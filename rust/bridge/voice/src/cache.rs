@@ -136,10 +136,32 @@ impl PhraseCache {
         Some(pcm)
     }
 
-    /// Keeps `pcm`, spoken by `voice`, as the audio of `text`: in memory, and on disk too when
-    /// `persist` (a policy sentence). Audio of a voice other than the cache's is dropped (a late
-    /// pre-synthesis of the voice the call started with, after the speak service was replaced). An
-    /// error is the disk's: the sentence is still kept in memory, so the call plays it and may warn.
+    /// Keeps `pcm`, spoken by `voice`, as the audio of `text` in this call's memory, and gives what
+    /// is to be written to disk when `persist` (a policy sentence): the call writes it outside the
+    /// cache's lock and off its loop (B6 review). Audio of a voice other than the cache's is
+    /// dropped (a late pre-synthesis of the voice the call started with, after the speak service
+    /// was replaced).
+    pub fn keep(
+        &mut self,
+        voice: &str,
+        text: &str,
+        pcm: Vec<i16>,
+        persist: bool,
+    ) -> Option<Filing> {
+        if voice != self.voice {
+            return None;
+        }
+        let k = key(&self.voice, text);
+        let filing = (persist && !pcm.is_empty()).then(|| Filing {
+            path: self.dir.join(format!("{k}.pcm")),
+            bytes: pcm.iter().flat_map(|s| s.to_le_bytes()).collect(),
+        });
+        self.memory.insert(k, Arc::new(pcm));
+        filing
+    }
+
+    /// As [`PhraseCache::keep`], the sentence written at once. An error is the disk's: the
+    /// sentence is still kept in memory.
     pub fn put(
         &mut self,
         voice: &str,
@@ -147,18 +169,23 @@ impl PhraseCache {
         pcm: Vec<i16>,
         persist: bool,
     ) -> std::io::Result<()> {
-        if voice != self.voice {
-            return Ok(());
+        self.keep(voice, text, pcm, persist)
+            .map_or(Ok(()), Filing::write)
+    }
+}
+
+/// A policy sentence to write to the cache's directory ([`PhraseCache::keep`]).
+pub struct Filing {
+    path: PathBuf,
+    bytes: Vec<u8>,
+}
+
+impl Filing {
+    /// Writes the sentence whole (see the module docs): a blocking write and its sync.
+    pub fn write(self) -> std::io::Result<()> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir)?;
         }
-        let k = key(&self.voice, text);
-        let filed = if persist && !pcm.is_empty() {
-            let bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
-            std::fs::create_dir_all(&self.dir)
-                .and_then(|()| write_whole(&self.dir.join(format!("{k}.pcm")), &bytes))
-        } else {
-            Ok(())
-        };
-        self.memory.insert(k, Arc::new(pcm));
-        filed
+        write_whole(&self.path, &self.bytes)
     }
 }

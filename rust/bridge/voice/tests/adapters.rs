@@ -84,6 +84,7 @@ fn configuration_defaults_hold_and_an_empty_value_is_unset() {
         Endpoint::Unix("/run/jeeta-voice/speak.sock".into())
     );
     assert_eq!(c.timing, jeeta_voice_bridge::talker::Timing::default());
+    assert_eq!(c.max_call_s, 600);
     assert!(matches!(
         Config::from_env(env(&[("ARI_PASSWORD", "")]), false),
         Err(ConfigError::Missing("ARI_PASSWORD"))
@@ -142,6 +143,19 @@ fn configuration_refuses_what_the_bridge_cannot_use() {
         refused(&[("VOICE_PHRASE_GAP_MS", "2000")]),
         ConfigError::TooLarge("VOICE_PHRASE_GAP_MS", 2_000)
     ));
+    // B6 review D: a call's longest duration is 1 s to an hour.
+    for bad in ["0", "3601", "long"] {
+        assert!(matches!(
+            refused(&[("VOICE_MAX_CALL_S", bad)]),
+            ConfigError::Invalid("VOICE_MAX_CALL_S")
+        ));
+    }
+    let short = Config::from_env(
+        env(&[("ARI_PASSWORD", "x"), ("VOICE_MAX_CALL_S", "150")]),
+        false,
+    )
+    .unwrap();
+    assert_eq!(short.max_call_s, 150);
     let edge = Config::from_env(
         env(&[
             ("ARI_PASSWORD", "x"),
@@ -298,6 +312,35 @@ fn opening_a_cache_removes_temporary_files_left_by_a_crash() {
     assert!(!left.exists(), "the crashed writer's file is removed");
     assert!(fresh.exists() && kept.exists());
     assert_eq!(c.get("Hı hı.").as_deref(), Some(&vec![1i16]));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// B6 review E: a call keeps a sentence under its cache's lock and writes it to disk outside it:
+/// `keep` stores it in memory and hands back the write a policy sentence needs.
+#[test]
+fn a_kept_policy_sentence_is_written_outside_the_lock() {
+    let dir = temp("cache-keep");
+    let mut c = PhraseCache::new(dir.clone(), "v");
+    assert!(
+        c.keep("v", "Arama sırası geldi.", vec![5, 6], false)
+            .is_none(),
+        "a call's own sentence stays in memory"
+    );
+    let filing = c
+        .keep("v", "Hı hı.", vec![1, 2], true)
+        .expect("a policy sentence is filed");
+    let file = dir.join(format!("{}.pcm", key("v", "Hı hı.")));
+    assert!(!file.exists(), "nothing is on disk before the write");
+    assert_eq!(c.get("Hı hı.").as_deref(), Some(&vec![1i16, 2]));
+    filing.write().unwrap();
+    assert_eq!(
+        PhraseCache::new(dir.clone(), "v").get("Hı hı.").as_deref(),
+        Some(&vec![1i16, 2])
+    );
+    assert!(
+        c.keep("w", "Tamam.", vec![1], true).is_none(),
+        "another voice's audio is dropped"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

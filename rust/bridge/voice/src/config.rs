@@ -13,6 +13,7 @@
 //! | `SPEAK_SOCKET` | `unix:/run/jeeta-voice/speak.sock` |
 //! | `VOICE_CACHE_DIR` | `/var/lib/jeeta-voice/cache` |
 //! | `VOICE_TRACE_FILE` | `/var/lib/jeeta-voice/traces.jsonl` |
+//! | `VOICE_MAX_CALL_S` | `600`: the slice's longest call, 1 to 3 600 s (`run` takes each plan's) |
 //! | `VOICE_ACK_MS`, `VOICE_FILLER_MS`, `VOICE_LONG_WAIT_MS`, `VOICE_STILL_THERE_MS`, `VOICE_PHRASE_GAP_MS` | [`Timing::default`] |
 //!
 //! The sockets follow the speech services' own rules ([`Endpoint`]). The timings must be ones the
@@ -32,6 +33,11 @@ use crate::talker::Timing;
 pub const LONG_WAIT_LIMIT_MS: u64 = 20_000;
 /// The core ends a call after 15 s of the caller's silence: a "still there" after it never plays.
 pub const STILL_THERE_LIMIT_MS: u64 = 15_000;
+/// The longest a slice's call may be, in seconds, unless `VOICE_MAX_CALL_S` says otherwise.
+pub const MAX_CALL_S: u64 = 600;
+/// The most `VOICE_MAX_CALL_S` may be: an hour.
+const MAX_CALL_LIMIT_S: u64 = 3_600;
+
 /// The gap holds the filler back after the acknowledgement ends (about 1.1 s into the wait, by
 /// default): below this cap the filler still comes before the core's own 4 s holding line, with a
 /// margin for a longer acknowledgement.
@@ -50,6 +56,8 @@ pub struct Config {
     pub cache_dir: PathBuf,
     pub trace_file: PathBuf,
     pub timing: Timing,
+    /// The slice's longest call, in seconds (B6 review): its closing plays then.
+    pub max_call_s: u64,
 }
 
 impl std::fmt::Debug for Config {
@@ -62,6 +70,7 @@ impl std::fmt::Debug for Config {
             .field("speak", &self.speak)
             .field("cache_dir", &self.cache_dir)
             .field("timing", &self.timing)
+            .field("max_call_s", &self.max_call_s)
             .finish_non_exhaustive()
     }
 }
@@ -79,7 +88,8 @@ pub enum ConfigError {
     TooLarge(&'static str, u64),
 }
 
-/// The milliseconds in `name`, or `default` when it is not set.
+/// The whole number in `name` (milliseconds, or seconds for `VOICE_MAX_CALL_S`), or `default`
+/// when it is not set.
 fn ms(
     get: &impl Fn(&str) -> Option<String>,
     name: &'static str,
@@ -157,6 +167,10 @@ impl Config {
             phrase_gap_ms: ms(&get, "VOICE_PHRASE_GAP_MS", base.phrase_gap_ms)?,
         };
         check(&timing)?;
+        let max_call_s = ms(&get, "VOICE_MAX_CALL_S", MAX_CALL_S)?;
+        if !(1..=MAX_CALL_LIMIT_S).contains(&max_call_s) {
+            return Err(ConfigError::Invalid("VOICE_MAX_CALL_S"));
+        }
         Ok(Config {
             jeeta_base_url: jeeta_base_url.trim_end_matches('/').to_owned(),
             bridge_key,
@@ -173,6 +187,7 @@ impl Config {
                 .unwrap_or_else(|| "/var/lib/jeeta-voice/traces.jsonl".into())
                 .into(),
             timing,
+            max_call_s,
         })
     }
 }
