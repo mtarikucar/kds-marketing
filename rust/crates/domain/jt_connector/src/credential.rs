@@ -108,14 +108,15 @@ pub enum Credential {
         api_key: String,
         api_secret: String,
     },
-    /// A Hepsiburada merchant's API user and password, and the merchant id. The exact pair the
-    /// API takes is VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md §12). The
-    /// user and the password are private.
+    /// A Hepsiburada merchant's id (sent as the `merchantId` header) and the service key the
+    /// seller copied for Jeeta as its integrator (seller panel: Bilgilerim → Entegrasyon →
+    /// Entegratör Bilgileri → Servis Anahtarı; task H0). The service key is private. The Basic
+    /// auth user is the platform's integrator user, not the seller's; which value goes where is
+    /// VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md §8.3, §12).
     #[serde(rename = "hepsiburada_merchant")]
     HepsiburadaMerchant {
         merchant_id: String,
-        username: String,
-        password: String,
+        service_key: String,
     },
 }
 
@@ -164,7 +165,7 @@ impl Credential {
     /// - `TrendyolSeller`: `seller_id`;
     /// - `HepsiburadaMerchant`: `merchant_id`.
     ///
-    /// Never a token, a refresh token, an API key or secret, a login or a password.
+    /// Never a token, a refresh token, an API key, secret or service key, a login or a password.
     pub fn redact_for_public(&self) -> Value {
         let mut facts = Map::new();
         facts.insert("kind".to_owned(), json!(self.kind()));
@@ -252,8 +253,8 @@ fn masked(secret: &Option<String>) -> Option<Masked> {
     secret.as_ref().map(|_| Masked)
 }
 
-/// Every secret field (tokens, refresh tokens, API keys and secrets, logins, passwords) prints
-/// as `***`; the rest as is.
+/// Every secret field (tokens, refresh tokens, API keys, secrets and service keys, logins,
+/// passwords) prints as `***`; the rest as is.
 impl fmt::Debug for Credential {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -349,13 +350,11 @@ impl fmt::Debug for Credential {
                 .finish(),
             Credential::HepsiburadaMerchant {
                 merchant_id,
-                username: _,
-                password: _,
+                service_key: _,
             } => f
                 .debug_struct("HepsiburadaMerchant")
                 .field("merchant_id", merchant_id)
-                .field("username", &Masked)
-                .field("password", &Masked)
+                .field("service_key", &Masked)
                 .finish(),
         }
     }

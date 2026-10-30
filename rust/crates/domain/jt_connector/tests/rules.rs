@@ -675,10 +675,9 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
         (
             Credential::HepsiburadaMerchant {
                 merchant_id: "a1b2c3d4-0000-4000-8000-000000000001".to_owned(),
-                username: "hb-user-SECRET".to_owned(),
-                password: "hb-pass-SECRET".to_owned(),
+                service_key: "hb-service-key-SECRET".to_owned(),
             },
-            vec!["hb-user-SECRET", "hb-pass-SECRET"],
+            vec!["hb-service-key-SECRET"],
             vec!["a1b2c3d4-0000-4000-8000-000000000001"],
         ),
     ]
@@ -804,10 +803,10 @@ fn marketplace_credentials_mask_and_redact() {
         api_key: "ty-key-SECRET".to_owned(),
         api_secret: "ty-secret-SECRET".to_owned(),
     };
+    // The seller's service key for Jeeta as its integrator (task H0).
     let hepsiburada = Credential::HepsiburadaMerchant {
         merchant_id: "m-42".to_owned(),
-        username: "hb-user-SECRET".to_owned(),
-        password: "hb-pass-SECRET".to_owned(),
+        service_key: "hb-service-key-SECRET".to_owned(),
     };
     assert_eq!(trendyol.kind(), "trendyol_seller");
     assert_eq!(hepsiburada.kind(), "hepsiburada_merchant");
@@ -817,7 +816,7 @@ fn marketplace_credentials_mask_and_redact() {
     );
     assert_eq!(
         format!("{hepsiburada:?}"),
-        "HepsiburadaMerchant { merchant_id: \"m-42\", username: ***, password: *** }"
+        "HepsiburadaMerchant { merchant_id: \"m-42\", service_key: *** }"
     );
     assert_eq!(
         trendyol.redact_for_public(),
@@ -839,7 +838,7 @@ fn marketplace_credentials_mask_and_redact() {
         serde_json::to_value(&hepsiburada).unwrap(),
         json!({
             "kind": "hepsiburada_merchant", "merchant_id": "m-42",
-            "username": "hb-user-SECRET", "password": "hb-pass-SECRET"
+            "service_key": "hb-service-key-SECRET"
         })
     );
     for cred in [&trendyol, &hepsiburada] {
