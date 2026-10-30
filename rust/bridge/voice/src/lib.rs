@@ -10,6 +10,7 @@
 //! - [`config`], [`cache`], [`trace`]: the environment, the phrase cache, the turn traces.
 //! - [`ari`], [`media`], [`speech`]: Asterisk's REST and events, `chan_websocket` media control,
 //!   the local speech services.
+//! - [`call`]: one call's task; [`slice`]: the standalone test call.
 //!
 //! # Logging
 //!
@@ -25,10 +26,12 @@
 
 pub mod ari;
 pub mod cache;
+pub mod call;
 pub mod config;
 pub mod g711;
 pub mod media;
 pub mod netgsm;
+pub mod slice;
 pub mod speech;
 pub mod talker;
 pub mod text;
