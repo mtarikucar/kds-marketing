@@ -979,7 +979,10 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook address",
       "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
-      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook address",
+      "tiktokHelp": "Enter it as the callback URL of the platform's TikTok app in TikTok's developer portal (the app's Webhooks). Jeeta acts on: {{events}}; other events are kept for the agent."
     },
     "bridge": {
       "title": "Voice bridge",
@@ -1880,7 +1883,14 @@
     "throttled": "the provider asked us to slow down; try again a little later.",
     "configuration": "the account's sending settings could not be read; check and reconnect it.",
     "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
-    "xDuplicate": "X does not publish the same text twice; change the text and try again."
+    "xDuplicate": "X does not publish the same text twice; change the text and try again.",
+    "tiktokUnaudited": "TikTok has not audited this app yet, so it posts only to a private TikTok account. Until the audit passes, make the account private in TikTok (Settings and privacy → Privacy → Private account), then cancel this post and plan it again.",
+    "tiktokPrivacy": "the privacy chosen for this post is not offered for this TikTok account (an app TikTok has not audited may post as \"Only me\" only); cancel it and post it again with a privacy the posting screen offers.",
+    "tiktokCap": "the TikTok account reached its daily limit of posts through apps; try again tomorrow, or post from the TikTok app.",
+    "tiktokBanned": "TikTok does not let this account post at the moment; check the account in the TikTok app.",
+    "tiktokDomain": "TikTok pulls photos only from a domain verified for the app; verify the media domain in TikTok's developer portal (URL properties), or post a video.",
+    "tiktokSpam": "TikTok flagged the post as spam or risky and will not publish it; change the caption before posting again.",
+    "tiktokMedia": "TikTok refused the media (its format, length, frame rate or picture size); check it against TikTok's requirements and post it again."
   },
   "calls": {
     "title": "Calls",

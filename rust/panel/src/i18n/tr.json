@@ -979,7 +979,10 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook adresi",
       "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
-      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
+      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook adresi",
+      "tiktokHelp": "Bunu platformun TikTok uygulamasının geri çağırma adresi (callback URL) olarak TikTok geliştirici portalına girin (uygulamanın Webhooks bölümü). Jeeta şu olaylara göre işlem yapar: {{events}}; diğer olaylar ajan için saklanır."
     },
     "bridge": {
       "title": "Ses köprüsü",
@@ -1880,7 +1883,14 @@
     "throttled": "sağlayıcı gönderimleri yavaşlatmamızı istedi; biraz sonra tekrar deneyin.",
     "configuration": "hesabın gönderim ayarları okunamadı; hesabı kontrol edip yeniden bağlayın.",
     "xCredits": "X API kredisi yok; X developer console'dan (console.x.com) kredi yükleyin.",
-    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin."
+    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin.",
+    "tiktokUnaudited": "TikTok bu uygulamayı henüz denetlemedi; bu yüzden yalnızca gizli bir TikTok hesabına paylaşım yapabilir. Denetim tamamlanana kadar hesabı TikTok'ta gizli yapın (Ayarlar ve gizlilik → Gizlilik → Gizli hesap), sonra bu gönderiyi iptal edip yeniden planlayın.",
+    "tiktokPrivacy": "bu gönderi için seçilen gizlilik bu TikTok hesabına sunulmuyor (TikTok'un denetlemediği bir uygulama yalnızca \"Sadece ben\" olarak paylaşabilir); gönderiyi iptal edip paylaşım ekranının sunduğu bir gizlilikle yeniden paylaşın.",
+    "tiktokCap": "TikTok hesabı uygulamalar üzerinden günlük paylaşım sınırına ulaştı; yarın tekrar deneyin ya da TikTok uygulamasından paylaşın.",
+    "tiktokBanned": "TikTok bu hesabın şu anda paylaşım yapmasına izin vermiyor; hesabı TikTok uygulamasında kontrol edin.",
+    "tiktokDomain": "TikTok fotoğrafları yalnızca uygulama için doğrulanmış bir alan adından çeker; medya alan adını TikTok geliştirici portalında (URL properties) doğrulayın ya da video paylaşın.",
+    "tiktokSpam": "TikTok gönderiyi spam ya da riskli olarak işaretledi ve yayınlamayacak; yeniden paylaşmadan önce açıklamayı değiştirin.",
+    "tiktokMedia": "TikTok medyayı kabul etmedi (biçimi, süresi, kare hızı ya da resim boyutu); TikTok'un gereksinimlerine göre kontrol edip yeniden paylaşın."
   },
   "calls": {
     "title": "Aramalar",
