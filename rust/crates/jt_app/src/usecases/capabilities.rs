@@ -686,7 +686,11 @@ pub async fn set_policy(
 /// left, `hosts_revoked`: how many tenant hosts go). Once committed, each host it named that no
 /// other live connector capability of the workspace names is revoked; a host that cannot be
 /// revoked then is logged as a warning and the retirement is answered all the same, since it
-/// holds.
+/// holds. And a connection's access is given back at its provider (`Connector::revoke`: TikTok
+/// revokes the access token, so the app leaves the account's authorized apps), with the
+/// credential read before it was erased, in a task of its own: best effort, a failure is logged
+/// (the kind of error only) and the access stays granted at the provider until the account's
+/// owner removes it there.
 pub async fn retire(
     deps: &Deps,
     ctx: &Ctx,
@@ -722,6 +726,13 @@ async fn retire_with_hosts(
         .capabilities()
         .set_status(id, StoredStatus::Retired, ctx.now)
         .await?;
+    // The connection's credential, read before it is erased, to give its access back at the
+    // provider once the retirement holds.
+    let sealed = if capability.has_sealed_config && capability.reach == Reach::Connector {
+        repos.capabilities().read_sealed(id).await?
+    } else {
+        None
+    };
     if capability.has_sealed_config {
         repos.capabilities().set_sealed(id, None, ctx.now).await?;
     }
@@ -802,7 +813,45 @@ async fn retire_with_hosts(
             );
         }
     }
+    if let Some(sealed) = sealed {
+        revoke_at_provider(deps, ctx, &capability, &sealed);
+    }
     Ok(out)
+}
+
+/// Gives back at its provider the access the retired `capability`'s credential (`sealed`, read
+/// before it was erased) granted, in a task of its own (see [`retire`]).
+fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &[u8]) {
+    let Some(adapter) = jt_connector::provider_for_kind(&capability.kind_key)
+        .and_then(|provider| deps.connectors.connector(provider))
+    else {
+        return;
+    };
+    let (ws, id, kind_key) = (ctx.workspace_id, capability.id, capability.kind_key.clone());
+    let credential = match connector::open_credential(deps, ws, sealed) {
+        Ok(credential) => credential,
+        Err(e) => {
+            tracing::warn!(
+                workspace_id = %ws,
+                capability_id = %id,
+                code = e.code.as_str(),
+                "a retired capability's credential could not be opened to give its access back"
+            );
+            return;
+        }
+    };
+    tokio::spawn(async move {
+        if let Err(e) = adapter.revoke(&credential).await {
+            tracing::warn!(
+                workspace_id = %ws,
+                capability_id = %id,
+                kind_key = %kind_key,
+                error_kind = e.kind(),
+                "a retired capability's access could not be given back at its provider; it stays \
+                 granted there until the account's owner removes it"
+            );
+        }
+    });
 }
 
 /// Links capability `id` to budget item `item`, the one it spends from, and returns it; linking

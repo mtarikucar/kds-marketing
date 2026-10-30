@@ -429,6 +429,61 @@ async fn refresh_rotates_refresh_token() {
     }
 }
 
+/// Retiring a capability revokes its access token
+/// (<https://developers.tiktok.com/doc/oauth-user-access-token-management>, "Revoke access"):
+/// TikTok answers an empty struct; a refusal maps as the token endpoint's do, without a secret.
+#[tokio::test]
+async fn revoke_gives_back_the_access_token() {
+    let r = rig().await;
+    r.mock.on("POST", REVOKE, raw(200, ""));
+    r.tt.revoke(&cred()).await.unwrap();
+    let call = r.mock.request("POST", REVOKE);
+    assert_eq!(
+        call.header("content-type"),
+        Some("application/x-www-form-urlencoded")
+    );
+    assert_eq!(call.bearer(), None);
+    assert_eq!(
+        call.form(),
+        owned(&[
+            ("client_key", CLIENT_KEY),
+            ("client_secret", CLIENT_SECRET),
+            ("token", ACCESS_TOKEN),
+        ])
+    );
+    // An empty JSON object is a success too.
+    r.mock.set("POST", REVOKE, ok(json!({})));
+    r.tt.revoke(&cred()).await.unwrap();
+
+    for (reply, expected) in [
+        (
+            status(
+                400,
+                json!({ "error": "invalid_request", "error_description": "The request parameters are malformed." }),
+            ),
+            "permanent",
+        ),
+        (answer_with(401, "token_invalid_client"), "permanent"),
+        (raw(401, "<html>no</html>"), "auth"),
+        (raw(429, "slow down"), "throttle"),
+        (raw(503, "<html>unavailable</html>"), "transient"),
+        (raw(200, "not json"), "permanent"),
+    ] {
+        r.mock.set("POST", REVOKE, reply.clone());
+        let e = r.tt.revoke(&cred()).await.unwrap_err();
+        assert_eq!(e.kind(), expected, "{reply:?}: {e}");
+        assert_no_secret(&format!("{e} {e:?}"));
+    }
+    // Only an OAuth credential has a token to revoke; nothing is sent for another.
+    let calls = r.mock.requests("POST", REVOKE).len();
+    let foreign = Credential::PageToken {
+        page_id: "1".into(),
+        token: "EAAB-SECRET".into(),
+    };
+    assert_eq!(kind_of(r.tt.revoke(&foreign).await), "permanent");
+    assert_eq!(r.mock.requests("POST", REVOKE).len(), calls);
+}
+
 #[tokio::test]
 async fn refresh_waits_until_near_expiry() {
     let r = rig().await;

@@ -2945,6 +2945,25 @@ async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
 // Retiring, pending work
 // ---------------------------------------------------------------------------------------------
 
+/// Giving the access back at the provider is best effort: a refusal is logged, and the
+/// retirement holds all the same.
+#[tokio::test]
+async fn a_refused_revocation_does_not_undo_a_retirement() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    r.meta
+        .push_revoke(Err(ConnectorError::transient("the provider is down")));
+    let out = capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls().len(), 1);
+    assert_eq!(out.capability.status, StoredStatus::Retired);
+    assert_eq!(r.stored(page.id).sealed, None);
+}
+
 #[tokio::test]
 async fn retire_clears_sealed_config() {
     let r = rig().await;
@@ -2953,12 +2972,19 @@ async fn retire_clears_sealed_config() {
         .push_probe(ProbeResult::failure(9, ConnectorError::auth("revoked")));
     r.probe(page.id).await;
     assert!(r.stored(page.id).sealed.is_some());
+    let held = r.sealed_credential(page.id);
 
     let later = at(&r.w.owner_ctx, FIXED_NOW + Duration::hours(2));
     let out = capabilities::retire(&r.w.deps, &later, page.id, true)
         .await
         .unwrap();
     assert_eq!(out.capability.status, StoredStatus::Retired);
+    // Its access is given back at the provider, with the credential it held (in a task of its
+    // own, once the retirement holds).
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![held]);
     assert!(!out.capability.has_sealed_config);
     assert_eq!(r.stored(page.id).sealed, None);
     assert_eq!(out.capability.updated_at, FIXED_NOW + Duration::hours(2));

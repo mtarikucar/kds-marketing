@@ -1,5 +1,5 @@
 //! Login Kit for the web (<https://developers.tiktok.com/doc/login-kit-web>): the authorize URL,
-//! the code exchange and the refresh near expiry
+//! the code exchange, the refresh near expiry and the revocation
 //! (<https://developers.tiktok.com/doc/oauth-user-access-token-management>).
 
 use jt_app::ports::connectors::{OAuthApp, TiktokApp};
@@ -208,6 +208,34 @@ fn credential_of(
         expires_at,
         scopes,
     })
+}
+
+/// Gives back the access `cred` grants (see the crate docs, "Revocation"):
+/// `POST {api}/v2/oauth/revoke/`, form `client_key, client_secret, token` (the access token).
+/// Revoking twice is harmless, so a call that got no answer is tried once more.
+pub(crate) async fn revoke(
+    connector: &TiktokConnector,
+    cred: &Credential,
+) -> Result<(), ConnectorError> {
+    let token = crate::credential::token_of(cred, "be revoked")?;
+    let tiktok = connector.tiktok_app()?;
+    let body = Body::Form(vec![
+        ("client_key", &tiktok.client_key),
+        ("client_secret", &tiktok.client_secret),
+        ("token", token),
+    ]);
+    let url = connector.api_url(&["v2", "oauth", "revoke", ""], &[]);
+    connector
+        .call(
+            Method::POST,
+            url,
+            Auth::Form,
+            &body,
+            Endpoint::Revoke,
+            Effect::Read,
+        )
+        .await
+        .map(|_| ())
 }
 
 impl TiktokConnector {

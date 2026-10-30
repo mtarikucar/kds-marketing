@@ -38,7 +38,15 @@
 //! [`Connector::refresh`] is called every hour for every TikTok capability; it renews only a
 //! credential that expires within [`REFRESH_AHEAD`] (or has expired, or names no expiry), and
 //! answers `None` for the others. One without a refresh token cannot be renewed: `Auth`
-//! (reconnect).
+//! (reconnect). TikTok's refresh token "is valid for 365 days after the initial issuance": a year
+//! after the owner connected, the refresh is refused (`invalid_grant`, `Auth`) and the capability
+//! asks for a reconnection, as for any lost login.
+//!
+//! **Revocation** ([`Connector::revoke`], once the capability is retired):
+//! `POST {api}/v2/oauth/revoke/`, form `client_key, client_secret, token` (the access token):
+//! TikTok then drops the app from the account's authorized apps. Any 2xx, its empty struct
+//! included, is a success; a failure maps as the token endpoint's do. Revoking twice is harmless,
+//! so the call is tried once more when no answer arrived.
 //!
 //! **Calls.** Every call but the token calls and the upload carries the access token as
 //! `Authorization: Bearer`; a JSON body is sent as `application/json; charset=UTF-8`.

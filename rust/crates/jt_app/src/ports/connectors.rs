@@ -663,6 +663,15 @@ pub trait Connector: Send + Sync {
         let _ = (cred, public);
         Ok(Value::Null)
     }
+    /// Gives back, at the provider, the access `cred` grants the platform's app, once its
+    /// capability is retired (TikTok's token revocation: the app then leaves the account's
+    /// authorized apps). Best effort: the retirement, and the credential's erasure, never wait on
+    /// it. The default does nothing (a provider that offers no revocation, or one this system does
+    /// not call).
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        let _ = cred;
+        Ok(())
+    }
 }
 
 /// Sends SMS.
