@@ -29,8 +29,9 @@ pub const RESOLVE_WINDOW: Duration = Duration::minutes(30);
 /// ([`PublishResolution::AwaitingPublicId`]: TikTok names one once its moderation passed the
 /// post) waits for one: until then each status read may bring it (the recovery job's, or one a
 /// webhook asks for at once); then the post settles as posted, under the id it has (no
-/// permalink, no counters). A post fewer may see, or a draft, has none to wait for and settles at
-/// once.
+/// permalink, no counters yet), and TikTok's later `post.publish.publicly_available` webhook
+/// upgrades it to its public id ([`resolve_observed`]). A post fewer may see, or a draft, has
+/// none to wait for and settles at once.
 pub const PUBLIC_ID_WAIT: Duration = Duration::minutes(15);
 
 fn query(until: OffsetDateTime) -> SlotQuery {
@@ -613,12 +614,60 @@ async fn recover_observed(
     Ok(true)
 }
 
-/// Settles at once the observed post `external_id` (its receipt's id: TikTok's publish id) that
+/// The attempt of capability `capability_id` whose receipt, observed or settled, is
+/// `external_id` (TikTok's publish id), in the open bundle `r`; `None` when none is.
+pub(crate) async fn attempt_by_receipt(
+    r: &mut dyn TenantRepos,
+    capability_id: CapabilityId,
+    external_id: &str,
+    now: OffsetDateTime,
+) -> Result<Option<PublishAttempt>, AppError> {
+    for s in r
+        .studio()
+        .list_slots(query(now + Duration::nanoseconds(1)))
+        .await?
+        .into_iter()
+        .filter(|s| s.capability_id == capability_id)
+    {
+        let found = r
+            .studio()
+            .slot_evidence(s.id)
+            .await?
+            .0
+            .into_iter()
+            .find(|a| {
+                a.capability_id() == capability_id
+                    && matches!(
+                        a.outcome(),
+                        Some(
+                            jt_studio::PublishOutcome::Observed(receipt)
+                            | jt_studio::PublishOutcome::Succeeded(receipt)
+                        ) if receipt.external_id == external_id
+                    )
+            });
+        if found.is_some() {
+            return Ok(found);
+        }
+    }
+    Ok(None)
+}
+
+/// Reads back at once the post `external_id` (its receipt's id: TikTok's publish id) that
 /// capability `capability_id` published, when the provider's webhook says it moved (TikTok's
-/// `post.publish.*`): with the very read-back [`recover_publications`] makes, so that a webhook
-/// and the recovery job settle it alike and whichever comes second finds it settled. Only an
-/// attempt still observed is read: any other, and a post no attempt of the capability observed,
-/// is left alone (`false`). `true` once settled.
+/// `post.publish.*`):
+///
+/// - an attempt still observed is read back with the very read [`recover_publications`] makes,
+///   so that a webhook and the recovery job settle it alike and whichever comes second finds it
+///   settled;
+/// - an attempt that settled under it as a provisional receipt (no page: TikTok named no public
+///   id within [`PUBLIC_ID_WAIT`]) is asked about again, and once the provider names the post's
+///   public id, the attempt and its publication take that public receipt
+///   (`studio.publish.public_id`): its page and its counters, a late public id included;
+/// - anything else (a post settled with its page, one no attempt of the capability sent) is
+///   left alone.
+///
+/// `true` when an attempt settled or was upgraded now. A status read that fails while upgrading
+/// is the error (`UPSTREAM_UNAVAILABLE`), so that its caller knows the read did not happen.
 pub async fn resolve_observed(
     d: &Deps,
     ws: WorkspaceId,
@@ -628,38 +677,72 @@ pub async fn resolve_observed(
     let found = {
         let mut r = d.uow.tenant(ws).await?;
         chain::active(r.as_mut()).await?;
-        let mut found = None;
-        for s in r
-            .studio()
-            .list_slots(query(d.clock.now() + Duration::nanoseconds(1)))
-            .await?
-            .into_iter()
-            .filter(|s| s.capability_id == capability_id)
-        {
-            found = r
-                .studio()
-                .slot_evidence(s.id)
-                .await?
-                .0
-                .into_iter()
-                .find(|a| {
-                    a.capability_id() == capability_id
-                        && matches!(
-                            a.outcome(),
-                            Some(jt_studio::PublishOutcome::Observed(receipt))
-                                if receipt.external_id == external_id
-                        )
-                });
-            if found.is_some() {
-                break;
-            }
-        }
-        found
+        attempt_by_receipt(r.as_mut(), capability_id, external_id, d.clock.now()).await?
     };
-    match found.as_ref().map(|a| (a, a.outcome())) {
-        Some((a, Some(jt_studio::PublishOutcome::Observed(receipt)))) => {
-            recover_observed(d, ws, a, receipt).await
+    let Some(a) = found else {
+        return Ok(false);
+    };
+    match a.outcome() {
+        Some(jt_studio::PublishOutcome::Observed(receipt)) => {
+            recover_observed(d, ws, &a, receipt).await
+        }
+        Some(jt_studio::PublishOutcome::Succeeded(receipt)) if receipt.url.is_none() => {
+            upgrade_settled(d, ws, &a, receipt).await
         }
         _ => Ok(false),
     }
+}
+
+/// Asks the provider again about the post succeeded attempt `a` settled under the provisional
+/// `receipt`, and upgrades the attempt and its publication to the public receipt it names now
+/// (see [`resolve_observed`]): `true` when upgraded.
+async fn upgrade_settled(
+    d: &Deps,
+    ws: WorkspaceId,
+    a: &PublishAttempt,
+    receipt: &PublishReceipt,
+) -> Result<bool, AppError> {
+    let prepared = {
+        let mut r = d.uow.tenant(ws).await?;
+        match chain::authorize_publication_recovery(r.as_mut(), a, d.clock.now()).await {
+            Ok(c) => {
+                let cred = credential(d, r.as_mut(), &c).await?;
+                Some((c, cred))
+            }
+            Err(_) => None,
+        }
+    };
+    let Some((c, cred)) = prepared else {
+        return Ok(false);
+    };
+    let Some(publisher) = provider_for_kind(&c.kind_key).and_then(|p| d.connectors.publisher(p))
+    else {
+        return Ok(false);
+    };
+    let public = match publisher.resolve(&cred, &adapter_public(&c), receipt).await {
+        Ok(Some(PublishResolution::Published(post))) if post.external_id != receipt.external_id => {
+            post
+        }
+        Ok(_) => return Ok(false),
+        Err(e) => {
+            return Err(AppError {
+                code: crate::error::ErrorCode::UpstreamUnavailable,
+                message: "the post's status could not be read".into(),
+                details: json!({"provider_error": e.kind()}),
+            });
+        }
+    };
+    // As a completion keeps it: the page without its query or fragment.
+    let jt_studio::PublishOutcome::Succeeded(public) =
+        PublishOutcome::Succeeded(public).into_redacted()
+    else {
+        return Ok(false);
+    };
+    let mut r = d.uow.tenant(ws).await?;
+    let upgraded = r
+        .studio()
+        .upgrade_receipt(a.id(), public, d.clock.now())
+        .await?;
+    r.commit().await?;
+    Ok(upgraded)
 }

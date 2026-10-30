@@ -13,7 +13,9 @@ use jt_app::{
     error::AppError,
     ports::{files::StoredFile, studio::*},
 };
-use jt_studio::{RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot};
+use jt_studio::{
+    PublishReceipt, RetirementReason, SlotEvent, StudioError, StudioPolicy, transition_slot,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -526,6 +528,14 @@ impl StudioRepo for PgTenantRepos {
     }
     async fn save_budget_move(&mut self, m: BudgetMove, key: &str) -> Result<BudgetMove, AppError> {
         self.studio_move(m, key).await
+    }
+    async fn upgrade_receipt(
+        &mut self,
+        attempt: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        self.studio_upgrade_receipt(attempt, receipt, at).await
     }
     async fn record_measurement(&mut self, m: Measurement) -> Result<bool, AppError> {
         self.studio_measure(m).await

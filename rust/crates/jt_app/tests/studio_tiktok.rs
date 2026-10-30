@@ -1178,9 +1178,144 @@ async fn a_webhook_settles_an_observed_post_at_once_as_the_recovery_job_would() 
         settled(&t),
         (PublishState::Succeeded, Some(PUBLISH_ID.to_owned()))
     );
-    // Settled: neither the recovery job nor the webhook again asks TikTok.
+    // Settled: the recovery job asks TikTok nothing more. A webhook naming it asks once more
+    // (settled without a page, it may have a public id by now), and nothing changes while TikTok
+    // names none; nothing is ever sent again.
     assert_eq!(recover_publications(d, ws).await.unwrap(), 0);
-    assert!(!resolve_observed(d, ws, cap, PUBLISH_ID).await.unwrap());
     assert_eq!(t.tt.resolve_calls(), vec![sent(), sent(), sent()]);
+    t.tt.push_resolve(Ok(Some(PublishResolution::AwaitingPublicId(sent()))));
+    assert!(!resolve_observed(d, ws, cap, PUBLISH_ID).await.unwrap());
+    assert_eq!(t.tt.resolve_calls().len(), 4);
+    assert_eq!(
+        settled(&t),
+        (PublishState::Succeeded, Some(PUBLISH_ID.to_owned()))
+    );
     assert_eq!(publishes(&t.tt).len(), 1);
+}
+
+/// A public id TikTok names only after the wait (a long moderation): the post settled under its
+/// publish id; TikTok's later `post.publish.publicly_available` reads it back, upgrades the attempt
+/// and its publication to the public post (its page; `studio.publish.public_id`, once), marks the
+/// event processed, and the post's counters then read.
+#[tokio::test]
+async fn a_public_id_named_after_the_wait_upgrades_the_settled_post() {
+    use jt_app::usecases::studio::publish::{PUBLIC_ID_WAIT, recover_publications};
+    use jt_app::usecases::webhook::{self, TiktokHookEffect, TiktokHookEvent};
+    use jt_studio::{PublishOutcome as Evidence, PublishState};
+
+    let mut t = posted(
+        "PUBLIC_TO_EVERYONE",
+        PublishResolution::AwaitingPublicId(sent()),
+    )
+    .await;
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + PUBLIC_ID_WAIT));
+    t.tt.push_resolve(Ok(Some(PublishResolution::AwaitingPublicId(sent()))));
+    assert_eq!(recover_publications(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    assert_eq!(
+        settled(&t),
+        (PublishState::Succeeded, Some(PUBLISH_ID.to_owned()))
+    );
+
+    // Forty minutes in, TikTok says the post is public.
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::minutes(40)));
+    let event = |external_id: &str| TiktokHookEvent {
+        open_id: ACCOUNT.into(),
+        publish_id: Some(PUBLISH_ID.into()),
+        effect: TiktokHookEffect::PublishMoved {
+            publish_id: PUBLISH_ID.into(),
+        },
+        draft: jt_app::ports::connectors::InboundEventDraft {
+            external_id: external_id.into(),
+            kind: jt_connector::EventKind::parse("post.publish.publicly_available"),
+            payload: json!({ "tiktok": { "event": "post.publish.publicly_available" } }),
+            occurred_at: None,
+        },
+    };
+    let intake = webhook::receive_tiktok(&t.w.d, event("ev-public"), b"{}")
+        .await
+        .unwrap();
+    assert_eq!(intake.stored.len(), 1);
+    assert_eq!(intake.stored[0].0, t.w.f.ws);
+    let [hooked] = intake.resolve.as_slice() else {
+        panic!("one post to read back: {intake:?}");
+    };
+    t.tt.push_resolve(Ok(Some(PublishResolution::Published(public_post()))));
+    assert!(webhook::resolve_hooked(&t.w.d, hooked).await.unwrap());
+    let s = t.w.uow.snapshot();
+    assert_eq!(
+        s.studio.attempts[0].outcome(),
+        Some(&Evidence::Succeeded(public_post()))
+    );
+    assert_eq!(s.studio.publications.len(), 1);
+    assert_eq!(
+        s.studio.publications[0].external_id,
+        public_post().external_id
+    );
+    assert_eq!(s.studio.publications[0].url, public_post().url);
+    let upgrades = s
+        .ledger
+        .iter()
+        .filter(|row| row.entry.action.as_str() == "studio.publish.public_id")
+        .count();
+    assert_eq!(upgrades, 1);
+    assert!(
+        s.inbound_events
+            .iter()
+            .all(|e| e.event.processed_at.is_some())
+    );
+
+    // Again (a redelivery, or another event about the post): the settled receipt is the post's,
+    // nothing is read or written.
+    let reads = t.tt.resolve_calls().len();
+    assert!(!webhook::resolve_hooked(&t.w.d, hooked).await.unwrap());
+    assert_eq!(t.tt.resolve_calls().len(), reads);
+    assert_eq!(t.w.uow.snapshot().ledger.len(), s.ledger.len());
+
+    // Its counters read, by its public id.
+    t.tt.push_post_metrics(Ok(PostMetrics {
+        metrics: [("view_count".to_owned(), 5)].into(),
+    }));
+    let out = tiktok_metrics(&t.w.d, &t.w.ctx, t.slot.id).await.unwrap();
+    assert_eq!(out.post, Some(public_post()));
+    assert_eq!(out.metrics.unwrap()["view_count"], 5);
+    assert!(matches!(
+        t.tt.calls().last(),
+        Some(ConnectorCall::PostMetrics { post_id, .. }) if post_id == "7300000000000000001"
+    ));
+}
+
+/// Reading back a post settled under its publish id upgrades it only when TikTok names a public
+/// id; one it still does not name stays as it is, and a read that fails is the error (its event
+/// then stays unprocessed, for the agent).
+#[tokio::test]
+async fn a_settled_post_is_upgraded_only_by_a_public_id() {
+    use jt_app::usecases::studio::publish::{
+        PUBLIC_ID_WAIT, recover_publications, resolve_observed,
+    };
+    use jt_studio::PublishState;
+
+    let mut t = posted(
+        "PUBLIC_TO_EVERYONE",
+        PublishResolution::AwaitingPublicId(sent()),
+    )
+    .await;
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + PUBLIC_ID_WAIT));
+    t.tt.push_resolve(Ok(Some(PublishResolution::AwaitingPublicId(sent()))));
+    recover_publications(&t.w.d, t.w.f.ws).await.unwrap();
+    let (d, ws, cap) = (&t.w.d, t.w.f.ws, t.slot.capability_id);
+    t.tt.push_resolve(Ok(Some(PublishResolution::AwaitingPublicId(sent()))));
+    assert!(!resolve_observed(d, ws, cap, PUBLISH_ID).await.unwrap());
+    t.tt.push_resolve(Err(ConnectorError::transient("offline")));
+    assert_eq!(
+        resolve_observed(d, ws, cap, PUBLISH_ID)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::UpstreamUnavailable
+    );
+    assert_eq!(
+        settled(&t),
+        (PublishState::Succeeded, Some(PUBLISH_ID.to_owned()))
+    );
+    assert_eq!(t.w.uow.snapshot().studio.publications[0].url, None);
 }

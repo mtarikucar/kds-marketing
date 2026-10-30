@@ -228,6 +228,17 @@ pub trait StudioRepo: Send + Sync {
         outcome: PublishOutcome,
         observed_at: OffsetDateTime,
     ) -> Result<(), AppError>;
+    /// Upgrades succeeded attempt `attempt`, and its publication, to `receipt`, the public
+    /// receipt its provider named after the post was settled under a provisional one
+    /// (`PublishAttempt::upgrade_receipt`), writing `studio.publish.public_id` at `at`: `true`
+    /// when it changed; the same receipt again is `false` and writes nothing. Under the same locks
+    /// as [`StudioRepo::finish_publication`].
+    async fn upgrade_receipt(
+        &mut self,
+        attempt: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError>;
     async fn record_measurement(&mut self, measurement: Measurement) -> Result<bool, AppError>;
     async fn apply_learning(&mut self, update: LearningUpdate) -> Result<bool, AppError>;
 }
