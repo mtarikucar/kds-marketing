@@ -24,6 +24,7 @@ type TiktokCase =
   | 'tiktokUnaudited'
   | 'tiktokPrivacy'
   | 'tiktokCap'
+  | 'tiktokAppCap'
   | 'tiktokBanned'
   | 'tiktokDomain'
   | 'tiktokSpam'
@@ -33,7 +34,8 @@ type TiktokCase =
 const TIKTOK_CODES: [RegExp, TiktokCase][] = [
   [/unaudited_client_can_only_post_to_private_accounts/, 'tiktokUnaudited'],
   [/privacy_level_option_mismatch|privacy level \S+ not available/, 'tiktokPrivacy'],
-  [/spam_risk_too_many_posts|spam_risk_too_many_pending_share|reached_active_user_cap/, 'tiktokCap'],
+  [/spam_risk_too_many_posts|spam_risk_too_many_pending_share/, 'tiktokCap'],
+  [/reached_active_user_cap/, 'tiktokAppCap'],
   [/spam_risk_user_banned_from_posting/, 'tiktokBanned'],
   [/url_ownership_unverified/, 'tiktokDomain'],
   [/spam_risk_text|spam_risk\b/, 'tiktokSpam'],
