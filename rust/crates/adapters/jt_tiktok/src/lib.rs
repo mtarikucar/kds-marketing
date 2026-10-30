@@ -45,9 +45,11 @@
 //!
 //! **Revocation** ([`Connector::revoke`], once the capability is retired):
 //! `POST {api}/v2/oauth/revoke/`, form `client_key, client_secret, token` (the access token):
-//! TikTok then drops the app from the account's authorized apps. Any 2xx, its empty struct
-//! included, is a success; a failure maps as the token endpoint's do. Revoking twice is harmless,
-//! so the call is tried once more when no answer arrived.
+//! TikTok then drops the app from the account's authorized apps (the account's whole grant: the
+//! use cases revoke only when no other capability holds the account). An access token that
+//! has expired is renewed first ([`Connector::refresh`]'s call) and the fresh one revoked. Any
+//! 2xx, its empty struct included, is a success; a failure maps as the token endpoint's do.
+//! Revoking twice is harmless, so the call is tried once more when no answer arrived.
 //!
 //! **Calls.** Every call but the token calls and the upload carries the access token as
 //! `Authorization: Bearer`; a JSON body is sent as `application/json; charset=UTF-8`.

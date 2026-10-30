@@ -1440,6 +1440,48 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     assert_eq!(routed(&uow, meta, "page-3").await, Some(second.id));
 }
 
+/// Every live holder of an account with sealed credentials, across workspaces, whatever its
+/// status: what one provider-side change of the account's grant reaches.
+#[tokio::test]
+async fn capabilities_holding_lists_every_live_sealed_holder_across_workspaces() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("holding-a").await;
+    let (b, _) = db.seed_workspace("holding-b").await;
+    let verified = capability(a, "tiktok", "open-1", T0);
+    connect(&uow, &verified, true).await;
+    let unverified = capability(b, "tiktok", "open-1", T0 + Duration::days(1));
+    connect(&uow, &unverified, false).await;
+    // Not holders: declared without credentials, another account, another kind, retired.
+    let declared = capability(b, "tiktok", "open-1", T0 + Duration::days(2));
+    insert_capability(&uow, &declared).await;
+    connect(&uow, &capability(a, "tiktok", "open-2", T0), true).await;
+    connect(&uow, &capability(a, "x", "open-1", T0), true).await;
+    let gone = capability(a, "tiktok", "open-1", T0 + Duration::days(3));
+    connect(&uow, &gone, true).await;
+    set_status(&uow, &gone, StoredStatus::Retired).await;
+    let held = |kinds: &'static [&'static str], id: &'static str| {
+        let uow = uow.clone();
+        async move {
+            let mut p = uow.platform().await.unwrap();
+            p.capabilities_holding(kinds, id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| c.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    let mut expected = vec![(a, verified.id), (b, unverified.id)];
+    expected.sort();
+    assert_eq!(
+        held(&["tiktok"], "open-1").await,
+        expected.into_iter().map(|(_, id)| id).collect::<Vec<_>>()
+    );
+    assert!(held(&["tiktok"], "open-9").await.is_empty());
+    assert!(held(&[], "open-1").await.is_empty());
+}
+
 /// Only a binding proven at least once routes events: a credential pasted for someone else's
 /// account (sealed, its probe failed or reached another account, so `unreachable` and never
 /// verified) takes nothing, while a connection verified once and unreachable since keeps its

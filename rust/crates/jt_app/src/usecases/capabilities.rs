@@ -688,9 +688,10 @@ pub async fn set_policy(
 /// revoked then is logged as a warning and the retirement is answered all the same, since it
 /// holds. And a connection's access is given back at its provider (`Connector::revoke`: TikTok
 /// revokes the access token, so the app leaves the account's authorized apps), with the
-/// credential read before it was erased, in a task of its own: best effort, a failure is logged
-/// (the kind of error only) and the access stays granted at the provider until the account's
-/// owner removes it there.
+/// credential read before it was erased, in a task of its own, unless another live capability
+/// (of any workspace) still holds the same account: best effort, every outcome is logged (a
+/// failure by its kind only), and a grant not given back stays at the provider until the
+/// account's owner removes it there.
 pub async fn retire(
     deps: &Deps,
     ctx: &Ctx,
@@ -820,11 +821,16 @@ async fn retire_with_hosts(
 }
 
 /// Gives back at its provider the access the retired `capability`'s credential (`sealed`, read
-/// before it was erased) granted, in a task of its own (see [`retire`]).
+/// before it was erased) granted, in a task of its own (see [`retire`]), unless another live
+/// capability, in any workspace, still holds the same account with sealed credentials: the
+/// provider's grant is the account's (TikTok's revocation ends the account's whole authorization
+/// of the app), so revoking it would cut that one off too. Each outcome is logged (never the
+/// account): given back, kept for its other holders, or refused.
 fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &[u8]) {
-    let Some(adapter) = jt_connector::provider_for_kind(&capability.kind_key)
-        .and_then(|provider| deps.connectors.connector(provider))
-    else {
+    let Some(provider) = jt_connector::provider_for_kind(&capability.kind_key) else {
+        return;
+    };
+    let Some(adapter) = deps.connectors.connector(provider) else {
         return;
     };
     let (ws, id, kind_key) = (ctx.workspace_id, capability.id, capability.kind_key.clone());
@@ -840,16 +846,54 @@ fn revoke_at_provider(deps: &Deps, ctx: &Ctx, capability: &Capability, sealed: &
             return;
         }
     };
+    let account = capability.external_id.clone();
+    let deps = deps.clone();
     tokio::spawn(async move {
-        if let Err(e) = adapter.revoke(&credential).await {
-            tracing::warn!(
+        if let Some(account) = account.as_deref() {
+            let holders = match deps.uow.platform().await {
+                Ok(mut platform) => {
+                    platform
+                        .capabilities_holding(provider.kinds(), account)
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            match holders {
+                Ok(holders) if holders.iter().any(|c| c.id != id) => {
+                    tracing::info!(
+                        workspace_id = %ws,
+                        capability_id = %id,
+                        kind_key = %kind_key,
+                        "a retired capability's access was not given back: another capability                          still holds the account, and the grant is the account's"
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        workspace_id = %ws,
+                        capability_id = %id,
+                        code = e.code.as_str(),
+                        "a retired capability's access was not given back: whether another                          capability holds the account could not be read"
+                    );
+                    return;
+                }
+            }
+        }
+        match adapter.revoke(&credential).await {
+            Ok(()) => tracing::info!(
+                workspace_id = %ws,
+                capability_id = %id,
+                kind_key = %kind_key,
+                "a retired capability's access was given back at its provider"
+            ),
+            Err(e) => tracing::warn!(
                 workspace_id = %ws,
                 capability_id = %id,
                 kind_key = %kind_key,
                 error_kind = e.kind(),
-                "a retired capability's access could not be given back at its provider; it stays \
-                 granted there until the account's owner removes it"
-            );
+                "a retired capability's access could not be given back at its provider; it stays                  granted there until the account's owner removes it"
+            ),
         }
     });
 }

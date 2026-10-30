@@ -4151,3 +4151,61 @@ async fn host_mutations_wait_for_workspace_guard() {
             .contains(&HostCall::Allow(w.ws, "imap.example.com".into()))
     );
 }
+
+/// The provider's grant is the account's (TikTok's revocation ends the account's whole
+/// authorization of the app): while another workspace still holds the account, retiring one
+/// holder gives nothing back, which would cut the other off; retiring the last one does.
+#[tokio::test]
+async fn a_shared_account_is_revoked_only_when_its_last_holder_retires() {
+    let r = rig().await;
+    let page = r.connect_page().await;
+    let (beta, beta_ctx) = r.w.other_workspace().await;
+    jt_testkit::flows::activate_workspace(&r.w.deps, beta).await;
+    let theirs = Credential::PageToken {
+        page_id: "page-1".into(),
+        token: "EAAB-beta-page-1".into(),
+    };
+    let mut held = Capability::new(
+        CapabilityId::new_v7(),
+        beta,
+        NewCapability {
+            kind_key: "facebook_page".into(),
+            name: "Kahve".into(),
+            external_id: Some("page-1".into()),
+            ..NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    held.status = StoredStatus::Verified;
+    held.last_verified_at = Some(FIXED_NOW);
+    let sealed =
+        r.w.deps
+            .seal
+            .seal(beta, &serde_json::to_vec(&theirs).unwrap())
+            .unwrap();
+    {
+        let mut t = r.w.uow.tenant(beta).await.unwrap();
+        t.capabilities()
+            .insert(held.clone(), Some(sealed))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+    }
+
+    capabilities::retire(&r.w.deps, &r.w.owner_ctx, page.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(r.meta.revoke_calls().is_empty());
+
+    capabilities::retire(&r.w.deps, &beta_ctx, held.id, true)
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(r.meta.revoke_calls(), vec![theirs]);
+}
