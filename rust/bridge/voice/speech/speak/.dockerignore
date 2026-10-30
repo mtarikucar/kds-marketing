@@ -1,0 +1,14 @@
+# Only what the Dockerfile copies reaches the daemon (no caches, no stray fixtures).
+*
+!requirements.txt
+!constraints.txt
+!wheels.sha256
+!torch.lock
+!requirements.lock
+!pins.py
+!weights.lock
+!respell.py
+!respell.json
+!jeeta_speak.py
+!pytest.ini
+!tests/*.py

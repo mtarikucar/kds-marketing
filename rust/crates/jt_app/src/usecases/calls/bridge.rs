@@ -42,10 +42,9 @@
 
 use std::collections::BTreeMap;
 
-use jt_calls::{BridgeEvent, CallCommandId, CallId, CallMode, CallState};
-use jt_capability::{Capability, CapabilityId, EffectiveStatus, StoredStatus, effective_status};
+use jt_calls::{BridgeEvent, CallMode, CallState};
+use jt_capability::{Capability, CapabilityId, StoredStatus, effective_status};
 use jt_tenancy::Permission;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
@@ -59,6 +58,11 @@ use crate::usecases::api_keys::AgentPrincipal;
 use crate::usecases::bridges::kernel::{self, Beat, BridgeSpec, FactsMerge, Held};
 use crate::usecases::capabilities::version_in_force;
 use crate::usecases::{Deps, invalid};
+
+pub use jt_calls::wire::{
+    BridgeCommand, CommandsOut, CommandsQuery, EventIn, EventsInput, EventsOut, RegisterInput,
+    RegisterOut, SpeechToText, TextToSpeech,
+};
 
 /// The kind of the bridge's capability.
 pub const VOICE_BRIDGE_KIND: &str = "voice_bridge";
@@ -120,47 +124,6 @@ fn authorize(ctx: &Ctx) -> Result<(), AppError> {
 // ---------------------------------------------------------------------------------------------
 // Register
 // ---------------------------------------------------------------------------------------------
-
-/// The bridge's speech-to-text engine and its model.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpeechToText {
-    pub engine: String,
-    pub model: String,
-}
-
-/// The bridge's text-to-speech engine and its voice.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TextToSpeech {
-    pub engine: String,
-    pub voice: String,
-}
-
-/// `calls.bridge.register`: what the bridge reports of itself. `extension` is its PBX extension
-/// (1 to 16 digits), `codecs` at most 8 names (`[A-Za-z0-9._-]`, 1 to 16 characters each),
-/// `max_calls` how many calls it carries at once (1 to 8), the engines' names 1 to 32 characters
-/// of `[a-z0-9_-]`, the model, voice and version 1 to 128 characters without control characters.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RegisterInput {
-    pub extension: String,
-    #[serde(default)]
-    pub codecs: Vec<String>,
-    pub max_calls: u8,
-    pub stt: SpeechToText,
-    pub tts: TextToSpeech,
-    pub version: String,
-}
-
-/// What a registration answers: the bridge's capability, its status now, and how often to
-/// register again.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct RegisterOut {
-    pub capability_id: CapabilityId,
-    pub status: EffectiveStatus,
-    pub heartbeat_s: u32,
-}
 
 fn is_name(text: &str, max: usize, extra: impl Fn(u8) -> bool) -> bool {
     (1..=max).contains(&text.len()) && text.bytes().all(|b| b.is_ascii_digit() || extra(b))
@@ -304,55 +267,9 @@ async fn live_bridges(r: &mut dyn TenantRepos) -> Result<Vec<Capability>, AppErr
 // Commands
 // ---------------------------------------------------------------------------------------------
 
-/// `calls.bridge.commands`: how long to wait for a command (at most [`MAX_WAIT_S`] seconds, which
-/// is also what an absent `wait_s` waits; more is cut to it), and which bridge is asking (its
-/// extension; the workspace's only bridge when left out).
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommandsQuery {
-    #[serde(default)]
-    pub wait_s: Option<u32>,
-    #[serde(default)]
-    pub extension: Option<String>,
-}
-
-/// A command as the bridge takes it: `kind` names it (`dial`, `play`, `say`, `hangup`, ...) and
-/// `payload` carries the rest of it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct BridgeCommand {
-    pub id: CallCommandId,
-    pub call_id: CallId,
-    pub bridge_call_id: Option<String>,
-    pub kind: String,
-    pub payload: Value,
-}
-
-/// What a poll answers: the commands now the bridge's, oldest first, and whether it waited its
-/// whole time for none.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct CommandsOut {
-    pub commands: Vec<BridgeCommand>,
-    pub timed_out: bool,
-}
-
 impl From<QueuedCommand> for BridgeCommand {
     fn from(q: QueuedCommand) -> Self {
-        let mut payload = serde_json::to_value(&q.command).unwrap_or_else(|_| json!({}));
-        let kind = payload
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if let Some(fields) = payload.as_object_mut() {
-            fields.remove("kind");
-        }
-        BridgeCommand {
-            id: q.id,
-            call_id: q.call_id,
-            bridge_call_id: q.bridge_call_id,
-            kind,
-            payload,
-        }
+        BridgeCommand::of(q.id, q.call_id, q.bridge_call_id, &q.command)
     }
 }
 
@@ -435,35 +352,6 @@ async fn bridge_of(
 // Events
 // ---------------------------------------------------------------------------------------------
 
-/// One event the bridge reports: its id of the call, the event's number in that call (the bridge
-/// counts up from 1), when it happened, and what it is (`kind` and its fields, as
-/// `jt_calls::BridgeEvent` reads them).
-#[derive(Clone, Debug, Deserialize)]
-pub struct EventIn {
-    pub bridge_call_id: String,
-    pub bridge_seq: u32,
-    #[serde(with = "time::serde::rfc3339")]
-    pub at: OffsetDateTime,
-    #[serde(flatten)]
-    pub event: BridgeEvent,
-}
-
-/// `calls.bridge.events`: at most [`MAX_EVENTS`] events, of any of the bridge's calls.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventsInput {
-    pub events: Vec<EventIn>,
-}
-
-/// What a batch did: the events applied now, those applied before (a retry), and those of a call
-/// the bridge has no session for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct EventsOut {
-    pub accepted: u32,
-    pub duplicates: u32,
-    pub unmatched: u32,
-}
-
 /// The event's kind, as its `kind` field names it.
 fn kind_of(event: &BridgeEvent) -> &'static str {
     match event {
@@ -477,6 +365,8 @@ fn kind_of(event: &BridgeEvent) -> &'static str {
         BridgeEvent::Recording { .. } => "recording",
         BridgeEvent::Hangup { .. } => "hangup",
         BridgeEvent::Error { .. } => "error",
+        BridgeEvent::Phrase { .. } => "phrase",
+        BridgeEvent::Trace { .. } => "trace",
         BridgeEvent::CommandDone { .. } => "command_done",
     }
 }
@@ -539,7 +429,7 @@ async fn apply_call(
         out.unmatched += count;
         return Ok(());
     };
-    let policy = r.calls().policy().await?;
+    let policy = super::policy_of(r.as_mut()).await?;
     let (was_answered, was_ended) = (
         session.answered_at.is_some(),
         session.state == CallState::Ended,

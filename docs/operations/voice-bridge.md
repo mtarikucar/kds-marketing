@@ -200,3 +200,33 @@ WantedBy=multi-user.target
 
 The bridge must never log its key, an event's words, audio paths that hold a number, or a phone
 number.
+
+## 6. The Asterisk edge: alert when the registration reads `Rejected` (V1-T3)
+
+Plan task V1-T3 puts Asterisk (`jeeta-asterisk.service`) in front of the bridge as extension 102.
+Task E4 rewrites this page around it. Until then, one rule for whoever watches the host:
+
+```bash
+docker exec jeeta-asterisk asterisk -rx 'pjsip show registrations'
+```
+
+- **Registered**: the line is up.
+- **Rejected**: alert when it lasts more than two minutes. The same word covers a retry in progress
+  and a registration that has stopped for good, so Jeeta's agent calls fail `bridge_offline` either
+  way. Per `asterisk/etc/pjsip.conf`:
+  - a wrong secret (401/407 to the authenticated REGISTER) stops for good;
+  - a 403 stops for good;
+  - timeouts and 5xx answers are retried every 30 s, at most 10 000 times in a row (about 83 hours),
+    then it stops.
+- Recovery: fix the cause first (the secret file, the extension in the Netsantral portal, another
+  UA registering 102). Then run `systemctl restart jeeta-asterisk`. Never print the secret file.
+
+Decided on the first run (2026-10-29):
+- **Keep-alive.** NetGSM answers Asterisk's OPTIONS with 200 OK, so `qualify_frequency=20` stays.
+  `pjsip show contacts` should read `Avail` (it measured about 49 ms).
+- **Stopped outside test windows.** The bundled pjproject 2.17 has published advisories without a
+  patched release (plan task B1, "As run"). Until the B7/E-phase tests are done, `jeeta-asterisk`
+  runs only during a test window. Keep it disabled at boot (`systemctl disable jeeta-asterisk`),
+  start it with `systemctl start jeeta-asterisk`, and stop it with `systemctl stop jeeta-asterisk`
+  afterwards. Rebuild the image once Asterisk ships the pjproject
+  fixes, before task E2 points production at it.

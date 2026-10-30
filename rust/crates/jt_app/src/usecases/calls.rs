@@ -11,8 +11,9 @@
 //! **The agent's loop.** `calls.place{mode: "agent", plan}` → `calls.listen` → think →
 //! `calls.say` → `calls.listen` … → `calls.end` (or `calls.transfer`). The server never composes
 //! a sentence: every text the bridge plays is the plan's (opening, holding phrases, fallback
-//! lines, closing), the policy's (the recording announcement) or one the agent passed to
-//! `calls.say`. A slow agent hears holding phrases covering for it, a silent or disconnected one
+//! lines, closing), the policy's (the workspace's opening and the transcript notice before the
+//! plan's opening, the closing of a plan that brings none, the recording announcement) or one the
+//! agent passed to `calls.say`. A slow agent hears holding phrases covering for it, a silent or disconnected one
 //! its fallback lines and then the closing: the call always ends by script
 //! (`jobs::run_call_timers`).
 //!
@@ -25,10 +26,12 @@ pub mod listen;
 pub mod say;
 pub mod session;
 
+use std::collections::BTreeSet;
+
 use jt_calls::{
     CallCommandId, CallDirection, CallId, CallMode, CallOutcome, CallPlan, CallPolicy, CallPurpose,
-    CallSession, CallState, Command, EndCause, FenceInput, MAX_SUMMARY_CHARS, RecordingState,
-    RefusalReason, RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
+    CallSession, CallState, Command, DialScript, EndCause, FenceInput, MAX_SUMMARY_CHARS,
+    RecordingState, RefusalReason, RelationshipEvidence, Turn, TurnClock, fence_call, mask_e164,
 };
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, StoredStatus, Unit, effective_status,
@@ -108,12 +111,32 @@ pub struct PlaceInput {
     pub mode: PlaceMode,
     #[serde(default)]
     pub rep_extension: Option<String>,
-    #[serde(default)]
+    /// Read strictly: a field the plan does not have is refused (``unknown field `plan.<key>` ``).
+    #[serde(default, deserialize_with = "strict_plan")]
     pub plan: Option<CallPlan>,
     /// The capability the call goes through: a `netgsm_pbx` for a rep's call, a `voice_bridge`
     /// for an agent's; the workspace's only live one of the kind when left out.
     #[serde(default)]
     pub capability_id: Option<CapabilityId>,
+}
+
+/// The plan as `calls.place` takes it: a field the plan does not have is refused (``unknown field
+/// `plan.<key>` ``), though a stored plan reads tolerantly (`CallPlan::FIELDS`).
+fn strict_plan<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<CallPlan>, D::Error> {
+    let Some(raw) = Option::<Value>::deserialize(d)?.filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    if let Some(unknown) = raw
+        .as_object()
+        .and_then(|o| o.keys().find(|k| !CallPlan::FIELDS.contains(&k.as_str())))
+    {
+        return Err(serde::de::Error::custom(format!(
+            "unknown field `plan.{unknown}`"
+        )));
+    }
+    serde_json::from_value(raw)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 /// A follow-up task `calls.end` opens on the journey.
@@ -160,24 +183,56 @@ pub struct CallOut {
     pub turns: Vec<Turn>,
 }
 
-/// `calls.policy_set`'s body: a whole policy, read strictly (an unknown field is refused).
+/// `calls.policy_set`'s body: a whole policy, read strictly (an unknown key is refused at any
+/// depth, `phrases.filler` included), and the top-level keys it named.
 #[derive(Clone, Debug)]
-pub struct PolicyInput(pub CallPolicy);
+pub struct PolicyInput {
+    pub policy: CallPolicy,
+    /// The keys the body named; `None` for a policy built in code, which names every key.
+    pub given: Option<BTreeSet<String>>,
+}
+
+impl From<CallPolicy> for PolicyInput {
+    fn from(policy: CallPolicy) -> Self {
+        PolicyInput {
+            policy,
+            given: None,
+        }
+    }
+}
+
+/// The first key of `given`, at any depth, that `known` (the default policy's encoding) lacks,
+/// as a dotted path. Only objects are compared: a list or a scalar is its field's type to check.
+fn unknown_key(given: &Value, known: &Value, prefix: &str) -> Option<String> {
+    let (Some(given), Some(known)) = (given.as_object(), known.as_object()) else {
+        return None;
+    };
+    given.iter().find_map(|(k, v)| {
+        let path = if prefix.is_empty() {
+            k.clone()
+        } else {
+            format!("{prefix}.{k}")
+        };
+        match known.get(k) {
+            None => Some(path),
+            Some(inner) => unknown_key(v, inner, &path),
+        }
+    })
+}
 
 impl<'de> Deserialize<'de> for PolicyInput {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = Value::deserialize(d)?;
         let known =
             serde_json::to_value(CallPolicy::default()).map_err(serde::de::Error::custom)?;
-        if let (Some(given), Some(known)) = (raw.as_object(), known.as_object())
-            && let Some(unknown) = given.keys().find(|k| !known.contains_key(*k))
-        {
+        if let Some(unknown) = unknown_key(&raw, &known, "") {
             return Err(serde::de::Error::custom(format!(
                 "unknown field `{unknown}`"
             )));
         }
+        let given = raw.as_object().map(|o| o.keys().cloned().collect());
         serde_json::from_value(raw)
-            .map(PolicyInput)
+            .map(|policy| PolicyInput { policy, given })
             .map_err(serde::de::Error::custom)
     }
 }
@@ -229,27 +284,133 @@ async fn ledger(
 // Policy
 // ---------------------------------------------------------------------------------------------
 
-/// The workspace's call policy (the defaults while none is stored). Needs `calls.work`.
+/// The call policy as calls use it: the stored one (the defaults while none is stored) with the
+/// workspace's own opening, notice, closing, disclosure and greeting where the owner wrote none
+/// (`CallPolicy::with_workspace`, the owner-approved templates with the workspace's name).
+pub(crate) async fn policy_of(r: &mut dyn TenantRepos) -> Result<CallPolicy, AppError> {
+    let name = r.workspace().get().await?.name;
+    Ok(r.calls().policy().await?.with_workspace(&name))
+}
+
+/// The workspace's call policy (the defaults while none is stored), with the workspace's own
+/// sentences where the owner wrote none (`CallPolicy::with_workspace`): the sentences a call
+/// plays, as it plays them. Needs `calls.work`.
 pub async fn policy_get(deps: &Deps, ctx: &Ctx) -> Result<CallPolicy, AppError> {
     ctx.require(Permission::CallsWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    r.calls().policy().await
+    policy_of(r.as_mut()).await
+}
+
+/// The call policy's texts only a person changes (owner decision 2026-10-29): the owner approved
+/// them word for word (the notice is legal text), the fence's disclosure check looks for the
+/// disclosure sentence, and the inbound greeting is the outbound opening's twin. An agent reads
+/// them.
+pub const PERSON_ONLY: [&str; 6] = [
+    "opening_outbound",
+    "transcript_notice",
+    "closing",
+    "phrases",
+    "disclosure_sentence",
+    "greeting_inbound",
+];
+
+/// An agent's policy with the person-only texts ([`PERSON_ONLY`]) as stored. A text the body left
+/// out keeps the stored value. A text sent as stored, or as `calls.policy_get` shows it (`shown`,
+/// the workspace's templates filled in), also keeps the stored value, so a read sent back changes
+/// nothing and freezes no template. Any other value is `FORBIDDEN` with
+/// `details.reason = "person_only"` and `details.field` naming it.
+fn keep_person_only(
+    policy: &mut CallPolicy,
+    stored: &CallPolicy,
+    shown: &CallPolicy,
+    given: Option<&BTreeSet<String>>,
+) -> Result<(), AppError> {
+    fn keep<T: PartialEq + Clone>(
+        field: &'static str,
+        sent: &mut T,
+        stored: &T,
+        shown: &T,
+        named: bool,
+    ) -> Result<(), AppError> {
+        if !named || sent == stored || sent == shown {
+            *sent = stored.clone();
+            return Ok(());
+        }
+        Err(AppError {
+            code: ErrorCode::Forbidden,
+            message: format!("only a person changes the call policy's {field}"),
+            details: json!({ "reason": "person_only", "field": field }),
+        })
+    }
+    let named = |k: &str| given.is_none_or(|g| g.contains(k));
+    keep(
+        "opening_outbound",
+        &mut policy.opening_outbound,
+        &stored.opening_outbound,
+        &shown.opening_outbound,
+        named("opening_outbound"),
+    )?;
+    keep(
+        "transcript_notice",
+        &mut policy.transcript_notice,
+        &stored.transcript_notice,
+        &shown.transcript_notice,
+        named("transcript_notice"),
+    )?;
+    keep(
+        "closing",
+        &mut policy.closing,
+        &stored.closing,
+        &shown.closing,
+        named("closing"),
+    )?;
+    keep(
+        "phrases",
+        &mut policy.phrases,
+        &stored.phrases,
+        &shown.phrases,
+        named("phrases"),
+    )?;
+    keep(
+        "disclosure_sentence",
+        &mut policy.disclosure_sentence,
+        &stored.disclosure_sentence,
+        &shown.disclosure_sentence,
+        named("disclosure_sentence"),
+    )?;
+    keep(
+        "greeting_inbound",
+        &mut policy.greeting_inbound,
+        &stored.greeting_inbound,
+        &shown.greeting_inbound,
+        named("greeting_inbound"),
+    )
 }
 
 /// Replaces the call policy with `input` once it validates (`VALIDATION` naming the field).
-/// Turning the assistant disclosure off is a person's decision: an agent asking for it is
-/// `FORBIDDEN`. Writes `calls.policy_set` (payload: which fields changed). Needs `calls.manage`.
+/// The approved texts ([`PERSON_ONLY`]) are a person's to change: an agent's body keeps their
+/// stored values where it leaves them out or sends them as read, and any other value of one is
+/// `FORBIDDEN` (`details.reason = "person_only"`, `details.field` naming it). Turning the
+/// assistant disclosure off is a person's decision too: an agent asking for it is `FORBIDDEN`.
+/// Writes `calls.policy_set` (payload: which fields changed). Returns the stored policy (the
+/// workspace's templates not filled in). Needs `calls.manage`.
 pub async fn policy_set(
     deps: &Deps,
     ctx: &Ctx,
-    PolicyInput(policy): PolicyInput,
+    input: PolicyInput,
 ) -> Result<CallPolicy, AppError> {
     ctx.require(Permission::CallsManage)?;
+    let PolicyInput { mut policy, given } = input;
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let before = r.calls().policy().await?;
+    if !matches!(ctx.actor, Actor::Human { .. }) {
+        let name = r.workspace().get().await?.name;
+        let shown = before.clone().with_workspace(&name);
+        keep_person_only(&mut policy, &before, &shown, given.as_ref())?;
+    }
     policy
         .validate()
         .map_err(|e| invalid(e.field, &format!("{} {}", e.field, e.message)))?;
-    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let before = r.calls().policy().await?;
     if !policy.disclose_assistant
         && before.disclose_assistant
         && !matches!(ctx.actor, Actor::Human { .. })
@@ -333,11 +494,14 @@ struct Facts {
 }
 
 /// Who talks on the call the fence decides on: a rep at a PBX extension, or the agent through a
-/// voice bridge with its plan's opening (which must disclose the assistant when the policy asks).
+/// voice bridge with its opening, which must disclose the assistant when the policy asks. The
+/// opening is the plan's own (`spoken: false`), which the fence reads after the policy's opening
+/// lines as the answer will play them, or the whole spoken opening a placed call stores
+/// (`spoken: true`), read as it is.
 #[derive(Clone, Copy)]
 enum Line<'a> {
     Rep { extension: &'a str },
-    Agent { opening: &'a str },
+    Agent { opening: &'a str, spoken: bool },
 }
 
 /// The workspace's capability of `kind` for the call: the one named (it must be of `kind`), or
@@ -521,7 +685,7 @@ async fn facts(
             .iter()
             .any(|a| a.appointment.state == AppointmentState::Booked);
     }
-    let policy = r.calls().policy().await?;
+    let policy = policy_of(r).await?;
     let (from, to) = local_day(&capability, now);
     let calls_today = r
         .calls()
@@ -530,9 +694,13 @@ async fn facts(
     let (remaining, per_minute) = budget_left(r, &capability, &policy, now).await?;
     let (busy, disclosure_present) = match line {
         Line::Rep { extension } => (r.calls().extension_busy(extension, own).await?, true),
-        Line::Agent { opening } => (
+        Line::Agent { opening, spoken } => (
             agent_line_busy(r, &capability, ctx.agent_connection_id, own).await?,
-            policy.discloses(opening),
+            if spoken {
+                policy.discloses(opening)
+            } else {
+                policy.discloses(&policy.spoken_opening(opening))
+            },
         ),
     };
     let verdict = fence_call(&FenceInput {
@@ -667,10 +835,14 @@ async fn first_fence(
 /// sentence, a count or the duration is out of bounds) and no extension, and goes through the
 /// workspace's voice bridge: verified (a heartbeat within the minute), with a free line (it
 /// carries fewer agent calls than its `max_calls`, and the agent placing it has none on the line:
-/// else `bridge_busy`), its opening containing the policy's disclosure sentence while the policy
-/// asks for one (`disclosure_missing`; the plan's `disclose_assistant` is forced on with it). The
-/// session's bridge call id is its own id; the transaction that passes the second fence queues
-/// the bridge's `dial` (the number and the plan, for the bridge to pre-synthesise). Recording is
+/// else `bridge_busy`), its spoken opening containing the policy's disclosure sentence while the
+/// policy asks for one (`disclosure_missing`; the plan's `disclose_assistant` is forced on with
+/// it). The spoken opening is what the answer plays, as one text: the policy's `opening_outbound`
+/// and `transcript_notice`, then the plan's opening; the session's plan keeps it as its opening. A
+/// plan that brings no closing takes the policy's (`VALIDATION` naming `plan.closing` when the
+/// policy has none either). The session's bridge call id is its own id; the transaction that
+/// passes the second fence queues the bridge's `dial` (the number and the plan, for the bridge to
+/// pre-synthesise). Recording is
 /// asked for only when the bridge's capability allows it (`recording_allowed`) and the policy has
 /// an announcement to play first.
 ///
@@ -743,6 +915,7 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
         },
         metrics: Default::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     r.calls().insert(session, ctx.now).await?;
     r.commit().await?;
@@ -869,13 +1042,32 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         input.purpose,
         Line::Agent {
             opening: &plan.opening,
+            spoken: false,
         },
         None,
     )
     .await?;
     let (mut r, facts) = first_fence(r, ctx, gathered, |reason| refused(reason, None)).await?;
-    let policy = r.calls().policy().await?;
+    let policy = policy_of(r.as_mut()).await?;
     plan.disclose_assistant |= policy.disclose_assistant;
+    // The answer plays the workspace's opening and the transcript notice before the plan's own
+    // opening, as one text: the bridge splits it into sentences, plays the cached ones at once, and
+    // plays it to its end (the caller's speech does not cut it: the disclosure and the notice are
+    // always heard).
+    plan.opening = policy.spoken_opening(&plan.opening);
+    // A plan that brings no closing plays the policy's.
+    if plan.closing.is_empty() {
+        plan.closing = policy
+            .closing
+            .clone()
+            .filter(|c| !c.trim().is_empty())
+            .ok_or_else(|| {
+                invalid(
+                    "plan.closing",
+                    "plan.closing is empty and the call policy has no closing",
+                )
+            })?;
+    }
     let id = CallId(deps.ids.uuid());
     let recording = if pbx_policy_of(&facts.capability).recording_allowed && policy.may_record() {
         RecordingState::Pending
@@ -910,6 +1102,7 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         recording,
         metrics: Default::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     r.calls().insert(session, ctx.now).await?;
     r.commit().await?;
@@ -939,9 +1132,14 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         .plan
         .clone()
         .ok_or_else(|| AppError::internal("an agent's call lost its plan"))?;
+    let script = DialScript::default();
+    // The phrases the bridge is told are the phrases the log will show: keep them with the call.
+    session.phrases = script.phrases.clone();
+    r.calls().update(session.clone(), ctx.now).await?;
     let dial = Command::Dial {
         to_e164: session.counterpart_e164.clone(),
         plan,
+        script,
     };
     r.calls()
         .enqueue_commands(id, vec![(CallCommandId(deps.ids.uuid()), dial)], ctx.now)
@@ -978,8 +1176,10 @@ async fn facts_for(
         (CallMode::Human { rep_extension }, _) => Line::Rep {
             extension: rep_extension,
         },
+        // A placed call stores its whole spoken opening (`place_agent`).
         (CallMode::Agent, Some(plan)) => Line::Agent {
             opening: &plan.opening,
+            spoken: true,
         },
         (CallMode::Agent, None) => return Err(AppError::internal("an agent's call has no plan")),
     };
@@ -1340,7 +1540,7 @@ pub(crate) async fn charge(
     let Some(capability) = r.capabilities().find(session.capability_id).await? else {
         return Ok(());
     };
-    let policy = r.calls().policy().await?;
+    let policy = policy_of(r).await?;
     for item_id in &capability.budget_item_ids {
         let Some((item, _)) = super::budget::left_in_period(r, *item_id, ctx.now).await? else {
             continue;

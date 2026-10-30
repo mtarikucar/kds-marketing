@@ -61,12 +61,15 @@ fn stamp(seconds: i64) -> String {
         .unwrap()
 }
 
-/// The policy of these calls: the disclosure sentence, no tariff unless a test sets one.
+/// The policy of these calls: the disclosure sentence, no tariff unless a test sets one, and no
+/// workspace opening or transcript notice, so the answer plays the plan's opening alone.
 fn policy() -> CallPolicy {
     CallPolicy {
         disclosure_sentence: DISCLOSURE.into(),
         holding_default: vec!["Bir dakika lütfen.".into()],
         recording_announcement: "Bu görüşme kalite amacıyla kaydedilmektedir.".into(),
+        opening_outbound: Some(String::new()),
+        transcript_notice: Some(String::new()),
         ..CallPolicy::default()
     }
 }
@@ -88,6 +91,7 @@ fn plan() -> CallPlan {
         max_duration_s: 300,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 
@@ -138,7 +142,7 @@ async fn rig_with(max_calls: u8, policy: CallPolicy) -> Rig {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput(policy))
+    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput::from(policy))
         .await
         .unwrap();
     let key = api_keys::create(
@@ -1484,4 +1488,80 @@ async fn replay_agent_silent() {
 #[tokio::test]
 async fn replay_caller_hangup() {
     replay("caller_hangup").await;
+}
+
+#[tokio::test]
+async fn the_workspace_opening_and_the_notice_precede_the_plans_opening() {
+    // No disclosure sentence of the owner's: the workspace's own opening discloses.
+    let r = rig_with(
+        1,
+        CallPolicy {
+            disclosure_sentence: String::new(),
+            ..CallPolicy::default()
+        },
+    )
+    .await;
+    let mut asks = plan();
+    asks.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    let call = r.place_at(0, asks).await;
+    assert_eq!(kinds(&r.poll(1).await), ["dial"]);
+    r.report(5, call, json!([{ "kind": "answered" }])).await;
+    let play = r.poll(5).await;
+    assert_eq!(kinds(&play), ["play"]);
+    assert_eq!(
+        play[0].payload["text"],
+        format!(
+            "Merhaba, ben Acme'nin dijital asistanıyım. {} Ada Hanım ile mi görüşüyorum?",
+            jt_calls::TRANSCRIPT_NOTICE
+        )
+    );
+}
+
+#[tokio::test]
+async fn policy_get_shows_the_workspaces_own_sentences() {
+    let w = world().await;
+    let p = calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(
+        p.opening_outbound.as_deref(),
+        Some("Merhaba, ben Acme'nin dijital asistanıyım.")
+    );
+    assert_eq!(p.closing.as_deref(), Some(jt_calls::CLOSING));
+    assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
+    assert_eq!(p.phrases, jt_calls::BridgePhrases::default());
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_ends_with_the_policys_closing() {
+    let mut brief = plan();
+    brief.closing = String::new();
+    brief.max_duration_s = 60;
+    let r = rig().await;
+    let call = r.place_at(0, brief).await;
+    r.answer(call).await;
+    r.timers(65).await;
+    let queued = r.poll(65).await;
+    let closing = queued
+        .iter()
+        .find(|c| c.payload["clip"] == "closing")
+        .expect("a closing");
+    assert_eq!(closing.payload["text"], jt_calls::CLOSING);
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_is_refused_when_the_policy_has_none() {
+    let r = rig_with(
+        1,
+        CallPolicy {
+            closing: Some(String::new()),
+            ..policy()
+        },
+    )
+    .await;
+    let mut brief = plan();
+    brief.closing = String::new();
+    let e = calls::place(&r.w.deps, &r.agent_at(0), place_input(&r, brief))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["field"], "plan.closing");
 }

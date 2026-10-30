@@ -1,0 +1,35 @@
+[package]
+name = "jeeta-voice-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The talker beside Asterisk on the Jeeta host (design addendum 2026-10-29-voice-sidecar-free-path).
+# A program of its own: it reaches Jeeta, ARI and the speech services over loopback, and names no
+# server crate, only the calls domain whose wire it speaks (archtest).
+[dependencies]
+jt_calls.workspace = true
+tokio = { workspace = true, features = ["time", "net", "io-util", "fs"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+# The bridge's own HTTP client to Jeeta and ARI, both on loopback.
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The fake Jeeta and fake ARI of the tests.
+axum.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

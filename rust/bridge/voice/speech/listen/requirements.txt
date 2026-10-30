@@ -1,0 +1,11 @@
+# What the listen service imports, and pytest, each pinned exactly: the input of the lock
+# (listen_pins.py check-lock holds requirements.lock to these). constraints.txt is their frozen
+# resolution in the base image; Smart Turn's features are computed without transformers
+# (features.py), and Silero VAD's ONNX file is taken from its wheel as a model (models.lock), since
+# the silero-vad package requires torch.
+sherpa-onnx==2.0.1
+onnxruntime==1.31.1
+soxr==1.1.0
+numpy==2.5.4
+websockets==17.3
+pytest==8.4.2

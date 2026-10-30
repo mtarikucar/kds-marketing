@@ -1,0 +1,2 @@
+d /run/jeeta-voice 1770 root jeeta-voice -
+d /run/jeeta-voice/listen 0710 jeeta-voice-svc jeeta-voice -
