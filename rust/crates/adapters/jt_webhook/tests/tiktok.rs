@@ -35,7 +35,8 @@ fn body(event: &str, content: serde_json::Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "client_key": CLIENT_KEY,
         "event": event,
-        "create_time": FIXED_NOW.unix_timestamp() - 5,
+        // When the account was last verified (the fixture's probe): no older than it.
+        "create_time": FIXED_NOW.unix_timestamp(),
         "user_openid": OPEN_ID,
         "content": content.to_string(),
     }))
@@ -192,6 +193,11 @@ async fn a_post_event_is_stored_processed_and_answered_at_once() {
     assert_eq!(resp.status(), StatusCode::OK);
     let events = w.events_of(w.ws);
     assert_eq!(events.len(), 1);
+    // Processed once the post is read back, in a task of its own after the answer.
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let events = w.events_of(w.ws);
     assert!(events[0].processed_at.is_some());
     assert_eq!(capability(&w, cap).await.status, StoredStatus::Verified);
 }
