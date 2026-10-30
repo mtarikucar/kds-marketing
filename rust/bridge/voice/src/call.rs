@@ -53,7 +53,7 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::{self, Message};
 use tracing::{info, warn};
 
-use crate::ari::{self, Ari, AriEvent};
+use crate::ari::{self, Ari, AriError, AriEvent};
 use crate::cache::{Filing, PhraseCache};
 use crate::g711::Codec;
 use crate::media::{self, MediaEvent, Out, Pacer};
@@ -67,6 +67,10 @@ use crate::trace::{AudioClock, TraceFile, TurnMarks};
 const HANGUP_TAIL: Duration = Duration::from_millis(400);
 /// How long the answered line may take to bring its media up.
 const MEDIA_SETUP: Duration = Duration::from_secs(3);
+/// How long the media channel may take to enter the application once its WebSocket is connected
+/// (Asterisk refuses to bridge it before, 422), and how often the bridge asks meanwhile (B7).
+const MIX_WAIT: Duration = Duration::from_secs(2);
+const MIX_RETRY: Duration = Duration::from_millis(100);
 /// How long the PBX may ring.
 const RING_TIMEOUT_S: u32 = 45;
 /// The pauses before each try to hang a channel up: ARI may be away a moment (B6 review).
@@ -220,6 +224,31 @@ impl CallCache {
                 warn!(call = %id, "the phrase cache could not be written");
             }
         });
+    }
+}
+
+/// Why the answered call's media did not come up: the step, and ARI's answer when ARI refused it
+/// (its status code; never a URL or a body).
+struct SetupError {
+    reason: &'static str,
+    ari: Option<AriError>,
+}
+
+impl SetupError {
+    /// The failure of step `reason` with ARI's error.
+    fn at(reason: &'static str) -> impl FnOnce(AriError) -> SetupError {
+        move |e| SetupError {
+            reason,
+            ari: Some(e),
+        }
+    }
+
+    /// The failure line's words: the step, and ARI's answer (`ARI answered 422`).
+    fn words(&self) -> String {
+        match &self.ari {
+            Some(e) => format!("{} ({e})", self.reason),
+            None => self.reason.to_owned(),
+        }
     }
 }
 
@@ -578,9 +607,14 @@ pub async fn run_call(
     info!(call = %id, "answered");
     match Live::connect(&deps, &setup, services, cache, reporter.clone()).await {
         Ok(live) => live.run(rx, early_commands).await,
-        Err(reason) => {
-            warn!(call = %id, reason, "the call's media did not come up");
-            reporter.fail(reason);
+        Err(e) => {
+            match &e.ari {
+                Some(err) => {
+                    warn!(call = %id, reason = e.reason, error = %err, "the call's media did not come up");
+                }
+                None => warn!(call = %id, reason = e.reason, "the call's media did not come up"),
+            }
+            reporter.fail(&e.words());
         }
     }
     // The caller's own channel too: the media or the speaker may have closed while the caller was
@@ -767,7 +801,7 @@ impl Live {
         services: Services,
         cache: CallCache,
         reporter: Reporter,
-    ) -> Result<Live, &'static str> {
+    ) -> Result<Live, SetupError> {
         let answered = Instant::now();
         let longest = tokio::time::Instant::now() + setup.max_duration;
         let id = setup.bridge_call_id.clone();
@@ -775,22 +809,41 @@ impl Live {
         deps.ari
             .external_media(&media_id, "alaw")
             .await
-            .map_err(|_| "external media refused")?;
+            .map_err(SetupError::at("external media refused"))?;
         let connection = deps
             .ari
             .variable(&media_id, "MEDIA_WEBSOCKET_CONNECTION_ID")
             .await
-            .map_err(|_| "no media connection id")?;
-        deps.ari
-            .mix(&format!("{id}-b"), &[&id, &media_id])
-            .await
-            .map_err(|_| "the mixing bridge was refused")?;
+            .map_err(SetupError::at("no media connection id"))?;
+        // The media's WebSocket first: Asterisk puts the media channel into the application only
+        // once it is connected, and refuses to bridge it before (422, B7 2026-10-30).
         let media = deps
             .ari
             .media(&connection)
             .await
-            .map_err(|_| "media unreachable")?;
+            .map_err(SetupError::at("media unreachable"))?;
         let (media_tx, mut media_rx) = media.split();
+        let bridge = format!("{id}-b");
+        deps.ari
+            .create_bridge(&bridge)
+            .await
+            .map_err(SetupError::at("the mixing bridge was refused"))?;
+        deps.ari
+            .add_channels(&bridge, &[&id])
+            .await
+            .map_err(SetupError::at("the caller could not be bridged"))?;
+        let mix_until = tokio::time::Instant::now() + MIX_WAIT;
+        loop {
+            match deps.ari.add_channels(&bridge, &[&media_id]).await {
+                Ok(()) => break,
+                Err(AriError::Status(422)) if tokio::time::Instant::now() < mix_until => {
+                    tokio::time::sleep(MIX_RETRY).await;
+                }
+                Err(e) => return Err(SetupError::at("the media could not be bridged")(e)),
+            }
+        }
+        // A `MEDIA_START` sent before the bridge waits in the socket and is read now; the pacer
+        // starts on it either way.
         let started = tokio::time::timeout(MEDIA_SETUP, async {
             while let Some(Ok(msg)) = media_rx.next().await {
                 if let Message::Text(t) = msg
@@ -809,7 +862,10 @@ impl Live {
             None
         })
         .await;
-        let codec = started.ok().flatten().ok_or("no media start")?;
+        let codec = started.ok().flatten().ok_or(SetupError {
+            reason: "no media start",
+            ari: None,
+        })?;
         // The pacing task starts at once: RTP leaves from the media's start (B1 review).
         let (pace, ops) = mpsc::unbounded_channel();
         let (sounding_tx, sounding_rx) = mpsc::unbounded_channel();

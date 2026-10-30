@@ -1,7 +1,7 @@
 //! Fakes of Asterisk (ARI over HTTP, media over WebSocket) and of the two speech services.
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -28,6 +28,9 @@ struct Fake {
     log: Log,
     /// Channel hangups still to answer 500 (ARI briefly away).
     refusals: Arc<AtomicUsize>,
+    /// Whether the call's media WebSocket is connected: until it is, its channel is not in the
+    /// application, and a bridge refuses it 422 (as Asterisk 22.11 does, B7 2026-10-30).
+    media_up: Arc<AtomicBool>,
 }
 
 impl Fake {
@@ -38,9 +41,17 @@ impl Fake {
 
 /// As [`fake_ari`], but the first `refusals` channel hangups answer 500 (each logged all the same).
 pub async fn fake_ari_refusing_hangups(refusals: usize) -> (String, Log) {
+    fake_ari_with(refusals, Arc::new(AtomicBool::new(true))).await
+}
+
+/// As [`fake_ari_refusing_hangups`], and a mixing bridge takes a media channel (`…-m`) only once
+/// `media_up` (its WebSocket connected; [`MediaFake::connected`]), else 422 "Channel not in Stasis
+/// application".
+pub async fn fake_ari_with(refusals: usize, media_up: Arc<AtomicBool>) -> (String, Log) {
     let fake = Fake {
         log: Arc::default(),
         refusals: Arc::new(AtomicUsize::new(refusals)),
+        media_up,
     };
     let log = fake.log.clone();
     let app = Router::new()
@@ -83,7 +94,20 @@ pub async fn fake_ari_refusing_hangups(refusals: usize) -> (String, Log) {
         .route("/ari/bridges", post(|| async { axum::Json(json!({})) }))
         .route(
             "/ari/bridges/{id}/addChannel",
-            post(|| async { StatusCode::NO_CONTENT }),
+            post(
+                |State(f): State<Fake>, Query(q): Query<Vec<(String, String)>>| async move {
+                    let media = q.iter().any(|(k, v)| k == "channel" && v.contains("-m"));
+                    if media && !f.media_up.load(Ordering::SeqCst) {
+                        f.record("addChannel refused: media not in Stasis".into());
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            axum::Json(json!({ "message": "Channel not in Stasis application" })),
+                        );
+                    }
+                    f.record("addChannel".into());
+                    (StatusCode::NO_CONTENT, axum::Json(json!({})))
+                },
+            ),
         )
         .route(
             "/ari/bridges/{id}",
@@ -155,8 +179,10 @@ pub fn serve_media(conns: mpsc::Receiver<WebSocketStream<TcpStream>>) -> mpsc::R
 }
 
 /// How the fake media behaves.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct MediaFake {
+    /// Set once the call's media WebSocket connected (the fake ARI's [`fake_ari_with`] reads it).
+    pub connected: Option<Arc<AtomicBool>>,
     /// The media closes this long after its start (Asterisk restarted, the media channel failed).
     pub closes_after: Option<Duration>,
     /// Each mark is answered this much later: the sentence before it takes that long to play.
@@ -169,6 +195,7 @@ pub fn serve_media_with(
     fake: MediaFake,
 ) -> mpsc::Receiver<String> {
     let MediaFake {
+        connected,
         closes_after,
         mark_delay,
     } = fake;
@@ -177,6 +204,9 @@ pub fn serve_media_with(
         let Some(mut ws) = conns.recv().await else {
             return;
         };
+        if let Some(c) = &connected {
+            c.store(true, Ordering::SeqCst);
+        }
         let start = json!({ "event": "MEDIA_START", "connection_id": "conn-1", "channel": "WebSocket/x",
             "channel_id": "c-1-m", "format": "alaw", "optimal_frame_size": 160, "ptime": 20 });
         ws.send(Message::Text(start.to_string().into()))

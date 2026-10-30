@@ -214,14 +214,20 @@ impl Ari {
             .ok_or(AriError::Decode)
     }
 
-    /// A mixing bridge `bridge_id` holding `channels`.
-    pub async fn mix(&self, bridge_id: &str, channels: &[&str]) -> Result<(), AriError> {
+    /// A mixing bridge `bridge_id`, empty.
+    pub async fn create_bridge(&self, bridge_id: &str) -> Result<(), AriError> {
         self.call(
             Method::POST,
             "/bridges",
             &[("type", "mixing"), ("bridgeId", bridge_id)],
         )
-        .await?;
+        .await
+        .map(drop)
+    }
+
+    /// Adds `channels` to bridge `bridge_id`. A channel that is not in the application yet (an
+    /// external media channel before its WebSocket is connected) is refused with 422 (B7).
+    pub async fn add_channels(&self, bridge_id: &str, channels: &[&str]) -> Result<(), AriError> {
         let list = channels.join(",");
         self.call(
             Method::POST,

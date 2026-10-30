@@ -48,6 +48,8 @@ struct Options {
     waits: Option<LineWaits>,
     /// The call's longest duration (60 s without).
     max_duration: Option<Duration>,
+    /// The media channel never enters the application: every bridge refuses it 422.
+    media_never_in_stasis: bool,
 }
 
 /// A call on its way: its fakes, its channels and its task.
@@ -68,7 +70,9 @@ async fn closed_port() -> String {
 }
 
 async fn rig(name: &str, options: Options) -> Rig {
-    let (ari_base, log) = fake_ari_refusing_hangups(options.refused_hangups).await;
+    // The media channel enters the application only once its WebSocket is connected (B7).
+    let media_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (ari_base, log) = fake_ari_with(options.refused_hangups, media_up.clone()).await;
     let (media_addr, media_conns) = ws_server().await;
     let (listen_addr, listen_conns) = ws_server().await;
     let (speak_addr, speak_conns) = ws_server().await;
@@ -76,6 +80,7 @@ async fn rig(name: &str, options: Options) -> Rig {
     let controls = serve_media_with(
         media_conns,
         MediaFake {
+            connected: (!options.media_never_in_stasis).then_some(media_up),
             closes_after: options.media_closes_after,
             mark_delay: options.mark_delay,
         },
@@ -661,4 +666,28 @@ async fn a_listener_that_stops_mid_turn_lets_the_fault_sentence_play() {
     }))
     .await;
     r.ended().await;
+}
+
+/// B7 (2026-10-30): Asterisk bridges the media channel only once its WebSocket is connected; one
+/// still refused after 2 s fails the call, and the failure names ARI's answer.
+#[tokio::test]
+async fn a_media_channel_asterisk_never_bridges_fails_the_call_with_aris_answer() {
+    let mut r = rig(
+        "no-stasis",
+        Options {
+            media_never_in_stasis: true,
+            ..Options::default()
+        },
+    )
+    .await;
+    let _listen = r.answer().await;
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Error {
+            failure_line: "transient: bridge: the media could not be bridged (ARI answered 422)"
+                .into()
+        }
+    );
+    r.ended().await;
+    assert!(r.hangups() >= 1, "{}", r.ari());
 }
