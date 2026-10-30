@@ -80,14 +80,17 @@ subscription for these events; if the portal offers a choice, select at least th
 
 | Event (<https://developers.tiktok.com/doc/webhooks-events>, <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>) | What Jeeta does |
 |---|---|
-| `authorization.removed` | the account removed the app (or its account was deleted, banned, ...): the capability turns unreachable and the owner is asked to reconnect (`connector.authorization_removed` in the ledger, a reconnect item in pending work) |
-| `post.publish.failed`, `post.publish.complete`, `post.publish.inbox_delivered`, `post.publish.publicly_available` | the post's status is read back at once, exactly as the minute's recovery job does, so the slot settles in seconds (and a public post gets its public id and link) |
+| `authorization.removed` | the account removed the app (or its account was deleted, banned, ...): every capability holding the account, in any workspace, turns unreachable and its owner is asked to reconnect (`connector.authorization_removed` in the ledger once, a reconnect item in pending work). An event older than the capability's last verification (it was reconnected since, or the event reports the revocation of a retired sibling's token) is stored and changes nothing |
+| `post.publish.failed`, `post.publish.complete`, `post.publish.inbox_delivered`, `post.publish.publicly_available` | stored in the workspace that sent the post; the post's status is read back at once, exactly as the minute's recovery job does, so the slot settles in seconds. A public post waits up to 15 minutes for its public id; if TikTok's moderation takes longer, the post settles under its publish id (no link, no counters yet), and `post.publish.publicly_available` then upgrades it to its public id and link (`studio.publish.public_id` in the ledger), so its counters read from then on. The event is marked processed once its read-back ran; a read that failed leaves it pending for the agent |
 | anything else (`post.publish.no_longer_publicaly_available`, a future event) | stored, left for the agent (`jeeta.events.pending`) |
 
 The delivery is checked before anything is read: header `TikTok-Signature: t=<unix>,s=<hex>`,
 HMAC-SHA256 under the client secret over `"{t}.{raw body}"`
 (<https://developers.tiktok.com/doc/webhooks-verification>), compared in constant time, `t` within
-five minutes of the server's clock. TikTok gives its events no id and delivers at least once: Jeeta
+five minutes of the server's clock. Every refusal is counted (`rejected_tiktok`) and logged at most
+once a minute as "a webhook delivery's signature was refused", naming only why: `no_app`,
+`missing_header`, `malformed`, `mismatch` or `stale`. TikTok gives its events no id and delivers at
+least once: Jeeta
 names an event by what it says (its name, account, time and content) and stores it once. A storage
 failure answers `500` so that TikTok redelivers; everything else answers `200`.
 
@@ -111,7 +114,11 @@ On staging:
    URIs of section 3 (staging's and yeni's); the webhook callback URL of the host it will serve.
 2. In the staging panel: cancel the Studio slots still waiting on a TikTok capability (Today →
    Cancel), then retire each TikTok capability (its card → Retire: its token is erased and revoked
-   at TikTok).
+   at TikTok). The revocation runs after the answer: before restarting, wait for its log line,
+   "a retired capability's access was given back at its provider" (or "... was not given back:
+   another capability still holds the account", when another workspace connected the same
+   account: retire that one too, last), with
+   `sudo journalctl -u jeeta-staging --since '-10 min' | grep 'retired capability'`.
 3. On the host, keep a copy and edit in place, pasting the production app's key and secret from
    the portal (never on a command line):
 
@@ -176,9 +183,12 @@ settings, "Private account") and public again afterwards.
 - A capability whose access was lost (a refused refresh, `authorization.removed`) is reconnected
   from its card (Reconnect; MCP `jeeta.connector.reconnect`) with the same TikTok account.
 - Retiring a TikTok capability erases its sealed credential and revokes its token at TikTok
-  (`POST /v2/oauth/revoke/`, best effort: a failure is logged as "a retired capability's access
-  could not be given back at its provider", and the app then stays in the account's TikTok
-  settings until its owner removes it there).
+  (`POST /v2/oauth/revoke/`; an expired token is renewed first), unless another capability, in
+  any workspace, still holds the same account: TikTok's revocation ends the account's whole
+  grant, so it would cut that one off too. Best effort, after the answer, each outcome logged:
+  "... was given back at its provider", "... was not given back: another capability still holds
+  the account", or "... could not be given back at its provider" (the app then stays in the
+  account's TikTok settings until its owner removes it there).
 
 ## 9. A failed post
 
