@@ -508,6 +508,42 @@ pub fn api_routes() -> Vec<ApiRoute> {
             inbox::commission_rates_set,
         ),
         api_route(
+            "POST",
+            "/inbox/items/{item_id}/hide",
+            "inbox.public.hide",
+            inbox::public_hide,
+        ),
+        api_route(
+            "POST",
+            "/inbox/items/{item_id}/delete",
+            "inbox.public.delete",
+            inbox::public_delete,
+        ),
+        api_route(
+            "POST",
+            "/inbox/items/handled",
+            "inbox.public.mark_handled",
+            inbox::public_mark_handled,
+        ),
+        api_route(
+            "POST",
+            "/inbox/items/{item_id}/report",
+            "inbox.public.report",
+            inbox::public_report,
+        ),
+        api_route(
+            "POST",
+            "/inbox/replies/{outbox_id}/approve",
+            "inbox.public.approve",
+            inbox::public_approve,
+        ),
+        api_route(
+            "POST",
+            "/inbox/replies/{outbox_id}/discard",
+            "inbox.public.discard",
+            inbox::public_discard,
+        ),
+        api_route(
             "GET",
             "/inbox/conversations/{conversation_id}/context",
             "inbox.context",

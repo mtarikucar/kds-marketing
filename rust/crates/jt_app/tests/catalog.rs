@@ -179,6 +179,12 @@ fn catalog_is_the_release_table() {
         ("inbox.commissions.approve", Some("jeeta.inbox.commissions_approve"), Some(("POST", "/api/inbox/commissions/{id}/approve")), false, Risk::Write),
         ("inbox.commissions.pay", Some("jeeta.inbox.commissions_pay"), Some(("POST", "/api/inbox/commissions/{id}/pay")), false, Risk::Write),
         ("inbox.commission_rates.set", Some("jeeta.inbox.commission_rates_set"), Some(("PUT", "/api/inbox/commission-rates")), false, Risk::Write),
+        ("inbox.public.hide", Some("jeeta.inbox.public_hide"), Some(("POST", "/api/inbox/items/{item_id}/hide")), false, Risk::Write),
+        ("inbox.public.delete", Some("jeeta.inbox.public_delete"), Some(("POST", "/api/inbox/items/{item_id}/delete")), false, Risk::Destructive),
+        ("inbox.public.mark_handled", Some("jeeta.inbox.public_mark_handled"), Some(("POST", "/api/inbox/items/handled")), false, Risk::Write),
+        ("inbox.public.report", Some("jeeta.inbox.public_report"), Some(("POST", "/api/inbox/items/{item_id}/report")), false, Risk::Write),
+        ("inbox.public.approve", Some("jeeta.inbox.public_approve"), Some(("POST", "/api/inbox/replies/{outbox_id}/approve")), false, Risk::Write),
+        ("inbox.public.discard", Some("jeeta.inbox.public_discard"), Some(("POST", "/api/inbox/replies/{outbox_id}/discard")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -283,9 +289,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 169);
+    assert_eq!(CATALOG.len(), 175);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id) && !uc.id.starts_with("inbox.public.")) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

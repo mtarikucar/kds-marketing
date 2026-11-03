@@ -1553,7 +1553,7 @@ fn refused_state() -> AppError {
 /// - `Unknown`: `UPSTREAM_UNAVAILABLE`, `retryable: false`, reason `outcome unknown`.
 ///
 /// A probe's failure is never such an error: it is the probe's result.
-fn provider_error(provider: Provider, e: ConnectorError) -> AppError {
+pub(crate) fn provider_error(provider: Provider, e: ConnectorError) -> AppError {
     match &e {
         ConnectorError::Throttle { retry_after } => AppError::upstream_unavailable(
             provider.key(),

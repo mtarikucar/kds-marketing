@@ -1821,6 +1821,25 @@ ordered by acquisition time and journey ID. The historical Task 9 migration-test
 unrelated inbox rows.
 
 
+## Comments and marketplace questions: the six `inbox.public` rows
+
+Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. They bring the
+inbox to 52 tools (146 in all). None needs an approved strategy: answering customers is not
+planned growth work (owner decision 2026-11-03). Each still needs an `active` workspace.
+
+| Row | Panel route | MCP tool | Risk / permission |
+|---|---|---|---|
+| `inbox.public.hide` | POST `/api/inbox/items/{item_id}/hide` `{hidden}` | `jeeta.inbox.public_hide` | WRITE / `inbox.work` |
+| `inbox.public.delete` | POST `/api/inbox/items/{item_id}/delete` `{confirm}` | `jeeta.inbox.public_delete` | DESTRUCTIVE / `inbox.manage`, humans only |
+| `inbox.public.mark_handled` | POST `/api/inbox/items/handled` `{item_ids, reason}` | `jeeta.inbox.public_mark_handled` | WRITE / `inbox.work` |
+| `inbox.public.report` | POST `/api/inbox/items/{item_id}/report` `{reason}` | `jeeta.inbox.public_report` | WRITE / `inbox.work` |
+| `inbox.public.approve` | POST `/api/inbox/replies/{outbox_id}/approve` `{text?}` | `jeeta.inbox.public_approve` | WRITE / `inbox.work`, humans only |
+| `inbox.public.discard` | POST `/api/inbox/replies/{outbox_id}/discard` | `jeeta.inbox.public_discard` | WRITE / `inbox.work`, the drafter or a human |
+
+Moderation calls the provider with no transaction open: the item is checked, the call made, and
+the result written on the item as it then is; a moderation another one beat is `skipped`, an
+item already so is `unchanged`. Marking handled (1 to 100 items, all or none) tells no provider.
+
 ## M2b panel and architecture completion
 
 The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send

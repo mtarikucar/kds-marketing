@@ -549,3 +549,48 @@ async fn two_concurrent_agent_replies_send_once() {
     );
     assert_eq!(r.meta.calls().len(), 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Moderation (task F7): the provider is called with no lock held
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn moderation_holds_no_postgres_lock_during_the_provider_call() {
+    use jt_app::usecases::inbox::public;
+    let db = TestDb::new().await;
+    let r = replying(&db).await;
+    let item = owed(&r, "1", 0).await;
+    let (uow, ws, id, conversation) = (r.f.uow.clone(), r.f.ws, item.id, r.conversation.id);
+    r.meta.push_hook(move || async move {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            let mut t = uow.tenant(ws).await.unwrap();
+            t.people().lock_workspace().await.unwrap();
+            t.conversations().lock(conversation).await.unwrap().unwrap();
+            t.public_items().lock(id).await.unwrap().unwrap();
+            t.commit().await.unwrap();
+        })
+        .await
+        .expect("the provider call holds no lock");
+    });
+    r.meta.push_moderate(Ok(()));
+    let out = public::hide(
+        &r.deps,
+        &r.owner,
+        item.id,
+        public::HideInput { hidden: true },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.outcome, "applied");
+    assert_eq!(out.item.moderation, Moderation::Hidden);
+    let mut t = r.f.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.public_items()
+            .get(item.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .moderation,
+        Moderation::Hidden
+    );
+}

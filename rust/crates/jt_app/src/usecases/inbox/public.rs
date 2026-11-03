@@ -14,6 +14,8 @@
 //! - `subject_fetch`: lock-free and best-effort before the intake's transaction, what the
 //!   provider tells of a post or product the inbox does not know yet (or knew more than a day
 //!   ago).
+//! - Moderation ([`hide`], [`delete`], [`report`], [`mark_handled`]: spec §3.8, §6.7), the
+//!   provider called with no transaction open (`super::moderation`).
 //! - Replies (`inbox.reply` on a public conversation, `super::replies`): `reply_fence` (spec
 //!   §3.6 rules 2 to 6, at enqueue, claim and approval), `on_receipt` (the item answered or
 //!   privately replied, the recipient's direct-message identity linked) and `on_gone`; held
@@ -50,6 +52,11 @@ use crate::{
         Deps,
         connector::{adapter_public, open_credential},
     },
+};
+
+pub use super::moderation::{
+    DeleteInput, HandledOut, HideInput, MAX_HANDLED_BATCH, MarkHandledInput, ModerationOut,
+    ReportInput, delete, hide, mark_handled, report,
 };
 
 /// How long a subject the inbox knows is not asked of its provider again.

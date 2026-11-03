@@ -38,6 +38,14 @@ const EXEMPT_IDS: &[&str] = &[
     "ledger.list",
     "inbox.pending",
     "inbox.context",
+    // Answering customers is not planned growth work (owner decision 2026-11-03): the
+    // conversation use cases of comments and marketplace questions run without a strategy.
+    "inbox.public.hide",
+    "inbox.public.delete",
+    "inbox.public.mark_handled",
+    "inbox.public.report",
+    "inbox.public.approve",
+    "inbox.public.discard",
     "studio.brake",
     "studio.ledger",
     "studio.ledger_export",
@@ -214,37 +222,55 @@ fn catalog_ids_are_dotted_lowercase() {
     }
 }
 
+/// The inbox rows the strategy gate does not apply to: the two reads, and the conversation use
+/// cases of comments and marketplace questions (owner decision 2026-11-03: answering customers
+/// is not planned growth work). Every one of them still needs an `active` workspace.
+const UNGATED_INBOX: &[&str] = &[
+    "inbox.pending",
+    "inbox.context",
+    "inbox.public.hide",
+    "inbox.public.delete",
+    "inbox.public.mark_handled",
+    "inbox.public.report",
+    "inbox.public.approve",
+    "inbox.public.discard",
+];
+
 #[test]
 fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
     let rows: Vec<_> = CATALOG
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 46);
+    assert_eq!(rows.len(), 52);
     for row in rows {
         assert_eq!(
             row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
+            if UNGATED_INBOX.contains(&row.id) {
                 GateMode::Exempt
             } else {
                 GateMode::Gated
-            }
+            },
+            "{}",
+            row.id
         );
         assert_eq!(row.status_exemption, StatusExemption::Never);
     }
 }
 
 #[test]
-fn only_pending_and_context_are_exempt_inbox_reads() {
-    for row in CATALOG.iter().filter(|r| r.id.starts_with("inbox.")) {
+fn only_pending_context_and_public_conversation_rows_are_exempt_inbox_rows() {
+    let exempt: Vec<&str> = CATALOG
+        .iter()
+        .filter(|r| r.id.starts_with("inbox.") && r.gate == GateMode::Exempt)
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(exempt, UNGATED_INBOX);
+    for id in UNGATED_INBOX {
         assert_eq!(
-            row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
-                GateMode::Exempt
-            } else {
-                GateMode::Gated
-            }
+            jt_app::catalog::find(id).unwrap().status_exemption,
+            StatusExemption::Never,
+            "{id}"
         );
-        assert_eq!(row.status_exemption, StatusExemption::Never);
     }
 }
