@@ -72,6 +72,7 @@ answers, and the phone fallback (device bridge playbooks).
 | D17 | A **comments backfill poll** (hourly, last 7 days of media/posts) closes webhook gaps and imports the backlog when comments are first enabled. Same external ids as webhooks, so replays store nothing new. | Webhook outages and the first-enable backlog would otherwise lose comments still within the private-reply window. |
 | D18 | (Decided in implementation, 2026-11-03.) `comments_enabled` also requires the **platform's comment flag of the login the grant came from**: `JEETA_INSTAGRAM_COMMENT_SCOPES` for an Instagram Login grant (`connector_public.access.app = "instagram"`), `JEETA_META_COMMENT_SCOPES` otherwise. A marketplace is always enabled. | Defense in depth over D11: with the flags off, no comment path (intake, replies, moderation, polls) runs and no new Meta request is made, whatever a token happens to hold; the flags are switched on only after Meta's App Review. |
 | D19 | (Review of F4–F6, 2026-11-03.) **One reply in flight per item and visibility**: under the workspace's inbox lock, at enqueue, claim and approval, a reply is refused `reply_in_flight` while another reply of the same item and visibility is held, queued or sending (the row being claimed or approved left out). An uncertain (`unknown`) one counts as answered **for the agent** until reconciliation settles it; a human, who can look at the platform, may still answer. | Item state changes only on a receipt: without this, a timed-out send let the agent answer again, and two concurrent replies both went out (a second public comment, a second Trendyol answer). |
+| D20 | (Review of F4–F6, 2026-11-03.) **A refused approval keeps the draft unless the item changed**: the approver's edited text is checked first (`check_text`; refused: `VALIDATION`, the reply stays held); then the full fence runs, and only an item-state refusal (`item_removed`, `deadline_passed`, `already_answered`, `item_not_in_conversation`, `reply_in_flight`) refuses the held reply; a temporary or domain refusal (`workspace_inactive`, `capability_down`, …) is answered with the reply still held. | An approver's typo, or a capability briefly down, must not destroy the agent's draft; a draft whose item can no longer take it is refused so the panel shows why. |
 
 ---
 
@@ -279,15 +280,17 @@ The 24-hour DM window does not apply to public conversations; rule 4 replaces it
   row is written with state **`held`**, the message `Queued`; ledger `inbox.public.held`; no provider call.
   `reply` answers `{message_id, state: "held"}`.
 - `inbox.public.approve(outbox_id, {text?})`: human actor with `inbox.work` (`human_required` otherwise).
-  Re-runs the full fence with the approver as author (the message author becomes `Human(approver)`; the
-  drafting agent is kept in `intent.public.drafted_by`); an edited text replaces the body before the fence;
-  state → `queued`, then `send_step`. Ledger `inbox.public.approved { edited }`.
+  An edited text is checked first (§3.6 rule 5; refused: `VALIDATION`, the reply stays held, D20). Re-runs
+  the full fence with the approver as author (the message author becomes `Human(approver)`; the drafting
+  agent is kept in `intent.public.drafted_by`); an edited text replaces the body; state → `queued`, then
+  `send_step`. Ledger `inbox.public.approved { edited }`.
 - `inbox.public.discard(outbox_id)`: a human with `inbox.work`, or the agent connection that drafted it.
   State → `refused` with reason `discarded`; message `Refused { reason: "discarded" }`. Ledger
   `inbox.public.discarded`.
 - `claim` never takes a `held` row; `outbox_recover` lists only `queued`/`sending` (pinned by a test).
-- A held reply whose item stops being answerable (deadline passed, answered elsewhere, removed) is refused at
-  approval by the fence; the panel shows why.
+- A held reply whose item stops being answerable (deadline passed, answered elsewhere, removed, another
+  reply in flight) is refused at approval by the fence; the panel shows why. Any other refusal at approval
+  (the workspace inactive, the capability down, …) is answered with the reply still held (D20).
 
 ### 3.8 Who may do what
 

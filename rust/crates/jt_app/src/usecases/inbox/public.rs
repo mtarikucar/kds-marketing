@@ -852,6 +852,31 @@ pub(crate) fn refusal(reason: impl std::fmt::Display) -> AppError {
     }
 }
 
+/// Why `text` may not be sent as a reply of `visibility` on public `conversation` (on
+/// `channel`): spec §3.6 rule 5 (`jt_inbox::public::check_text`) against the person's own active
+/// phone numbers and email addresses; `None` when it may.
+pub(crate) async fn text_refusal(
+    r: &mut dyn TenantRepos,
+    conversation: &Conversation,
+    channel: Channel,
+    visibility: Visibility,
+    text: &str,
+) -> Result<Option<PublicRefusal>, AppError> {
+    let rules = jt_inbox::public::rules(channel)
+        .ok_or_else(|| AppError::internal("a public conversation without rules"))?;
+    let contacts: Vec<String> = r
+        .identities()
+        .list(conversation.person_id)
+        .await?
+        .into_iter()
+        .filter(|i| {
+            i.active && matches!(i.channel, IdentityChannel::Phone | IdentityChannel::Email)
+        })
+        .map(|i| i.value_normalized)
+        .collect();
+    Ok(jt_inbox::public::check_text(&rules, visibility, text, &contacts).err())
+}
+
 /// What a reply on a public conversation answers, once fenced ([`reply_fence`]).
 pub(crate) struct Fenced {
     pub item: PublicItem,
@@ -908,17 +933,9 @@ pub(crate) async fn reply_fence(
         return Err(refusal("reply_in_flight"));
     }
     // 5. The text: bounds, the person's own contact data, a marketplace's contact data.
-    let contacts: Vec<String> = r
-        .identities()
-        .list(conversation.person_id)
-        .await?
-        .into_iter()
-        .filter(|i| {
-            i.active && matches!(i.channel, IdentityChannel::Phone | IdentityChannel::Email)
-        })
-        .map(|i| i.value_normalized)
-        .collect();
-    jt_inbox::public::check_text(&rules, visibility, text, &contacts).map_err(refusal)?;
+    if let Some(refused) = text_refusal(r, conversation, channel, visibility, text).await? {
+        return Err(refusal(refused));
+    }
     // 6. The capability's daily cap on the agent's public replies, counted under its lock with
     // every row of the day but refused ones: held and in-flight replies count.
     if count_cap && by_agent && visibility == Visibility::Public {
@@ -1099,12 +1116,16 @@ pub struct ApproveInput {
     pub text: Option<String>,
 }
 
-/// Approves held reply `outbox_id` (spec §3.7): a human with `inbox.work` (`human_required`
-/// otherwise). The full fence runs again with the approver as the author, on the edited text when
-/// one is given (which replaces the draft's); refused, the reply is refused with that reason
-/// (the panel shows why) and the refusal is the error. Else the message's author becomes the
-/// approver (the drafter stays in `intent.public.drafted_by`), the row is queued and sent.
-/// Ledger `inbox.public.approved {edited}`.
+/// Approves held reply `outbox_id` (spec §3.7, D20): a human with `inbox.work` (`human_required`
+/// otherwise). An edited text, which replaces the draft's, is checked first (spec §3.6 rule 5):
+/// refused, the error is `VALIDATION` with the refusal as `details.reason`, and the reply stays
+/// held for another try. Then the full fence runs again with the approver as the author; a
+/// refusal is the error, and only one saying the item can no longer take the reply
+/// (`item_removed`, `deadline_passed`, `already_answered`, `item_not_in_conversation`,
+/// `reply_in_flight`) also refuses the reply (the panel shows why); any other (`capability_down`,
+/// `workspace_inactive`, …) leaves it held. Once fenced, the message's author becomes the approver
+/// (the drafter stays in `intent.public.drafted_by`), the row is queued and sent. Ledger
+/// `inbox.public.approved {edited}`.
 pub async fn approve(
     deps: &Deps,
     ctx: &Ctx,

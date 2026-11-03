@@ -260,8 +260,10 @@ impl PublicEnvelope {
 // CapabilityRepo::lock, the day being the capability's working-hours day, else Istanbul:
 // calls::local_day). inbox::public::{approve(deps, ctx, outbox_id, ApproveInput { text }),
 // discard(deps, ctx, outbox_id)} for F7's rows: refusals human_required, not_the_drafter, CONFLICT
-// reply_not_held; a refused approval refuses the row. MessageRepo::revise_queued(id, author, body)
-// (fake and Postgres). ports::connectors::PUBLIC_ITEM_GONE: the Permanent reason an adapter
+// reply_not_held; an edited text is checked first (VALIDATION, the row stays held) and only an
+// item-state fence refusal refuses the row, any other leaves it held (spec D20;
+// public::text_refusal(r, conversation, channel, visibility, text) is rule 5 on its own).
+// MessageRepo::revise_queued(id, author, body) (fake and Postgres). ports::connectors::PUBLIC_ITEM_GONE: the Permanent reason an adapter
 // answers for a gone item (M2/T2/H1 map theirs) → item Removed, outbox failed "item_removed".
 // agent_answers counts receipts of messages the agent authored (an approved draft is the
 // approver's). people::link_identity (a private reply's recipient_id → DM identity, else a merge

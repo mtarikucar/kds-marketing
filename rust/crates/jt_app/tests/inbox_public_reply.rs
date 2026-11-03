@@ -900,10 +900,26 @@ async fn approve_with_edit_replaces_the_text_and_refences() {
     )
     .await
     .unwrap_err();
+    // The approver's edit is checked first: refused, the draft stays held for another try.
+    assert_eq!(e.code, jt_app::error::ErrorCode::Validation);
     assert_eq!(reason(&e), "text_too_long");
     assert!(sends(&r.meta).is_empty());
-    // A refused approval refuses the reply: the panel shows why.
-    assert_eq!(outbox(&r, out.message_id).state, "refused");
+    assert_eq!(outbox(&r, out.message_id).state, "held");
+    assert_eq!(message(&r, out.message_id).body, "Merhaba");
+    assert!(r.w.entries("inbox.send.refused").is_empty());
+    // A shorter edit then goes.
+    r.meta.push_reply_public(accepted("r0"));
+    let approved = public::approve(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        row.id,
+        public::ApproveInput {
+            text: Some("Merhaba, DM'den yazdık.".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(approved.state, "sent");
 
     let r = rig().await;
     let (_, out, _) = held(&r, "Merhaba").await;
@@ -1514,4 +1530,60 @@ async fn a_held_reply_refuses_another_and_its_own_approval_goes() {
     .await
     .unwrap();
     assert_eq!(approved.state, "sent");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A refused approval (spec D20)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_refused_approval_keeps_the_draft_unless_the_item_changed() {
+    let r = rig().await;
+    let (c1, out, _) = held(&r, "Merhaba").await;
+    let row = outbox(&r, out.message_id);
+    // The capability is down for now: the draft waits.
+    let id = r.ig.id;
+    r.w.uow.edit(|s| {
+        s.capabilities
+            .iter_mut()
+            .find(|c| c.capability.id == id)
+            .unwrap()
+            .capability
+            .status = StoredStatus::Unreachable;
+    });
+    let e = public::approve(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        row.id,
+        public::ApproveInput::default(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::Forbidden);
+    assert_eq!(outbox(&r, out.message_id).state, "held");
+    assert_eq!(message(&r, out.message_id).status, MsgStatus::Queued);
+    assert!(sends(&r.meta).is_empty());
+    // Back up: approved and sent.
+    r.w.uow.edit(|s| {
+        s.capabilities
+            .iter_mut()
+            .find(|c| c.capability.id == id)
+            .unwrap()
+            .capability
+            .status = StoredStatus::Verified;
+    });
+    r.meta.push_reply_public(accepted("r1"));
+    assert_eq!(
+        public::approve(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            row.id,
+            public::ApproveInput::default(),
+        )
+        .await
+        .unwrap()
+        .state,
+        "sent"
+    );
+    let _ = c1;
 }

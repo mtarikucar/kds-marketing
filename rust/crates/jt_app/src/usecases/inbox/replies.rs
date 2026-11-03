@@ -1380,9 +1380,23 @@ async fn record_result_with(
     Ok(output(&row))
 }
 
-/// [`super::public::approve`] inside its transaction (the workspace lock held): the held row is
-/// fenced again with `approver` as its author on `text` (the draft's when `None`), then queued
-/// with its message revised; refused, the row and its message are refused with the reason.
+/// The fence refusals of an approval that refuse the held reply itself: its item can no longer
+/// take it (spec D20). Any other refusal (`workspace_inactive`, `capability_down`, the text)
+/// leaves the reply held.
+const ITEM_STATE_REFUSALS: &[&str] = &[
+    "item_removed",
+    "deadline_passed",
+    "already_answered",
+    "item_not_in_conversation",
+    "reply_in_flight",
+];
+
+/// [`super::public::approve`] inside its transaction (the workspace lock held): the approver's
+/// edited `text` is checked first (`VALIDATION`, the reply still held); then the held row is
+/// fenced again with `approver` as its author on the text (the draft's when `None`) and queued
+/// with its message revised. A fence refusal is the error; an item-state one
+/// ([`ITEM_STATE_REFUSALS`]) also refuses the row and its message with that reason, any other
+/// leaves the reply held (spec D20).
 pub(super) async fn approve_in(
     deps: &Deps,
     ctx: &Ctx,
@@ -1419,6 +1433,18 @@ pub(super) async fn approve_in(
     let author = Author::Human(approver);
     let cap = capability(r, &c).await?;
     let public = super::public::intent_of(&row.intent)?;
+    // The approver's edit first: refused, the draft stays held for another try.
+    if edited
+        && let Some(public) = &public
+        && let Some(channel) = public_channel_for_kind(&c.kind_key)
+        && let Some(refused) =
+            super::public::text_refusal(r, &c, channel, public.visibility, &text).await?
+    {
+        return Err(AppError::validation(
+            refused.to_string(),
+            json!({"field":"text","reason":refused.to_string()}),
+        ));
+    }
     let fenced = fence_all(
         deps,
         r,
@@ -1438,7 +1464,11 @@ pub(super) async fn approve_in(
     )
     .await;
     if let Err(e) = fenced {
-        if matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) {
+        let item_state = e.code == ErrorCode::Forbidden
+            && e.details["reason"]
+                .as_str()
+                .is_some_and(|reason| ITEM_STATE_REFUSALS.contains(&reason));
+        if item_state {
             row.state = "refused".into();
             row.last_error = Some(e.message.clone());
             row.updated_at = ctx.now;
