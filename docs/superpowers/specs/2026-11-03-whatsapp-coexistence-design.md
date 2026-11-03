@@ -144,6 +144,15 @@ on Meta's own page, a refused discovery as the callback's error, a refused sync 
 ledger (`inbox.whatsapp_history`, `declined: true`), a disconnection as `reconnect_required` with
 Meta's reason. Turkey's support is not assumed either way.
 
+## Review decisions (2026-11-03, PR #395)
+
+**D13. Erasure reaches the app's events.** Erasing a person finds them in the history's thread
+(the customer's number) and its messages' `from`/`to`, a phone-app echo's `to` and an app
+contact's `phone_number`, both in the use cases (`erasure::event_identities`, which also masks an
+event arriving after the erasure) and in the database (`inbox_event_person`, migration 0024);
+the mask takes `thread`, `phone_number`, `full_name` and `first_name` too, in Rust and in SQL
+alike. 0024's down puts 0008's functions back and is refused once such events are stored.
+
 ## Open questions
 
 - **Q1.** Does the dialog honour `extras` when opened by redirect? If not, the panel must launch
