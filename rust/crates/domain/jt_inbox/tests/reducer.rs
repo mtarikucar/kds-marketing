@@ -395,3 +395,81 @@ fn invalid_events_cannot_produce_transitions() {
     }
     assert!(ReduceInput::new((0..65).map(|i| i.to_string()), false).is_err());
 }
+
+fn outreach_sent() -> JourneyEventKind {
+    JourneyEventKind::OutreachSent {
+        campaign_id: uuid::Uuid::from_u128(7),
+        step: 2,
+    }
+}
+
+/// An outreach receipt records the touch without moving the stage (spec D18): unlike `Replied`,
+/// a new journey stays `New`.
+#[test]
+fn outreach_sent_is_rank_neutral() {
+    use JourneyStatus as S;
+    for status in [
+        S::New,
+        S::Contacted,
+        S::Unreachable,
+        S::Appointment,
+        S::Met,
+        S::Quoted,
+        S::Pending,
+    ] {
+        let mut j = journey(status);
+        j.unreachable_attempts = 2;
+        let transition = apply(&j, outreach_sent());
+        assert_eq!(transition.from(), status);
+        assert_eq!(transition.to(), status);
+        assert!(transition.effects().is_empty(), "{status:?}");
+        assert_eq!(transition.patch().unreachable_attempts, 2);
+        assert_eq!(transition.patch().updated_at, now());
+        assert_eq!(transition.patch().closed_at, None);
+    }
+    assert_eq!(
+        apply(&journey(S::New), JourneyEventKind::Replied).to(),
+        S::Contacted
+    );
+    assert_eq!(
+        serde_json::to_value(outreach_sent()).unwrap(),
+        serde_json::json!({"outreach_sent": {
+            "campaign_id": "00000000-0000-0000-0000-000000000007",
+            "step": 2
+        }})
+    );
+}
+
+#[test]
+fn outreach_sent_duplicate_key_is_suppressed() {
+    for status in [JourneyStatus::New, JourneyStatus::Won] {
+        let mut j = journey(status);
+        let e = event(&j, outreach_sent());
+        j.reduce_input = ReduceInput::new([e.idempotency_key.clone()], false).unwrap();
+        assert_eq!(
+            reduce(&j, &e, &ReducePolicy::default()),
+            Err(ReduceError::Duplicate)
+        );
+    }
+}
+
+#[test]
+fn outreach_sent_after_terminal_is_a_noop_like_replied() {
+    for status in [JourneyStatus::Won, JourneyStatus::Lost] {
+        let mut j = journey(status);
+        j.closed_at = Some(now() - Duration::hours(1));
+        let transition = apply(&j, outreach_sent());
+        assert_eq!(transition.to(), status);
+        assert_eq!(transition.patch().updated_at, j.updated_at);
+        assert_eq!(transition.patch().closed_at, j.closed_at);
+        assert!(transition.effects().is_empty());
+        for source in [EventSource::Agent, EventSource::Human(UserId::new_v7())] {
+            let mut e = event(&j, outreach_sent());
+            e.source = source;
+            assert_eq!(
+                reduce(&j, &e, &ReducePolicy::default()),
+                Err(ReduceError::Terminal)
+            );
+        }
+    }
+}

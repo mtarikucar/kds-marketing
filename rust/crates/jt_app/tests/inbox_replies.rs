@@ -1424,3 +1424,163 @@ async fn unpriced_sms_outbox_refuses_before_sending() {
             .all(|o| o.state != "sending")
     );
 }
+
+// ---- The business-recipient basis (spec 2026-10-30-leads-pool-outreach-design.md §3.12, D17) ----
+
+/// A provider's acceptance under its own id (a stored message's external id is unique).
+fn receipt(id: &str) -> Result<SendReceipt, jt_connector::ConnectorError> {
+    Ok(SendReceipt {
+        provider_id: id.into(),
+        cost_minor: None,
+    })
+}
+
+fn commercial(key: &str) -> replies::ReplyInput {
+    serde_json::from_value(
+        json!({"text":"Teklifimiz ektedir","intent":"commercial","request_key":key}),
+    )
+    .unwrap()
+}
+
+/// The setup's only person is now a business (`set_kind`'s effect).
+async fn recipient_kind(w: &World, kind: RecipientKind) {
+    let person = w.uow.snapshot().inbox.people[0].id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.people()
+        .set_recipient_kind(person, kind, w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+}
+
+/// The owner turned the business-recipient basis on for `channels`, the counsel's confirmation
+/// recorded (`confirmed`).
+async fn b2b_basis(w: &World, channels: &[&str], confirmed: bool) {
+    let at = w
+        .owner_ctx
+        .now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.workspace_policy()
+        .patch_leads(
+            json!({"outreach": {"b2b_basis": channels, "legal_ack": {
+                "counsel_confirmed": confirmed, "note": "Avukat görüşü", "by": w.owner, "at": at
+            }}}),
+            w.owner_ctx.now,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+}
+
+/// The platform switch `JEETA_OUTREACH_ENABLED`.
+fn platform(w: &mut World, on: bool) {
+    w.deps.apps = Arc::new(jt_testkit::fakes::FakeAppConfig {
+        outreach_enabled: on,
+        ..jt_testkit::fakes::FakeAppConfig::default()
+    });
+}
+
+#[tokio::test]
+async fn business_basis_off_by_default_refuses_izin_yok() {
+    let (mut w, id, c) = setup_channel("mailbox").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    let refused = |w: &World, key: &'static str| {
+        let deps = w.deps.clone();
+        let ctx = w.owner_ctx.clone();
+        async move {
+            replies::reply(&deps, &ctx, id, commercial(key))
+                .await
+                .unwrap_err()
+                .message
+        }
+    };
+    // The policy's default: no business-recipient basis.
+    assert_eq!(refused(&w, "b2b-1").await, "IZIN_YOK");
+    // Stored without the counsel's confirmation, it counts for nothing.
+    b2b_basis(&w, &["email"], false).await;
+    assert_eq!(refused(&w, "b2b-2").await, "IZIN_YOK");
+    // Confirmed, it still counts for nothing while the platform switch is off (D53).
+    b2b_basis(&w, &["email"], true).await;
+    platform(&mut w, false);
+    assert_eq!(refused(&w, "b2b-3").await, "IZIN_YOK");
+    assert!(c.calls().is_empty(), "no email left");
+    assert_eq!(w.ledger("inbox.send.refused").len(), 3);
+}
+
+#[tokio::test]
+async fn business_basis_on_allows_email_only() {
+    let (mut w, id, c) = setup_channel("mailbox").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email", "sms"], true).await;
+    c.push_mail(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial("b2b-mail"))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    assert_eq!(c.calls().len(), 1);
+    // An individual (or an unknown) recipient still needs consent.
+    for kind in [RecipientKind::Individual, RecipientKind::Unknown] {
+        recipient_kind(&w, kind).await;
+        let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial(kind.key()))
+            .await
+            .unwrap_err();
+        assert_eq!(e.message, "IZIN_YOK", "{kind:?}");
+    }
+    // A stored "sms" never widens the basis: this program allows email only.
+    let (mut w, id, c) = setup_channel("sms_line").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email", "sms"], true).await;
+    let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial("b2b-sms"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.message, "IZIN_YOK");
+    assert!(c.calls().is_empty());
+}
+
+#[tokio::test]
+async fn basis_recorded_in_fence_snapshot() {
+    let (mut w, id, c) = setup_channel("mailbox").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email"], true).await;
+    c.push_mail(receipt("basis-1"));
+    replies::reply(&w.deps, &w.owner_ctx, id, commercial("on-b2b"))
+        .await
+        .unwrap();
+    let person = w.uow.snapshot().inbox.people[0].id;
+    jt_app::usecases::inbox::consent::record_consent(
+        &w.deps,
+        &w.owner_ctx,
+        person,
+        serde_json::from_value(json!({"channel":"email","kind":"explicit","source":"agent",
+            "at": w.owner_ctx.now.format(&time::format_description::well_known::Rfc3339).unwrap()}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    c.push_mail(receipt("basis-2"));
+    replies::reply(&w.deps, &w.owner_ctx, id, commercial("on-consent"))
+        .await
+        .unwrap();
+    c.push_mail(receipt("basis-3"));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(Some("a-reply")))
+        .await
+        .unwrap();
+    let s = w.uow.snapshot();
+    let bases: Vec<_> = s
+        .inbox
+        .outbox
+        .iter()
+        .map(|o| o.fence_snapshot.as_ref().unwrap()["basis"].clone())
+        .collect();
+    assert_eq!(
+        bases,
+        vec![json!("business_recipient"), json!("consent"), json!(null)]
+    );
+    assert!(s.inbox.outbox.iter().all(|o| o.state == "sent"));
+}

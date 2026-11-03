@@ -292,7 +292,11 @@ pub(super) async fn enqueue_in(
         j.as_ref(),
         &cap,
         c.executor_generation,
-        (author, input.intent),
+        Sending {
+            author,
+            intent: input.intent,
+            outreach_enabled: deps.apps.outreach_enabled(),
+        },
     )
     .await
     {
@@ -505,6 +509,20 @@ async fn capability(r: &mut dyn TenantRepos, c: &Conversation) -> Result<Capabil
         .await?
         .ok_or_else(|| AppError::not_found("no such capability"))
 }
+/// Who sends what, and whether the platform switch `JEETA_OUTREACH_ENABLED` is on.
+#[derive(Clone, Copy, Debug)]
+struct Sending {
+    author: Author,
+    intent: SendIntent,
+    outreach_enabled: bool,
+}
+
+/// The send fence. A commercial send needs an effective consent, or (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.12, D17) the business-recipient basis: a
+/// `business` person on a channel the outreach policy's `b2b_basis` covers, which counts only
+/// while the platform switch is on and the counsel's confirmation is recorded
+/// (`OutreachPolicy::b2b_channels`). Answers the basis a commercial send rests on (`None` for a
+/// reply).
 async fn fence(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -512,9 +530,13 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    purpose: (Author, SendIntent),
-) -> Result<(), AppError> {
-    let (author, intent) = purpose;
+    sending: Sending,
+) -> Result<Option<CommercialBasis>, AppError> {
+    let Sending {
+        author,
+        intent,
+        outreach_enabled,
+    } = sending;
     let person = r
         .people()
         .get(c.person_id)
@@ -539,11 +561,32 @@ async fn fence(
             row
         })
         .collect();
+    // The policy is read (without a lock) only when the business basis could count.
+    let b2b_channels = if intent == SendIntent::Commercial
+        && outreach_enabled
+        && person.recipient_kind == RecipientKind::Business
+    {
+        r.workspace_policy()
+            .read()
+            .await?
+            .leads
+            .outreach
+            .b2b_channels()
+    } else {
+        Vec::new()
+    };
+    let basis = commercial_basis(
+        &consents,
+        &suppressions,
+        channel,
+        person.recipient_kind,
+        &b2b_channels,
+    );
     may_send(
         &FenceCtx {
             journey_status: j.map(|j| j.status),
             suppressed: suppressions.iter().any(|s| s.channel == channel),
-            consent_ok: commercial_allowed(&consents, &suppressions, channel).is_ok(),
+            consent_ok: basis.is_ok(),
             intent,
             person_erased: person.erased_at.is_some(),
             person_merged: person.merged_into.is_some(),
@@ -585,7 +628,10 @@ async fn fence(
     if r.strategy().current_approved().await?.is_none() {
         return Err(refused("strategy_required"));
     }
-    Ok(())
+    Ok(match intent {
+        SendIntent::Commercial => basis.ok(),
+        SendIntent::Reply => None,
+    })
 }
 
 struct Prepared {
@@ -682,43 +728,47 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     }
-    if let Err(e) = fence(
+    let basis = match fence(
         r.as_mut(),
         ctx,
         &c,
         j.as_ref(),
         &cap,
         row.expected_generation,
-        (
-            message.author,
-            serde_json::from_value(row.intent["kind"].clone())?,
-        ),
+        Sending {
+            author: message.author,
+            intent: serde_json::from_value(row.intent["kind"].clone())?,
+            outreach_enabled: deps.apps.outreach_enabled(),
+        },
     )
     .await
     {
-        if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) {
+        Ok(basis) => basis,
+        Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {
             return Err(e);
         }
-        row.state = "refused".into();
-        row.last_error = Some(e.message.clone());
-        row.updated_at = ctx.now;
-        r.messages()
-            .set_status(
-                row.message_id,
-                MsgStatus::Refused {
-                    reason: e.message.clone(),
-                },
-                None,
-                None,
-            )
-            .await?;
-        save_result(r.as_mut(), ctx, &row).await?;
-        r.commit().await?;
-        if e.code == ErrorCode::Validation {
-            return Err(e);
+        Err(e) => {
+            row.state = "refused".into();
+            row.last_error = Some(e.message.clone());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: e.message.clone(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r.as_mut(), ctx, &row).await?;
+            r.commit().await?;
+            if e.code == ErrorCode::Validation {
+                return Err(e);
+            }
+            return Ok(Claim::Done(output(&row)));
         }
-        return Ok(Claim::Done(output(&row)));
-    }
+    };
     let prepared = prepare(deps, r.as_mut(), &c, &cap)
         .await
         .and_then(|prepared| {
@@ -799,7 +849,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     row.attempts += 1;
     row.updated_at = ctx.now;
     row.fence_snapshot = Some(
-        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"journey_status":j.as_ref().map(|j|j.status),"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false}),
+        json!({"conversation_id":c.id,"journey_id":j.as_ref().map(|j|j.id),"journey_updated_at":j.as_ref().map(|j|j.updated_at.unix_timestamp_nanos().to_string()),"journey_reducer_revision":journey_reducer_revision,"journey_status":j.as_ref().map(|j|j.status),"executor_generation":c.executor_generation,"activity_revision":activity_revision,"send_at":ctx.now.unix_timestamp_nanos().to_string(),"person_erased":false,"person_merged":false,"basis":basis}),
     );
     r.outbox().update(row.clone()).await?;
     r.commit().await?;

@@ -204,6 +204,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_devices",
     "jt_device_protocol",
     "jt_prospects",
+    "jt_outreach",
     "serde",
     "serde_json",
     "uuid",

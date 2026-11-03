@@ -1406,6 +1406,7 @@ dependencies = [
  "jt_meta",
  "jt_netgsm",
  "jt_outbound",
+ "jt_outreach",
  "jt_prospects",
  "jt_strategy",
  "jt_studio",

@@ -16,6 +16,7 @@ jt_studio.workspace = true
 jt_calls.workspace = true
 jt_devices.workspace = true
 jt_prospects.workspace = true
+jt_outreach.workspace = true
 jt_device_protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true

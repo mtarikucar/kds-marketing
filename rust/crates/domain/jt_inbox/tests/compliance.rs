@@ -335,3 +335,213 @@ fn sms_segments_extension_and_surrogate_units() {
 fn oversized_sms_never_wraps_segment_count() {
     sms_segments(&"a".repeat(153 * usize::from(u16::MAX) + 1));
 }
+
+fn suppression(person_id: PersonId, channel: Channel, reason: SuppressionReason) -> Suppression {
+    Suppression {
+        person_id,
+        channel,
+        reason,
+    }
+}
+
+/// Spec §3.12, D17: consent explicit/implied/withdrawn/none × suppression on/off × recipient kind
+/// × channel in or out of the business channels.
+#[test]
+fn commercial_basis_matrix() {
+    let person = PersonId::new_v7();
+    let kinds = [
+        Some(ConsentKind::Explicit),
+        Some(ConsentKind::ImpliedByContract),
+        Some(ConsentKind::Withdrawn),
+        None,
+    ];
+    for kind in kinds {
+        for suppressed in [false, true] {
+            for recipient in RecipientKind::ALL {
+                for b2b in [vec![], vec![Channel::Email], vec![Channel::Sms]] {
+                    let consents: Vec<Consent> = kind
+                        .map(|k| consent(person, Channel::Email, k, 1))
+                        .into_iter()
+                        .collect();
+                    let suppressions: Vec<Suppression> = if suppressed {
+                        vec![suppression(
+                            person,
+                            Channel::Email,
+                            SuppressionReason::Unsubscribe,
+                        )]
+                    } else {
+                        vec![]
+                    };
+                    let expected = if suppressed {
+                        Err(IzinYok)
+                    } else {
+                        match kind {
+                            Some(ConsentKind::Explicit | ConsentKind::ImpliedByContract) => {
+                                Ok(CommercialBasis::Consent)
+                            }
+                            Some(ConsentKind::Withdrawn) => Err(IzinYok),
+                            None if *recipient == RecipientKind::Business
+                                && b2b.contains(&Channel::Email) =>
+                            {
+                                Ok(CommercialBasis::BusinessRecipient)
+                            }
+                            None => Err(IzinYok),
+                        }
+                    };
+                    assert_eq!(
+                        commercial_basis(
+                            &consents,
+                            &suppressions,
+                            Channel::Email,
+                            *recipient,
+                            &b2b
+                        ),
+                        expected,
+                        "{kind:?} suppressed={suppressed} {recipient:?} {b2b:?}"
+                    );
+                }
+            }
+        }
+    }
+    // A suppression on another channel does not refuse; another person's rows fail closed.
+    let other = PersonId::new_v7();
+    let sms_off = [suppression(person, Channel::Sms, SuppressionReason::Manual)];
+    assert_eq!(
+        commercial_basis(
+            &[],
+            &sms_off,
+            Channel::Email,
+            RecipientKind::Business,
+            &[Channel::Email]
+        ),
+        Ok(CommercialBasis::BusinessRecipient)
+    );
+    let mixed = [
+        suppression(person, Channel::Sms, SuppressionReason::Manual),
+        suppression(other, Channel::Sms, SuppressionReason::Manual),
+    ];
+    assert_eq!(
+        commercial_basis(
+            &[],
+            &mixed,
+            Channel::Email,
+            RecipientKind::Business,
+            &[Channel::Email]
+        ),
+        Err(IzinYok)
+    );
+    assert_eq!(
+        commercial_basis(
+            &[consent(other, Channel::Email, ConsentKind::Explicit, 1)],
+            &[suppression(person, Channel::Sms, SuppressionReason::Manual)],
+            Channel::Email,
+            RecipientKind::Business,
+            &[Channel::Email]
+        ),
+        Err(IzinYok)
+    );
+    assert_eq!(CommercialBasis::Consent.key(), "consent");
+    assert_eq!(
+        CommercialBasis::BusinessRecipient.key(),
+        "business_recipient"
+    );
+    assert_eq!(
+        serde_json::to_value(CommercialBasis::BusinessRecipient).unwrap(),
+        serde_json::json!("business_recipient")
+    );
+}
+
+#[test]
+fn withdrawal_beats_business_basis() {
+    let person = PersonId::new_v7();
+    let b2b = [Channel::Email];
+    let history = [
+        consent(person, Channel::Email, ConsentKind::Explicit, 1),
+        consent(person, Channel::Email, ConsentKind::Withdrawn, 2),
+    ];
+    assert_eq!(
+        commercial_basis(&history, &[], Channel::Email, RecipientKind::Business, &b2b),
+        Err(IzinYok)
+    );
+    // An İYS refusal is cached as a withdrawal.
+    let mut ret = consent(person, Channel::Email, ConsentKind::Withdrawn, 3);
+    ret.source = ConsentSource::IysSync;
+    assert_eq!(
+        commercial_basis(&[ret], &[], Channel::Email, RecipientKind::Business, &b2b),
+        Err(IzinYok)
+    );
+    for reason in [
+        SuppressionReason::Unsubscribe,
+        SuppressionReason::Bounce,
+        SuppressionReason::Complaint,
+        SuppressionReason::Manual,
+    ] {
+        assert_eq!(
+            commercial_basis(
+                &[consent(person, Channel::Email, ConsentKind::Explicit, 1)],
+                &[suppression(person, Channel::Email, reason)],
+                Channel::Email,
+                RecipientKind::Business,
+                &b2b
+            ),
+            Err(IzinYok),
+            "{reason:?}"
+        );
+    }
+}
+
+/// `commercial_allowed` keeps its meaning: `commercial_basis` for an unknown recipient without
+/// business channels (the earlier tests of this file still pass unchanged).
+#[test]
+fn commercial_allowed_unchanged() {
+    let person = PersonId::new_v7();
+    let other = PersonId::new_v7();
+    let histories: Vec<Vec<Consent>> = vec![
+        vec![],
+        vec![consent(person, Channel::Sms, ConsentKind::Explicit, 1)],
+        vec![consent(
+            person,
+            Channel::Sms,
+            ConsentKind::ImpliedByContract,
+            1,
+        )],
+        vec![
+            consent(person, Channel::Sms, ConsentKind::Explicit, 1),
+            consent(person, Channel::Sms, ConsentKind::Withdrawn, 2),
+        ],
+        vec![
+            consent(person, Channel::Sms, ConsentKind::Explicit, 1),
+            consent(other, Channel::Sms, ConsentKind::Explicit, 1),
+        ],
+    ];
+    let suppressions: Vec<Vec<Suppression>> = vec![
+        vec![],
+        vec![suppression(person, Channel::Sms, SuppressionReason::Bounce)],
+        vec![suppression(
+            person,
+            Channel::Email,
+            SuppressionReason::Bounce,
+        )],
+        vec![suppression(
+            other,
+            Channel::Email,
+            SuppressionReason::Bounce,
+        )],
+    ];
+    for h in &histories {
+        for s in &suppressions {
+            for channel in [Channel::Sms, Channel::Email] {
+                let allowed = commercial_allowed(h, s, channel);
+                assert_eq!(
+                    allowed,
+                    commercial_basis(h, s, channel, RecipientKind::Unknown, &[]).map(|_| ())
+                );
+                // Without business channels a business recipient needs consent like anyone.
+                assert_eq!(
+                    allowed,
+                    commercial_basis(h, s, channel, RecipientKind::Business, &[]).map(|_| ())
+                );
+            }
+        }
+    }
+}

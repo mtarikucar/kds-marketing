@@ -213,6 +213,15 @@ pub enum JourneyEventKind {
     },
     /// An outbound reply was sent.
     Replied,
+    /// An outreach email was sent (spec 2026-10-30-leads-pool-outreach-design.md D18): the
+    /// touch is recorded without moving the stage, so a cold send never marks a journey
+    /// contacted; the person's answer and ours move it as usual.
+    OutreachSent {
+        /// The campaign that sent it.
+        campaign_id: uuid::Uuid,
+        /// Its step, 1 to 6.
+        step: u8,
+    },
     /// A completed call attempt.
     CallMade {
         /// Whether contact was established.
@@ -450,8 +459,14 @@ pub fn reduce(
     };
     let mut effects = Vec::new();
     let terminal = j.status.rank().is_none();
-    let terminal_reply =
-        terminal && e.kind == JourneyEventKind::Replied && e.source == EventSource::System;
+    // A system receipt of an outbound send (a reply or an outreach email) after closure changes
+    // nothing; anyone else's event on a closed journey is refused below.
+    let terminal_reply = terminal
+        && matches!(
+            e.kind,
+            JourneyEventKind::Replied | JourneyEventKind::OutreachSent { .. }
+        )
+        && e.source == EventSource::System;
     if !terminal_reply {
         if terminal
             && !matches!(e.kind, JourneyEventKind::Merged { .. })
@@ -467,7 +482,7 @@ pub fn reduce(
         }
         patch.updated_at = e.at;
         match &e.kind {
-            JourneyEventKind::LeadReceived { .. } => {}
+            JourneyEventKind::LeadReceived { .. } | JourneyEventKind::OutreachSent { .. } => {}
             JourneyEventKind::MessageReceived => effects.push(JourneyEffect::ConversationOurs),
             JourneyEventKind::Replied | JourneyEventKind::CallMade { connected: true } => {
                 patch.unreachable_attempts = 0;

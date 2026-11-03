@@ -1098,9 +1098,10 @@ impl Default for InboxPolicy {
 }
 
 /// The leads policy (spec 2026-10-30-leads-pool-outreach-design.md §6.1): the time zone the
-/// pool's daily caps count in, the pool's retention and caps, distribution and attachment
-/// retention. Stored as JSON (`workspace_policies.leads_policy`) and read key by key: a missing
-/// key, at any depth, reads as its default. The outreach part joins with the outreach phase.
+/// pool's daily caps count in, the pool's retention and caps, distribution, outreach and
+/// attachment retention. Stored as JSON (`workspace_policies.leads_policy`) and read key by key:
+/// a missing key, at any depth, reads as its default. The outreach part's defaults keep cold
+/// email locked (no business-recipient basis, `jt_outreach::OutreachPolicy`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct LeadsPolicy {
@@ -1108,6 +1109,7 @@ pub struct LeadsPolicy {
     pub timezone: String,
     pub prospects: jt_prospects::ProspectsPolicy,
     pub distribution: DistributionPolicy,
+    pub outreach: jt_outreach::OutreachPolicy,
     pub attachments: AttachmentsPolicy,
 }
 
@@ -1117,6 +1119,7 @@ impl Default for LeadsPolicy {
             timezone: crate::usecases::hours::DEFAULT_TZ.to_owned(),
             prospects: jt_prospects::ProspectsPolicy::default(),
             distribution: DistributionPolicy::default(),
+            outreach: jt_outreach::OutreachPolicy::default(),
             attachments: AttachmentsPolicy::default(),
         }
     }

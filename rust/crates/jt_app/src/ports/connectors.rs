@@ -158,6 +158,13 @@ pub trait PlatformAppConfig: Send + Sync {
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
     fn public_base_url(&self) -> Option<Url>;
+    /// The platform switch `JEETA_OUTREACH_ENABLED` (spec 2026-10-30-leads-pool-outreach-design.md
+    /// D24): off (the default) until the operator turns it on. While it is off no outreach email
+    /// is sent (fence F2 at launch, dispatch and claim) and no commercial send rests on the
+    /// business-recipient basis.
+    fn outreach_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// The app an OAuth flow signs in with, as the last segment of its redirect URI names it

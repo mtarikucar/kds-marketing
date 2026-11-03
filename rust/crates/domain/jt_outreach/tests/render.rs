@@ -173,6 +173,14 @@ fn footer_tr_and_en() {
 
 #[test]
 fn footer_source_line_depends_on_basis() {
+    assert_eq!(
+        FooterSource::from(jt_inbox::CommercialBasis::Consent),
+        FooterSource::Consent
+    );
+    assert_eq!(
+        FooterSource::from(jt_inbox::CommercialBasis::BusinessRecipient),
+        FooterSource::PublicBusinessData
+    );
     let lines = |lang, source| footer(source).render(lang).unwrap();
     assert!(lines(Lang::Tr, FooterSource::PublicBusinessData).contains(
         "\nBu e-postayı işletmenizin herkese açık iletişim bilgileri üzerinden gönderiyoruz.\n"

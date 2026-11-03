@@ -3,6 +3,8 @@
 //! language. It names the sender, says why the recipient gets the email, links the privacy
 //! notice and the unsubscribe link.
 
+use jt_inbox::CommercialBasis;
+
 use crate::{Lang, RenderError};
 
 /// Why the recipient gets the email, which the footer's source line says.
@@ -12,6 +14,16 @@ pub enum FooterSource {
     PublicBusinessData,
     /// The recipient agreed to receive messages (an effective consent).
     Consent,
+}
+
+impl From<CommercialBasis> for FooterSource {
+    /// The source line says what the send rests on: a consent, or the business's public data.
+    fn from(basis: CommercialBasis) -> FooterSource {
+        match basis {
+            CommercialBasis::Consent => FooterSource::Consent,
+            CommercialBasis::BusinessRecipient => FooterSource::PublicBusinessData,
+        }
+    }
 }
 
 /// The footer's values: the workspace's sender identity and privacy notice, and this send's

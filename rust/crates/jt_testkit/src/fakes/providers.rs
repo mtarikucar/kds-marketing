@@ -52,6 +52,8 @@ pub struct FakeAppConfig {
     pub tiktok: Option<TiktokApp>,
     pub linkedin: Option<LinkedinApp>,
     pub public_base_url: Option<Url>,
+    /// The platform switch `JEETA_OUTREACH_ENABLED`; off by default, as on a real platform.
+    pub outreach_enabled: bool,
 }
 
 impl Default for FakeAppConfig {
@@ -63,6 +65,7 @@ impl Default for FakeAppConfig {
             tiktok: None,
             linkedin: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
+            outreach_enabled: false,
         }
     }
 }
@@ -129,6 +132,10 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn public_base_url(&self) -> Option<Url> {
         self.public_base_url.clone()
+    }
+
+    fn outreach_enabled(&self) -> bool {
+        self.outreach_enabled
     }
 }
 

@@ -31,7 +31,8 @@ mod task;
 pub use appointment::{Appointment, AppointmentError, AppointmentState, ics};
 pub use commission::{Commission, CommissionState, commission_for};
 pub use consent::{
-    Consent, ConsentKind, ConsentSource, IzinYok, SyncState, commercial_allowed, effective_consent,
+    CommercialBasis, Consent, ConsentKind, ConsentSource, IzinYok, SyncState, commercial_allowed,
+    commercial_basis, effective_consent,
 };
 pub use conversation::{ConvState, Conversation, Executor};
 pub use distribution::{
