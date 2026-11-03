@@ -275,7 +275,7 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
         ),
         (
             "piece_submit",
-            json!({"slot_id":id,"expected_revision":1,"request_key":"piece","text":"test","media":[],"adaptations":{}}),
+            json!({"slot_id":id,"expected_revision":1,"request_key":"piece","text":"test","media":[],"adaptations":{},"subject":{"kind":"generic"}}),
         ),
         (
             "judgment_record",

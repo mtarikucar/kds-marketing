@@ -137,7 +137,8 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .fetch_all(&db.pool)
     .await
     .unwrap();
-    assert_eq!(tables.len(), 14);
+    // 14 Studio tables and the materials library's seven (0021_studio_materials).
+    assert_eq!(tables.len(), 14 + 7);
     for table in tables {
         let forced: bool = sqlx::query_scalar(
             "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1",
