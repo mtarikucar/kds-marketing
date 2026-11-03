@@ -594,3 +594,158 @@ async fn moderation_holds_no_postgres_lock_during_the_provider_call() {
         Moderation::Hidden
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Erasure of comments and questions (task F9)
+// ---------------------------------------------------------------------------------------------
+
+/// A comment of an Instagram commenter and a question of a Trendyol buyer, both taken in through
+/// the consumer, then the person of each erased: their events keep ids, states and times, and
+/// lose the author, the text, the provider's item and its names; the items stay with no personal
+/// text; a later comment of the erased commenter is masked before it is stored.
+#[tokio::test]
+async fn erasure_masks_comment_and_question_events() {
+    use jt_app::usecases::inbox::{consumer, erasure};
+    use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
+    let db = TestDb::new().await;
+    let r = replying(&db).await;
+    let mut apps = jt_testkit::fakes::FakeAppConfig::with_all_apps();
+    apps.meta.as_mut().unwrap().comment_scopes = true;
+    let mut deps = r.deps.clone();
+    deps.apps = Arc::new(apps);
+    let ws = r.f.ws;
+    let mut t = r.f.uow.tenant(ws).await.unwrap();
+    let ig = t
+        .capabilities()
+        .find(r.conversation.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(t);
+    let trendyol = account(&r.f, "trendyol", "seller-1").await;
+    let envelope = |kind: &str, account: &str, author: &str, id: &str| {
+        json!({
+            "public": {
+                "kind": kind, "account_id": account, "external_id": id,
+                "root_external_id": id, "status": "open",
+                "author": {"id": author, "name": "ayse.example", "is_self": false},
+                "text": "Fiyatı nedir? 0532 000 00 00", "created_at": "2026-10-30T10:00:00Z"
+            },
+            "provider_item": {"id": id, "username": "ayse.example", "userName": "Ayşe K."}
+        })
+    };
+    let mut events = Vec::new();
+    for (cap, provider, kind, payload) in [
+        (
+            ig.id,
+            Provider::Meta,
+            EventKind::Comment,
+            envelope("comment", "ig-acct", "5150", "c-1"),
+        ),
+        (
+            trendyol,
+            Provider::Trendyol,
+            EventKind::Question,
+            envelope("question", "seller-1", "777", "q-1"),
+        ),
+    ] {
+        let event = InboundEvent {
+            id: InboundEventId::new_v7(),
+            workspace_id: ws,
+            provider,
+            capability_id: Some(cap),
+            external_id: format!("event:{}", payload["public"]["external_id"]),
+            kind,
+            payload,
+            received_at: FIXED_NOW,
+            processed_at: None,
+        };
+        let mut t = r.f.uow.tenant(ws).await.unwrap();
+        t.inbound_events()
+            .insert_if_new(event.clone(), Some(b"raw delivery".to_vec()))
+            .await
+            .unwrap()
+            .unwrap();
+        t.commit().await.unwrap();
+        consumer::consume_event(&deps, &event, FIXED_NOW)
+            .await
+            .unwrap();
+        events.push(event);
+    }
+    let ctx = jt_app::ctx::Ctx {
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        ..r.owner.clone()
+    };
+    let mut t = r.f.uow.tenant(ws).await.unwrap();
+    let items: Vec<PublicItem> = {
+        let mut items = Vec::new();
+        for (cap, id) in [(ig.id, "c-1"), (trendyol, "q-1")] {
+            items.push(
+                t.public_items()
+                    .find_by_external(cap, id)
+                    .await
+                    .unwrap()
+                    .expect("the item was taken in"),
+            );
+        }
+        items
+    };
+    let mut people = Vec::new();
+    for item in &items {
+        people.push(
+            t.conversations()
+                .get(item.conversation_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .person_id,
+        );
+    }
+    drop(t);
+    for person in &people {
+        erasure::erase(&deps, &ctx, *person, erasure::EraseInput { confirm: true })
+            .await
+            .unwrap();
+    }
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    for event in &events {
+        let (p, raw): (Value, Option<Vec<u8>>) = sqlx::query_as(
+            "select payload,raw from inbound_events where workspace_id=$1 and id=$2",
+        )
+        .bind(ws.as_uuid())
+        .bind(event.id.as_uuid())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        assert!(raw.is_none());
+        let public = &p["public"];
+        assert_eq!(public["author"], json!(""));
+        assert_eq!(public["text"], json!(""));
+        assert_eq!(p["provider_item"], json!(""));
+        assert_eq!(
+            public["external_id"],
+            event.payload["public"]["external_id"]
+        );
+        assert_eq!(public["status"], "open");
+    }
+    tx.commit().await.unwrap();
+    // The items keep ids, states and times only; their messages are scrubbed.
+    let mut t = r.f.uow.tenant(ws).await.unwrap();
+    for item in &items {
+        let stored = t.public_items().get(item.id).await.unwrap().unwrap();
+        let text = serde_json::to_string(&stored).unwrap();
+        for personal in ["Fiyat", "ayse", "Ayşe", "5150", "777", "0532"] {
+            assert!(!text.contains(personal), "{personal} in {text}");
+        }
+        let message = t.messages().get(stored.message_id).await.unwrap().unwrap();
+        assert!(!message.body.contains("Fiyat"));
+    }
+    // A later comment of the erased commenter is masked before it is stored.
+    let mut later = envelope("comment", "ig-acct", "5150", "c-2");
+    let erased = erasure::scrub_inbound(t.as_mut(), Some(ig.id), &mut later)
+        .await
+        .unwrap();
+    assert!(erased);
+    assert_eq!(later["public"]["text"], json!(""));
+    assert_eq!(later["erased_identity"], true);
+}

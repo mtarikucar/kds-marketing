@@ -1474,3 +1474,145 @@ async fn our_removed_comment_never_answers_the_parent() {
     assert_eq!(after.messages, before.messages);
     assert_eq!(after.public_items, before.public_items);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Erasure (task F9)
+// ---------------------------------------------------------------------------------------------
+
+/// The person of item `external_id`.
+fn person_of(s: &jt_testkit::fakes::MemState, external_id: &str) -> PersonId {
+    conversation(s, item(s, external_id).conversation_id).person_id
+}
+
+/// The stored payload of event `external_id`.
+fn payload_of(s: &jt_testkit::fakes::MemState, external_id: &str) -> Value {
+    s.inbound_events
+        .iter()
+        .find(|e| e.event.external_id == external_id)
+        .unwrap()
+        .event
+        .payload
+        .clone()
+}
+
+async fn erase(r: &Rig, person: PersonId) {
+    jt_app::usecases::inbox::erasure::erase(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        person,
+        jt_app::usecases::inbox::erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn erase_commenter_scrubs_messages_and_payloads() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
+    assert_eq!(
+        deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await,
+        "consumed"
+    );
+    assert_eq!(
+        deliver(&r, &store, "q:1", question("q-1", Some("777"))).await,
+        "consumed"
+    );
+    // Someone else's comment.
+    assert_eq!(
+        deliver(
+            &r,
+            &ig,
+            "comment:2",
+            comment("2", Some("17841400000000077"))
+        )
+        .await,
+        "consumed"
+    );
+    let s = r.w.uow.snapshot();
+    let (commenter, buyer) = (person_of(&s, "1"), person_of(&s, "q-1"));
+    erase(&r, commenter).await;
+    erase(&r, buyer).await;
+    let s = r.w.uow.snapshot();
+    for (event, external_id) in [("comment:1", "1"), ("q:1", "q-1")] {
+        let payload = payload_of(&s, event);
+        let public = &payload["public"];
+        assert_eq!(public["author"], json!(""), "{event}");
+        assert_eq!(public["text"], json!(""), "{event}");
+        assert_eq!(payload["provider_item"], json!(""), "{event}");
+        // Ids, states and times stay.
+        assert_eq!(public["external_id"], external_id, "{event}");
+        assert_eq!(public["status"], "open", "{event}");
+        let message = s
+            .inbox
+            .messages
+            .iter()
+            .find(|m| m.id == item(&s, external_id).message_id)
+            .unwrap();
+        assert!(!message.body.contains("Fiyat") && !message.body.contains("bedeni"));
+    }
+    assert!(
+        s.inbox
+            .identities
+            .iter()
+            .all(|i| !i.value_normalized.contains(FAN) && !i.value_normalized.contains("777"))
+    );
+    // The other commenter's event is untouched.
+    let kept = payload_of(&s, "comment:2");
+    assert_eq!(kept["public"]["text"], "Fiyatı nedir?");
+    assert_eq!(kept["provider_item"]["userName"], "Ayşe Kaya");
+}
+
+#[tokio::test]
+async fn erased_commenter_new_comment_dropped() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
+    let person = person_of(&r.w.uow.snapshot(), "1");
+    erase(&r, person).await;
+    // Masked before it is stored, as the webhook and the polls store it.
+    let mut payload = comment("3", Some(FAN)).into_payload(json!({"userName": "Ayşe Kaya"}));
+    let mut t = r.w.uow.tenant(r.w.ws).await.unwrap();
+    assert!(
+        jt_app::usecases::inbox::erasure::scrub_inbound(t.as_mut(), Some(ig.id), &mut payload)
+            .await
+            .unwrap()
+    );
+    drop(t);
+    assert_eq!(payload["public"]["text"], json!(""));
+    assert_eq!(payload["public"]["author"], json!(""));
+    assert_eq!(payload["erased_identity"], true);
+    // And dropped by the consumer: no person, message or item.
+    let before = r.w.uow.snapshot().inbox;
+    assert_eq!(
+        deliver(&r, &ig, "comment:3", comment("3", Some(FAN))).await,
+        "erased_identity_drop"
+    );
+    let after = r.w.uow.snapshot().inbox;
+    assert_eq!(after.people.len(), before.people.len());
+    assert_eq!(after.messages.len(), before.messages.len());
+    assert_eq!(after.public_items.len(), before.public_items.len());
+}
+
+#[tokio::test]
+async fn items_keep_no_personal_text() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
+    let s = r.w.uow.snapshot();
+    let person = person_of(&s, "1");
+    let before = item(&s, "1");
+    erase(&r, person).await;
+    let s = r.w.uow.snapshot();
+    let after = item(&s, "1");
+    // The item stays, with its ids, states and times; nothing in it is personal.
+    assert_eq!(
+        (after.id, after.answer.clone(), after.moderation),
+        (before.id, before.answer.clone(), before.moderation)
+    );
+    let text = serde_json::to_string(&after).unwrap();
+    for personal in ["Fiyat", "a.customer", "Ayşe", FAN] {
+        assert!(!text.contains(personal), "{personal} in {text}");
+    }
+}
