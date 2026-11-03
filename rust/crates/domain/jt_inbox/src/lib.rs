@@ -13,6 +13,7 @@ mod appointment;
 mod commission;
 mod consent;
 mod conversation;
+mod distribution;
 mod erasure;
 mod fence;
 mod identity;
@@ -33,14 +34,18 @@ pub use consent::{
     Consent, ConsentKind, ConsentSource, IzinYok, SyncState, commercial_allowed, effective_consent,
 };
 pub use conversation::{ConvState, Conversation, Executor};
+pub use distribution::{
+    Candidate, Cause, Choice, DefaultRule, LeadFacts, Match, MemberPool, Method, RepProfile, Rule,
+    SourceKind, choose, fold, rule_matches, source_kind,
+};
 pub use erasure::identity_hash;
 pub use fence::{FenceCtx, FenceRefusal, SendIntent, may_send};
 pub use identity::{
     Channel, Identity, IdentityChannel, IdentityError, channel_for_kind, normalise, scope_opaque,
 };
 pub use ids::{
-    ConsentId, ConversationId, IdentityId, JourneyEventId, JourneyId, MergeId, MessageId, NoteId,
-    PersonId, TaskId,
+    AssignmentId, ConsentId, ConversationId, IdentityId, JourneyEventId, JourneyId, MergeId,
+    MessageId, NoteId, PersonId, RuleId, TaskId,
 };
 pub use journey::{
     ImportedJourney, InitialJourney, Journey, JourneyEffect, JourneyEvent, JourneyEventKind,
@@ -50,7 +55,7 @@ pub use journey::{
 pub use merge::{MergeConflict, MergeDecision, PersonView, decide_merge};
 pub use message::{Author, Direction, Message, MsgStatus};
 pub use note::Note;
-pub use person::{EventSource, FirstTouch, Person, Source};
+pub use person::{EventSource, FirstTouch, Person, RecipientKind, Source};
 pub use quote::{Quote, QuoteError, QuoteState};
 pub use sms::sms_segments;
 pub use suppression::{Suppression, SuppressionReason};

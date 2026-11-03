@@ -315,6 +315,7 @@ async fn never_steals_non_imported_identities_and_never_rebaselines_touched_peop
             workspace_id: ws,
             display_name: "runtime person".into(),
             company: "".into(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: Source::Form,
                 capability_id: None,

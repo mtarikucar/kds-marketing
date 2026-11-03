@@ -4,6 +4,7 @@ use jt_capability::CapabilityId;
 use jt_tenancy::{UserId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::{Channel, PersonId, epoch};
 
@@ -21,6 +22,14 @@ pub enum Source {
     Form,
     /// A returning customer starting a later journey.
     Repeat,
+    /// Promoted from the workspace's prospect pool: the prospect and how it entered the pool
+    /// (`research_task`, `manual`, `agent`, `v1_import`, `system`).
+    Prospect {
+        /// The promoted prospect.
+        prospect_id: Uuid,
+        /// The prospect's origin.
+        origin: String,
+    },
     /// Provenance preserved by the operator-only v1 lead import.
     #[serde(untagged)]
     V1Import {
@@ -50,6 +59,44 @@ pub struct FirstTouch {
     pub at: OffsetDateTime,
 }
 
+/// Whom a commercial message would reach: a business's own contact point or a private
+/// individual. Unknown until promotion or a person sets it; the commercial basis of outreach
+/// reads it (spec 2026-10-30-leads-pool-outreach-design.md §3.12).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipientKind {
+    /// Not known.
+    #[default]
+    Unknown,
+    /// A business (a promoted prospect, or set by a person).
+    Business,
+    /// A private individual; only a person sets it, and promotion never overrides it.
+    Individual,
+}
+
+impl RecipientKind {
+    /// Every kind, in declaration order.
+    pub const ALL: &'static [RecipientKind] = &[
+        RecipientKind::Unknown,
+        RecipientKind::Business,
+        RecipientKind::Individual,
+    ];
+
+    /// The kind's stored name.
+    pub fn key(self) -> &'static str {
+        match self {
+            RecipientKind::Unknown => "unknown",
+            RecipientKind::Business => "business",
+            RecipientKind::Individual => "individual",
+        }
+    }
+
+    /// The kind a stored name names.
+    pub fn parse(s: &str) -> Option<RecipientKind> {
+        RecipientKind::ALL.iter().copied().find(|k| k.key() == s)
+    }
+}
+
 /// A tenant's person, with original attribution and optional merge/erasure markers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Person {
@@ -63,6 +110,9 @@ pub struct Person {
     /// The person's company; missing reads as empty.
     #[serde(default)]
     pub company: String,
+    /// Whom a commercial message to this person reaches; missing reads as `Unknown`.
+    #[serde(default)]
+    pub recipient_kind: RecipientKind,
     /// Original acquisition attribution; required and never fabricated on read.
     pub first_touch: FirstTouch,
     /// The keeper when this person was merged; missing reads as `None`.

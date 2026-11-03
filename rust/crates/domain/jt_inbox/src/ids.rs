@@ -42,3 +42,11 @@ define_id!(
     /// A decision in a person's consent history.
     ConsentId
 );
+define_id!(
+    /// A distribution rule.
+    RuleId
+);
+define_id!(
+    /// One distribution decision in a journey's assignment log.
+    AssignmentId
+);

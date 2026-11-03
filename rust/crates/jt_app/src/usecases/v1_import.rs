@@ -341,6 +341,7 @@ async fn intake(
             workspace_id: ws,
             display_name: lead.contact_person.clone(),
             company: lead.business_name.clone(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: Source::Import,
                 capability_id: None,

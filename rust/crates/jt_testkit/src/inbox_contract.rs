@@ -65,6 +65,7 @@ impl Fixture {
             workspace_id: self.ws,
             display_name: name.into(),
             company: "Company".into(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: Source::Import,
                 capability_id: None,

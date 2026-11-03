@@ -146,6 +146,7 @@ pub(crate) async fn match_or_create(
             workspace_id: ctx.workspace_id,
             display_name: input.display_name,
             company: String::new(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: input.source.clone(),
                 capability_id: own_identity.and_then(|i| input.identities[i].capability_id),
