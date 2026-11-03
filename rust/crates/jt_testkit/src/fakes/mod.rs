@@ -52,6 +52,8 @@ mod compliance;
 mod connector;
 mod devices;
 pub use devices::MemDevices;
+mod distribution;
+pub use distribution::MemDistribution;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod platform;

@@ -32,4 +32,6 @@ pub mod platform_access_contract;
 pub mod devices_bridge_contract;
 pub mod devices_contract;
 
+/// Lead distribution's repository contracts, shared by the fake and PostgreSQL.
+pub mod distribution_contract;
 pub mod prospects_contract;

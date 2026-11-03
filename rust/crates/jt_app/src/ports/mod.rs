@@ -27,6 +27,7 @@ pub mod calls;
 pub mod compliance;
 pub mod connectors;
 pub mod devices;
+pub mod distribution;
 pub mod files;
 pub mod inbox;
 pub mod prospects;
@@ -1651,6 +1652,9 @@ pub trait TenantRepos: Send + Sync {
     fn prospects(&mut self) -> &mut dyn crate::ports::prospects::ProspectRepo;
     fn research_tasks(&mut self) -> &mut dyn crate::ports::prospects::ResearchTaskRepo;
     fn prospect_blocklist(&mut self) -> &mut dyn crate::ports::prospects::BlocklistRepo;
+    fn rep_profiles(&mut self) -> &mut dyn crate::ports::distribution::RepProfileRepo;
+    fn distribution_rules(&mut self) -> &mut dyn crate::ports::distribution::RuleRepo;
+    fn assignments(&mut self) -> &mut dyn crate::ports::distribution::AssignmentRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

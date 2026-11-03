@@ -122,4 +122,23 @@ impl PersonRepo for PgTenantRepos {
             .map_err(|e| map_sqlx(e, "erase person"))?,
         )
     }
+    async fn set_recipient_kind(
+        &mut self,
+        id: PersonId,
+        kind: jt_inbox::RecipientKind,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        changed(
+            sqlx::query(
+                "update people set recipient_kind=$3,updated_at=greatest(updated_at+interval '1 microsecond',$4) where workspace_id=$1 and id=$2",
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(id.as_uuid())
+            .bind(kind.key())
+            .bind(at)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "set recipient kind"))?,
+        )
+    }
 }

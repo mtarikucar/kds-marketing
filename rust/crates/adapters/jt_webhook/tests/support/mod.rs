@@ -315,6 +315,15 @@ impl TenantRepos for FailingTenant {
     fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
         self.0.prospect_blocklist()
     }
+    fn rep_profiles(&mut self) -> &mut dyn jt_app::ports::distribution::RepProfileRepo {
+        self.0.rep_profiles()
+    }
+    fn distribution_rules(&mut self) -> &mut dyn jt_app::ports::distribution::RuleRepo {
+        self.0.distribution_rules()
+    }
+    fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
+        self.0.assignments()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()

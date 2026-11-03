@@ -31,17 +31,18 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
-/// device commands and device files of `0017_device_bridge`, and the five pool tables of
-/// `0020_prospects`.
-const TABLES_AFTER_ALL: i64 = 79;
+/// device commands and device files of `0017_device_bridge`, the five pool tables of
+/// `0020_prospects`, and the rep profiles, rules and assignment log of `0021_distribution`.
+const TABLES_AFTER_ALL: i64 = 82;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, and `0020_prospects`.
-const MIGRATIONS: i64 = 19;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, `0020_prospects` and
+/// `0021_distribution`.
+const MIGRATIONS: i64 = 20;
 
 /// The migration versions. `0019` (inbox comments and marketplace) belongs to a parallel branch:
 /// when it merges it adds its version here.
 fn versions() -> Vec<i64> {
-    (1..=18).chain([20]).collect()
+    (1..=18).chain([20, 21]).collect()
 }
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
@@ -220,6 +221,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0021_distribution",
         "0020_prospects",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
@@ -731,6 +733,12 @@ async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     // Newest first: the pool and the call tables reference the inbox tables.
     sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_distribution.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../../migrations/0020_prospects.down.sql"
     ))
     .execute(&db.pool)
@@ -876,6 +884,12 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_distribution.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0020_prospects.down.sql"
     ))
@@ -1375,4 +1389,103 @@ async fn blocklist_reason_and_expiry_agree() {
             "{reason}: {err}"
         );
     }
+}
+
+/// The tables of `0021_distribution`, each with its one row-level policy.
+const DISTRIBUTION_TABLES: [(&str, &str); 3] = [
+    ("rep_profiles", "rep_profiles_ws"),
+    ("distribution_rules", "distribution_rules_ws"),
+    ("journey_assignments", "journey_assignments_ws"),
+];
+
+/// The indexes of `0021_distribution` beyond its primary keys and unique constraints.
+const DISTRIBUTION_INDEXES: [&str; 4] = [
+    "journey_assignments_live",
+    "journey_assignments_sla",
+    "journey_assignments_journey",
+    "journey_assignments_log",
+];
+
+#[tokio::test]
+async fn distribution_up_and_down_are_repeatable() {
+    let db = TestDb::new().await; // already migrated up, 0021 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0021_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0021_distribution.down.sql")).unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 3);
+        for index in DISTRIBUTION_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        assert!(!function_exists(&db.pool, "journey_assignments_guard").await);
+        assert!(!column_exists(&db.pool, ("people", "recipient_kind")).await);
+    }
+    try_run(&db.pool, &up).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(column_exists(&db.pool, ("people", "recipient_kind")).await);
+    assert!(function_exists(&db.pool, "journey_assignments_guard").await);
+    for index in DISTRIBUTION_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    for (table, policy) in DISTRIBUTION_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: Vec<String> = sqlx::query_scalar(
+            "select policyname::text from pg_policies where schemaname = current_schema() \
+             and tablename = $1",
+        )
+        .bind(table)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, [policy], "{table}");
+    }
+}
+
+#[tokio::test]
+async fn distribution_down_keeps_a_recipient_kind_a_person_holds() {
+    let db = TestDb::new().await;
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0021_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0021_distribution.down.sql")).unwrap();
+    let (ws, _) = db.seed_workspace("distribution-kind-kept").await;
+    let person = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into people (workspace_id, id, display_name, company, first_touch, created_at, \
+         updated_at, recipient_kind) values ($1, $2, 'Ornek', 'Ornek Kafe', \
+         '{\"source\": \"form\", \"at\": \"2026-11-03T00:00:00Z\"}', now(), now(), 'business')",
+    )
+    .bind(ws.as_uuid())
+    .bind(person)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 3);
+        assert!(column_exists(&db.pool, ("people", "recipient_kind")).await);
+    }
+    try_run(&db.pool, &up).await.unwrap();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let kept: String =
+        sqlx::query_scalar("select recipient_kind from people where workspace_id = $1 and id = $2")
+            .bind(ws.as_uuid())
+            .bind(person)
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_eq!(kept, "business");
 }

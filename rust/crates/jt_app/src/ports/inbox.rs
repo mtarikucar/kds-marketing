@@ -72,6 +72,14 @@ pub trait PersonRepo: Send + Sync {
         at: OffsetDateTime,
     ) -> Result<(), AppError>;
     async fn set_erased(&mut self, id: PersonId, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Sets whom a commercial message to the person reaches; `NOT_FOUND` for a person of
+    /// another workspace.
+    async fn set_recipient_kind(
+        &mut self,
+        id: PersonId,
+        kind: jt_inbox::RecipientKind,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
 }
 
 #[async_trait]

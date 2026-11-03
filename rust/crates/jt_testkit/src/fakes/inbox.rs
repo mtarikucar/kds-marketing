@@ -183,6 +183,7 @@ impl PersonRepo for MemTenant {
         Ok(())
     }
     async fn lock_workspace(&mut self) -> Result<(), AppError> {
+        self.tx.journal_lock("inbox");
         Ok(())
     }
     async fn insert(&mut self, row: Person) -> Result<(), AppError> {
@@ -313,6 +314,29 @@ impl PersonRepo for MemTenant {
                     .find(|r| r.workspace_id == ws && r.id == id)
                 {
                     r.erased_at = Some(at);
+                    r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
+                }
+            });
+            Ok(())
+        })
+    }
+    async fn set_recipient_kind(
+        &mut self,
+        id: PersonId,
+        kind: jt_inbox::RecipientKind,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            person(t.state(), ws, id)?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .people
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.recipient_kind = kind;
                     r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
                 }
             });

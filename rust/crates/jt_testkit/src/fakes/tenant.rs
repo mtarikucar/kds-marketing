@@ -90,6 +90,18 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn rep_profiles(&mut self) -> &mut dyn jt_app::ports::distribution::RepProfileRepo {
+        self
+    }
+
+    fn distribution_rules(&mut self) -> &mut dyn jt_app::ports::distribution::RuleRepo {
+        self
+    }
+
+    fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }

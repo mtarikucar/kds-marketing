@@ -94,6 +94,15 @@ impl TenantRepos for Tenant {
     fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
         self.inner.prospect_blocklist()
     }
+    fn rep_profiles(&mut self) -> &mut dyn jt_app::ports::distribution::RepProfileRepo {
+        self.inner.rep_profiles()
+    }
+    fn distribution_rules(&mut self) -> &mut dyn jt_app::ports::distribution::RuleRepo {
+        self.inner.distribution_rules()
+    }
+    fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
+        self.inner.assignments()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

@@ -186,6 +186,7 @@ impl MemTenant {
 #[async_trait]
 impl ProspectRepo for MemTenant {
     async fn lock_pool(&mut self) -> Result<(), AppError> {
+        self.tx.journal_lock("pool");
         Ok(())
     }
 
