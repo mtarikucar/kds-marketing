@@ -65,7 +65,10 @@ create table if not exists prospects (
     promoted_journey_id uuid,
     promoted_at timestamptz,
     promoted_score smallint check (promoted_score between 0 and 100),
-    purge_after timestamptz,
+    -- When it was rejected or marked do-not-contact (the decision in `data` holds the rest). No
+    -- purge time is stored: the purge reads the current retention against this and
+    -- `updated_at`, so a changed policy reaches every prospect.
+    decided_at timestamptz,
     revision bigint not null default 1 check (revision >= 1),
     created_at timestamptz not null,
     updated_at timestamptz not null,
@@ -85,15 +88,21 @@ create table if not exists prospects (
     constraint prospects_latest_check check (
         (latest_score is null) = (latest_digest is null)
         and (latest_score is null) = (latest_scored_at is null)
+    ),
+    -- Decided exactly when rejected or do-not-contact.
+    constraint prospects_decided_check check (
+        (decided_at is not null) = (status in ('rejected', 'do_not_contact'))
     )
 );
 -- The pool's list, newest first per status.
 create index if not exists prospects_list on prospects (workspace_id, status, created_at desc, id);
 -- A task's prospects by creation time: its daily cap and its count found.
 create index if not exists prospects_task on prospects (workspace_id, research_task_id, created_at);
--- The purge job's sweep.
-create index if not exists prospects_purge on prospects (workspace_id, purge_after)
-    where purge_after is not null;
+-- The purge job's sweeps: rejections by decision time, unpromoted prospects by last update.
+create index if not exists prospects_purge_rejected on prospects (workspace_id, decided_at)
+    where status = 'rejected';
+create index if not exists prospects_purge_unpromoted on prospects (workspace_id, updated_at)
+    where status in ('new', 'qualified');
 -- One prospect per inbox person.
 create unique index if not exists prospects_person on prospects (workspace_id, promoted_person_id)
     where promoted_person_id is not null;
@@ -133,15 +142,20 @@ create table if not exists prospect_scores (
 create index if not exists prospect_scores_by_prospect on prospect_scores (workspace_id, prospect_id, at desc);
 
 -- The do-not-contact blocklist: `key_hash` is the hex HMAC-SHA256, under the workspace's
--- `prospects.blocklist` key, of `kind ‖ 0x00 ‖ normalised value`. Objections (do_not_contact) and
--- erasures never expire; a purged rejection is remembered until `expires_at`.
+-- `prospects.blocklist` key, of `kind ‖ 0x00 ‖ normalised value`, for hard keys only (a shared
+-- domain or a name and city never blocks anyone). Objections (do_not_contact) and erasures never
+-- expire; a purged rejection is remembered until `expires_at`. `key_fingerprint` names the key
+-- that hashed the entry (the first 16 hex digits of its MAC of a fixed label): a hash cannot be
+-- computed again without the value, so a master-key change orphans the entries of the old key,
+-- and this counts them.
 create table if not exists prospect_blocklist (
     workspace_id uuid not null references workspaces (id),
-    kind text not null check (kind in ('phone', 'email', 'instagram', 'tiktok', 'domain', 'name_city')),
+    kind text not null check (kind in ('phone', 'email', 'instagram', 'tiktok')),
     key_hash text not null check (key_hash ~ '^[0-9a-f]{64}$'),
     reason text not null check (reason in ('do_not_contact', 'erased', 'rejected')),
     created_at timestamptz not null,
     expires_at timestamptz,
+    key_fingerprint text not null check (key_fingerprint ~ '^[0-9a-f]{16}$'),
     constraint prospect_blocklist_expiry_check check ((reason = 'rejected') = (expires_at is not null)),
     primary key (workspace_id, kind, key_hash)
 );

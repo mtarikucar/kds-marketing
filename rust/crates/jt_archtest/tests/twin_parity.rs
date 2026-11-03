@@ -4673,7 +4673,7 @@ async fn prospects_answer_the_same_over_the_panel_and_mcp() {
     assert_eq!(human, agent);
     assert_eq!(
         human,
-        json!({"ok": false, "reason": "duplicate", "prospect_id": id})
+        json!({"ok": false, "reason": "duplicate", "prospect_id": id, "flags": []})
     );
 
     let resp = send(

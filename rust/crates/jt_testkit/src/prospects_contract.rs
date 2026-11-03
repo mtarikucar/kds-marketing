@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use jt_app::ports::prospects::{
-    BlockReason, Inserted, ListCursor, ProspectQuery, ResearchTaskQuery, ScoreRow, Updated,
+    BlockReason, Inserted, ListCursor, Promoted, ProspectQuery, ResearchTaskQuery, ScoreRow,
+    Updated,
 };
 use jt_app::ports::{UnitOfWork, WorkspacePolicy};
 use jt_ledger::Actor;
@@ -85,15 +86,13 @@ pub fn prospect(
     created_at: OffsetDateTime,
 ) -> Prospect {
     jt_prospects::validate_create(&input, created_at, &human(user)).expect("a valid input");
-    let mut p = jt_prospects::build(
+    jt_prospects::build(
         input,
         ProspectId(Uuid::now_v7()),
         ws,
         created_at,
         human(user),
-    );
-    p.purge_after = Some(created_at + Duration::days(180));
-    p
+    )
 }
 
 /// Stores `p` with its derived keys in one bundle.
@@ -173,6 +172,23 @@ fn hash(n: u8) -> String {
     format!("{n:02x}").repeat(32)
 }
 
+/// The key fingerprint the contracts block under.
+pub const FP: &str = "0123456789abcdef";
+
+/// A rejection of `p` decided at `at`.
+fn rejected(p: &Prospect, user: UserId, at: OffsetDateTime) -> Prospect {
+    Prospect {
+        status: ProspectStatus::Rejected,
+        decision: Some(jt_prospects::Decision {
+            kind: DecisionKind::Rejected(RejectReason::NotIcp),
+            note: String::new(),
+            by: human(user),
+            at,
+        }),
+        ..p.clone()
+    }
+}
+
 pub async fn insert_then_get_round_trips_every_field(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow.clone()).await;
     let version = approved_version(&uow, f.ws).await;
@@ -233,6 +249,67 @@ pub async fn insert_then_get_round_trips_every_field(uow: Arc<dyn UnitOfWork>) {
     // A taken id is a conflict.
     let err = tx.prospects().insert(&p, &[]).await.unwrap_err();
     assert_eq!(err.code, jt_app::error::ErrorCode::Conflict);
+    drop(tx);
+    // No purge time is stored: the use cases compute it from the current policy.
+    let mut timed = prospect(f.ws, f.user, input("Zamanlı Kafe", "0500 000 00 99"), at(2));
+    timed.purge_after = Some(at(1_000));
+    assert_eq!(store(&uow, &timed).await, Inserted::Ok);
+    assert_eq!(get(&uow, f.ws, timed.id).await.unwrap().purge_after, None);
+}
+
+pub async fn keys_are_bounded_and_decisions_match_the_status(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let p = prospect(f.ws, f.user, input("Örnek Kafe", "0500 000 00 00"), at(0));
+    let long = Key {
+        kind: KeyKind::Domain,
+        value: "a".repeat(401),
+    };
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let err = t.prospects().insert(&p, &[long]).await.unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let longest = Key {
+        kind: KeyKind::Domain,
+        value: "a".repeat(400),
+    };
+    assert_eq!(
+        t.prospects().insert(&p, &[longest]).await.unwrap(),
+        Inserted::Ok
+    );
+    t.commit().await.unwrap();
+    // A rejection has its decision, a new prospect none.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let undecided = Prospect {
+        status: ProspectStatus::Rejected,
+        revision: 2,
+        ..p.clone()
+    };
+    let err = t.prospects().update(&undecided, &[], 1).await.unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let err = t
+        .prospects()
+        .set_status(p.id, ProspectStatus::Rejected, None, at(1), 1)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let decided = rejected(&p, f.user, at(1));
+    let err = t
+        .prospects()
+        .set_status(
+            p.id,
+            ProspectStatus::New,
+            decided.decision.as_ref(),
+            at(1),
+            1,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
 }
 
 pub async fn hard_key_duplicate_is_reported_with_its_owner(uow: Arc<dyn UnitOfWork>) {
@@ -464,7 +541,7 @@ pub async fn list_filters_and_cursor(uow: Arc<dyn UnitOfWork>) {
         .await
         .unwrap();
     tx.prospects()
-        .set_status(ids[2], ProspectStatus::Qualified, None, None, at(31), 1)
+        .set_status(ids[2], ProspectStatus::Qualified, None, at(31), 1)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -576,6 +653,25 @@ pub async fn delete_returns_keys_and_cascades_scores(uow: Arc<dyn UnitOfWork>) {
         })
         .await
         .unwrap();
+    // Deleting the scores keeps the record and its latest score.
+    assert_eq!(t.prospects().delete_scores(p.id).await.unwrap(), 1);
+    assert!(t.prospects().scores(p.id, 10).await.unwrap().is_empty());
+    let kept = t.prospects().get(p.id).await.unwrap().unwrap();
+    assert_eq!(kept.latest_score.map(|s| s.score), Some(10));
+    assert_eq!(t.prospects().delete_scores(p.id).await.unwrap(), 0, "twice");
+    t.prospects()
+        .record_score(&ScoreRow {
+            id: Uuid::now_v7(),
+            prospect_id: p.id,
+            score: 20,
+            reasons: vec![],
+            rubric_digest: "d".into(),
+            strategy_version_id: None,
+            recorder: human(f.user),
+            at: at(2),
+        })
+        .await
+        .unwrap();
     assert_eq!(t.prospects().delete(p.id).await.unwrap(), derive_keys(&p));
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
@@ -595,38 +691,85 @@ pub async fn delete_returns_keys_and_cascades_scores(uow: Arc<dyn UnitOfWork>) {
 }
 
 pub async fn due_for_purge_respects_time(uow: Arc<dyn UnitOfWork>) {
+    use jt_prospects::PurgeCutoffs;
     let f = Fixture::new(uow.clone()).await;
-    let mut early = prospect(f.ws, f.user, input("Bir", "0500 000 00 01"), at(0));
-    early.purge_after = Some(at(100));
-    let mut late = prospect(f.ws, f.user, input("İki", "0500 000 00 02"), at(0));
-    late.purge_after = Some(at(200));
-    let mut never = prospect(f.ws, f.user, input("Üç", "0500 000 00 03"), at(0));
-    never.purge_after = None;
-    let mut other = prospect(f.other, f.user, input("Dört", "0500 000 00 04"), at(0));
-    other.purge_after = Some(at(1));
-    for p in [&early, &late, &never, &other] {
+    // New prospects by their last update, rejections by their decision time.
+    let fresh = prospect(f.ws, f.user, input("Bir", "0500 000 00 01"), at(10));
+    let stale = prospect(f.ws, f.user, input("İki", "0500 000 00 02"), at(5));
+    let base = prospect(f.ws, f.user, input("Üç", "0500 000 00 03"), at(0));
+    let rejection = rejected(&base, f.user, at(7));
+    let other = prospect(f.other, f.user, input("Dört", "0500 000 00 04"), at(0));
+    for p in [&fresh, &stale, &rejection, &other] {
         store(&uow, p).await;
     }
+    let due = |rejected: i64, unpromoted: i64, limit: u32| {
+        let uow = uow.clone();
+        let ws = f.ws;
+        async move {
+            let mut t = uow.tenant(ws).await.unwrap();
+            t.prospects()
+                .due_for_purge(
+                    PurgeCutoffs {
+                        rejected: at(rejected),
+                        unpromoted: at(unpromoted),
+                    },
+                    limit,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    assert!(due(6, 4, 10).await.is_empty());
+    assert_eq!(due(6, 5, 10).await, [stale.id], "at the cutoff is due");
+    assert_eq!(due(7, 5, 10).await, [stale.id, rejection.id]);
+    assert_eq!(
+        due(7, 10, 10).await,
+        [stale.id, rejection.id, fresh.id],
+        "earliest first"
+    );
+    assert_eq!(due(7, 10, 1).await, [stale.id]);
+    // The rejection counts from its decision, not its last update.
+    assert_eq!(due(6, 1_000, 10).await, [stale.id, fresh.id]);
+    // A promoted or do-not-contact prospect is never due.
+    let person = f.insert_person("Bir").await;
+    let journey = jt_inbox::begin_journey(
+        jt_inbox::JourneyId::new_v7(),
+        f.ws,
+        person.id,
+        jt_inbox::Source::Import,
+        FIXED_NOW,
+    );
+    let journey_id = journey.journey().id;
     let mut t = uow.tenant(f.ws).await.unwrap();
-    assert!(
-        t.prospects()
-            .due_for_purge(at(99), 10)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        t.prospects().due_for_purge(at(100), 10).await.unwrap(),
-        [early.id]
-    );
-    assert_eq!(
-        t.prospects().due_for_purge(at(1_000), 10).await.unwrap(),
-        [early.id, late.id]
-    );
-    assert_eq!(
-        t.prospects().due_for_purge(at(1_000), 1).await.unwrap(),
-        [early.id]
-    );
+    t.people().set_write_time(FIXED_NOW).await.unwrap();
+    t.journeys().insert_initial(journey).await.unwrap();
+    let promoted = t
+        .prospects()
+        .set_promoted(
+            fresh.id,
+            &jt_prospects::Promotion {
+                person_id: person.id,
+                journey_id,
+                at: at(11),
+                score: None,
+                bucket: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(promoted, Promoted::Ok);
+    let dnc = jt_prospects::Decision {
+        kind: DecisionKind::DoNotContact(jt_prospects::DncReason::Objected),
+        note: String::new(),
+        by: human(f.user),
+        at: at(1),
+    };
+    t.prospects()
+        .set_status(stale.id, ProspectStatus::DoNotContact, Some(&dnc), at(1), 1)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    assert_eq!(due(1_000, 1_000, 10).await, [rejection.id]);
 }
 
 pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
@@ -644,28 +787,14 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert_eq!(
         t.prospects()
-            .set_status(
-                p.id,
-                ProspectStatus::Rejected,
-                Some(&decision),
-                Some(at(99)),
-                at(10),
-                2
-            )
+            .set_status(p.id, ProspectStatus::Rejected, Some(&decision), at(10), 2)
             .await
             .unwrap(),
         Updated::Stale
     );
     assert_eq!(
         t.prospects()
-            .set_status(
-                p.id,
-                ProspectStatus::Rejected,
-                Some(&decision),
-                Some(at(99)),
-                at(10),
-                1
-            )
+            .set_status(p.id, ProspectStatus::Rejected, Some(&decision), at(10), 1)
             .await
             .unwrap(),
         Updated::Ok
@@ -676,13 +805,13 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(back.decision, Some(decision));
     assert_eq!(
         (back.purge_after, back.updated_at, back.revision),
-        (Some(at(99)), at(10), 2)
+        (None, at(10), 2)
     );
     assert_eq!(back.contact, p.contact, "a decision keeps the record");
     let mut t = uow.tenant(f.ws).await.unwrap();
     // A reopen clears the decision.
     t.prospects()
-        .set_status(p.id, ProspectStatus::New, None, Some(at(500)), at(11), 2)
+        .set_status(p.id, ProspectStatus::New, None, at(11), 2)
         .await
         .unwrap();
     assert_eq!(
@@ -692,14 +821,7 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(t.prospects().backlog("kafeler").await.unwrap(), 2);
     assert_eq!(t.prospects().backlog("other").await.unwrap(), 0);
     t.prospects()
-        .set_status(
-            q.id,
-            ProspectStatus::Qualified,
-            None,
-            Some(at(600)),
-            at(12),
-            1,
-        )
+        .set_status(q.id, ProspectStatus::Qualified, None, at(12), 1)
         .await
         .unwrap();
     assert_eq!(t.prospects().count_qualified_unpromoted().await.unwrap(), 1);
@@ -746,13 +868,16 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
         score: Some(60),
         bucket: Some(Bucket::B50To74),
     };
-    t.prospects().set_promoted(q.id, &promotion).await.unwrap();
+    assert_eq!(
+        t.prospects().set_promoted(q.id, &promotion).await.unwrap(),
+        Promoted::Ok
+    );
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
     let back = t.prospects().by_person(person.id).await.unwrap().unwrap();
     assert_eq!(back.id, q.id);
     assert_eq!(back.status, ProspectStatus::Promoted);
-    assert_eq!(back.promoted, Some(promotion));
+    assert_eq!(back.promoted, Some(promotion.clone()));
     assert_eq!(back.purge_after, None);
     assert_eq!(back.revision, 3);
     assert_eq!(t.prospects().count_qualified_unpromoted().await.unwrap(), 0);
@@ -781,6 +906,51 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
         .await
         .unwrap_err();
     assert_eq!(err.code, jt_app::error::ErrorCode::NotFound);
+    // A typed refusal, nothing written: a promoted prospect again, a person another prospect
+    // holds.
+    assert_eq!(
+        t.prospects().set_promoted(q.id, &promotion).await.unwrap(),
+        Promoted::NotPromotable {
+            status: ProspectStatus::Promoted
+        }
+    );
+    assert_eq!(
+        t.prospects().set_promoted(p.id, &promotion).await.unwrap(),
+        Promoted::PersonAlreadyLinked { prospect_id: q.id }
+    );
+    let rejection = rejected(
+        &t.prospects().get(p.id).await.unwrap().unwrap(),
+        f.user,
+        at(30),
+    );
+    t.prospects()
+        .set_status(
+            p.id,
+            ProspectStatus::Rejected,
+            rejection.decision.as_ref(),
+            at(30),
+            3,
+        )
+        .await
+        .unwrap();
+    let other_person = f.insert_person("Başka Kafe").await;
+    let other_promotion = jt_prospects::Promotion {
+        person_id: other_person.id,
+        ..promotion.clone()
+    };
+    assert_eq!(
+        t.prospects()
+            .set_promoted(p.id, &other_promotion)
+            .await
+            .unwrap(),
+        Promoted::NotPromotable {
+            status: ProspectStatus::Rejected
+        }
+    );
+    assert_eq!(
+        t.prospects().get(p.id).await.unwrap().unwrap().status,
+        ProspectStatus::Rejected
+    );
 }
 
 pub async fn research_tasks_round_trip_and_one_standing_per_entry(uow: Arc<dyn UnitOfWork>) {
@@ -916,6 +1086,7 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
         BlockReason::Rejected,
         at(0),
         Some(at(100)),
+        FP,
     )
     .await
     .unwrap();
@@ -926,6 +1097,7 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
         BlockReason::Rejected,
         at(1),
         Some(at(200)),
+        FP,
     )
     .await
     .unwrap();
@@ -935,6 +1107,7 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
         BlockReason::Rejected,
         at(2),
         Some(at(150)),
+        FP,
     )
     .await
     .unwrap();
@@ -952,6 +1125,7 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
         BlockReason::DoNotContact,
         at(3),
         None,
+        FP,
     )
     .await
     .unwrap();
@@ -969,6 +1143,7 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
         BlockReason::Rejected,
         at(4),
         Some(at(5)),
+        FP,
     )
     .await
     .unwrap();
@@ -978,15 +1153,23 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
             .unwrap(),
         Some(BlockReason::DoNotContact)
     );
-    b.insert(KeyKind::Phone, &hash(1), BlockReason::Erased, at(5), None)
-        .await
-        .unwrap();
+    b.insert(
+        KeyKind::Phone,
+        &hash(1),
+        BlockReason::Erased,
+        at(5),
+        None,
+        FP,
+    )
+    .await
+    .unwrap();
     b.insert(
         KeyKind::Phone,
         &hash(1),
         BlockReason::DoNotContact,
         at(6),
         None,
+        FP,
     )
     .await
     .unwrap();
@@ -1005,17 +1188,171 @@ pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
     let mut t = uow.tenant(f.ws).await.unwrap();
     let err = t
         .prospect_blocklist()
-        .insert(KeyKind::Phone, "not-hex", BlockReason::Erased, at(0), None)
+        .insert(
+            KeyKind::Phone,
+            "not-hex",
+            BlockReason::Erased,
+            at(0),
+            None,
+            FP,
+        )
         .await
         .unwrap_err();
     assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
     let mut t = uow.tenant(f.ws).await.unwrap();
     let err = t
         .prospect_blocklist()
-        .insert(KeyKind::Phone, &hash(2), BlockReason::Rejected, at(0), None)
+        .insert(
+            KeyKind::Phone,
+            &hash(2),
+            BlockReason::Rejected,
+            at(0),
+            None,
+            FP,
+        )
         .await
         .unwrap_err();
     assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    // Only a hard key is blocklisted, under a fingerprint of 16 lowercase hex digits.
+    for soft in [KeyKind::Domain, KeyKind::NameCity] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let err = t
+            .prospect_blocklist()
+            .insert(soft, &hash(2), BlockReason::DoNotContact, at(0), None, FP)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, jt_app::error::ErrorCode::Internal, "{soft:?}");
+    }
+    for bad in ["0123", "0123456789ABCDEF", "0123456789abcdeg"] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let err = t
+            .prospect_blocklist()
+            .insert(
+                KeyKind::Phone,
+                &hash(2),
+                BlockReason::DoNotContact,
+                at(0),
+                None,
+                bad,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, jt_app::error::ErrorCode::Internal, "{bad}");
+    }
+}
+
+pub async fn blocklist_counts_entries_by_key_fingerprint(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let old = "fedcba9876543210";
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let b = t.prospect_blocklist();
+    assert!(b.key_fingerprints().await.unwrap().is_empty());
+    for (n, fp) in [(1, FP), (2, FP), (3, old)] {
+        b.insert(
+            KeyKind::Phone,
+            &hash(n),
+            BlockReason::DoNotContact,
+            at(0),
+            None,
+            fp,
+        )
+        .await
+        .unwrap();
+    }
+    // One hash under one key: a second write of it keeps the stored fingerprint.
+    b.insert(
+        KeyKind::Phone,
+        &hash(3),
+        BlockReason::Erased,
+        at(1),
+        None,
+        FP,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        b.key_fingerprints().await.unwrap(),
+        vec![(FP.to_owned(), 2), (old.to_owned(), 1)]
+    );
+    t.commit().await.unwrap();
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert!(
+        o.prospect_blocklist()
+            .key_fingerprints()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+pub async fn request_keys_are_forgotten_by_prefix_and_field(uow: Arc<dyn UnitOfWork>) {
+    use serde_json::json;
+    let f = Fixture::new(uow.clone()).await;
+    let id = Uuid::from_u128(5).to_string();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let r = t.request_keys();
+    for (key, response) in [
+        ("prospects.create:a", json!({"prospect_id": id})),
+        ("prospects.create:b", json!({"prospect_id": id})),
+        ("prospects.create:c", json!({"prospect_id": "other"})),
+        ("inbox.send:d", json!({"prospect_id": id})),
+        ("prospects.create_x", json!({"prospect_id": id})),
+    ] {
+        assert!(r.store(key, response, FIXED_NOW).await.unwrap(), "{key}");
+    }
+    assert_eq!(
+        r.forget("prospects.create:", "prospect_id", &id)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        r.forget("prospects.create:", "prospect_id", &id)
+            .await
+            .unwrap(),
+        0,
+        "twice"
+    );
+    for (key, kept) in [
+        ("prospects.create:a", false),
+        ("prospects.create:b", false),
+        ("prospects.create:c", true),
+        ("inbox.send:d", true),
+        ("prospects.create_x", true),
+    ] {
+        assert_eq!(
+            r.get(key, FIXED_NOW).await.unwrap().is_some(),
+            kept,
+            "{key}"
+        );
+    }
+    t.commit().await.unwrap();
+    // Another workspace's keys are its own.
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert!(
+        o.request_keys()
+            .store("prospects.create:a", json!({"prospect_id": id}), FIXED_NOW)
+            .await
+            .unwrap()
+    );
+    o.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.request_keys()
+            .forget("prospects.create:", "prospect_id", &id)
+            .await
+            .unwrap(),
+        0
+    );
+    drop(t);
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert!(
+        o.request_keys()
+            .get("prospects.create:a", FIXED_NOW)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 pub async fn blocklist_expired_rejected_is_ignored(uow: Arc<dyn UnitOfWork>) {
@@ -1023,41 +1360,44 @@ pub async fn blocklist_expired_rejected_is_ignored(uow: Arc<dyn UnitOfWork>) {
     let mut t = uow.tenant(f.ws).await.unwrap();
     let b = t.prospect_blocklist();
     b.insert(
-        KeyKind::Domain,
+        KeyKind::Tiktok,
         &hash(3),
         BlockReason::Rejected,
         at(0),
         Some(at(10)),
+        FP,
     )
     .await
     .unwrap();
     b.insert(
-        KeyKind::Domain,
+        KeyKind::Tiktok,
         &hash(4),
         BlockReason::Rejected,
         at(0),
         Some(at(20)),
+        FP,
     )
     .await
     .unwrap();
     b.insert(
-        KeyKind::Domain,
+        KeyKind::Tiktok,
         &hash(5),
         BlockReason::DoNotContact,
         at(0),
         None,
+        FP,
     )
     .await
     .unwrap();
     assert_eq!(
-        b.contains(KeyKind::Domain, &hash(3), at(10)).await.unwrap(),
+        b.contains(KeyKind::Tiktok, &hash(3), at(10)).await.unwrap(),
         None
     );
     assert_eq!(b.purge_expired(at(10)).await.unwrap(), 1);
     assert_eq!(b.purge_expired(at(10)).await.unwrap(), 0);
     assert_eq!(b.purge_expired(at(1_000)).await.unwrap(), 1);
     assert_eq!(
-        b.contains(KeyKind::Domain, &hash(5), at(1_000))
+        b.contains(KeyKind::Tiktok, &hash(5), at(1_000))
             .await
             .unwrap(),
         Some(BlockReason::DoNotContact),
@@ -1075,18 +1415,27 @@ pub async fn lift_refuses_erased(uow: Arc<dyn UnitOfWork>) {
         BlockReason::DoNotContact,
         at(0),
         None,
+        FP,
     )
     .await
     .unwrap();
-    b.insert(KeyKind::Email, &hash(7), BlockReason::Erased, at(0), None)
-        .await
-        .unwrap();
+    b.insert(
+        KeyKind::Email,
+        &hash(7),
+        BlockReason::Erased,
+        at(0),
+        None,
+        FP,
+    )
+    .await
+    .unwrap();
     b.insert(
         KeyKind::Email,
         &hash(8),
         BlockReason::Rejected,
         at(0),
         Some(at(99)),
+        FP,
     )
     .await
     .unwrap();
@@ -1125,6 +1474,7 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
             BlockReason::DoNotContact,
             at(0),
             None,
+            FP,
         )
         .await
         .unwrap();
@@ -1180,22 +1530,78 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
 }
 
 pub async fn leads_policy_merges_defaults_key_by_key(uow: Arc<dyn UnitOfWork>) {
+    use serde_json::json;
     let f = Fixture::new(uow.clone()).await;
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert_eq!(
         t.workspace_policy().get().await.unwrap(),
         WorkspacePolicy::default()
     );
-    let mut policy = WorkspacePolicy::default();
-    policy.leads.prospects.rejected_retention_days = 7;
-    policy.leads.timezone = "America/New_York".into();
-    t.workspace_policy()
-        .set(policy.clone(), at(0))
+    assert_eq!(
+        t.workspace_policy().read().await.unwrap(),
+        WorkspacePolicy::default()
+    );
+    // Only the keys given are stored; the others keep following their defaults.
+    let leads = t
+        .workspace_policy()
+        .patch_leads(
+            json!({"timezone": "America/New_York", "prospects": {"rejected_retention_days": 7}}),
+            at(0),
+        )
         .await
         .unwrap();
+    let mut expected = WorkspacePolicy::default();
+    expected.leads.prospects.rejected_retention_days = 7;
+    expected.leads.timezone = "America/New_York".into();
+    assert_eq!(leads, expected.leads);
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
-    assert_eq!(t.workspace_policy().get().await.unwrap(), policy);
+    let leads = t
+        .workspace_policy()
+        .patch_leads(json!({"prospects": {"rejected_memory_days": 0}}), at(1))
+        .await
+        .unwrap();
+    expected.leads.prospects.rejected_memory_days = 0;
+    assert_eq!(leads, expected.leads, "a second patch keeps the first");
+    t.commit().await.unwrap();
+    // Saving the other policies writes no leads key.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut other = t.workspace_policy().get().await.unwrap();
+    other.agent_checkin_interval_minutes = 60;
+    other.leads.prospects.unpromoted_retention_days = 1;
+    t.workspace_policy().set(other, at(2)).await.unwrap();
+    t.commit().await.unwrap();
+    expected.agent_checkin_interval_minutes = 60;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.workspace_policy().get().await.unwrap(), expected);
+    assert_eq!(t.workspace_policy().read().await.unwrap(), expected);
+    // A patch that is not an object, or that does not read as a policy, writes nothing.
+    let err = t
+        .workspace_policy()
+        .patch_leads(json!([1]), at(3))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let err = t
+        .workspace_policy()
+        .patch_leads(
+            json!({"prospects": {"rejected_retention_days": "x"}}),
+            at(3),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Internal);
+    drop(t);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.workspace_policy().read().await.unwrap(), expected);
+    // Another workspace reads its own defaults.
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        o.workspace_policy().read().await.unwrap(),
+        WorkspacePolicy::default()
+    );
     // A stored partial object reads every missing key as its default (bug class "stale stored
     // aggregate").
     let partial: jt_app::ports::LeadsPolicy = serde_json::from_value(

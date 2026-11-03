@@ -1621,6 +1621,28 @@ impl RequestKeyRepo for MemTenant {
             Ok(true)
         })
     }
+
+    async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let (prefix, field, value) = (prefix.to_owned(), field.to_owned(), value.to_owned());
+        let matches = move |r: &StoredRequestKey| {
+            r.workspace_id == ws
+                && r.key.starts_with(&prefix)
+                && r.response.get(&field).and_then(Value::as_str) == Some(value.as_str())
+        };
+        let n = self
+            .state()
+            .inbox
+            .request_keys
+            .iter()
+            .filter(|r| matches(r))
+            .count();
+        if n > 0 {
+            self.tx
+                .write(move |s| s.inbox.request_keys.retain(|r| !matches(r)));
+        }
+        Ok(n as u64)
+    }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {
     if !["queued", "sending", "sent", "failed", "unknown", "refused"].contains(&row.state.as_str())

@@ -9,13 +9,14 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
-    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, ProspectQuery,
-    ProspectRepo, ProspectRow, ScoreRow, Updated, is_key_hash,
+    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
+    ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, Updated, is_key_fingerprint, is_key_hash,
 };
 use jt_inbox::{JourneyId, PersonId};
 use jt_prospects::{
     ContactFields, Decision, EntityKind, Field, Key, KeyKind, Origin, Promotion, Prospect,
-    ProspectId, ProspectStatus, ResearchTaskId, ScoreSummary, Signal, SizeHint, bucket,
+    ProspectId, ProspectStatus, PurgeCutoffs, ResearchTaskId, ScoreSummary, Signal, SizeHint,
+    bucket,
 };
 use jt_strategy::StrategyVersionId;
 use jt_tenancy::WorkspaceId;
@@ -31,7 +32,7 @@ use crate::uow::PgTenantRepos;
 const COLUMNS: &str = "workspace_id, id, status, business_name, entity_kind, sector, city, \
                        district, country, language, segment_key, labels, data, research_task_id, \
                        latest_score, latest_digest, latest_scored_at, promoted_person_id, \
-                       promoted_journey_id, promoted_at, promoted_score, purge_after, revision, \
+                       promoted_journey_id, promoted_at, promoted_score, revision, \
                        created_at, updated_at";
 
 /// What `data` holds: the record but its columns.
@@ -73,7 +74,6 @@ struct Record {
     promoted_journey_id: Option<Uuid>,
     promoted_at: Option<OffsetDateTime>,
     promoted_score: Option<i16>,
-    purge_after: Option<OffsetDateTime>,
     revision: i64,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
@@ -140,7 +140,8 @@ impl Record {
             latest_score,
             decision: data.decision,
             promoted,
-            purge_after: self.purge_after,
+            // Never stored: the use cases compute it from the current policy.
+            purge_after: None,
             revision: stored(u32::try_from(self.revision).ok(), "prospects.revision")?,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -306,7 +307,7 @@ impl ProspectRepo for PgTenantRepos {
         let inserted = sqlx::query(
             "insert into prospects (workspace_id, id, status, business_name, entity_kind, sector, \
              city, district, country, language, segment_key, labels, data, research_task_id, \
-             latest_score, latest_digest, latest_scored_at, purge_after, revision, created_at, \
+             latest_score, latest_digest, latest_scored_at, decided_at, revision, created_at, \
              updated_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, \
              $15, $16, $17, $18, $19, $20, $21) on conflict do nothing",
         )
@@ -327,7 +328,7 @@ impl ProspectRepo for PgTenantRepos {
         .bind(latest.map(|s| i16::from(s.score)))
         .bind(latest.map(|s| s.digest.clone()))
         .bind(latest.map(|s| s.at))
-        .bind(p.purge_after)
+        .bind(p.decision.as_ref().map(|d| d.at))
         .bind(i64::from(p.revision))
         .bind(p.created_at)
         .bind(p.updated_at)
@@ -378,7 +379,7 @@ impl ProspectRepo for PgTenantRepos {
              labels = $12, data = $13, research_task_id = $14, latest_score = $15, \
              latest_digest = $16, latest_scored_at = $17, promoted_person_id = $18, \
              promoted_journey_id = $19, promoted_at = $20, promoted_score = $21, \
-             purge_after = $22, updated_at = $23, revision = revision + 1 \
+             decided_at = $22, updated_at = $23, revision = revision + 1 \
              where workspace_id = $1 and id = $2 and revision = $24",
         )
         .bind(ws.as_uuid())
@@ -402,7 +403,7 @@ impl ProspectRepo for PgTenantRepos {
         .bind(promoted.map(|x| x.journey_id.as_uuid()))
         .bind(promoted.map(|x| x.at))
         .bind(promoted.and_then(|x| x.score).map(i16::from))
-        .bind(p.purge_after)
+        .bind(p.decision.as_ref().map(|d| d.at))
         .bind(p.updated_at)
         .bind(i64::from(expected_revision))
         .execute(self.tx.conn())
@@ -417,9 +418,15 @@ impl ProspectRepo for PgTenantRepos {
         if self.insert_keys(p.id, keys).await? < key_arrays(keys).0.len() {
             // A writer without the pool lock took a hard key in between: the caller drops the
             // bundle, which undoes this update.
-            return Err(AppError::conflict(
-                "a prospect key was taken by a concurrent write",
-            ));
+            let holder = self.hard_holder(keys, Some(p.id)).await?;
+            return Err(AppError {
+                code: jt_app::error::ErrorCode::Conflict,
+                message: "another prospect holds this contact".into(),
+                details: serde_json::json!({
+                    "reason": "duplicate",
+                    "prospect_id": holder.map(|(_, id)| id),
+                }),
+            });
         }
         Ok(Updated::Ok)
     }
@@ -607,12 +614,22 @@ impl ProspectRepo for PgTenantRepos {
             .collect()
     }
 
+    async fn delete_scores(&mut self, id: ProspectId) -> Result<u64, AppError> {
+        let done =
+            sqlx::query("delete from prospect_scores where workspace_id = $1 and prospect_id = $2")
+                .bind(self.workspace_id().as_uuid())
+                .bind(id.as_uuid())
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "delete prospect scores"))?;
+        Ok(done.rows_affected())
+    }
+
     async fn set_status(
         &mut self,
         id: ProspectId,
         status: ProspectStatus,
         decision: Option<&Decision>,
-        purge_after: Option<OffsetDateTime>,
         at: OffsetDateTime,
         expected_revision: u32,
     ) -> Result<Updated, AppError> {
@@ -624,19 +641,20 @@ impl ProspectRepo for PgTenantRepos {
             Some(r) if r != expected_revision => return Ok(Updated::Stale),
             Some(_) => {}
         }
+        let decided_at = decision.map(|d| d.at);
         let decision = decision.map(|d| json(d, "prospect decision")).transpose()?;
         sqlx::query(
             "update prospects set status = $3, \
              data = case when $4::jsonb is null then data - 'decision' \
                     else jsonb_set(data, '{decision}', $4::jsonb) end, \
-             purge_after = $5, updated_at = $6, revision = revision + 1 \
+             decided_at = $5, updated_at = $6, revision = revision + 1 \
              where workspace_id = $1 and id = $2 and revision = $7",
         )
         .bind(self.workspace_id().as_uuid())
         .bind(id.as_uuid())
         .bind(status.key())
         .bind(decision)
-        .bind(purge_after)
+        .bind(decided_at)
         .bind(at)
         .bind(i64::from(expected_revision))
         .execute(self.tx.conn())
@@ -649,13 +667,44 @@ impl ProspectRepo for PgTenantRepos {
         &mut self,
         id: ProspectId,
         promotion: &Promotion,
-    ) -> Result<(), AppError> {
-        let done = sqlx::query(
+    ) -> Result<Promoted, AppError> {
+        let ws = self.workspace_id();
+        let status: Option<String> = sqlx::query_scalar(
+            "select status from prospects where workspace_id = $1 and id = $2 for update",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read prospect status"))?;
+        let Some(status) = status else {
+            return Err(AppError::not_found("no such prospect"));
+        };
+        let status = stored(ProspectStatus::parse(&status), "prospects.status")?;
+        if !matches!(status, ProspectStatus::New | ProspectStatus::Qualified) {
+            return Ok(Promoted::NotPromotable { status });
+        }
+        let holder: Option<Uuid> = sqlx::query_scalar(
+            "select id from prospects where workspace_id = $1 and promoted_person_id = $2 \
+             and id <> $3",
+        )
+        .bind(ws.as_uuid())
+        .bind(promotion.person_id.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read the person's prospect"))?;
+        if let Some(prospect_id) = holder {
+            return Ok(Promoted::PersonAlreadyLinked {
+                prospect_id: ProspectId(prospect_id),
+            });
+        }
+        sqlx::query(
             "update prospects set status = 'promoted', promoted_person_id = $3, \
-             promoted_journey_id = $4, promoted_at = $5, promoted_score = $6, purge_after = null, \
+             promoted_journey_id = $4, promoted_at = $5, promoted_score = $6, \
              updated_at = $5, revision = revision + 1 where workspace_id = $1 and id = $2",
         )
-        .bind(self.workspace_id().as_uuid())
+        .bind(ws.as_uuid())
         .bind(id.as_uuid())
         .bind(promotion.person_id.as_uuid())
         .bind(promotion.journey_id.as_uuid())
@@ -664,10 +713,7 @@ impl ProspectRepo for PgTenantRepos {
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "promote prospect"))?;
-        if done.rows_affected() == 0 {
-            return Err(AppError::not_found("no such prospect"));
-        }
-        Ok(())
+        Ok(Promoted::Ok)
     }
 
     async fn by_person(&mut self, person: PersonId) -> Result<Option<Prospect>, AppError> {
@@ -688,15 +734,23 @@ impl ProspectRepo for PgTenantRepos {
 
     async fn due_for_purge(
         &mut self,
-        now: OffsetDateTime,
+        cutoffs: PurgeCutoffs,
         limit: u32,
     ) -> Result<Vec<ProspectId>, AppError> {
+        // Each branch reads its own partial index (`prospects_purge_rejected`,
+        // `prospects_purge_unpromoted`).
         let ids: Vec<Uuid> = sqlx::query_scalar(
-            "select id from prospects where workspace_id = $1 and purge_after <= $2 \
-             order by purge_after, id limit $3",
+            "select id from ( \
+               select id, decided_at as due_at from prospects \
+                 where workspace_id = $1 and status = 'rejected' and decided_at <= $2 \
+               union all \
+               select id, updated_at as due_at from prospects \
+                 where workspace_id = $1 and status in ('new', 'qualified') and updated_at <= $3 \
+             ) due order by due_at, id limit $4",
         )
         .bind(self.workspace_id().as_uuid())
-        .bind(now)
+        .bind(cutoffs.rejected)
+        .bind(cutoffs.unpromoted)
         .bind(i64::from(limit))
         .fetch_all(self.tx.conn())
         .await
@@ -803,10 +857,19 @@ impl BlocklistRepo for PgTenantRepos {
         reason: BlockReason,
         at: OffsetDateTime,
         expires_at: Option<OffsetDateTime>,
+        key_fingerprint: &str,
     ) -> Result<(), AppError> {
+        if !kind.hard() {
+            return Err(AppError::internal("only a hard key is blocklisted"));
+        }
         if !is_key_hash(hash) {
             return Err(AppError::internal(
                 "a blocklist hash is 64 lowercase hex digits",
+            ));
+        }
+        if !is_key_fingerprint(key_fingerprint) {
+            return Err(AppError::internal(
+                "a blocklist key fingerprint is 16 lowercase hex digits",
             ));
         }
         if (reason == BlockReason::Rejected) != expires_at.is_some() {
@@ -815,10 +878,11 @@ impl BlocklistRepo for PgTenantRepos {
             ));
         }
         // The stronger reason wins (rejected < do_not_contact < erased); in the SET list the
-        // table's name reads the stored row, `excluded` the new one.
+        // table's name reads the stored row, `excluded` the new one. One hash under one key:
+        // the stored fingerprint stays.
         sqlx::query(
             "insert into prospect_blocklist (workspace_id, kind, key_hash, reason, created_at, \
-             expires_at) values ($1, $2, $3, $4, $5, $6) \
+             expires_at, key_fingerprint) values ($1, $2, $3, $4, $5, $6, $7) \
              on conflict (workspace_id, kind, key_hash) do update set \
              reason = case when array_position(array['rejected', 'do_not_contact', 'erased'], excluded.reason) \
                  > array_position(array['rejected', 'do_not_contact', 'erased'], prospect_blocklist.reason) \
@@ -837,10 +901,26 @@ impl BlocklistRepo for PgTenantRepos {
         .bind(reason.key())
         .bind(at)
         .bind(expires_at)
+        .bind(key_fingerprint)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "insert into the prospect blocklist"))?;
         Ok(())
+    }
+
+    async fn key_fingerprints(&mut self) -> Result<Vec<(String, u64)>, AppError> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "select key_fingerprint, count(*) from prospect_blocklist where workspace_id = $1 \
+             group by key_fingerprint order by key_fingerprint",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count blocklist key fingerprints"))?;
+        Ok(rows
+            .into_iter()
+            .map(|(fp, n)| (fp, u64::try_from(n).unwrap_or(0)))
+            .collect())
     }
 
     async fn lift(&mut self, kind: KeyKind, hash: &str) -> Result<bool, AppError> {

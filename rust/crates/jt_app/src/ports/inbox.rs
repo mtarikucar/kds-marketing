@@ -461,6 +461,10 @@ pub trait RequestKeyRepo: Send + Sync {
         response: Value,
         now: OffsetDateTime,
     ) -> Result<bool, AppError>;
+    /// Deletes every request key, expired or not, whose key starts with `prefix` and whose
+    /// stored response holds the string `value` under its top-level `field`; how many went. An
+    /// erasure, a do-not-contact mark or a purge forgets the requests that recorded the row.
+    async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError>;
 }
 
 /// Durable outbound intent. Sending/recovery state transitions belong to the send use cases.

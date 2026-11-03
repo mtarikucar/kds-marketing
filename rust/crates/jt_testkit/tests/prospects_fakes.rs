@@ -96,3 +96,42 @@ async fn leads_policy_merges_defaults_key_by_key() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::prospects_contract::leads_policy_merges_defaults_key_by_key(uow).await;
 }
+
+#[tokio::test]
+async fn keys_are_bounded_and_decisions_match_the_status() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::keys_are_bounded_and_decisions_match_the_status(uow).await;
+}
+
+#[tokio::test]
+async fn blocklist_counts_entries_by_key_fingerprint() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::blocklist_counts_entries_by_key_fingerprint(uow).await;
+}
+
+#[tokio::test]
+async fn request_keys_are_forgotten_by_prefix_and_field() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::request_keys_are_forgotten_by_prefix_and_field(uow).await;
+}
+
+/// The leads policy is stored as the keys someone set, nothing more (so every other key keeps
+/// following its default when the defaults change).
+#[tokio::test]
+async fn the_stored_leads_policy_holds_only_the_keys_set() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::leads_policy_merges_defaults_key_by_key(uow.clone()).await;
+    let snapshot = uow.snapshot();
+    let stored: Vec<&serde_json::Value> = snapshot
+        .workspace_policies
+        .iter()
+        .map(|p| &p.leads)
+        .collect();
+    assert_eq!(
+        stored,
+        [&serde_json::json!({
+            "timezone": "America/New_York",
+            "prospects": {"rejected_retention_days": 7, "rejected_memory_days": 0},
+        })]
+    );
+}

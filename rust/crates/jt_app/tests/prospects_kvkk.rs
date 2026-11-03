@@ -6,6 +6,7 @@ mod support;
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::UnitOfWork;
+use jt_app::ports::prospects::Promoted;
 use jt_app::usecases::jobs::{Job, run_prospects_purge};
 use jt_app::usecases::prospects::{
     self, DecideInput, DecideKind, DncInput, EraseInput, LiftInput, RawKey, SettingsInput,
@@ -17,7 +18,8 @@ use jt_prospects::{
     RejectReason, ScoreInput, SourceRefInput,
 };
 use jt_strategy::{
-    Criterion, Prospecting, Rubric, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
+    Area, Criterion, IcpEntry, Prospecting, Rubric, Sections, StrategyVersion, StrategyVersionId,
+    VersionStatus,
 };
 use jt_tenancy::WorkspaceStatus;
 use jt_testkit::fakes::FIXED_NOW;
@@ -97,8 +99,32 @@ fn rubric() -> Rubric {
     }
 }
 
-/// Puts an approved version with `rubric` in force.
+/// One ICP entry: cafes in İstanbul.
+fn icp_entry() -> IcpEntry {
+    IcpEntry {
+        key: "kafeler".into(),
+        segment_key: "kafeler".into(),
+        sectors: vec!["kafe".into()],
+        areas: vec![Area {
+            city: "İstanbul".into(),
+            district: None,
+        }],
+        signals: vec![],
+        exclusions: vec![],
+        size_hint: String::new(),
+        language: None,
+        daily_cap: 20,
+        backlog_target: 0,
+    }
+}
+
+/// Puts an approved version with prospecting on (one ICP entry) and `rubric` in force.
 async fn approve(w: &World, rubric: Rubric) -> StrategyVersionId {
+    approve_with(w, vec![icp_entry()], rubric).await
+}
+
+/// Puts an approved version with `icp` and `rubric` in force.
+async fn approve_with(w: &World, icp: Vec<IcpEntry>, rubric: Rubric) -> StrategyVersionId {
     let id = StrategyVersionId::new_v7();
     let mut t = w.uow.tenant(w.ws).await.unwrap();
     t.strategy()
@@ -108,10 +134,7 @@ async fn approve(w: &World, rubric: Rubric) -> StrategyVersionId {
             number: 1,
             status: VersionStatus::Approved,
             sections: Sections {
-                prospecting: Prospecting {
-                    icp: vec![],
-                    rubric,
-                },
+                prospecting: Prospecting { icp, rubric },
                 ..Sections::default()
             },
             created_at: FIXED_NOW,
@@ -190,6 +213,40 @@ async fn score_without_prospecting_is_refused() {
         .unwrap();
     let e = err(prospects::score(&w.deps, &w.owner_ctx, p.id, scored(30, 10, "x")).await);
     assert_refused(&e, ErrorCode::Conflict, "prospecting_off");
+}
+
+#[tokio::test]
+async fn an_empty_icp_switches_scoring_off_whatever_the_rubric() {
+    let w = world().await;
+    approve_with(&w, vec![], rubric()).await;
+    let p = create(&w, &w.owner_ctx, input("Örnek Kafe", PHONE))
+        .await
+        .unwrap();
+    let digest = rubric_digest(&rubric());
+    let e = err(prospects::score(&w.deps, &w.owner_ctx, p.id, scored(30, 10, &digest)).await);
+    assert_refused(&e, ErrorCode::Conflict, "prospecting_off");
+    assert!(w.entries("prospects.scored").is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_gives_no_manual_source_in_a_score() {
+    let w = world().await;
+    approve(&w, rubric()).await;
+    let digest = rubric_digest(&rubric());
+    let agent = w.agent(&["prospects.work"]).await;
+    let p = create(&w, &agent, input("Örnek Kafe", PHONE))
+        .await
+        .unwrap();
+    let mut manual = scored(30, 10, &digest);
+    manual.reasons[0].source = Some(SourceRefInput::Manual {
+        note: "the owner said so".into(),
+    });
+    let e = err(prospects::score(&w.deps, &agent, p.id, manual.clone()).await);
+    assert_invalid(&e, "reasons");
+    assert_eq!(e.details["reason"], "manual_source_is_for_humans");
+    prospects::score(&w.deps, &w.owner_ctx, p.id, manual)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -364,9 +421,20 @@ fn dnc(prospect: Option<jt_prospects::ProspectId>, keys: Vec<RawKey>) -> DncInpu
 #[tokio::test]
 async fn dnc_scrubs_and_blocks_reentry_after_purge() {
     let w = world().await;
+    approve(&w, rubric()).await;
     let mut i = input("Örnek Kafe", PHONE);
     i.instagram = field("@ornek.kafe");
+    i.website = field("https://ornek-kafe.example.invalid");
+    i.request_key = Some("dnc-1".into());
     let p = create(&w, &w.owner_ctx, i).await.unwrap();
+    prospects::score(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        scored(30, 10, &rubric_digest(&rubric())),
+    )
+    .await
+    .unwrap();
     let e = err(prospects::do_not_contact(
         &w.deps,
         &w.owner_ctx,
@@ -383,19 +451,32 @@ async fn dnc_scrubs_and_blocks_reentry_after_purge() {
         .unwrap();
     assert_eq!(
         out.kinds,
-        [KeyKind::Phone, KeyKind::Instagram, KeyKind::NameCity]
+        [KeyKind::Phone, KeyKind::Instagram],
+        "hard keys only: the domain and the name are others' too"
     );
+    assert_eq!(out.prospects, [p.id]);
     let back = get(&w, &p).await.unwrap();
     assert_eq!(back.status, ProspectStatus::DoNotContact);
     assert_eq!(back.business_name, "—");
     assert_eq!(back.contact, jt_prospects::ContactFields::default());
     assert_eq!(back.notes, "");
     assert_eq!(back.purge_after, None, "never purged by the pool");
+    // The score history goes (its reasons are evidence about the business); the number stays.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    assert!(r.prospects().scores(p.id, 10).await.unwrap().is_empty());
+    drop(r);
+    assert_eq!(back.latest_score.map(|s| s.score), Some(40));
+    // The request that recorded it is forgotten: no replay answers the scrubbed row.
+    assert!(w.uow.snapshot().inbox.request_keys.is_empty());
     let entry = w.entries("prospects.do_not_contact").pop().unwrap();
     assert_eq!(
         entry.payload,
-        json!({"prospect_id": p.id, "reason": "objected", "keys": ["phone", "instagram", "name_city"]})
+        json!({"prospect_id": p.id, "reason": "objected", "keys": ["phone", "instagram"]})
     );
+    // A business sharing only its name and city, or its domain, may still be recorded.
+    let mut namesake = input("Örnek Kafe", "0500 000 00 77");
+    namesake.website = field("https://ornek-kafe.example.invalid/sube");
+    create(&w, &w.owner_ctx, namesake).await.unwrap();
     // Even with the row gone, the business cannot be recorded again.
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.prospects().delete(p.id).await.unwrap();
@@ -432,6 +513,109 @@ async fn dnc_with_raw_keys_blocks_create() {
     assert_invalid(&e, "prospect_id");
     let text = w.entries("prospects.do_not_contact")[0].payload.to_string();
     assert!(!text.contains("500"), "no value in the ledger: {text}");
+    // A soft key is no objection's key.
+    for (kind, value) in [
+        (KeyKind::Domain, "ornek.example.invalid"),
+        (KeyKind::NameCity, "Örnek Kafe|İstanbul"),
+    ] {
+        let soft = vec![RawKey {
+            kind,
+            value: value.into(),
+        }];
+        let e = err(prospects::do_not_contact(&w.deps, &w.owner_ctx, dnc(None, soft)).await);
+        assert_invalid(&e, "keys");
+        assert_eq!(e.details["reason"], "not_a_hard_key");
+    }
+}
+
+#[tokio::test]
+async fn dnc_by_raw_keys_marks_the_prospects_holding_them() {
+    let w = world().await;
+    let mut i = input("Örnek Kafe", PHONE);
+    i.instagram = field("@ornek.kafe");
+    let held = create(&w, &w.owner_ctx, i).await.unwrap();
+    let other = create(&w, &w.owner_ctx, input("Başka Kafe", "0500 000 00 01"))
+        .await
+        .unwrap();
+    // A promoted holder is the inbox person's: its person is answered.
+    let mut j = input("Üçüncü Kafe", "0500 000 00 02");
+    j.tiktok = field("@ucuncu.kafe");
+    let promoted = create(&w, &w.owner_ctx, j).await.unwrap();
+    let person = promote(&w, &promoted).await;
+    let raw = vec![
+        RawKey {
+            kind: KeyKind::Instagram,
+            value: "https://www.instagram.com/ornek.kafe/".into(),
+        },
+        RawKey {
+            kind: KeyKind::Tiktok,
+            value: "@ucuncu.kafe".into(),
+        },
+    ];
+    let out = prospects::do_not_contact(&w.deps, &w.owner_ctx, dnc(None, raw))
+        .await
+        .unwrap();
+    assert_eq!(out.prospect_id, None);
+    assert_eq!(out.prospects, [held.id]);
+    assert_eq!(out.people, [person]);
+    assert_eq!(out.kinds, [KeyKind::Instagram, KeyKind::Tiktok]);
+    let back = get(&w, &held).await.unwrap();
+    assert_eq!(back.status, ProspectStatus::DoNotContact);
+    assert_eq!(back.contact, jt_prospects::ContactFields::default());
+    // Every hard key it held is listed, its phone too.
+    let e = err(create(&w, &w.owner_ctx, input("Yeni Ad", PHONE)).await);
+    assert_refused(&e, ErrorCode::Forbidden, "do_not_contact");
+    assert_eq!(get(&w, &other).await.unwrap().status, ProspectStatus::New);
+    assert_eq!(
+        get(&w, &promoted).await.unwrap().status,
+        ProspectStatus::Promoted,
+        "the pool leaves a promoted prospect to its person"
+    );
+    let entries = w.entries("prospects.do_not_contact");
+    assert_eq!(entries.len(), 2, "one per prospect, one for the raw keys");
+    assert_eq!(
+        entries[1].payload,
+        json!({"reason": "objected", "keys": ["instagram", "tiktok"], "prospects": 1, "people": 1})
+    );
+}
+
+/// Promotes `p` to a new inbox person by hand (promotion itself is L3's); the person.
+async fn promote(w: &World, p: &Prospect) -> jt_inbox::PersonId {
+    let person = jt_app::usecases::inbox::people::create(
+        &w.deps,
+        &w.owner_ctx,
+        jt_app::usecases::inbox::people::CreateInput {
+            display_name: p.business_name.clone(),
+            identities: vec![jt_app::usecases::inbox::people::IdentityInput {
+                channel: jt_inbox::IdentityChannel::Email,
+                value: format!("satis+{}@ucuncu.example.invalid", p.id),
+                capability_id: None,
+            }],
+            source: jt_inbox::Source::Import,
+        },
+    )
+    .await
+    .unwrap()
+    .person;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let journey = r.journeys().open_for(person.id).await.unwrap().unwrap();
+    let done = r
+        .prospects()
+        .set_promoted(
+            p.id,
+            &jt_prospects::Promotion {
+                person_id: person.id,
+                journey_id: journey.id,
+                at: FIXED_NOW,
+                score: None,
+                bucket: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(done, Promoted::Ok);
+    r.commit().await.unwrap();
+    person.id
 }
 
 #[tokio::test]
@@ -476,6 +660,22 @@ async fn lift_requires_a_human_manager() {
 }
 
 #[tokio::test]
+async fn a_soft_key_is_never_lifted() {
+    let w = world().await;
+    let e = err(prospects::dnc_lift(
+        &w.deps,
+        &w.owner_ctx,
+        LiftInput {
+            kind: KeyKind::Domain,
+            value: "ornek.example.invalid".into(),
+        },
+    )
+    .await);
+    assert_invalid(&e, "kind");
+    assert_eq!(e.details["reason"], "not_a_hard_key");
+}
+
+#[tokio::test]
 async fn agent_cannot_lift() {
     let w = world().await;
     let agent = w.agent(&["prospects.work", "prospects.manage"]).await;
@@ -494,9 +694,18 @@ async fn agent_cannot_lift() {
 #[tokio::test]
 async fn erase_deletes_now_and_blocks_reentry() {
     let w = world().await;
-    let p = create(&w, &w.owner_ctx, input("Örnek Kafe", PHONE))
-        .await
-        .unwrap();
+    approve(&w, rubric()).await;
+    let mut i = input("Örnek Kafe", PHONE);
+    i.request_key = Some("erase-1".into());
+    let p = create(&w, &w.owner_ctx, i).await.unwrap();
+    prospects::score(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        scored(30, 10, &rubric_digest(&rubric())),
+    )
+    .await
+    .unwrap();
     let agent = w.agent(&["prospects.work", "prospects.manage"]).await;
     let e = err(prospects::erase(&w.deps, &agent, p.id, EraseInput { confirm: true }).await);
     assert_refused(&e, ErrorCode::Forbidden, "human_only");
@@ -506,7 +715,14 @@ async fn erase_deletes_now_and_blocks_reentry() {
         .await
         .unwrap();
     assert!(out.erased);
+    assert_eq!(out.kinds, [KeyKind::Phone], "hard keys only");
     assert_eq!(get(&w, &p).await, None);
+    let snapshot = w.uow.snapshot();
+    assert!(snapshot.prospects.scores.is_empty(), "its scores went");
+    assert!(
+        snapshot.inbox.request_keys.is_empty(),
+        "the request that recorded it is forgotten"
+    );
     let e = err(create(&w, &w.owner_ctx, input("Örnek Kafe", PHONE)).await);
     assert_refused(&e, ErrorCode::Forbidden, "do_not_contact");
     // An erasure is never lifted.
@@ -548,7 +764,8 @@ async fn erase_of_promoted_points_to_the_person() {
     .person;
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     let journey = r.journeys().open_for(person.id).await.unwrap().unwrap();
-    r.prospects()
+    let done = r
+        .prospects()
         .set_promoted(
             p.id,
             &jt_prospects::Promotion {
@@ -561,6 +778,7 @@ async fn erase_of_promoted_points_to_the_person() {
         )
         .await
         .unwrap();
+    assert_eq!(done, Promoted::Ok);
     r.commit().await.unwrap();
     let e = err(prospects::erase(&w.deps, &w.owner_ctx, p.id, EraseInput { confirm: true }).await);
     assert_refused(&e, ErrorCode::Conflict, "erase_the_person");
@@ -674,7 +892,8 @@ async fn purge_deletes_stale_unpromoted_but_not_promoted() {
     .person;
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     let journey = r.journeys().open_for(person.id).await.unwrap().unwrap();
-    r.prospects()
+    let done = r
+        .prospects()
         .set_promoted(
             promoted.id,
             &jt_prospects::Promotion {
@@ -687,6 +906,7 @@ async fn purge_deletes_stale_unpromoted_but_not_promoted() {
         )
         .await
         .unwrap();
+    assert_eq!(done, Promoted::Ok);
     r.commit().await.unwrap();
     purge(&w, 180).await;
     assert_eq!(get(&w, &stale).await, None, "180 days without an update");
@@ -704,6 +924,162 @@ async fn purge_deletes_stale_unpromoted_but_not_promoted() {
     create(&w, &back, input("Bir Kafe", "0500 000 00 01"))
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_shortened_retention_reaches_existing_prospects() {
+    let w = world().await;
+    let unpromoted = create(&w, &w.owner_ctx, input("Bir Kafe", "0500 000 00 01"))
+        .await
+        .unwrap();
+    let rejected = create(&w, &w.owner_ctx, input("İki Kafe", "0500 000 00 02"))
+        .await
+        .unwrap();
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        rejected.id,
+        decide(DecideKind::Reject, Some(RejectReason::NotIcp), None, 1),
+    )
+    .await
+    .unwrap();
+    purge(&w, 10).await;
+    assert!(get(&w, &unpromoted).await.is_some());
+    assert!(get(&w, &rejected).await.is_some());
+    // Shortened after they were recorded: the next purge reads the new periods.
+    prospects::settings_set(
+        &w.deps,
+        &w.owner_ctx,
+        SettingsInput {
+            unpromoted_retention_days: Some(10),
+            rejected_retention_days: Some(7),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let out = prospects::get(&w.deps, &w.owner_ctx, unpromoted.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        out.prospect.purge_after,
+        Some(FIXED_NOW + Duration::days(10)),
+        "the answer reads the current policy"
+    );
+    purge(&w, 10).await;
+    assert_eq!(get(&w, &unpromoted).await, None);
+    assert_eq!(get(&w, &rejected).await, None);
+}
+
+#[tokio::test]
+async fn purge_catches_up_beyond_one_batch() {
+    let w = world().await;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let count = prospects::PURGE_BATCH + 3;
+    for n in 0..count {
+        let p = jt_testkit::prospects_contract::prospect(
+            w.ws,
+            w.owner,
+            input(&format!("Kafe {n}"), &format!("0500 {n:03} 00 00")),
+            FIXED_NOW,
+        );
+        r.prospects().insert(&p, &[]).await.unwrap();
+    }
+    r.commit().await.unwrap();
+    purge(&w, 181).await;
+    assert!(w.uow.snapshot().prospects.prospects.is_empty());
+    let purged: Vec<serde_json::Value> = w
+        .entries("prospects.purged")
+        .into_iter()
+        .map(|e| e.payload)
+        .collect();
+    assert_eq!(
+        purged,
+        [
+            json!({"count": prospects::PURGE_BATCH}),
+            json!({"count": 3})
+        ],
+        "one entry per batch"
+    );
+}
+
+#[tokio::test]
+async fn objections_are_recordable_in_a_suspended_workspace() {
+    use jt_app::catalog::{CATALOG, GateMode, StatusExemption};
+    use jt_app::gate::{NoStrategyYet, check_gate};
+    let row = |id: &str| CATALOG.iter().find(|uc| uc.id == id).unwrap();
+    for id in ["prospects.do_not_contact", "prospects.erase"] {
+        let uc = row(id);
+        assert_eq!(uc.status_exemption, StatusExemption::Always, "{id}");
+        assert_eq!(uc.gate, GateMode::Exempt, "{id}");
+        for status in [
+            WorkspaceStatus::Active,
+            WorkspaceStatus::PendingPayment,
+            WorkspaceStatus::Suspended,
+        ] {
+            check_gate(
+                uc,
+                status,
+                &NoStrategyYet,
+                jt_tenancy::WorkspaceId::new_v7(),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{id} in {status:?}: {e:?}"));
+        }
+    }
+    // Every other pool write stays behind the gate.
+    let create = row("prospects.create");
+    let e = check_gate(
+        create,
+        WorkspaceStatus::Suspended,
+        &NoStrategyYet,
+        jt_tenancy::WorkspaceId::new_v7(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::WorkspaceInactive);
+    // And the use cases themselves do not look at the status.
+    let w = world().await;
+    let p = create_in(&w, input("Örnek Kafe", PHONE)).await;
+    suspend(&w).await;
+    prospects::do_not_contact(&w.deps, &w.owner_ctx, dnc(Some(p.id), vec![]))
+        .await
+        .unwrap();
+    let q = {
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        let q = jt_testkit::prospects_contract::prospect(
+            w.ws,
+            w.owner,
+            input("Başka Kafe", "0500 000 00 01"),
+            FIXED_NOW,
+        );
+        r.prospects().insert(&q, &[]).await.unwrap();
+        r.commit().await.unwrap();
+        q
+    };
+    prospects::erase(&w.deps, &w.owner_ctx, q.id, EraseInput { confirm: true })
+        .await
+        .unwrap();
+}
+
+async fn create_in(w: &World, i: CreateInput) -> Prospect {
+    create(w, &w.owner_ctx, i).await.unwrap()
+}
+
+async fn suspend(w: &World) {
+    let mut platform = w.uow.platform().await.unwrap();
+    platform
+        .workspace_set_status(
+            w.ws,
+            WorkspaceStatus::Suspended,
+            "test suspension",
+            &Actor::System {
+                component: "test".into(),
+            },
+        )
+        .await
+        .unwrap();
+    platform.commit().await.unwrap();
 }
 
 #[tokio::test]
@@ -766,6 +1142,18 @@ async fn settings_are_bounded_and_kept_key_by_key() {
     .unwrap();
     assert_eq!(out.prospects.rejected_memory_days, 0);
     assert_eq!(out.prospects.rejected_retention_days, 30, "the others kept");
+    // Only the keys given are stored: every other one keeps following its default.
+    let stored: Vec<serde_json::Value> = w
+        .uow
+        .snapshot()
+        .workspace_policies
+        .iter()
+        .map(|p| p.leads.clone())
+        .collect();
+    assert_eq!(
+        stored,
+        [json!({"timezone": "America/New_York", "prospects": {"rejected_memory_days": 0}})]
+    );
     assert_eq!(
         prospects::settings_get(&w.deps, &w.owner_ctx)
             .await

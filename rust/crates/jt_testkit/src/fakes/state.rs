@@ -104,11 +104,14 @@ pub struct StoredOutboundJob {
     pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
 }
 
-/// A workspace's policies together with when they were last set.
+/// A workspace's policies together with when they were last set. The leads policy is kept as
+/// the stored object (`workspace_policies.leads_policy`): only the keys someone set, read over
+/// the defaults; `policy.leads` is not read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
     pub workspace_id: WorkspaceId,
     pub policy: WorkspacePolicy,
+    pub leads: serde_json::Value,
     pub updated_at: OffsetDateTime,
 }
 

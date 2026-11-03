@@ -5,9 +5,16 @@
 //! Contracts every adapter keeps beyond the module's:
 //! - A hard key (phone, email, Instagram, TikTok) belongs to at most one prospect of a workspace:
 //!   a write that would give it a second one answers `DuplicateKey` naming the holder and writes
-//!   nothing. Soft keys (domain, name_city) never conflict.
-//! - The repositories never read a clock: `purge_after`, `updated_at` and every other time comes
-//!   from the caller (the use case computes `purge_after` with `jt_prospects::purge_after`).
+//!   nothing. Soft keys (domain, name_city) never conflict. A key value is at most 400
+//!   characters (`prospect_keys.value`): a longer one is `INTERNAL` (the use cases validate
+//!   first).
+//! - The repositories never read a clock: `updated_at` and every other time comes from the
+//!   caller. `Prospect::purge_after` is never stored (a read answers `None`): the use cases
+//!   compute it from the current policy, and the purge selects by status and decision or update
+//!   time against the current policy (`due_for_purge`), so a changed retention reaches every
+//!   prospect.
+//! - A rejected or do-not-contact prospect has its decision (`decided_at` is its time); any
+//!   other has none: a write that breaks this is `INTERNAL`.
 //! - A prospect's keys and scores go with it when it is deleted.
 //! - Rows hold contact values: log ids and counts, never a row.
 
@@ -15,7 +22,7 @@ use async_trait::async_trait;
 use jt_inbox::PersonId;
 use jt_prospects::{
     Bucket, EntityKind, FieldName, Key, KeyKind, Promotion, Prospect, ProspectId, ProspectStatus,
-    Reason, Recorder, ResearchTask, ResearchTaskId, ScoreSummary, TaskStatus,
+    PurgeCutoffs, Reason, Recorder, ResearchTask, ResearchTaskId, ScoreSummary, TaskStatus,
 };
 use jt_strategy::StrategyVersionId;
 use serde::Serialize;
@@ -48,6 +55,20 @@ pub enum Updated {
     /// A hard key the write gives the prospect is another prospect's; nothing was written.
     DuplicateKey {
         kind: KeyKind,
+        prospect_id: ProspectId,
+    },
+}
+
+/// What a promotion write did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Promoted {
+    Ok,
+    /// Only a `new` or `qualified` prospect is promoted; it is in `status`. Nothing written.
+    NotPromotable {
+        status: ProspectStatus,
+    },
+    /// The person is another prospect's already (one prospect per person). Nothing written.
+    PersonAlreadyLinked {
         prospect_id: ProspectId,
     },
 }
@@ -120,6 +141,11 @@ pub struct ProspectRow {
     pub fields: Vec<FieldName>,
     pub promoted: Option<Promotion>,
     pub revision: u32,
+    /// When it was rejected or marked do-not-contact.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub decided_at: Option<OffsetDateTime>,
+    /// When the current policy purges it ([`ProspectRow::of`] copies the record's, which a
+    /// repository leaves `None`; the use case fills it).
     #[serde(with = "time::serde::rfc3339::option")]
     pub purge_after: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
@@ -152,6 +178,7 @@ impl ProspectRow {
             fields: p.field_names(),
             promoted: p.promoted.clone(),
             revision: p.revision,
+            decided_at: p.decision.as_ref().map(|d| d.at),
             purge_after: p.purge_after,
             created_at: p.created_at,
             updated_at: p.updated_at,
@@ -187,7 +214,9 @@ pub trait ProspectRepo: Send + Sync {
     async fn insert(&mut self, p: &Prospect, keys: &[Key]) -> Result<Inserted, AppError>;
     /// Replaces the whole record (columns and data) and its keys when the stored revision is
     /// `expected_revision`; the stored revision becomes `expected_revision + 1` (the revision
-    /// `jt_prospects::apply_update` gives `p`). `NOT_FOUND` when no such prospect.
+    /// `jt_prospects::apply_update` gives `p`). `NOT_FOUND` when no such prospect. A hard key a
+    /// racing writer without the pool lock took in between is `CONFLICT {reason: duplicate,
+    /// prospect_id}` (the caller drops the bundle, which undoes the write).
     async fn update(
         &mut self,
         p: &Prospect,
@@ -209,32 +238,42 @@ pub trait ProspectRepo: Send + Sync {
     async fn record_score(&mut self, row: &ScoreRow) -> Result<(), AppError>;
     /// The prospect's scores, newest first, at most `limit`.
     async fn scores(&mut self, id: ProspectId, limit: u32) -> Result<Vec<ScoreRow>, AppError>;
-    /// Sets the status, the decision (`None` clears it), `purge_after` and `updated_at = at`
-    /// when the stored revision is `expected_revision`, which then moves one up. Keys stay.
-    /// `NOT_FOUND` when no such prospect.
+    /// Deletes the prospect's score rows (their reasons are evidence about the business) and
+    /// keeps its `latest_score`; how many went.
+    async fn delete_scores(&mut self, id: ProspectId) -> Result<u64, AppError>;
+    /// Sets the status, the decision (`None` clears it) and `updated_at = at` when the stored
+    /// revision is `expected_revision`, which then moves one up. Keys stay. `NOT_FOUND` when no
+    /// such prospect.
     async fn set_status(
         &mut self,
         id: ProspectId,
         status: ProspectStatus,
         decision: Option<&jt_prospects::Decision>,
-        purge_after: Option<OffsetDateTime>,
         at: OffsetDateTime,
         expected_revision: u32,
     ) -> Result<Updated, AppError>;
-    /// Marks the prospect promoted to `promotion`'s person and journey: status `promoted`, no
-    /// purge time, the revision one up, `updated_at = promotion.at`. Keys stay (the pool's own
-    /// "duplicate" answer). `NOT_FOUND` when no such prospect.
-    async fn set_promoted(&mut self, id: ProspectId, promotion: &Promotion)
-    -> Result<(), AppError>;
+    /// Marks a `new` or `qualified` prospect promoted to `promotion`'s person and journey:
+    /// status `promoted`, the revision one up, `updated_at = promotion.at`. Keys stay (the
+    /// pool's own "duplicate" answer). A prospect in another status is `NotPromotable`, a
+    /// person another prospect holds `PersonAlreadyLinked`, and neither writes; `NOT_FOUND`
+    /// when no such prospect.
+    async fn set_promoted(
+        &mut self,
+        id: ProspectId,
+        promotion: &Promotion,
+    ) -> Result<Promoted, AppError>;
     /// The prospect promoted to `person`, if any.
     async fn by_person(&mut self, person: PersonId) -> Result<Option<Prospect>, AppError>;
     /// Deletes the prospect with its keys and scores; the keys it held. Empty when no such
     /// prospect.
     async fn delete(&mut self, id: ProspectId) -> Result<Vec<Key>, AppError>;
-    /// Prospects whose `purge_after` is at or before `now`, earliest first, at most `limit`.
+    /// Prospects due for purge at the `cutoffs` of the current policy
+    /// (`jt_prospects::purge_cutoffs`): rejections decided at or before `cutoffs.rejected`,
+    /// `new` and `qualified` prospects last updated at or before `cutoffs.unpromoted`; never a
+    /// promoted or do-not-contact one. Earliest first (by that time, then id), at most `limit`.
     async fn due_for_purge(
         &mut self,
-        now: OffsetDateTime,
+        cutoffs: PurgeCutoffs,
         limit: u32,
     ) -> Result<Vec<ProspectId>, AppError>;
     /// Prospects created in `[from, to)`: all of the workspace's, or `task`'s only.
@@ -342,7 +381,18 @@ pub fn is_key_hash(hash: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The workspace's do-not-contact blocklist: keyed hashes, never values.
+/// Whether `fingerprint` is a blocklist key fingerprint as stored: 16 lowercase hex digits.
+pub fn is_key_fingerprint(fingerprint: &str) -> bool {
+    fingerprint.len() == 16
+        && fingerprint
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The workspace's do-not-contact blocklist: keyed hashes of hard keys, never values. Each
+/// entry names the fingerprint of the key that hashed it, so the entries a master-key change
+/// would orphan can be counted: a hash cannot be computed again without the value, which is
+/// gone.
 #[async_trait]
 pub trait BlocklistRepo: Send + Sync {
     /// The reason `(kind, hash)` is blocked at `now`, if it is: a rejection only until it
@@ -353,10 +403,11 @@ pub trait BlocklistRepo: Send + Sync {
         hash: &str,
         now: OffsetDateTime,
     ) -> Result<Option<BlockReason>, AppError>;
-    /// Blocks `(kind, hash)`. A stronger reason replaces a weaker one (rejected < do-not-contact
-    /// < erased; a replaced rejection loses its expiry); a weaker one changes nothing, except
-    /// that a second rejection keeps the later expiry. A rejection carries `expires_at`, the
-    /// others none, and `hash` is 64 lowercase hex digits: anything else is `INTERNAL`.
+    /// Blocks `(kind, hash)`, hashed under the key `key_fingerprint` names. A stronger reason
+    /// replaces a weaker one (rejected < do-not-contact < erased; a replaced rejection loses its
+    /// expiry); a weaker one changes nothing, except that a second rejection keeps the later
+    /// expiry. Only a hard kind is blocked, a rejection carries `expires_at` and the others none,
+    /// `hash` is 64 and `key_fingerprint` 16 lowercase hex digits: anything else is `INTERNAL`.
     async fn insert(
         &mut self,
         kind: KeyKind,
@@ -364,7 +415,10 @@ pub trait BlocklistRepo: Send + Sync {
         reason: BlockReason,
         at: OffsetDateTime,
         expires_at: Option<OffsetDateTime>,
+        key_fingerprint: &str,
     ) -> Result<(), AppError>;
+    /// How many entries each key fingerprint holds, by fingerprint.
+    async fn key_fingerprints(&mut self) -> Result<Vec<(String, u64)>, AppError>;
     /// Removes a do-not-contact entry; `false` (nothing changed) for an erased or rejected one,
     /// or none.
     async fn lift(&mut self, kind: KeyKind, hash: &str) -> Result<bool, AppError>;

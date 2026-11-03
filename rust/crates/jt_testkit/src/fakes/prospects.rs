@@ -1,9 +1,11 @@
 //! The in-memory prospect pool, research tasks and blocklist, with the constraints migration
 //! `0020_prospects` enforces: one prospect and one task per id across workspaces, a hard key held
-//! by at most one prospect of a workspace (soft keys repeat freely), a task's strategy version and
-//! a prospect's task of the bundle's workspace, one open standing task per ICP entry and version,
-//! a rejection's expiry and nothing else's, and keys and scores going with their prospect. Every
-//! count is computed from the rows (no counter to drift). Locks are not modelled: races are
+//! by at most one prospect of a workspace (soft keys repeat freely), a key of at most 400
+//! characters, a decision exactly on a rejected or do-not-contact prospect, a task's strategy
+//! version and a prospect's task of the bundle's workspace, one open standing task per ICP entry
+//! and version, hard keys only on the blocklist with a rejection's expiry and nothing else's, and
+//! keys and scores going with their prospect. No purge time is stored (a read answers `None`).
+//! Every count is computed from the rows (no counter to drift). Locks are not modelled: races are
 //! tested on PostgreSQL.
 
 use std::collections::BTreeSet;
@@ -11,14 +13,14 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
-    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, ProspectQuery,
-    ProspectRepo, ProspectRow, ResearchTaskQuery, ResearchTaskRepo, ScoreRow, Updated, is_key_hash,
-    prospect_matches,
+    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
+    ProspectQuery, ProspectRepo, ProspectRow, ResearchTaskQuery, ResearchTaskRepo, ScoreRow,
+    Updated, is_key_fingerprint, is_key_hash, prospect_matches,
 };
 use jt_inbox::PersonId;
 use jt_prospects::{
-    Claim, Decision, Key, KeyKind, Promotion, Prospect, ProspectId, ProspectStatus, ResearchTask,
-    ResearchTaskId, ScoreSummary, TaskKind, TaskStatus,
+    Claim, Decision, Key, KeyKind, Promotion, Prospect, ProspectId, ProspectStatus, PurgeCutoffs,
+    ResearchTask, ResearchTaskId, ScoreSummary, TaskKind, TaskStatus,
 };
 use jt_strategy::StrategyVersionId;
 use jt_tenancy::WorkspaceId;
@@ -36,6 +38,7 @@ pub struct StoredBlock {
     pub reason: BlockReason,
     pub created_at: OffsetDateTime,
     pub expires_at: Option<OffsetDateTime>,
+    pub key_fingerprint: String,
 }
 
 /// The pool's tables, as the fake stores them.
@@ -64,6 +67,38 @@ fn distinct(keys: &[Key]) -> Vec<Key> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+/// The checks of `prospects` and `prospect_keys` a written row and its keys meet: a decision
+/// exactly when rejected or do-not-contact (`prospects_decided_check`), keys of 1 to 400
+/// characters (`prospect_keys.value`).
+fn row_checks(p: &Prospect, keys: &[Key]) -> Result<(), AppError> {
+    let decided = matches!(
+        p.status,
+        ProspectStatus::Rejected | ProspectStatus::DoNotContact
+    );
+    if decided != p.decision.is_some() {
+        return Err(AppError::internal(
+            "prospects_decided_check: a decision exactly when rejected or do-not-contact",
+        ));
+    }
+    if keys
+        .iter()
+        .any(|k| !(1..=400).contains(&k.value.chars().count()))
+    {
+        return Err(AppError::internal(
+            "prospect_keys.value is 1 to 400 characters",
+        ));
+    }
+    Ok(())
+}
+
+/// The row as stored: no purge time.
+fn stored_row(p: &Prospect) -> Prospect {
+    Prospect {
+        purge_after: None,
+        ..p.clone()
+    }
 }
 
 impl MemTenant {
@@ -160,6 +195,7 @@ impl ProspectRepo for MemTenant {
             if p.status == ProspectStatus::Promoted {
                 return Err(AppError::internal("a new prospect is never promoted"));
             }
+            row_checks(p, keys)?;
             if let Some((kind, prospect_id)) = this.hard_holder(keys, None) {
                 return Ok(Inserted::DuplicateKey { kind, prospect_id });
             }
@@ -174,7 +210,7 @@ impl ProspectRepo for MemTenant {
                     "prospects.research_task_id references a row that does not exist",
                 ));
             }
-            let row = p.clone();
+            let row = stored_row(p);
             this.tx
                 .write(move |s: &mut MemState| s.prospects.prospects.push(row.clone()));
             this.set_keys(p.id, distinct(keys));
@@ -196,10 +232,11 @@ impl ProspectRepo for MemTenant {
             if current.revision != expected_revision {
                 return Ok(Updated::Stale);
             }
+            row_checks(p, keys)?;
             if let Some((kind, prospect_id)) = this.hard_holder(keys, Some(p.id)) {
                 return Ok(Updated::DuplicateKey { kind, prospect_id });
             }
-            let mut row = p.clone();
+            let mut row = stored_row(p);
             row.created_at = current.created_at;
             row.revision = expected_revision + 1;
             this.change_prospect(p.id, move |x| *x = row.clone());
@@ -302,6 +339,24 @@ impl ProspectRepo for MemTenant {
         })
     }
 
+    async fn delete_scores(&mut self, id: ProspectId) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let n = self
+            .pool()
+            .scores
+            .iter()
+            .filter(|(w, s)| *w == ws && s.prospect_id == id)
+            .count();
+        if n > 0 {
+            self.tx.write(move |s: &mut MemState| {
+                s.prospects
+                    .scores
+                    .retain(|(w, x)| !(*w == ws && x.prospect_id == id))
+            });
+        }
+        Ok(n as u64)
+    }
+
     async fn scores(&mut self, id: ProspectId, limit: u32) -> Result<Vec<ScoreRow>, AppError> {
         let ws = self.ws;
         let mut rows: Vec<ScoreRow> = self
@@ -321,7 +376,6 @@ impl ProspectRepo for MemTenant {
         id: ProspectId,
         status: ProspectStatus,
         decision: Option<&Decision>,
-        purge_after: Option<OffsetDateTime>,
         at: OffsetDateTime,
         expected_revision: u32,
     ) -> Result<Updated, AppError> {
@@ -336,10 +390,17 @@ impl ProspectRepo for MemTenant {
                 return Ok(Updated::Stale);
             }
             let decision = decision.cloned();
+            row_checks(
+                &Prospect {
+                    status,
+                    decision: decision.clone(),
+                    ..current.clone()
+                },
+                &[],
+            )?;
             this.change_prospect(id, move |p| {
                 p.status = status;
                 p.decision = decision.clone();
-                p.purge_after = purge_after;
                 p.updated_at = at;
                 p.revision += 1;
             });
@@ -351,21 +412,40 @@ impl ProspectRepo for MemTenant {
         &mut self,
         id: ProspectId,
         promotion: &Promotion,
-    ) -> Result<(), AppError> {
+    ) -> Result<Promoted, AppError> {
         self.call(|this| {
-            if this.prospect_in(id).is_none() {
+            let Some(current) = this.prospect_in(id) else {
                 return Err(AppError::not_found("no such prospect"));
+            };
+            if !matches!(
+                current.status,
+                ProspectStatus::New | ProspectStatus::Qualified
+            ) {
+                return Ok(Promoted::NotPromotable {
+                    status: current.status,
+                });
+            }
+            let ws = this.ws;
+            if let Some(holder) = this.pool().prospects.iter().find(|p| {
+                p.workspace_id == ws
+                    && p.id != id
+                    && p.promoted
+                        .as_ref()
+                        .is_some_and(|x| x.person_id == promotion.person_id)
+            }) {
+                return Ok(Promoted::PersonAlreadyLinked {
+                    prospect_id: holder.id,
+                });
             }
             let mut promotion = promotion.clone();
             promotion.bucket = promotion.score.map(jt_prospects::bucket);
             this.change_prospect(id, move |p| {
                 p.status = ProspectStatus::Promoted;
                 p.promoted = Some(promotion.clone());
-                p.purge_after = None;
                 p.updated_at = promotion.at;
                 p.revision += 1;
             });
-            Ok(())
+            Ok(Promoted::Ok)
         })
     }
 
@@ -398,7 +478,7 @@ impl ProspectRepo for MemTenant {
 
     async fn due_for_purge(
         &mut self,
-        now: OffsetDateTime,
+        cutoffs: PurgeCutoffs,
         limit: u32,
     ) -> Result<Vec<ProspectId>, AppError> {
         let ws = self.ws;
@@ -407,7 +487,20 @@ impl ProspectRepo for MemTenant {
             .prospects
             .iter()
             .filter(|p| p.workspace_id == ws)
-            .filter_map(|p| p.purge_after.filter(|at| *at <= now).map(|at| (at, p.id)))
+            .filter_map(|p| {
+                let due_at = match p.status {
+                    ProspectStatus::Rejected => p
+                        .decision
+                        .as_ref()
+                        .map(|d| d.at)
+                        .filter(|at| *at <= cutoffs.rejected),
+                    ProspectStatus::New | ProspectStatus::Qualified => {
+                        Some(p.updated_at).filter(|at| *at <= cutoffs.unpromoted)
+                    }
+                    ProspectStatus::Promoted | ProspectStatus::DoNotContact => None,
+                };
+                due_at.map(|at| (at, p.id))
+            })
             .collect();
         due.sort();
         due.truncate(limit as usize);
@@ -646,8 +739,17 @@ impl BlocklistRepo for MemTenant {
         reason: BlockReason,
         at: OffsetDateTime,
         expires_at: Option<OffsetDateTime>,
+        key_fingerprint: &str,
     ) -> Result<(), AppError> {
         self.call(|this| {
+            if !kind.hard() {
+                return Err(AppError::internal("only a hard key is blocklisted"));
+            }
+            if !is_key_fingerprint(key_fingerprint) {
+                return Err(AppError::internal(
+                    "a blocklist key fingerprint is 16 lowercase hex digits",
+                ));
+            }
             if !is_key_hash(hash) {
                 return Err(AppError::internal(
                     "a blocklist hash is 64 lowercase hex digits",
@@ -658,7 +760,7 @@ impl BlocklistRepo for MemTenant {
                     "a rejection expires, an objection or an erasure does not",
                 ));
             }
-            let (ws, hash) = (this.ws, hash.to_owned());
+            let (ws, hash, fingerprint) = (this.ws, hash.to_owned(), key_fingerprint.to_owned());
             this.tx.write(move |s: &mut MemState| {
                 let list = &mut s.prospects.blocklist;
                 match list
@@ -680,11 +782,26 @@ impl BlocklistRepo for MemTenant {
                         reason,
                         created_at: at,
                         expires_at,
+                        key_fingerprint: fingerprint.clone(),
                     }),
                 }
             });
             Ok(())
         })
+    }
+
+    async fn key_fingerprints(&mut self) -> Result<Vec<(String, u64)>, AppError> {
+        let ws = self.ws;
+        let mut counts: std::collections::BTreeMap<String, u64> = Default::default();
+        for b in self
+            .pool()
+            .blocklist
+            .iter()
+            .filter(|b| b.workspace_id == ws)
+        {
+            *counts.entry(b.key_fingerprint.clone()).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
     }
 
     async fn lift(&mut self, kind: KeyKind, hash: &str) -> Result<bool, AppError> {

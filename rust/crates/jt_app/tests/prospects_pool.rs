@@ -8,7 +8,7 @@ use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::UnitOfWork;
 use jt_app::usecases::inbox::{erasure, people};
-use jt_app::usecases::prospects::{self, CheckInput, ListInput};
+use jt_app::usecases::prospects::{self, CheckInput, Flag, ListInput};
 use jt_inbox::{IdentityChannel, Source};
 use jt_ledger::Actor;
 use jt_prospects::{
@@ -253,6 +253,7 @@ async fn blocklist(w: &World, phone: &str, reason: jt_app::ports::prospects::Blo
             reason,
             FIXED_NOW,
             expires,
+            jt_testkit::prospects_contract::FP,
         )
         .await
         .unwrap();
@@ -280,7 +281,7 @@ async fn duplicate_hard_key_names_the_prospect() {
 }
 
 #[tokio::test]
-async fn possible_duplicate_lists_candidates() {
+async fn possible_duplicate_is_a_flag_not_a_refusal() {
     let w = world().await;
     let first = create(
         &w,
@@ -289,31 +290,72 @@ async fn possible_duplicate_lists_candidates() {
     )
     .await
     .unwrap();
-    let e = err(create(&w, &w.owner_ctx, input("ÖRNEK KAFE", "0500 000 00 02")).await);
-    assert_refused(&e, ErrorCode::Conflict, "possible_duplicate");
+    let out = prospects::create(&w.deps, &w.owner_ctx, input("ÖRNEK KAFE", "0500 000 00 02"))
+        .await
+        .unwrap();
     assert_eq!(
-        e.details["candidates"],
+        serde_json::to_value(&out.flags).unwrap(),
         json!([{
-            "prospect_id": first.id,
-            "business_name": "Örnek Kafe Ltd. Şti.",
-            "city": "İstanbul",
-            "matched": ["name_city"],
+            "flag": "possible_duplicate",
+            "candidates": [{
+                "prospect_id": first.id,
+                "business_name": "Örnek Kafe Ltd. Şti.",
+                "city": "İstanbul",
+                "status": "new",
+                "matched": ["name_city"],
+            }],
         }])
     );
+    assert_eq!(w.entries("prospects.created").len(), 2, "both recorded");
 }
 
 #[tokio::test]
-async fn distinct_from_lets_a_branch_through_and_is_recorded() {
+async fn distinct_from_silences_the_flag_and_is_recorded() {
     let w = world().await;
     let first = create(&w, &w.owner_ctx, input("Örnek Kafe", "0500 000 00 01"))
         .await
         .unwrap();
     let mut branch = input("Örnek Kafe", "0500 000 00 02");
     branch.distinct_from = vec![first.id];
-    let second = create(&w, &w.owner_ctx, branch).await.unwrap();
-    assert_eq!(second.origin.distinct_from, [first.id]);
+    let second = prospects::create(&w.deps, &w.owner_ctx, branch)
+        .await
+        .unwrap();
+    assert!(second.flags.is_empty());
+    assert_eq!(second.prospect.origin.distinct_from, [first.id]);
     let entry = w.entries("prospects.created").pop().unwrap();
     assert_eq!(entry.payload["distinct_from"], 1);
+}
+
+#[tokio::test]
+async fn a_soft_key_of_a_rejection_is_a_soft_flag() {
+    let w = world().await;
+    let mut i = input("Örnek Kafe", "0500 000 00 01");
+    i.website = field("https://ornek-kafe.example.invalid");
+    let first = create(&w, &w.owner_ctx, i).await.unwrap();
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        first.id,
+        prospects::DecideInput {
+            decision: prospects::DecideKind::Reject,
+            reason: Some(jt_prospects::RejectReason::NotIcp),
+            note: None,
+            expected_revision: 1,
+        },
+    )
+    .await
+    .unwrap();
+    // Another phone, the same website: recorded, with the rejection as a soft flag.
+    let mut again = input("Başka Ad", "0500 000 00 02");
+    again.website = field("https://www.ornek-kafe.example.invalid/menu");
+    let out = prospects::create(&w.deps, &w.owner_ctx, again)
+        .await
+        .unwrap();
+    let [Flag::PreviouslyRejectedSoft { candidates }] = out.flags.as_slice() else {
+        panic!("one soft rejection flag: {:?}", out.flags)
+    };
+    assert_eq!(candidates[0].prospect_id, first.id);
+    assert_eq!(candidates[0].matched, [jt_prospects::KeyKind::Domain]);
 }
 
 #[tokio::test]
@@ -356,9 +398,10 @@ async fn daily_cap_per_task_in_workspace_time_zone() {
 
 async fn set_timezone(w: &World, tz: &str) {
     let mut r = w.uow.tenant(w.ws).await.unwrap();
-    let mut policy = r.workspace_policy().get().await.unwrap();
-    policy.leads.timezone = tz.into();
-    r.workspace_policy().set(policy, FIXED_NOW).await.unwrap();
+    r.workspace_policy()
+        .patch_leads(json!({ "timezone": tz }), FIXED_NOW)
+        .await
+        .unwrap();
     r.commit().await.unwrap();
 }
 
@@ -389,9 +432,39 @@ async fn request_key_replays() {
     let mut i = input("Örnek Kafe", PHONE);
     i.request_key = Some("k-1".into());
     let first = create(&w, &w.owner_ctx, i.clone()).await.unwrap();
-    let again = create(&w, &w.owner_ctx, i).await.unwrap();
+    let again = create(&w, &w.owner_ctx, i.clone()).await.unwrap();
     assert_eq!(again, first);
     assert_eq!(w.entries("prospects.created").len(), 1);
+    // The key stores the id only, never the record's values.
+    let stored: Vec<serde_json::Value> = w
+        .uow
+        .snapshot()
+        .inbox
+        .request_keys
+        .iter()
+        .map(|k| k.response.clone())
+        .collect();
+    assert_eq!(stored, [json!({ "prospect_id": first.id })]);
+    // A replay reads the record again: it answers the current revision.
+    prospects::update(
+        &w.deps,
+        &w.owner_ctx,
+        first.id,
+        update_input(
+            1,
+            SetFields {
+                notes: Some("updated".into()),
+                ..SetFields::default()
+            },
+            vec![],
+        ),
+    )
+    .await
+    .unwrap();
+    let replayed = create(&w, &w.owner_ctx, i).await.unwrap();
+    assert_eq!(replayed.id, first.id);
+    assert_eq!(replayed.revision, 2);
+    assert_eq!(replayed.notes, "updated");
 }
 
 #[tokio::test]
@@ -427,7 +500,7 @@ async fn check_writes_nothing() {
     assert!(!dup.ok);
     assert_eq!(
         serde_json::to_value(&dup).unwrap(),
-        json!({"ok": false, "reason": "duplicate", "prospect_id": first.id})
+        json!({"ok": false, "reason": "duplicate", "prospect_id": first.id, "flags": []})
     );
     let soft = prospects::check(
         &w.deps,
@@ -440,7 +513,11 @@ async fn check_writes_nothing() {
     )
     .await
     .unwrap();
-    assert_eq!(soft.refusal["reason"], "possible_duplicate");
+    assert!(soft.ok, "a soft key never refuses");
+    assert!(matches!(
+        soft.flags.as_slice(),
+        [Flag::PossibleDuplicate { candidates }] if candidates[0].prospect_id == first.id
+    ));
     assert_eq!(
         w.uow.snapshot().ledger.len(),
         before.ledger.len(),
@@ -584,7 +661,7 @@ async fn list_filters_by_status_task_city_score_bucket() {
         .await
         .unwrap();
     r.prospects()
-        .set_status(ids[1], ProspectStatus::Qualified, None, None, FIXED_NOW, 1)
+        .set_status(ids[1], ProspectStatus::Qualified, None, FIXED_NOW, 1)
         .await
         .unwrap();
     r.commit().await.unwrap();
@@ -657,6 +734,12 @@ async fn list_filters_by_status_task_city_score_bucket() {
     assert!(
         rows[0].get("contact").is_none(),
         "a list row carries no contact values"
+    );
+    // Each row's purge time under the current policy.
+    assert_eq!(
+        page.items[2].purge_after,
+        Some(FIXED_NOW + Duration::days(180)),
+        "the qualified one counts from its last update"
     );
     let e = err(prospects::list(
         &w.deps,
@@ -746,7 +829,19 @@ fn values() -> Vec<&'static str> {
 
 #[tokio::test]
 async fn ledger_payloads_hold_no_values() {
+    use jt_app::usecases::prospects::{
+        DecideInput, DecideKind, DncInput, EraseInput, RawKey, SettingsInput,
+    };
     let w = world().await;
+    let rubric = jt_strategy::Rubric {
+        criteria: vec![jt_strategy::Criterion {
+            key: "fit".into(),
+            description: "serves coffee".into(),
+            weight: 100,
+        }],
+        qualify_at: 50,
+    };
+    approve_prospecting(&w, rubric.clone()).await;
     let mut i = input("Örnek Kafe", PHONE);
     i.email = field(EMAIL);
     i.notes = "a corner cafe".into();
@@ -766,8 +861,119 @@ async fn ledger_payloads_hold_no_values() {
     )
     .await
     .unwrap();
+    // Score (qualifies it), then reject, reopen and mark do-not-contact.
+    prospects::score(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        jt_prospects::ScoreInput {
+            score: 80,
+            reasons: vec![jt_prospects::ReasonInput {
+                criterion: "fit".into(),
+                points: 80,
+                evidence: "Örnek Kafe serves coffee in İstanbul".into(),
+                source: None,
+            }],
+            rubric_digest: prospects::rubric_digest(&rubric),
+        },
+    )
+    .await
+    .unwrap();
+    let decide = |decision, reason, rev| DecideInput {
+        decision,
+        reason,
+        note: Some("ornek: not a fit".into()),
+        expected_revision: rev,
+    };
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        decide(
+            DecideKind::Reject,
+            Some(jt_prospects::RejectReason::Other),
+            3,
+        ),
+    )
+    .await
+    .unwrap();
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        p.id,
+        decide(DecideKind::Reopen, None, 4),
+    )
+    .await
+    .unwrap();
+    prospects::do_not_contact(
+        &w.deps,
+        &w.owner_ctx,
+        DncInput {
+            confirm: true,
+            prospect_id: Some(p.id),
+            keys: vec![],
+            reason: jt_prospects::DncReason::Other,
+            note: Some("Örnek asked by phone".into()),
+        },
+    )
+    .await
+    .unwrap();
+    // Raw keys, an erasure and the settings.
+    prospects::do_not_contact(
+        &w.deps,
+        &w.owner_ctx,
+        DncInput {
+            confirm: true,
+            prospect_id: None,
+            keys: vec![RawKey {
+                kind: jt_prospects::KeyKind::Email,
+                value: "bilgi@ornek-kafe.example.invalid".into(),
+            }],
+            reason: jt_prospects::DncReason::Objected,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    let other = create(&w, &w.owner_ctx, input("Örnek Pastane", "0500 000 00 05"))
+        .await
+        .unwrap();
+    prospects::erase(
+        &w.deps,
+        &w.owner_ctx,
+        other.id,
+        EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    prospects::settings_set(
+        &w.deps,
+        &w.owner_ctx,
+        SettingsInput {
+            timezone: Some("Europe/Istanbul".into()),
+            rejected_memory_days: Some(10),
+            ..SettingsInput::default()
+        },
+    )
+    .await
+    .unwrap();
     let entries = w.ledger("prospects.");
-    assert!(entries.len() >= 2);
+    for action in [
+        "prospects.created",
+        "prospects.updated",
+        "prospects.scored",
+        "prospects.qualified",
+        "prospects.rejected",
+        "prospects.reopened",
+        "prospects.do_not_contact",
+        "prospects.erased",
+        "prospects.settings_set",
+    ] {
+        assert!(
+            entries.iter().any(|e| e.action.as_str() == action),
+            "{action} written"
+        );
+    }
     for e in entries {
         let text = e.payload.to_string();
         for v in values() {
@@ -777,5 +983,52 @@ async fn ledger_payloads_hold_no_values() {
                 e.action.as_str()
             );
         }
+    }
+}
+
+/// Puts an approved version with prospecting on (one ICP entry) and `rubric` in force.
+async fn approve_prospecting(w: &World, rubric: jt_strategy::Rubric) {
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    t.strategy()
+        .insert(jt_strategy::StrategyVersion {
+            id: jt_strategy::StrategyVersionId::new_v7(),
+            workspace_id: w.ws,
+            number: 1,
+            status: jt_strategy::VersionStatus::Approved,
+            sections: jt_strategy::Sections {
+                prospecting: jt_strategy::Prospecting {
+                    icp: vec![icp_entry()],
+                    rubric,
+                },
+                ..jt_strategy::Sections::default()
+            },
+            created_at: FIXED_NOW,
+            created_by: Actor::Human { user_id: w.owner },
+            submitted_at: Some(FIXED_NOW),
+            approved_at: Some(FIXED_NOW),
+            approved_by: Some(w.owner),
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+}
+
+/// One ICP entry: cafes in İstanbul.
+fn icp_entry() -> jt_strategy::IcpEntry {
+    jt_strategy::IcpEntry {
+        key: "kafeler".into(),
+        segment_key: "kafeler".into(),
+        sectors: vec!["kafe".into()],
+        areas: vec![jt_strategy::Area {
+            city: "İstanbul".into(),
+            district: None,
+        }],
+        signals: vec![],
+        exclusions: vec![],
+        size_hint: String::new(),
+        language: None,
+        daily_cap: 20,
+        backlog_target: 0,
     }
 }

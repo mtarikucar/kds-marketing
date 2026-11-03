@@ -71,8 +71,10 @@ pub async fn settings_get(deps: &Deps, ctx: &Ctx) -> Result<SettingsOut, AppErro
     })
 }
 
-/// `jeeta.prospects.settings_set`: changes the keys given, keeps every other one; the new
-/// periods apply to each prospect's purge time at its next change.
+/// `jeeta.prospects.settings_set`: stores the keys given and only those (every other key keeps
+/// following its default: `WorkspacePolicyRepo::patch_leads`); new retention periods apply to
+/// every prospect at the next purge, which reads the current policy. It takes the
+/// workspace-policy lock and no pool lock.
 pub async fn settings_set(
     deps: &Deps,
     ctx: &Ctx,
@@ -120,31 +122,48 @@ pub async fn settings_set(
         1,
         1000,
     )?;
-    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let mut policy = r.workspace_policy().get().await?;
-    let leads = &mut policy.leads;
-    if let Some(tz) = timezone {
-        leads.timezone = tz.to_owned();
-    }
-    let p = &mut leads.prospects;
-    p.rejected_retention_days = input
-        .rejected_retention_days
-        .unwrap_or(p.rejected_retention_days);
-    p.unpromoted_retention_days = input
-        .unpromoted_retention_days
-        .unwrap_or(p.unpromoted_retention_days);
-    p.rejected_memory_days = input.rejected_memory_days.unwrap_or(p.rejected_memory_days);
-    p.max_promotions_per_day = input
-        .max_promotions_per_day
-        .unwrap_or(p.max_promotions_per_day);
-    p.agents_promote_qualified_only = input
-        .agents_promote_qualified_only
-        .unwrap_or(p.agents_promote_qualified_only);
-    let out = SettingsOut {
-        timezone: leads.timezone.clone(),
-        prospects: leads.prospects.clone(),
+    let mut pool = serde_json::Map::new();
+    let mut put = |key: &str, value: Option<serde_json::Value>| {
+        if let Some(v) = value {
+            pool.insert(key.to_owned(), v);
+        }
     };
-    r.workspace_policy().set(policy, ctx.now).await?;
+    put(
+        "rejected_retention_days",
+        input.rejected_retention_days.map(Into::into),
+    );
+    put(
+        "unpromoted_retention_days",
+        input.unpromoted_retention_days.map(Into::into),
+    );
+    put(
+        "rejected_memory_days",
+        input.rejected_memory_days.map(Into::into),
+    );
+    put(
+        "max_promotions_per_day",
+        input.max_promotions_per_day.map(Into::into),
+    );
+    put(
+        "agents_promote_qualified_only",
+        input.agents_promote_qualified_only.map(Into::into),
+    );
+    let mut patch = serde_json::Map::new();
+    if let Some(tz) = timezone {
+        patch.insert("timezone".into(), tz.into());
+    }
+    if !pool.is_empty() {
+        patch.insert("prospects".into(), pool.into());
+    }
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let leads = r
+        .workspace_policy()
+        .patch_leads(patch.into(), ctx.now)
+        .await?;
+    let out = SettingsOut {
+        timezone: leads.timezone,
+        prospects: leads.prospects,
+    };
     let version = crate::usecases::capabilities::version_in_force(r.as_mut()).await?;
     crate::usecases::capabilities::append(
         r.as_mut(),

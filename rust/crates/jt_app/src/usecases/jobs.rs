@@ -1147,10 +1147,11 @@ pub async fn run_device_file_purge(deps: &Deps, now: OffsetDateTime) -> JobRepor
 // ---------------------------------------------------------------------------------------------
 
 /// The prospect pool's retention (spec 2026-10-30-leads-pool-outreach-design.md §3.6), in every
-/// workspace whatever its status: deletes the prospects past their `purge_after` (a rejection's
-/// keys first remembered as hashes) and the expired rejection hashes. `touched` counts the
-/// prospects due, `changed` those deleted plus the hashes expired, `failed` the workspaces that
-/// could not be purged. No identifier is logged.
+/// workspace whatever its status: deletes the prospects past their retention under the current
+/// policy (a rejection's hard keys first remembered as hashes), in batches of their own
+/// transactions, and the expired rejection hashes. `touched` counts the prospects due,
+/// `changed` those deleted plus the hashes expired, `failed` the workspaces that could not be
+/// purged. No identifier is logged.
 pub async fn run_prospects_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let job = Job::ProspectsPurge;
     let mut report = JobReport::default();

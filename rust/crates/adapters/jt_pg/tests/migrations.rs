@@ -78,12 +78,13 @@ const PROSPECTS_TABLES: [(&str, &str); 5] = [
 ];
 
 /// The indexes of `0020_prospects` beyond its primary keys and unique constraints.
-const PROSPECTS_INDEXES: [&str; 10] = [
+const PROSPECTS_INDEXES: [&str; 11] = [
     "research_tasks_one_standing",
     "research_tasks_list",
     "prospects_list",
     "prospects_task",
-    "prospects_purge",
+    "prospects_purge_rejected",
+    "prospects_purge_unpromoted",
     "prospects_person",
     "prospect_keys_hard",
     "prospect_keys_soft",
@@ -1014,12 +1015,25 @@ async fn insert_blocklisted(
     reason: &str,
     expires: bool,
 ) -> Result<(), sqlx::Error> {
+    insert_blocklisted_kind(pool, ws, "phone", reason, expires).await
+}
+
+/// [`insert_blocklisted`] of a key of `kind`.
+async fn insert_blocklisted_kind(
+    pool: &PgPool,
+    ws: Uuid,
+    kind: &str,
+    reason: &str,
+    expires: bool,
+) -> Result<(), sqlx::Error> {
     let mut tx = PlatformTx::begin(pool).await.unwrap();
     sqlx::query(
-        "insert into prospect_blocklist (workspace_id, kind, key_hash, reason, created_at, expires_at) \
-         values ($1, 'phone', $2, $3, now(), case when $4 then now() + interval '1 day' end)",
+        "insert into prospect_blocklist (workspace_id, kind, key_hash, reason, created_at, expires_at, \
+         key_fingerprint) values ($1, $2, $3, $4, now(), case when $5 then now() + interval '1 day' end, \
+         '0123456789abcdef')",
     )
     .bind(ws)
+    .bind(kind)
     .bind(format!("{:064x}", Uuid::now_v7().as_u128()))
     .bind(reason)
     .bind(expires)
@@ -1267,6 +1281,69 @@ async fn prospect_keys_hard_index_refuses_a_second_phone() {
         insert_prospect(&db.pool, ws, "name_city", "ornek kafe|istanbul")
             .await
             .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn blocklist_holds_hard_keys_only() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("prospect-blocklist-hard").await;
+    let ws = ws.as_uuid();
+    for kind in ["phone", "email", "instagram", "tiktok"] {
+        insert_blocklisted_kind(&db.pool, ws, kind, "do_not_contact", false)
+            .await
+            .unwrap();
+    }
+    for soft in ["domain", "name_city"] {
+        let err = insert_blocklisted_kind(&db.pool, ws, soft, "do_not_contact", false)
+            .await
+            .unwrap_err();
+        assert!(
+            err.as_database_error()
+                .is_some_and(|e| e.constraint() == Some("prospect_blocklist_kind_check")),
+            "{soft}: {err}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_prospect_is_decided_exactly_when_rejected_or_do_not_contact() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("prospect-decided").await;
+    let insert = |status: &'static str, decided: bool| {
+        let pool = db.pool.clone();
+        let ws = ws.as_uuid();
+        async move {
+            let mut tx = PlatformTx::begin(&pool).await.unwrap();
+            let done = sqlx::query(
+                "insert into prospects (workspace_id, id, status, business_name, entity_kind, \
+                 data, decided_at, created_at, updated_at) values ($1, $2, $3, 'Örnek Kafe', \
+                 'legal_entity', '{}', case when $4 then now() end, now(), now())",
+            )
+            .bind(ws)
+            .bind(Uuid::now_v7())
+            .bind(status)
+            .bind(decided)
+            .execute(tx.conn())
+            .await;
+            tx.commit().await.unwrap();
+            done.map(drop)
+        }
+    };
+    for (status, decided) in [("new", false), ("qualified", false), ("rejected", true)] {
+        insert(status, decided).await.unwrap();
+    }
+    for (status, decided) in [
+        ("new", true),
+        ("rejected", false),
+        ("do_not_contact", false),
+    ] {
+        let err = insert(status, decided).await.unwrap_err();
+        assert!(
+            err.as_database_error()
+                .is_some_and(|e| e.constraint() == Some("prospects_decided_check")),
+            "{status}: {err}"
+        );
     }
 }
 

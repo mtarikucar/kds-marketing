@@ -707,16 +707,70 @@ impl BudgetRepo for MemTenant {
     }
 }
 
-#[async_trait]
-impl WorkspacePolicyRepo for MemTenant {
-    async fn get(&mut self) -> Result<WorkspacePolicy, AppError> {
-        Ok(self
+impl MemTenant {
+    /// The stored policies with the leads policy read from its stored object. Locks are not
+    /// modelled, so `get` and `read` are one read.
+    fn policies(&self) -> Result<WorkspacePolicy, AppError> {
+        match self
             .state()
             .workspace_policies
             .iter()
             .find(|p| p.workspace_id == self.ws)
-            .map(|p| p.policy.clone())
-            .unwrap_or_default())
+        {
+            None => Ok(WorkspacePolicy::default()),
+            Some(p) => Ok(WorkspacePolicy {
+                leads: jt_app::ports::leads_policy_of(&p.leads)?,
+                ..p.policy.clone()
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl WorkspacePolicyRepo for MemTenant {
+    async fn get(&mut self) -> Result<WorkspacePolicy, AppError> {
+        self.policies()
+    }
+
+    async fn read(&mut self) -> Result<WorkspacePolicy, AppError> {
+        self.policies()
+    }
+
+    async fn patch_leads(
+        &mut self,
+        patch: serde_json::Value,
+        at: OffsetDateTime,
+    ) -> Result<jt_app::ports::LeadsPolicy, AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            if !patch.is_object() {
+                return Err(AppError::internal("a leads policy patch is an object"));
+            }
+            exists(
+                this.state().workspace(ws).is_some(),
+                "workspace_policies.workspace_id",
+            )?;
+            let stored = this
+                .state()
+                .workspace_policies
+                .iter()
+                .find(|p| p.workspace_id == ws)
+                .cloned();
+            let mut row = stored.unwrap_or_else(|| StoredWorkspacePolicy {
+                workspace_id: ws,
+                policy: WorkspacePolicy::default(),
+                leads: serde_json::json!({}),
+                updated_at: at,
+            });
+            jt_app::ports::merge_object(&mut row.leads, &patch);
+            let policy = jt_app::ports::leads_policy_of(&row.leads)?;
+            row.updated_at = at;
+            this.tx.write(move |s| {
+                s.workspace_policies.retain(|p| p.workspace_id != ws);
+                s.workspace_policies.push(row.clone());
+            });
+            Ok(policy)
+        })
     }
 
     async fn set(&mut self, policy: WorkspacePolicy, at: OffsetDateTime) -> Result<(), AppError> {
@@ -740,9 +794,18 @@ impl WorkspacePolicyRepo for MemTenant {
             {
                 return Err(AppError::internal("unknown inbox status label key"));
             }
+            // The leads policy is not written here (`patch_leads` writes it): a new row starts
+            // it as `{}`, every key its default.
+            let leads = this
+                .state()
+                .workspace_policies
+                .iter()
+                .find(|p| p.workspace_id == ws)
+                .map_or_else(|| serde_json::json!({}), |p| p.leads.clone());
             let row = StoredWorkspacePolicy {
                 workspace_id: ws,
                 policy,
+                leads,
                 updated_at: at,
             };
             this.tx.write(move |s| {

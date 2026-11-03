@@ -1190,15 +1190,67 @@ impl Default for WorkspacePolicy {
 }
 
 /// The workspace's policies.
+///
+/// Lock order: a policy write takes the workspace-policy lock (`get`, `patch_leads`); a reader
+/// that writes no policy uses `read`, which takes none. A use case holding the pool lock reads
+/// the policy with `read` only, and none takes the pool lock after `get` (inbox → pool; a
+/// policy read never locks).
 #[async_trait]
 pub trait WorkspacePolicyRepo: Send + Sync {
     /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
     /// Serialize policy read/modify/write transactions, including when the row is absent.
     async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
-    /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
-    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check
-    /// constraint and is `INTERNAL`: callers validate first.
+    /// The stored policies as [`WorkspacePolicyRepo::get`] reads them, without the
+    /// workspace-policy lock: for a reader that writes no policy (the pool's caps, time zone and
+    /// retention).
+    async fn read(&mut self) -> Result<WorkspacePolicy, AppError>;
+    /// Stores the policies, updated at `at`, replacing any stored before, except the leads
+    /// policy, which only [`WorkspacePolicyRepo::patch_leads`] writes (`policy.leads` is not
+    /// written). An interval outside `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=
+    /// MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check constraint and is `INTERNAL`: callers
+    /// validate first.
     async fn set(&mut self, policy: WorkspacePolicy, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Merges `patch` into the stored leads policy under the workspace-policy lock, updated at
+    /// `at`, and answers the policy as it reads after ([`merge_object`]): the stored object holds
+    /// only the keys someone set, so every other key keeps following its default. A `patch` that
+    /// is not an object, or a result that does not read as a [`LeadsPolicy`], is `INTERNAL`:
+    /// callers validate first.
+    async fn patch_leads(
+        &mut self,
+        patch: Value,
+        at: OffsetDateTime,
+    ) -> Result<LeadsPolicy, AppError>;
+}
+
+/// Merges `patch` into `stored`, key by key: an object value merges into the stored object of
+/// the same key (made one if it is not), any other value replaces the stored one. Keys `patch`
+/// does not name stay as stored.
+pub fn merge_object(stored: &mut Value, patch: &Value) {
+    let Value::Object(patch) = patch else {
+        *stored = patch.clone();
+        return;
+    };
+    if !stored.is_object() {
+        *stored = Value::Object(serde_json::Map::new());
+    }
+    if let Value::Object(target) = stored {
+        for (key, value) in patch {
+            match value {
+                Value::Object(_) => {
+                    merge_object(target.entry(key.clone()).or_insert(Value::Null), value)
+                }
+                other => {
+                    target.insert(key.clone(), other.clone());
+                }
+            }
+        }
+    }
+}
+
+/// The leads policy a stored object reads as: every missing key, at any depth, its default.
+pub fn leads_policy_of(stored: &Value) -> Result<LeadsPolicy, AppError> {
+    serde_json::from_value(stored.clone())
+        .map_err(|_| AppError::internal("invalid stored leads policy"))
 }
 
 // ---------------------------------------------------------------------------------------------

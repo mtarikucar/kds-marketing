@@ -13,7 +13,11 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
-use super::{dedupe, invalid_from, leads_policy, no_such_prospect, record, recorder, refused};
+use super::dedupe::Flag;
+use super::{
+    REQUEST_KEY_PREFIX, dedupe, invalid_from, leads_policy, no_such_prospect, record, recorder,
+    refused, with_purge_after,
+};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::prospects::{
@@ -21,9 +25,6 @@ use crate::ports::prospects::{
 };
 use crate::ports::{LedgerFilter, LedgerRow, TenantRepos};
 use crate::usecases::{Deps, hours, invalid, keyset_cursor};
-
-/// The prefix that keeps a create's request keys apart from the inbox's.
-const REQUEST_KEY_PREFIX: &str = "prospects.create:";
 
 /// The scores `prospects.get` answers with, newest first.
 const GET_SCORES: u32 = 20;
@@ -33,10 +34,12 @@ const GET_SCORES: u32 = 20;
 const GET_LEDGER: usize = 50;
 const GET_LEDGER_SCAN: usize = 1_000;
 
-/// A prospect as the pool answers it: the record with its evidence.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// A prospect as the pool answers it: the record with its evidence and its purge time under the
+/// current policy, and what its soft keys share with other prospects (never a refusal).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProspectOut {
     pub prospect: Prospect,
+    pub flags: Vec<Flag>,
 }
 
 /// A prospect that shares a soft key (the website's domain, or name and city) with another.
@@ -45,8 +48,40 @@ pub struct DuplicateCandidate {
     pub prospect_id: ProspectId,
     pub business_name: String,
     pub city: Option<String>,
+    pub status: ProspectStatus,
     /// The soft keys it shares: `domain`, `name_city`.
     pub matched: Vec<KeyKind>,
+}
+
+/// The answer a create request key recorded: the prospect it made, read again now (a request
+/// key stores only `{prospect_id}`). `None` when the key is not live.
+async fn replay(
+    r: &mut dyn TenantRepos,
+    key: &str,
+    now: OffsetDateTime,
+) -> Result<Option<ProspectOut>, AppError> {
+    let Some(stored) = r.request_keys().get(key, now).await? else {
+        return Ok(None);
+    };
+    let id: ProspectId = stored
+        .get("prospect_id")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .ok_or_else(|| AppError::conflict("request key belongs to another operation"))?;
+    let p = r
+        .prospects()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("the prospect this request recorded is gone"))?;
+    let policy = leads_policy(r).await?;
+    let soft: Vec<Key> = derive_keys(&p)
+        .into_iter()
+        .filter(|k| !k.kind.hard())
+        .collect();
+    let flags = dedupe::flags(r, &soft, Some(p.id), &p.origin.distinct_from).await?;
+    Ok(Some(ProspectOut {
+        prospect: with_purge_after(p, &policy.prospects),
+        flags,
+    }))
 }
 
 /// Opens a tenant bundle of the caller's workspace.
@@ -88,7 +123,8 @@ async fn check_caps(
 }
 
 /// `jeeta.prospects.create`: records one business. The recorder is the caller; the checks run in
-/// spec §3.3's order under the pool lock; a request key replays the first answer for 24 hours.
+/// spec §3.3's order under the pool lock; a request key replays the prospect it recorded, read
+/// again, for 24 hours (a create racing with the same key replays once the first commits).
 pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<ProspectOut, AppError> {
     ctx.require(Permission::ProspectsWork)?;
     let recorder = recorder(ctx)?;
@@ -99,12 +135,17 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
         .as_deref()
         .map(|k| format!("{REQUEST_KEY_PREFIX}{}", k.trim()));
     if let Some(key) = &key
-        && let Some(stored) = r.request_keys().get(key, ctx.now).await?
+        && let Some(out) = replay(r.as_mut(), key, ctx.now).await?
     {
-        return serde_json::from_value(stored)
-            .map_err(|_| AppError::conflict("request key belongs to another operation"));
+        return Ok(out);
     }
     r.prospects().lock_pool().await?;
+    // Again under the lock: a create with the same key may have committed while this one waited.
+    if let Some(key) = &key
+        && let Some(out) = replay(r.as_mut(), key, ctx.now).await?
+    {
+        return Ok(out);
+    }
     let policy = leads_policy(r.as_mut()).await?;
     let task = match input.research_task_id {
         None => None,
@@ -126,16 +167,15 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
         }
     };
     check_caps(r.as_mut(), &policy.timezone, task, ctx.now).await?;
-    let mut p = jt_prospects::build(
+    let p = jt_prospects::build(
         input,
         ProspectId::from(deps.ids.uuid()),
         ctx.workspace_id,
         ctx.now,
         recorder,
     );
-    p.purge_after = purge_after(&policy.prospects, p.status, None, p.updated_at);
     let keys = derive_keys(&p);
-    dedupe::check(
+    let flags = dedupe::check(
         deps,
         ctx,
         r.as_mut(),
@@ -163,17 +203,20 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
         }),
     )
     .await?;
-    let out = ProspectOut { prospect: p };
+    // The request key holds the id only: no contact value outlives the row in it.
     if let Some(key) = &key
         && !r
             .request_keys()
-            .store(key, serde_json::to_value(&out)?, ctx.now)
+            .store(key, json!({ "prospect_id": p.id }), ctx.now)
             .await?
     {
         return Err(AppError::conflict("request key changed while recording"));
     }
     r.commit().await?;
-    Ok(out)
+    Ok(ProspectOut {
+        prospect: with_purge_after(p, &policy.prospects),
+        flags,
+    })
 }
 
 fn duplicate(holder: ProspectId) -> AppError {
@@ -209,13 +252,14 @@ pub struct CheckInput {
     pub distinct_from: Vec<ProspectId>,
 }
 
-/// What `prospects.check` answers: `ok`, or the refusal `create` would meet (its `reason` and
-/// details), never a hash.
+/// What `prospects.check` answers: `ok` with the soft-key flags `create` would report, or the
+/// refusal `create` would meet (its `reason` and details), never a hash.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CheckOut {
     pub ok: bool,
     #[serde(flatten)]
     pub refusal: Value,
+    pub flags: Vec<Flag>,
 }
 
 /// The keys `input` names, each normalised by its kind; `VALIDATION` for a value that is not one.
@@ -289,13 +333,15 @@ pub async fn check(deps: &Deps, ctx: &Ctx, input: CheckInput) -> Result<CheckOut
     )
     .await
     {
-        Ok(()) => Ok(CheckOut {
+        Ok(flags) => Ok(CheckOut {
             ok: true,
             refusal: json!({}),
+            flags,
         }),
         Err(e) if e.details.get("reason").is_some() => Ok(CheckOut {
             ok: false,
             refusal: e.details,
+            flags: Vec::new(),
         }),
         Err(e) => Err(e),
     }
@@ -334,19 +380,15 @@ pub async fn update(
     let changed =
         jt_prospects::apply_update(&mut p, input, ctx.now, recorder).map_err(invalid_from)?;
     let policy = leads_policy(r.as_mut()).await?;
-    p.purge_after = purge_after(
-        &policy.prospects,
-        p.status,
-        p.decision.as_ref().map(|d| d.at),
-        p.updated_at,
-    );
     let keys = derive_keys(&p);
     let added: Vec<Key> = keys
         .iter()
         .filter(|k| !before.contains(k))
         .cloned()
         .collect();
-    if !added.is_empty() {
+    let flags = if added.is_empty() {
+        Vec::new()
+    } else {
         dedupe::check(
             deps,
             ctx,
@@ -356,8 +398,8 @@ pub async fn update(
             Some(p.id),
             ctx.now,
         )
-        .await?;
-    }
+        .await?
+    };
     match r.prospects().update(&p, &keys, expected).await? {
         Updated::Ok => {}
         Updated::Stale => return Err(stale(expected + 1)),
@@ -373,7 +415,10 @@ pub async fn update(
     )
     .await?;
     r.commit().await?;
-    Ok(ProspectOut { prospect: p })
+    Ok(ProspectOut {
+        prospect: with_purge_after(p, &policy.prospects),
+        flags,
+    })
 }
 
 /// `CONFLICT {reason: stale_revision, revision}`: the caller read an older revision.
@@ -433,7 +478,8 @@ pub async fn list(deps: &Deps, ctx: &Ctx, input: ListInput) -> Result<ListOut, A
     let after = keyset_cursor(input.before_at.as_deref(), input.before_id)?
         .map(|(created_at, id)| ListCursor { created_at, id });
     let mut r = bundle(deps, ctx).await?;
-    let page = r
+    let policy = leads_policy(r.as_mut()).await?;
+    let mut page = r
         .prospects()
         .list(&ProspectQuery {
             status: input.status,
@@ -445,6 +491,14 @@ pub async fn list(deps: &Deps, ctx: &Ctx, input: ListInput) -> Result<ListOut, A
             after,
         })
         .await?;
+    for row in &mut page.items {
+        row.purge_after = purge_after(
+            &policy.prospects,
+            row.status,
+            row.decided_at,
+            row.updated_at,
+        );
+    }
     Ok(ListOut {
         items: page.items,
         next: page.next.map(|c| NextPage {
@@ -471,7 +525,9 @@ pub struct GetOut {
 pub async fn get(deps: &Deps, ctx: &Ctx, id: ProspectId) -> Result<GetOut, AppError> {
     ctx.require(Permission::ProspectsWork)?;
     let mut r = bundle(deps, ctx).await?;
+    let policy = leads_policy(r.as_mut()).await?;
     let prospect = r.prospects().get(id).await?.ok_or_else(no_such_prospect)?;
+    let prospect = with_purge_after(prospect, &policy.prospects);
     let scores = r.prospects().scores(id, GET_SCORES).await?;
     let soft: Vec<Key> = derive_keys(&prospect)
         .into_iter()

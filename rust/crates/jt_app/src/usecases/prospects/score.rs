@@ -4,7 +4,7 @@
 use jt_ledger::Actor;
 use jt_prospects::{
     Decision, DecisionKind, ProspectId, ProspectStatus, RejectReason, ScoreInput, StatusEvent,
-    next_status, purge_after,
+    next_status,
 };
 use jt_strategy::Rubric;
 use jt_tenancy::Permission;
@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::{invalid_from, leads_policy, no_such_prospect, record, recorder, refused};
+use super::{
+    invalid_from, leads_policy, no_such_prospect, record, recorder, refused, with_purge_after,
+};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::prospects::{ScoreRow, Updated};
@@ -65,12 +67,16 @@ pub async fn score(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.prospects().lock_pool().await?;
     let approved = r.strategy().current_approved().await?;
-    let Some(version) = approved.filter(|v| !v.sections.prospecting.rubric.criteria.is_empty())
-    else {
+    // Prospecting is on exactly while the approved strategy has ICP entries (an empty ICP is
+    // the off switch, and its rubric is then never checked: `jt_strategy::validate_sections`).
+    let Some(version) = approved.filter(|v| {
+        let p = &v.sections.prospecting;
+        !p.icp.is_empty() && !p.rubric.criteria.is_empty()
+    }) else {
         return Err(refused(
             ErrorCode::Conflict,
             "prospecting_off",
-            "the approved strategy has no prospecting rubric",
+            "the approved strategy has no prospecting (no ICP entry)",
             json!({}),
         ));
     };
@@ -116,12 +122,10 @@ pub async fn score(
     let mut status = p.status;
     let qualified = p.status == ProspectStatus::New && row.score >= rubric.qualify_at;
     if qualified {
-        let policy = leads_policy(r.as_mut()).await?;
         status = ProspectStatus::Qualified;
-        let purge = purge_after(&policy.prospects, status, None, ctx.now);
         match r
             .prospects()
-            .set_status(id, status, None, purge, ctx.now, p.revision)
+            .set_status(id, status, None, ctx.now, p.revision)
             .await?
         {
             Updated::Ok => {}
@@ -252,16 +256,9 @@ pub async fn decide(
         }),
         _ => None,
     };
-    let policy = leads_policy(r.as_mut()).await?;
-    let purge = purge_after(
-        &policy.prospects,
-        to,
-        decision.as_ref().map(|d| d.at),
-        ctx.now,
-    );
     match r
         .prospects()
-        .set_status(id, to, decision.as_ref(), purge, ctx.now, p.revision)
+        .set_status(id, to, decision.as_ref(), ctx.now, p.revision)
         .await?
     {
         Updated::Ok => {}
@@ -279,7 +276,11 @@ pub async fn decide(
         _ => ("prospects.reopened", json!({ "prospect_id": id })),
     };
     record(r.as_mut(), ctx, action, id, payload).await?;
+    let policy = leads_policy(r.as_mut()).await?;
     let prospect = r.prospects().get(id).await?.ok_or_else(no_such_prospect)?;
     r.commit().await?;
-    Ok(ProspectOut { prospect })
+    Ok(ProspectOut {
+        prospect: with_purge_after(prospect, &policy.prospects),
+        flags: Vec::new(),
+    })
 }
