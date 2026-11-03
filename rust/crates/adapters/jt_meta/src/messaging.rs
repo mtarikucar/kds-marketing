@@ -1,9 +1,11 @@
 //! Direct messages: Messenger and Instagram through the Page (`POST /me/messages`, Page token,
 //! `messaging_type: RESPONSE`), and WhatsApp Cloud (`POST /{phone_number_id}/messages`, a text
 //! message). The sender's name: `GET /{psid}?fields=name` (Messenger), `GET /{igsid}?fields=
-//! name,username` (Instagram, on `graph.instagram.com` for an Instagram Login token).
+//! name,username` (Instagram, on `graph.instagram.com` for an Instagram Login token). The
+//! one-time sharing of a WhatsApp Business app's contacts or history:
+//! `POST /{phone_number_id}/smb_app_data` ([`request_app_sync`]).
 
-use jt_app::ports::connectors::SendReceipt;
+use jt_app::ports::connectors::{AppSync, SendReceipt};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
 
@@ -142,4 +144,48 @@ pub(crate) async fn sender_name(
         .or_else(|| instagram.then(|| text(&answer["username"])).flatten())
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty()))
+}
+
+/// Asks Meta, once, to share what the WhatsApp Business app behind a `whatsapp_cloud` number
+/// holds: `POST /{phone_number_id}/smb_app_data` with `messaging_product: whatsapp` and
+/// `sync_type` `smb_app_state_sync` (contacts) or `history`, as Meta's onboarding page gives it
+/// (<https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>);
+/// the receipt's id is the answer's `request_id`. Another kind, or a credential that is not a
+/// WhatsApp one, asks nothing (`None`).
+pub(crate) async fn request_app_sync(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    sync: AppSync,
+) -> Result<Option<SendReceipt>, ConnectorError> {
+    if kind_of(public)? != "whatsapp_cloud" {
+        return Ok(None);
+    }
+    let MetaCred::WhatsApp {
+        phone_number_id,
+        token,
+        ..
+    } = MetaCred::of(cred, "share a WhatsApp Business app's data")?
+    else {
+        return Ok(None);
+    };
+    let sync_type = match sync {
+        AppSync::Contacts => "smb_app_state_sync",
+        AppSync::History => "history",
+    };
+    let app = connector.graph_app()?;
+    let answer = connector
+        .graph_post(
+            &app,
+            token,
+            &[node(phone_number_id)?, "smb_app_data"],
+            &[],
+            json!({ "messaging_product": "whatsapp", "sync_type": sync_type }),
+        )
+        .await?;
+    let id = text(&answer["request_id"]).ok_or_else(|| missing("request id"))?;
+    Ok(Some(SendReceipt {
+        provider_id: id,
+        cost_minor: None,
+    }))
 }

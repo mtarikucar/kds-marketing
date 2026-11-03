@@ -28,13 +28,16 @@
 
 use std::time::Instant;
 
+use jt_app::ports::connectors::OAuthFlow;
+use jt_app::usecases::webhook::META_HOOK_PATH;
 use jt_connector::{ConnectorError, Credential, ProbeResult};
+use jt_outbound::Method;
 use serde_json::{Map, Value, json};
 
 use crate::MetaConnector;
 use crate::assets::ad_account_number;
 use crate::credential::{MetaCred, account_of, kind_of};
-use crate::graph::{GraphApp, integer, missing, node, text};
+use crate::graph::{Body, GraphApp, integer, missing, node, text};
 use crate::oauth::{LEADS_RETRIEVAL, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
@@ -218,9 +221,17 @@ async fn ad_account_facts(
 ///   again once without it (`"leadgen": false`): the messages arrive whatever becomes of the
 ///   leads. Any other failure is the error;
 /// - `whatsapp_cloud`: subscribes the WhatsApp Business Account when its id is known
-///   (`POST /{waba}/subscribed_apps`) and registers the number for the Cloud API
-///   (`POST /{phone_number_id}/register`), each best effort, and reports
-///   `{"subscribed": bool, "registered": bool}`;
+///   (`POST /{waba}/subscribed_apps`); once subscribed, sends that account's webhooks to this
+///   instance ([`override_callback`]: Meta's webhook override,
+///   <https://developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/override/>,
+///   so each deployment receives the events of its own customers' accounts whatever the app's
+///   callback URL is); asks whether the number is on the WhatsApp Business app
+///   ([`on_business_app`]); and registers the number for the Cloud API
+///   (`POST /{phone_number_id}/register`) only when it is not: neither on the app, nor connected
+///   through the WhatsApp Business app's sign-in (`public["asset"]["onboarding"]`), since Meta's
+///   onboarding page says to skip registering such a number. Each step best effort; reports
+///   `{"subscribed": bool, "callback_override": bool, "on_business_app": bool or null,
+///   "registered": bool}`;
 /// - any other Meta kind: nothing (`Null`);
 /// - no Meta kind in `public["kind_key"]`: `Permanent` ("kind_key missing"), nothing called.
 pub(crate) async fn on_connected(
@@ -263,20 +274,133 @@ pub(crate) async fn on_connected(
                     .is_ok(),
                 None => false,
             };
-            let registered = connector
-                .graph_post(
-                    &app,
-                    token,
-                    &[node(phone_number_id)?, "register"],
-                    &[],
-                    json!({ "messaging_product": "whatsapp", "pin": "000000" }),
-                )
-                .await
-                .map_err(|e| tracing::warn!(error_kind = e.kind(), "WhatsApp registration failed"))
-                .is_ok();
-            Ok(json!({ "subscribed": subscribed, "registered": registered }))
+            let callback_override = match waba_id {
+                Some(waba) if subscribed => override_callback(connector, &app, waba, token).await,
+                _ => false,
+            };
+            let on_business_app = on_business_app(connector, &app, phone_number_id, token).await;
+            let through_app = public["asset"]["onboarding"] == OAuthFlow::WhatsappBusinessApp.key();
+            let registered = if on_business_app == Some(true) || through_app {
+                false
+            } else {
+                connector
+                    .graph_post(
+                        &app,
+                        token,
+                        &[node(phone_number_id)?, "register"],
+                        &[],
+                        json!({ "messaging_product": "whatsapp", "pin": "000000" }),
+                    )
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!(error_kind = e.kind(), "WhatsApp registration failed")
+                    })
+                    .is_ok()
+            };
+            Ok(json!({
+                "subscribed": subscribed,
+                "callback_override": callback_override,
+                "on_business_app": on_business_app,
+                "registered": registered,
+            }))
         }
         _ => Ok(Value::Null),
+    }
+}
+
+/// The longest override callback URI Meta takes (its webhook override page: at most 200
+/// characters).
+const MAX_OVERRIDE_URI_CHARS: usize = 200;
+
+/// Sends the WhatsApp Business Account `waba`'s webhooks to this instance (see
+/// [`on_connected`]): `POST /{waba}/subscribed_apps` with `override_callback_uri` = the platform's
+/// public base URL (its path kept, without a trailing slash) followed by the Meta hook path, and
+/// `verify_token` = the Meta app's verify token (which `GET /hooks/meta` answers Meta's challenge
+/// for), sent as form fields so that neither is repeated in a refusal's reason. Best effort:
+/// `false`, logged, when there is no public base URL or verify token, when the URI is longer
+/// than Meta takes, or when Meta refuses.
+async fn override_callback(
+    connector: &MetaConnector,
+    app: &GraphApp,
+    waba: &str,
+    token: &str,
+) -> bool {
+    let Some(mut uri) = connector.apps.public_base_url() else {
+        tracing::warn!("no public base URL: the WhatsApp webhooks keep the app's callback");
+        return false;
+    };
+    let verify_token = match connector.meta_app() {
+        Ok(meta) if !meta.verify_token.trim().is_empty() => meta.verify_token,
+        _ => {
+            tracing::warn!("no verify token: the WhatsApp webhooks keep the app's callback");
+            return false;
+        }
+    };
+    let base = uri.path().trim_end_matches('/').to_owned();
+    uri.set_path(&format!("{base}{META_HOOK_PATH}"));
+    uri.set_query(None);
+    uri.set_fragment(None);
+    let uri = uri.to_string();
+    if uri.chars().count() > MAX_OVERRIDE_URI_CHARS {
+        tracing::warn!(
+            "the webhook address is longer than Meta takes: the WhatsApp webhooks keep the app's callback"
+        );
+        return false;
+    }
+    let Ok(waba) = node(waba) else {
+        return false;
+    };
+    let url = connector.graph_url(&app.version, &[waba, "subscribed_apps"], &[]);
+    let form = vec![
+        ("override_callback_uri".to_owned(), uri),
+        ("verify_token".to_owned(), verify_token),
+    ];
+    match connector
+        .call(Method::POST, url, app.auth(token), Body::Form(form))
+        .await
+    {
+        Ok(answer) if answer["success"] != false => true,
+        Ok(_) => {
+            tracing::warn!("Meta did not accept the WhatsApp webhook override");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(
+                error_kind = e.kind(),
+                "the WhatsApp webhook override failed"
+            );
+            false
+        }
+    }
+}
+
+/// Whether the WhatsApp number `phone_number_id` is on the WhatsApp Business app (Meta's
+/// onboarding page: `GET /{phone_number_id}?fields=is_on_biz_app,platform_type`, `true` once it
+/// is onboarded beside the app); `None` when Graph does not tell.
+async fn on_business_app(
+    connector: &MetaConnector,
+    app: &GraphApp,
+    phone_number_id: &str,
+    token: &str,
+) -> Option<bool> {
+    let number = node(phone_number_id).ok()?;
+    match connector
+        .graph_get(
+            app,
+            token,
+            &[number],
+            &[("fields", "is_on_biz_app,platform_type")],
+        )
+        .await
+    {
+        Ok(answer) => answer["is_on_biz_app"].as_bool(),
+        Err(e) => {
+            tracing::warn!(
+                error_kind = e.kind(),
+                "whether a WhatsApp number is on the business app could not be read"
+            );
+            None
+        }
     }
 }
 

@@ -448,8 +448,9 @@ impl MetaConnector {
 
 /// The secrets of one call, to be taken out of any provider text its error quotes: the token and
 /// the app secret of `auth`; for a call without a token, every query field of `url` but
-/// [`PUBLIC_PARAMS`] (the code, the client secret, the token to exchange); and every form field
-/// of `body` but those. Empty values are left out.
+/// [`PUBLIC_PARAMS`] (the code, the client secret, the token to exchange); for any call, a token
+/// inspected in the query (`input_token`, `debug_token`'s); and every form field of `body` but
+/// those. Empty values are left out.
 fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
     let mut secrets: Vec<String> = match auth {
         Auth::None => url
@@ -460,6 +461,11 @@ fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
         Auth::Graph { token, secret } => vec![token.to_owned(), secret.to_owned()],
         Auth::Bearer(token) => vec![token.to_owned()],
     };
+    secrets.extend(
+        url.query_pairs()
+            .filter(|(name, _)| name == "input_token")
+            .map(|(_, value)| value.into_owned()),
+    );
     if let Body::Form(fields) = body {
         secrets.extend(
             fields

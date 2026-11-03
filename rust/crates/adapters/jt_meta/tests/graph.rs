@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::connectors::{
-    AdBudgetWriter, Connector, InsightsReader, InstagramApp, LeadGenFetcher, MessagingSender,
-    OAuthApp, OAuthProvider, PublishRequest, Publisher,
+    AdBudgetWriter, AppSync, Connector, InsightsReader, InstagramApp, LeadGenFetcher,
+    MessagingSender, OAuthApp, OAuthFlow, OAuthProvider, PublishRequest, Publisher,
 };
 use jt_connector::{ConnectorError, Credential, Provider};
 use jt_meta::{
@@ -1341,6 +1341,11 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         "/fb/v19.0/5555555555/register",
         ok(json!({ "success": true })),
     );
+    m.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
     let facts = r
         .meta
         .on_connected(
@@ -1349,19 +1354,45 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         )
         .await
         .unwrap();
-    assert_eq!(facts, json!({ "subscribed": true, "registered": true }));
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": true,
+            "callback_override": true,
+            "on_business_app": false,
+            "registered": true,
+        })
+    );
     let register = m.request("POST", "/fb/v19.0/5555555555/register");
     assert_eq!(
         register.json(),
         json!({ "messaging_product": "whatsapp", "pin": "000000" })
     );
     assert_graph_auth(&register, WA_TOKEN);
-    assert_graph_auth(
-        &m.request("POST", "/fb/v19.0/4444444444/subscribed_apps"),
-        WA_TOKEN,
+    // The plain subscription first, then the override to this instance's own hook, with its
+    // verify token, as form fields.
+    let subscriptions = m.requests("POST", "/fb/v19.0/4444444444/subscribed_apps");
+    assert_eq!(subscriptions.len(), 2, "{subscriptions:#?}");
+    assert_eq!(subscriptions[0].json(), json!({}));
+    assert_eq!(
+        subscriptions[1].form(),
+        vec![
+            (
+                "override_callback_uri".to_owned(),
+                "https://panel.test/hooks/meta".to_owned()
+            ),
+            ("verify_token".to_owned(), "verify-test".to_owned()),
+        ]
     );
+    for subscription in &subscriptions {
+        assert_graph_auth(subscription, WA_TOKEN);
+    }
+    let asked = m.request("GET", "/fb/v19.0/5555555555");
+    assert_eq!(asked.param("fields"), Some("is_on_biz_app,platform_type"));
+    assert_graph_auth(&asked, WA_TOKEN);
 
-    // Without the account's id there is nothing to subscribe; a refused registration is a fact.
+    // Without the account's id there is nothing to subscribe nor to override; a number Graph
+    // says nothing about is registered, and a refused registration is a fact.
     let r = rig().await;
     r.mock.on(
         "POST",
@@ -1373,8 +1404,116 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         .on_connected(&wa_cred(None), &public("whatsapp_cloud", Some(PHONE)))
         .await
         .unwrap();
-    assert_eq!(facts, json!({ "subscribed": false, "registered": false }));
-    assert_eq!(r.mock.recorded().len(), 1);
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": false,
+            "callback_override": false,
+            "on_business_app": null,
+            "registered": false,
+        })
+    );
+    assert_eq!(r.mock.recorded().len(), 2);
+}
+
+/// A number on the WhatsApp Business app is never registered (Meta's onboarding page: skip the
+/// registration), whether Graph says it is on the app or it was connected through the app's
+/// sign-in; a refused override leaves the subscription standing.
+#[tokio::test]
+async fn on_connected_never_registers_a_number_on_the_business_app() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        status(400, json!({ "error": { "code": 100, "type": "OAuthException", "message": "(#100) Invalid parameter" } })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": true, "platform_type": "CLOUD_API" })),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &wa_cred(Some("4444444444")),
+            &public("whatsapp_cloud", Some(PHONE)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": true,
+            "callback_override": false,
+            "on_business_app": true,
+            "registered": false,
+        })
+    );
+    assert!(
+        m.requests("POST", "/fb/v19.0/5555555555/register")
+            .is_empty()
+    );
+
+    // Connected through the business app's sign-in: not registered, though Graph tells nothing.
+    let r = rig().await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    let mut through_app = public("whatsapp_cloud", Some(PHONE));
+    through_app["asset"] =
+        json!({ "waba_id": "4444444444", "onboarding": "whatsapp_business_app" });
+    let facts = r
+        .meta
+        .on_connected(&wa_cred(Some("4444444444")), &through_app)
+        .await
+        .unwrap();
+    assert_eq!(facts["registered"], false);
+    assert_eq!(facts["on_business_app"], Value::Null);
+    assert!(
+        r.mock
+            .requests("POST", "/fb/v19.0/5555555555/register")
+            .is_empty()
+    );
+}
+
+/// The override needs a public base URL and a verify token: without either, the WABA keeps the
+/// app's callback.
+#[tokio::test]
+async fn on_connected_overrides_nothing_without_a_verify_token() {
+    let mut apps = TestApps::default();
+    if let Some(meta) = apps.meta.as_mut() {
+        meta.verify_token = "  ".into();
+    }
+    let r = rig_with(apps).await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &wa_cred(Some("4444444444")),
+            &public("whatsapp_cloud", Some(PHONE)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts["subscribed"], true);
+    assert_eq!(facts["callback_override"], false);
+    assert_eq!(
+        r.mock
+            .requests("POST", "/fb/v19.0/4444444444/subscribed_apps")
+            .len(),
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2797,4 +2936,361 @@ async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
         let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
         assert_eq!(context.timezone, expected);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The WhatsApp Business app's sign-in (coexistence)
+// ---------------------------------------------------------------------------------------------
+
+/// The Meta app with its WhatsApp Embedded Signup configuration.
+fn coexistence_apps() -> TestApps {
+    let mut apps = TestApps::default();
+    if let Some(meta) = apps.meta.as_mut() {
+        meta.whatsapp_config_id = Some("wa-config-test".into());
+        meta.login_config_id = Some("login-config-test".into());
+    }
+    apps
+}
+
+#[tokio::test]
+async fn the_business_app_sign_in_opens_embedded_signup_with_its_extras() {
+    let r = rig_with(coexistence_apps()).await;
+    let app = OAuthApp::Meta(coexistence_apps().meta.unwrap());
+    let url = r
+        .meta
+        .authorize_url_for(
+            &app,
+            &redirect(),
+            "state-1",
+            None,
+            Some(OAuthFlow::WhatsappBusinessApp),
+        )
+        .unwrap();
+    assert_eq!(url.host_str(), Some("www.facebook.com"));
+    assert_eq!(url.path(), "/v19.0/dialog/oauth");
+    let q: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    assert_eq!(get("client_id"), Some(META_APP_ID));
+    assert_eq!(get("config_id"), Some("wa-config-test"));
+    assert_eq!(get("response_type"), Some("code"));
+    assert_eq!(get("override_default_response_type"), Some("true"));
+    assert_eq!(get("state"), Some("state-1"));
+    assert_eq!(get("redirect_uri"), Some(redirect().as_str()));
+    assert_eq!(get("scope"), None);
+    let extras: Value = serde_json::from_str(get("extras").unwrap()).unwrap();
+    assert_eq!(
+        extras,
+        json!({
+            "setup": {},
+            "featureType": "whatsapp_business_app_onboarding",
+            "sessionInfoVersion": "3",
+        })
+    );
+    // Without a flow it is Facebook Login as before (its own configuration, no extras).
+    let plain = r
+        .meta
+        .authorize_url_for(&app, &redirect(), "state-1", None, None)
+        .unwrap();
+    assert!(
+        plain.as_str().contains("config_id=login-config-test"),
+        "{plain}"
+    );
+    assert!(!plain.as_str().contains("extras"), "{plain}");
+
+    // No WhatsApp configuration, or another app: refused, nothing built.
+    let bare = OAuthApp::Meta(meta_app());
+    let refused = r.meta.authorize_url_for(
+        &bare,
+        &redirect(),
+        "s",
+        None,
+        Some(OAuthFlow::WhatsappBusinessApp),
+    );
+    assert_eq!(kind_of(refused), "permanent");
+    let instagram = OAuthApp::Instagram(InstagramApp {
+        app_id: "ig".into(),
+        app_secret: "ig-secret".into(),
+    });
+    let refused = r.meta.authorize_url_for(
+        &instagram,
+        &redirect(),
+        "s",
+        None,
+        Some(OAuthFlow::WhatsappBusinessApp),
+    );
+    assert_eq!(kind_of(refused), "permanent");
+    assert!(r.mock.recorded().is_empty());
+}
+
+/// The business app's code is exchanged once, for the business's token as it is: no
+/// `fb_exchange_token`, no `/me/permissions`.
+#[tokio::test]
+async fn the_business_app_code_is_exchanged_for_the_token_as_it_is() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/oauth/access_token",
+        ok(json!({ "access_token": "EAAB-business-test", "token_type": "bearer", "expires_in": 5_184_000 })),
+    );
+    let app = OAuthApp::Meta(coexistence_apps().meta.unwrap());
+    let before = OffsetDateTime::now_utc();
+    let cred = r
+        .meta
+        .exchange_for(
+            &app,
+            &redirect(),
+            "code-1",
+            None,
+            Some(OAuthFlow::WhatsappBusinessApp),
+        )
+        .await
+        .unwrap();
+    let Credential::OAuth {
+        access_token,
+        expires_at,
+        refresh_token,
+        scopes,
+    } = cred
+    else {
+        panic!("an OAuth credential");
+    };
+    assert_eq!(access_token, "EAAB-business-test");
+    assert_eq!(refresh_token, None);
+    assert!(scopes.is_empty());
+    let expires_at = expires_at.unwrap();
+    assert!(expires_at >= before + Duration::days(59), "{expires_at}");
+    let exchange = m.request("GET", "/fb/v19.0/oauth/access_token");
+    assert_eq!(exchange.param("code"), Some("code-1"));
+    assert_eq!(exchange.param("client_id"), Some(META_APP_ID));
+    assert_eq!(exchange.param("redirect_uri"), Some(redirect().as_str()));
+    assert_eq!(exchange.param("fb_exchange_token"), None);
+    assert_eq!(m.recorded().len(), 1, "{:#?}", m.recorded());
+}
+
+/// The numbers the sign-in shared: the accounts `debug_token` grants (asked with the app's own
+/// token), each account's numbers, and whether each is on the business app.
+#[tokio::test]
+async fn the_business_app_numbers_come_from_the_shared_accounts() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": {
+            "app_id": META_APP_ID,
+            "is_valid": true,
+            "expires_at": 1_900_000_000,
+            "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+            "granular_scopes": [
+                { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+                { "scope": "whatsapp_business_messaging", "target_ids": ["4444444444", "4444444445"] },
+            ],
+        }})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [{
+            "id": PHONE,
+            "display_phone_number": "+90 850 000 00 00",
+            "verified_name": "Test Atölye",
+            "quality_rating": "GREEN",
+        }]})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444445/phone_numbers",
+        status(400, json!({ "error": { "code": 200, "type": "OAuthException", "message": "(#200) no access" } })),
+    );
+    m.on(
+        "GET",
+        &format!("/fb/v19.0/{PHONE}"),
+        ok(json!({ "id": PHONE, "is_on_biz_app": true, "platform_type": "CLOUD_API" })),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let assets = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1, "{assets:?}");
+    let number = &assets[0];
+    assert_eq!(number.kind_key, "whatsapp_cloud");
+    assert_eq!(number.external_id, PHONE);
+    assert_eq!(number.name, "Test Atölye");
+    assert_eq!(
+        number.public,
+        json!({
+            "waba_id": "4444444444",
+            "display_phone_number": "+90 850 000 00 00",
+            "verified_name": "Test Atölye",
+            "quality_rating": "GREEN",
+            "onboarding": "whatsapp_business_app",
+            "is_on_biz_app": true,
+            "platform_type": "CLOUD_API",
+        })
+    );
+    assert_eq!(
+        number.credential,
+        Credential::WhatsAppCloud {
+            phone_number_id: PHONE.into(),
+            token: "EAAB-business-test".into(),
+            waba_id: Some("4444444444".into()),
+            expires_at: Some(OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap()),
+        }
+    );
+    // `debug_token` is asked with the app's own token (and its proof), the business token
+    // inspected in the query only.
+    let debugged = m.request("GET", "/fb/v19.0/debug_token");
+    assert_eq!(debugged.param("input_token"), Some("EAAB-business-test"));
+    assert_graph_auth(&debugged, &format!("{META_APP_ID}|{META_APP_SECRET}"));
+    assert_graph_auth(
+        &m.request("GET", "/fb/v19.0/4444444444/phone_numbers"),
+        "EAAB-business-test",
+    );
+    // The plain listing is not run.
+    assert!(m.requests("GET", "/fb/v19.0/me/accounts").is_empty());
+}
+
+/// A sign-in that shared no account, or an account without a number, is refused: the owner is
+/// told it shared nothing.
+#[tokio::test]
+async fn a_business_app_sign_in_that_shared_nothing_is_refused() {
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": { "is_valid": true, "granular_scopes": [] } })),
+    );
+    let refused = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await;
+    assert_eq!(kind_of(refused), "permanent");
+
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": { "granular_scopes": [
+            { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+        ]}})),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [] })),
+    );
+    let refused = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await;
+    assert_eq!(kind_of(refused), "permanent");
+}
+
+/// A refusal of `debug_token` never repeats the business token it inspected, nor the app's.
+#[tokio::test]
+async fn a_refused_debug_token_never_echoes_a_token() {
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        status(
+            400,
+            json!({ "error": {
+                "code": 100,
+                "type": "OAuthException",
+                "message": format!(
+                    "bad input_token EAAB-business-test for {META_APP_ID}|{META_APP_SECRET}"
+                ),
+            }}),
+        ),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let e = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap_err();
+    let reason = e.reason().unwrap_or_default().to_owned();
+    assert!(!reason.contains("EAAB-business-test"), "{reason}");
+    assert!(!reason.contains(META_APP_SECRET), "{reason}");
+}
+
+/// The one-time sharing of the app's contacts and history: `POST /{number}/smb_app_data`, the
+/// receipt the answer's `request_id`; another kind asks nothing.
+#[tokio::test]
+async fn app_sync_asks_smb_app_data_once_per_request() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/5555555555/smb_app_data",
+        ok(json!({ "messaging_product": "whatsapp", "request_id": "req-1" })),
+    );
+    let p = public("whatsapp_cloud", Some(PHONE));
+    let receipt = r
+        .meta
+        .request_app_sync(&wa_cred(Some("4444444444")), &p, AppSync::Contacts)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "req-1");
+    let receipt = r
+        .meta
+        .request_app_sync(&wa_cred(Some("4444444444")), &p, AppSync::History)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "req-1");
+    let asked = m.requests("POST", "/fb/v19.0/5555555555/smb_app_data");
+    assert_eq!(
+        asked.iter().map(Recorded::json).collect::<Vec<_>>(),
+        [
+            json!({ "messaging_product": "whatsapp", "sync_type": "smb_app_state_sync" }),
+            json!({ "messaging_product": "whatsapp", "sync_type": "history" }),
+        ]
+    );
+    for request in &asked {
+        assert_graph_auth(request, WA_TOKEN);
+    }
+    // Another kind asks nothing; an answer without a request id is refused.
+    assert_eq!(
+        r.meta
+            .request_app_sync(
+                &page_cred(),
+                &public("messenger", Some(PAGE)),
+                AppSync::History
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    m.set(
+        "POST",
+        "/fb/v19.0/5555555555/smb_app_data",
+        ok(json!({ "messaging_product": "whatsapp" })),
+    );
+    let refused = r
+        .meta
+        .request_app_sync(&wa_cred(None), &p, AppSync::History)
+        .await;
+    assert_eq!(kind_of(refused), "permanent");
 }
