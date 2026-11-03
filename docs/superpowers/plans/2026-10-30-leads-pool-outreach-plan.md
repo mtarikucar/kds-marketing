@@ -692,6 +692,22 @@ Inputs are the domain input types (schemars derive on them, `deny_unknown_fields
   `remaining_today_counts_the_local_day`, `backlog_target_zeroes_remaining`, `claim_lease_and_other_claimer`,
   `close_requires_prospects_work`.
 - [ ] Green; **commit** `feat(research): research tasks from the ICP`.
+- As built (2026-11-03): with the playbook, **6 rows** (catalog 181 → 187, registry 152 → 158,
+  `("prospects", 13)`, `("research", 5)`). Domain: `jt_prospects::{standing_brief, Brief::normalised,
+  validate_ad_hoc, Capacity, remaining_today, CLAIM_LEASE, MAX_TASK_TARGET, MAX_TASK_DAILY_CAP}`; port
+  `ProspectRepo::count_for_task(task) -> u32` (both adapters, the list contract). `usecases::research::{tasks_list,
+  tasks_get, tasks_create, tasks_claim, tasks_close}` answer `TaskOut { task, remaining_today }`, `ListOut { items,
+  next }`, `GetOut { task, remaining_today, found, prospects }` (rows, purge time from the current policy),
+  `ClaimOut { task_id, claimed, claim, held_by_other }`; `CloseInput { outcome: done | canceled, note? }`. The
+  planner is `research::plan_in(deps, ctx, r, &StrategyVersion) -> Planned { created, superseded }` (recorded by
+  `Recorder::System { job: "research_plan" }`, ledger under the system actor `research_plan`); `research::plan`
+  is the job body; `strategy.approve` runs `plan_in` in its transaction; `Job::ResearchPlan` (`Job::ALL` 29 →
+  30), active workspaces with an approved version, 1 h. `prospects.create` holds the task row (`lock`) and closes
+  an ad-hoc task at its target (`research::close_if_found`, `research.task_closed {outcome: done, auto: true}`).
+  Decisions D37–D41 (spec). Tests in `jt_app/tests/research_tasks.rs` (with an active workspace: a registration
+  starts `pending_payment`, which the planner skips) and `strategy.rs`
+  (`approval_creates_one_standing_task_per_icp_entry`, through the real consultation); Postgres parity
+  `research_tasks_and_the_playbook_answer_the_same_over_the_panel_and_mcp`.
 
 ### Task L2-T3: playbook tool and work items
 
@@ -707,6 +723,16 @@ ProspectsToPromote}` with `cleared_by`), `jt_mcp/src/tools/work.rs` description 
   `prospects_to_promote_counts_qualified`, `prospect_items_hidden_without_permission`,
   `prospect_items_respect_status_exemption` (pending payment → none).
 - [ ] Green; **commit** `feat(prospects): the agent playbook and research work items`.
+- As built (2026-11-03): `usecases::prospects::playbook` answers `PlaybookOut { version, text, workspace:
+  PlaybookWorkspace { prospecting_on, icp, rubric, rubric_digest (None while off), caps { timezone,
+  daily_prospects, recorded_today, max_promotions_per_day, resets_at }, remaining_today [{task_id, icp_key,
+  remaining}], retention_days { rejected, unpromoted, rejected_memory }, blocklist_rules { listed, flagged } } }`.
+  `WorkKind::{ResearchDue { task_id, remaining_today }, ProspectsToScore { count }}` (priority 3, cleared by
+  `prospects.create` / `prospects.score`) for keys with `prospects.work`, under an approved version with
+  prospecting on, after the inbox and Studio items; **`ProspectsToPromote` moves to L3-T5** with
+  `prospects.promote` (spec D42). Tests in `jt_app/tests/prospects_playbook.rs` (and `work.rs`'s catalogued-kinds
+  list); the MCP descriptions now name `jeeta.prospects.playbook`, and `prospects_mcp.rs` checks that every
+  `jeeta.*` tool a pool or research description names is registered.
 
 ---
 
@@ -823,6 +849,10 @@ record(..."prospects.promoted"...).await?; r.commit().await?;
 - [ ] Green; **commit** `feat(distribution): rule-based assignment, SLA reassignment, never silent`.
 
 ### Task L3-T5: surfaces and pins for promotion, distribution and `inbox.people.set_kind`
+
+L2 note (spec D42): this task also adds `WorkKind::ProspectsToPromote { count }` (priority 3, cleared by
+`prospects.promote`, `count_qualified_unpromoted`) to `work.pending`, with the test
+`prospects_to_promote_counts_qualified`.
 
 **Files:** catalog (`prospects.promote`, 5 `distribution.*`, `inbox.people.set_kind`),
 `jt_mcp/src/tools/{prospects,distribution,inbox}.rs`, `jt_panel_http/src/routes/{prospects,distribution,inbox}.rs`,

@@ -966,6 +966,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
 | `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
 | `prospects_purge` | 1 gün | Her alanda (durumu ne olursa olsun), alanın **güncel** saklama sürelerine göre zamanı gelen adayları 500'lük partiler hâlinde (her parti kendi işleminde, çalışma başına en çok 20 parti) siler: reddedilen bir adayın sert anahtarları (telefon, e-posta, Instagram, TikTok) önce `rejected_memory_days` (365 gün) boyunca anahtarlı özet olarak hatırlanır; silinen adayın istek anahtarları da silinir; ardından süresi dolmuş red özetlerini siler. Bir şey silen her parti için bir `prospects.purged {count}` sistem kaydı yazar; hiçbir değer ya da kimlik günlüğe geçmez | `jeeta.jobs.prospects_purge` |
+| `research_plan` | 1 saat | Onaylı stratejisi olan her `active` alanda, onaylı sürümün her ICP girdisine açık bir sürekli araştırma görevi açar (`Recorder::System { job: "research_plan" }`) ve eski sürümlerin açık sürekli görevlerini `superseded` yapar; anlık (ad-hoc) görevlere dokunmaz. Aynı iş strateji onayında da onayın işleminde çalışır. Görev başına bir `research.task_created` ya da `research.task_closed {outcome}` sistem kaydı yazar; brief metni günlüğe geçmez | `jeeta.jobs.research_plan` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -2002,6 +2003,7 @@ which the rep role does not hold.
 
 | Use case | Panel | MCP | Risk | Notes |
 |---|---|---|---|---|
+| `prospects.playbook` | `GET /api/prospects/playbook` | `jeeta.prospects.playbook` | READ | the playbook (Appendix A, versioned) and the workspace's ICP, rubric digest, caps, remaining per task, retention and blocklist rules |
 | `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok, flags}` or the refusal create would meet; writes nothing |
 | `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `{prospect, flags}`; `request_key` replays the recorded prospect 24 h |
 | `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
@@ -2014,6 +2016,28 @@ which the rep role does not hold.
 | `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; hard keys kept as erased hashes; any workspace status |
 | `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
 | `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
+
+#### Research tasks (`jeeta.research.*`, leads L2)
+
+The briefs agents fill the pool from (spec §3.7). Approving a strategy whose `prospecting` section
+has ICP entries plans one open **standing** task per entry (in the approval's transaction, and
+hourly with `research_plan`); a newer version supersedes the older versions' standing tasks, and
+nobody closes a standing task by hand. **Ad-hoc** tasks are a person's or an agent's brief and
+target, while prospecting is on; one closes itself once its target is recorded. A task's
+`remaining_today` is its daily cap less today's records, never past the workspace's ceiling (500)
+or an ad-hoc task's target, and zero for a standing task while its segment's backlog is at the ICP
+entry's `backlog_target` (0 sets no limit). The claim is a two-hour advisory lease. `work.pending`
+lists `research_due` (each task with something left today) and `prospects_to_score` (new prospects
+without a score under the approved rubric) to keys with `prospects.work`. Gated by the strategy;
+`prospects.work`.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `research.tasks_list` | `GET /api/research/tasks` | `jeeta.research.tasks_list` | READ | `?status&limit&before_at&before_id`; each `{task, remaining_today}` |
+| `research.tasks_get` | `GET /api/research/tasks/{task_id}` | `jeeta.research.tasks_get` | READ | the task, `remaining_today`, `found` and its 20 newest prospects (rows) |
+| `research.tasks_create` | `POST /api/research/tasks` | `jeeta.research.tasks_create` | WRITE | an ad-hoc `{brief, target_count, daily_cap}`; `prospecting_off` without ICP; `request_key` replays 24 h |
+| `research.tasks_claim` | `POST /api/research/tasks/{task_id}/claim` | `jeeta.research.tasks_claim` | WRITE | two hours; another recorder's live claim is answered (`held_by_other`), never taken |
+| `research.tasks_close` | `POST /api/research/tasks/{task_id}/close` | `jeeta.research.tasks_close` | WRITE | an ad-hoc task, `done` or `canceled`; a standing one is `standing_task` |
 
 #### The voice bridge (voice V1)
 
