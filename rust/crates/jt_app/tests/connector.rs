@@ -11,7 +11,7 @@ use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdBudgetWriter, Asset, AssetPublic, Connector, ConnectorRegistry, ConsentSync, DeliveryReports,
     InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthApp,
-    OAuthProvider, Publisher, SmsSender, Telephony, Url,
+    OAuthFlow, OAuthProvider, Publisher, SmsSender, Telephony, Url,
 };
 use jt_app::ports::{OAuthPendingRow, SecretBox, UnitOfWork};
 use jt_app::usecases::Deps;
@@ -123,6 +123,7 @@ async fn rig() -> Rig {
 fn start(kind: &str) -> StartOAuth {
     StartOAuth {
         kind_key: kind.into(),
+        flow: None,
     }
 }
 
@@ -4208,4 +4209,178 @@ async fn a_shared_account_is_revoked_only_when_its_last_holder_retires() {
         tokio::task::yield_now().await;
     }
     assert_eq!(r.meta.revoke_calls(), vec![theirs]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The WhatsApp Business app's sign-in (coexistence)
+// ---------------------------------------------------------------------------------------------
+
+/// The rig with the Meta app's WhatsApp Embedded Signup configuration set.
+async fn coexistence_rig() -> Rig {
+    let mut r = rig().await;
+    let mut apps = FakeAppConfig::with_all_apps();
+    if let Some(meta) = apps.meta.as_mut() {
+        meta.whatsapp_config_id = Some("wa-config-1".into());
+    }
+    r.w.deps.apps = Arc::new(apps);
+    r
+}
+
+/// A number the business app's sign-in shared, as the Meta adapter lists it.
+fn business_app_number() -> Asset {
+    Asset {
+        kind_key: "whatsapp_cloud".into(),
+        external_id: "5555555555".into(),
+        name: "Test Atölye".into(),
+        credential: Credential::WhatsAppCloud {
+            phone_number_id: "5555555555".into(),
+            token: "EAAB-user-2".into(),
+            waba_id: Some("4444444444".into()),
+            expires_at: None,
+        },
+        public: json!({
+            "waba_id": "4444444444",
+            "display_phone_number": "+90 850 000 00 00",
+            "onboarding": "whatsapp_business_app",
+            "is_on_biz_app": true,
+            "platform_type": "CLOUD_API",
+        }),
+    }
+}
+
+fn coexistence() -> StartOAuth {
+    StartOAuth {
+        kind_key: "whatsapp_cloud".into(),
+        flow: Some(OAuthFlow::WhatsappBusinessApp),
+    }
+}
+
+#[tokio::test]
+async fn the_business_app_flow_signs_in_its_own_way_and_starts_the_sharing() {
+    let r = coexistence_rig().await;
+    let o = &r.w.owner_ctx;
+    let out = connector::start_oauth(&r.w.deps, o, coexistence())
+        .await
+        .unwrap();
+    assert_eq!(
+        query(&out, "flow").as_deref(),
+        Some("whatsapp_business_app")
+    );
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == out.pending_id)
+        .unwrap();
+    assert_eq!(row.flow, Some(OAuthFlow::WhatsappBusinessApp));
+    assert_eq!(row.kind_key, "whatsapp_cloud");
+    assert_eq!(
+        r.w.entries("connector.oauth_started")
+            .last()
+            .unwrap()
+            .payload,
+        json!({ "provider": "meta", "kind_key": "whatsapp_cloud", "flow": "whatsapp_business_app" })
+    );
+
+    // The callback exchanges and lists as the flow says.
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![business_app_number()]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-2")
+        .await
+        .unwrap();
+    let flow = Some(OAuthFlow::WhatsappBusinessApp);
+    assert_eq!(
+        r.meta_oauth.flows(),
+        [
+            ("authorize_url", flow),
+            ("exchange", flow),
+            ("list_assets", flow)
+        ]
+    );
+
+    // Confirmed, the number starts its sharing: both requests due, 24 hours from now.
+    r.meta.push_probe(ok_probe("5555555555"));
+    let mut confirmed = r.confirm(&pending, &["5555555555"]).await;
+    let number = confirmed.remove(0).capability;
+    let sharing = &number.connector_public["business_app"];
+    assert_eq!(
+        *sharing,
+        json!({
+            "onboarded_at": FIXED_NOW.format(&Rfc3339).unwrap(),
+            "sync_until": (FIXED_NOW + Duration::hours(24)).format(&Rfc3339).unwrap(),
+            "contacts": { "state": "due" },
+            "history": { "state": "due" },
+        })
+    );
+    assert_eq!(
+        number.connector_public["asset"]["onboarding"],
+        "whatsapp_business_app"
+    );
+    assert_eq!(
+        connector::flow_of(&number),
+        Some(OAuthFlow::WhatsappBusinessApp)
+    );
+
+    // A reconnection signs in through the same flow again.
+    let again = connector::reconnect(&r.w.deps, o, number.id).await.unwrap();
+    assert_eq!(
+        query(&again, "flow").as_deref(),
+        Some("whatsapp_business_app")
+    );
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == again.pending_id)
+        .unwrap();
+    assert_eq!(row.flow, Some(OAuthFlow::WhatsappBusinessApp));
+    assert_no_secret("the capability", &wire(&number));
+}
+
+/// The business app's sign-in connects `whatsapp_cloud` only, and needs the Meta app's WhatsApp
+/// configuration; the plain sign-in starts no sharing.
+#[tokio::test]
+async fn the_business_app_flow_needs_its_kind_and_the_whatsapp_configuration() {
+    let r = coexistence_rig().await;
+    let o = &r.w.owner_ctx;
+    let e = err(connector::start_oauth(
+        &r.w.deps,
+        o,
+        StartOAuth {
+            kind_key: "messenger".into(),
+            flow: Some(OAuthFlow::WhatsappBusinessApp),
+        },
+    )
+    .await);
+    assert_invalid(&e, "flow");
+
+    let plain = rig().await;
+    let e = err(connector::start_oauth(&plain.w.deps, &plain.w.owner_ctx, coexistence()).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.details["reason"], "provider_product_not_enabled");
+    assert_eq!(e.details["provider"], "meta");
+    assert!(plain.pending_rows().is_empty());
+
+    // Without the flow, a WhatsApp number connects as before: no sharing.
+    let out = connector::start_oauth(&r.w.deps, o, start("whatsapp_cloud"))
+        .await
+        .unwrap();
+    assert_eq!(query(&out, "flow"), None);
+    let mut number = business_app_number();
+    number.public = json!({ "waba_id": "4444444444" });
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![number]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-2")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe("5555555555"));
+    let number = r
+        .confirm(&pending, &["5555555555"])
+        .await
+        .remove(0)
+        .capability;
+    assert!(number.connector_public.get("business_app").is_none());
+    assert_eq!(connector::flow_of(&number), None);
 }

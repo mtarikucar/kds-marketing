@@ -394,6 +394,12 @@ impl PlatformRepos for Platform {
             .capability_by_external(kind_keys, external_id)
             .await
     }
+    async fn capability_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Option<Capability>, AppError> {
+        self.inner.capability_by_business_account(waba_id).await
+    }
     async fn capabilities_holding(
         &mut self,
         kind_keys: &[&str],

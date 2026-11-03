@@ -365,6 +365,29 @@ impl PlatformRepos for MemPlatform {
             .map(|s| state.capability_view(s)))
     }
 
+    async fn capability_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Option<Capability>, AppError> {
+        let state = self.state();
+        Ok(state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
+                    && s.sealed.is_some()
+                    && c.last_verified_at.is_some()
+                    && c.kind_key == "whatsapp_cloud"
+                    && c.connector_public["asset"]["waba_id"].as_str() == Some(waba_id)
+            })
+            .max_by_key(|s| {
+                let c = &s.capability;
+                (c.status == StoredStatus::Verified, c.created_at, c.id)
+            })
+            .map(|s| state.capability_view(s)))
+    }
+
     async fn capabilities_holding(
         &mut self,
         kind_keys: &[&str],

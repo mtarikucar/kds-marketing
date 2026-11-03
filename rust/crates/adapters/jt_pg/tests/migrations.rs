@@ -34,8 +34,15 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// device commands and device files of `0017_device_bridge`.
 const TABLES_AFTER_ALL: i64 = 74;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`.
-const MIGRATIONS: i64 = 18;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, and `0023_oauth_flow`.
+const MIGRATIONS: i64 = 19;
+
+/// The migration versions. `0019` to `0022` belong to parallel branches (inbox comments and
+/// marketplace, the prospect pool, the studio materials): each adds its version here when it
+/// merges.
+fn versions() -> Vec<i64> {
+    (1..=18).chain([23]).collect()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -189,6 +196,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0023_oauth_flow",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
         "0016_voice_bridge",
@@ -281,7 +289,8 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=MIGRATIONS).collect::<Vec<_>>());
+    assert_eq!(versions, self::versions());
+    assert_eq!(versions.len() as i64, MIGRATIONS);
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -451,6 +460,83 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
             ["workspace.read", "capabilities.manage"]
         );
     }
+}
+
+/// `0023_oauth_flow` keeps a flow's sign-in variant: its up and its down are repeatable, the check
+/// takes only a known variant (or none), and its down forgets the flows that ran a variant (each
+/// would otherwise be completed as the app's own sign-in) and keeps the others.
+#[tokio::test]
+async fn oauth_flow_migration_is_repeatable_and_its_down_drops_the_variant_flows() {
+    let db = TestDb::new().await; // already migrated up, 0023 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0023_oauth_flow.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0023_oauth_flow.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let (ws, owner) = db.seed_workspace("oauth-flow").await;
+    let insert = |flow: Option<&'static str>| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,flow,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,'meta','whatsapp_cloud','meta',$3,$4,$5,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(flow)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let flows = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from oauth_pending")
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            n
+        }
+    };
+
+    for _ in 0..2 {
+        run(&up).await;
+    }
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    assert_eq!(insert(None).await, None);
+    assert_eq!(insert(Some("whatsapp_business_app")).await, None);
+    assert_eq!(insert(Some("another")).await.as_deref(), Some("23514"));
+    assert_eq!(flows().await, 2);
+
+    for _ in 0..2 {
+        run(&down).await;
+        assert!(!column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    }
+    // The variant's flow went with the column; the app's own sign-in stays.
+    assert_eq!(flows().await, 1);
+    run(&up).await;
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
 }
 
 /// `0018_tiktok_webhooks` lets inbound events be TikTok's; its up and its down are repeatable,

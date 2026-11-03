@@ -85,6 +85,7 @@ fn pending(
         provider: Provider::X,
         kind_key: "x".into(),
         app: OAuthCallback::X,
+        flow: None,
         state_hash: state_hash.into(),
         started_by: user,
         capability_id: None,
@@ -910,6 +911,7 @@ async fn tiktok_and_linkedin_flows_are_stored_and_survive_a_rollback() {
         provider: Provider::Tiktok,
         kind_key: "tiktok".into(),
         app: OAuthCallback::Tiktok,
+        flow: None,
         pkce_verifier_sealed: None,
         ..pending(a, owner, "hash-tiktok", T0 + Duration::minutes(30))
     };
@@ -917,6 +919,7 @@ async fn tiktok_and_linkedin_flows_are_stored_and_survive_a_rollback() {
         provider: Provider::Linkedin,
         kind_key: "linkedin_page".into(),
         app: OAuthCallback::Linkedin,
+        flow: None,
         pkce_verifier_sealed: None,
         ..pending(a, owner, "hash-linkedin", T0 + Duration::minutes(30))
     };
