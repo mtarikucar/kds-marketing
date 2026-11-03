@@ -47,6 +47,7 @@ use futures_util::{SinkExt, StreamExt};
 use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
 use serde::Serialize;
 use serde_json::Value;
+use time::OffsetDateTime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -140,11 +141,27 @@ pub enum ToCall {
     CoreLost,
 }
 
-/// An event of the call, and a way to hear when it was taken (the core answered its report).
+/// An event of the call, when it happened, and a way to hear when it was taken (the core
+/// answered its report).
 pub struct Report {
     pub bridge_call_id: String,
     pub event: BridgeEvent,
+    /// When the event happened: stamped as it is handed on, not when it is posted, so a report
+    /// held back while the core is away keeps its own time (review of D, L4).
+    pub at: OffsetDateTime,
     pub taken: Option<oneshot::Sender<()>>,
+}
+
+impl Report {
+    /// `event` of call `bridge_call_id`, now.
+    pub fn now(bridge_call_id: &str, event: BridgeEvent) -> Report {
+        Report {
+            bridge_call_id: bridge_call_id.to_owned(),
+            event,
+            at: OffsetDateTime::now_utc(),
+            taken: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -186,6 +203,7 @@ impl Reporter {
         let report = Report {
             bridge_call_id: self.id.clone(),
             event,
+            at: OffsetDateTime::now_utc(),
             taken,
         };
         if self.tx.send(report).is_err() {

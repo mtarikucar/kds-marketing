@@ -1,8 +1,10 @@
 //! The line end to end against a fake Jeeta and a fake ARI: a Turkish dial reaches the PBX, a
-//! foreign one is refused as a failure, every command is acknowledged, the bridge registers.
+//! foreign one is refused as a failure, every command is acknowledged, the bridge registers; and
+//! each report carries the time it happened, not the time it was posted.
 mod support;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,11 +17,25 @@ use jt_calls::wire::BridgeCommand;
 use jt_calls::{CallCommandId, CallId, CallPlan, Command, DialScript};
 use serde_json::{Value, json};
 use support::{fake_ari, serve_speaker, ws_server};
-use tokio::sync::watch;
+use time::OffsetDateTime;
+use tokio::net::TcpStream;
+use tokio::sync::{mpsc, watch};
+use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
 
 type Seen = Arc<Mutex<Vec<String>>>;
+type Ats = Arc<Mutex<Vec<OffsetDateTime>>>;
 type Queue = Arc<Mutex<Option<Vec<BridgeCommand>>>>;
+
+/// The fake Jeeta's state: what it saw, the events' times, its first poll's commands, and how
+/// long an events post takes.
+#[derive(Clone)]
+struct Jeeta {
+    seen: Seen,
+    ats: Ats,
+    queue: Queue,
+    events_take: Duration,
+}
 
 fn plan() -> CallPlan {
     serde_json::from_value(json!({
@@ -29,12 +45,19 @@ fn plan() -> CallPlan {
     .unwrap()
 }
 
-fn dial(call: &str, to: &str) -> BridgeCommand {
+fn command(call: &str, command: Command) -> BridgeCommand {
     BridgeCommand::of(
         CallCommandId(Uuid::now_v7()),
         CallId(Uuid::now_v7()),
         Some(call.into()),
-        &Command::Dial {
+        &command,
+    )
+}
+
+fn dial(call: &str, to: &str) -> BridgeCommand {
+    command(
+        call,
+        Command::Dial {
             to_e164: to.into(),
             plan: plan(),
             script: DialScript::default(),
@@ -46,24 +69,34 @@ fn dial(call: &str, to: &str) -> BridgeCommand {
 /// what the bridge registered and reported is logged as `register <extension>` and
 /// `<bridge_call_id> <kind>`.
 async fn fake_jeeta(first: Vec<BridgeCommand>) -> (String, Seen) {
-    let seen: Seen = Arc::default();
-    let queue: Queue = Arc::new(Mutex::new(Some(first)));
+    let (base, seen, _) = fake_jeeta_with(first, Duration::ZERO).await;
+    (base, seen)
+}
+
+/// As [`fake_jeeta`], each events post taking `events_take`; the events' `at` are kept too.
+async fn fake_jeeta_with(first: Vec<BridgeCommand>, events_take: Duration) -> (String, Seen, Ats) {
+    let state = Jeeta {
+        seen: Arc::default(),
+        ats: Arc::default(),
+        queue: Arc::new(Mutex::new(Some(first))),
+        events_take,
+    };
+    let (seen, ats) = (state.seen.clone(), state.ats.clone());
     let app = Router::new()
         .route(
             "/api/voice/bridge/register",
-            post(
-                |State((s, _)): State<(Seen, Queue)>, Json(b): Json<Value>| async move {
-                    s.lock()
-                        .unwrap()
-                        .push(format!("register {}", b["extension"].as_str().unwrap()));
-                    Json(json!({ "capability_id": "00000000-0000-0000-0000-000000000001", "status": "verified", "heartbeat_s": 15 }))
-                },
-            ),
+            post(|State(j): State<Jeeta>, Json(b): Json<Value>| async move {
+                j.seen
+                    .lock()
+                    .unwrap()
+                    .push(format!("register {}", b["extension"].as_str().unwrap()));
+                Json(json!({ "capability_id": "00000000-0000-0000-0000-000000000001", "status": "verified", "heartbeat_s": 15 }))
+            }),
         )
         .route(
             "/api/voice/bridge/commands",
-            get(|State((_, q)): State<(Seen, Queue)>| async move {
-                let next = q.lock().unwrap().take();
+            get(|State(j): State<Jeeta>| async move {
+                let next = j.queue.lock().unwrap().take();
                 match next {
                     Some(commands) => Json(json!({ "commands": commands, "timed_out": false })),
                     None => {
@@ -75,24 +108,71 @@ async fn fake_jeeta(first: Vec<BridgeCommand>) -> (String, Seen) {
         )
         .route(
             "/api/voice/bridge/events",
-            post(
-                |State((s, _)): State<(Seen, Queue)>, Json(b): Json<Value>| async move {
-                    for e in b["events"].as_array().unwrap() {
-                        s.lock().unwrap().push(format!(
-                            "{} {}",
-                            e["bridge_call_id"].as_str().unwrap(),
-                            e["kind"].as_str().unwrap()
-                        ));
-                    }
-                    Json(json!({ "accepted": 1, "duplicates": 0, "unmatched": 0 }))
-                },
-            ),
+            post(|State(j): State<Jeeta>, Json(b): Json<Value>| async move {
+                tokio::time::sleep(j.events_take).await;
+                for e in b["events"].as_array().unwrap() {
+                    j.seen.lock().unwrap().push(format!(
+                        "{} {}",
+                        e["bridge_call_id"].as_str().unwrap(),
+                        e["kind"].as_str().unwrap()
+                    ));
+                    let at = e["at"].as_str().unwrap();
+                    j.ats.lock().unwrap().push(
+                        OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339)
+                            .unwrap(),
+                    );
+                }
+                Json(json!({ "accepted": 1, "duplicates": 0, "unmatched": 0 }))
+            }),
         )
-        .with_state((seen.clone(), queue));
+        .with_state(state);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (base, seen)
+    (base, seen, ats)
+}
+
+/// The speech services a dial waits for (B6 as built): a listener that takes the connection
+/// (its connections are kept open by the returned receiver), and a speaker that says hello.
+async fn speech() -> (String, String, mpsc::Receiver<WebSocketStream<TcpStream>>) {
+    let (listen_addr, listen_conns) = ws_server().await;
+    let (speak_addr, speak_conns) = ws_server().await;
+    serve_speaker(speak_conns);
+    (listen_addr, speak_addr, listen_conns)
+}
+
+/// The line's configuration against the fakes, its files in a directory of `name`'s.
+fn config(name: &str, jeeta: &str, ari: &str, listen: &str, speak: &str) -> (Config, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("voice-run-{name}-{}", std::process::id()));
+    let env: HashMap<&str, String> = HashMap::from([
+        ("JEETA_BASE_URL", jeeta.to_owned()),
+        ("JEETA_BRIDGE_KEY", "jeeta_test".into()),
+        ("ARI_URL", ari.to_owned()),
+        ("ARI_PASSWORD", "p".into()),
+        ("LISTEN_SOCKET", format!("tcp:{listen}")),
+        ("SPEAK_SOCKET", format!("tcp:{speak}")),
+        ("VOICE_CACHE_DIR", dir.join("cache").display().to_string()),
+        (
+            "VOICE_TRACE_FILE",
+            dir.join("traces.jsonl").display().to_string(),
+        ),
+    ]);
+    (
+        Config::from_env(|k| env.get(k).cloned(), true).unwrap(),
+        dir,
+    )
+}
+
+/// Runs the line `for_how_long`, then stops it and waits for it to end.
+async fn run_for(config: Config, for_how_long: Duration) {
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let task = tokio::spawn(run(config, stop_rx));
+    tokio::time::sleep(for_how_long).await;
+    stop_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(8), task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -103,34 +183,9 @@ async fn a_dial_reaches_the_pbx_and_every_command_is_acknowledged() {
         dial("call-tr", "+905321234567"),
     ])
     .await;
-    let dir = std::env::temp_dir().join(format!("voice-run-{}", std::process::id()));
-    // B6 dials only once both speech services answer (B6 as built): a listener that takes the
-    // connection, and a speaker that says hello.
-    let (listen_addr, _listen_conns) = ws_server().await;
-    let (speak_addr, speak_conns) = ws_server().await;
-    serve_speaker(speak_conns);
-    let env: HashMap<&str, String> = HashMap::from([
-        ("JEETA_BASE_URL", jeeta_base),
-        ("JEETA_BRIDGE_KEY", "jeeta_test".into()),
-        ("ARI_URL", ari_base),
-        ("ARI_PASSWORD", "p".into()),
-        ("LISTEN_SOCKET", format!("tcp:{listen_addr}")),
-        ("SPEAK_SOCKET", format!("tcp:{speak_addr}")),
-        ("VOICE_CACHE_DIR", dir.join("cache").display().to_string()),
-        (
-            "VOICE_TRACE_FILE",
-            dir.join("traces.jsonl").display().to_string(),
-        ),
-    ]);
-    let config = Config::from_env(|k| env.get(k).cloned(), true).unwrap();
-    let (stop_tx, stop_rx) = watch::channel(false);
-    let task = tokio::spawn(run(config, stop_rx));
-    tokio::time::sleep(Duration::from_millis(1_500)).await;
-    stop_tx.send(true).unwrap();
-    tokio::time::timeout(Duration::from_secs(8), task)
-        .await
-        .unwrap()
-        .unwrap();
+    let (listen, speak, _listen_conns) = speech().await;
+    let (config, dir) = config("dial", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(config, Duration::from_millis(1_500)).await;
     let ari = ari_log.lock().unwrap().join("\n");
     assert!(ari.contains("PJSIP/05321234567@netgsm"), "{ari}");
     assert!(!ari.contains("4915112345678"), "{ari}");
@@ -142,5 +197,28 @@ async fn a_dial_reaches_the_pbx_and_every_command_is_acknowledged() {
         2,
         "{seen:?}"
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn reports_keep_the_time_they_happened() {
+    // Two refused dials make four reports at once; the core takes 700 ms over each. Stamped when
+    // posted, the last would read about two seconds after the first (review of D, L4).
+    let (ari_base, _) = fake_ari().await;
+    let (jeeta_base, _, ats) = fake_jeeta_with(
+        vec![
+            dial("call-de", "+4915112345678"),
+            dial("call-fr", "+33612345678"),
+        ],
+        Duration::from_millis(700),
+    )
+    .await;
+    let (listen, speak, _listen_conns) = speech().await;
+    let (config, dir) = config("at", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(config, Duration::from_millis(3_500)).await;
+    let ats = ats.lock().unwrap().clone();
+    assert_eq!(ats.len(), 4, "{ats:?}");
+    let spread = *ats.iter().max().unwrap() - *ats.iter().min().unwrap();
+    assert!(spread < time::Duration::milliseconds(500), "{spread}");
     let _ = std::fs::remove_dir_all(dir);
 }

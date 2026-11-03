@@ -13,7 +13,6 @@ use jt_calls::wire::{
     BridgeCommand, CommandsQuery, EventIn, EventsInput, RegisterInput, SpeechToText, TextToSpeech,
 };
 use jt_calls::{BridgeEvent, CallCommandId, CallPlan, Command, DialScript};
-use time::OffsetDateTime;
 use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
@@ -203,12 +202,7 @@ async fn dispatch(
             Err(_) => warn!(command = %c.id, kind = %c.kind, "a command this build cannot read"),
         }
     }
-    let done = Report {
-        bridge_call_id: call,
-        event: BridgeEvent::CommandDone { id: c.id },
-        taken: None,
-    };
-    let _ = reports.send(done);
+    let _ = reports.send(Report::now(&call, BridgeEvent::CommandDone { id: c.id }));
 }
 
 /// Starts the task of a dialled call, or reports why the line refuses it.
@@ -221,12 +215,13 @@ fn start_call(
     calls: &Registry,
     reports: &mpsc::UnboundedSender<Report>,
 ) {
-    let refuse = |failure_line: &str| Report {
-        bridge_call_id: call.to_owned(),
-        event: BridgeEvent::Error {
-            failure_line: failure_line.to_owned(),
-        },
-        taken: None,
+    let refuse = |failure_line: &str| {
+        Report::now(
+            call,
+            BridgeEvent::Error {
+                failure_line: failure_line.to_owned(),
+            },
+        )
     };
     let Some(dial) = netgsm::dial_string(to_e164) else {
         // Geographic, mobile, 0800 and 0850 numbers only (B4 review I6).
@@ -312,7 +307,8 @@ impl Outage {
     }
 }
 
-/// Posts the calls' reports one by one, in order, each numbered within its call; retries while the
+/// Posts the calls' reports one by one, in order, each numbered within its call and stamped when it
+/// happened; retries while the
 /// core is away, and tells the live calls once it stayed away [`CORE_LOST_AFTER`].
 async fn post_reports(
     jeeta: Arc<JeetaClient>,
@@ -334,7 +330,7 @@ async fn post_reports(
             events: vec![EventIn {
                 bridge_call_id: report.bridge_call_id.clone(),
                 bridge_seq: *seq,
-                at: OffsetDateTime::now_utc(),
+                at: report.at,
                 event: report.event,
             }],
         };
