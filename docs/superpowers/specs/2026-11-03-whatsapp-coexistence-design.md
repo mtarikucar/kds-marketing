@@ -153,6 +153,11 @@ event arriving after the erasure) and in the database (`inbox_event_person`, mig
 the mask takes `thread`, `phone_number`, `full_name` and `first_name` too, in Rust and in SQL
 alike. 0024's down puts 0008's functions back and is refused once such events are stored.
 
+**D14. The business's token is never renewed.** `refresh_tokens` leaves a capability whose asset
+says `onboarding: whatsapp_business_app` alone, whatever its expiry: the token is the business's
+own (D4) and is not put through `fb_exchange_token`. When it lapses, the hourly probe fails with
+`Auth` and the capability asks for a reconnection, which signs in through the same flow.
+
 ## Open questions
 
 - **Q1.** Does the dialog honour `extras` when opened by redirect? If not, the panel must launch

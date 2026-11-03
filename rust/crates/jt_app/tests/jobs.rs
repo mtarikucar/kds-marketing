@@ -427,6 +427,48 @@ async fn refresh_takes_only_tokens_expiring_within_seven_days() {
     assert_eq!(r.capability(due).status, StoredStatus::Verified);
 }
 
+/// The token of a number connected through the WhatsApp Business app's sign-in is the business's
+/// own (spec D4): it is never put through a renewal, however near its expiry. A Cloud API number's
+/// token of the same age is renewed as before.
+#[tokio::test]
+async fn refresh_never_renews_a_business_app_token() {
+    let r = rig().await;
+    let token = |number: &str| Credential::WhatsAppCloud {
+        phone_number_id: number.into(),
+        token: "EAAB-business".into(),
+        waba_id: Some("4444444444".into()),
+        expires_at: Some(NOW + Duration::days(6)),
+    };
+    let business = token("5555555555");
+    let id = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &business,
+            json!({ "asset": { "waba_id": "4444444444", "onboarding": "whatsapp_business_app" } }),
+        )
+        .await;
+    let cloud = token("5555555556");
+    r.connected(
+        "whatsapp_cloud",
+        "5555555556",
+        StoredStatus::Verified,
+        &cloud,
+        json!({ "asset": { "waba_id": "4444444444" } }),
+    )
+    .await;
+    r.meta.push_refresh(Ok(None));
+
+    let out = jobs::run_refresh_tokens(&r.w.deps, NOW).await;
+    assert_eq!(out, report(1, 0, 0, 0));
+    assert_eq!(
+        r.meta.calls(),
+        [ConnectorCall::Refresh { credential: cloud }]
+    );
+    assert_eq!(r.credential(id), business);
+}
+
 #[tokio::test]
 async fn refresh_x_always_rotates() {
     let r = rig().await;

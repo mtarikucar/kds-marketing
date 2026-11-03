@@ -57,7 +57,7 @@ use super::webhook::{self, Delivery};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::connectors::{
-    AppSync, Connector, DeliveryReports, DeliveryStatus, MessagingSender, Telephony,
+    AppSync, Connector, DeliveryReports, DeliveryStatus, MessagingSender, OAuthFlow, Telephony,
 };
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
@@ -272,7 +272,9 @@ impl Job {
 /// while) flags the capability although its refresh token still holds; renewing is what brings
 /// it back. A LinkedIn credential has a refresh token only when LinkedIn grants the app
 /// programmatic refresh; without one the adapter has nothing to renew, and the capability lapses
-/// into a reconnection when its 60 days are up.
+/// into a reconnection when its 60 days are up. A WhatsApp number connected through the WhatsApp
+/// Business app's sign-in (its asset says so, [`super::connector::flow_of`]) is never renewed: its
+/// token is the business's own, kept as it is.
 ///
 /// **Compare and swap.** The sealed credential is read in a transaction of its own, the provider
 /// is asked with no transaction open, and the answer is written in a second transaction that
@@ -358,6 +360,12 @@ fn due_for_refresh(capability: &Capability, now: OffsetDateTime) -> bool {
         return true;
     }
     if reconnect_required(capability) {
+        return false;
+    }
+    // The business's own token from the WhatsApp Business app's sign-in is kept as it is (spec
+    // D4): never exchanged as a user token. Its lapse shows as a failed probe, asking for a
+    // reconnection through the same sign-in.
+    if super::connector::flow_of(capability) == Some(OAuthFlow::WhatsappBusinessApp) {
         return false;
     }
     public_time(&capability.connector_public["access"]["expires_at"])
