@@ -31,11 +31,13 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
-/// device commands and device files of `0017_device_bridge`.
-const TABLES_AFTER_ALL: i64 = 74;
+/// device commands and device files of `0017_device_bridge`; then the materials library's seven of
+/// `0021_studio_materials`.
+const TABLES_AFTER_ALL: i64 = 81;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`.
-const MIGRATIONS: i64 = 18;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, and `0021_studio_materials`
+/// (`0019` and `0020` belong to other branches).
+const MIGRATIONS: i64 = 19;
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -189,6 +191,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0021_studio_materials",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
         "0016_voice_bridge",

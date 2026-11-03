@@ -1,6 +1,7 @@
 //! Tenant-transaction Studio storage. The control row serializes request receipts and claims;
 //! callers commit the frozen Sending snapshot before doing any provider I/O.
 mod control;
+mod materials;
 mod paid;
 mod queue;
 mod records;

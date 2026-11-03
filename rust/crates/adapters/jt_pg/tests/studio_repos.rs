@@ -13,14 +13,21 @@ async fn studio_schema_exact_table_delta() {
             "studio_adset_bindings",
             "studio_arms",
             "studio_budget_moves",
+            "studio_calendar_entries",
             "studio_control",
             "studio_files",
             "studio_learning_applications",
+            "studio_material_policy",
+            "studio_material_releases",
+            "studio_materials",
             "studio_measurements",
+            "studio_olays",
+            "studio_piece_materials",
             "studio_pieces",
             "studio_publications",
             "studio_publish_attempts",
             "studio_request_keys",
+            "studio_shoot_requests",
             "studio_slots",
             "studio_spend_reservations",
             "studio_trends"
@@ -28,8 +35,9 @@ async fn studio_schema_exact_table_delta() {
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
     // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
-    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2);
+    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge), and
+    // the materials library's seven (0021_studio_materials).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 7);
 }
 
 #[tokio::test]

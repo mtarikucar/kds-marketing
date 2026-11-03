@@ -112,10 +112,12 @@ async fn studio_exact_catalog_and_gate_set() {
         }
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
-    // 0016_voice_bridge and the device commands and device files of 0017_device_bridge.
-    assert_eq!(all_tables.len(), 74);
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, and the
+    // materials library's seven of 0021_studio_materials.
+    assert_eq!(all_tables.len(), 81);
 
-    // All fourteen Studio tables are tenant-scoped.
+    // All twenty-one Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
+    // 0021_studio_materials.
     assert_eq!(
         set(tables
             .iter()
@@ -135,7 +137,14 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_budget_moves",
             "studio_spend_reservations",
             "studio_control",
-            "studio_request_keys"
+            "studio_request_keys",
+            "studio_olays",
+            "studio_materials",
+            "studio_piece_materials",
+            "studio_calendar_entries",
+            "studio_shoot_requests",
+            "studio_material_policy",
+            "studio_material_releases"
         ])
     );
 }
