@@ -297,6 +297,7 @@ fn every_job_has_a_lock_named_after_it() {
             "device_bridge_health",
             "device_command_expiry",
             "device_file_purge",
+            "whatsapp_app_sync",
         ]
     );
     for job in Job::ALL {
@@ -1335,6 +1336,7 @@ async fn purges_remove_only_what_is_past_its_time() {
                 provider: Provider::Meta,
                 kind_key: "facebook_page".into(),
                 app: OAuthCallback::Meta,
+                flow: None,
                 state_hash: format!("hash-{state}"),
                 started_by: r.w.owner,
                 capability_id: None,
@@ -1428,6 +1430,7 @@ async fn purges_go_on_past_a_failing_workspace_and_cover_every_status() {
                 provider: Provider::Meta,
                 kind_key: "facebook_page".into(),
                 app: OAuthCallback::Meta,
+                flow: None,
                 state_hash: format!("hash-{ws}"),
                 started_by: r.w.owner,
                 capability_id: None,
@@ -1928,4 +1931,230 @@ async fn cdr_poll_dedups_against_push() {
         jobs::run_netgsm_cdr_poll(&r.w.deps, NOW).await,
         report(1, 0, 0, 1)
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// whatsapp_app_sync
+// ---------------------------------------------------------------------------------------------
+
+/// The WhatsApp number of a business app onboarded beside it.
+fn wa_number() -> Credential {
+    Credential::WhatsAppCloud {
+        phone_number_id: "5555555555".into(),
+        token: "EAAB-page".into(),
+        waba_id: Some("4444444444".into()),
+        expires_at: None,
+    }
+}
+
+/// `connector_public` of a number onboarded at `onboarded`, its two requests as given.
+fn sharing(onboarded: OffsetDateTime, contacts: &str, history: &str) -> Value {
+    json!({ "business_app": {
+        "onboarded_at": rfc3339(onboarded),
+        "sync_until": rfc3339(onboarded + Duration::hours(24)),
+        "contacts": { "state": contacts },
+        "history": { "state": history },
+    }})
+}
+
+fn receipt(id: &str) -> jt_app::ports::connectors::SendReceipt {
+    jt_app::ports::connectors::SendReceipt {
+        provider_id: id.into(),
+        cost_minor: None,
+    }
+}
+
+fn sync_state(r: &Rig, id: CapabilityId, sync: &str) -> Value {
+    r.capability(id).connector_public["business_app"][sync].clone()
+}
+
+#[tokio::test]
+async fn app_sync_asks_for_the_contacts_then_the_history_once_each() {
+    use jt_app::ports::connectors::AppSync;
+    let r = rig().await;
+    let id = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "due", "due"),
+        )
+        .await;
+    r.meta.push_app_sync(Ok(Some(receipt("req-contacts"))));
+    r.meta.push_app_sync(Ok(Some(receipt("req-history"))));
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW).await,
+        report(2, 2, 0, 0)
+    );
+    assert_eq!(
+        r.meta.app_sync_calls(),
+        [
+            (json!("5555555555"), AppSync::Contacts),
+            (json!("5555555555"), AppSync::History),
+        ]
+    );
+    assert_eq!(
+        sync_state(&r, id, "contacts"),
+        json!({ "state": "requested", "at": rfc3339(NOW), "request_id": "req-contacts" })
+    );
+    assert_eq!(sync_state(&r, id, "history")["request_id"], "req-history");
+    let entries = r.w.entries("connector.app_sync");
+    assert_eq!(
+        entries.iter().map(payload).collect::<Vec<_>>(),
+        [
+            json!({ "kind_key": "whatsapp_cloud", "sync": "contacts", "state": "requested" }),
+            json!({ "kind_key": "whatsapp_cloud", "sync": "history", "state": "requested" }),
+        ]
+    );
+    // Asked once: a later run asks nothing.
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW + Duration::minutes(5)).await,
+        JobReport::default()
+    );
+    assert_eq!(r.meta.app_sync_calls().len(), 2);
+    r.assert_no_secret_leaked();
+}
+
+/// A busy or unreachable provider is asked again on the next run; an answer lost after the
+/// request may have reached it is never asked again.
+#[tokio::test]
+async fn app_sync_retries_a_busy_provider_and_never_repeats_an_unknown_request() {
+    let r = rig().await;
+    let id = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "due", "due"),
+        )
+        .await;
+    r.meta
+        .push_app_sync(Err(ConnectorError::transient("connect refused")));
+    r.meta
+        .push_app_sync(Err(ConnectorError::unknown("the answer broke off")));
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW).await,
+        report(2, 1, 0, 1)
+    );
+    let contacts = sync_state(&r, id, "contacts");
+    assert_eq!(contacts["state"], "due");
+    assert!(
+        contacts["retry_reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("connect refused")),
+        "{contacts}"
+    );
+    assert_eq!(sync_state(&r, id, "history")["state"], "unknown");
+
+    r.meta.push_app_sync(Ok(Some(receipt("req-contacts"))));
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW + Duration::minutes(5)).await,
+        report(1, 1, 0, 0)
+    );
+    assert_eq!(r.meta.app_sync_calls().len(), 3);
+    assert_eq!(sync_state(&r, id, "contacts")["state"], "requested");
+    assert_eq!(sync_state(&r, id, "history")["state"], "unknown");
+}
+
+/// A refusal (an unsupported country among them) is kept with its reason, and a window that
+/// closed first is `expired`, nothing asked.
+#[tokio::test]
+async fn app_sync_keeps_a_refusal_and_lets_a_closed_window_expire() {
+    let r = rig().await;
+    let refused = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "due", "requested"),
+        )
+        .await;
+    r.meta.push_app_sync(Err(ConnectorError::permanent(
+        "(#131000) the feature is not available in this country",
+    )));
+    let late = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555556",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(25), "due", "due"),
+        )
+        .await;
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW).await,
+        report(3, 3, 0, 0)
+    );
+    let contacts = sync_state(&r, refused, "contacts");
+    assert_eq!(contacts["state"], "refused");
+    assert!(
+        contacts["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("permanent") && r.contains("not available")),
+        "{contacts}"
+    );
+    assert_eq!(sync_state(&r, refused, "history")["state"], "requested");
+    assert_eq!(sync_state(&r, late, "contacts")["state"], "expired");
+    assert_eq!(sync_state(&r, late, "history")["state"], "expired");
+    assert_eq!(r.meta.app_sync_calls().len(), 1);
+}
+
+/// A request found `requesting` (its answer was never written) is `unknown`, never asked again;
+/// a capability that is not verified, or has no sharing, is left alone.
+#[tokio::test]
+async fn app_sync_never_repeats_an_unrecorded_request_and_waits_for_verification() {
+    let r = rig().await;
+    let id = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "requesting", "requested"),
+        )
+        .await;
+    let waiting = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555556",
+            StoredStatus::Unreachable,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "due", "due"),
+        )
+        .await;
+    // Not verified either, and its window closed while it waited: it can no longer be asked.
+    let lapsed = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555558",
+            StoredStatus::Unreachable,
+            &wa_number(),
+            sharing(NOW - Duration::hours(25), "due", "requested"),
+        )
+        .await;
+    r.connected(
+        "whatsapp_cloud",
+        "5555555557",
+        StoredStatus::Verified,
+        &wa_number(),
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW).await,
+        report(2, 2, 0, 0)
+    );
+    let contacts = sync_state(&r, id, "contacts");
+    assert_eq!(contacts["state"], "unknown");
+    assert_eq!(
+        contacts["reason"],
+        "the answer to the request was never recorded"
+    );
+    assert_eq!(sync_state(&r, waiting, "contacts")["state"], "due");
+    assert_eq!(sync_state(&r, lapsed, "contacts")["state"], "expired");
+    assert_eq!(sync_state(&r, lapsed, "history")["state"], "requested");
+    assert!(r.meta.app_sync_calls().is_empty());
 }
