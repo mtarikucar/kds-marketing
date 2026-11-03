@@ -154,6 +154,18 @@ impl Olay {
     }
 }
 
+/// The olays a material captured on Istanbul day `day` may belong to (spec §5.3): those, confirmed
+/// or proposed, whose dates contain it, the one starting nearest to it first (then the shorter,
+/// then by id). A suggestion only: a human chooses, nothing is bound by it.
+pub fn olay_suggestions(olays: &[Olay], day: Date) -> Vec<&Olay> {
+    let mut out: Vec<&Olay> = olays
+        .iter()
+        .filter(|o| (o.starts_on..=o.ends_on).contains(&day))
+        .collect();
+    out.sort_by_key(|o| (day - o.starts_on, o.ends_on - o.starts_on, o.id));
+    out
+}
+
 /// The Istanbul calendar day of `at` (UTC+03 throughout the supported Studio calendar).
 pub fn istanbul_day(at: OffsetDateTime) -> Date {
     at.to_offset(UtcOffset::from_hms(3, 0, 0).expect("Istanbul offset"))

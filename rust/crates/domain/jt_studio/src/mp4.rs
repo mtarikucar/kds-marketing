@@ -1,8 +1,9 @@
-//! A video's length from its ISO base media boxes (ISO/IEC 14496-12): the top-level boxes are
-//! walked to `moov`, whose `mvhd` names a timescale and a duration in it. A fragmented video's
-//! `mvhd` names none (zero, or all ones for "unknown"); its `mvex/mehd` then names the whole
-//! fragment duration in the same timescale. Nothing else is read, and nothing is trusted: a box
-//! running past its parent, or shorter than its own header, ends the walk.
+//! A video's length and creation time from its ISO base media boxes (ISO/IEC 14496-12): the
+//! top-level boxes are walked to `moov`, whose `mvhd` names a creation time, a timescale and a
+//! duration in it. A fragmented video's `mvhd` names no duration (zero, or all ones for
+//! "unknown"); its `mvex/mehd` then names the whole fragment duration in the same timescale.
+//! Nothing else is read, and nothing is trusted: a box running past its parent, or shorter than
+//! its own header, ends the walk.
 
 /// The duration in milliseconds, or `None` when it cannot be read.
 pub(crate) fn duration_ms(bytes: &[u8]) -> Option<u64> {
@@ -24,6 +25,27 @@ pub(crate) fn duration_ms(bytes: &[u8]) -> Option<u64> {
     };
     let ms = u128::from(duration) * 1000 / u128::from(timescale);
     u64::try_from(ms).ok()
+}
+
+/// Seconds from 1904-01-01T00:00:00Z, the epoch of ISO base media times, to the Unix epoch.
+const MP4_EPOCH_TO_UNIX: i64 = 2_082_844_800;
+
+/// When the video was made, from `moov/mvhd`'s creation time (seconds since 1904-01-01 UTC, 4 or
+/// 8 bytes after the version and flags); `None` when it is zero (not set), unreadable, or outside
+/// 1970–2100.
+pub(crate) fn creation_time(bytes: &[u8]) -> Option<time::OffsetDateTime> {
+    let mvhd = find(find(bytes, b"moov")?, b"mvhd")?;
+    let seconds = match *mvhd.first()? {
+        0 => u64::from(be32(mvhd, 4)?),
+        1 => be64(mvhd, 4)?,
+        _ => return None,
+    };
+    if seconds == 0 {
+        return None;
+    }
+    let unix = i64::try_from(seconds).ok()? - MP4_EPOCH_TO_UNIX;
+    let at = time::OffsetDateTime::from_unix_timestamp(unix).ok()?;
+    (1970..=2100).contains(&at.year()).then_some(at)
 }
 
 /// `moov/mvex/mehd`'s fragment duration, when it names one.

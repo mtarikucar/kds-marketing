@@ -5,13 +5,24 @@ use jt_ledger::Actor;
 use jt_tenancy::{UserId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use time::OffsetDateTime;
+use time::{Date, Month, OffsetDateTime};
 use uuid::Uuid;
 
 /// The longest title of a material, in characters.
 pub const MAX_MATERIAL_TITLE_CHARS: usize = 120;
 /// The most people a material may name.
 pub const MAX_MATERIAL_PEOPLE: usize = 50;
+/// How long a material that shows people is kept after its olay (spec D16), in months.
+pub const RETENTION_MONTHS: u32 = 24;
+
+/// `day` moved `months` calendar months on, at the month's last day when it is shorter.
+pub fn add_months(day: Date, months: u32) -> Date {
+    let index = i64::from(u8::from(day.month())) - 1 + i64::from(months);
+    let year = day.year() + i32::try_from(index.div_euclid(12)).unwrap_or(i32::MAX);
+    let month = Month::try_from(u8::try_from(index.rem_euclid(12) + 1).unwrap_or(1))
+        .unwrap_or(Month::January);
+    Date::from_calendar_date(year, month, day.day().min(month.length(year))).unwrap_or(Date::MAX)
+}
 
 fn invalid(field: &'static str) -> StudioError {
     StudioError::InvalidMaterial(field)
@@ -242,6 +253,24 @@ impl Material {
                 .depicts
                 .iter()
                 .any(|d| matches!(d, Depicts::Face | Depicts::Name | Depicts::Child))
+    }
+
+    /// The last Istanbul day a material that is personal data is kept (spec D16, §9.3):
+    /// [`RETENTION_MONTHS`] after its olay's last day (`olay_end`), or after the day it was added
+    /// when it has no olay (genel).
+    pub fn kept_until(&self, olay_end: Option<Date>) -> Date {
+        add_months(
+            olay_end.unwrap_or_else(|| crate::istanbul_day(self.created_at)),
+            RETENTION_MONTHS,
+        )
+    }
+
+    /// Whether the retention rule erases the material at `now`: it is live, personal data, and
+    /// [`Material::kept_until`] has passed.
+    pub fn retention_due(&self, olay_end: Option<Date>, now: OffsetDateTime) -> bool {
+        self.erased_at.is_none()
+            && self.is_personal_data()
+            && crate::istanbul_day(now) > self.kept_until(olay_end)
     }
 
     /// The material as erasure leaves it (spec §9.2): its id, file, origin and binding, and a

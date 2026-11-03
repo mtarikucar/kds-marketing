@@ -2,6 +2,7 @@
 //! Stored records are validated before writes. Execution authorization must additionally read
 //! the current workspace, capability, policy, brake and spend gates in the application layer.
 mod calendar;
+mod capture;
 mod chain;
 mod control;
 mod eligibility;
@@ -23,6 +24,7 @@ pub mod time_compat;
 mod trend;
 
 pub use calendar::*;
+pub use capture::*;
 pub use chain::*;
 pub use control::*;
 pub use eligibility::*;

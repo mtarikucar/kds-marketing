@@ -158,6 +158,81 @@ fn rank(subject: &Subject, olays: &[Olay], cx: &UseContext<'_>, recap_days: u16)
     }
 }
 
+/// A material a slot's piece may show at the slot's time: the subject it takes and its role.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Candidate {
+    pub material_id: MaterialId,
+    pub subject: Subject,
+    pub role: UseRole,
+    /// Whether its tags carry what the slot needs: what [`select_anchor`] asks of an anchor.
+    pub matches_need: bool,
+}
+
+/// What a slot's piece may show at `cx.at` (spec §8, `studio.slot_materials`): every subject a
+/// live material passes for, as an anchor or as a supporting visual, best first (the anchors
+/// that match `need` in [`select_anchor`]'s order, then the other anchors, then the supporting
+/// visuals); and each live material that passes for none, with its own subject's refusal (its
+/// olay's, or generic for a genel one). Erased materials are left out.
+pub fn rank_materials(
+    need: &SlotNeed,
+    materials: &[Material],
+    usage: &[MaterialUsage],
+    policy: &MaterialPolicy,
+    cx: &UseContext<'_>,
+) -> (Vec<Candidate>, Vec<(MaterialId, crate::Refusal)>) {
+    let reuse = Duration::days(i64::from(policy.reuse_days));
+    let mut ranked: Vec<((bool, bool, Rank), Candidate)> = Vec::new();
+    let mut refused = Vec::new();
+    for m in materials.iter().filter(|m| m.erased_at.is_none()) {
+        let last = usage
+            .iter()
+            .filter(|u| u.material_id == m.id)
+            .map(|u| u.at)
+            .max();
+        let recent = last.is_some_and(|at| (cx.at - at).abs() < reuse);
+        let fresh = std::cmp::Reverse(m.captured_at.unwrap_or(m.created_at));
+        let matches_need = need.matches(&m.tags);
+        let mut any = false;
+        for subject in subjects(m) {
+            let Ok(role) = crate::classify(m, &subject, cx) else {
+                continue;
+            };
+            any = true;
+            let key = (
+                role != UseRole::Anchor,
+                !matches_need,
+                (
+                    rank(&subject, cx.olays, cx, policy.recap_days),
+                    recent,
+                    last,
+                    fresh,
+                    m.id,
+                ),
+            );
+            ranked.push((
+                key,
+                Candidate {
+                    material_id: m.id,
+                    subject,
+                    role,
+                    matches_need,
+                },
+            ));
+        }
+        if !any {
+            let own = match m.binding {
+                Binding::Olay { olay_id } => Subject::Olay { olay_id },
+                Binding::Genel => Subject::Generic,
+            };
+            if let Err(r) = crate::classify(m, &own, cx) {
+                refused.push((m.id, r));
+            }
+        }
+    }
+    ranked.sort_by(|a, b| a.0.cmp(&b.0));
+    (ranked.into_iter().map(|(_, c)| c).collect(), refused)
+}
+
 /// The anchor Studio builds a slot at `cx.at` on, from `materials`, or `None` when no eligible
 /// material matches `need` (spec D1: then no slot). Deterministic: rank, then not used within
 /// `reuse_days`, then least recently used, then most recently captured or created, then id.
