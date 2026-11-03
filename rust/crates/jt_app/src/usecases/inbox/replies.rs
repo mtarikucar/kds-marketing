@@ -2,6 +2,7 @@
 //! atomically record the result. An uncertain provider write is never retried.
 use super::record;
 use crate::{
+    catalog::{self, GateMode},
     ctx::Ctx,
     error::{AppError, ErrorCode},
     ports::{
@@ -13,6 +14,7 @@ use crate::{
         Deps,
         connector::{adapter_public, open_credential},
         failure, required,
+        studio::budget::is_metered,
     },
 };
 use jt_capability::{Capability, EffectiveStatus, effective_status};
@@ -200,6 +202,25 @@ pub(super) enum Purpose<'a> {
     Appointment(&'a crate::ports::compliance::AppointmentRow),
 }
 
+/// The use case that queues a send for `target` and `purpose`. It is recorded in the send's
+/// intent (`use_case`), so a claim, recovery included, honours that use case's strategy gate again.
+fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
+    match (target, purpose) {
+        (_, Purpose::Quote(..)) => "inbox.quotes.send",
+        (_, Purpose::Appointment(_)) => "inbox.appointments.book",
+        (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
+        (Target::Person(..), Purpose::Reply) => "inbox.send",
+    }
+}
+
+/// The strategy gate of the use case a send's intent records. A send that records none was
+/// queued before sends recorded it, when every send was queued behind the gate: it stays gated.
+fn gate_of(use_case: Option<&str>) -> GateMode {
+    use_case
+        .and_then(catalog::find)
+        .map_or(GateMode::Gated, |uc| uc.gate)
+}
+
 /// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
 pub(super) async fn enqueue_in(
     deps: &Deps,
@@ -227,6 +248,7 @@ pub(super) async fn enqueue_in(
             json!({"field":"text"}),
         ));
     }
+    let use_case = queued_by(&target, &purpose);
     let c = match target {
         Target::Conversation(id) => lock_conversation(r, id).await?,
         Target::Person(person, channel) => {
@@ -292,7 +314,7 @@ pub(super) async fn enqueue_in(
         j.as_ref(),
         &cap,
         c.executor_generation,
-        (author, input.intent),
+        (author, input.intent, gate_of(Some(use_case))),
     )
     .await
     {
@@ -317,7 +339,7 @@ pub(super) async fn enqueue_in(
     let recipient = recipient(r, &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
     let outbox_id = deps.ids.uuid();
-    let mut intent = json!({"kind":input.intent,"request_key":key});
+    let mut intent = json!({"kind":input.intent,"request_key":key,"use_case":use_case});
     match &purpose {
         Purpose::Reply => {}
         Purpose::Quote(quote, key) => {
@@ -509,9 +531,9 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    purpose: (Author, SendIntent),
+    purpose: (Author, SendIntent, GateMode),
 ) -> Result<(), AppError> {
-    let (author, intent) = purpose;
+    let (author, intent, gate) = purpose;
     let person = r
         .people()
         .get(c.person_id)
@@ -575,11 +597,16 @@ async fn fence(
             return Err(refused("reply_window_closed"));
         }
     }
-    // Recovery must honor the same workspace gate as the public surfaces.
+    // Recovery must honor the same workspace gate as the public surfaces: the status check for
+    // every send, the strategy for one queued by a gated use case. A metered send needs the
+    // strategy too, whatever queued it: its spend is reserved in the approved strategy's budget
+    // frame, so without one it is refused here instead of waiting queued to be sent late.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Err(refused("workspace_inactive"));
     }
-    if r.strategy().current_approved().await?.is_none() {
+    if (gate == GateMode::Gated || is_metered(cap))
+        && r.strategy().current_approved().await?.is_none()
+    {
         return Err(refused("strategy_required"));
     }
     Ok(())
@@ -689,6 +716,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         (
             message.author,
             serde_json::from_value(row.intent["kind"].clone())?,
+            gate_of(row.intent.get("use_case").and_then(Value::as_str)),
         ),
     )
     .await

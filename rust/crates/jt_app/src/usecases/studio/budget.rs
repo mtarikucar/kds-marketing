@@ -560,6 +560,13 @@ pub(crate) fn bucket_window(m: &Measurement) -> Option<(OffsetDateTime, OffsetDa
     ))
 }
 
+/// Whether an operation through `c` spends metered money, reserved by `reserve_metered` in the
+/// approved strategy's budget frame: SMS always, any other capability once it has a linked budget
+/// item or a spend cap.
+pub fn is_metered(c: &Capability) -> bool {
+    !c.budget_item_ids.is_empty() || c.kind_key == "sms_line" || c.policy.spend_cap_minor.is_some()
+}
+
 /// Metered operations need a persisted price and an explicit quantity. Supported organic
 /// publishing without linked budgets is intrinsically unmetered; SMS is always metered.
 pub async fn reserve_metered(
@@ -570,10 +577,7 @@ pub async fn reserve_metered(
     key: String,
     at: OffsetDateTime,
 ) -> Result<Option<SpendReservation>, AppError> {
-    if c.budget_item_ids.is_empty()
-        && c.kind_key != "sms_line"
-        && c.policy.spend_cap_minor.is_none()
-    {
+    if !is_metered(c) {
         return Ok(None);
     }
     r.strategy().lock_execution_frame().await?;
