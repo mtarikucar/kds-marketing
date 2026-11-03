@@ -13,7 +13,9 @@ use std::time::Duration;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use jeeta_voice_bridge::ari::{Ari, AriEvent};
-use jeeta_voice_bridge::call::{CallDeps, CallSetup, LineWaits, Report, ToCall, run_call};
+use jeeta_voice_bridge::call::{
+    CallDeps, CallSetup, LineWaits, Report, ToCall, run_call, run_call_capped,
+};
 use jeeta_voice_bridge::speech::Endpoint;
 use jeeta_voice_bridge::talker::Timing;
 use jt_calls::{BridgeEvent, Command, DialScript, PhraseSet, PlayKind};
@@ -50,6 +52,8 @@ struct Options {
     max_duration: Option<Duration>,
     /// The media channel never enters the application: every bridge refuses it 422.
     media_never_in_stasis: bool,
+    /// The call's task is cut this long after it starts (`run_call_capped`).
+    cap: Option<Duration>,
 }
 
 /// A call on its way: its fakes, its channels and its task.
@@ -117,7 +121,10 @@ async fn rig(name: &str, options: Options) -> Rig {
         closing: "Görüşmek üzere, iyi günler.".into(),
         max_duration: options.max_duration.unwrap_or(Duration::from_secs(60)),
     };
-    let task = tokio::spawn(run_call(deps, setup, rx, reports_tx));
+    let task = match options.cap {
+        Some(cap) => tokio::spawn(run_call_capped(deps, setup, rx, reports_tx, cap)),
+        None => tokio::spawn(run_call(deps, setup, rx, reports_tx)),
+    };
     Rig {
         log,
         to_call,
@@ -738,4 +745,41 @@ async fn a_ringing_call_told_the_line_stops_is_hung_up_and_reported() {
     assert_eq!(next(&mut r.reports).await.event, stopped());
     r.ended().await;
     assert!(r.hangups() >= 1, "{}", r.ari());
+}
+
+/// Review of D, L6: a call's task stuck past its cap (here a line that rings on, its ring wait an
+/// hour) is cut: its channels and its mixing bridge are cleared, and the call is reported failed.
+#[tokio::test]
+async fn a_call_whose_task_outlives_its_cap_is_cut_and_reported() {
+    let mut r = rig(
+        "capped",
+        Options {
+            waits: Some(LineWaits {
+                ring: Duration::from_secs(3_600),
+                gone: Duration::from_secs(2),
+            }),
+            cap: Some(Duration::from_millis(800)),
+            ..Options::default()
+        },
+    )
+    .await;
+    let _listener = r.listener().await;
+    assert_eq!(
+        next(&mut r.reports).await.event,
+        BridgeEvent::Error {
+            failure_line: "transient: bridge: the call's task did not end".into()
+        }
+    );
+    r.ended().await;
+    let ari = r.ari();
+    for line in [
+        "DELETE channel c-1",
+        "DELETE channel c-1-m",
+        "DELETE bridge c-1-b",
+    ] {
+        assert!(
+            r.log.lock().unwrap().iter().any(|l| l == line),
+            "{line}: {ari}"
+        );
+    }
 }

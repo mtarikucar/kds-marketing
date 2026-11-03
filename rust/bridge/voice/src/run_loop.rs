@@ -8,6 +8,10 @@
 //! up and reported failed at the start; a command for a call this line does not carry is reported
 //! (a hangup of it has nothing left to do); on stop each call is told the line stops (a live one
 //! plays its closing), and the run waits for every call's task, then for the reports to be posted.
+//! Nothing waits on a call (L6): each call's task is capped ([`crate::call::run_call_capped`]), a
+//! command or the core's loss is handed to it without waiting (a call that takes no more commands
+//! is reported failed), and a call the core asked to hang up leaves the line free for the next dial
+//! while it closes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -18,20 +22,30 @@ use jt_calls::wire::{
     BridgeCommand, CommandsQuery, EventIn, EventsInput, RegisterInput, SpeechToText, TextToSpeech,
 };
 use jt_calls::{BridgeEvent, CallCommandId, CallPlan, Command, DialScript};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
 use crate::ari::{self, Ari, AriEvent};
-use crate::call::{CLOSE_GRACE, CallDeps, CallSetup, LineWaits, Report, ToCall, run_call};
+use crate::call::{
+    CLOSE_GRACE, CallDeps, CallSetup, LineWaits, Report, ToCall, run_call_capped, task_cap,
+};
 use crate::config::Config;
 use crate::jeeta::JeetaClient;
 use crate::netgsm;
 use crate::trace::TraceFile;
 
+/// A call on the line: its task's inbox, and whether the core asked it to hang up (it then closes
+/// on its own, and the line takes the next dial meanwhile).
+struct CallEntry {
+    tx: mpsc::Sender<ToCall>,
+    closing: bool,
+}
+
 /// The calls on the line, by the bridge's id of the call (also its Asterisk channel id).
-pub type Registry = Arc<Mutex<HashMap<String, mpsc::Sender<ToCall>>>>;
+type Registry = Arc<Mutex<HashMap<String, CallEntry>>>;
 
 /// How long the core may refuse every report before the live calls are told it is lost.
 const CORE_LOST_AFTER: Duration = Duration::from_secs(5);
@@ -137,7 +151,7 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
             out = jeeta.commands(&query) => match out {
                 Ok(out) => {
                     for c in out.commands {
-                        dispatch(c, &deps, &calls, &reports_tx, &mut seen, &mut tasks).await;
+                        dispatch(c, &deps, &calls, &reports_tx, &mut seen, &mut tasks);
                     }
                 }
                 Err(e) => {
@@ -152,7 +166,7 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
     // are still posted; a hangup in flight is never cut.
     let live: Vec<mpsc::Sender<ToCall>> = calls
         .lock()
-        .map(|m| m.values().cloned().collect())
+        .map(|m| m.values().map(|e| e.tx.clone()).collect())
         .unwrap_or_default();
     for tx in live {
         let _ = tx.try_send(ToCall::Stop);
@@ -215,8 +229,9 @@ async fn heartbeat(jeeta: Arc<JeetaClient>, body: RegisterInput) {
 /// Hands command `c` to its call (a dial starts one), once, and acknowledges it however it went.
 /// A command of a call this line does not carry is reported, so a session the core still thinks
 /// live ends (a hangup of one has nothing left to do), and acknowledged all the same: an
-/// unacknowledged command would be handed out again every ten seconds for a week.
-async fn dispatch(
+/// unacknowledged command would be handed out again every ten seconds for a week. Never waits on
+/// a call (L6): one whose inbox is full takes no more commands, and is reported failed.
+fn dispatch(
     c: BridgeCommand,
     deps: &Arc<CallDeps>,
     calls: &Registry,
@@ -237,14 +252,26 @@ async fn dispatch(
             }) => start_call(&call, &to_e164, plan, script, deps, calls, reports, tasks),
             Ok(command) => {
                 let hangup = matches!(command, Command::Hangup);
-                let tx = calls.lock().ok().and_then(|m| m.get(&call).cloned());
-                let handed = match tx {
-                    Some(tx) => tx.send(ToCall::Command(command)).await.is_ok(),
-                    None => false,
+                // A hangup frees the line for the next dial while the call closes.
+                let tx = calls.lock().ok().and_then(|mut m| {
+                    let entry = m.get_mut(&call)?;
+                    entry.closing |= hangup;
+                    Some(entry.tx.clone())
+                });
+                let failure = match tx.map(|tx| tx.try_send(ToCall::Command(command))) {
+                    Some(Ok(())) => None,
+                    Some(Err(TrySendError::Full(_))) => {
+                        warn!(call, "a call takes no more commands");
+                        Some("transient: bridge: the call stopped taking commands")
+                    }
+                    Some(Err(TrySendError::Closed(_))) | None if hangup => None,
+                    Some(Err(TrySendError::Closed(_))) | None => {
+                        warn!(call, "a command for a call this line does not carry");
+                        Some("transient: bridge: the call is not on this line")
+                    }
                 };
-                if !handed && !hangup {
-                    warn!(call, "a command for a call this line does not carry");
-                    let failure_line = "transient: bridge: the call is not on this line".to_owned();
+                if let Some(line) = failure {
+                    let failure_line = line.to_owned();
                     let _ = reports.send(Report::now(&call, BridgeEvent::Error { failure_line }));
                 }
             }
@@ -286,13 +313,18 @@ fn start_call(
         ));
         return;
     };
-    if calls.lock().map(|m| !m.is_empty()).unwrap_or(true) {
+    // One call at a time; a call closing on the core's hangup leaves the line free.
+    if calls
+        .lock()
+        .map(|m| m.values().any(|e| !e.closing))
+        .unwrap_or(true)
+    {
         let _ = reports.send(refuse("transient: bridge: the line is busy"));
         return;
     }
     let (tx, rx) = mpsc::channel(64);
     if let Ok(mut m) = calls.lock() {
-        m.insert(call.to_owned(), tx);
+        m.insert(call.to_owned(), CallEntry { tx, closing: false });
     }
     let setup = CallSetup {
         bridge_call_id: call.to_owned(),
@@ -315,8 +347,9 @@ fn start_call(
         reports.clone(),
         call.to_owned(),
     );
+    let cap = task_cap(deps.waits, setup.max_duration);
     tasks.spawn(async move {
-        run_call(deps, setup, rx, reports).await;
+        run_call_capped(deps, setup, rx, reports, cap).await;
         if let Ok(mut m) = calls.lock() {
             m.remove(&call);
         }
@@ -411,10 +444,11 @@ async fn post_reports(
                         warn!(error = %e, "the core is unreachable");
                         let live: Vec<mpsc::Sender<ToCall>> = calls
                             .lock()
-                            .map(|m| m.values().cloned().collect())
+                            .map(|m| m.values().map(|e| e.tx.clone()).collect())
                             .unwrap_or_default();
                         for tx in live {
-                            let _ = tx.send(ToCall::CoreLost).await;
+                            // Never waits (L6): a call too busy to take it is capped all the same.
+                            let _ = tx.try_send(ToCall::CoreLost);
                         }
                     }
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -446,7 +480,10 @@ async fn forward_ari(ari: Arc<Ari>, calls: Registry) {
                         let _ = ari.refuse(&channel).await;
                         continue;
                     }
-                    let tx = calls.lock().ok().and_then(|m| m.get(&channel).cloned());
+                    let tx = calls
+                        .lock()
+                        .ok()
+                        .and_then(|m| m.get(&channel).map(|e| e.tx.clone()));
                     if let Some(tx) = tx {
                         let _ = tx.send(ToCall::Ari(event)).await;
                     }

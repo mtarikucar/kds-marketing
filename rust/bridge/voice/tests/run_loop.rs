@@ -283,3 +283,28 @@ async fn reports_keep_the_time_they_happened() {
     assert!(spread < time::Duration::milliseconds(500), "{spread}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn a_hangup_frees_the_line_for_the_next_dial() {
+    // The core asked call-a to hang up; it closes on its own (here it was ringing), and a dial that
+    // comes meanwhile is not refused as busy (review of D, L6).
+    let (ari_base, ari_log) = fake_ari().await;
+    let (jeeta_base, seen) = fake_jeeta(vec![
+        dial("call-a", "+905321234567"),
+        command("call-a", Command::Hangup),
+        dial("call-b", "+905321234568"),
+    ])
+    .await;
+    let (listen, speak, _listen_conns) = speech().await;
+    let (config, dir) = config("free", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(config, Duration::from_millis(1_500)).await;
+    let ari = ari_log.lock().unwrap().join("\n");
+    // call-b was dialled, not refused as busy.
+    assert!(ari.contains("\"call-b\""), "{ari}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .contains(&"call-b command_done".to_owned())
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

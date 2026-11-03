@@ -87,6 +87,9 @@ const HANGUP_TRIES: [Duration; 3] = [
 /// How long past its longest duration a call may take to play its closing (the caller may hold it
 /// back) before the line is cut.
 pub const CLOSE_GRACE: Duration = Duration::from_secs(30);
+/// What a call's task may take beyond its waits, its longest duration and its closing (ARI's
+/// retries, the media's setup) before it is cut ([`run_call_capped`]).
+pub const TASK_MARGIN: Duration = Duration::from_secs(60);
 const SAMPLE_RATE: u64 = 8_000;
 /// G.711 in 20 ms frames: the only media the pacer writes (B5 review).
 const FRAME_BYTES: usize = 160;
@@ -465,6 +468,39 @@ fn early(message: Option<Result<Message, tungstenite::Error>>) -> Early {
 
 /// The failure a call reports when the line stops under it (`ToCall::Stop`, or `run` gone).
 const STOPPED: &str = "the line stopped";
+
+/// The longest a call's task may run from its dial: the ring, the call's longest duration, the
+/// closing held back, the hangup's confirmation, and [`TASK_MARGIN`].
+pub fn task_cap(waits: LineWaits, max_duration: Duration) -> Duration {
+    waits.ring + max_duration + CLOSE_GRACE + waits.gone + TASK_MARGIN
+}
+
+/// [`run_call`], cut at `cap` (review of D, L6: B6's waits bound each step, this bounds a task
+/// stuck between them): the call's channel, its media channel and its mixing bridge are then
+/// cleared, and the call is reported failed.
+pub async fn run_call_capped(
+    deps: Arc<CallDeps>,
+    setup: CallSetup,
+    rx: mpsc::Receiver<ToCall>,
+    reports: mpsc::UnboundedSender<Report>,
+    cap: Duration,
+) {
+    let id = setup.bridge_call_id.clone();
+    let reporter = Reporter {
+        id: id.clone(),
+        tx: reports.clone(),
+    };
+    if tokio::time::timeout(cap, run_call(deps.clone(), setup, rx, reports))
+        .await
+        .is_err()
+    {
+        warn!(call = %id, "the call's task outlived its longest duration; it is cut");
+        hang_up(&deps.ari, &id).await;
+        let _ = deps.ari.hangup(&format!("{id}-m")).await;
+        let _ = deps.ari.destroy_bridge(&format!("{id}-b")).await;
+        reporter.fail("the call's task did not end");
+    }
+}
 
 /// Ends a call that has not been answered for `reason`: the line is hung up (nobody is on it yet,
 /// so the call may wait for ARI) and the call reported failed.
