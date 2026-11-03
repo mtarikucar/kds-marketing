@@ -508,6 +508,10 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "AdBudgetWriter",
             "LeadGenFetcher",
             "OAuthProvider",
+            // Replies, moderation and polls on public items (comments, marketplace questions):
+            // plan 2026-10-30-inbox-comments-marketplace-plan.md, task F4.
+            "PublicSurface",
+            "PublicPoller",
             "ConnectorRegistry"
         ]
         .into_iter()
