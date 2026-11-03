@@ -757,6 +757,12 @@ ProspectsToPromote}` with `cleared_by`), `jt_mcp/src/tools/work.rs` description 
   `excluded_users_are_skipped`, `unknown_fact_never_matches_non_empty_list`.
 - [ ] `cargo test -p jt_inbox` green; **commit** `feat(inbox): recipient kind, prospect source and distribution
   choice`.
+- As built (2026-11-03, `87e30c1a`): `choose(rules, default: DefaultRule, facts, candidates, exclude)` with
+  `DefaultRule::{Off, On { cursor }}` (spec D43) instead of a `bool`; `RepProfile { user_id, accepting, max_open,
+  languages, cities, sectors, hours, away_until, updated_at }` with `default_for` and `takes_new(now,
+  open_owned)`; `Cause::{key, parse, ALL}`, `Method::{key, parse}`, `SourceKind::{key, ALL}`,
+  `LeadFacts::source_only`, `RecipientKind::{key, parse, ALL}`, `fold` (Turkish-aware) exported; a rep's own
+  filters narrow known facts only. Test `stored_rules_and_profiles_read_tolerantly`, `fold_is_turkish_aware`.
 
 ### Task L3-T2: migration 0021, ports, repos, fakes; `leads_policy`
 
@@ -771,6 +777,17 @@ fakes, `jt_testkit/src/distribution_contract.rs`, pins (tables 79 → 82, migrat
   `touch_marks_only_the_owner_once`, `due_sla_lists_unacted_past_due`, `ownerless_open_excludes_closed_and_owned`,
   `rules_replace_all_keeps_positions_unique`, `rep_profile_default_when_absent`, `recipient_kind_round_trips`; Postgres only: `assignment_rows_refuse_other_updates_and_deletes`.
 - [ ] CI green; **commit** `feat(distribution): rules, rep profiles and the assignment log`.
+- As built (`d0783934`): pins tables 79 → 82, migrations 19 → 20 (0018 is on the base). `journey_assignments`
+  cascades with its journey (the trigger refuses any other delete), checks the member against the cause
+  (`journey_assignments_user_check`) and a due time against a member, and has the extra indexes
+  `journey_assignments_journey` and `journey_assignments_log`. Ports (`ports/distribution.rs`): `AssignmentRow`,
+  `AssignmentQuery`/`AssignmentPage`/`AssignmentCursor`, `OwnerlessScope { Undecided, All }`, `Ownerless { count,
+  oldest_journey_id }`, `assignment_row_valid`; `RepProfileRepo { get (default when absent), list, set }`,
+  `RuleRepo { list, replace_all(rules, at), set_cursor -> bool }`, `AssignmentRepo { live, insert, supersede,
+  touch, due_sla(now, max_reassignments, limit), count_stalled(now, max), ownerless_open(scope, limit),
+  count_ownerless, previous_assignees, reassignments, default_cursor, open_owned, list }` (spec D44, D45).
+  `PersonRepo::set_recipient_kind(id, kind, at)`. The fake records advisory locks in order
+  (`InMemoryUow::lock_journal`). Every round-trip test that runs 0020's down runs 0021's first.
 
 ### Task L3-T3: `prospects.promote`
 
@@ -814,6 +831,18 @@ record(..."prospects.promoted"...).await?; r.commit().await?;
   `blocklisted_since_creation_refuses`, `context_shows_prospect_facts`, `erasing_the_person_scrubs_the_prospect_and_blocks_its_handles`,
   `promotion_takes_inbox_then_pool_lock` (a fake that records lock order).
 - [ ] Green; **commit** `feat(prospects): promotion into the inbox`.
+- As built (`ef85b14c`, with L3-T4: promotion runs distribution inline, distribution reads the linked
+  prospect): `PromoteInput { prospect_ids (1..=50), request_key }` → `PromoteOut { items: [PromoteOutcome ::
+  Promoted { prospect_id, person_id, journey_id, created_person, owner_id } | AlreadyPromoted { .. } | Refused {
+  prospect_id, reason, details } ] }` (serde tag `outcome`); a repeated id is promoted once; `promote_one(deps,
+  ctx, id, request_key)` is the per-prospect body. `people::match_or_create_with(.., Option<NewPerson { company,
+  recipient_kind }>)` beside the unchanged `match_or_create`; `dedupe::blocked` re-checks erased identities and
+  objection hashes (spec D48); `ProspectSummary { prospect_id, business_name, entity_kind, sector, city, district,
+  segment_key, language, origin, research_task_id, evidence: [FieldEvidence { field, sources, captured_at,
+  deliverable }], signals, latest_score, reasons, promotion }` in `ContextOut.prospect` and `PersonOut.prospect`
+  (`promote::summary_for`); `blocklist::on_person_erased` (spec D46). Decisions D46–D49. Tests in
+  `jt_app/tests/prospects_promote.rs`, plus `an_individual_stays_an_individual`, `request_key_replays_the_promotion`,
+  `erasing_a_person_deletes_unlinked_prospects_holding_its_phone`.
 
 ### Task L3-T4: distribution use cases, the `lead_distribution` job, hooks, work items
 
@@ -847,6 +876,20 @@ record(..."prospects.promoted"...).await?; r.commit().await?;
   `manual_assignment_has_no_sla_and_supersedes`, `member_left_rows_written`, `backfill_is_capped`,
   `rep_can_edit_only_own_profile`, `calls_hours_behaviour_unchanged` (the existing calls tests stay green).
 - [ ] Green; **commit** `feat(distribution): rule-based assignment, SLA reassignment, never silent`.
+- As built (`ef85b14c`, one commit with L3-T3): `usecases::distribution::{get, rules_set, rep_set,
+  assignments_list, backfill, run}` with `RuleInput`, `RulesSetInput { rules, mode?, max_reassignments? }`,
+  `RepSetInput` (whole replacement, spec D50), `RepOut`, `DistributionOut`, `AssignmentsListInput`,
+  `AssignmentsOut`, `BackfillInput`, `Distributed { assigned, no_eligible, imported, reassigned, kept }`;
+  `assign_in(deps, ctx, r, journey, import_waits)` (inline and job), `record_manual`, `record_member_left`,
+  `touch` (spec D51; the reply touches when a person enqueues it). `hours::{within, add_working_minutes}`; the
+  calls fence's local day is now `hours::local_day` (a clock-change day is 23 or 25 hours, as the pool's).
+  `Job::LeadDistribution` (`Job::ALL` 30 → 31, 1 min). `WorkKind::{OwnerlessJourneys { count,
+  oldest_journey_id }, AssignmentStalled { count }}` (priority 2, `inbox.manage`, cleared by
+  `inbox.journeys.assign_owner`). Two L2 work hints held runs of spaces (lost line continuations): fixed. Tests
+  in `jt_app/tests/distribution.rs`; the plan's `owner_reply_marks_acted` is `owner_acts_mark_acted` (a note;
+  a person's reply touches in `enqueue_in`), and the consumer and lead-ads paths of
+  `every_creation_path_ends_owned_or_counted` are covered by the job (they create ownerless journeys like a
+  person created by hand).
 
 ### Task L3-T5: surfaces and pins for promotion, distribution and `inbox.people.set_kind`
 
@@ -861,6 +904,11 @@ pins (+7: catalog 188 → 195; `("prospects", 14)` → 15; `("distribution", 5)`
 - [ ] **Tests first:** pins red; parity cases; `promote_tool_answers_per_item_outcomes`,
   `set_kind_records_note_in_ledger_without_value`.
 - [ ] Green; **commit** `feat(distribution): promotion and distribution tools and routes`.
+- As built (`b25d0df4`): pins catalog 187 → 194, registry 158 → 165, `POST_M4_ADDED` 33 → 40, `("prospects",
+  14)`, `("distribution", 5)`, inbox 46 → 47. `inbox.people.set_kind { kind }` answers the person; the same kind
+  again records nothing; ledger `inbox.person.kind_set {person_id, from, to}` (spec D52 for its gate).
+  `WorkKind::ProspectsToPromote { count }` (`PoolPending.to_promote`). Parity
+  `promotion_distribution_and_the_recipient_kind_answer_the_same_over_the_panel_and_mcp`.
 
 ---
 
