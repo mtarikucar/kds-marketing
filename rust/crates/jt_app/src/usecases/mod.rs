@@ -25,6 +25,7 @@ pub mod ledger;
 pub mod platform;
 pub mod platform_payments;
 pub mod prospects;
+pub mod research;
 pub mod roles;
 pub mod strategy;
 pub mod studio;

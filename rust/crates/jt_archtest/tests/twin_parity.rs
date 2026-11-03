@@ -4695,3 +4695,184 @@ async fn prospects_answer_the_same_over_the_panel_and_mcp() {
     assert_eq!(human["rejected_retention_days"], 30);
     assert_eq!(human["timezone"], "Europe/Istanbul");
 }
+
+/// [`approve_inbox_strategy`] with prospecting on: one ICP entry (`local`, segment `all`) and a
+/// one-criterion rubric, so the approval plans a standing research task.
+async fn approve_prospecting_strategy(app: &Router, cookie: &str) {
+    let draft = send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/consultation",
+            Some(cookie),
+            None,
+        ),
+    )
+    .await;
+    assert!(draft.status().is_success());
+    let prospecting = json!({
+        "icp": [{
+            "key": "local", "segment_key": "all", "sectors": ["kafe"],
+            "areas": [{"city": "İstanbul"}], "signals": [], "exclusions": [], "size_hint": "",
+            "daily_cap": 20, "backlog_target": 0,
+        }],
+        "rubric": {"criteria": [{"key": "fit", "description": "Serves coffee", "weight": 100}], "qualify_at": 60},
+    });
+    for (key, value) in [
+        ("identity", json!({"product":"Service"})),
+        (
+            "audience",
+            json!([{"key":"all","name":"Everyone","description":"Local"}]),
+        ),
+        (
+            "channels",
+            json!([{"channel":"any","rationale":"Available"}]),
+        ),
+        ("cadence", json!({"per_week":3})),
+        ("prospecting", prospecting),
+    ] {
+        let r = send(
+            app,
+            panel(
+                Method::PUT,
+                &format!("/api/strategy/draft/sections/{key}"),
+                Some(cookie),
+                Some(value),
+            ),
+        )
+        .await;
+        assert!(r.status().is_success(), "{key}");
+    }
+    let r = send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","prior_confidence":0.6}])))).await;
+    assert!(r.status().is_success());
+    let draft = json_body(
+        send(
+            app,
+            panel(
+                Method::POST,
+                "/api/strategy/draft/submit",
+                Some(cookie),
+                None,
+            ),
+        )
+        .await,
+    )
+    .await;
+    let r = send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/draft/approve",
+            Some(cookie),
+            Some(json!({"version_id":draft["id"],"submitted_at":draft["submitted_at"]})),
+        ),
+    )
+    .await;
+    assert!(r.status().is_success());
+}
+
+#[tokio::test]
+async fn research_tasks_and_the_playbook_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("research").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_prospecting_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    // The approval planned the ICP entry's standing task.
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/research/tasks", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.research.tasks_list", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"].as_array().unwrap().len(), 1);
+    assert_eq!(human["items"][0]["task"]["kind"]["type"], "standing");
+    let id = human["items"][0]["task"]["id"].as_str().unwrap().to_owned();
+
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/research/tasks/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.research.tasks_get",
+        json!({ "task_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["remaining_today"], 20);
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects/playbook", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.playbook", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["workspace"]["prospecting_on"], true);
+    assert_eq!(human["workspace"]["remaining_today"][0]["remaining"], 20);
+
+    // An ad-hoc task created over the panel reads the same over both.
+    let body = json!({
+        "brief": {"sectors": ["pastane"], "areas": [{"city": "Ankara"}]},
+        "target_count": 10,
+        "daily_cap": 5,
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/research/tasks",
+            Some(&cookie),
+            Some(body),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = json_body(resp).await;
+    let id = created["task"]["id"].as_str().unwrap().to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/research/tasks/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.research.tasks_get",
+        json!({ "task_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human["task"]["kind"],
+        json!({"type": "ad_hoc", "target_count": 10})
+    );
+}

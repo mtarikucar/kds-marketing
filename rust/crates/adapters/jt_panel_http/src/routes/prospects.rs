@@ -7,13 +7,22 @@ use axum::Json;
 use axum::extract::State;
 use jt_app::usecases::prospects::{
     self, CheckInput, CheckOut, DecideInput, DncInput, DncOut, EraseInput, EraseOut, GetOut,
-    LiftInput, LiftOut, ListInput, ListOut, ProspectOut, ScoreOut, SettingsInput, SettingsOut,
+    LiftInput, LiftOut, ListInput, ListOut, PlaybookOut, ProspectOut, ScoreOut, SettingsInput,
+    SettingsOut,
 };
 use jt_prospects::{CreateInput, ProspectId, ScoreInput, UpdateInput};
 
 use crate::error::{ApiError, ApiJson, ApiPath, ApiQuery};
 use crate::session::WorkspaceCtx;
 use crate::state::AppState;
+
+/// `200` with the agents' playbook and the workspace's section (the pool page shows the text).
+pub async fn playbook(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+) -> Result<Json<PlaybookOut>, ApiError> {
+    Ok(Json(prospects::playbook(&state.deps, &ctx).await?))
+}
 
 /// `200` with `{ok}` or the refusal `create` would meet. The body is what is known of the business.
 pub async fn check(

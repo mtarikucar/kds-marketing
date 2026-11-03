@@ -520,6 +520,10 @@ impl ProspectRepo for MemTenant {
         }))
     }
 
+    async fn count_for_task(&mut self, task: ResearchTaskId) -> Result<u32, AppError> {
+        Ok(self.count_where(|p| p.research_task_id == Some(task)))
+    }
+
     async fn promoted_between(
         &mut self,
         from: OffsetDateTime,

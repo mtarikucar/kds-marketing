@@ -21,8 +21,9 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the prospect pool, leads L1-T6).
-const POST_M4_ADDED: [(&str, &str); 27] = [
+/// device bridge's agent tools, D1-T6; the prospect pool, leads L1-T6; the playbook and the
+/// research tasks, leads L2).
+const POST_M4_ADDED: [(&str, &str); 33] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -38,6 +39,7 @@ const POST_M4_ADDED: [(&str, &str); 27] = [
     ("devices.act", "jeeta.devices.act"),
     ("devices.command_get", "jeeta.devices.command_get"),
     ("devices.commands", "jeeta.devices.commands"),
+    ("prospects.playbook", "jeeta.prospects.playbook"),
     ("prospects.check", "jeeta.prospects.check"),
     ("prospects.create", "jeeta.prospects.create"),
     ("prospects.update", "jeeta.prospects.update"),
@@ -50,6 +52,11 @@ const POST_M4_ADDED: [(&str, &str); 27] = [
     ("prospects.erase", "jeeta.prospects.erase"),
     ("prospects.settings_get", "jeeta.prospects.settings_get"),
     ("prospects.settings_set", "jeeta.prospects.settings_set"),
+    ("research.tasks_list", "jeeta.research.tasks_list"),
+    ("research.tasks_get", "jeeta.research.tasks_get"),
+    ("research.tasks_create", "jeeta.research.tasks_create"),
+    ("research.tasks_claim", "jeeta.research.tasks_claim"),
+    ("research.tasks_close", "jeeta.research.tasks_close"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

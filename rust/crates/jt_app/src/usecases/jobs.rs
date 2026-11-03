@@ -140,11 +140,12 @@ pub enum Job {
     DeviceCommandExpiry,
     DeviceFilePurge,
     ProspectsPurge,
+    ResearchPlan,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 29] = [
+    pub const ALL: [Job; 30] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -174,6 +175,7 @@ impl Job {
         Job::DeviceCommandExpiry,
         Job::DeviceFilePurge,
         Job::ProspectsPurge,
+        Job::ResearchPlan,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -209,6 +211,7 @@ impl Job {
             Job::DeviceCommandExpiry => "device_command_expiry",
             Job::DeviceFilePurge => "device_file_purge",
             Job::ProspectsPurge => "prospects_purge",
+            Job::ResearchPlan => "research_plan",
         }
     }
 
@@ -249,6 +252,7 @@ impl Job {
             Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
             Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
             Job::ProspectsPurge => run_prospects_purge(deps, now).await,
+            Job::ResearchPlan => run_research_plan(deps, now).await,
         }
     }
 }
@@ -1163,6 +1167,32 @@ pub async fn run_prospects_purge(deps: &Deps, now: OffsetDateTime) -> JobReport 
                 report.changed += purged.deleted + purged.expired_hashes;
                 report.skipped += purged.due - purged.deleted;
             }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// The research tasks' planner (spec 2026-10-30-leads-pool-outreach-design.md §3.7), in every
+/// `active` workspace with an approved strategy: each ICP entry of the approved version gets an
+/// open standing task, and the open standing tasks of older versions are superseded
+/// (`research::plan`). `touched` counts the workspaces planned, `changed` the tasks created plus
+/// those superseded, `skipped` the workspaces without an approved strategy, `failed` those that
+/// could not be planned. No identifier is logged.
+pub async fn run_research_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::ResearchPlan;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::research::plan(deps, &ctx).await {
+            Ok(Some(planned)) => {
+                report.touched += 1;
+                report.changed += u64::from(planned.created + planned.superseded);
+            }
+            Ok(None) => report.skipped += 1,
             Err(e) => {
                 report.failed += 1;
                 step_failed(job, ws, None, &Failure::App(e));

@@ -20,6 +20,7 @@
 
 mod blocklist;
 mod dedupe;
+pub mod playbook;
 pub mod pool;
 mod score;
 mod settings;
@@ -29,6 +30,7 @@ pub use blocklist::{
     Purged, RawKey, dnc_lift, do_not_contact, erase, purge,
 };
 pub use dedupe::Flag;
+pub use playbook::{PlaybookOut, playbook};
 pub use pool::{
     CheckInput, CheckOut, DuplicateCandidate, GetOut, ListInput, ListOut, NextPage, ProspectOut,
     check, create, get, list, update,

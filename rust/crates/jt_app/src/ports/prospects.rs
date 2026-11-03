@@ -283,6 +283,8 @@ pub trait ProspectRepo: Send + Sync {
         from: OffsetDateTime,
         to: OffsetDateTime,
     ) -> Result<u32, AppError>;
+    /// Prospects recorded for `task`, whatever their status now (purged ones are gone).
+    async fn count_for_task(&mut self, task: ResearchTaskId) -> Result<u32, AppError>;
     /// Prospects promoted in `[from, to)`.
     async fn promoted_between(
         &mut self,

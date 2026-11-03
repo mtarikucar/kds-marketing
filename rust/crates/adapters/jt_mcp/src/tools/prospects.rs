@@ -21,6 +21,21 @@ use crate::registry::{ToolFuture, schema_for};
 pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
+            use_case: "prospects.playbook",
+            description: "Read this first: how to research businesses with your own tools \
+                          (Jeeta calls no data service), what to record with what evidence, \
+                          what is forbidden, how to score and when to promote (text, with its \
+                          version), and the workspace's section: prospecting_on, the approved \
+                          ICP entries, the rubric with the rubric_digest to send with every \
+                          score, today's caps (timezone, daily_prospects, recorded_today, \
+                          resets_at), each open research task's remaining count, the retention \
+                          in days and the blocklist's rules (listed: phone, email, instagram, \
+                          tiktok; flagged only: domain, name_city). [risk: READ]",
+            permission: Permission::ProspectsWork,
+            schema: schema_for::<NoArgs>,
+            run: playbook,
+        },
+        ToolDef {
             use_case: "prospects.check",
             description: "Before researching a business in depth, check what you know of it \
                           (business_name with city, phone, email, website, instagram, tiktok; \
@@ -53,7 +68,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           resets_at) or task_closed; FORBIDDEN with details.reason \
                           do_not_contact or erased_identity; VALIDATION with details.field and \
                           details.reason. A request_key replays the prospect it recorded, read \
-                          again, for 24 hours. Call jeeta.prospects.check first. [risk: WRITE]",
+                          again, for 24 hours. Read jeeta.prospects.playbook first, and call \
+                          jeeta.prospects.check before researching a business in depth. A \
+                          research_task_id records it for that task (CONFLICT task_closed when \
+                          the task is closed; an ad-hoc task closes itself at its target). \
+                          [risk: WRITE]",
             permission: Permission::ProspectsWork,
             schema: create_schema,
             run: create,
@@ -501,6 +520,13 @@ fn split(mut raw: Value, key: &str) -> Result<(ProspectId, Value), AppError> {
         .unwrap_or(Value::Null);
     let id: Uuid = args(id)?;
     Ok((ProspectId(id), raw))
+}
+
+fn playbook<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let NoArgs {} = args(raw)?;
+        to_json(&prospects::playbook(deps, ctx).await?)
+    })
 }
 
 fn check<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {

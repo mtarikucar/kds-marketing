@@ -20,7 +20,10 @@ mod prospect;
 mod score;
 mod status;
 
-pub use brief::{Brief, Claim, ResearchTask, TaskKind, TaskStatus, validate_brief};
+pub use brief::{
+    Brief, CLAIM_LEASE, Capacity, Claim, MAX_TASK_DAILY_CAP, MAX_TASK_TARGET, ResearchTask,
+    TaskKind, TaskStatus, remaining_today, standing_brief, validate_ad_hoc, validate_brief,
+};
 pub use evidence::{Evidence, Recorder, SourceRef, SourceRefInput};
 pub use ids::{ProspectId, ResearchTaskId};
 pub use keys::{

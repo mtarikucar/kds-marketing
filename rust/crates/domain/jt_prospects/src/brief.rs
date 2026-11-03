@@ -1,11 +1,22 @@
-//! Research tasks' briefs (spec §3.7): what to look for, where, and what disqualifies.
+//! Research tasks' briefs (spec §3.7): what to look for, where, and what disqualifies; the
+//! claim lease and what a task may still record today.
 
-use jt_strategy::{Area, StrategyVersionId};
+use jt_strategy::{Area, IcpEntry, StrategyVersionId};
 use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
-use crate::{ProspectError, Recorder, ResearchTaskId, bounded, chars, invalid, language_ok};
+use crate::{
+    MAX_DAILY_PROSPECTS, ProspectError, Recorder, ResearchTaskId, bounded, chars, invalid,
+    language_ok,
+};
+
+/// How long a claim on a task lasts (spec §3.7): two hours.
+pub const CLAIM_LEASE: Duration = Duration::hours(2);
+/// The most prospects an ad-hoc task asks for.
+pub const MAX_TASK_TARGET: u16 = 500;
+/// The most prospects a task records per local day (`research_tasks.daily_cap`).
+pub const MAX_TASK_DAILY_CAP: u16 = 500;
 
 /// What a research task asks agents to find. An ICP entry's brief names its segment; an ad-hoc
 /// one may not.
@@ -77,6 +88,106 @@ pub fn validate_brief(b: &Brief) -> Result<(), ProspectError> {
         return Err(invalid("note", "too_long"));
     }
     Ok(())
+}
+
+fn trimmed_list(items: Vec<String>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+impl Brief {
+    /// The brief as stored: every text trimmed, empty list entries and an empty district
+    /// dropped, the language lower-cased.
+    pub fn normalised(self) -> Brief {
+        Brief {
+            segment_key: self.segment_key.map(|s| s.trim().to_owned()),
+            sectors: trimmed_list(self.sectors),
+            areas: self
+                .areas
+                .into_iter()
+                .map(|a| Area {
+                    city: a.city.trim().to_owned(),
+                    district: a
+                        .district
+                        .map(|d| d.trim().to_owned())
+                        .filter(|d| !d.is_empty()),
+                })
+                .collect(),
+            signals: trimmed_list(self.signals),
+            exclusions: trimmed_list(self.exclusions),
+            size_hint: self.size_hint.trim().to_owned(),
+            language: self.language.map(|l| l.trim().to_ascii_lowercase()),
+            note: self.note.trim().to_owned(),
+        }
+    }
+}
+
+/// The brief of an ICP entry's standing task: its segment, sectors, areas, signals,
+/// exclusions, size hint and language, normalised; no note.
+pub fn standing_brief(e: &IcpEntry) -> Brief {
+    Brief {
+        segment_key: Some(e.segment_key.clone()),
+        sectors: e.sectors.clone(),
+        areas: e.areas.clone(),
+        signals: e.signals.clone(),
+        exclusions: e.exclusions.clone(),
+        size_hint: e.size_hint.clone(),
+        language: e.language.clone(),
+        note: String::new(),
+    }
+    .normalised()
+}
+
+/// An ad-hoc task's numbers: a target of `1..=MAX_TASK_TARGET` prospects, a daily cap of
+/// `1..=MAX_TASK_DAILY_CAP`.
+pub fn validate_ad_hoc(target_count: u16, daily_cap: u16) -> Result<(), ProspectError> {
+    if !(1..=MAX_TASK_TARGET).contains(&target_count) {
+        return Err(invalid("target_count", "range"));
+    }
+    if !(1..=MAX_TASK_DAILY_CAP).contains(&daily_cap) {
+        return Err(invalid("daily_cap", "range"));
+    }
+    Ok(())
+}
+
+/// What an open task may still record today (spec §3.7), with the counts of today, in the
+/// workspace's local day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capacity {
+    /// The task's daily cap.
+    pub daily_cap: u16,
+    /// Prospects the task recorded today.
+    pub recorded_today: u32,
+    /// Prospects the workspace recorded today (its ceiling is [`MAX_DAILY_PROSPECTS`]).
+    pub workspace_today: u32,
+    /// For an ad-hoc task, how many it still has to find.
+    pub target_left: Option<u32>,
+    /// For a standing task, its segment's backlog (unpromoted `new` and `qualified` prospects)
+    /// and the ICP entry's `backlog_target`.
+    pub backlog: Option<(u32, u16)>,
+}
+
+/// How many prospects an open task may still record today: its daily cap less what it recorded
+/// today, never more than the workspace's ceiling leaves nor (ad hoc) than it still has to find;
+/// zero for a standing task while its segment's backlog is at its target. A `backlog_target` of
+/// 0 sets no limit (spec D37).
+pub fn remaining_today(c: &Capacity) -> u32 {
+    if let Some((backlog, target)) = c.backlog
+        && target > 0
+        && backlog >= u32::from(target)
+    {
+        return 0;
+    }
+    let task = u32::from(c.daily_cap).saturating_sub(c.recorded_today);
+    let workspace = MAX_DAILY_PROSPECTS.saturating_sub(c.workspace_today);
+    let mut left = task.min(workspace);
+    if let Some(target) = c.target_left {
+        left = left.min(target);
+    }
+    left
 }
 
 /// Where a research task comes from.

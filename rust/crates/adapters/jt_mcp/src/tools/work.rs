@@ -29,7 +29,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           last_seen_at (its bridge does not report it: no evidence verifies it), \
                           inbound_events with count (up to 1000: unacknowledged events to read \
                           with jeeta.events.pending; listed only to a key that may acknowledge \
-                          them, with capabilities.manage), declare_first_capability), a priority \
+                          them, with capabilities.manage), declare_first_capability, research_due \
+                          with task_id and remaining_today (research businesses for that task \
+                          with your own tools and record them; to a key with prospects.work), \
+                          prospects_to_score with count (new prospects without a score under \
+                          the approved rubric)), a priority \
                           (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",

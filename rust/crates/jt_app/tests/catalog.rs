@@ -265,6 +265,7 @@ fn catalog_is_the_release_table() {
         ("devices.act", Some("jeeta.devices.act"), Some(("POST", "/api/devices/{capability_id}/act")), false, Risk::Write),
         ("devices.command_get", Some("jeeta.devices.command_get"), Some(("GET", "/api/devices/commands/{command_id}")), false, Risk::Read),
         ("devices.commands", Some("jeeta.devices.commands"), Some(("GET", "/api/devices/{capability_id}/commands")), false, Risk::Read),
+        ("prospects.playbook", Some("jeeta.prospects.playbook"), Some(("GET", "/api/prospects/playbook")), false, Risk::Read),
         ("prospects.check", Some("jeeta.prospects.check"), Some(("POST", "/api/prospects/check")), false, Risk::Read),
         ("prospects.create", Some("jeeta.prospects.create"), Some(("POST", "/api/prospects")), false, Risk::Write),
         ("prospects.update", Some("jeeta.prospects.update"), Some(("PATCH", "/api/prospects/{prospect_id}")), false, Risk::Write),
@@ -277,6 +278,11 @@ fn catalog_is_the_release_table() {
         ("prospects.erase", Some("jeeta.prospects.erase"), Some(("POST", "/api/prospects/{prospect_id}/erase")), false, Risk::Destructive),
         ("prospects.settings_get", Some("jeeta.prospects.settings_get"), Some(("GET", "/api/prospects/settings")), false, Risk::Read),
         ("prospects.settings_set", Some("jeeta.prospects.settings_set"), Some(("PUT", "/api/prospects/settings")), false, Risk::Write),
+        ("research.tasks_list", Some("jeeta.research.tasks_list"), Some(("GET", "/api/research/tasks")), false, Risk::Read),
+        ("research.tasks_get", Some("jeeta.research.tasks_get"), Some(("GET", "/api/research/tasks/{task_id}")), false, Risk::Read),
+        ("research.tasks_create", Some("jeeta.research.tasks_create"), Some(("POST", "/api/research/tasks")), false, Risk::Write),
+        ("research.tasks_claim", Some("jeeta.research.tasks_claim"), Some(("POST", "/api/research/tasks/{task_id}/claim")), false, Risk::Write),
+        ("research.tasks_close", Some("jeeta.research.tasks_close"), Some(("POST", "/api/research/tasks/{task_id}/close")), false, Risk::Write),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -295,9 +301,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 181);
+    assert_eq!(CATALOG.len(), 187);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

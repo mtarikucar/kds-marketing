@@ -27,7 +27,11 @@
 //!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many),
 //!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
 //!   see an item they could never clear;
-//! - `DeclareFirstCapability` (3): no capability that is not retired.
+//! - `DeclareFirstCapability` (3): no capability that is not retired;
+//! - `ResearchDue` (3): each open research task that may still record prospects today, and
+//!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, only for a
+//!   caller holding `prospects.work` while the approved strategy has prospecting on (spec
+//!   2026-10-30-leads-pool-outreach-design.md §3.17).
 //!
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
 //! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
@@ -195,6 +199,13 @@ pub enum WorkKind {
         #[serde(with = "time::serde::rfc3339::option")]
         last_seen_at: Option<OffsetDateTime>,
     },
+    /// An open research task may still record `remaining_today` prospects today.
+    ResearchDue {
+        task_id: jt_prospects::ResearchTaskId,
+        remaining_today: u32,
+    },
+    /// `count` new prospects have no score under the approved rubric.
+    ProspectsToScore { count: u32 },
 }
 
 impl WorkKind {
@@ -218,6 +229,8 @@ impl WorkKind {
             WorkKind::InboundEvents { .. } => "events.ack",
             WorkKind::VoiceBridgeOffline { .. } => "calls.bridge.register",
             WorkKind::PhoneOffline { .. } => "devices.bridge.register",
+            WorkKind::ResearchDue { .. } => "prospects.create",
+            WorkKind::ProspectsToScore { .. } => "prospects.score",
         }
     }
 }
@@ -291,6 +304,17 @@ async fn pending_as_seen(
     } else {
         None
     };
+    // The pool's work, for who works it, while the approved strategy has prospecting on.
+    let pool = if ctx.permissions.contains(&Permission::ProspectsWork)
+        && status_exemption("prospects.create").allows(status)
+    {
+        match repos.strategy().current_approved().await? {
+            Some(v) => Some(super::prospects::playbook::pending_in(repos.as_mut(), ctx, &v).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -350,6 +374,29 @@ async fn pending_as_seen(
                 "Review the queued Studio budget move and its blockers.".into()
             },
         }));
+    }
+    if let Some(p) = pool {
+        items.extend(
+            p.research_due
+                .into_iter()
+                .map(|(task_id, remaining_today)| WorkItem {
+                    kind: WorkKind::ResearchDue {
+                        task_id,
+                        remaining_today,
+                    },
+                    priority: 3,
+                    hint: "Read jeeta.prospects.playbook and the task (jeeta.research.tasks_get),                            claim it (jeeta.research.tasks_claim), research businesses with your                            own tools and record each with jeeta.prospects.create."
+                        .into(),
+                }),
+        );
+        if p.to_score > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::ProspectsToScore { count: p.to_score },
+                priority: 3,
+                hint: "Score the new prospects (jeeta.prospects.list with status new) with                        jeeta.prospects.score, sending the playbook's rubric_digest."
+                    .into(),
+            });
+        }
     }
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));

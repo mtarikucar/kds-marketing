@@ -1,5 +1,6 @@
-//! The `jeeta.prospects.*` tools (leads L1-T6): their permissions, risks and schemas, what they
-//! tell an agent, and a create through the tool that records the agent's connection.
+//! The `jeeta.prospects.*` and `jeeta.research.*` tools (leads L1-T6, L2): their permissions,
+//! risks and schemas, what they tell an agent, and a create through the tool that records the
+//! agent's connection.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -12,17 +13,79 @@ use jt_testkit::fakes::{FIXED_NOW, InMemoryUow};
 use serde_json::json;
 
 fn tools() -> BTreeMap<&'static str, jt_mcp::ToolSpec> {
+    tools_of("jeeta.prospects.")
+}
+
+fn tools_of(prefix: &str) -> BTreeMap<&'static str, jt_mcp::ToolSpec> {
     jt_mcp::registry()
         .into_iter()
-        .filter(|t| t.name.starts_with("jeeta.prospects."))
+        .filter(|t| t.name.starts_with(prefix))
         .map(|t| (t.name, t))
         .collect()
+}
+
+#[test]
+fn research_tools_listed_with_risks() {
+    let tools = tools_of("jeeta.research.");
+    let expected = [
+        ("tasks_list", Risk::Read),
+        ("tasks_get", Risk::Read),
+        ("tasks_create", Risk::Write),
+        ("tasks_claim", Risk::Write),
+        ("tasks_close", Risk::Write),
+    ];
+    assert_eq!(tools.len(), expected.len());
+    for (action, risk) in expected {
+        let name = format!("jeeta.research.{action}");
+        let tool = &tools[name.as_str()];
+        assert_eq!(tool.use_case, format!("research.{action}"), "{name}");
+        assert_eq!(tool.permission, Permission::ProspectsWork, "{name}");
+        assert_eq!(tool.risk, risk, "{name}");
+        assert!(tool.description.ends_with(jt_mcp::risk_tag(risk)), "{name}");
+        let schema = tool.input_schema.as_value();
+        assert_eq!(schema["additionalProperties"], false, "{name}");
+        assert!(!schema.to_string().contains("recorder"), "{name}");
+    }
+    let create = tools["jeeta.research.tasks_create"].input_schema.as_value();
+    assert_eq!(
+        create["required"],
+        json!(["brief", "target_count", "daily_cap"])
+    );
+    assert!(
+        tools["jeeta.research.tasks_close"]
+            .description
+            .contains("standing_task")
+    );
+}
+
+/// Every `jeeta.*` tool a pool or research description names is a registered tool.
+#[test]
+fn descriptions_name_only_registered_tools() {
+    let registered: Vec<&str> = jt_mcp::registry().iter().map(|t| t.name).collect();
+    let mut named = Vec::new();
+    for tool in jt_mcp::registry()
+        .iter()
+        .filter(|t| t.name.starts_with("jeeta.prospects.") || t.name.starts_with("jeeta.research."))
+    {
+        for (i, _) in tool.description.match_indices("jeeta.") {
+            let name: String = tool.description[i..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_')
+                .collect();
+            named.push((tool.name, name.trim_end_matches('.').to_owned()));
+        }
+    }
+    assert!(!named.is_empty());
+    for (tool, name) in named {
+        assert!(registered.contains(&name.as_str()), "{tool} names {name}");
+    }
 }
 
 #[test]
 fn tools_listed_with_risks() {
     let tools = tools();
     let expected = [
+        ("playbook", Risk::Read, Permission::ProspectsWork),
         ("check", Risk::Read, Permission::ProspectsWork),
         ("create", Risk::Write, Permission::ProspectsWork),
         ("update", Risk::Write, Permission::ProspectsWork),
@@ -87,13 +150,7 @@ fn tools_listed_with_risks() {
     ] {
         assert!(create.contains(word), "{word}");
     }
-    // No tool the catalog does not have yet.
-    for (name, tool) in &tools {
-        assert!(
-            !tool.description.contains("jeeta.prospects.playbook"),
-            "{name}"
-        );
-    }
+    assert!(create.contains("jeeta.prospects.playbook"));
     // The do-not-contact list holds hard keys only.
     for name in ["jeeta.prospects.do_not_contact", "jeeta.prospects.dnc_lift"] {
         let schema = schema(name).to_string();

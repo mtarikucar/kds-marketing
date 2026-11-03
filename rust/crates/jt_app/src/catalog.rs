@@ -418,8 +418,9 @@ pub static CATALOG: &[UseCase] = &[
     // `check` and the do-not-contact lift are `POST`: their bodies carry contact values, which never
     // go into a URL. Do-not-contact and erasure record an objection, which must always be
     // recordable: they are `OBJECTION_USE_CASES`, exempt from the strategy gate and from the
-    // workspace status. `prospects.playbook` comes with the research tasks, `prospects.promote`
-    // with distribution and `prospects.report` with outreach.
+    // workspace status. `prospects.promote` comes with distribution and `prospects.report` with
+    // outreach.
+    twin("prospects.playbook", GateMode::Gated, "jeeta.prospects.playbook", ("GET", "/api/prospects/playbook"), Read),
     twin("prospects.check", GateMode::Gated, "jeeta.prospects.check", ("POST", "/api/prospects/check"), Read),
     twin("prospects.create", GateMode::Gated, "jeeta.prospects.create", ("POST", "/api/prospects"), Write),
     twin("prospects.update", GateMode::Gated, "jeeta.prospects.update", ("PATCH", "/api/prospects/{prospect_id}"), Write),
@@ -432,6 +433,12 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.erase", Exempt, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
     twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
+    // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
+    twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
+    twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),
+    twin("research.tasks_create", GateMode::Gated, "jeeta.research.tasks_create", ("POST", "/api/research/tasks"), Write),
+    twin("research.tasks_claim", GateMode::Gated, "jeeta.research.tasks_claim", ("POST", "/api/research/tasks/{task_id}/claim"), Write),
+    twin("research.tasks_close", GateMode::Gated, "jeeta.research.tasks_close", ("POST", "/api/research/tasks/{task_id}/close"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

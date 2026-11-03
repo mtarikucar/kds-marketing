@@ -147,12 +147,13 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
         return Ok(out);
     }
     let policy = leads_policy(r.as_mut()).await?;
+    // The task row is held to the end: an ad-hoc task closes when this one reaches its target.
     let task = match input.research_task_id {
         None => None,
         Some(id) => {
             let t = r
                 .research_tasks()
-                .get(id)
+                .lock(id)
                 .await?
                 .ok_or_else(|| AppError::not_found("no such research task"))?;
             if t.status != TaskStatus::Open {
@@ -163,10 +164,16 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
                     json!({ "task_id": id, "status": t.status.key() }),
                 ));
             }
-            Some((id, t.daily_cap))
+            Some(t)
         }
     };
-    check_caps(r.as_mut(), &policy.timezone, task, ctx.now).await?;
+    check_caps(
+        r.as_mut(),
+        &policy.timezone,
+        task.as_ref().map(|t| (t.id, t.daily_cap)),
+        ctx.now,
+    )
+    .await?;
     let p = jt_prospects::build(
         input,
         ProspectId::from(deps.ids.uuid()),
@@ -203,6 +210,9 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
         }),
     )
     .await?;
+    if let Some(t) = &task {
+        crate::usecases::research::close_if_found(r.as_mut(), ctx, t).await?;
+    }
     // The request key holds the id only: no contact value outlives the row in it.
     if let Some(key) = &key
         && !r

@@ -26,6 +26,7 @@ pub mod ops;
 pub mod platform;
 pub mod platform_payments;
 pub mod prospects;
+pub mod research;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
@@ -218,6 +219,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/devices/{capability_id}/act"),
     ("GET", "/api/devices/commands/{command_id}"),
     ("GET", "/api/devices/{capability_id}/commands"),
+    ("GET", "/api/prospects/playbook"),
     ("POST", "/api/prospects/check"),
     ("POST", "/api/prospects"),
     ("PATCH", "/api/prospects/{prospect_id}"),
@@ -230,6 +232,11 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/prospects/{prospect_id}/erase"),
     ("GET", "/api/prospects/settings"),
     ("PUT", "/api/prospects/settings"),
+    ("GET", "/api/research/tasks"),
+    ("GET", "/api/research/tasks/{task_id}"),
+    ("POST", "/api/research/tasks"),
+    ("POST", "/api/research/tasks/{task_id}/claim"),
+    ("POST", "/api/research/tasks/{task_id}/close"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -1092,6 +1099,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             devices::commands,
         ),
         api_route(
+            "GET",
+            "/prospects/playbook",
+            "prospects.playbook",
+            prospects::playbook,
+        ),
+        api_route(
             "POST",
             "/prospects/check",
             "prospects.check",
@@ -1152,6 +1165,36 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/prospects/settings",
             "prospects.settings_set",
             prospects::settings_set,
+        ),
+        api_route(
+            "GET",
+            "/research/tasks",
+            "research.tasks_list",
+            research::list,
+        ),
+        api_route(
+            "GET",
+            "/research/tasks/{task_id}",
+            "research.tasks_get",
+            research::get,
+        ),
+        api_route(
+            "POST",
+            "/research/tasks",
+            "research.tasks_create",
+            research::create,
+        ),
+        api_route(
+            "POST",
+            "/research/tasks/{task_id}/claim",
+            "research.tasks_claim",
+            research::claim,
+        ),
+        api_route(
+            "POST",
+            "/research/tasks/{task_id}/close",
+            "research.tasks_close",
+            research::close,
         ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),

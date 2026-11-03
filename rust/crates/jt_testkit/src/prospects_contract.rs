@@ -612,6 +612,20 @@ pub async fn list_filters_and_cursor(uow: Arc<dyn UnitOfWork>) {
         .await
         .is_empty()
     );
+    // A task's prospects, counted whatever their status.
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(tx.prospects().count_for_task(t.id).await.unwrap(), 3);
+    assert_eq!(
+        tx.prospects()
+            .count_for_task(ResearchTaskId::new_v7())
+            .await
+            .unwrap(),
+        0
+    );
+    drop(tx);
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert_eq!(o.prospects().count_for_task(t.id).await.unwrap(), 0);
+    drop(o);
     // Pages of two, following the cursor.
     let mut t = uow.tenant(f.ws).await.unwrap();
     let mut seen = Vec::new();

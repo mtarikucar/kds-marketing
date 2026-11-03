@@ -2433,3 +2433,79 @@ fn rubric_digest_is_stable_and_order_sensitive() {
     };
     assert_ne!(rubric_digest(&threshold), digest);
 }
+
+/// The prospecting section with ICP entries `keys` (segment `students`) and a one-criterion
+/// rubric.
+fn prospecting(keys: &[&str]) -> Value {
+    let icp: Vec<Value> = keys
+        .iter()
+        .map(|k| {
+            json!({
+                "key": k, "segment_key": "students", "sectors": ["kafe"],
+                "areas": [{ "city": "İstanbul" }], "signals": [], "exclusions": [],
+                "size_hint": "", "language": "tr", "daily_cap": 20, "backlog_target": 0,
+            })
+        })
+        .collect();
+    json!({
+        "icp": icp,
+        "rubric": { "criteria": [{ "key": "fit", "description": "serves coffee", "weight": 100 }], "qualify_at": 60 },
+    })
+}
+
+/// Approving a version plans its research in the same transaction: one open standing task per
+/// ICP entry at once; the next approval supersedes them (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.7).
+#[tokio::test]
+async fn approval_creates_one_standing_task_per_icp_entry() {
+    use jt_prospects::{TaskKind, TaskStatus};
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "prospecting".to_owned(),
+        prospecting(&["kampus", "merkez"]),
+    )
+    .await
+    .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let v1 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    let tasks = w.uow.snapshot().prospects.tasks;
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|t| t.strategy_version_id == v1.id
+        && t.status == TaskStatus::Open
+        && matches!(t.kind, TaskKind::Standing { .. })));
+    // The next version keeps one entry: the old tasks are superseded, one new one is open.
+    strategy::start_consultation(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "prospecting".to_owned(),
+        prospecting(&["kampus"]),
+    )
+    .await
+    .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    let tasks = w.uow.snapshot().prospects.tasks;
+    let open: Vec<_> = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Open)
+        .collect();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].strategy_version_id, v2.id);
+    assert_eq!(
+        tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Superseded)
+            .count(),
+        2
+    );
+}

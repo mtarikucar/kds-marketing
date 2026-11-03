@@ -778,6 +778,18 @@ impl ProspectRepo for PgTenantRepos {
         Ok(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
+    async fn count_for_task(&mut self, task: ResearchTaskId) -> Result<u32, AppError> {
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from prospects where workspace_id = $1 and research_task_id = $2",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(task.as_uuid())
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count a task's prospects"))?;
+        Ok(u32::try_from(n).unwrap_or(u32::MAX))
+    }
+
     async fn promoted_between(
         &mut self,
         from: OffsetDateTime,
