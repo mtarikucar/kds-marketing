@@ -12,7 +12,7 @@
 //! SLA (counted in its owner's working hours) moves to the next eligible member of its rule,
 //! excluding the journey's earlier owners, at most `max_reassignments` times; then it is stalled
 //! and counted in `assignment_stalled`. The owner acts when they reply, report a journey event,
-//! add a note, complete a task or place a call ([`touch`]).
+//! add a note, complete a task or place a call (`touch`).
 //!
 //! Every decision runs under the inbox workspace lock; the job takes one transaction per
 //! journey. Ledger payloads carry ids, causes and counts only.
