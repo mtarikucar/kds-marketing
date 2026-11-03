@@ -283,7 +283,8 @@ fn subject_id_ok(subject: &EnvelopeSubject) -> bool {
 
 /// Takes public-item `event` of capability `cap` (already the surface capability: see
 /// `consumer::route`) into the inbox (see the module docs), with the subject facts `fetched`
-/// before the transaction. Outcomes: `consumed`, `duplicate` (a replay, or our own reply's
+/// before the transaction. A comment of the account itself takes the own-comment path only
+/// while it is open or edited. Outcomes: `consumed`, `duplicate` (a replay, or our own reply's
 /// echo already bound), `deferred` (a question's state before the question itself, or an own
 /// comment the inbox cannot yet tell from our replies), `comments_not_enabled`. An erased author
 /// is the `erased_identity` refusal (`erased_identity_drop`); a payload without an envelope, or
@@ -315,7 +316,14 @@ pub(crate) async fn intake(
         .filter(|id| !id.is_empty())
         .ok_or_else(malformed)?;
     if env.author.is_self || env.author.id.as_deref() == Some(account) {
-        return own(deps, ctx, r, event, cap, &env).await;
+        // Only our comment as written answers its parent: its removal (or any other provider
+        // state of it) never does, and is consumed with nothing written.
+        return match env.status {
+            EnvelopeStatus::Open | EnvelopeStatus::Edited => {
+                own(deps, ctx, r, event, cap, &env).await
+            }
+            _ => Ok("consumed"),
+        };
     }
     if !matches!(env.status, EnvelopeStatus::Open | EnvelopeStatus::Edited) {
         return status(deps, ctx, r, event, cap, &env).await;

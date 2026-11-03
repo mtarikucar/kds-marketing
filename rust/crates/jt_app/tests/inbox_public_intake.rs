@@ -1446,3 +1446,31 @@ async fn own_comment_binds_only_our_reply_to_its_parent() {
     assert_eq!(bound.external_id.as_deref(), Some("4"));
     assert_eq!(item(&s, "2").answer, AnswerState::Awaiting);
 }
+
+#[tokio::test]
+async fn our_removed_comment_never_answers_the_parent() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
+    let before = r.w.uow.snapshot().inbox;
+    for status in [
+        EnvelopeStatus::Removed,
+        EnvelopeStatus::Answered,
+        EnvelopeStatus::Reported,
+    ] {
+        assert_eq!(
+            deliver(
+                &r,
+                &ig,
+                &format!("comment:2:{status:?}"),
+                with_status(own_reply("2", "1", "Teşekkürler"), status)
+            )
+            .await,
+            "consumed",
+            "{status:?}"
+        );
+    }
+    let after = r.w.uow.snapshot().inbox;
+    assert_eq!(after.messages, before.messages);
+    assert_eq!(after.public_items, before.public_items);
+}
