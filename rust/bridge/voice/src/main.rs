@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 use jeeta_voice_bridge::config::Config;
 use jeeta_voice_bridge::trace::read_traces;
-use jeeta_voice_bridge::{ari::Ari, slice, speech};
+use jeeta_voice_bridge::{ari::Ari, run_loop, slice, speech};
 use time::OffsetDateTime;
 use tracing_subscriber::EnvFilter;
 
@@ -32,6 +32,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     match args.first().map(String::as_str).unwrap_or("run") {
+        "run" => runtime.block_on(run_command()),
         "slice" => runtime.block_on(slice::main(&args[1..])),
         "report" => report(&args[1..]),
         "check" => runtime.block_on(check()),
@@ -39,6 +40,47 @@ fn main() -> ExitCode {
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
+    }
+}
+
+/// The line, until SIGTERM or Ctrl-C.
+async fn run_command() -> ExitCode {
+    let config = match Config::from_env(|k| std::env::var(k).ok(), true) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop_tx.send(true);
+    });
+    run_loop::run(config, stop_rx).await;
+    ExitCode::SUCCESS
+}
+
+/// SIGTERM (systemd's stop) or Ctrl-C.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }
 

@@ -13956,6 +13956,13 @@ git add rust/bridge/voice
 git commit -m "feat(voice-bridge): the line's run loop: heartbeat, command poll, Asterisk events, ordered reports" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**D2 as built (2026-11-03).** The steps ran as written, test first: `run_loop` was seen failing to compile (E0432, no `run_loop` in `jeeta_voice_bridge`). The code is the plan's, reflowed by rustfmt, against B6 as built (its `CallSetup`, `Report`, `ToCall`, `LineWaits`, `Ari::{channel_ids, refuse}` and the test support's `fake_ari`, `ws_server`, `serve_speaker` are the ones the plan names). What differs:
+- `start_call` is a plain `fn`: it awaits nothing (it spawns the call's task), so `dispatch` calls it without `.await`.
+- Every item of `run_loop.rs` has a doc line (the constants say what they bound); the test names its fake's state `(Seen, Queue)` with a `Queue` alias, the plan's handlers spelled the type out three times.
+- `main.rs`: the `run` arm, `run_command` and `shutdown_signal` as written; `lib.rs`' module map names `run_loop`.
+- `logging` scans `run_loop.rs` with the rest of `src/` and passes: its log calls carry `call`, `count`, `status`, `command`, `kind` and `error` only.
+- Checks on Windows: `cargo test -p jeeta-voice-bridge` 112 (lib 1, adapters 20, call 14, connect 4, g711 5, jeeta_client 2, logging 3, netgsm 4, pacer 8, redaction 4, run_loop 1 in about 1.5 s, slice 4, talker 31, text 11); clippy `--all-targets -D warnings`, `cargo doc -D warnings` and fmt clean. The `cfg(unix)` SIGTERM branch of `shutdown_signal` compiles in CI only.
+
 ### Task D3: Build artifacts and the worker's unit; the worker serves staging
 
 **Files:**

@@ -11,7 +11,7 @@
 //! - [`ari`], [`media`], [`speech`]: Asterisk's REST and events, `chan_websocket` media control,
 //!   the local speech services.
 //! - [`call`]: one call's task; [`slice`](mod@slice): the standalone test call.
-//! - [`jeeta`]: the client of the core's voice bridge routes.
+//! - [`jeeta`]: the client of the core's voice bridge routes; [`run_loop`]: the line (`run`).
 //!
 //! # Logging
 //!
@@ -33,6 +33,7 @@ pub mod g711;
 pub mod jeeta;
 pub mod media;
 pub mod netgsm;
+pub mod run_loop;
 pub mod slice;
 pub mod speech;
 pub mod talker;
