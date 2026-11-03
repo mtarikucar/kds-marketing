@@ -15,9 +15,19 @@ async fn setup() -> (World, ConversationId, Arc<ScriptedConnector>) {
     setup_channel("whatsapp_cloud").await
 }
 async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnector>) {
+    setup_channel_with(kind, true).await
+}
+/// [`setup_channel`] in a workspace with an approved strategy only when `approved`; without one
+/// no SMS price is set up either (the SMS fixture prices its line in the strategy's budget).
+async fn setup_channel_with(
+    kind: &str,
+    approved: bool,
+) -> (World, ConversationId, Arc<ScriptedConnector>) {
     let mut w = world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
-    w.approve_strategy().await;
+    if approved {
+        w.approve_strategy().await;
+    }
     let connector = Arc::new(ScriptedConnector::new(match kind {
         "mailbox" => Provider::Mail,
         "sms_line" => Provider::Netgsm,
@@ -87,7 +97,9 @@ async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnec
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
-    jt_testkit::flows::price_sms(&w.deps, w.ws).await;
+    if approved {
+        jt_testkit::flows::price_sms(&w.deps, w.ws).await;
+    }
     (w, id, connector)
 }
 fn input(key: Option<&str>) -> replies::ReplyInput {
@@ -571,10 +583,8 @@ async fn uncertain_and_definite_failures_have_no_success_effect() {
     }
 }
 
-#[tokio::test]
-async fn recovery_rechecks_strategy_approval() {
-    let (w, id, c) = setup().await;
-    queued(&w, id).await;
+/// Archives the workspace's approved strategy.
+async fn archive_strategy(w: &World) {
     let version = w
         .uow
         .tenant(w.ws)
@@ -595,20 +605,91 @@ async fn recovery_rechecks_strategy_approval() {
     )
     .await
     .unwrap();
-    c.push_send_text(accepted());
-    let report = jt_app::usecases::jobs::run_outbox_recover(
+}
+async fn recover(w: &World) -> jt_app::usecases::jobs::JobReport {
+    jt_app::usecases::jobs::run_outbox_recover(
         &w.deps,
         w.owner_ctx.now + time::Duration::minutes(6),
     )
-    .await;
+    .await
+}
+
+/// Answering a customer never waits for a marketing strategy (owner decision of 2026-11-03).
+#[tokio::test]
+async fn a_reply_needs_no_strategy() {
+    let (w, id, c) = setup_channel_with("whatsapp_cloud", false).await;
+    c.push_send_text(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.outbox[0].state, "sent");
+    // The send records the use case that queued it, whose gate a recovery honours again.
+    assert_eq!(s.inbox.outbox[0].intent["use_case"], "inbox.reply");
+    assert_eq!(c.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn recovery_sends_a_reply_after_the_strategy_is_archived() {
+    let (w, id, c) = setup().await;
+    queued(&w, id).await;
+    archive_strategy(&w).await;
+    c.push_send_text(accepted());
+    let report = recover(&w).await;
     assert_eq!(report.failed, 0);
+    assert_eq!(c.calls().len(), 1);
+    assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "sent");
+}
+
+/// A send queued by a gated use case (`inbox.send`, outreach) meets the strategy again when it is
+/// recovered, and so does one queued before sends recorded their use case: then every send was
+/// queued behind the gate.
+#[tokio::test]
+async fn recovery_rechecks_the_strategy_of_a_send_queued_by_a_gated_use_case() {
+    for use_case in [Some("inbox.send"), None] {
+        let (w, id, c) = setup().await;
+        let queued = queued(&w, id).await;
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        let mut row = r.outbox().get(queued).await.unwrap().unwrap();
+        match use_case {
+            Some(use_case) => row.intent["use_case"] = json!(use_case),
+            None => {
+                row.intent.as_object_mut().unwrap().remove("use_case");
+            }
+        }
+        r.outbox().update(row).await.unwrap();
+        r.commit().await.unwrap();
+        archive_strategy(&w).await;
+        c.push_send_text(accepted());
+        let report = recover(&w).await;
+        assert_eq!(report.failed, 0, "{use_case:?}");
+        assert!(c.calls().is_empty(), "{use_case:?}");
+        let s = w.uow.snapshot();
+        assert_eq!(s.inbox.outbox[0].state, "refused", "{use_case:?}");
+        assert_eq!(
+            s.inbox.outbox[0].last_error.as_deref(),
+            Some("strategy_required"),
+            "{use_case:?}"
+        );
+    }
+}
+
+/// A metered send (an SMS line here) reserves its spend in the approved strategy's budget frame,
+/// so without a strategy it is refused before anything is queued, rather than left queued until
+/// a strategy is approved and then sent late.
+#[tokio::test]
+async fn a_metered_reply_without_a_strategy_is_refused_before_it_is_queued() {
+    let (w, id, c) = setup_channel_with("sms_line", false).await;
+    c.push_send_text(accepted());
+    let e = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "strategy_required", "{e:?}");
     assert!(c.calls().is_empty());
     let s = w.uow.snapshot();
-    assert_eq!(s.inbox.outbox[0].state, "refused");
-    assert_eq!(
-        s.inbox.outbox[0].last_error.as_deref(),
-        Some("strategy_required")
-    );
+    assert!(s.inbox.outbox.is_empty());
+    assert!(s.inbox.messages.is_empty());
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 //! The gate rule, structural half (spec §5, B1): only the use cases the Global Constraints list
-//! may be `Exempt` from the strategy gate; every other use case is `Gated`. Separately, only
+//! may be `Exempt` from the strategy gate; every other use case is `Gated`. The inbox is exempt
+//! but for the one row that starts commercial contact (`inbox.send`). Separately, only
 //! `auth.*`, `workspace.*` and `platform.*` use cases run whatever the workspace's status, and
 //! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
@@ -11,8 +12,9 @@ use jt_app::catalog::{CATALOG, GateMode, StatusExemption};
 /// and agents, the platform console, the strategy itself (it is what opens the gate), the
 /// capabilities and budget items (the consultation needs to know what the workspace has, spec
 /// §5), the pending work (an agent asks what is pending before any strategy exists), connecting
-/// accounts (part of the consultation's prerequisites, M1b) and the inbound events (observation,
-/// not planned work, M1b).
+/// accounts (part of the consultation's prerequisites, M1b), the inbound events (observation,
+/// not planned work, M1b) and the inbox (reading and answering the workspace's own customers
+/// never waits for a marketing strategy, owner decision of 2026-11-03).
 const EXEMPT_PREFIXES: &[&str] = &[
     "auth.",
     "workspace.",
@@ -27,6 +29,7 @@ const EXEMPT_PREFIXES: &[&str] = &[
     "work.",
     "connector.",
     "events.",
+    "inbox.",
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
@@ -36,8 +39,6 @@ const EXEMPT_IDS: &[&str] = &[
     "billing.activate",
     "billing.report_payment",
     "ledger.list",
-    "inbox.pending",
-    "inbox.context",
     "studio.brake",
     "studio.ledger",
     "studio.ledger_export",
@@ -174,6 +175,8 @@ fn the_exempt_list_rejects_other_use_cases() {
     assert!(may_be_exempt("work.pending"));
     assert!(may_be_exempt("connector.probe"));
     assert!(may_be_exempt("events.ack"));
+    assert!(may_be_exempt("inbox.reply"));
+    assert!(!may_be_exempt("inboxes.list"));
     assert!(!may_be_exempt("connectors.list"));
     assert!(!may_be_exempt("event.list"));
     assert!(!may_be_exempt("strategies.list"));
@@ -214,8 +217,14 @@ fn catalog_ids_are_dotted_lowercase() {
     }
 }
 
+/// The inbox rows that stay behind the strategy gate: those that start commercial contact rather
+/// than answer a customer. `inbox.send` writes to a person, not in a conversation, with
+/// commercial intent only, and may open a conversation no customer started: outreach, which the
+/// strategy governs. Every other inbox row, a new one included, answers customers and is exempt.
+const GATED_INBOX: &[&str] = &["inbox.send"];
+
 #[test]
-fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
+fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
     let rows: Vec<_> = CATALOG
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
@@ -224,27 +233,19 @@ fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
     for row in rows {
         assert_eq!(
             row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
-                GateMode::Exempt
-            } else {
+            if GATED_INBOX.contains(&row.id) {
                 GateMode::Gated
-            }
+            } else {
+                GateMode::Exempt
+            },
+            "{}",
+            row.id
         );
-        assert_eq!(row.status_exemption, StatusExemption::Never);
+        // Only the strategy part changed: every inbox row, erasure and suppressions among them,
+        // still answers WORKSPACE_INACTIVE unless the workspace is active.
+        assert_eq!(row.status_exemption, StatusExemption::Never, "{}", row.id);
     }
-}
-
-#[test]
-fn only_pending_and_context_are_exempt_inbox_reads() {
-    for row in CATALOG.iter().filter(|r| r.id.starts_with("inbox.")) {
-        assert_eq!(
-            row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
-                GateMode::Exempt
-            } else {
-                GateMode::Gated
-            }
-        );
-        assert_eq!(row.status_exemption, StatusExemption::Never);
+    for id in GATED_INBOX {
+        assert!(jt_app::catalog::find(id).is_some(), "{id} is a catalog row");
     }
 }
