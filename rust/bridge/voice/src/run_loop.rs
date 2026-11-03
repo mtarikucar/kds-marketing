@@ -258,14 +258,22 @@ fn dispatch(
                     entry.closing |= hangup;
                     Some(entry.tx.clone())
                 });
-                let failure = match tx.map(|tx| tx.try_send(ToCall::Command(command))) {
-                    Some(Ok(())) => None,
-                    Some(Err(TrySendError::Full(_))) => {
+                let carried = match tx {
+                    Some(tx) => match tx.try_send(ToCall::Command(command)) {
+                        Ok(()) => Carried::Yes,
+                        Err(TrySendError::Full(_)) => Carried::Full,
+                        Err(TrySendError::Closed(_)) => Carried::No,
+                    },
+                    None => Carried::No,
+                };
+                let failure = match carried {
+                    Carried::Yes => None,
+                    Carried::Full => {
                         warn!(call, "a call takes no more commands");
                         Some("transient: bridge: the call stopped taking commands")
                     }
-                    Some(Err(TrySendError::Closed(_))) | None if hangup => None,
-                    Some(Err(TrySendError::Closed(_))) | None => {
+                    Carried::No if hangup => None,
+                    Carried::No => {
                         warn!(call, "a command for a call this line does not carry");
                         Some("transient: bridge: the call is not on this line")
                     }
@@ -279,6 +287,15 @@ fn dispatch(
         }
     }
     let _ = reports.send(Report::now(&call, BridgeEvent::CommandDone { id: c.id }));
+}
+
+/// Whether a call took the command handed to it.
+enum Carried {
+    Yes,
+    /// Its inbox is full: it takes no more commands.
+    Full,
+    /// The line does not carry the call (it ended, or never was).
+    No,
 }
 
 /// Starts the task of a dialled call (in `tasks`, which a stop waits for), or reports why the
