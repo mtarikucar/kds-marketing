@@ -203,8 +203,8 @@ human may release).
 
 ### 5.1 Ports
 
-A new `MaterialRepo` on `TenantRepos` (`studio_materials()`): olays, materials, piece materials, slot
-briefs, calendar rows, shoot requests, the materials policy, caption releases, and the person-erasure
+A new `MaterialRepo` on `TenantRepos` (`studio_materials()`): olays, materials, piece materials, calendar
+rows, shoot requests, the materials policy, caption releases, and the person-erasure
 redaction. Calls run in the caller's tenant transaction; no file I/O under its locks (files are written
 before, deleted after, as `studio.file_upload` does).
 
@@ -255,7 +255,13 @@ material with `olay_suggestions`: confirmed or proposed olays whose date range c
 `olay_id` or `genel` (real genel: human only); an agent naming an unknown event creates a proposed olay
 first.
 
-### 5.4 Planner gate (D1)
+### 5.4 Planner gate (D1) — pending the posting methodology
+
+The owner is reworking the posting methodology (per-post preparation lead, no all-at-once weekly planning,
+no fixed weekly count, bursts from an olay's new materials). Until it is settled, slot materialization is
+unchanged and the gate holds at submission (§5.5) and publish (§5.6). The intended planner behaviour,
+to be fitted to the new model:
+
 
 `studio::planner::plan` keeps its positions and draws. For each organic position it computes the slot
 need (§4.5) and runs `select_anchor` at the position's time:
@@ -270,8 +276,8 @@ whose condition now holds.
 
 ### 5.5 Submission gate (D1, D2)
 
-`studio.piece_submit` gains an optional `subject` (default: the slot's brief subject; a slot with no brief
-— planned before this release — has none and must name one). Under the same control fence that already
+`studio.piece_submit` gains a `subject` (default: the slot's brief subject once the planner writes briefs,
+§5.4; until then, and for a slot with no brief, the piece must name one). Under the same control fence that already
 checks the files, it loads every medium's material and runs §4.3 at the slot's `scheduled_at`:
 
 - any medium not a material → `VALIDATION` `{"field":"media","reason":"not_a_material"}`;
@@ -293,16 +299,17 @@ or `fix_piece` (hard). A piece with no recorded material use (submitted before t
 
 ## 6. Storage — migration `0021_studio_materials`
 
-Eight tenant tables, `workspace_id` first in every key, ENABLE + FORCE RLS with the `tenant_isolation`
+Seven tenant tables, `workspace_id` first in every key, ENABLE + FORCE RLS with the `tenant_isolation`
 policy of `0009`, composite foreign keys to `workspaces`, `studio_files`, `studio_slots`, `studio_pieces`.
-Records keep Studio's `data jsonb` with the columns the rules and indexes need. 74 → 82 tables.
+Records keep Studio's `data jsonb` with the columns the rules and indexes need. 74 → 81 tables. Slot
+briefs (`studio_slot_briefs`: slot, material, subject, need) wait for the new posting model (§5.4) and its
+own migration.
 
 | table | key columns and checks |
 |---|---|
 | `studio_olays` | `id`, `kind`, `status` (`proposed`/`confirmed`), `starts_on ≤ ends_on`, `occasion` present exactly for season/special_day, `revision > 0` |
 | `studio_materials` | `id`, `file_id` (unique per workspace, FK `studio_files`), `olay_id` (FK, null exactly for genel), `binding`, `origin` (`real`/`ai_generated`), `generator` (present exactly for AI), `share`, `freed_at`, `erased_at`, `revision`; a real genel row has `freed_at`; trigger: `origin`, `generator` and `file_id` never change |
 | `studio_piece_materials` | `(piece_id, material_id)`, `slot_id`, `revision`, `role` (`anchor`/`support`), FKs to the piece (with its slot) and the material; insert only (trigger refuses update and delete) |
-| `studio_slot_briefs` | `slot_id` (PK with workspace, FK `studio_slots`), `material_id` (FK), `subject` |
 | `studio_calendar_entries` | `(key, year)`, `kind`, `window_start ≤ window_end` or both null, `lead_days` 0–90, `enabled` |
 | `studio_shoot_requests` | `id`, `key` (unique per workspace), `status`, `week_start` |
 | `studio_material_policy` | one row per workspace: `lead_days` 0–90, `reuse_days` 0–365, `recap_days` 0–365 (defaults 21, 14, 30 when absent) |
@@ -402,7 +409,7 @@ A "Materyaller" tab in Growth Studio, phone-first (one column under 640 px, the 
 - Postgres (CI): the migration up/down/up, down refusing live rows, RLS isolation of every new table, the
   origin trigger, the insert-only piece-materials trigger.
 - Archtest: catalog rows, MCP registry and panel routes for the new use cases; panel-only rows have no
-  tool; table count 82; SQL scoping.
+  tool; table count 81; SQL scoping.
 - Panel (vitest): upload form requires the permission; olay suggestion; çekim listesi actions; TR/EN parity.
 
 ## 12. Deploy and migration notes

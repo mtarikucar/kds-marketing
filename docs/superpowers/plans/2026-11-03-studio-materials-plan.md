@@ -7,7 +7,7 @@
 (spec `docs/superpowers/specs/2026-11-03-studio-materials-design.md`, read it first).
 
 **Architecture:** pure rules in `jt_studio` (olay, material, calendar, eligibility, selection, truth check,
-shoot requests); a `MaterialRepo` port on `TenantRepos`; one migration `0021_studio_materials` with eight
+shoot requests); a `MaterialRepo` port on `TenantRepos`; one migration `0021_studio_materials` with seven
 forced-RLS tables; the planner, `piece_submit` and the publisher gated by eligibility (spec D1); use cases
 with MCP twins and panel-only human decisions; a "Materyaller" tab in the panel.
 
@@ -52,8 +52,8 @@ No new catalog row: the gate changes behaviour behind existing use cases. Ships 
 - [ ] Implement `selection.rs`, `shoot.rs`.
 
 ### P1-T3 Ports and the in-memory fake
-- [ ] `jt_app::ports::materials::MaterialRepo` (olays, materials, piece uses, briefs, calendar rows, shoot
-  requests, policy, releases, person redaction), `TenantRepos::studio_materials()`; every `TenantRepos`
+- [ ] `jt_app::ports::materials::MaterialRepo` (olays, materials, piece uses, calendar rows, shoot requests,
+  policy, releases, person redaction), `TenantRepos::studio_materials()`; every `TenantRepos`
   impl (pg, testkit `MemTenant`, the spy tenants in `jt_app/tests`, the failing tenant in `jt_webhook`
   tests, `jt_testkit::activation_control`).
 - [ ] `jt_testkit` `MemMaterials` with the migration's constraints (one material per file, origin and file
@@ -61,22 +61,33 @@ No new catalog row: the gate changes behaviour behind existing use cases. Ships 
 
 ### P1-T4 Migration `0021_studio_materials` and the pg repo
 - [ ] Migration up/down per spec §6 (checks, composite FKs, triggers, FORCE RLS, `down` refusing live
-  rows); `jt_pg/tests/migrations.rs` and `jt_archtest` table count 74 → 82; README migrations table.
+  rows); `jt_pg/tests/migrations.rs` and `jt_archtest` table count 74 → 81; README migrations table.
 - [ ] `jt_pg/src/repos/studio/materials.rs`; tests `jt_pg/tests/studio_materials.rs` (round trips, RLS
   isolation, origin trigger, insert-only uses, down refusal) — Linux CI.
 
-### P1-T5 Planner gate
-- [ ] Tests `jt_app/tests/studio_materials_gate.rs`: zero materials + approved strategy + no-approval
-  policy → `plan` inserts no slot and writes `slot:` shoot requests; `publish_due` publishes nothing; a
-  seeded eligible material → the next run plans the slot with a brief naming it; season and `olay:`
-  requests; system requests close themselves.
-- [ ] `planner::plan`: need, `select_anchor`, brief, `studio.slot.unfilled`, requests.
+### P1-T5 Planner gate — PENDING METHODOLOGY (do not change `planner.rs` yet)
+
+The owner is reworking the posting methodology (2026-11-03): each post gets its own preparation start, a
+reasonable lead before its publish time; planning no longer happens all at once at the start of the week;
+there is no fixed weekly count (an olay with new materials may trigger a burst, e.g. 20 stories at once).
+The slot model will change, so slot materialization in `planner.rs` stays as it is until the new model is
+settled. Intended behaviour, to be fitted to that model:
+- a slot (or post) is materialized only when `select_anchor` finds an eligible anchor for it at its
+  publish time; it records the pick as its brief (material, subject, need);
+- no pick: no slot; a `slot:` request on the çekim listesi instead, and `studio.slot.unfilled` once per key;
+- the `season:` and `olay:` requests are written ahead of their windows by `lead_days`; system requests
+  close themselves once their condition holds;
+- test: zero materials + approved strategy + no-approval policy → no slots, no publications, only requests.
+
+Until then the gate holds at the other two points (P1-T6, P1-T7): nothing without an eligible material is
+ever submitted or published. Slot briefs (`studio_slot_briefs`) wait for the new model's migration.
 
 ### P1-T6 Submission gate
 - [ ] Tests: piece with bytes / hosted URL / non-material file → `not_a_material`; no anchor →
   `no_eligible_material`; other olay, out of season, unset permission, AI recap → `material_refused` with
   codes; a valid piece records its uses and subject.
-- [ ] `pieces.rs`: `subject` input (schema), D2, §4.3 under the control fence, `record_piece_materials`.
+- [ ] `pieces.rs`: `subject` input (required while slots have no brief), D2, §4.3 under the control
+  fence at the slot's time, `record_piece_materials`.
 
 ### P1-T7 Publish re-check and pending
 - [ ] Tests: permission revoked after submit, window passed, olay unconfirmed or rebound, no recorded use →
