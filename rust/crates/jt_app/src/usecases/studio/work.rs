@@ -42,6 +42,9 @@ pub struct Blocker {
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_action: Option<String>,
+    /// What holds it, for a `material_check_hold`: each finding's code (and material).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct PendingStudioOut {
@@ -50,6 +53,9 @@ pub struct PendingStudioOut {
     pub approvals: Vec<ApprovalTarget>,
     pub budget_moves: Vec<BudgetMove>,
     pub blockers: Vec<Blocker>,
+    /// The çekim listesi's open requests (spec 2026-11-03 §4.6): what to shoot or upload.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shoot_requests: Vec<jt_studio::ShootRequest>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -125,6 +131,7 @@ pub(crate) async fn pending_in(
                 // asked about, never sent again: no duplicate to review.
                 Some(jt_studio::PublishOutcome::Observed(_)) => {
                     out.blockers.push(Blocker {
+                        details: None,
                         target,
                         reason: "publish_processing".into(),
                         next_action: None,
@@ -139,6 +146,7 @@ pub(crate) async fn pending_in(
                     .unwrap_or("unknown")
                     .to_owned();
                 out.blockers.push(Blocker {
+                    details: None,
                     target,
                     reason: format!("publish_{reason}"),
                     next_action: Some(
@@ -170,6 +178,7 @@ pub(crate) async fn pending_in(
 
         if control.is_braked(arm.key.lane) {
             out.blockers.push(Blocker {
+                details: None,
                 next_action: None,
                 target,
                 reason: "studio_braked".into(),
@@ -177,6 +186,7 @@ pub(crate) async fn pending_in(
         }
         if let Err(e) = capability_access(&cap, ctx.now, true) {
             out.blockers.push(Blocker {
+                details: None,
                 next_action: None,
                 target,
                 reason: e.message,
@@ -203,9 +213,25 @@ pub(crate) async fn pending_in(
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
+                details: None,
                 next_action: screen.then(|| "tiktok_posting_screen".into()),
                 target,
                 reason: "human_approval_required".into(),
+            });
+        }
+        // A ready piece the material gate holds now (spec 2026-11-03 §5.6).
+        if s.state == SlotState::Ready
+            && attempts.is_empty()
+            && let Err(e) = super::materials::publish_check(r, &s, ctx.now).await
+        {
+            if e.code == crate::error::ErrorCode::Internal {
+                return Err(e);
+            }
+            out.blockers.push(Blocker {
+                details: Some(e.details["findings"].clone()),
+                target,
+                reason: super::materials::MATERIAL_HOLD.into(),
+                next_action: Some("fix_piece".into()),
             });
         }
         out.slots.push(PendingSlot {
@@ -213,6 +239,13 @@ pub(crate) async fn pending_in(
             slot: s,
         });
     }
+    out.shoot_requests = r
+        .studio_materials()
+        .list_shoot_requests()
+        .await?
+        .into_iter()
+        .filter(|q| q.status == jt_studio::ShootStatus::Open)
+        .collect();
     out.budget_moves = r
         .studio()
         .list_budget_moves()
@@ -234,6 +267,7 @@ pub(crate) async fn pending_in(
         let target = ApprovalTarget::BudgetMove(m.id);
         if super::chain::binding_current(&b, &cap).is_err() || !m.matches_binding_generation(&b) {
             out.blockers.push(Blocker {
+                details: None,
                 target,
                 reason: "binding_stale".into(),
                 next_action: Some("rebind_adset".into()),
@@ -241,6 +275,7 @@ pub(crate) async fn pending_in(
         }
         if control.is_braked(jt_strategy::LaneKind::Paid) {
             out.blockers.push(Blocker {
+                details: None,
                 next_action: None,
                 target,
                 reason: "studio_braked".into(),
@@ -248,6 +283,7 @@ pub(crate) async fn pending_in(
         }
         if let Err(e) = capability_access(&cap, ctx.now, true) {
             out.blockers.push(Blocker {
+                details: None,
                 next_action: None,
                 target,
                 reason: e.message,
@@ -262,6 +298,7 @@ pub(crate) async fn pending_in(
         {
             out.approvals.push(target);
             out.blockers.push(Blocker {
+                details: None,
                 next_action: None,
                 target,
                 reason: "human_approval_required".into(),

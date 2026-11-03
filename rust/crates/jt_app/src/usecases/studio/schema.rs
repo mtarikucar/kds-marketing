@@ -53,7 +53,7 @@ pub fn input(action: &str) -> Value {
             vec!["request_key", "filename", "mime", "content"],
         ),
         "piece_submit" => (
-            json!({"slot_id":{"type":"string","format":"uuid"},"expected_revision":revision,"request_key":{"type":"string","minLength":1,"maxLength":200},"text":{"type":"string"},"media":{"type":"array","items":media()},"adaptations":{"type":"object","additionalProperties":object(json!({"text":{"type":"string"},"media":{"type":"array","items":media()},"link":{"type":["string","null"],"format":"uri"},"privacy":privacy()}),&["text","media"])}}),
+            json!({"slot_id":{"type":"string","format":"uuid"},"expected_revision":revision,"request_key":{"type":"string","minLength":1,"maxLength":200},"text":{"type":"string"},"media":{"type":"array","items":media()},"adaptations":{"type":"object","additionalProperties":object(json!({"text":{"type":"string"},"media":{"type":"array","items":media()},"link":{"type":["string","null"],"format":"uri"},"privacy":privacy()}),&["text","media"])},"subject":subject()}),
             vec![
                 "slot_id",
                 "expected_revision",
@@ -61,6 +61,7 @@ pub fn input(action: &str) -> Value {
                 "text",
                 "media",
                 "adaptations",
+                "subject",
             ],
         ),
         "pending" => (json!({}), vec![]),
@@ -115,6 +116,19 @@ pub fn panel_input(action: &str) -> Value {
     schema
 }
 
+/// What a piece speaks about (spec 2026-11-03 D7): one olay (its real date, place, name and client
+/// may be stated), an earlier season's olay as last year's (its year stated), or nothing specific.
+/// Every medium must be a material eligible for it.
+fn subject() -> Value {
+    let olay = |kind: &str| {
+        object(
+            json!({"kind":{"const":kind},"olay_id":{"type":"string","format":"uuid"}}),
+            &["kind", "olay_id"],
+        )
+    };
+    json!({"oneOf":[olay("olay"), olay("archive"), object(json!({"kind":{"const":"generic"}}),&["kind"])]})
+}
+
 fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
 }
@@ -132,10 +146,11 @@ fn privacy() -> Value {
 fn mime() -> Value {
     json!({"type":"string","enum":["image/jpeg","image/png","image/webp","image/gif","video/mp4"]})
 }
+/// A medium of a piece: a stored file that is a material (spec 2026-11-03 D2); inline bytes and
+/// hosted URLs are refused, since they carry no provenance.
 fn media() -> Value {
-    json!({"oneOf":[
-     object(json!({"kind":{"const":"file"},"id":{"type":"string","format":"uuid"}}),&["kind","id"]),
-     object(json!({"kind":{"const":"hosted_url"},"url":{"type":"string","format":"uri"},"mime":mime(),"size_bytes":{"type":"integer","minimum":1,"maximum":200000000}}),&["kind","url","mime","size_bytes"]),
-     object(json!({"kind":{"const":"bytes"},"data":{"type":"string"},"mime":mime(),"filename":{"type":"string","minLength":1,"maxLength":255}}),&["kind","data","mime","filename"])
-    ]})
+    object(
+        json!({"kind":{"const":"file"},"id":{"type":"string","format":"uuid"}}),
+        &["kind", "id"],
+    )
 }

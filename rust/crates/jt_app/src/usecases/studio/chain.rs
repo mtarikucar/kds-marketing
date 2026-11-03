@@ -58,16 +58,19 @@ pub(crate) fn refuse(reason: &str) -> AppError {
         details: json!({"reason":reason}),
     }
 }
-/// Whether `e` is [`authorize_execution_at`]'s refusal of a target that only waits for a human:
-/// its approval, or a TikTok piece's posting screen ([`StudioPolicy::check_approval`]).
+/// Whether `e` is [`authorize_execution_at`]'s refusal of a target that waits for someone rather
+/// than failed: its approval, a TikTok piece's posting screen ([`StudioPolicy::check_approval`]),
+/// or a piece held by the material gate (spec 2026-11-03 §5.6), which a corrected piece or
+/// material releases. `studio.pending` names each; none is a failed run.
 pub(crate) fn awaits_human(e: &AppError) -> bool {
     e.code == ErrorCode::Conflict
-        && [
+        && ([
             StudioError::ApprovalRequired,
             StudioError::PostingScreenRequired,
         ]
         .iter()
         .any(|w| e.details["reason"] == w.to_string())
+            || e.details["reason"] == super::materials::MATERIAL_HOLD)
 }
 pub(crate) async fn active(r: &mut dyn TenantRepos) -> Result<WorkspaceId, AppError> {
     let w = r.workspace().get().await?;
@@ -278,6 +281,9 @@ pub async fn authorize_execution_at(
                 .get_piece(id, s.revision)
                 .await?
                 .ok_or_else(|| AppError::not_found("piece"))?;
+            // The material gate again, now (spec 2026-11-03 §5.6): a permission revoked, a window
+            // passed or an olay changed since submission holds the piece.
+            super::materials::publish_check(r, &s, now).await?;
             StudioPolicy {
                 approval: r.studio().get_approval(input.target, s.revision).await?,
                 ..policy

@@ -54,6 +54,10 @@ pub struct WirePieceInput {
     pub text: String,
     pub media: Vec<MediaInput>,
     pub adaptations: BTreeMap<String, ChannelInput>,
+    /// What the piece speaks about (spec 2026-11-03 D7): an olay, an earlier season's olay as
+    /// last year's, or nothing specific. Required: every medium is a material checked against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Subject>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "WirePieceInput", into = "WirePieceInput")]
@@ -64,6 +68,7 @@ pub struct PieceInput {
     pub text: String,
     pub media: Vec<MediaAsset>,
     pub adaptations: BTreeMap<String, ChannelContent>,
+    pub subject: Option<Subject>,
 }
 impl TryFrom<MediaInput> for MediaAsset {
     type Error = AppError;
@@ -149,6 +154,7 @@ impl TryFrom<WirePieceInput> for PieceInput {
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             adaptations,
+            subject: i.subject,
         })
     }
 }
@@ -175,6 +181,7 @@ impl From<PieceInput> for WirePieceInput {
                     )
                 })
                 .collect(),
+            subject: i.subject,
         }
     }
 }
@@ -287,6 +294,17 @@ async fn validate(
         },
     )
     .map_err(|_| AppError::conflict("invalid content chain"))?;
+    // Every medium is a material (spec 2026-11-03 D2), and the piece names its subject.
+    super::materials::only_files(&super::materials::media(
+        &i.media,
+        i.adaptations.values().map(|a| a.media.as_slice()),
+    ))?;
+    if i.subject.is_none() {
+        return Err(AppError::validation(
+            "the piece must name its subject",
+            json!({"field":"subject","reason":"subject_required"}),
+        ));
+    }
     for account in i.adaptations.keys() {
         if c.external_id.as_deref() != Some(account.as_str()) {
             return Err(AppError::validation(
@@ -381,10 +399,36 @@ async fn submit(
             files::available(d, ctx.workspace_id, &f).await?;
         }
     }
+    // The material gate (spec 2026-11-03 D1), at the slot's time, under the same fence.
+    let subject = i
+        .subject
+        .ok_or_else(|| AppError::internal("subject checked above"))?;
+    let files = super::materials::only_files(&super::materials::media(
+        &p.media,
+        p.adaptations.values().map(|a| a.media.as_slice()),
+    ))?;
+    let materials = super::materials::materials_of(r.as_mut(), &files).await?;
+    let roles =
+        super::materials::check_piece(r.as_mut(), &materials, &subject, s.scheduled_at).await?;
     r.studio()
         .save_piece(s.id, i.expected_revision, p.clone(), &i.request_key)
         .await?;
-    r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id}))?).await?;
+    r.studio_materials()
+        .record_piece_materials(
+            subject,
+            roles
+                .iter()
+                .map(|(material_id, role)| PieceMaterial {
+                    piece_id: p.id,
+                    slot_id: s.id,
+                    revision: p.revision,
+                    material_id: *material_id,
+                    role: *role,
+                })
+                .collect(),
+        )
+        .await?;
+    r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id,"materials":roles.iter().map(|(id,_)|id).collect::<Vec<_>>(),"subject":subject}))?).await?;
     let out = slot_in(r.as_mut(), s.id, &frame).await?;
     r.studio()
         .request_receipt(

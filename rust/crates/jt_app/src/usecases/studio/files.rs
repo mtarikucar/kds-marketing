@@ -302,8 +302,20 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             d.files.delete(ws, id).await?;
         }
     }
+    // A material's file is the owner's library, not a publication's leftover (spec 2026-11-03
+    // D14): kept while the material lives; an erased material's file goes as soon as no queued or
+    // uncertain publication still needs it.
+    let materials = r.studio_materials().list_materials().await?;
     for mut f in usage.files {
         if f.deleted_at.is_some() {
+            continue;
+        }
+        let material = materials.iter().find(|m| m.file_id == f.id);
+        if material.is_some_and(|m| m.erased_at.is_none()) {
+            if f.cleanup_due_at.is_some() {
+                f.cleanup_due_at = None;
+                r.studio().save_file(f).await?;
+            }
             continue;
         }
         let pending = usage.pieces.iter().any(|(id, p)| {
@@ -332,7 +344,10 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             })
             .map(|p| p.published_at)
             .max();
-        f.cleanup_due_at = last.map(|at| at + Duration::days(30));
+        f.cleanup_due_at = match material.and_then(|m| m.erased_at) {
+            Some(erased) => Some(erased),
+            None => last.map(|at| at + Duration::days(30)),
+        };
         if !pending && !unknown && f.cleanup_due_at.is_some_and(|at| now >= at) {
             d.files.delete(ws, f.id).await?;
             f.deleted_at = Some(now);
