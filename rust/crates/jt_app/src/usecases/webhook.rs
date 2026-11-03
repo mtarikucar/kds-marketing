@@ -41,7 +41,14 @@
 //! kept for [`RAW_RETENTION`] and then removed by the daily purge ([`purge_raw`]). When the
 //! provider said when the event happened, the payload (an object) also carries `occurred_at`
 //! (RFC 3339), unless the provider's item already names that key. Inbound events are records of
-//! the outside world: no ledger entry.
+//! the outside world: no ledger entry. A WhatsApp Business app's shared history and contacts, and
+//! what the business sent from the app, are stored already processed ([`stored_processed`]):
+//! the past is filed by the inbox, never put to the agent as something to answer.
+//!
+//! **A WhatsApp Business Account's own events** (Meta's `account_update`) name the business
+//! account, not a number: they are routed to the connected `whatsapp_cloud` capability whose
+//! asset names it ([`AccountRoute::WhatsappBusinessAccount`]), stored once in its workspace, and
+//! the inbox takes their effect there.
 //!
 //! **TikTok** ([`receive_tiktok`]). One event per delivery, routed by its open id to every
 //! workspace holding that `tiktok` account connected (an event naming a post: to the workspace
@@ -118,12 +125,48 @@ pub fn takes_routed_events(status: WorkspaceStatus) -> bool {
 pub type ScopedRaw<'a> = dyn Fn(&[usize]) -> Option<Vec<u8>> + Sync + 'a;
 
 /// One event of a provider that names its account: which capability kinds may hold the account
-/// (`kind_keys`), the provider's id of the account, and the event.
+/// (`kind_keys`), the provider's id of the account, how that id names a capability (`route`),
+/// and the event.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountEvent {
     pub kind_keys: &'static [&'static str],
     pub external_account_id: String,
+    pub route: AccountRoute,
     pub draft: InboundEventDraft,
+}
+
+/// How an event's account names the capability it is routed to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AccountRoute {
+    /// The account is the capability's external id (a page, an Instagram account, a WhatsApp
+    /// number): [`crate::ports::PlatformRepos::capability_by_external`].
+    #[default]
+    ExternalId,
+    /// The account is a WhatsApp Business Account, which a `whatsapp_cloud` capability names in
+    /// its asset (Meta's `account_update`, which names no number):
+    /// [`crate::ports::PlatformRepos::capability_by_business_account`]. The event is stored once,
+    /// with the capability found; the inbox takes its effect on every capability of the
+    /// workspace naming that account.
+    WhatsappBusinessAccount,
+}
+
+/// Whether an event of `kind` is a record of the past or of the account's own state that nobody
+/// answers, stored already processed so it never waits in `events.pending`: a WhatsApp Business
+/// app's shared history and contacts, and what the business sent from the app itself (WhatsApp's
+/// echoes; Messenger's echoes are kept for the agent as before). The inbox files them all the
+/// same.
+pub fn stored_processed(
+    provider: Provider,
+    kind: &jt_connector::EventKind,
+    payload: &Value,
+) -> bool {
+    use jt_connector::EventKind;
+    provider == Provider::Meta
+        && match kind {
+            EventKind::History | EventKind::ContactSync => true,
+            EventKind::MessageEcho => payload.get("echo").is_some(),
+            _ => false,
+        }
 }
 
 /// What a TikTok webhook event asks of the system once stored (see the module docs).
@@ -434,9 +477,18 @@ pub async fn receive_for_accounts(
         // Each workspace's status, read once per delivery.
         let mut open: BTreeMap<WorkspaceId, bool> = BTreeMap::new();
         for (i, event) in events.into_iter().enumerate() {
-            let routed = platform
-                .capability_by_external(event.kind_keys, &event.external_account_id)
-                .await?;
+            let routed = match event.route {
+                AccountRoute::ExternalId => {
+                    platform
+                        .capability_by_external(event.kind_keys, &event.external_account_id)
+                        .await?
+                }
+                AccountRoute::WhatsappBusinessAccount => {
+                    platform
+                        .capability_by_business_account(&event.external_account_id)
+                        .await?
+                }
+            };
             let Some(capability) = routed else {
                 continue;
             };
@@ -745,6 +797,7 @@ async fn store(
     {
         fields.insert("occurred_at".to_owned(), Value::String(text));
     }
+    let processed_at = stored_processed(at.provider, &kind, &payload).then_some(at.received_at);
     let event = InboundEvent {
         id: InboundEventId(deps.ids.uuid()),
         workspace_id: at.ws,
@@ -754,7 +807,7 @@ async fn store(
         kind,
         payload,
         received_at: at.received_at,
-        processed_at: None,
+        processed_at,
     };
     Ok(
         match repos.inbound_events().insert_if_new(event, raw).await? {

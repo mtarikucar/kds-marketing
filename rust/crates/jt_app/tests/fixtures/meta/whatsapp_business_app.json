@@ -1,0 +1,154 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "4444444444",
+      "changes": [
+        {
+          "field": "smb_message_echoes",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000000", "phone_number_id": "5555555555" },
+            "message_echoes": [
+              {
+                "from": "905550000000",
+                "to": "905551111111",
+                "id": "wamid.TEST-ECHO-1",
+                "timestamp": "1790000100",
+                "type": "text",
+                "text": { "body": "Siparişiniz yarın kargoda." }
+              },
+              {
+                "from": "905550000000",
+                "to": "905551111111",
+                "timestamp": "1790000101",
+                "type": "text",
+                "text": { "body": "an echo without an id is left out" }
+              }
+            ]
+          }
+        },
+        {
+          "field": "history",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000000", "phone_number_id": "5555555555" },
+            "history": [
+              {
+                "metadata": { "phase": 0, "chunk_order": 1, "progress": 55 },
+                "threads": [
+                  {
+                    "id": "905551111111",
+                    "messages": [
+                      {
+                        "from": "905551111111",
+                        "id": "wamid.TEST-HIST-1",
+                        "timestamp": "1789900000",
+                        "type": "text",
+                        "text": { "body": "Boyama setiniz var mı?" },
+                        "history_context": { "status": "read" }
+                      },
+                      {
+                        "from": "905550000000",
+                        "to": "905551111111",
+                        "id": "wamid.TEST-HIST-2",
+                        "timestamp": "1789900060",
+                        "type": "text",
+                        "text": { "body": "Evet, 450 TL." },
+                        "history_context": { "status": "read" }
+                      }
+                    ]
+                  },
+                  {
+                    "id": "905552222222",
+                    "messages": [
+                      {
+                        "from": "905552222222",
+                        "id": "wamid.TEST-HIST-3",
+                        "timestamp": "1789900120",
+                        "type": "media_placeholder",
+                        "history_context": { "status": "delivered" }
+                      },
+                      {
+                        "from": "905552222222",
+                        "timestamp": "1789900121",
+                        "type": "text",
+                        "text": { "body": "a history message without an id is left out" }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "field": "history",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000000", "phone_number_id": "5555555555" },
+            "messages": [
+              {
+                "from": "905552222222",
+                "id": "wamid.TEST-HIST-3",
+                "timestamp": "1789900120",
+                "type": "image",
+                "image": { "caption": "media of a placeholder: left out", "mime_type": "image/jpeg", "sha256": "x", "id": "777" }
+              }
+            ]
+          }
+        },
+        {
+          "field": "smb_app_state_sync",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905550000000", "phone_number_id": "5555555555" },
+            "state_sync": [
+              {
+                "type": "contact",
+                "contact": { "full_name": "Ayşe Yılmaz", "first_name": "Ayşe", "phone_number": "905553333333" },
+                "action": "add",
+                "metadata": { "timestamp": "1790000200" }
+              },
+              {
+                "type": "contact",
+                "contact": { "phone_number": "905554444444" },
+                "action": "remove",
+                "metadata": { "timestamp": "1790000201" }
+              },
+              {
+                "type": "label",
+                "action": "add",
+                "metadata": { "timestamp": "1790000202" }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "4444444445",
+      "changes": [
+        {
+          "field": "history",
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": { "display_phone_number": "905560000000", "phone_number_id": "5555555556" },
+            "history": [
+              {
+                "errors": [
+                  {
+                    "code": 2593109,
+                    "title": "History sync is turned off by the business from the WhatsApp Business App",
+                    "message": "History sync is turned off by the business from the WhatsApp Business App",
+                    "error_data": { "details": "History sharing is turned off by the business" }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
