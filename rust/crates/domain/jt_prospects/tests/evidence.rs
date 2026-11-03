@@ -185,12 +185,68 @@ fn website_must_be_http_or_https() {
 
 #[test]
 fn website_on_platform_host_is_refused() {
+    for (website, reason) in [
+        (
+            "https://www.instagram.com/ornekkafe",
+            "website_is_a_platform_profile",
+        ),
+        (
+            "https://linktr.ee/ornekkafe",
+            "website_is_a_link_in_bio_page",
+        ),
+        ("https://wa.me/905000000000", "website_is_a_messaging_link"),
+        (
+            "https://www.google.com.tr/maps/place/Ornek",
+            "website_is_a_map_listing",
+        ),
+        (
+            "https://www.trendyol.com/magaza/ornek-m-0",
+            "website_is_a_marketplace_listing",
+        ),
+        ("https://bit.ly/0000", "website_is_a_short_link"),
+        (
+            "https://sites.google.com/view/ornekkafe",
+            "website_is_a_shared_host",
+        ),
+        ("http://192.0.2.1/", "website_is_an_ip_address"),
+    ] {
+        let mut i = input();
+        i.website = Some(field(website.to_owned()));
+        assert_eq!(invalid(&i, &agent()), ("website", reason), "{website}");
+    }
     let mut i = input();
-    i.website = Some(field("https://www.instagram.com/ornekkafe".to_owned()));
+    i.website = Some(field(format!(
+        "https://{}.example.invalid/",
+        "a".repeat(250)
+    )));
+    assert_eq!(invalid(&i, &agent()), ("website", "host_too_long"));
+}
+
+#[test]
+fn a_system_recorder_gives_no_manual_source() {
+    let system = Recorder::System {
+        job: "research_plan".into(),
+    };
+    assert!(!system.is_agent());
     assert_eq!(
-        invalid(&i, &agent()),
-        ("website", "website_is_a_platform_profile")
+        serde_json::to_value(&system).unwrap(),
+        json!({"kind": "system", "job": "research_plan"})
     );
+    let mut i = input();
+    i.phone = Some(FieldInput {
+        sources: vec![SourceRefInput::Manual {
+            note: "business card at a fair".into(),
+        }],
+        ..field("0500 000 00 00".to_owned())
+    });
+    assert_eq!(
+        invalid(&i, &system),
+        ("phone", "manual_source_is_for_humans")
+    );
+    validate_create(&input(), NOW, &system).unwrap();
+    let p = build(input(), pid(1), ws(), NOW, system.clone());
+    assert_eq!(p.origin.via, OriginVia::System);
+    assert_eq!(p.origin.recorder, system);
 }
 
 /// A change to a valid input and the refusal it must meet.

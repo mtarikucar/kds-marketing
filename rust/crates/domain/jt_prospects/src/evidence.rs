@@ -55,12 +55,20 @@ pub enum Recorder {
     Human { user_id: UserId },
     /// The operator's import of another system's record.
     Import { system: String, record: String },
+    /// A Jeeta job (`job` is its name, e.g. `research_plan`): what a job writes on its own, such
+    /// as a standing research task. The application refuses a system actor's pool writes.
+    System { job: String },
 }
 
 impl Recorder {
     /// Whether the recorder is an agent.
     pub fn is_agent(&self) -> bool {
         matches!(self, Recorder::Agent { .. })
+    }
+
+    /// Whether the recorder is a signed-in person.
+    pub fn is_human(&self) -> bool {
+        matches!(self, Recorder::Human { .. })
     }
 }
 
@@ -106,14 +114,14 @@ pub(crate) fn http_url_ok(raw: &str) -> Result<(), &'static str> {
     }
 }
 
-/// One source as `recorder` may give it: a manual note is a person's, never an agent's.
-/// Errors are reported on `field`.
+/// One source as `recorder` may give it: a manual note is a person's, never an agent's or a
+/// job's. Errors are reported on `field`.
 pub(crate) fn validate_source(
     field: &'static str,
     source: &SourceRefInput,
     recorder: &Recorder,
 ) -> Result<(), ProspectError> {
-    if matches!(source, SourceRefInput::Manual { .. }) && recorder.is_agent() {
+    if matches!(source, SourceRefInput::Manual { .. }) && !recorder.is_human() {
         return Err(invalid(field, "manual_source_is_for_humans"));
     }
     validate_source_format(field, source)

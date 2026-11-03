@@ -4,7 +4,7 @@
 use jt_prospects::{
     Bucket, CreateInput, Key, KeyKind, Prospect, ProspectId, ProspectStatus, ResearchTaskId,
     TaskStatus, UpdateInput, derive_keys, name_city, normalise_handle, normalise_key, purge_after,
-    website_domain,
+    website_domain, website_handle,
 };
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
@@ -251,12 +251,7 @@ fn check_keys(input: &CheckInput) -> Result<Vec<Key>, AppError> {
             add(KeyKind::Domain, domain);
         }
         for kind in [KeyKind::Instagram, KeyKind::Tiktok] {
-            if let Ok(handle) = normalise_handle(kind, raw)
-                && raw.to_ascii_lowercase().contains(match kind {
-                    KeyKind::Instagram => "instagram.com/",
-                    _ => "tiktok.com/",
-                })
-            {
+            if let Some(handle) = website_handle(kind, raw) {
                 add(kind, handle);
             }
         }

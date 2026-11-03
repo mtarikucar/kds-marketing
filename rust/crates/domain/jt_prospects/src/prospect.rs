@@ -9,7 +9,9 @@ use time::OffsetDateTime;
 use crate::evidence::{
     MAX_SOURCES, http_url_ok, validate_captured_at, validate_source, validate_sources,
 };
-use crate::keys::{KeyKind, normalise_handle, website_domain};
+use crate::keys::{
+    KeyKind, WebsiteHost, classify_website, normalise_handle, normalise_phone, phone_is_dialable,
+};
 use crate::{
     Bucket, DncReason, Evidence, ProspectError, ProspectId, ProspectStatus, Recorder, RejectReason,
     ResearchTaskId, SourceRef, SourceRefInput, bounded, chars, invalid, language_ok,
@@ -223,6 +225,9 @@ pub enum OriginVia {
     Agent,
     /// Imported from v1.
     V1Import,
+    /// Recorded by a Jeeta job. None does (the application refuses a system actor's pool
+    /// writes); the variant keeps [`build`] total over [`Recorder`].
+    System,
 }
 
 /// The latest score, kept on the record for lists and filters.
@@ -540,9 +545,7 @@ fn validate_field<T>(
 // The validators of a `FieldInput<T>` take `&T`.
 #[allow(clippy::ptr_arg)]
 fn phone_ok(v: &String) -> Result<(), &'static str> {
-    normalise(IdentityChannel::Phone, v)
-        .map(drop)
-        .map_err(|_| "invalid")
+    normalise_phone(v).map(drop).map_err(|_| "invalid")
 }
 
 // The validators of a `FieldInput<T>` take `&T`.
@@ -560,10 +563,11 @@ fn email_ok(v: &String) -> Result<(), &'static str> {
 #[allow(clippy::ptr_arg)]
 fn website_ok(v: &String) -> Result<(), &'static str> {
     http_url_ok(v)?;
-    match website_domain(v) {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err("website_is_a_platform_profile"),
-        Err(_) => Err("not_http"),
+    match classify_website(v) {
+        Ok(WebsiteHost::Domain(_)) => Ok(()),
+        Ok(WebsiteHost::Platform(kind)) => Err(kind.reason()),
+        Ok(WebsiteHost::IpAddress) => Err("website_is_an_ip_address"),
+        Err(ProspectError::Invalid { reason, .. }) => Err(reason),
     }
 }
 
@@ -737,8 +741,12 @@ fn field_of<T>(input: FieldInput<T>, recorder: &Recorder, normal: impl FnOnce(T)
     }
 }
 
-fn normal_phone(v: String) -> String {
-    normalise(IdentityChannel::Phone, &v).unwrap_or(v)
+/// A validated phone input as stored: normalised ([`normalise_phone`]); a number that is no
+/// E.164 number (a `tr444:` one) is not `deliverable`, so no promotion makes it an identity.
+fn phone_field(input: FieldInput<String>, recorder: &Recorder) -> Field<String> {
+    let mut f = field_of(input, recorder, |v| normalise_phone(&v).unwrap_or(v));
+    f.deliverable = phone_is_dialable(&f.value);
+    f
 }
 
 fn normal_email(v: String) -> String {
@@ -791,8 +799,9 @@ fn dedup_ids(ids: Vec<ProspectId>) -> Vec<ProspectId> {
 }
 
 /// The record a validated create input makes, recorded by `recorder` at `now`: status `new`,
-/// revision 1, values normalised (an E.164 phone, a lower-cased email, bare handles), each
-/// field's evidence naming the recorder. `purge_after` is the caller's, from its policy.
+/// revision 1, values normalised (an E.164 or `tr444:` phone, a lower-cased email, bare
+/// handles), each field's evidence naming the recorder. `purge_after` is the caller's to fill
+/// from the current policy when it answers (it is never stored).
 pub fn build(
     input: CreateInput,
     id: ProspectId,
@@ -805,10 +814,11 @@ pub fn build(
         (_, Some(_)) => OriginVia::ResearchTask,
         (Recorder::Agent { .. }, None) => OriginVia::Agent,
         (Recorder::Human { .. }, None) => OriginVia::Manual,
+        (Recorder::System { .. }, None) => OriginVia::System,
     };
     let r = &recorder;
     let contact = ContactFields {
-        phone: input.phone.map(|f| field_of(f, r, normal_phone)),
+        phone: input.phone.map(|f| phone_field(f, r)),
         email: input.email.map(|f| field_of(f, r, normal_email)),
         website: input.website.map(|f| field_of(f, r, normal_text)),
         instagram: input
@@ -975,7 +985,7 @@ pub fn apply_update(
     }
     let c = &mut p.contact;
     if let Some(f) = s.phone {
-        c.phone = Some(field_of(f, r, normal_phone));
+        c.phone = Some(phone_field(f, r));
     }
     if let Some(f) = s.email {
         c.email = Some(field_of(f, r, normal_email));

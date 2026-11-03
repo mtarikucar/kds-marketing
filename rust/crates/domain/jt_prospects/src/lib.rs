@@ -24,10 +24,12 @@ pub use brief::{Brief, Claim, ResearchTask, TaskKind, TaskStatus, validate_brief
 pub use evidence::{Evidence, Recorder, SourceRef, SourceRefInput};
 pub use ids::{ProspectId, ResearchTaskId};
 pub use keys::{
-    FREE_MAIL_DOMAINS, Key, KeyKind, PLATFORM_HOSTS, blocklist_material, derive_keys, name_city,
-    normalise_handle, normalise_key, website_domain,
+    FREE_MAIL_DOMAINS, Key, KeyKind, MAX_HOST_CHARS, PLATFORM_HOSTS, PLATFORM_NAMES, PlatformKind,
+    TR444_PREFIX, WebsiteHost, blocklist_material, classify_website, derive_keys, name_city,
+    normalise_handle, normalise_key, normalise_phone, phone_is_dialable, website_domain,
+    website_handle,
 };
-pub use policy::{MAX_DAILY_PROSPECTS, ProspectsPolicy, purge_after};
+pub use policy::{MAX_DAILY_PROSPECTS, ProspectsPolicy, PurgeCutoffs, purge_after, purge_cutoffs};
 pub use prospect::{
     ContactFields, ContactPerson, CreateInput, Decision, DecisionKind, EmployeeBand, EntityKind,
     Field, FieldInput, FieldName, Origin, OriginVia, Promotion, Prospect, ScoreSummary, SetFields,

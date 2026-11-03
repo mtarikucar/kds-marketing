@@ -84,7 +84,7 @@ pub async fn score(
             json!({ "current": current }),
         ));
     }
-    jt_prospects::validate_score(&input, rubric).map_err(invalid_from)?;
+    jt_prospects::validate_score(&input, rubric, &recorder).map_err(invalid_from)?;
     let p = r.prospects().lock(id).await?.ok_or_else(no_such_prospect)?;
     if !matches!(p.status, ProspectStatus::New | ProspectStatus::Qualified) {
         return Err(refused(

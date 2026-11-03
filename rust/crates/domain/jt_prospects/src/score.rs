@@ -3,8 +3,8 @@
 use jt_strategy::Rubric;
 use serde::{Deserialize, Serialize};
 
-use crate::evidence::validate_source_format;
-use crate::{ProspectError, SourceRef, SourceRefInput, chars, invalid};
+use crate::evidence::validate_source;
+use crate::{ProspectError, Recorder, SourceRef, SourceRefInput, chars, invalid};
 
 /// A score band, the same under every rubric, so reports compare across rubric versions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -90,11 +90,16 @@ pub struct ReasonInput {
     pub source: Option<SourceRefInput>,
 }
 
-/// Checks a score against `rubric`: a non-empty rubric, a score of `0..=100`, every criterion
-/// exactly once, points within each criterion's weight, evidence of `1..=300` characters, an
-/// `http(s)` source when one is given, and a score equal to the sum of the points. Whether
-/// `rubric_digest` names the approved rubric is the caller's to check (it knows the digest).
-pub fn validate_score(input: &ScoreInput, rubric: &Rubric) -> Result<(), ProspectError> {
+/// Checks a score `recorder` sends against `rubric`: a non-empty rubric, a score of `0..=100`,
+/// every criterion exactly once, points within each criterion's weight, evidence of `1..=300`
+/// characters, a well-formed source when one is given (a manual note from a person only, as on
+/// a field), and a score equal to the sum of the points. Whether `rubric_digest` names the
+/// approved rubric is the caller's to check (it knows the digest).
+pub fn validate_score(
+    input: &ScoreInput,
+    rubric: &Rubric,
+    recorder: &Recorder,
+) -> Result<(), ProspectError> {
     if rubric.criteria.is_empty() {
         return Err(invalid("rubric", "empty"));
     }
@@ -117,7 +122,7 @@ pub fn validate_score(input: &ScoreInput, rubric: &Rubric) -> Result<(), Prospec
             return Err(invalid("reasons", "evidence_length"));
         }
         if let Some(s) = &r.source {
-            validate_source_format("reasons", s)?;
+            validate_source("reasons", s, recorder)?;
         }
     }
     if seen.len() != rubric.criteria.len() {

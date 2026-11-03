@@ -41,6 +41,83 @@ fn phone_keys_use_inbox_normalisation() {
 }
 
 #[test]
+fn turkish_phone_forms_normalise_before_the_inbox_rules() {
+    for (raw, normal) in [
+        // `00` is the international prefix.
+        ("0090 500 000 00 00", "+905000000000"),
+        ("0090-500-000-00-00", "+905000000000"),
+        // The national `0` written after the country code.
+        ("+90 (0) 500 000 00 00", "+905000000000"),
+        ("+90(0)500 000 00 00", "+905000000000"),
+        ("+90 0500 000 00 00", "+905000000000"),
+        // Extensions are not part of the number.
+        ("0200 000 00 00 dahili 12", "+902000000000"),
+        ("0200 000 00 00 Dahili: 12", "+902000000000"),
+        ("0200 000 00 00 DAHİLİ 12", "+902000000000"),
+        ("0200 000 00 00 ext. 12", "+902000000000"),
+        ("0200 000 00 00 x12", "+902000000000"),
+        ("0200 000 00 00 / 12", "+902000000000"),
+        // A label before the number is not an extension.
+        ("Tel/Fax: 0200 000 00 00 (Fax)", "+902000000000"),
+        ("Tel: +90 500 000 00 00", "+905000000000"),
+        // The forms the inbox already reads, and its own output.
+        ("0500 000 00 00", "+905000000000"),
+        ("+905000000000", "+905000000000"),
+    ] {
+        assert_eq!(normalise_phone(raw).unwrap(), normal, "{raw}");
+        assert_eq!(normalise_key(KeyKind::Phone, raw).unwrap(), normal, "{raw}");
+        assert!(phone_is_dialable(normal), "{raw}");
+    }
+    for bad in [
+        "00 0500 000 00 00",
+        "+0 500 000 00 00",
+        "+00500000000",
+        "05000000",
+        "dahili 12",
+        "",
+    ] {
+        assert_eq!(
+            normalise_phone(bad),
+            Err(ProspectError::Invalid {
+                field: "phone",
+                reason: "invalid"
+            }),
+            "{bad}"
+        );
+    }
+    let mut i = input();
+    i.phone = Some(field("0090 500 000 00 00".into()));
+    let p = prospect(i);
+    assert_eq!(key(&p, KeyKind::Phone), ["+905000000000"]);
+    assert!(p.contact.phone.as_ref().unwrap().deliverable);
+}
+
+#[test]
+fn tr444_numbers_are_a_distinct_key_and_never_dialled() {
+    for raw in [
+        "444 0 000",
+        "4440000",
+        "444-0-000",
+        "0444 0 000",
+        "+90 444 0 000",
+        "tr444:4440000",
+    ] {
+        assert_eq!(normalise_phone(raw).unwrap(), "tr444:4440000", "{raw}");
+    }
+    assert!(!phone_is_dialable("tr444:4440000"));
+    assert!(normalise_phone("tr444:5550000").is_err());
+    assert!(normalise_phone("tr444:44400").is_err());
+    let mut i = input();
+    i.phone = Some(field("444 0 000".into()));
+    validate_create(&i, NOW, &agent()).unwrap();
+    let p = prospect(i);
+    assert_eq!(key(&p, KeyKind::Phone), ["tr444:4440000"]);
+    let phone = p.contact.phone.as_ref().unwrap();
+    assert_eq!(phone.value, "tr444:4440000");
+    assert!(!phone.deliverable, "no identity a promotion would dial");
+}
+
+#[test]
 fn email_key_lowercases_and_domain_key_skips_free_mail() {
     let mut i = input();
     i.email = Some(field(" Bilgi@Ornek-Kafe.Example.Invalid ".into()));
@@ -91,16 +168,71 @@ fn website_domain_strips_www_and_idna() {
 
 #[test]
 fn platform_hosts_are_not_domains() {
-    for u in [
-        "https://www.instagram.com/ornekkafe",
-        "https://m.facebook.com/ornekkafe",
-        "https://www.tiktok.com/@ornekkafe",
-        "https://linktr.ee/ornekkafe",
-        "https://maps.app.goo.gl/0000",
+    use PlatformKind::*;
+    for (u, kind) in [
+        ("https://www.instagram.com/ornekkafe", SocialProfile),
+        ("https://m.facebook.com/ornekkafe", SocialProfile),
+        ("https://www.tiktok.com/@ornekkafe", SocialProfile),
+        ("https://linktr.ee/ornekkafe", LinkInBio),
+        ("https://wa.me/905000000000", Messaging),
+        ("https://t.me/ornekkafe", Messaging),
+        ("https://maps.app.goo.gl/0000", MapListing),
+        ("https://g.page/ornekkafe", MapListing),
+        ("https://www.google.com/maps/place/Ornek", MapListing),
+        ("https://www.google.com.tr/maps/place/Ornek", MapListing),
+        ("https://maps.google.com/?cid=0", MapListing),
+        ("https://yandex.com.tr/maps/org/ornek/0", MapListing),
+        ("https://yandex.ru/maps/-/0", MapListing),
+        ("https://www.google.com/search?q=ornek", SharedHost),
+        ("https://sites.google.com/view/ornekkafe", SharedHost),
+        ("https://goo.gl/0000", ShortLink),
+        ("https://bit.ly/0000", ShortLink),
+        ("https://www.trendyol.com/magaza/ornek-m-0", Marketplace),
+        ("https://www.hepsiburada.com/magaza/ornek", Marketplace),
+        ("https://www.n11.com/magaza/ornek", Marketplace),
+        ("https://www.ciceksepeti.com/ornek", Marketplace),
+        ("https://www.yemeksepeti.com/ornek-kafe", Marketplace),
+        ("https://getir.com/yemek/restoran/ornek", Marketplace),
+        ("https://www.sahibinden.com/ornek", Marketplace),
+        ("https://armut.com/ornek", Marketplace),
     ] {
         assert_eq!(website_domain(u).unwrap(), None, "{u}");
+        assert_eq!(
+            classify_website(u).unwrap(),
+            WebsiteHost::Platform(kind),
+            "{u}"
+        );
     }
-    assert!(PLATFORM_HOSTS.contains(&"instagram.com"));
+    assert!(PLATFORM_HOSTS.iter().any(|(h, _)| *h == "instagram.com"));
+    // A business's own site whose name merely contains a platform's is its own.
+    for own in [
+        "https://googleornek.example.invalid",
+        "https://ornek-trendyol.example.invalid",
+        "https://instagram.community.example.invalid",
+    ] {
+        assert!(website_domain(own).unwrap().is_some(), "{own}");
+    }
+}
+
+#[test]
+fn ip_and_overlong_hosts_are_no_domains() {
+    assert_eq!(
+        classify_website("http://192.0.2.1/menu").unwrap(),
+        WebsiteHost::IpAddress
+    );
+    assert_eq!(
+        classify_website("http://[2001:db8::1]/").unwrap(),
+        WebsiteHost::IpAddress
+    );
+    let long = format!("https://{}.example.invalid/", "a".repeat(250));
+    assert_eq!(
+        classify_website(&long),
+        Err(ProspectError::Invalid {
+            field: "website",
+            reason: "host_too_long"
+        })
+    );
+    assert!(normalise_key(KeyKind::Domain, &long).is_err());
 }
 
 #[test]
@@ -124,6 +256,84 @@ fn instagram_url_becomes_handle_key() {
     let p = prospect(i);
     assert_eq!(key(&p, KeyKind::Instagram), ["ornek.kafe"]);
     assert_eq!(p.contact.instagram.as_ref().unwrap().value, "ornek.kafe");
+}
+
+#[test]
+fn instagram_post_reel_and_story_urls_are_no_handle() {
+    for url in [
+        "https://www.instagram.com/p/C0000000000/",
+        "https://instagram.com/reel/C0000000000",
+        "https://www.instagram.com/reels/C0000000000/",
+        "https://www.instagram.com/stories/ornek.kafe/0000000000",
+        "https://www.instagram.com/explore/tags/kafe/",
+        "https://www.instagram.com/tv/C0000000000",
+        "https://www.instagram.com/accounts/login/",
+        "instagram.com/p/C0000000000",
+        "https://www.instagram.com/",
+        "https://ornek.example.invalid/ornek.kafe",
+    ] {
+        assert_eq!(
+            normalise_handle(KeyKind::Instagram, url),
+            Err(ProspectError::Invalid {
+                field: "instagram",
+                reason: "not_a_profile_url"
+            }),
+            "{url}"
+        );
+    }
+    // A profile URL on the platform's own subdomains is its handle.
+    for url in [
+        "https://m.instagram.com/ornek.kafe/",
+        "http://instagram.com/ornek.kafe/tagged",
+        "www.instagram.com/ornek.kafe",
+    ] {
+        assert_eq!(
+            normalise_handle(KeyKind::Instagram, url).unwrap(),
+            "ornek.kafe",
+            "{url}"
+        );
+    }
+}
+
+#[test]
+fn bare_handles_keep_www_and_m() {
+    assert_eq!(
+        normalise_handle(KeyKind::Instagram, "m.kafe").unwrap(),
+        "m.kafe"
+    );
+    assert_eq!(
+        normalise_handle(KeyKind::Instagram, "www.kafe").unwrap(),
+        "www.kafe"
+    );
+    assert_eq!(
+        normalise_handle(KeyKind::Tiktok, "@www.kafe").unwrap(),
+        "www.kafe"
+    );
+    // A host that only starts like the platform's is no profile URL.
+    assert!(normalise_handle(KeyKind::Instagram, "instagram.community/kafe").is_err());
+}
+
+#[test]
+fn tiktok_profile_urls_need_the_at() {
+    for url in [
+        "https://www.tiktok.com/ornek.kafe",
+        "https://www.tiktok.com/t/ZS0000000/",
+        "https://www.tiktok.com/video/0000000000",
+        "https://www.tiktok.com/tag/kafe",
+        "https://www.tiktok.com/music/ornek-0000",
+        "https://www.tiktok.com/discover/kafe",
+        "https://vm.tiktok.com/ZM0000000/",
+    ] {
+        assert!(normalise_handle(KeyKind::Tiktok, url).is_err(), "{url}");
+    }
+    assert_eq!(
+        normalise_handle(
+            KeyKind::Tiktok,
+            "https://m.tiktok.com/@ornek.kafe/video/0000000000"
+        )
+        .unwrap(),
+        "ornek.kafe"
+    );
 }
 
 #[test]
@@ -170,6 +380,15 @@ fn name_city_folds_turkish_and_legal_forms() {
     assert_eq!(
         name_city("örnek kafe", "istanbul"),
         name_city("ÖRNEK KAFE LTD ŞTİ", "İSTANBUL")
+    );
+    // The circumflex of older spellings folds too.
+    assert_eq!(
+        name_city("Kâr Hâlî Kûtu", "Âşağı").as_deref(),
+        Some("kar hali kutu|asagi")
+    );
+    assert_eq!(
+        name_city("KÂR HÂLÎ KÛTU", "aşağı"),
+        name_city("Kar Hali Kutu", "Asagi")
     );
 }
 

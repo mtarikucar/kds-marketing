@@ -61,6 +61,36 @@ fn purge_after_unpromoted_moves_with_updates() {
 }
 
 #[test]
+fn purge_cutoffs_agree_with_purge_after() {
+    let p = ProspectsPolicy {
+        rejected_retention_days: 7,
+        unpromoted_retention_days: 20,
+        ..ProspectsPolicy::default()
+    };
+    let now = UPDATED + Duration::days(20);
+    let c = purge_cutoffs(&p, now);
+    assert_eq!(c.rejected, now - Duration::days(7));
+    assert_eq!(c.unpromoted, now - Duration::days(20));
+    // Due at `now` exactly when `purge_after` is at or before it, for every status.
+    for at in [
+        c.rejected - Duration::seconds(1),
+        c.rejected,
+        c.rejected + Duration::seconds(1),
+    ] {
+        let due = purge_after(&p, ProspectStatus::Rejected, Some(at), UPDATED).unwrap() <= now;
+        assert_eq!(due, at <= c.rejected, "{at}");
+    }
+    for at in [
+        c.unpromoted - Duration::seconds(1),
+        c.unpromoted,
+        c.unpromoted + Duration::seconds(1),
+    ] {
+        let due = purge_after(&p, ProspectStatus::New, None, at).unwrap() <= now;
+        assert_eq!(due, at <= c.unpromoted, "{at}");
+    }
+}
+
+#[test]
 fn promoted_and_dnc_have_no_purge_time() {
     let p = ProspectsPolicy::default();
     assert_eq!(

@@ -41,8 +41,21 @@ fn score(score: u8, reasons: Vec<ReasonInput>) -> ScoreInput {
     }
 }
 
+fn agent() -> Recorder {
+    Recorder::Agent {
+        connection_id: jt_tenancy::AgentConnectionId(uuid::Uuid::from_u128(1)),
+        user_id: jt_tenancy::UserId(uuid::Uuid::from_u128(2)),
+    }
+}
+
+fn human() -> Recorder {
+    Recorder::Human {
+        user_id: jt_tenancy::UserId(uuid::Uuid::from_u128(3)),
+    }
+}
+
 fn reason_of(input: &ScoreInput) -> (&'static str, &'static str) {
-    match validate_score(input, &rubric()) {
+    match validate_score(input, &rubric(), &agent()) {
         Err(ProspectError::Invalid { field, reason }) => (field, reason),
         Ok(()) => panic!("accepted"),
     }
@@ -53,7 +66,8 @@ fn score_must_equal_sum_of_points() {
     assert_eq!(
         validate_score(
             &score(80, vec![reason("fit", 50), reason("size", 30)]),
-            &rubric()
+            &rubric(),
+            &agent()
         ),
         Ok(())
     );
@@ -102,6 +116,20 @@ fn every_criterion_exactly_once() {
 }
 
 #[test]
+fn manual_sources_in_reasons_are_for_humans_only() {
+    let mut manual = reason("fit", 30);
+    manual.source = Some(SourceRefInput::Manual {
+        note: "the owner told us at a fair".into(),
+    });
+    let input = score(60, vec![manual, reason("size", 30)]);
+    assert_eq!(
+        reason_of(&input),
+        ("reasons", "manual_source_is_for_humans")
+    );
+    assert_eq!(validate_score(&input, &rubric(), &human()), Ok(()));
+}
+
+#[test]
 fn points_bounded_by_weight() {
     assert_eq!(
         reason_of(&score(100, vec![reason("fit", 61), reason("size", 39)])),
@@ -110,7 +138,8 @@ fn points_bounded_by_weight() {
     assert_eq!(
         validate_score(
             &score(100, vec![reason("fit", 60), reason("size", 40)]),
-            &rubric()
+            &rubric(),
+            &agent()
         ),
         Ok(())
     );
@@ -120,7 +149,7 @@ fn points_bounded_by_weight() {
 fn an_empty_rubric_takes_no_score() {
     let empty = Rubric::default();
     assert_eq!(
-        validate_score(&score(0, vec![]), &empty),
+        validate_score(&score(0, vec![]), &empty, &agent()),
         Err(ProspectError::Invalid {
             field: "rubric",
             reason: "empty"

@@ -40,6 +40,26 @@ impl Default for ProspectsPolicy {
     }
 }
 
+/// The purge's sweep at one moment under one policy (see [`purge_cutoffs`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PurgeCutoffs {
+    /// A rejection decided at or before this is due.
+    pub rejected: OffsetDateTime,
+    /// A `new` or `qualified` prospect last updated at or before this is due.
+    pub unpromoted: OffsetDateTime,
+}
+
+/// What is due for purge at `now` under the workspace's current `policy`: exactly the
+/// prospects whose [`purge_after`] under it is at or before `now`. The purge evaluates the
+/// current policy, never a stored time, so a shorter retention reaches every existing prospect
+/// at the next run.
+pub fn purge_cutoffs(policy: &ProspectsPolicy, now: OffsetDateTime) -> PurgeCutoffs {
+    PurgeCutoffs {
+        rejected: now - Duration::days(i64::from(policy.rejected_retention_days)),
+        unpromoted: now - Duration::days(i64::from(policy.unpromoted_retention_days)),
+    }
+}
+
 /// When a prospect in `status` is purged: a rejection `rejected_retention_days` after it was
 /// decided (after the last update when the decision time is unknown); a `new` or `qualified`
 /// prospect `unpromoted_retention_days` after its last update; never for a promoted prospect
