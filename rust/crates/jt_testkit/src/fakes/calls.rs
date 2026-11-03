@@ -423,6 +423,10 @@ impl CallRepo for MemTenant {
             for c in s.calls.commands.iter_mut() {
                 if c.workspace_id == ws && ids.contains(&c.id) {
                     c.taken_at = Some(now);
+                    // A dial is handed out at most once (the port's contract).
+                    if matches!(c.command, Command::Dial { .. }) {
+                        c.acked_at = Some(now);
+                    }
                 }
             }
         });

@@ -393,6 +393,75 @@ async fn bridge_commands_lease_in_queue_order_and_events_are_noted_once() {
     t.commit().await.unwrap();
 }
 
+/// A dial is acknowledged as it is taken: a bridge that took it and restarted before acknowledging
+/// it must not ring the person twice. The commands after it are handed out again past their lease.
+#[tokio::test]
+async fn a_dial_is_taken_at_most_once() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (a, _) = db.seed_workspace("bridge-dial").await;
+    let bridge = voice_bridge(&uow, a, "101").await;
+    let call = agent_call(a, bridge, "b-1");
+    let (dial, hangup) = (
+        CallCommandId(Uuid::from_u128(1)),
+        CallCommandId(Uuid::from_u128(2)),
+    );
+    let mut t = uow.tenant(a).await.unwrap();
+    t.calls().insert(call.clone(), T0).await.unwrap();
+    t.calls()
+        .enqueue_commands(
+            call.id,
+            vec![
+                (
+                    dial,
+                    Command::Dial {
+                        to_e164: call.counterpart_e164.clone(),
+                        plan: call.plan.clone().unwrap(),
+                        script: Default::default(),
+                    },
+                ),
+                (hangup, Command::Hangup),
+            ],
+            T0,
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let later = |s: i64| T0 + time::Duration::seconds(s);
+    let mut t = uow.tenant(a).await.unwrap();
+    let taken = t
+        .calls()
+        .take_commands(bridge, later(1), later(-9), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        taken.iter().map(|q| q.id).collect::<Vec<_>>(),
+        [dial, hangup]
+    );
+    // Past the lease: the hangup again, never the dial.
+    let again = t
+        .calls()
+        .take_commands(bridge, later(12), later(2), 10)
+        .await
+        .unwrap();
+    assert_eq!(again.iter().map(|q| q.id).collect::<Vec<_>>(), [hangup]);
+    // The dial reads acknowledged: the bridge's late command_done changes nothing.
+    assert!(
+        !t.calls()
+            .ack_command(bridge, dial, later(13))
+            .await
+            .unwrap()
+    );
+    assert!(
+        t.calls()
+            .ack_command(bridge, hangup, later(13))
+            .await
+            .unwrap()
+    );
+    t.commit().await.unwrap();
+}
+
 /// A poll takes at most its limit, in queue order; the commands it leaves wait, untaken, for the
 /// next poll.
 #[tokio::test]
