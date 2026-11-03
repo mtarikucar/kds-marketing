@@ -5,24 +5,22 @@
 //! - `report`: p50/p95 of the traces in `VOICE_TRACE_FILE`, optionally since a time.
 //! - `check`: reaches ARI and both speech services, and says which answer.
 //!
-//! The log filter is `JEETA_VOICE_BRIDGE_LOG` (default `info`).
+//! The log filter is `JEETA_VOICE_BRIDGE_LOG` (default `info`); the HTTP and WebSocket libraries log
+//! at `info` at most whatever it asks (`log_filter`).
 
 use std::process::ExitCode;
 
 use jeeta_voice_bridge::config::Config;
 use jeeta_voice_bridge::trace::read_traces;
-use jeeta_voice_bridge::{ari::Ari, run_loop, slice, speech};
+use jeeta_voice_bridge::{ari::Ari, log_filter, run_loop, slice, speech};
 use time::OffsetDateTime;
-use tracing_subscriber::EnvFilter;
 
 const USAGE: &str = "usage: jeeta-voice-bridge [run | slice --opening TEXT --reply TEXT [--think-ms N] [--show-transcript] | report [--since RFC3339] | check]";
 
 fn main() -> ExitCode {
+    let spec = std::env::var("JEETA_VOICE_BRIDGE_LOG").ok();
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_env("JEETA_VOICE_BRIDGE_LOG")
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(log_filter(spec.as_deref()))
         .init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Ok(runtime) = tokio::runtime::Builder::new_multi_thread()
