@@ -254,10 +254,11 @@ async fn a_slot_already_sent_is_not_offered_for_approval_again() {
     piece.revision = 2;
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     r.studio()
-        .save_piece(w.f.slot.id, 1, piece, "again")
+        .save_piece(w.f.slot.id, 1, piece.clone(), "again")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    w.record(w.f.slot.id, &piece).await;
     let p = work::pending(&w.d, &w.ctx).await.unwrap();
     assert!(!p.approvals.contains(&slot));
     assert!(
@@ -368,7 +369,7 @@ async fn metered_publication_requires_persisted_price() {
 #[tokio::test]
 async fn full_request_uses_account_adaptation_and_stored_bytes() {
     use jt_app::usecases::studio::pieces::{PieceInput, piece_submit};
-    use jt_studio::{ChannelContent, MediaAsset, MediaUpload};
+    use jt_studio::{ChannelContent, MediaAsset};
     use std::collections::BTreeMap;
     let (mut w, c) = world().await;
     w.d.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
@@ -380,11 +381,9 @@ async fn full_request_uses_account_adaptation_and_stored_bytes() {
         .unwrap()
         .unwrap();
     drop(r);
-    let u = MediaUpload {
-        bytes: b"\x89PNG\r\n\x1a\nimage".to_vec(),
-        mime: "image/png".into(),
-        filename: "image.png".into(),
-    };
+    // The adaptation shows a material (spec 2026-11-03 D2): its stored bytes go to the provider.
+    let (m, subject) = w.stored().await;
+    let u = w.d.files.read(w.f.ws, m.file_id).await.unwrap();
     piece_submit(
         &w.d,
         &w.ctx,
@@ -398,11 +397,12 @@ async fn full_request_uses_account_adaptation_and_stored_bytes() {
                 cap.external_id.unwrap(),
                 ChannelContent {
                     text: "adapted".into(),
-                    media: vec![MediaAsset::Bytes { upload: u.clone() }],
+                    media: vec![MediaAsset::File { id: m.file_id }],
                     link: Some("https://example.com/link".parse().unwrap()),
                     privacy: Some("SELF_ONLY".into()),
                 },
             )]),
+            subject: Some(subject),
         },
     )
     .await
@@ -613,10 +613,11 @@ async fn held_queue_head_does_not_starve_an_eligible_slot() {
     let mut piece = w.f.piece.clone();
     piece.id = PieceId::new_v7();
     r.studio()
-        .save_piece(slot.id, 0, piece, "second-piece")
+        .save_piece(slot.id, 0, piece.clone(), "second-piece")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    w.record(slot.id, &piece).await;
     let mut d = w.d;
     d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::seconds(2)));
     c.push_publish(Ok(receipt()));
@@ -638,10 +639,11 @@ async fn second_slot(w: &support::World) -> jt_studio::SlotId {
     let mut piece = w.f.piece.clone();
     piece.id = jt_studio::PieceId::new_v7();
     r.studio()
-        .save_piece(slot.id, 0, piece, "second")
+        .save_piece(slot.id, 0, piece.clone(), "second")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    w.record(slot.id, &piece).await;
     slot.id
 }
 
@@ -733,10 +735,11 @@ async fn broken_media_does_not_starve_healthy_slots() {
         }];
         let mut r = w.uow.tenant(w.f.ws).await.unwrap();
         r.studio()
-            .save_piece(w.f.slot.id, 1, piece, "broken")
+            .save_piece(w.f.slot.id, 1, piece.clone(), "broken")
             .await
             .unwrap();
         r.commit().await.unwrap();
+        w.record(w.f.slot.id, &piece).await;
         c.push_publish(Ok(receipt()));
         assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 2);
         let s = w.uow.snapshot();
@@ -853,10 +856,11 @@ async fn unpriced_queue_head_does_not_starve() {
     let mut piece = w.f.piece.clone();
     piece.id = PieceId::new_v7();
     r.studio()
-        .save_piece(slot.id, 0, piece, "second-piece")
+        .save_piece(slot.id, 0, piece.clone(), "second-piece")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    w.record(slot.id, &piece).await;
     let mut d = w.d;
     d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::seconds(2)));
     c.push_publish(Ok(receipt()));
@@ -885,10 +889,11 @@ async fn media_failure_does_not_leak_reservation() {
         .await
         .unwrap();
     r.studio()
-        .save_piece(w.f.slot.id, 1, piece, "broken")
+        .save_piece(w.f.slot.id, 1, piece.clone(), "broken")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    w.record(w.f.slot.id, &piece).await;
     assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 1);
     assert_eq!(sends(&c), 0);
     let s = w.uow.snapshot();
