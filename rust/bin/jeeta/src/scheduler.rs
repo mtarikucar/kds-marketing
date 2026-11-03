@@ -75,6 +75,7 @@ pub struct Intervals {
     pub device_bridge_health: Duration,
     pub device_command_expiry: Duration,
     pub device_file_purge: Duration,
+    pub whatsapp_app_sync: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -119,6 +120,7 @@ impl Default for Intervals {
             device_bridge_health: MINUTE,
             device_command_expiry: MINUTE,
             device_file_purge: HOUR,
+            whatsapp_app_sync: 5 * MINUTE,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -156,6 +158,7 @@ impl Intervals {
             Job::DeviceBridgeHealth => self.device_bridge_health,
             Job::DeviceCommandExpiry => self.device_command_expiry,
             Job::DeviceFilePurge => self.device_file_purge,
+            Job::WhatsappAppSync => self.whatsapp_app_sync,
         }
     }
 }
@@ -472,6 +475,7 @@ mod tests {
             device_bridge_health: every,
             device_command_expiry: every,
             device_file_purge: every,
+            whatsapp_app_sync: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -580,6 +584,7 @@ mod tests {
         assert_eq!(i.of(Job::DeviceBridgeHealth), MINUTE);
         assert_eq!(i.of(Job::DeviceCommandExpiry), MINUTE);
         assert_eq!(i.of(Job::DeviceFilePurge), HOUR);
+        assert_eq!(i.of(Job::WhatsappAppSync), 5 * MINUTE);
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),
             "jeeta.jobs.device_bridge_health"

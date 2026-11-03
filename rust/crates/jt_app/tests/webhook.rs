@@ -13,8 +13,9 @@ use jt_app::usecases::connector::{
     self, HooksOut, MetaHook, NetgsmHook, TiktokHook, VERIFY_TOKEN_HINT,
 };
 use jt_app::usecases::webhook::{
-    self, AccountEvent, Delivery, META_HOOK_PATH, NETGSM_HOOK_PATH, NETGSM_HOOK_PURPOSE,
-    RAW_RETENTION, RawPurge, TIKTOK_HOOK_PATH, TiktokHookEffect, TiktokHookEvent,
+    self, AccountEvent, AccountRoute, Delivery, META_HOOK_PATH, NETGSM_HOOK_PATH,
+    NETGSM_HOOK_PURPOSE, RAW_RETENTION, RawPurge, TIKTOK_HOOK_PATH, TiktokHookEffect,
+    TiktokHookEvent,
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, NetgsmPurpose, Provider, netgsm_hook_token};
@@ -91,6 +92,7 @@ fn for_account(
     AccountEvent {
         kind_keys: kinds,
         external_account_id: account.into(),
+        route: AccountRoute::ExternalId,
         draft,
     }
 }
@@ -1242,4 +1244,151 @@ async fn hooks_need_capabilities_manage() {
     let e = err(connector::hooks(&w.deps, &rep).await);
     assert_eq!(e.code, ErrorCode::Forbidden);
     assert_forbidden(&e, "capabilities.manage");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A number onboarded beside the WhatsApp Business app
+// ---------------------------------------------------------------------------------------------
+
+/// A business account's own event (`account_update`) names no number: it reaches the connected
+/// number whose asset names the account, in its workspace; an account no capability names, or
+/// one named only by a capability never proved, is dropped.
+#[tokio::test]
+async fn a_business_account_event_routes_to_the_number_whose_asset_names_it() {
+    let w = world().await;
+    let (beta, _) = w.other_workspace().await;
+    activate_workspace(&w.deps, beta).await;
+    let number = connected(&w, beta, "whatsapp_cloud", "5555555555").await;
+    let declared = capability(
+        &w,
+        w.ws,
+        "whatsapp_cloud",
+        "5555555556",
+        StoredStatus::Declared,
+        false,
+    )
+    .await;
+    for (ws, id, waba) in [(beta, number, "4444444444"), (w.ws, declared, "4444444445")] {
+        let mut t = w.uow.tenant(ws).await.unwrap();
+        let mut c = t.capabilities().find(id).await.unwrap().unwrap();
+        c.connector_public = json!({ "asset": { "waba_id": waba } });
+        t.capabilities().update(c).await.unwrap();
+        t.commit().await.unwrap();
+    }
+    let event = |account: &str| AccountEvent {
+        kind_keys: WHATSAPP,
+        external_account_id: account.into(),
+        route: AccountRoute::WhatsappBusinessAccount,
+        draft: draft(
+            &format!("account-update:{account}"),
+            EventKind::AccountUpdate,
+        ),
+    };
+    let body = b"{\"object\":\"whatsapp_business_account\"}";
+    let out = webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        vec![
+            event("4444444444"),
+            event("4444444445"),
+            event("4444444446"),
+        ],
+        &whole(body),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out[0], Delivery::Stored(_)), "{out:?}");
+    assert_eq!(out[1..], [Delivery::Unrouted, Delivery::Unrouted]);
+    let events = events_of(&w, beta);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].capability_id, Some(number));
+    // Kept for the agent, as every account event is.
+    assert_eq!(events[0].processed_at, None);
+    assert!(events_of(&w, w.ws).is_empty());
+}
+
+/// A business account's event reaches every workspace holding a number of that account: stored
+/// once in each, with the number found there.
+#[tokio::test]
+async fn a_business_account_event_reaches_every_workspace_holding_the_account() {
+    let w = world().await;
+    let (beta, _) = w.other_workspace().await;
+    activate_workspace(&w.deps, beta).await;
+    let ours = connected(&w, w.ws, "whatsapp_cloud", "5555555555").await;
+    let theirs = connected(&w, beta, "whatsapp_cloud", "5555555556").await;
+    for (ws, id) in [(w.ws, ours), (beta, theirs)] {
+        let mut t = w.uow.tenant(ws).await.unwrap();
+        let mut c = t.capabilities().find(id).await.unwrap().unwrap();
+        c.connector_public = json!({ "asset": { "waba_id": "4444444444" } });
+        t.capabilities().update(c).await.unwrap();
+        t.commit().await.unwrap();
+    }
+    let body = b"{\"object\":\"whatsapp_business_account\"}";
+    let out = webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        vec![AccountEvent {
+            kind_keys: WHATSAPP,
+            external_account_id: "4444444444".into(),
+            route: AccountRoute::WhatsappBusinessAccount,
+            draft: draft("account-update:4444444444", EventKind::AccountUpdate),
+        }],
+        &whole(body),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out[0], Delivery::Stored(_)), "{out:?}");
+    for (ws, id) in [(w.ws, ours), (beta, theirs)] {
+        let events = events_of(&w, ws);
+        assert_eq!(events.len(), 1, "{ws:?}");
+        assert_eq!(events[0].capability_id, Some(id));
+    }
+}
+
+/// The past and what the business sent from the app are stored processed: they never wait in
+/// `events.pending`. A live message, and Messenger's echoes, still do.
+#[tokio::test]
+async fn business_app_history_contacts_and_echoes_are_stored_processed() {
+    let w = world().await;
+    connected(&w, w.ws, "whatsapp_cloud", "5555555555").await;
+    connected(&w, w.ws, "messenger", "1234567890").await;
+    let raw = std::fs::read(format!(
+        "{}/tests/fixtures/meta/whatsapp_business_app.json",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    let mut events: Vec<AccountEvent> = jt_meta::webhook::parse(&raw)
+        .unwrap()
+        .into_iter()
+        .map(|p| for_account(WHATSAPP, &p.external_account_id, p.event))
+        .collect();
+    events.push(for_account(
+        WHATSAPP,
+        "5555555555",
+        draft("wamid.live", EventKind::Message),
+    ));
+    let mut messenger_echo = draft("mid.echo", EventKind::MessageEcho);
+    messenger_echo.payload = json!({ "messaging": { "message": { "mid": "mid.echo" } } });
+    events.push(for_account(PAGE, "1234567890", messenger_echo));
+    let body = b"{}";
+    webhook::receive_for_accounts(&w.deps, Provider::Meta, events, &whole(body))
+        .await
+        .unwrap();
+    let stored = events_of(&w, w.ws);
+    let pending: Vec<&str> = stored
+        .iter()
+        .filter(|e| e.processed_at.is_none())
+        .map(|e| e.external_id.as_str())
+        .collect();
+    assert_eq!(pending.len(), 2, "{pending:?}");
+    assert!(pending.contains(&"wamid.live") && pending.contains(&"mid.echo"));
+    // Every business-app event of the number is stored (the refusal names another number,
+    // which no workspace holds).
+    assert_eq!(stored.len(), 2 + 7);
+    assert!(
+        stored
+            .iter()
+            .filter(|e| e.processed_at.is_some())
+            .all(|e| e.processed_at == Some(FIXED_NOW))
+    );
 }

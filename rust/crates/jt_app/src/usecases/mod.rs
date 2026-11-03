@@ -29,6 +29,7 @@ pub mod studio;
 pub mod team;
 pub mod v1_import;
 pub mod webhook;
+pub mod whatsapp_app;
 pub mod work;
 pub mod workspace;
 
