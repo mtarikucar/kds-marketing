@@ -56,9 +56,13 @@ workshop, and special-day photos and videos must never be picked at random for u
 | D10 | **AI promo visuals.** An `ai_generated` material bound to a confirmed olay counts as an anchor only for that olay's own subject and only until the olay ends (an announcement, never a recap). AI materials bound to no olay (genel) are supporting visuals (text cards, backgrounds, layouts): never an anchor, usable beside one. |
 | D11 | **The çekim listesi is its own table**, surfaced in `studio.pending`, `work.pending` and the panel. The existing inbox tasks hang off a person's journey (`/api/inbox/journeys/{id}/tasks`) and do not fit workspace-level requests. |
 | D12 | **Calendar defaults are computed, not seeded.** Fixed and rule-based Turkish dates are derived per year by a pure function; the workspace table holds only the owner's edits and the dates the owner enters. Lunar holidays (Ramazan and Kurban Bayramı), mezuniyet and kulüp sezon başı ship with no dates: they are inactive until the owner enters a year's dates. No guessed date is ever stored. |
-| D13 | **Paid lane.** The paid lane moves budgets of ad sets a human created and bound; it carries no piece. D1's gate applies to every content-producing (organic) slot. Paid-lane slots stay as they are (open question Q1). |
+| D13 | **Paid-lane slots stay ungated (decided 2026-11-03, was Q1).** The paid lane moves budgets of ad sets built from existing creatives; it carries no piece, and any creative that came from Studio already passed the gate. D1 applies to every content-producing (organic) slot. Revisit when Studio builds paid creatives itself. |
 | D14 | **Material files outlive the 30-day publication cleanup.** `StudioFilesCleanup` never deletes the file of a live material; it deletes the files of erased materials (§9). |
 | D15 | **Migration number 0021.** `0019` and `0020` are taken by open PRs (#392 inbox public, #393 prospects); sqlx applies a lower pending version after a higher applied one, so the three merge in any order. |
+| D16 | **Retention (decided, was Q2).** Materials that show people are kept 24 months after their olay by default (§9.3); the owner may delete earlier at any time; a person's erasure removes theirs at once, whatever the retention. |
+| D17 | **AI self-permission (decided, was Q3).** D5 stands. The `depicts` flags are mandatory on every AI upload (the agent states the set, possibly empty: no face, name, child, logo, brand or club mark). Any flag set: a human decides. A human may always revoke. |
+| D18 | **Per-workspace settings (decided, was Q4–Q5).** `lead_days` 21, `reuse_days` 14, `recap_days` 30 are the materials policy's defaults, editable per workspace; the season windows of §4.4 are the defaults of the per-workspace calendar. |
+| D19 | **Hard findings are never releasable (decided, was Q6).** The fix is to change the material's binding or the caption. Only caption findings (§7) may be released by a human. |
 
 ## 4. Domain (`jt_studio`, pure)
 
@@ -171,9 +175,8 @@ requirement (e.g. content type `figur.bitmis_urun` needs product group `figur` a
 places no tag requirement; eligibility still applies in full.
 
 Order (first wins): (1) a season/special-day olay's own material inside its window; (2) a confirmed olay
-that has not ended (announcement); (3) a real olay that ended in the last 30 days (recap); (4) `archive`;
-(5) any other olay subject; (6) `generic`. Then: not used within `reuse_days` before (default 14,
-per-workspace policy) first, then least recently used, then most recently captured or created, then id.
+that has not ended (announcement); (3) a real olay that ended within `recap_days` (recap); (4) `archive`;
+(5) any other olay subject; (6) `generic`. Then: not used within `reuse_days` before (D18) first, then least recently used, then most recently captured or created, then id.
 Use = a publication that showed the material, or a slot brief that picked it.
 
 ### 4.6 Çekim listesi
@@ -184,7 +187,7 @@ resolved_by, resolved_at }`. `key` makes the request idempotent:
 - `slot:{hypothesis}:{content_type}:{week}`: the planner found no anchor for a position;
 - `season:{key}:{year}`: a window opens within its `lead_days` (or is open) and no eligible material of
   the occasion exists; or the entry has no dates yet;
-- `olay:{id}`: a confirmed olay starts within 21 days and has no anchor ("16 Kasım atölyesi için afiş veya
+- `olay:{id}`: a confirmed olay starts within `lead_days` and has no anchor ("16 Kasım atölyesi için afiş veya
   hazırlık fotoğrafı yükle");
 - `agent:{request_key}` / `human:{request_key}`: added by an agent or a person.
 
@@ -302,7 +305,7 @@ Records keep Studio's `data jsonb` with the columns the rules and indexes need. 
 | `studio_slot_briefs` | `slot_id` (PK with workspace, FK `studio_slots`), `material_id` (FK), `subject` |
 | `studio_calendar_entries` | `(key, year)`, `kind`, `window_start ≤ window_end` or both null, `lead_days` 0–90, `enabled` |
 | `studio_shoot_requests` | `id`, `key` (unique per workspace), `status`, `week_start` |
-| `studio_material_policy` | one row per workspace: `reuse_days` 0–365 |
+| `studio_material_policy` | one row per workspace: `lead_days` 0–90, `reuse_days` 0–365, `recap_days` 0–365 (defaults 21, 14, 30 when absent) |
 | `studio_material_releases` | `(slot_id, revision)`, `findings_digest`, `by` (a user), `at` |
 
 `down` refuses while any `studio_olays`, `studio_materials` or `studio_shoot_requests` row exists (the
@@ -418,15 +421,7 @@ Auto-ingest: photos and videos arriving in the workspace's WhatsApp or mailbox b
 human's review in the Yükle screen. Nothing ingested is eligible until a human sets the permission and
 confirms the olay.
 
-## 14. Open questions for the owner
+## 14. Questions answered (2026-11-03)
 
-- **Q1** Paid lane (D13): should paid-lane slots also require an eligible material, though they carry no
-  piece? Today they are planned as before.
-- **Q2** Retention (§9.3): is 24 months after the olay right for materials showing people, and should the
-  owner be able to extend it per material?
-- **Q3** D5: may Codex keep setting `shareable` on its own AI images with no `depicts` flag, or should every
-  permission be a human's?
-- **Q4** Window lengths of the defaults (§4.4) and the 21-day lead: keep, or change per occasion?
-- **Q5** Reuse window default (14 days) and the recap horizon (30 days after an olay).
-- **Q6** Should a human be able to release a *hard* finding for one revision (e.g. a freed workshop photo
-  in another workshop's post the owner explicitly wants)? This design says no (D8).
+The owner left Q1–Q6 of the first draft to the coordinator, who answered them the same day: Q1 → D13,
+Q2 → D16, Q3 → D17, Q4–Q5 → D18, Q6 → D19. No question is open.
