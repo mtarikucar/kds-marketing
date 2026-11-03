@@ -541,6 +541,53 @@ async fn oauth_flow_migration_is_repeatable_and_its_down_drops_the_variant_flows
     assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
 }
 
+/// `0023_oauth_flow` is the WhatsApp Business app coexistence's migration, and the code before it
+/// cannot read what the feature leaves: once a message the business wrote from the app, or a
+/// capability's sharing of the app's data, is stored, its down is refused and changes nothing.
+#[tokio::test]
+async fn oauth_flow_down_is_refused_once_the_business_app_left_data() {
+    use jt_app::ports::UnitOfWork;
+    let down = std::fs::read_to_string(migrations_dir().join("0023_oauth_flow.down.sql")).unwrap();
+    for case in ["message", "capability"] {
+        let db = TestDb::new().await;
+        let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+        let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+        let cap = f.capability().await;
+        let person = f.insert_person("App").await;
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        if case == "message" {
+            let c = t
+                .conversations()
+                .upsert_on_inbound(f.conversation(person.id, cap))
+                .await
+                .unwrap();
+            let mut m = f.message(c.id);
+            m.direction = jt_inbox::Direction::Outbound;
+            m.author = jt_inbox::Author::BusinessApp;
+            t.messages().insert_if_new(m).await.unwrap();
+        } else {
+            let mut c = t.capabilities().find(cap).await.unwrap().unwrap();
+            c.connector_public =
+                serde_json::json!({ "business_app": { "contacts": { "state": "due" } } });
+            t.capabilities().update(c).await.unwrap();
+        }
+        t.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("oauth flow rollback refused"),
+            "{case}: {refused}"
+        );
+        assert!(
+            column_exists(&db.pool, ("oauth_pending", "flow")).await,
+            "{case}"
+        );
+    }
+}
+
 /// `0024_whatsapp_erasure` lets erasure find a person in the WhatsApp Business app's events:
 /// its up and its down are repeatable, and its down is refused, changing nothing, once such an
 /// event is stored (events are never deleted, and the older functions could not find the person

@@ -158,6 +158,12 @@ says `onboarding: whatsapp_business_app` alone, whatever its expiry: the token i
 own (D4) and is not put through `fb_exchange_token`. When it lapses, the hourly probe fails with
 `Auth` and the capability asks for a reconnection, which signs in through the same flow.
 
+**D15. A rollback that would strand data is refused.** The code before 0023 cannot read a
+message authored `business_app` nor a capability's `business_app` sharing, so 0023's down is
+refused (as 0018's is) once either is stored; 0024's once the app's events are. `Author` gets no
+`#[serde(other)]` fallback: in this codebase only a device bridge's failure reason has one, for
+newer bridges talking to an older server, and a stored author has nothing to fall back to.
+
 ## Open questions
 
 - **Q1.** Does the dialog honour `extras` when opened by redirect? If not, the panel must launch
