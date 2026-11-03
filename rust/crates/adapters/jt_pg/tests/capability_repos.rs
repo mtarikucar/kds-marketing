@@ -1326,16 +1326,20 @@ async fn stored_policy_without_new_keys_gets_their_defaults() {
     let db = TestDb::new().await;
     let uow = uow(&db);
     let (a, _) = db.seed_workspace("a").await;
-    // A policy stored before the public surfaces had response times of their own.
+    // A policy stored before the public surfaces had response times of their own (written as
+    // the workspace, under its row-level security).
+    let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
     sqlx::query(
         "insert into workspace_policies (workspace_id, agent_checkin_interval_minutes, \
-         updated_at, inbox_status_labels, inbox_policy) values ($1, 60, now(), '{}'::jsonb, $2)",
+         updated_at, inbox_status_labels, inbox_policy) values ($1, 60, now(), '{}'::jsonb, $2) \
+         on conflict (workspace_id) do update set inbox_policy = excluded.inbox_policy",
     )
     .bind(a.as_uuid())
     .bind(json!({ "max_response_s": { "whatsapp": 600 }, "unreachable_threshold": 4 }))
-    .execute(&db.pool)
+    .execute(tx.conn())
     .await
     .unwrap();
+    tx.commit().await.unwrap();
     let mut t = uow.tenant(a).await.unwrap();
     let inbox = t.workspace_policy().get().await.unwrap().inbox;
     // The stored key wins; every default it lacks is read at its default.
