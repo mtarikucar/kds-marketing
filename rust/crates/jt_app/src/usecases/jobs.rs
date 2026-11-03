@@ -1493,6 +1493,9 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
             r.people().set_write_time(now).await?;
             let policy = r.workspace_policy().get().await?.inbox;
             let mut changed = 0;
+            if job == Job::ResponseSla {
+                changed += expire_public_items(r.as_mut(), &ctx, now).await?;
+            }
             for c in super::inbox::context::all_conversations(r.as_mut()).await? {
                 if job == Job::SnoozeWake {
                     if !matches!(c.state,ConvState::Snoozed{until} if until<=now) {
@@ -1505,17 +1508,38 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     if c.state != ConvState::Ours || c.executor != Executor::Agent {
                         continue;
                     }
-                    let channel = match c.kind_key.as_str() {
+                    let mut since = c.last_inbound_at.unwrap_or(c.created_at);
+                    let mut channel = match c.kind_key.as_str() {
                         "sms_line" => "sms",
                         "whatsapp_cloud" => "whatsapp",
                         other => other,
                     };
-                    let Some(seconds) = policy.max_response_s.get(channel) else {
-                        continue;
-                    };
-                    if now - c.last_inbound_at.unwrap_or(c.created_at)
-                        <= Duration::seconds(i64::from(*seconds))
+                    // A public conversation waits since its oldest owed item, and an owed item's
+                    // deadline hands it over two hours ahead (spec §3.11 (a), (c)).
+                    let mut due = None;
+                    if jt_inbox::public_channel_for_kind(&c.kind_key).is_some() {
+                        let items = r.public_items().for_conversation(c.id).await?;
+                        let owed: Vec<_> = items.iter().filter(|i| i.awaiting()).collect();
+                        let Some(oldest) = owed.iter().map(|i| i.created_at).min() else {
+                            continue;
+                        };
+                        since = oldest;
+                        due = owed
+                            .iter()
+                            .filter_map(|i| i.deadline.map(|at| (at, i.id)))
+                            .filter(|(at, _)| *at - now <= super::inbox::public::DEADLINE_HANDOVER)
+                            .min();
+                    } else if super::inbox::public::relay_of(r.as_mut(), &c)
+                        .await?
+                        .is_some()
                     {
+                        // Relayed marketplace mail answers within the marketplace's time (b).
+                        channel = "amazon";
+                    }
+                    let overdue = policy.max_response_s.get(channel).is_some_and(|seconds| {
+                        now - since > Duration::seconds(i64::from(*seconds))
+                    });
+                    if due.is_none() && !overdue {
                         continue;
                     }
                     let owner = r
@@ -1526,6 +1550,20 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     r.conversations()
                         .update_executor(c.id, Executor::Human { user_id: owner })
                         .await?;
+                    if let Some((deadline, item_id)) = due {
+                        super::inbox::record(
+                            r.as_mut(),
+                            &ctx,
+                            "inbox.public.deadline_handover",
+                            "conversation",
+                            c.id,
+                            json!({"conversation_id": c.id, "item_id": item_id,
+                                "deadline": deadline.unix_timestamp()}),
+                        )
+                        .await?;
+                        changed += 1;
+                        continue;
+                    }
                 }
                 super::inbox::record(
                     r.as_mut(),
@@ -1554,6 +1592,43 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
         }
     }
     finish(job, report)
+}
+
+/// Marks expired the owed items whose deadline passed (spec §3.11 (d)): each in its own ledger
+/// line `inbox.public.expired`, its conversation's state settled. How many.
+async fn expire_public_items(
+    r: &mut dyn crate::ports::TenantRepos,
+    ctx: &crate::ctx::Ctx,
+    now: OffsetDateTime,
+) -> Result<u64, AppError> {
+    let mut expired = 0;
+    let mut conversations = Vec::new();
+    for due in r
+        .public_items()
+        .due_before(now, crate::ports::inbox::MAX_INBOX_PAGE)
+        .await?
+    {
+        let Some(item) = r.public_items().lock(due.id).await? else {
+            continue;
+        };
+        let Ok(next) = jt_inbox::public::apply(&item, jt_inbox::ItemEvent::Expired, now) else {
+            continue;
+        };
+        r.public_items().update(next).await?;
+        super::inbox::record(
+            r,
+            ctx,
+            "inbox.public.expired",
+            "public_item",
+            item.id,
+            json!({"item_id": item.id, "conversation_id": item.conversation_id}),
+        )
+        .await?;
+        conversations.push(item.conversation_id);
+        expired += 1;
+    }
+    super::inbox::public::settle_states(r, conversations).await?;
+    Ok(expired)
 }
 
 /// Refresh this instance's full tenant egress tier for active/pending-payment workspaces.

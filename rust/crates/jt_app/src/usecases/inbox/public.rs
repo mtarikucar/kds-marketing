@@ -62,6 +62,28 @@ pub use super::moderation::{
 /// How long a subject the inbox knows is not asked of its provider again.
 pub const SUBJECT_REFRESH: Duration = Duration::days(1);
 
+/// How long before an owed item's deadline the response SLA hands an agent's conversation to a
+/// human (spec §3.11 (c)).
+pub const DEADLINE_HANDOVER: Duration = Duration::hours(2);
+
+/// The marketplace relaying mail conversation `conversation` (Amazon's buyer-seller messages,
+/// spec §8.4): a mailbox conversation whose person holds an active relay address
+/// (`jt_inbox::relay::marketplace_relay`); `None` for any other.
+pub(crate) async fn relay_of(
+    r: &mut dyn TenantRepos,
+    conversation: &Conversation,
+) -> Result<Option<Relay>, AppError> {
+    if conversation.kind_key != "mailbox" {
+        return Ok(None);
+    }
+    Ok(r.identities()
+        .list(conversation.person_id)
+        .await?
+        .into_iter()
+        .filter(|i| i.active && i.channel == IdentityChannel::Email)
+        .find_map(|i| jt_inbox::relay::marketplace_relay(&i.value_normalized)))
+}
+
 /// The capability kind whose posts a capability of `kind_key` answers comments on: a direct
 /// message sibling maps to its surface (`messenger` → `facebook_page`, `instagram_dm` →
 /// `instagram`), as the webhook's routing may pick the sibling for the same account; any other
