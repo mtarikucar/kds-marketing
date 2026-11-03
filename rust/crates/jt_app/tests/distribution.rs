@@ -21,6 +21,14 @@ use serde_json::json;
 use support::*;
 use time::{Duration, OffsetDateTime};
 
+/// The world, its workspace active: the `lead_distribution` job runs for active workspaces only
+/// (a registration starts `pending_payment`).
+async fn active_world() -> World {
+    let w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    w
+}
+
 /// A new active member with role `role_key`, numbered `n` (unique email).
 async fn member(w: &World, role_key: &str, n: u32) -> Ctx {
     let role = {
@@ -236,7 +244,7 @@ fn kinds(items: &[work::WorkItem]) -> Vec<String> {
 
 #[tokio::test]
 async fn solo_owner_gets_everything_without_setup() {
-    let w = world().await;
+    let w = active_world().await;
     let (_, j) = by_hand(&w, "+905000000001").await;
     assert_eq!(owner_of(&w, j), None);
     tick(&w, FIXED_NOW).await;
@@ -256,7 +264,7 @@ async fn solo_owner_gets_everything_without_setup() {
 
 #[tokio::test]
 async fn every_creation_path_ends_owned_or_counted() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = member(&w, "rep", 1).await;
     // By hand.
     let (person, hand) = by_hand(&w, "+905000000001").await;
@@ -364,7 +372,7 @@ async fn every_creation_path_ends_owned_or_counted() {
 
 #[tokio::test]
 async fn manual_mode_raises_work_item() {
-    let w = world().await;
+    let w = active_world().await;
     set_rules(&w, vec![], Some(DistributionMode::Manual)).await;
     let (_, j) = by_hand(&w, "+905000000001").await;
     tick(&w, FIXED_NOW).await;
@@ -386,7 +394,7 @@ async fn manual_mode_raises_work_item() {
 
 #[tokio::test]
 async fn rules_route_by_city_and_source() {
-    let w = world().await;
+    let w = active_world().await;
     let izmir = member(&w, "rep", 1).await;
     let other = member(&w, "rep", 2).await;
     set_rules(
@@ -422,7 +430,7 @@ async fn rules_route_by_city_and_source() {
 
 #[tokio::test]
 async fn capacity_and_away_skip_members() {
-    let w = world().await;
+    let w = active_world().await;
     let full = member(&w, "rep", 1).await;
     let away = member(&w, "rep", 2).await;
     let free = member(&w, "rep", 3).await;
@@ -454,7 +462,7 @@ async fn capacity_and_away_skip_members() {
 
 #[tokio::test]
 async fn on_shift_preferred() {
-    let w = world().await;
+    let w = active_world().await;
     let night = member(&w, "rep", 1).await;
     let day = member(&w, "rep", 2).await;
     owner_away(&w).await;
@@ -511,7 +519,7 @@ async fn sla_counts_only_working_minutes() {
             time::macros::datetime!(2026-10-22 15:30 UTC),
         ),
     ] {
-        let w = world().await;
+        let w = active_world().await;
         let rep = member(&w, "rep", 1).await;
         let mut hours = profile();
         hours.hours = Some(Hours {
@@ -533,7 +541,7 @@ async fn sla_counts_only_working_minutes() {
 
 #[tokio::test]
 async fn owner_acts_mark_acted() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = member(&w, "rep", 1).await;
     sla_rule(&w, vec![user_of(&rep)]).await;
     let (_, j) = by_hand(&w, "+905000000001").await;
@@ -557,7 +565,7 @@ async fn owner_acts_mark_acted() {
 
 #[tokio::test]
 async fn agent_reply_does_not_mark_acted() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = member(&w, "rep", 1).await;
     sla_rule(&w, vec![user_of(&rep)]).await;
     let (_, j) = by_hand(&w, "+905000000001").await;
@@ -587,7 +595,7 @@ async fn agent_reply_does_not_mark_acted() {
 
 #[tokio::test]
 async fn reassign_after_sla_excludes_previous() {
-    let w = world().await;
+    let w = active_world().await;
     let a = member(&w, "rep", 1).await;
     let b = member(&w, "rep", 2).await;
     sla_rule(&w, vec![user_of(&a), user_of(&b)]).await;
@@ -607,7 +615,7 @@ async fn reassign_after_sla_excludes_previous() {
 
 #[tokio::test]
 async fn stalled_after_max_reassignments() {
-    let w = world().await;
+    let w = active_world().await;
     let a = member(&w, "rep", 1).await;
     let b = member(&w, "rep", 2).await;
     sla_rule(&w, vec![user_of(&a), user_of(&b)]).await;
@@ -640,7 +648,7 @@ async fn stalled_after_max_reassignments() {
 
 #[tokio::test]
 async fn manual_assignment_has_no_sla_and_supersedes() {
-    let w = world().await;
+    let w = active_world().await;
     let a = member(&w, "rep", 1).await;
     let b = member(&w, "rep", 2).await;
     sla_rule(&w, vec![user_of(&a)]).await;
@@ -669,7 +677,7 @@ async fn manual_assignment_has_no_sla_and_supersedes() {
 
 #[tokio::test]
 async fn member_left_rows_written() {
-    let w = world().await;
+    let w = active_world().await;
     let rep = member(&w, "rep", 1).await;
     let (_, j) = by_hand(&w, "+905000000001").await;
     journeys::assign_owner(
@@ -700,7 +708,7 @@ async fn member_left_rows_written() {
 
 #[tokio::test]
 async fn backfill_is_capped() {
-    let w = world().await;
+    let w = active_world().await;
     set_rules(&w, vec![], Some(DistributionMode::Manual)).await;
     for i in 1..=4 {
         by_hand(&w, &format!("+90500000000{i}")).await;
@@ -724,7 +732,7 @@ async fn backfill_is_capped() {
 
 #[tokio::test]
 async fn rep_can_edit_only_own_profile() {
-    let w = world().await;
+    let w = active_world().await;
     let a = member(&w, "rep", 1).await;
     let b = member(&w, "rep", 2).await;
     let mut away = profile();
@@ -769,4 +777,17 @@ async fn rep_can_edit_only_own_profile() {
     )
     .await);
     assert_invalid(&e, "rules[0].to");
+}
+
+#[tokio::test]
+async fn the_job_waits_for_an_active_workspace() {
+    // A registration awaits payment: nothing is distributed until the workspace is active.
+    let w = world().await;
+    let (_, j) = by_hand(&w, "+905000000001").await;
+    tick(&w, FIXED_NOW).await;
+    assert_eq!(owner_of(&w, j), None);
+    assert!(decisions(&w, j).is_empty());
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    tick(&w, FIXED_NOW + Duration::minutes(1)).await;
+    assert_eq!(owner_of(&w, j), Some(w.owner));
 }
