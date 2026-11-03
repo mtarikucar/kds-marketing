@@ -696,9 +696,12 @@ In `usecases/inbox/public.rs`: `intake`, `comments_enabled`, `settle_state`, `hi
 `mark_handled`, `report`, `approve`, `discard`, `context`, `on_receipt`, `reconcile_unknown`. Each mutating
 use case takes the workspace inbox lock first (`people().lock_workspace()`), then conversation → item →
 outbox, as the reply path does. Provider I/O (moderation, report) runs **without a transaction**: lock and
-check, release, call, then write the result in a second transaction that re-reads the item (compare and
-swap on `updated_at`); a lost race is `skipped`, never a double action (bug class "cron-lock pool
-starvation": no connection held across provider I/O).
+check, release, call, then write the result in a second transaction that re-reads the item; a lost race is
+`skipped`, never a double action (bug class "cron-lock pool starvation": no connection held across
+provider I/O). As built (F7): the compare is on the item's moderation, not its `updated_at` (the re-read
+item must still take the event: a receipt that only touched the answer meanwhile does not undo a hide the
+provider did); an item already so is `unchanged` and calls nobody; the moderation use cases live in
+`usecases/inbox/moderation.rs`, reached through `public`.
 
 ### 6.8 Reads
 
@@ -709,6 +712,10 @@ starvation": no connection held across provider I/O).
 - `inbox.conversations.list`/`get` answer `ConversationView { #[serde(flatten)] conversation, surface:
   "private"|"public"|"relay", channel, owed_items, next_deadline, held_replies }` (computed; nothing stored).
 - `inbox.messages.list` items (`MessageView`) add `item: Option<{item_id, kind, answer_state, visibility}>`.
+- As built (F8): `public` and `item` are left out (not `null`) on a direct conversation, so its outputs are
+  unchanged; `rules` is shown as JSON (the private window in seconds); a context shows the conversation's
+  latest 20 items and 50 items of each thread; `inbox.pending`'s `approvals` go to every human caller, whoever
+  holds the conversation (an agent holds most of them); the context's `relay` part is task A1's.
 
 ### 6.9 Jobs
 
@@ -725,7 +732,12 @@ capability for the run and is logged once.
 
 ## 7. Catalog
 
-### 7.1 New rows (all twins, all `Gated`, workspace must be active)
+### 7.1 New rows (all twins, all `Exempt` from the strategy gate, workspace must be active)
+
+Owner decision 2026-11-03: the inbox is independent of the strategy gate (answering customers is not
+planned growth work); these six rows are `GateMode::Exempt` (the catalog's ungated mode), pinned in
+`jt_archtest/tests/gate_rule.rs`. The reply fence's own `strategy_required` check (which approving a
+held reply still meets) belongs to the separate `feat/inbox-ungated` change.
 
 | Use case | MCP tool | Route | Risk | Permission | Input |
 |---|---|---|---|---|---|

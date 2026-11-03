@@ -269,6 +269,31 @@ impl PublicEnvelope {
 // approver's). people::link_identity (a private reply's recipient_id → DM identity, else a merge
 // suggestion; ledger inbox.public.identity_linked). Merge refuses held rows with their request
 // keys and ledger, as queued ones.
+// Review of F4-F6: OutboxRepo::for_message(message) -> Option<OutboxRow> (the own-comment echo
+// binds only a reply whose intent.public.target.external_id is the parent); a comment of the
+// account itself takes the own-comment path only while open or edited (else consumed).
+// As built in F7 (usecases/inbox/moderation.rs, re-exported by public): hide(id, HideInput
+// {hidden}), delete(id, DeleteInput {confirm}), report(id, ReportInput {reason}) ->
+// ModerationOut {item, outcome: "applied" | "unchanged" | "skipped"}; mark_handled(
+// MarkHandledInput {item_ids, reason}) -> HandledOut {items}. Refusals: hide_unsupported,
+// delete_unsupported, report_unsupported, comments_not_enabled, moderation_not_granted (delete
+// without delete_others), item_removed, human_holds_conversation (an agent on a human-held
+// conversation), capability_down, agent_cannot_delete, item_not_owed (mark_handled, all or
+// none); VALIDATION confirm / item_ids. The six rows are GateMode::Exempt (owner decision
+// 2026-11-03), pinned by gate_rule.rs UNGATED_INBOX. The approve schema has no request_key
+// (a repeat answers CONFLICT reply_not_held).
+// As built in F8: ContextOut.public: Option<PublicContext {channel, rules (JSON), approval_required,
+// hint, items: [PublicItemContext {item, subject, thread: [ThreadEntry {author, text, at,
+// external_id}], private_reply_until, owed}]}> (absent for a DM); conversations::list/get answer
+// ConversationView {conversation (flattened, Deref), surface, channel, owed_items, next_deadline,
+// held_replies}; MessageView.item: Option<MessageItem {item_id, kind, answer_state, visibility}>
+// (absent on a DM); PendingOut.{public_due: [PublicDue], approvals: [Approval]} (approvals to
+// humans only, whoever holds the conversation); WorkKind::{AnswerDeadline, ApproveReply,
+// EnableComments}; public::{DEADLINE_HANDOVER, relay_of}; held rows are read with
+// OutboxRepo::list_pending("held", ..). The relay part of the context is A1's.
+// As built in F9: erasure::event_identities also yields the envelope author (public/author/id,
+// or the item's one-off key when unnamed) in its surface's namespace; mask_personal also masks
+// author, provider_item, username, userName, customerName and a string message (as 0019's SQL).
 
 // jt_app::ports::public (re-exported from ports::inbox)
 #[async_trait] pub trait PublicItemRepo: Send + Sync {
