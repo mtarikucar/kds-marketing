@@ -124,3 +124,46 @@ fn a_place_body_refuses_a_field_the_plan_does_not_have() {
     .to_string();
     assert!(e.contains("unknown field `plan.spoken_by`"), "{e}");
 }
+
+#[tokio::test]
+async fn a_persons_save_of_the_shown_templates_keeps_them_following_the_workspace() {
+    let w = world().await;
+    // The panel sends back the whole policy it read, a timer changed: the templates it showed
+    // with the workspace's name are not frozen into the stored policy.
+    let mut read =
+        serde_json::to_value(calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap()).unwrap();
+    assert_eq!(
+        read["opening_outbound"],
+        "Merhaba, ben Acme'nin dijital asistanıyım."
+    );
+    read["slow_agent_s"] = json!(5);
+    let out = calls::policy_set(&w.deps, &w.owner_ctx, body(read.clone()))
+        .await
+        .unwrap();
+    assert_eq!(out.slow_agent_s, 5);
+    assert_eq!(
+        (&out.opening_outbound, &out.transcript_notice, &out.closing),
+        (&None, &None, &None),
+        "the templates are not frozen into the stored policy"
+    );
+    assert_eq!(out.disclosure_sentence, "");
+    assert_eq!(out.greeting_inbound, "");
+    let again =
+        serde_json::to_value(calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap()).unwrap();
+    assert_eq!(again, read);
+    // Any other value of a person's is stored as sent: an own opening, and no notice at all.
+    read["opening_outbound"] = json!("Merhaba, Acme asistanı ben.");
+    read["transcript_notice"] = json!("");
+    let out = calls::policy_set(&w.deps, &w.owner_ctx, body(read))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.opening_outbound.as_deref(),
+        Some("Merhaba, Acme asistanı ben.")
+    );
+    assert_eq!(out.transcript_notice.as_deref(), Some(""));
+    assert_eq!(
+        out.closing, None,
+        "the closing sent as shown stays the template"
+    );
+}

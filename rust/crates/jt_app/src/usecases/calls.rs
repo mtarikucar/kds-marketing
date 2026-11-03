@@ -335,16 +335,19 @@ pub const PERSON_ONLY: [&str; 6] = [
     "greeting_inbound",
 ];
 
-/// An agent's policy with the person-only texts ([`PERSON_ONLY`]) as stored. A text the body left
-/// out keeps the stored value. A text sent as stored, or as `calls.policy_get` shows it (`shown`,
-/// the workspace's templates filled in), also keeps the stored value, so a read sent back changes
-/// nothing and freezes no template. Any other value is `FORBIDDEN` with
-/// `details.reason = "person_only"` and `details.field` naming it.
+/// The person-only texts ([`PERSON_ONLY`]) of a policy body, against the stored ones. A text sent
+/// exactly as `calls.policy_get` shows it (`shown`, the workspace's templates filled in) keeps the
+/// stored value, a person's (`person`) as an agent's: a read sent back changes nothing and freezes
+/// no template, so a template the owner left unwritten keeps following the workspace's name. A
+/// person's other values are stored as sent (one the body left out takes its default, as every
+/// field does). An agent's text left out, or sent as stored, keeps the stored value too, and any
+/// other value is `FORBIDDEN` with `details.reason = "person_only"` and `details.field` naming it.
 fn keep_person_only(
     policy: &mut CallPolicy,
     stored: &CallPolicy,
     shown: &CallPolicy,
     given: Option<&BTreeSet<String>>,
+    person: bool,
 ) -> Result<(), AppError> {
     fn keep<T: PartialEq + Clone>(
         field: &'static str,
@@ -352,9 +355,15 @@ fn keep_person_only(
         stored: &T,
         shown: &T,
         named: bool,
+        person: bool,
     ) -> Result<(), AppError> {
-        if !named || sent == stored || sent == shown {
+        // Sent as shown, by anyone; or an agent's left out or sent as stored: the stored value.
+        if (named && sent == shown) || (!person && (!named || sent == stored)) {
             *sent = stored.clone();
+            return Ok(());
+        }
+        // A person's other value (or default) is stored as sent.
+        if person {
             return Ok(());
         }
         Err(AppError {
@@ -370,6 +379,7 @@ fn keep_person_only(
         &stored.opening_outbound,
         &shown.opening_outbound,
         named("opening_outbound"),
+        person,
     )?;
     keep(
         "transcript_notice",
@@ -377,6 +387,7 @@ fn keep_person_only(
         &stored.transcript_notice,
         &shown.transcript_notice,
         named("transcript_notice"),
+        person,
     )?;
     keep(
         "closing",
@@ -384,6 +395,7 @@ fn keep_person_only(
         &stored.closing,
         &shown.closing,
         named("closing"),
+        person,
     )?;
     keep(
         "phrases",
@@ -391,6 +403,7 @@ fn keep_person_only(
         &stored.phrases,
         &shown.phrases,
         named("phrases"),
+        person,
     )?;
     keep(
         "disclosure_sentence",
@@ -398,6 +411,7 @@ fn keep_person_only(
         &stored.disclosure_sentence,
         &shown.disclosure_sentence,
         named("disclosure_sentence"),
+        person,
     )?;
     keep(
         "greeting_inbound",
@@ -405,14 +419,17 @@ fn keep_person_only(
         &stored.greeting_inbound,
         &shown.greeting_inbound,
         named("greeting_inbound"),
+        person,
     )
 }
 
 /// Replaces the call policy with `input` once it validates (`VALIDATION` naming the field).
 /// The approved texts ([`PERSON_ONLY`]) are a person's to change: an agent's body keeps their
 /// stored values where it leaves them out or sends them as read, and any other value of one is
-/// `FORBIDDEN` (`details.reason = "person_only"`, `details.field` naming it). Turning the
-/// assistant disclosure off is a person's decision too: an agent asking for it is `FORBIDDEN`.
+/// `FORBIDDEN` (`details.reason = "person_only"`, `details.field` naming it). A text sent exactly
+/// as `calls.policy_get` shows it keeps its stored value for a person too, so the panel's save of
+/// an untouched template leaves it following the workspace's name. Turning the assistant
+/// disclosure off is a person's decision too: an agent asking for it is `FORBIDDEN`.
 /// Writes `calls.policy_set` (payload: which fields changed). Returns the stored policy (the
 /// workspace's templates not filled in). Needs `calls.manage`.
 pub async fn policy_set(
@@ -424,11 +441,10 @@ pub async fn policy_set(
     let PolicyInput { mut policy, given } = input;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let before = r.calls().policy().await?;
-    if !matches!(ctx.actor, Actor::Human { .. }) {
-        let name = r.workspace().get().await?.name;
-        let shown = before.clone().with_workspace(&name);
-        keep_person_only(&mut policy, &before, &shown, given.as_ref())?;
-    }
+    let name = r.workspace().get().await?.name;
+    let shown = before.clone().with_workspace(&name);
+    let person = matches!(ctx.actor, Actor::Human { .. });
+    keep_person_only(&mut policy, &before, &shown, given.as_ref(), person)?;
     policy
         .validate()
         .map_err(|e| invalid(e.field, &format!("{} {}", e.field, e.message)))?;
