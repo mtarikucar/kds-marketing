@@ -965,7 +965,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
 | `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
 | `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
-| `prospects_purge` | 1 gün | Her alanda (durumu ne olursa olsun), `purge_after` zamanı gelen adayları siler: reddedilen bir adayın anahtarları önce `rejected_memory_days` (365 gün) boyunca anahtarlı özet olarak hatırlanır; ardından süresi dolmuş red özetlerini siler. Bir şey silindiyse alan başına bir `prospects.purged {count}` sistem kaydı yazar; hiçbir değer ya da kimlik günlüğe geçmez | `jeeta.jobs.prospects_purge` |
+| `prospects_purge` | 1 gün | Her alanda (durumu ne olursa olsun), alanın **güncel** saklama sürelerine göre zamanı gelen adayları 500'lük partiler hâlinde (her parti kendi işleminde, çalışma başına en çok 20 parti) siler: reddedilen bir adayın sert anahtarları (telefon, e-posta, Instagram, TikTok) önce `rejected_memory_days` (365 gün) boyunca anahtarlı özet olarak hatırlanır; silinen adayın istek anahtarları da silinir; ardından süresi dolmuş red özetlerini siler. Bir şey silen her parti için bir `prospects.purged {count}` sistem kaydı yazar; hiçbir değer ya da kimlik günlüğe geçmez | `jeeta.jobs.prospects_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1985,29 +1985,35 @@ Businesses that agents research with their own tools and record with evidence (s
 no data service; it stores, validates, dedupes and fences what is recorded. A prospect is never in
 the inbox, and is never contacted, until it is promoted (L3). Every contact field carries its source
 URL, `captured_at` and the recorder, which Jeeta takes from the caller (an agent's connection and
-issuer, or the person); input never names it. Dedupe answers, in order: `erased_identity`,
-`do_not_contact`, `previously_rejected`, `in_inbox`, `duplicate`, `possible_duplicate` (resend with
-`distinct_from`). Daily caps count in the workspace's time zone (500 a day, and each research task's
-own cap). Retention: rejected 30 days after the decision, unpromoted 180 days after the last update,
-a purged rejection's keys remembered 365 days; the do-not-contact list is per-workspace keyed
-hashes (HMAC under the `prospects.blocklist` key) and survives every purge. Ledger payloads carry
-ids, kinds, reasons and field names, never values. Gated by the strategy; `prospects.work`
-(`prospects.manage` where noted), which the rep role does not hold.
+issuer, or the person); input never names it. Only hard keys (phone, email, Instagram, TikTok)
+refuse, in order: `erased_identity`, `do_not_contact`, `previously_rejected`, `in_inbox`,
+`duplicate`; soft keys (the website's domain, name and city) come back as non-blocking `flags`
+(`possible_duplicate`, `previously_rejected_soft`; `distinct_from` silences a candidate). A website
+on a platform host (social profiles, marketplaces, maps, link-in-bio pages, short links) is refused
+with its kind's reason. Daily caps count in the workspace's time zone (500 a day, and each research
+task's own cap). Retention, evaluated against the current policy at each purge: rejected 30 days
+after the decision, unpromoted 180 days after the last update, a purged rejection's hard keys
+remembered 365 days; the do-not-contact list is per-workspace keyed hashes of hard keys (HMAC under
+the `prospects.blocklist` key, each entry with its key's fingerprint) and survives every purge.
+Request keys store the prospect id only. Ledger payloads carry ids, kinds, reasons and field names,
+never values. Gated by the strategy, except do-not-contact and erasure, which run in any workspace
+status (an objection is always recordable); `prospects.work` (`prospects.manage` where noted),
+which the rep role does not hold.
 
 | Use case | Panel | MCP | Risk | Notes |
 |---|---|---|---|---|
-| `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok}` or the refusal create would meet; writes nothing |
-| `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `request_key` replays 24 h |
+| `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok, flags}` or the refusal create would meet; writes nothing |
+| `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `{prospect, flags}`; `request_key` replays the recorded prospect 24 h |
 | `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
 | `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters, newest first, no contact values |
 | `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores, duplicate candidates, history |
 | `prospects.score` | `POST /api/prospects/{prospect_id}/scores` | `jeeta.prospects.score` | WRITE | under the approved rubric's digest; `qualify_at` qualifies |
 | `prospects.decide` | `POST /api/prospects/{prospect_id}/decision` | `jeeta.prospects.decide` | WRITE | qualify, reject (fixed reasons), reopen (a person with `prospects.manage`) |
-| `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed) or raw keys; agents too |
+| `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed, scores deleted) or raw hard keys (their holders marked too); agents too; any workspace status |
 | `prospects.dnc_lift` | `POST /api/prospects/do-not-contact/lift` | `jeeta.prospects.dnc_lift` | WRITE | a person with `prospects.manage`; an erasure never lifts |
-| `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; keys kept as erased hashes |
+| `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; hard keys kept as erased hashes; any workspace status |
 | `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
-| `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded |
+| `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
 
 #### The voice bridge (voice V1)
 

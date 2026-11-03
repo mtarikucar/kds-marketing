@@ -25,11 +25,13 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Before researching a business in depth, check what you know of it \
                           (business_name with city, phone, email, website, instagram, tiktok; \
                           distinct_from: prospects you know it is not). Writes nothing. Answers \
-                          {ok: true}, or {ok: false, reason, ...} with the refusal \
-                          jeeta.prospects.create would meet: erased_identity, do_not_contact, \
-                          previously_rejected, in_inbox (person_id), duplicate (prospect_id) or \
-                          possible_duplicate (candidates). Skip the business on any of them. \
-                          [risk: READ]",
+                          {ok: false, reason, ...} with the refusal jeeta.prospects.create would \
+                          meet: erased_identity, do_not_contact, previously_rejected, in_inbox \
+                          (person_id) or duplicate (prospect_id); skip the business on any of \
+                          them. Else {ok: true, flags}: possible_duplicate and \
+                          previously_rejected_soft list prospects sharing the website's domain \
+                          or the name and city (never a refusal: a branch or another business \
+                          goes on, naming them in distinct_from). [risk: READ]",
             permission: Permission::ProspectsWork,
             schema: check_schema,
             run: check,
@@ -40,16 +42,18 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           private individual). Every contact field (phone, email, website, \
                           instagram, tiktok, address, contact_person) needs a public source URL \
                           where the business itself publishes it, and captured_at (when you saw \
-                          it, within the last 365 days). Jeeta records you as the recorder. \
-                          Answers {prospect} or CONFLICT with details.reason duplicate \
-                          (prospect_id), possible_duplicate (candidates: resend with \
-                          distinct_from naming them if this is another business), in_inbox \
-                          (person_id: add a note to that person's journey instead), \
-                          previously_rejected, daily_cap (scope, resets_at) or task_closed; \
-                          FORBIDDEN with details.reason do_not_contact or erased_identity; \
-                          VALIDATION with details.field and details.reason. A request_key \
-                          replays the first answer for 24 hours. Read the playbook \
-                          (jeeta.prospects.playbook) first. [risk: WRITE]",
+                          it, within the last 365 days); the website is the business's own site, \
+                          never a profile, listing, map or short link. Jeeta records you as the \
+                          recorder. Answers {prospect, flags}: flags possible_duplicate and \
+                          previously_rejected_soft list prospects sharing the website's domain \
+                          or the name and city (never a refusal: if this is another business, \
+                          name them in distinct_from next time). CONFLICT with details.reason \
+                          duplicate (prospect_id), in_inbox (person_id: add a note to that \
+                          person's journey instead), previously_rejected, daily_cap (scope, \
+                          resets_at) or task_closed; FORBIDDEN with details.reason \
+                          do_not_contact or erased_identity; VALIDATION with details.field and \
+                          details.reason. A request_key replays the prospect it recorded, read \
+                          again, for 24 hours. Call jeeta.prospects.check first. [risk: WRITE]",
             permission: Permission::ProspectsWork,
             schema: create_schema,
             run: create,
@@ -61,9 +65,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           with new evidence as on create, clear fields that are wrong or no \
                           longer published (clear: field names), name prospects it is not \
                           (distinct_from). The business name and kind are not edited. New \
-                          contact values meet create's checks. Answers {prospect}; CONFLICT \
-                          stale_revision (revision: read it again), duplicate, \
-                          possible_duplicate or not_editable. [risk: WRITE]",
+                          contact values meet create's checks. Answers {prospect, flags} (as \
+                          create's, for the keys the edit adds); CONFLICT stale_revision \
+                          (revision: read it again), duplicate or not_editable. [risk: WRITE]",
             permission: Permission::ProspectsWork,
             schema: update_schema,
             run: update,
@@ -118,24 +122,28 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "prospects.do_not_contact",
-            description: "A business asked not to be contacted: call this at once. With \
-                          prospect_id the prospect becomes do_not_contact, its contact data is \
-                          emptied and its keys stay only as hashes; with keys [{kind: phone, \
-                          email, instagram, tiktok, domain or name_city (name|city), value}] \
-                          (an objection heard by phone) the values are hashed. reason: \
-                          objected, legal, other (with a note). Nobody can record it again \
-                          until a person lifts it. Answers {prospect_id, kinds}. Requires \
-                          confirm: true. [risk: DESTRUCTIVE]",
+            description: "A business asked not to be contacted: call this at once (it works \
+                          even while the workspace is suspended). With prospect_id the prospect \
+                          becomes do_not_contact, its contact data and score history are emptied \
+                          and its phone, email and handles stay only as hashes; with keys \
+                          [{kind: phone, email, instagram or tiktok, value}] (an objection heard \
+                          by phone) the values are hashed and every prospect holding one is \
+                          marked too. A website domain or a name is shared by others and is \
+                          never listed. reason: objected, legal, other (with a note). Nobody can \
+                          record it again until a person lifts it. Answers {prospect_id, \
+                          prospects (every one marked), people (inbox people of promoted \
+                          prospects holding a key: record the objection on them too), kinds}. \
+                          Requires confirm: true. [risk: DESTRUCTIVE]",
             permission: Permission::ProspectsWork,
             schema: dnc_schema,
             run: do_not_contact,
         },
         ToolDef {
             use_case: "prospects.dnc_lift",
-            description: "Lift a do-not-contact entry: the kind and the raw value (the hash is \
-                          computed again). A person with prospects.manage only; an agent is \
-                          refused (human_only); an erasure is never lifted. Answers {kind, \
-                          lifted}. [risk: WRITE]",
+            description: "Lift a do-not-contact entry: the kind (phone, email, instagram, \
+                          tiktok) and the raw value (the hash is computed again). A person with \
+                          prospects.manage only; an agent is refused (human_only); an erasure is \
+                          never lifted. Answers {kind, lifted}. [risk: WRITE]",
             permission: Permission::ProspectsManage,
             schema: lift_schema,
             run: dnc_lift,
@@ -143,8 +151,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "prospects.erase",
             description: "Erase a prospect now (prospect_id; a person with prospects.manage \
-                          only): the row goes and every key it held is kept as an erased hash so \
-                          it is never recorded again. A promoted prospect is erased with its \
+                          only; it works even while the workspace is suspended): the row and its \
+                          scores go and its phone, email and handles are kept as erased hashes \
+                          so it is never recorded again. A promoted prospect is erased with its \
                           person (CONFLICT erase_the_person). Answers {prospect_id, erased, \
                           kinds}. Requires confirm: true. [risk: DESTRUCTIVE]",
             permission: Permission::ProspectsManage,
@@ -422,8 +431,9 @@ fn decide_schema() -> Schema {
     })
 }
 
+/// The kinds of key the do-not-contact list holds: the hard ones.
 fn key_kinds() -> Value {
-    json!({ "type": "string", "enum": ["phone", "email", "instagram", "tiktok", "domain", "name_city"] })
+    json!({ "type": "string", "enum": ["phone", "email", "instagram", "tiktok"] })
 }
 
 fn dnc_schema() -> Schema {
@@ -437,7 +447,7 @@ fn dnc_schema() -> Schema {
                 "maxItems": 20,
                 "items": {
                     "type": "object",
-                    "properties": { "kind": key_kinds(), "value": text(400, "The raw value; name_city as name|city.") },
+                    "properties": { "kind": key_kinds(), "value": text(400, "The raw value: a phone, an email, a handle or a profile URL.") },
                     "required": ["kind", "value"],
                     "additionalProperties": false,
                 },

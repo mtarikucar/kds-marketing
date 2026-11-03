@@ -77,6 +77,8 @@ fn tools_listed_with_risks() {
         "public source URL",
         "captured_at",
         "possible_duplicate",
+        "previously_rejected_soft",
+        "never a refusal",
         "distinct_from",
         "in_inbox",
         "daily_cap",
@@ -84,6 +86,19 @@ fn tools_listed_with_risks() {
         "never a private individual",
     ] {
         assert!(create.contains(word), "{word}");
+    }
+    // No tool the catalog does not have yet.
+    for (name, tool) in &tools {
+        assert!(
+            !tool.description.contains("jeeta.prospects.playbook"),
+            "{name}"
+        );
+    }
+    // The do-not-contact list holds hard keys only.
+    for name in ["jeeta.prospects.do_not_contact", "jeeta.prospects.dnc_lift"] {
+        let schema = schema(name).to_string();
+        assert!(!schema.contains("name_city"), "{name}");
+        assert!(!schema.contains("\"domain\""), "{name}");
     }
 }
 
