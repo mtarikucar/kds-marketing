@@ -336,7 +336,7 @@ async fn replying(db: &TestDb) -> Replying {
         .seal
         .seal(f.ws, &serde_json::to_vec(&credential).unwrap())
         .unwrap();
-    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
     t.capabilities()
         .insert(cap.clone(), Some(sealed))
         .await
