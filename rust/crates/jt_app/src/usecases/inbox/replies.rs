@@ -467,6 +467,9 @@ pub(super) async fn enqueue_in(
         })
         .await?;
     r.outbox().insert(row.clone()).await?;
+    if let Some(j) = &j {
+        crate::usecases::distribution::touch(r, ctx, j.id).await?;
+    }
     record(
         r,
         ctx,

@@ -148,6 +148,7 @@ pub async fn assign_owner(
         }
     }
     r.journeys().assign_owner(id, input.user_id).await?;
+    crate::usecases::distribution::record_manual(deps, ctx, r.as_mut(), id, input.user_id).await?;
     let row = r
         .journeys()
         .get(id)
@@ -274,6 +275,7 @@ pub async fn report(
     apply_effects(deps, ctx, r.as_mut(), &journey, &out.effects).await?;
     // Only status/effect metadata, never product, customer content or identity values.
     record(r.as_mut(), ctx, "inbox.event.reported", "journey", id, json!({"kind":input.kind,"from":journey.status,"to":out.transition.as_ref().map(Transition::to)})).await?;
+    crate::usecases::distribution::touch(r.as_mut(), ctx, id).await?;
     r.commit().await?;
     Ok(out)
 }

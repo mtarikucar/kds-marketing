@@ -77,6 +77,7 @@ pub struct Intervals {
     pub device_file_purge: Duration,
     pub prospects_purge: Duration,
     pub research_plan: Duration,
+    pub lead_distribution: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -123,6 +124,7 @@ impl Default for Intervals {
             device_file_purge: HOUR,
             prospects_purge: DAY,
             research_plan: HOUR,
+            lead_distribution: MINUTE,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -162,6 +164,7 @@ impl Intervals {
             Job::DeviceFilePurge => self.device_file_purge,
             Job::ProspectsPurge => self.prospects_purge,
             Job::ResearchPlan => self.research_plan,
+            Job::LeadDistribution => self.lead_distribution,
         }
     }
 }
@@ -480,6 +483,7 @@ mod tests {
             device_file_purge: every,
             prospects_purge: every,
             research_plan: every,
+            lead_distribution: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -590,6 +594,11 @@ mod tests {
         assert_eq!(i.of(Job::DeviceFilePurge), HOUR);
         assert_eq!(i.of(Job::ProspectsPurge), DAY);
         assert_eq!(i.of(Job::ResearchPlan), HOUR);
+        assert_eq!(i.of(Job::LeadDistribution), MINUTE);
+        assert_eq!(
+            Job::LeadDistribution.lock_name(),
+            "jeeta.jobs.lead_distribution"
+        );
         assert_eq!(Job::ResearchPlan.lock_name(), "jeeta.jobs.research_plan");
         assert_eq!(
             Job::ProspectsPurge.lock_name(),

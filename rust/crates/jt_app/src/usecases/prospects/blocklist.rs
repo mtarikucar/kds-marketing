@@ -81,7 +81,7 @@ pub struct DncOut {
 
 /// Writes every hard key of `keys` to the list with `reason` (and `expires_at` for a
 /// rejection), under the workspace key's fingerprint; the kinds written.
-async fn block(
+pub(crate) async fn block(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
@@ -102,7 +102,7 @@ async fn block(
 }
 
 /// The keys a prospect holds and would derive now, together.
-async fn all_keys(r: &mut dyn TenantRepos, p: &Prospect) -> Result<Vec<Key>, AppError> {
+pub(crate) async fn all_keys(r: &mut dyn TenantRepos, p: &Prospect) -> Result<Vec<Key>, AppError> {
     let mut keys: BTreeSet<Key> = r.prospects().keys_of(p.id).await?.into_iter().collect();
     keys.extend(derive_keys(p));
     Ok(keys.into_iter().collect())
@@ -420,6 +420,89 @@ pub async fn erase(
         erased: true,
         kinds,
     })
+}
+
+/// What a person's erasure did to the pool.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PersonErased {
+    /// The prospect promoted into the person, scrubbed (ids kept).
+    pub linked: Option<ProspectId>,
+    /// The unlinked prospects holding the person's phone or email, deleted.
+    pub deleted: Vec<ProspectId>,
+}
+
+/// Runs in `inbox.people.erase`'s transaction, after the inbox lock (it takes the pool lock):
+/// the prospect promoted into the person is scrubbed as a do-not-contact one is (personal
+/// fields, evidence, score rows and the create requests that recorded it gone; ids, status and
+/// promotion kept: its lifetime is the person's), and every unlinked live prospect holding one of
+/// the person's `keys` (phone, email) is deleted with the requests that recorded it. Every hard
+/// key each held is hashed as `erased`, so the business is not collected again (L-06): its
+/// handles, and its phone and email too (a `tr444:` number or an undeliverable address is no
+/// erased identity). One `prospects.erased {via: person}` entry per prospect.
+pub(crate) async fn on_person_erased(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    person: PersonId,
+    keys: &[Key],
+) -> Result<PersonErased, AppError> {
+    r.prospects().lock_pool().await?;
+    let mut out = PersonErased::default();
+    if let Some(mut p) = r.prospects().by_person(person).await? {
+        let held = all_keys(r, &p).await?;
+        let expected = p.revision;
+        scrub_for_dnc(&mut p);
+        p.updated_at = ctx.now;
+        p.revision = expected + 1;
+        match r.prospects().update(&p, &[], expected).await? {
+            Updated::Ok => {}
+            Updated::Stale | Updated::DuplicateKey { .. } => return Err(stale(expected)),
+        }
+        r.prospects().delete_scores(p.id).await?;
+        forget_requests(r, p.id).await?;
+        let kinds = block(deps, ctx, r, &held, BlockReason::Erased, None).await?;
+        record(
+            r,
+            ctx,
+            "prospects.erased",
+            p.id,
+            json!({ "prospect_id": p.id, "keys": kinds, "via": "person", "person_id": person }),
+        )
+        .await?;
+        out.linked = Some(p.id);
+    }
+    let hard: Vec<Key> = keys.iter().filter(|k| k.kind.hard()).cloned().collect();
+    let holders: BTreeSet<ProspectId> = r
+        .prospects()
+        .find_by_keys(&hard)
+        .await?
+        .into_iter()
+        .map(|(_, id)| id)
+        .filter(|id| Some(*id) != out.linked)
+        .collect();
+    for id in holders {
+        let Some(p) = r.prospects().lock(id).await? else {
+            continue;
+        };
+        // Another person's prospect: that person's erasure decides about it.
+        if p.status == ProspectStatus::Promoted {
+            continue;
+        }
+        let held = all_keys(r, &p).await?;
+        r.prospects().delete(id).await?;
+        forget_requests(r, id).await?;
+        let kinds = block(deps, ctx, r, &held, BlockReason::Erased, None).await?;
+        record(
+            r,
+            ctx,
+            "prospects.erased",
+            id,
+            json!({ "prospect_id": id, "keys": kinds, "via": "person", "person_id": person }),
+        )
+        .await?;
+        out.deleted.push(id);
+    }
+    Ok(out)
 }
 
 /// What one workspace's purge did.

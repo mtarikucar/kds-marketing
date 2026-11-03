@@ -14,6 +14,7 @@ pub mod calls;
 pub mod capabilities;
 pub mod connector;
 pub mod devices;
+pub mod distribution;
 pub mod events;
 pub mod failure;
 pub mod files;

@@ -18,10 +18,11 @@
 //!   the row again, and an erasure, a do-not-contact mark or a purge forgets the requests that
 //!   recorded the row.
 
-mod blocklist;
+pub(crate) mod blocklist;
 mod dedupe;
 pub mod playbook;
 pub mod pool;
+pub mod promote;
 mod score;
 mod settings;
 
@@ -34,6 +35,9 @@ pub use playbook::{PlaybookOut, playbook};
 pub use pool::{
     CheckInput, CheckOut, DuplicateCandidate, GetOut, ListInput, ListOut, NextPage, ProspectOut,
     check, create, get, list, update,
+};
+pub use promote::{
+    MAX_PROMOTE_BATCH, PromoteInput, PromoteOut, PromoteOutcome, ProspectSummary, promote,
 };
 pub use score::{DecideInput, DecideKind, ScoreOut, decide, rubric_digest, score};
 pub use settings::{SettingsInput, SettingsOut, settings_get, settings_set};

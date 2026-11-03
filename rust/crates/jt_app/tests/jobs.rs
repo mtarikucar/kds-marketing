@@ -299,6 +299,7 @@ fn every_job_has_a_lock_named_after_it() {
             "device_file_purge",
             "prospects_purge",
             "research_plan",
+            "lead_distribution",
         ]
     );
     for job in Job::ALL {

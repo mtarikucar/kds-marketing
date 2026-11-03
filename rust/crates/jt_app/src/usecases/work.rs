@@ -31,7 +31,11 @@
 //! - `ResearchDue` (3): each open research task that may still record prospects today, and
 //!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, only for a
 //!   caller holding `prospects.work` while the approved strategy has prospecting on (spec
-//!   2026-10-30-leads-pool-outreach-design.md §3.17).
+//!   2026-10-30-leads-pool-outreach-design.md §3.17);
+//! - `OwnerlessJourneys` (2): every open journey without an owner, whatever the cause (nobody
+//!   eligible, the manual mode, a v1 import, a manager's unassignment), with the longest-open
+//!   one, and `AssignmentStalled` (2): assignments past their SLA after the last reassignment,
+//!   only for a caller holding `inbox.manage` (spec §3.9: no journey is silently ownerless).
 //!
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
 //! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
@@ -206,6 +210,13 @@ pub enum WorkKind {
     },
     /// `count` new prospects have no score under the approved rubric.
     ProspectsToScore { count: u32 },
+    /// `count` open journeys have no owner; `oldest_journey_id` has waited longest.
+    OwnerlessJourneys {
+        count: u32,
+        oldest_journey_id: Option<jt_inbox::JourneyId>,
+    },
+    /// `count` assignments passed their SLA after the last reassignment.
+    AssignmentStalled { count: u32 },
 }
 
 impl WorkKind {
@@ -231,6 +242,9 @@ impl WorkKind {
             WorkKind::PhoneOffline { .. } => "devices.bridge.register",
             WorkKind::ResearchDue { .. } => "prospects.create",
             WorkKind::ProspectsToScore { .. } => "prospects.score",
+            WorkKind::OwnerlessJourneys { .. } | WorkKind::AssignmentStalled { .. } => {
+                "inbox.journeys.assign_owner"
+            }
         }
     }
 }
@@ -315,6 +329,27 @@ async fn pending_as_seen(
     } else {
         None
     };
+    // Ownerless and stalled journeys, for who may assign them.
+    let distribution = if ctx.permissions.contains(&Permission::InboxManage)
+        && status_exemption("inbox.journeys.assign_owner").allows(status)
+    {
+        let max = repos
+            .workspace_policy()
+            .read()
+            .await?
+            .leads
+            .distribution
+            .max_reassignments;
+        Some((
+            repos.assignments().count_ownerless().await?,
+            repos
+                .assignments()
+                .count_stalled(ctx.now, u32::from(max))
+                .await?,
+        ))
+    } else {
+        None
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -385,7 +420,9 @@ async fn pending_as_seen(
                         remaining_today,
                     },
                     priority: 3,
-                    hint: "Read jeeta.prospects.playbook and the task (jeeta.research.tasks_get),                            claim it (jeeta.research.tasks_claim), research businesses with your                            own tools and record each with jeeta.prospects.create."
+                    hint: "Read jeeta.prospects.playbook and the task (jeeta.research.tasks_get), \
+                           claim it (jeeta.research.tasks_claim), research businesses with your \
+                           own tools and record each with jeeta.prospects.create."
                         .into(),
                 }),
         );
@@ -393,7 +430,33 @@ async fn pending_as_seen(
             items.push(WorkItem {
                 kind: WorkKind::ProspectsToScore { count: p.to_score },
                 priority: 3,
-                hint: "Score the new prospects (jeeta.prospects.list with status new) with                        jeeta.prospects.score, sending the playbook's rubric_digest."
+                hint: "Score the new prospects (jeeta.prospects.list with status new) with \
+                       jeeta.prospects.score, sending the playbook's rubric_digest."
+                    .into(),
+            });
+        }
+    }
+    if let Some((ownerless, stalled)) = distribution {
+        if ownerless.count > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::OwnerlessJourneys {
+                    count: ownerless.count,
+                    oldest_journey_id: ownerless.oldest_journey_id,
+                },
+                priority: 2,
+                hint: "Open journeys have no owner: assign each with \
+                       jeeta.inbox.journeys_assign_owner, or hand them out with \
+                       jeeta.distribution.backfill (jeeta.distribution.get shows who is eligible)."
+                    .into(),
+            });
+        }
+        if stalled > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::AssignmentStalled { count: stalled },
+                priority: 2,
+                hint: "Assignments passed their SLA after the last reassignment: find them with \
+                       jeeta.distribution.assignments_list and give each an owner with \
+                       jeeta.inbox.journeys_assign_owner."
                     .into(),
             });
         }

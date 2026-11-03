@@ -468,6 +468,11 @@ async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
             remaining_today: 1,
         },
         WorkKind::ProspectsToScore { count: 1 },
+        WorkKind::OwnerlessJourneys {
+            count: 1,
+            oldest_journey_id: None,
+        },
+        WorkKind::AssignmentStalled { count: 1 },
     ] {
         assert!(
             jt_app::catalog::find(kind.cleared_by()).is_some(),

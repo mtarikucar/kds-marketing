@@ -132,6 +132,41 @@ pub(crate) async fn check(
     flags(r, &soft, except, distinct_from).await
 }
 
+/// Step 1 again, for a promotion (the lists may have changed since the prospect was recorded):
+/// `erased_identity` when a phone or an email was erased, `do_not_contact` when a hard key is
+/// listed as an objection or an erasure. A remembered rejection does not refuse: it was written
+/// after this prospect was recorded, by the purge of another one.
+pub(crate) async fn blocked(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    keys: &[Key],
+    now: OffsetDateTime,
+) -> Result<Option<&'static str>, AppError> {
+    for key in keys.iter().filter(|k| k.kind.hard()) {
+        if let Some(channel) = identity_channel(key)
+            && let Err(e) =
+                crate::usecases::inbox::erasure::check_identity(r, channel, &key.value).await
+        {
+            return if e.details["reason"] == "erased_identity" {
+                Ok(Some("erased_identity"))
+            } else {
+                Err(e)
+            };
+        }
+        let hash = blocklist_hash(deps, ctx, key)?;
+        if matches!(
+            r.prospect_blocklist()
+                .contains(key.kind, &hash, now)
+                .await?,
+            Some(BlockReason::DoNotContact | BlockReason::Erased)
+        ) {
+            return Ok(Some("do_not_contact"));
+        }
+    }
+    Ok(None)
+}
+
 /// The flags of the soft `keys` of a prospect that is `except` or new: the live prospects
 /// holding one, but those in `distinct_from`, rejected ones apart.
 pub(crate) async fn flags(

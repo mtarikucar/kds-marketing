@@ -141,11 +141,12 @@ pub enum Job {
     DeviceFilePurge,
     ProspectsPurge,
     ResearchPlan,
+    LeadDistribution,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 30] = [
+    pub const ALL: [Job; 31] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -176,6 +177,7 @@ impl Job {
         Job::DeviceFilePurge,
         Job::ProspectsPurge,
         Job::ResearchPlan,
+        Job::LeadDistribution,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -212,6 +214,7 @@ impl Job {
             Job::DeviceFilePurge => "device_file_purge",
             Job::ProspectsPurge => "prospects_purge",
             Job::ResearchPlan => "research_plan",
+            Job::LeadDistribution => "lead_distribution",
         }
     }
 
@@ -253,6 +256,7 @@ impl Job {
             Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
             Job::ProspectsPurge => run_prospects_purge(deps, now).await,
             Job::ResearchPlan => run_research_plan(deps, now).await,
+            Job::LeadDistribution => run_lead_distribution(deps, now).await,
         }
     }
 }
@@ -1193,6 +1197,33 @@ pub async fn run_research_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
                 report.changed += u64::from(planned.created + planned.superseded);
             }
             Ok(None) => report.skipped += 1,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// Distributes, in every active workspace, the open journeys no decision has settled and the
+/// assignments past their SLA ([`super::distribution::run`]): one transaction per journey.
+/// `touched` counts the workspaces with a decision, `changed` the decisions.
+pub async fn run_lead_distribution(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::LeadDistribution;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::distribution::run(deps, &ctx).await {
+            Ok(d) => {
+                let decisions = d.assigned + d.no_eligible + d.imported + d.reassigned + d.kept;
+                if decisions == 0 {
+                    report.skipped += 1;
+                } else {
+                    report.touched += 1;
+                    report.changed += u64::from(decisions);
+                }
+            }
             Err(e) => {
                 report.failed += 1;
                 step_failed(job, ws, None, &Failure::App(e));

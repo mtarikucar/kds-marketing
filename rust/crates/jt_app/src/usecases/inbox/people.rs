@@ -47,6 +47,8 @@ pub struct PersonOut {
     pub identities: Vec<Identity>,
     pub open_journey: Option<Journey>,
     pub conversations: Vec<Conversation>,
+    /// The prospect this person was promoted from.
+    pub prospect: Option<crate::usecases::prospects::ProspectSummary>,
 }
 
 pub async fn search(deps: &Deps, ctx: &Ctx, input: SearchInput) -> Result<Vec<Person>, AppError> {
@@ -70,6 +72,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppE
         identities: r.identities().list(person.id).await?,
         open_journey: r.journeys().open_for(person.id).await?,
         conversations: r.conversations().list(Some(person.id), 500).await?,
+        prospect: crate::usecases::prospects::promote::summary_for(r.as_mut(), person.id).await?,
         person,
     })
 }
@@ -101,6 +104,28 @@ pub(crate) async fn match_or_create(
     r: &mut dyn TenantRepos,
     input: CreateInput,
     own_identity: Option<usize>,
+) -> Result<CreateOut, AppError> {
+    match_or_create_with(deps, ctx, r, input, own_identity, None).await
+}
+
+/// What a person created by a promotion from the prospect pool starts with (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.5); a person created any other way starts with no
+/// company and an unknown recipient kind.
+#[derive(Clone, Debug)]
+pub(crate) struct NewPerson {
+    pub company: String,
+    pub recipient_kind: RecipientKind,
+}
+
+/// [`match_or_create`], a new person starting with `new`'s company and kind. A matched person is
+/// left as it is: the caller decides what changes.
+pub(crate) async fn match_or_create_with(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    input: CreateInput,
+    own_identity: Option<usize>,
+    new: Option<NewPerson>,
 ) -> Result<CreateOut, AppError> {
     if input.identities.is_empty() {
         return Err(invalid("identities", "at least one identity is required"));
@@ -145,8 +170,8 @@ pub(crate) async fn match_or_create(
             id: PersonId::from(deps.ids.uuid()),
             workspace_id: ctx.workspace_id,
             display_name: input.display_name,
-            company: String::new(),
-            recipient_kind: jt_inbox::RecipientKind::Unknown,
+            company: new.as_ref().map(|n| n.company.clone()).unwrap_or_default(),
+            recipient_kind: new.as_ref().map(|n| n.recipient_kind).unwrap_or_default(),
             first_touch: FirstTouch {
                 source: input.source.clone(),
                 capability_id: own_identity.and_then(|i| input.identities[i].capability_id),
