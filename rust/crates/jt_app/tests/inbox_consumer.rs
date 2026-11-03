@@ -1811,6 +1811,67 @@ async fn a_phone_app_echo_answers_the_conversation_without_the_agent() {
     assert_eq!(w.uow.snapshot().inbox.messages.len(), 2);
 }
 
+/// A phone-app echo is matched to what Jeeta sent by its `wamid` only: a send of Jeeta's still in
+/// flight with the same text is not taken for it, and the echo is filed as the business's own.
+#[tokio::test]
+async fn a_phone_app_echo_is_matched_by_its_wamid_only() {
+    use jt_app::ports::inbox::OutboxRow;
+    let (w, c) = first().await;
+    let conv = w.uow.snapshot().inbox.conversations[0].id;
+    let now = w.owner_ctx.now;
+    let sending = Message {
+        id: MessageId::new_v7(),
+        workspace_id: w.ws,
+        conversation_id: conv,
+        direction: Direction::Outbound,
+        author: Author::Agent,
+        body: "Siparişiniz yarın kargoda.".into(),
+        external_id: None,
+        status: MsgStatus::Queued,
+        cost_minor: None,
+        at: now,
+    };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages().insert_if_new(sending.clone()).await.unwrap();
+    r.outbox()
+        .insert(OutboxRow {
+            id: uuid::Uuid::now_v7(),
+            workspace_id: w.ws,
+            conversation_id: conv,
+            message_id: sending.id,
+            capability_id: c,
+            intent: json!({}),
+            expected_generation: 0,
+            fence_snapshot: Some(json!({ "send_at": now.unix_timestamp_nanos().to_string() })),
+            conversation_merged: false,
+            state: "sending".into(),
+            attempts: 0,
+            last_error: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    put(&w, Some(c), Provider::Meta, business_app(0), 5).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let ours = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.id == sending.id)
+        .unwrap();
+    assert_eq!(ours.external_id, None);
+    let echo = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.external_id.as_deref() == Some("wamid.TEST-ECHO-1"))
+        .expect("the echo is filed as its own message");
+    assert_eq!(echo.author, Author::BusinessApp);
+}
+
 /// The app's contacts become people with their phone identity, named as the app names them; a
 /// removal changes nobody.
 #[tokio::test]

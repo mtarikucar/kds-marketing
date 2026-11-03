@@ -129,7 +129,8 @@ job's alone to write.
 
 **D10. Phone-app echoes.** An `smb_message_echoes` item is an outbound message authored
 `business_app` ("the business, from the WhatsApp Business app"), deduplicated by its `wamid`
-against what Jeeta sent and by text against a send in flight. When it is newer than the
+only, against every message filed (what Jeeta sent included, once its send recorded the `wamid`;
+D16). When it is newer than the
 conversation's last inbound message, the conversation turns `theirs` (the business answered from
 the phone, so no reply is owed and the agent does not answer again); otherwise it only joins the
 thread.
@@ -163,6 +164,10 @@ message authored `business_app` nor a capability's `business_app` sharing, so 00
 refused (as 0018's is) once either is stored; 0024's once the app's events are. `Author` gets no
 `#[serde(other)]` fallback: in this codebase only a device bridge's failure reason has one, for
 newer bridges talking to an older server, and a stored author has nothing to fall back to.
+
+**D16. An echo is matched by its `wamid` only.** The business typed it on the phone: a send of
+Jeeta's in flight with the same text is not it, so the text match Messenger's echoes use is not
+applied to the app's.
 
 ## Open questions
 

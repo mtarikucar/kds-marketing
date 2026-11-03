@@ -1395,11 +1395,11 @@ async fn history(
 /// What the business sent from the WhatsApp Business app (`smb_message_echoes`,
 /// `EventKind::MessageEcho` with `{echo}`): an outbound message authored `business_app` in the
 /// person's conversation (one with nothing owed is started when there is none). Deduplicated by
-/// its `wamid` against every message filed (what Jeeta sent included), and by its text against a
-/// send of Jeeta's in flight (bound to it, as Messenger's echoes are; an ambiguous match is
-/// deferred). When it is newer than the conversation's last inbound message and the
-/// conversation was owed a reply, the business answered from the phone: the conversation turns
-/// `theirs`, so no agent answers again. Nothing else reacts to it.
+/// its `wamid` only, against every message filed (what Jeeta sent included, once its send
+/// recorded the `wamid`): the business typed it on the phone, so a send of Jeeta's in flight with
+/// the same text is not it. When it is newer than the conversation's last inbound message and
+/// the conversation was owed a reply, the business answered from the phone: the conversation
+/// turns `theirs`, so no agent answers again. Nothing else reacts to it.
 async fn app_echo(
     deps: &Deps,
     ctx: &Ctx,
@@ -1422,25 +1422,6 @@ async fn app_echo(
     let source = Source::Channel(Channel::WhatsApp);
     let person = app_person(deps, ctx, r, cap, customer, "", source).await?;
     let conv = quiet_conversation(deps, ctx, r, cap, person.id).await?;
-    let candidates = r
-        .messages()
-        .echo_candidates(conv.id, &body, event.received_at)
-        .await?;
-    match candidates.as_slice() {
-        [sent] => {
-            r.messages()
-                .set_status(
-                    sent.id,
-                    sent.status.clone(),
-                    Some(wamid.to_owned()),
-                    sent.cost_minor,
-                )
-                .await?;
-            return Ok("consumed");
-        }
-        [] => {}
-        _ => return Ok("deferred"),
-    }
     let at = activity_at(event);
     let inserted = r
         .messages()
