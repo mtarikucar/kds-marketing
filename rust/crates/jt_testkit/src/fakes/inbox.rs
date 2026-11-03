@@ -804,7 +804,8 @@ impl MessageRepo for MemTenant {
                     i.workspace_id == ws && i.id == sender && i.person_id == c.person_id && i.active
                 })
                 .ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
-            if channel_for_kind(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel) {
+            if conversation_channel(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel)
+            {
                 return Err(AppError::not_found("no matching inbound sender"));
             }
             if t.state()

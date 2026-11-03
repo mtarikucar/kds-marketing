@@ -112,6 +112,9 @@ pub async fn apply(
             }
         }
     }
+    // The public items move with their conversations: each survivor's state follows its items
+    // (settled before the merge's writes: see `settle_for_merge`).
+    super::public::settle_for_merge(r.as_mut(), &snapshot).await?;
     r.merges().apply_snapshot(&snapshot, input.keep, at).await?;
     for id in invalidated {
         let refused = r
@@ -189,6 +192,22 @@ pub async fn undo(
         .now
         .max(current.latest_write_at + Duration::microseconds(1));
     r.merges().restore_snapshot(&snapshot, at).await?;
+    // The public items went back to their conversations, which got their states back with
+    // them; a state that does not follow its items is settled (nothing written otherwise).
+    let targets = snapshot.conversation_targets();
+    super::public::settle_states(
+        r.as_mut(),
+        snapshot.public_items.iter().flat_map(|p| {
+            [
+                p.conversation_id,
+                targets
+                    .get(&p.conversation_id)
+                    .copied()
+                    .unwrap_or(p.conversation_id),
+            ]
+        }),
+    )
+    .await?;
     r.people().mark_merged(row.source_id, None, at).await?;
     r.merges().mark_undone(id, at).await?;
     row.status = "undone".into();

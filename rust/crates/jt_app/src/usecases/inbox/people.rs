@@ -94,13 +94,28 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Create
 
 /// Reuse inside the consumer's transaction. `own_identity` is the index of the message sender's
 /// identity in `input.identities`, never a client-controlled preferred person. Acquire the
-/// workspace lock before matching so simultaneous first contacts cannot create extra people.
+/// workspace lock before matching so simultaneous first contacts cannot create extra people. A
+/// person created here starts with an initial journey.
 pub(crate) async fn match_or_create(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     input: CreateInput,
     own_identity: Option<usize>,
+) -> Result<CreateOut, AppError> {
+    match_or_create_with(deps, ctx, r, input, own_identity, true).await
+}
+
+/// [`match_or_create`], a person it creates starting with a journey only when `open_journey`:
+/// a commenter or a marketplace asker is a person without one until buying intent shows (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md D4).
+pub(crate) async fn match_or_create_with(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    input: CreateInput,
+    own_identity: Option<usize>,
+    open_journey: bool,
 ) -> Result<CreateOut, AppError> {
     if input.identities.is_empty() {
         return Err(invalid("identities", "at least one identity is required"));
@@ -157,8 +172,10 @@ pub(crate) async fn match_or_create(
             updated_at: ctx.now,
         };
         r.people().insert(person.clone()).await?;
-        let journey = super::journeys::initial(deps, ctx, person.id, input.source);
-        r.journeys().insert_initial(journey).await?;
+        if open_journey {
+            let journey = super::journeys::initial(deps, ctx, person.id, input.source);
+            r.journeys().insert_initial(journey).await?;
+        }
         record(
             r,
             ctx,
@@ -239,7 +256,8 @@ async fn normalize(r: &mut dyn TenantRepos, input: &IdentityInput) -> Result<Str
         .find(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such capability"))?;
-    if channel_for_kind(&capability.kind_key).map(Channel::identity_channel) != Some(input.channel)
+    if conversation_channel(&capability.kind_key).map(Channel::identity_channel)
+        != Some(input.channel)
     {
         return Err(invalid(
             "capability_id",

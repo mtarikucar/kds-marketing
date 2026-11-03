@@ -781,9 +781,10 @@ pub async fn run_netgsm_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobRepor
                     for delivery in deliveries {
                         match delivery {
                             Delivery::Stored(_) => report.changed += 1,
-                            Delivery::Duplicate | Delivery::Unrouted | Delivery::Inactive => {
-                                report.skipped += 1
-                            }
+                            Delivery::Duplicate
+                            | Delivery::Unrouted
+                            | Delivery::Inactive
+                            | Delivery::Disabled => report.skipped += 1,
                         }
                     }
                 }
@@ -902,9 +903,10 @@ pub async fn run_netgsm_cdr_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     for delivery in deliveries {
                         match delivery {
                             Delivery::Stored(_) => report.changed += 1,
-                            Delivery::Duplicate | Delivery::Unrouted | Delivery::Inactive => {
-                                report.skipped += 1
-                            }
+                            Delivery::Duplicate
+                            | Delivery::Unrouted
+                            | Delivery::Inactive
+                            | Delivery::Disabled => report.skipped += 1,
                         }
                     }
                 }

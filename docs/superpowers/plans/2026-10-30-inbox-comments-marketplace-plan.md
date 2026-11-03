@@ -234,7 +234,20 @@ impl PublicEnvelope {
 // read. jt_testkit::fakes::{ScriptedPublic, PublicCall}: a scripted PublicSurface (reply_public,
 // reply_private, moderate, subject; push_hook runs inside a reply or moderation call), registered
 // only by ScriptedRegistry::with_public (the binary's registry test pins `public`/`public_poller`
-// as offered by no provider yet: M2, M4, T2 and H1 change that pin).
+// as offered by no provider yet: M2, M4, T2 and H1 change that pin). The connector-trait set is
+// pinned by jt_archtest/tests/studio_rules.rs (studio_has_no_ai_media_or_trend_provider).
+// As built in F5 (jt_app::usecases::inbox::public): comments_enabled(apps: &dyn PlatformAppConfig,
+// cap) -> bool also requires the platform's comment flag of the grant's login (access.app
+// "instagram" → InstagramApp.comment_scopes, else MetaApp.comment_scopes): with the flags off no
+// Meta comment path runs, whatever a token holds; marketplaces always true. surface_kind(kind),
+// surface_capability(r, cap) (messenger → facebook_page, instagram_dm → instagram, same account,
+// not retired), settle_state(r, conversation), settle_states, settle_for_merge(r, snapshot) (a
+// merge settles BEFORE apply_snapshot: the snapshot's own writes stamp the conversations the undo
+// guard reads; undo restores states with the snapshot), subject_fetch (SUBJECT_REFRESH = 1 day),
+// intake. webhook::Delivery::Disabled; jt_webhook::Counters.disabled_meta.
+// people::match_or_create_with(.., open_journey: bool): intake creates people without a journey.
+// record_inbound_sender (fake and Postgres) and identity normalisation accept the public kinds'
+// namespaces (conversation_channel). Intake ledger: inbox.public.answer_rejected only.
 
 // jt_app::ports::public (re-exported from ports::inbox)
 #[async_trait] pub trait PublicItemRepo: Send + Sync {
