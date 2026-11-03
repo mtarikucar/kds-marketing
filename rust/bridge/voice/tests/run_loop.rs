@@ -156,7 +156,12 @@ fn config(name: &str, jeeta: &str, ari: &str, listen: &str, speak: &str) -> (Con
             "VOICE_TRACE_FILE",
             dir.join("traces.jsonl").display().to_string(),
         ),
+        (
+            "VOICE_DIAL_LOG",
+            dir.join("dials.log").display().to_string(),
+        ),
     ]);
+    std::fs::create_dir_all(&dir).unwrap();
     (
         Config::from_env(|k| env.get(k).cloned(), true).unwrap(),
         dir,
@@ -306,5 +311,39 @@ async fn a_hangup_frees_the_line_for_the_next_dial() {
             .unwrap()
             .contains(&"call-b command_done".to_owned())
     );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_dial_handed_out_again_after_a_restart_rings_nobody() {
+    // A dial whose acknowledgement was lost before a restart, handed out again by a core that
+    // re-hands dials: the dial log holds its id, so the next run rings nobody (review of D, M2).
+    // The log holds command ids only, never a number.
+    let again = dial("call-tr", "+905321234567");
+    let (listen, speak, _listen_conns) = speech().await;
+    let (ari_base, first_ari) = fake_ari().await;
+    let (jeeta_base, _) = fake_jeeta(vec![again.clone()]).await;
+    let (first, dir) = config("restart", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(first, Duration::from_millis(1_000)).await;
+    assert!(
+        first_ari
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.starts_with("POST /ari/channels"))
+    );
+    let (ari_base, second_ari) = fake_ari().await;
+    let (jeeta_base, seen) = fake_jeeta(vec![again.clone()]).await;
+    let (second, _) = config("restart", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(second, Duration::from_millis(1_000)).await;
+    let ari = second_ari.lock().unwrap().join("\n");
+    assert!(!ari.contains("POST /ari/channels"), "{ari}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .contains(&"call-tr command_done".to_owned())
+    );
+    let log = std::fs::read_to_string(dir.join("dials.log")).unwrap();
+    assert_eq!(log.lines().collect::<Vec<_>>(), [again.id.0.to_string()]);
     let _ = std::fs::remove_dir_all(dir);
 }

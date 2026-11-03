@@ -75,6 +75,7 @@ fn configuration_defaults_hold_and_an_empty_value_is_unset() {
     assert_eq!(c.extension, "102");
     assert_eq!(c.cache_dir, Path::new("/var/lib/jeeta-voice/cache"));
     assert_eq!(c.trace_file, Path::new("/var/lib/jeeta-voice/traces.jsonl"));
+    assert_eq!(c.dial_log, Path::new("/var/lib/jeeta-voice/dials.log"));
     assert_eq!(
         c.listen,
         Endpoint::Unix("/run/jeeta-voice/listen/listen.sock".into())

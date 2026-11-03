@@ -11,9 +11,13 @@
 //! Nothing waits on a call (L6): each call's task is capped ([`crate::call::run_call_capped`]), a
 //! command or the core's loss is handed to it without waiting (a call that takes no more commands
 //! is reported failed), and a call the core asked to hang up leaves the line free for the next dial
-//! while it closes.
+//! while it closes. A dial is acted on at most once across restarts too (M2): its command id is
+//! appended to the dial log (`VOICE_DIAL_LOG`), read back at the start; the core also hands a dial
+//! out once.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -52,7 +56,7 @@ const CORE_LOST_AFTER: Duration = Duration::from_secs(5);
 /// The command long-poll's wait: the core's longest.
 const POLL_WAIT_S: u32 = 25;
 /// How many command ids are remembered, so that a command handed out again (its
-/// acknowledgement lost) runs once.
+/// acknowledgement lost) runs once; the dial log keeps as many dials.
 const SEEN_COMMANDS: usize = 1_000;
 /// How long a stop waits for the calls: a closing played within [`CLOSE_GRACE`], the hangup's
 /// confirmation, and a margin for ARI's retries.
@@ -78,14 +82,55 @@ pub fn register_input(config: &Config) -> RegisterInput {
     }
 }
 
-/// The command ids already taken, the oldest forgotten first.
-#[derive(Default)]
+/// The command ids already taken, the oldest forgotten first. The dials' ids are also appended to
+/// the dial log and read back at the start, so a dial handed out again after a restart (by a core
+/// that re-hands dials) rings nobody twice.
 struct Seen {
     order: VecDeque<CallCommandId>,
     set: HashSet<CallCommandId>,
+    log: PathBuf,
 }
 
 impl Seen {
+    /// The ids in the dial log at `log`, its last [`SEEN_COMMANDS`] (a line that is no id is
+    /// passed over). A log that cannot be read is empty; a longer one is rewritten with those.
+    fn open(log: PathBuf) -> Seen {
+        let ids: Vec<CallCommandId> = std::fs::File::open(&log)
+            .map(|f| {
+                std::io::BufReader::new(f)
+                    .lines()
+                    .map_while(Result::ok)
+                    .filter_map(|l| l.trim().parse().ok().map(CallCommandId))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let keep = &ids[ids.len().saturating_sub(SEEN_COMMANDS)..];
+        if ids.len() > SEEN_COMMANDS && rewrite(&log, keep).is_err() {
+            warn!("the dial log could not be shortened");
+        }
+        let mut seen = Seen {
+            order: VecDeque::new(),
+            set: HashSet::new(),
+            log,
+        };
+        for id in keep {
+            seen.insert(*id);
+        }
+        seen
+    }
+
+    /// `true` the first time `id` is seen; a dial's id is also appended to the dial log (a write
+    /// that fails is logged: the core hands a dial out once all the same).
+    fn first(&mut self, id: CallCommandId, dial: bool) -> bool {
+        if !self.insert(id) {
+            return false;
+        }
+        if dial && append(&self.log, id).is_err() {
+            warn!(command = %id, "the dial log could not be written");
+        }
+        true
+    }
+
     /// `true` the first time `id` is seen.
     fn insert(&mut self, id: CallCommandId) -> bool {
         if !self.set.insert(id) {
@@ -99,6 +144,23 @@ impl Seen {
         }
         true
     }
+}
+
+/// Appends `id` to the dial log (an id a line: no number, no word).
+fn append(log: &Path, id: CallCommandId) -> std::io::Result<()> {
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)?;
+    f.write_all(format!("{}\n", id.0).as_bytes())
+}
+
+/// Replaces the dial log with `ids`, through a temporary file renamed over it.
+fn rewrite(log: &Path, ids: &[CallCommandId]) -> std::io::Result<()> {
+    let temporary = log.with_extension("tmp");
+    let body: String = ids.iter().map(|id| format!("{}\n", id.0)).collect();
+    std::fs::write(&temporary, body)?;
+    std::fs::rename(&temporary, log)
 }
 
 /// Runs the line until `stop` turns true.
@@ -136,7 +198,7 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
     });
     let beat = tokio::spawn(heartbeat(jeeta.clone(), register_input(&config)));
     let events = tokio::spawn(forward_ari(ari.clone(), calls.clone()));
-    let mut seen = Seen::default();
+    let mut seen = Seen::open(config.dial_log.clone());
     let mut tasks = JoinSet::new();
     info!("the line is up");
     loop {
@@ -243,8 +305,10 @@ fn dispatch(
         .bridge_call_id
         .clone()
         .unwrap_or_else(|| c.call_id.to_string());
-    if seen.insert(c.id) {
-        match c.command() {
+    let command = c.command();
+    let dial = matches!(command, Ok(Command::Dial { .. }));
+    if seen.first(c.id, dial) {
+        match command {
             Ok(Command::Dial {
                 to_e164,
                 plan,

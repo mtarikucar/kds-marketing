@@ -13,6 +13,7 @@
 //! | `SPEAK_SOCKET` | `unix:/run/jeeta-voice/speak/speak.sock` |
 //! | `VOICE_CACHE_DIR` | `/var/lib/jeeta-voice/cache` |
 //! | `VOICE_TRACE_FILE` | `/var/lib/jeeta-voice/traces.jsonl` |
+//! | `VOICE_DIAL_LOG` | `/var/lib/jeeta-voice/dials.log`: the dials' command ids, so none rings twice across a restart |
 //! | `VOICE_MAX_CALL_S` | `600`: the slice's longest call, 1 to 3 600 s (`run` takes each plan's) |
 //! | `VOICE_ACK_MS`, `VOICE_FILLER_MS`, `VOICE_LONG_WAIT_MS`, `VOICE_STILL_THERE_MS`, `VOICE_PHRASE_GAP_MS` | [`Timing::default`] |
 //!
@@ -55,6 +56,8 @@ pub struct Config {
     pub speak: Endpoint,
     pub cache_dir: PathBuf,
     pub trace_file: PathBuf,
+    /// The command ids of the dials taken (one a line, ids only), read back at the start.
+    pub dial_log: PathBuf,
     pub timing: Timing,
     /// The slice's longest call, in seconds (B6 review): its closing plays then.
     pub max_call_s: u64,
@@ -69,6 +72,7 @@ impl std::fmt::Debug for Config {
             .field("listen", &self.listen)
             .field("speak", &self.speak)
             .field("cache_dir", &self.cache_dir)
+            .field("dial_log", &self.dial_log)
             .field("timing", &self.timing)
             .field("max_call_s", &self.max_call_s)
             .finish_non_exhaustive()
@@ -185,6 +189,9 @@ impl Config {
                 .into(),
             trace_file: get("VOICE_TRACE_FILE")
                 .unwrap_or_else(|| "/var/lib/jeeta-voice/traces.jsonl".into())
+                .into(),
+            dial_log: get("VOICE_DIAL_LOG")
+                .unwrap_or_else(|| "/var/lib/jeeta-voice/dials.log".into())
                 .into(),
             timing,
             max_call_s,

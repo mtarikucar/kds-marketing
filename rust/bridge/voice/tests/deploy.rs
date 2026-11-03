@@ -63,6 +63,9 @@ fn the_environment_example_is_the_bridges_defaults_and_the_speech_units_sockets(
     assert_eq!(from_example.speak, defaults.speak);
     assert_eq!(from_example.cache_dir, defaults.cache_dir);
     assert_eq!(from_example.trace_file, defaults.trace_file);
+    assert_eq!(from_example.dial_log, defaults.dial_log);
+    // The dial log is in the one directory the unit lets the bridge write.
+    assert!(defaults.dial_log.starts_with("/var/lib/jeeta-voice"));
     // The speech units serve the sockets the bridge reaches, each in its own service's directory.
     assert!(LISTEN_UNIT.contains(&format!("-e LISTEN_SOCKET={} ", vars["LISTEN_SOCKET"])));
     assert!(SPEAK_UNIT.contains(&format!("-e SPEAK_SOCKET={} ", vars["SPEAK_SOCKET"])));
