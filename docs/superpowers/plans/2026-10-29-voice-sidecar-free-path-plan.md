@@ -12974,6 +12974,12 @@ git add rust/crates/jt_app rust/crates/adapters/jt_mcp
 git commit -m "feat(calls): calls.say may wait for the reply; one short sentence per say" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**C4 as built (2026-11-03).** The steps ran as written, test first: the `calls_session` tests were seen failing to compile (E0560, no field `wait_reply_s`, with `say.rs` and `listen.rs` taken back) and `say_offers…` failing (`wait_reply_s` null in the schema, with the tool file taken back). The code is the plan's, reflowed by rustfmt. What differs:
+- `say.rs` imports `MAX_WAIT_S` with the module's other `super` names instead of naming `super::MAX_WAIT_S` inline; `SayInput`'s, `SayOut`'s and the module's docs say what `wait_reply_s` adds.
+- `listen`'s module doc says that `calls.say` with `wait_reply_s` waits the same way, without linking `wait_turns`: `cargo doc -D warnings` refuses a public doc that links a `pub(crate)` item. `wait_turns`' own doc adds that an unknown call is `NOT_FOUND`.
+- The nine `SayInput { … }` literals are all in `calls_session.rs` (`say_at` and eight others); each gains `wait_reply_s: None`.
+- Checks on Windows (`jt_pg`'s two unix-only lines removed locally, never committed): `jt_app` `calls_session` 30; `jt_mcp` `calls_mcp` 6 (`listen_long_poll_shape` included). Clippy `-D warnings` (jt_app lib with `tokio/time`, `calls_session`, jt_mcp all targets), `cargo fmt --all -- --check` and `cargo doc --no-deps -D warnings` (jt_app, jt_mcp) are clean. `jt_panel_http` (the `POST /api/calls/{id}/say` route takes the same `SayInput`) runs in CI.
+
 ### Task C5: The panel edits the opening and the phrases, and shows a call's latency
 
 **Files:**

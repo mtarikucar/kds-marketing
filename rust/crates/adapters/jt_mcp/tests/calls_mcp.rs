@@ -286,6 +286,17 @@ async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
     assert_eq!(listed["calls"][0]["counterpart"], "+90 5** *** ** 67");
 }
 
+#[test]
+fn say_offers_wait_reply_s_and_asks_for_one_short_sentence() {
+    let tools = tools();
+    let say = tools["jeeta.calls.say"].input_schema.as_value().clone();
+    assert_eq!(say["properties"]["wait_reply_s"]["maximum"], 25);
+    assert_eq!(say["properties"]["wait_reply_s"]["minimum"], 0);
+    let text = tools["jeeta.calls.say"].description;
+    assert!(text.contains("one short sentence"), "{text}");
+    assert!(text.contains("wait_reply_s"), "{text}");
+}
+
 #[tokio::test]
 async fn listen_long_poll_shape() {
     let tools = tools();

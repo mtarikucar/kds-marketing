@@ -99,24 +99,35 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           you listen again with the same after_seq. Returns {call_id, state, \
                           events: [{seq, at, kind, text, meta}], timed_out}; pass the last \
                           event's seq as after_seq next time. After the person speaks, reply \
-                          with jeeta.calls.say within 10 seconds: after 4 s the caller hears a \
-                          holding phrase, after 20 s a fallback line from your plan, and the \
-                          call ends by script once the fallback lines are spent. [risk: READ]",
+                          with jeeta.calls.say within 10 seconds: the bridge acknowledges and \
+                          fills a wait on its own; after 4 s the caller hears a holding phrase \
+                          if the bridge did not, after 20 s a fallback line from your plan, and \
+                          the call ends by script once the fallback lines are spent. \
+                          jeeta.calls.say with wait_reply_s returns the reply itself. \
+                          [risk: READ]",
             permission: Permission::CallsWork,
             schema: listen_schema,
             run: listen,
         },
         ToolDef {
             use_case: "calls.say",
-            description: "Say a sentence (text, at most 600 characters) to the person on your \
-                          live call; the voice bridge speaks it as you wrote it. expect_reply \
-                          (default true): false when you will speak again before the person \
-                          answers. allow_barge_in (default true): the person may cut it by \
-                          speaking (the turn then records interrupted_at_char). Reply within \
-                          10 seconds of the person's words: after 4 s the caller hears a \
-                          holding phrase, after 20 s a fallback line from your plan, and the \
-                          call ends by script. CONFLICT not_live once the call ended. Returns \
-                          {call_id, seq, state}. [risk: WRITE]",
+            description: "Say one short sentence (text, at most 600 characters) to the person \
+                          on your live call; the voice bridge speaks it as you wrote it. It \
+                          returns as soon as the sentence is queued, so send the next sentence \
+                          right away: the first one plays while you write the next. \
+                          wait_reply_s (0 to 25): after queuing, wait for the person's reply \
+                          (their words, a key, caller_silence or the hangup) and return \
+                          {events, timed_out} as jeeta.calls.listen would, which saves you one \
+                          listen per turn. expect_reply (default true): false when you will \
+                          speak again before the person answers. allow_barge_in (default \
+                          true): the person may cut it by speaking (the turn then records \
+                          interrupted_at_char, the characters heard). Reply within 10 seconds \
+                          of the person's words: the bridge acknowledges and fills a wait on \
+                          its own; after 4 s the caller hears a holding phrase if the bridge \
+                          did not, after 20 s a fallback line from your plan, and the call ends \
+                          by script. CONFLICT not_live once the call ended. Returns {call_id, \
+                          seq, state}, and events and timed_out with wait_reply_s. \
+                          [risk: WRITE]",
             permission: Permission::CallsWork,
             schema: say_schema,
             run: say,
@@ -314,6 +325,7 @@ fn say_schema() -> Schema {
             "text": { "type": "string", "minLength": 1, "maxLength": 600 },
             "expect_reply": { "type": "boolean" },
             "allow_barge_in": { "type": "boolean" },
+            "wait_reply_s": { "type": "integer", "minimum": 0, "maximum": 25, "description": "Wait this long (at most 25 s) for the person's reply and return it as events; without it the call answers at once." },
         },
         "required": ["call_id", "text"],
         "additionalProperties": false,

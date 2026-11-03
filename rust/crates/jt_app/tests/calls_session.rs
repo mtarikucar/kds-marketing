@@ -330,6 +330,7 @@ impl Rig {
                 text: text.into(),
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await
@@ -592,6 +593,7 @@ async fn say_enqueues_tts_command_and_turn() {
             text: "Alo?".into(),
             expect_reply: true,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await;
@@ -629,6 +631,7 @@ async fn say_enqueues_tts_command_and_turn() {
                 text: bad,
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await);
@@ -644,6 +647,7 @@ async fn say_enqueues_tts_command_and_turn() {
             text: "Alo?".into(),
             expect_reply: true,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await);
@@ -658,6 +662,7 @@ async fn say_enqueues_tts_command_and_turn() {
                 text: "Alo?".into(),
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await),
@@ -911,6 +916,7 @@ async fn caller_hangup_ends_session_with_call_made() {
                     text: "Alo?".into(),
                     expect_reply: true,
                     allow_barge_in: true,
+                    wait_reply_s: None,
                 },
             )
             .await
@@ -1054,6 +1060,7 @@ async fn transfer_ends_agent_part() {
                     text: "Alo?".into(),
                     expect_reply: true,
                     allow_barge_in: true,
+                    wait_reply_s: None,
                 },
             )
             .await
@@ -1222,6 +1229,7 @@ async fn every_played_text_is_authored() {
             text: agent_lines[1].into(),
             expect_reply: false,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await
@@ -1377,6 +1385,7 @@ async fn replay(name: &str) {
                             text: step["text"].as_str().unwrap().into(),
                             expect_reply: step["expect_reply"].as_bool().unwrap_or(true),
                             allow_barge_in: true,
+                            wait_reply_s: None,
                         },
                     )
                     .await
@@ -1740,4 +1749,59 @@ async fn a_calls_view_carries_neither_its_clock_nor_its_dialled_phrases() {
         );
         assert_eq!(item["latency"]["perceived"]["p50"], 600);
     }
+}
+
+#[tokio::test]
+async fn say_with_wait_reply_returns_the_callers_next_words() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Merhaba?").await;
+    let deps = r.w.deps.clone();
+    let ctx = r.agent_at(11);
+    let speaking = tokio::spawn(async move {
+        say::say(
+            &deps,
+            &ctx,
+            call,
+            SayInput {
+                text: "Perşembe uygun mu?".into(),
+                expect_reply: true,
+                allow_barge_in: true,
+                wait_reply_s: Some(10),
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // The sentence was queued before the wait began.
+    assert_eq!(kinds(&r.poll(11).await), ["say"]);
+    // A phrase of the bridge is not the reply.
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "acknowledgement", "index": 0 }]),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!speaking.is_finished());
+    r.utterance(13, call, "Evet, uygun.").await;
+    let out = speaking.await.unwrap().unwrap();
+    assert_eq!(out.timed_out, Some(false));
+    let events = out.events.unwrap();
+    assert_eq!(events.last().unwrap().text, "Evet, uygun.");
+    assert!(events.iter().all(|t| t.seq > out.seq));
+}
+
+#[tokio::test]
+async fn say_without_wait_reply_answers_at_once_as_before() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    let out = r.say_at(10, call, "Merhaba.").await;
+    let shown = serde_json::to_value(&out).unwrap();
+    assert!(
+        shown.get("events").is_none() && shown.get("timed_out").is_none(),
+        "{shown}"
+    );
 }
