@@ -1,7 +1,8 @@
 //! The gate rule, structural half (spec §5, B1): only the use cases the Global Constraints list
 //! may be `Exempt` from the strategy gate; every other use case is `Gated`. Separately, only
-//! `auth.*`, `workspace.*` and `platform.*` use cases run whatever the workspace's status, and
-//! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
+//! `auth.*`, `workspace.*` and `platform.*` use cases and the objections (a business's
+//! do-not-contact and erasure) run whatever the workspace's status, and `strategy.*` and `work.*`
+//! ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
 //! lives in the adapters' tests.
 
@@ -56,6 +57,9 @@ const EXEMPT_IDS: &[&str] = &[
     "devices.act",
     "devices.command_get",
     "devices.commands",
+    // A business's objection and an erasure must always be recordable (leads spec D29).
+    "prospects.do_not_contact",
+    "prospects.erase",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
@@ -88,8 +92,10 @@ const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 #[test]
 fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_while_unpaid() {
     let expected = |id: &str| {
-        if matches!(id, "billing.status" | "ops.health")
-            || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
+        if matches!(
+            id,
+            "billing.status" | "ops.health" | "prospects.do_not_contact" | "prospects.erase"
+        ) || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
         {
             StatusExemption::Always
         } else if id == "billing.activate"

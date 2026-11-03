@@ -98,14 +98,21 @@ pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."
 /// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
 pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
+/// The use cases that record a business's objection or erase its data: an objection must always
+/// be recordable, so they run whatever the workspace's status ([`StatusExemption::Always`]) and
+/// without an approved strategy ([`GateMode::Exempt`]).
+pub const OBJECTION_USE_CASES: &[&str] = &["prospects.do_not_contact", "prospects.erase"];
+
 /// The status exemption of use case `id`. The exact `billing.status` row is Always and
 /// `billing.report_payment` and `billing.activate` are PendingPayment; no other billing name is exempt.
+/// The [`OBJECTION_USE_CASES`] are Always.
 /// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
     if equals(id, "ops.health")
         || equals(id, "billing.status")
+        || equals_any(id, OBJECTION_USE_CASES)
         || starts_with_any(id, STATUS_EXEMPT_PREFIXES)
     {
         StatusExemption::Always
@@ -122,6 +129,18 @@ pub const fn status_exemption(id: &str) -> StatusExemption {
 /// Whether `id` starts with one of `prefixes`, usable in a constant.
 const fn equals(a: &str, b: &str) -> bool {
     a.len() == b.len() && starts_with(a, b)
+}
+
+/// Whether `id` is one of `ids`, usable in a constant.
+const fn equals_any(id: &str, ids: &[&str]) -> bool {
+    let mut i = 0;
+    while i < ids.len() {
+        if equals(id, ids[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
@@ -397,8 +416,10 @@ pub static CATALOG: &[UseCase] = &[
     // The prospect pool (spec 2026-10-30-leads-pool-outreach-design.md §7.1), for an agent or a
     // person holding `prospects.work` (`prospects.manage` for the settings, lifting and erasing).
     // `check` and the do-not-contact lift are `POST`: their bodies carry contact values, which never
-    // go into a URL. `prospects.playbook` comes with the research tasks, `prospects.promote` with
-    // distribution and `prospects.report` with outreach.
+    // go into a URL. Do-not-contact and erasure record an objection, which must always be
+    // recordable: they are `OBJECTION_USE_CASES`, exempt from the strategy gate and from the
+    // workspace status. `prospects.playbook` comes with the research tasks, `prospects.promote`
+    // with distribution and `prospects.report` with outreach.
     twin("prospects.check", GateMode::Gated, "jeeta.prospects.check", ("POST", "/api/prospects/check"), Read),
     twin("prospects.create", GateMode::Gated, "jeeta.prospects.create", ("POST", "/api/prospects"), Write),
     twin("prospects.update", GateMode::Gated, "jeeta.prospects.update", ("PATCH", "/api/prospects/{prospect_id}"), Write),
@@ -406,9 +427,9 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.get", GateMode::Gated, "jeeta.prospects.get", ("GET", "/api/prospects/{prospect_id}"), Read),
     twin("prospects.score", GateMode::Gated, "jeeta.prospects.score", ("POST", "/api/prospects/{prospect_id}/scores"), Write),
     twin("prospects.decide", GateMode::Gated, "jeeta.prospects.decide", ("POST", "/api/prospects/{prospect_id}/decision"), Write),
-    twin("prospects.do_not_contact", GateMode::Gated, "jeeta.prospects.do_not_contact", ("POST", "/api/prospects/do-not-contact"), Destructive),
+    twin("prospects.do_not_contact", Exempt, "jeeta.prospects.do_not_contact", ("POST", "/api/prospects/do-not-contact"), Destructive),
     twin("prospects.dnc_lift", GateMode::Gated, "jeeta.prospects.dnc_lift", ("POST", "/api/prospects/do-not-contact/lift"), Write),
-    twin("prospects.erase", GateMode::Gated, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
+    twin("prospects.erase", Exempt, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
     twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the

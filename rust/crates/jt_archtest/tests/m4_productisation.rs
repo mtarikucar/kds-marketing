@@ -410,7 +410,7 @@ fn only_named_billing_rows_bypass_pending_status() {
         } else if ["auth.", "workspace.", "platform."]
             .iter()
             .any(|p| row.id.starts_with(p))
-            || row.id == "ops.health"
+            || ["ops.health", "prospects.do_not_contact", "prospects.erase"].contains(&row.id)
         {
             Always
         } else if ["strategy.", "work."].iter().any(|p| row.id.starts_with(p)) {

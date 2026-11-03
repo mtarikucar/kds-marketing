@@ -170,7 +170,14 @@ fn suspended_blocks_strategy_and_work_too() {
 
 #[test]
 fn only_auth_workspace_and_platform_use_cases_are_status_exempt_in_every_status() {
-    for id in ["auth.me", "workspace.info", "platform.workspaces.list"] {
+    for id in [
+        "auth.me",
+        "workspace.info",
+        "platform.workspaces.list",
+        // An objection must always be recordable.
+        "prospects.do_not_contact",
+        "prospects.erase",
+    ] {
         assert_eq!(status_exemption(id), StatusExemption::Always, "{id}");
     }
     for id in [
@@ -198,6 +205,9 @@ fn only_auth_workspace_and_platform_use_cases_are_status_exempt_in_every_status(
         "workspaces.x",
         "strategies.x",
         "works.x",
+        "prospects.create",
+        "prospects.dnc_lift",
+        "prospects.do_not_contact_x",
         "",
     ] {
         assert_eq!(status_exemption(id), StatusExemption::Never, "{id}");
