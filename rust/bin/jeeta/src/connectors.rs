@@ -195,6 +195,10 @@ mod tests {
                 "delivery_reports",
                 registry.delivery_reports(provider).is_some(),
             ),
+            // Replies on public items and their polls: no adapter offers them yet (tasks M2,
+            // M4, T2 and H1 of plan 2026-10-30-inbox-comments-marketplace-plan.md).
+            ("public", registry.public(provider).is_some()),
+            ("public_poller", registry.public_poller(provider).is_some()),
         ]
         .into_iter()
         .filter_map(|(name, some)| some.then_some(name))

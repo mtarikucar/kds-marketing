@@ -22,10 +22,11 @@ use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus,
     InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
-    MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp, OAuthApp,
-    OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt, PublishRequest,
-    PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, Telephony, TiktokApp,
-    TiktokCreator, Url, XApp,
+    MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
+    ModerationAction, OAuthApp, OAuthProvider, PlatformAppConfig, PostMetrics, PrivateReceipt,
+    PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
+    RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url,
+    XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -51,6 +52,8 @@ pub struct FakeAppConfig {
     pub x: Option<XApp>,
     pub tiktok: Option<TiktokApp>,
     pub linkedin: Option<LinkedinApp>,
+    /// The Hepsiburada integrator user; `None` by default (the merchant id stands in for it).
+    pub hepsiburada_integrator_user: Option<String>,
     pub public_base_url: Option<Url>,
 }
 
@@ -62,6 +65,7 @@ impl Default for FakeAppConfig {
             x: None,
             tiktok: None,
             linkedin: None,
+            hepsiburada_integrator_user: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
         }
     }
@@ -82,10 +86,12 @@ impl FakeAppConfig {
                 login_config_id: None,
                 whatsapp_config_id: None,
                 graph_version: None,
+                comment_scopes: false,
             }),
             instagram: Some(InstagramApp {
                 app_id: "instagram-app-id".into(),
                 app_secret: "instagram-app-secret".into(),
+                comment_scopes: false,
             }),
             x: Some(XApp {
                 client_id: "x-client-id".into(),
@@ -125,6 +131,10 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         self.linkedin.clone()
+    }
+
+    fn hepsiburada_integrator_user(&self) -> Option<String> {
+        self.hepsiburada_integrator_user.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -1039,6 +1049,185 @@ impl DeliveryReports for ScriptedConnector {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The scripted public surface
+// ---------------------------------------------------------------------------------------------
+
+/// One call a [`ScriptedPublic`] received, with its arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PublicCall {
+    ReplyPublic {
+        credential: Credential,
+        public: Value,
+        target: PublicTarget,
+        text: String,
+    },
+    ReplyPrivate {
+        credential: Credential,
+        public: Value,
+        target: PublicTarget,
+        text: String,
+    },
+    Moderate {
+        credential: Credential,
+        public: Value,
+        target: PublicTarget,
+        action: ModerationAction,
+    },
+    Subject {
+        public: Value,
+        subject_external_id: String,
+    },
+}
+
+/// A provider's replies and moderation on public items ([`PublicSurface`]), answering from the
+/// queues its `push_*` methods fill and recording every call. A reply or a moderation with
+/// nothing queued panics; [`PublicSurface::subject`] answers `Ok(None)` (the trait's default)
+/// when nothing is queued. A hook queued with [`ScriptedPublic::push_hook`] runs inside the next
+/// reply or moderation call, before its answer: a provider call during which the world changes.
+/// Registered in a [`ScriptedRegistry`] with [`ScriptedRegistry::with_public`] only: the binary
+/// offers no public surface until its adapters do.
+pub struct ScriptedPublic {
+    provider: Provider,
+    calls: Mutex<Vec<PublicCall>>,
+    hooks: Script<SendHook>,
+    reply_public: Script<Result<SendReceipt, ConnectorError>>,
+    reply_private: Script<Result<PrivateReceipt, ConnectorError>>,
+    moderate: Script<Result<(), ConnectorError>>,
+    subject: Script<Result<Option<SubjectFacts>, ConnectorError>>,
+}
+
+impl ScriptedPublic {
+    /// A public surface of `provider` with nothing queued.
+    pub fn new(provider: Provider) -> Self {
+        ScriptedPublic {
+            provider,
+            calls: Mutex::new(Vec::new()),
+            hooks: Script::default(),
+            reply_public: Script::default(),
+            reply_private: Script::default(),
+            moderate: Script::default(),
+            subject: Script::default(),
+        }
+    }
+
+    /// The provider whose surface this is.
+    pub fn provider(&self) -> Provider {
+        self.provider
+    }
+
+    /// Every call so far, in order.
+    pub fn calls(&self) -> Vec<PublicCall> {
+        lock(&self.calls).clone()
+    }
+
+    pub fn push_reply_public(&self, result: Result<SendReceipt, ConnectorError>) {
+        self.reply_public.push(result);
+    }
+
+    pub fn push_reply_private(&self, result: Result<PrivateReceipt, ConnectorError>) {
+        self.reply_private.push(result);
+    }
+
+    pub fn push_moderate(&self, result: Result<(), ConnectorError>) {
+        self.moderate.push(result);
+    }
+
+    /// Queues what the next [`PublicSurface::subject`] answers.
+    pub fn push_subject(&self, result: Result<Option<SubjectFacts>, ConnectorError>) {
+        self.subject.push(result);
+    }
+
+    /// Runs `hook` inside the next reply or moderation call, before it answers.
+    pub fn push_hook<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.hooks.push(Box::new(move || Box::pin(hook())));
+    }
+
+    async fn during_call(&self) {
+        if let Some(hook) = self.hooks.try_next() {
+            hook().await;
+        }
+    }
+
+    fn record(&self, call: PublicCall) {
+        lock(&self.calls).push(call);
+    }
+}
+
+#[async_trait]
+impl PublicSurface for ScriptedPublic {
+    async fn reply_public(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<SendReceipt, ConnectorError> {
+        self.record(PublicCall::ReplyPublic {
+            credential: cred.clone(),
+            public: public.clone(),
+            target: target.clone(),
+            text: text.to_owned(),
+        });
+        self.during_call().await;
+        self.reply_public
+            .next("ScriptedPublic", self.provider, "reply_public result")
+    }
+
+    async fn reply_private(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<PrivateReceipt, ConnectorError> {
+        self.record(PublicCall::ReplyPrivate {
+            credential: cred.clone(),
+            public: public.clone(),
+            target: target.clone(),
+            text: text.to_owned(),
+        });
+        self.during_call().await;
+        self.reply_private
+            .next("ScriptedPublic", self.provider, "reply_private result")
+    }
+
+    async fn moderate(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        action: ModerationAction,
+    ) -> Result<(), ConnectorError> {
+        self.record(PublicCall::Moderate {
+            credential: cred.clone(),
+            public: public.clone(),
+            target: target.clone(),
+            action,
+        });
+        self.during_call().await;
+        self.moderate
+            .next("ScriptedPublic", self.provider, "moderate result")
+    }
+
+    async fn subject(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+        subject_external_id: &str,
+    ) -> Result<Option<SubjectFacts>, ConnectorError> {
+        self.record(PublicCall::Subject {
+            public: public.clone(),
+            subject_external_id: subject_external_id.to_owned(),
+        });
+        self.subject.try_next().unwrap_or(Ok(None))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The scripted OAuth provider
 // ---------------------------------------------------------------------------------------------
 
@@ -1222,6 +1411,7 @@ const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
 pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,
     oauth: BTreeMap<Provider, Arc<ScriptedOAuth>>,
+    public: BTreeMap<Provider, Arc<ScriptedPublic>>,
 }
 
 impl ScriptedRegistry {
@@ -1239,6 +1429,13 @@ impl ScriptedRegistry {
     /// Registers `oauth` for its provider, replacing any registered before.
     pub fn with_oauth(mut self, oauth: Arc<ScriptedOAuth>) -> Self {
         self.oauth.insert(oauth.provider, oauth);
+        self
+    }
+
+    /// Registers `public` as its provider's public surface ([`ConnectorRegistry::public`]),
+    /// replacing any registered before. Only explicitly: no production adapter offers one yet.
+    pub fn with_public(mut self, public: Arc<ScriptedPublic>) -> Self {
+        self.public.insert(public.provider, public);
         self
     }
 
@@ -1319,5 +1516,12 @@ impl ConnectorRegistry for ScriptedRegistry {
     fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>> {
         self.offered(provider, NETGSM_ONLY)
             .map(|c| c as Arc<dyn DeliveryReports>)
+    }
+
+    fn public(&self, provider: Provider) -> Option<Arc<dyn PublicSurface>> {
+        self.public
+            .get(&provider)
+            .cloned()
+            .map(|p| p as Arc<dyn PublicSurface>)
     }
 }

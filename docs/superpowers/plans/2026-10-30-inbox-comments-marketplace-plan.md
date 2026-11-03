@@ -225,6 +225,16 @@ impl PublicEnvelope {
     pub fn into_payload(self, provider_item: Value) -> Value;
     pub fn from_payload(payload: &Value) -> Option<PublicEnvelope>;
 }
+// As built in F4: from_payload also refuses a blank external id (account, item, root, parent) or
+// one over MAX_EXTERNAL_ID_CHARS; PublicTarget and PrivateReceipt are serde (the target is stored
+// in intent.public.target); ModerationAction is serde-tagged by "action", ReportReason snake_case.
+// PlatformAppConfig::hepsiburada_integrator_user(&self) -> Option<String> (default None, read from
+// JEETA_HEPSIBURADA_INTEGRATOR_USER) stands for the integrator user: no Hepsiburada "app" struct.
+// InboxPolicy::with_default_response_times(self) -> Self is the key-wise merge both repos apply on
+// read. jt_testkit::fakes::{ScriptedPublic, PublicCall}: a scripted PublicSurface (reply_public,
+// reply_private, moderate, subject; push_hook runs inside a reply or moderation call), registered
+// only by ScriptedRegistry::with_public (the binary's registry test pins `public`/`public_poller`
+// as offered by no provider yet: M2, M4, T2 and H1 change that pin).
 
 // jt_app::ports::public (re-exported from ports::inbox)
 #[async_trait] pub trait PublicItemRepo: Send + Sync {

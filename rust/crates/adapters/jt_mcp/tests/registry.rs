@@ -648,7 +648,9 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
             "netgsm_sms",
             "netgsm_iys",
             "netgsm_pbx",
-            "meta_token"
+            "meta_token",
+            "trendyol_seller",
+            "hepsiburada_merchant"
         ])
     );
     assert_eq!(

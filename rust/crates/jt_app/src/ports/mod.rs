@@ -1071,6 +1071,12 @@ pub const MIN_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 15;
 pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
 
 /// Inbox response deadlines, reachability and fixed-stage display labels.
+///
+/// `max_response_s` is keyed by channel or surface: `whatsapp`, `instagram_dm`, `messenger`,
+/// `sms`, and the public surfaces' kinds `instagram`, `facebook_page`, `trendyol`, `hepsiburada`,
+/// with `amazon` for Amazon relay mail. A stored policy reads with every default it lacks
+/// ([`InboxPolicy::with_default_response_times`]): a map stored before a default was added
+/// would otherwise hide it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InboxPolicy {
@@ -1086,6 +1092,11 @@ impl Default for InboxPolicy {
                 ("instagram_dm", 900),
                 ("messenger", 900),
                 ("sms", 3600),
+                ("instagram", 3600),
+                ("facebook_page", 3600),
+                ("trendyol", 3600),
+                ("hepsiburada", 1800),
+                ("amazon", 3600),
             ]
             .into_iter()
             .map(|(k, v)| (k.into(), v))
@@ -1093,6 +1104,16 @@ impl Default for InboxPolicy {
             unreachable_threshold: 3,
             status_labels: BTreeMap::new(),
         }
+    }
+}
+impl InboxPolicy {
+    /// This policy with every default response time it lacks, key by key: a stored key keeps its
+    /// value. What a repository answers for a stored policy.
+    pub fn with_default_response_times(mut self) -> Self {
+        for (key, seconds) in InboxPolicy::default().max_response_s {
+            self.max_response_s.entry(key).or_insert(seconds);
+        }
+        self
     }
 }
 

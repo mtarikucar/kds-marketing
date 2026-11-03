@@ -1210,6 +1210,7 @@ mod tests {
             login_config_id: None,
             whatsapp_config_id: None,
             graph_version: v.map(str::to_owned),
+            comment_scopes: false,
         };
         assert_eq!(graph_version(&app(None)).unwrap(), "v19.0");
         assert_eq!(graph_version(&app(Some(" "))).unwrap(), "v19.0");

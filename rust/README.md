@@ -172,6 +172,9 @@ hiçbir günlük satırında görünmez.
 | `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
 | `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
+| `JEETA_INSTAGRAM_COMMENT_SCOPES` | kapalı | `1`/`true`: Instagram Login akışları yorum izinlerini de ister (onaydan sonra). Instagram uygulaması olmadan verilemez |
+| `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
