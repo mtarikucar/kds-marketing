@@ -1,6 +1,7 @@
 //! The bridge's calls to Jeeta, against a fake Jeeta: the key on every route, the request header on
 //! the posts, the long-poll's query, the bodies of `jt_calls::wire`; errors without the address.
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -95,7 +96,7 @@ fn register_input() -> RegisterInput {
 #[tokio::test]
 async fn the_key_and_the_request_header_go_where_jeeta_expects_them() {
     let (base, seen) = fake_jeeta().await;
-    let client = JeetaClient::new(&base, "jeeta_test_key");
+    let client = JeetaClient::new(&base, "jeeta_test_key").unwrap();
     assert_eq!(
         client
             .register(&register_input())
@@ -137,16 +138,82 @@ async fn the_key_and_the_request_header_go_where_jeeta_expects_them() {
 async fn errors_carry_a_status_or_a_kind_and_never_the_address() {
     let (base, _) = fake_jeeta().await;
     let refused = JeetaClient::new(&base, "bad")
+        .unwrap()
         .register(&register_input())
         .await
         .unwrap_err();
     assert!(matches!(refused, ClientError::Status(403)));
     assert!(!refused.retryable());
     let unreachable = JeetaClient::new("http://127.0.0.1:9", "k")
+        .unwrap()
         .register(&register_input())
         .await
         .unwrap_err();
     assert!(matches!(unreachable, ClientError::Transport));
     assert!(unreachable.retryable());
     assert!(!unreachable.to_string().contains("127.0.0.1"));
+}
+
+/// A core that takes the connection and never answers (wedged).
+async fn wedged_jeeta() -> String {
+    let wedged = || async {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        StatusCode::OK
+    };
+    let app = Router::new()
+        .route("/api/voice/bridge/register", post(wedged))
+        .route("/api/voice/bridge/events", post(wedged))
+        .route(
+            "/api/voice/bridge/commands",
+            get(|| async {
+                tokio::time::sleep(Duration::from_secs(4)).await;
+                Json(json!({ "commands": [], "timed_out": true }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+#[tokio::test]
+async fn a_wedged_core_fails_a_report_in_seconds_but_the_long_poll_waits() {
+    // The register and the events posts give up after about 3 s, so the line tells its calls the
+    // core is lost within seconds (M3); the long-poll alone waits its 25 s and the core's answer.
+    let client = JeetaClient::new(&wedged_jeeta().await, "k").unwrap();
+    let started = Instant::now();
+    let e = client.register(&register_input()).await.unwrap_err();
+    assert!(matches!(e, ClientError::Transport) && e.retryable());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    let started = Instant::now();
+    let batch = EventsInput {
+        events: vec![EventIn {
+            bridge_call_id: "c-1".into(),
+            bridge_seq: 1,
+            at: OffsetDateTime::now_utc(),
+            event: BridgeEvent::Ringing,
+        }],
+    };
+    assert!(matches!(
+        client.events(&batch).await.unwrap_err(),
+        ClientError::Transport
+    ));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    // A poll the core answers after 4 s is answered.
+    let polled = client
+        .commands(&CommandsQuery {
+            wait_s: Some(25),
+            extension: None,
+        })
+        .await
+        .unwrap();
+    assert!(polled.timed_out);
 }

@@ -79,7 +79,13 @@ impl Seen {
 
 /// Runs the line until `stop` turns true.
 pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
-    let jeeta = Arc::new(JeetaClient::new(&config.jeeta_base_url, &config.bridge_key));
+    let jeeta = match JeetaClient::new(&config.jeeta_base_url, &config.bridge_key) {
+        Ok(j) => Arc::new(j),
+        Err(e) => {
+            warn!(error = %e, "the core's client could not be built");
+            return;
+        }
+    };
     let ari = match Ari::new(&config.ari_url, &config.ari_user, &config.ari_password) {
         Ok(a) => Arc::new(a),
         Err(e) => {
@@ -279,6 +285,33 @@ fn first_seq(dialled_here: bool) -> u32 {
     1_000_000 + u32::try_from(secs % 1_000_000).unwrap_or(0) * 1_000
 }
 
+/// Since when every report to the core has failed, counted from the start of the first attempt
+/// that failed (against a wedged core each attempt costs its whole timeout, review of D, M3), and
+/// whether the live calls were told it is lost.
+#[derive(Debug, Default)]
+struct Outage {
+    since: Option<Instant>,
+    told: bool,
+}
+
+impl Outage {
+    /// The attempt begun at `tried` failed at `now`: whether the live calls are to be told now
+    /// (once an outage lasted [`CORE_LOST_AFTER`], once per outage).
+    fn failed(&mut self, tried: Instant, now: Instant) -> bool {
+        let since = *self.since.get_or_insert(tried);
+        if self.told || now.duration_since(since) < CORE_LOST_AFTER {
+            return false;
+        }
+        self.told = true;
+        true
+    }
+
+    /// A report went through: the outage is over.
+    fn over(&mut self) {
+        *self = Outage::default();
+    }
+}
+
 /// Posts the calls' reports one by one, in order, each numbered within its call; retries while the
 /// core is away, and tells the live calls once it stayed away [`CORE_LOST_AFTER`].
 async fn post_reports(
@@ -287,8 +320,7 @@ async fn post_reports(
     calls: Registry,
 ) {
     let mut seqs: HashMap<String, u32> = HashMap::new();
-    let mut failing_since: Option<Instant> = None;
-    let mut lost = false;
+    let mut outage = Outage::default();
     while let Some(report) = rx.recv().await {
         let dialled = calls
             .lock()
@@ -308,12 +340,12 @@ async fn post_reports(
         };
         let taken = report.taken;
         loop {
+            let tried = Instant::now();
             match jeeta.events(&body).await {
                 Ok(_) => {
-                    failing_since = None;
                     // A core that comes back and goes again sends `CoreLost` again; the talker
                     // takes the first only (B4 review I2), so the fault sentence never restarts.
-                    lost = false;
+                    outage.over();
                     if let Some(t) = taken {
                         let _ = t.send(());
                     }
@@ -324,9 +356,7 @@ async fn post_reports(
                     break;
                 }
                 Err(e) => {
-                    let since = *failing_since.get_or_insert_with(Instant::now);
-                    if !lost && since.elapsed() >= CORE_LOST_AFTER {
-                        lost = true;
+                    if outage.failed(tried, Instant::now()) {
                         warn!(error = %e, "the core is unreachable");
                         let live: Vec<mpsc::Sender<ToCall>> = calls
                             .lock()
@@ -375,5 +405,29 @@ async fn forward_ari(ari: Arc<Ari>, calls: Registry) {
             Err(e) => warn!(error = %e, "Asterisk's events are unreachable"),
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wedged_core_is_lost_five_seconds_after_the_first_attempt_began() {
+        // Each attempt against a wedged core costs its whole timeout (about 3 s): counted from the
+        // first failure, the calls would hear of it a timeout late (M3).
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let mut outage = Outage::default();
+        assert!(!outage.failed(t0, t0 + s(3)));
+        assert!(outage.failed(
+            t0 + Duration::from_millis(3_200),
+            t0 + Duration::from_millis(6_200)
+        ));
+        // Once per outage.
+        assert!(!outage.failed(t0 + s(7), t0 + s(10)));
+        outage.over();
+        assert!(!outage.failed(t0 + s(20), t0 + s(23)));
+        assert!(outage.failed(t0 + s(23), t0 + s(26)));
     }
 }

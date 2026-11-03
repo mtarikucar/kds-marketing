@@ -13,8 +13,11 @@ use serde::de::DeserializeOwned;
 
 /// The request header the API's posts must carry.
 pub const REQUESTED_WITH: &str = "jeeta-panel";
-/// The 25-second long-poll, and room for the core's answer.
-const TIMEOUT: Duration = Duration::from_secs(40);
+/// A register or an events post, which the core answers at once: a wedged core is noticed within
+/// seconds, so the live calls hear of its loss in time (review of D, M3).
+const QUICK: Duration = Duration::from_secs(3);
+/// The command long-poll: its 25 s, and room for the core's answer.
+const LONG_POLL: Duration = Duration::from_secs(40);
 
 /// Why a request to Jeeta failed: its status, or a kind; never the address.
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +28,8 @@ pub enum ClientError {
     Transport,
     #[error("Jeeta's answer is unreadable")]
     Decode,
+    #[error("the HTTP client could not be built")]
+    Client,
 }
 
 impl ClientError {
@@ -33,6 +38,7 @@ impl ClientError {
         match self {
             ClientError::Status(s) => *s == 408 || *s == 429 || *s >= 500,
             ClientError::Transport | ClientError::Decode => true,
+            ClientError::Client => false,
         }
     }
 }
@@ -45,15 +51,17 @@ pub struct JeetaClient {
 }
 
 impl JeetaClient {
-    pub fn new(base: &str, key: &str) -> JeetaClient {
-        JeetaClient {
+    /// The client of the core at `base`, with `key`. A client that cannot be built is an error,
+    /// not a client without its timeouts.
+    pub fn new(base: &str, key: &str) -> Result<JeetaClient, ClientError> {
+        Ok(JeetaClient {
             http: reqwest::Client::builder()
-                .timeout(TIMEOUT)
+                .connect_timeout(QUICK)
                 .build()
-                .unwrap_or_default(),
+                .map_err(|_| ClientError::Client)?,
             base: base.trim_end_matches('/').to_owned(),
             key: key.to_owned(),
-        }
+        })
     }
 
     async fn send<T: DeserializeOwned>(
@@ -78,6 +86,7 @@ impl JeetaClient {
         self.send(
             self.http
                 .post(url)
+                .timeout(QUICK)
                 .header("X-Requested-With", REQUESTED_WITH)
                 .json(body),
         )
@@ -87,7 +96,8 @@ impl JeetaClient {
     /// `GET /api/voice/bridge/commands`: the long-poll for the line's commands.
     pub async fn commands(&self, query: &CommandsQuery) -> Result<CommandsOut, ClientError> {
         let url = format!("{}/api/voice/bridge/commands", self.base);
-        self.send(self.http.get(url).query(query)).await
+        self.send(self.http.get(url).timeout(LONG_POLL).query(query))
+            .await
     }
 
     /// `POST /api/voice/bridge/events`: what the line's calls reported.
@@ -96,6 +106,7 @@ impl JeetaClient {
         self.send(
             self.http
                 .post(url)
+                .timeout(QUICK)
                 .header("X-Requested-With", REQUESTED_WITH)
                 .json(body),
         )
