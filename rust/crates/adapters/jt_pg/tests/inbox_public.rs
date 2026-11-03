@@ -52,6 +52,12 @@ async fn public_replies_in_flight() {
 }
 
 #[tokio::test]
+async fn outbox_row_of_a_message() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::outbox_row_of_a_message(uow(&db)).await;
+}
+
+#[tokio::test]
 async fn erasure_refuses_held_replies() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::erasure_refuses_held_replies(uow(&db)).await;

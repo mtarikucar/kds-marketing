@@ -794,7 +794,7 @@ async fn own_comment_binds_our_sending_reply() {
             conversation_id,
             message_id: reply,
             capability_id: ig.id,
-            intent: json!({"kind": "reply", "public": {"item_id": parent.id, "visibility": "public"}}),
+            intent: json!({"kind": "reply", "public": {"item_id": parent.id, "visibility": "public", "target": {"kind": "comment", "external_id": "1"}}}),
             expected_generation: 0,
             fence_snapshot: Some(
                 json!({"send_at": FIXED_NOW.unix_timestamp_nanos().to_string()}),
@@ -1364,4 +1364,85 @@ async fn merged_commenters_conversation_state_follows_their_items() {
     assert_ne!(a.conversation_id, b.conversation_id);
     assert_eq!(conversation(&s, a.conversation_id).state, ConvState::Theirs);
     assert_eq!(conversation(&s, b.conversation_id).state, ConvState::Ours);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Own comments: bound by parent (spec §6.4 step 2), and only as written
+// ---------------------------------------------------------------------------------------------
+
+/// Our reply in flight on `item` (`target`), with `text`: a message without a provider id and a
+/// sending outbox row.
+fn reply_in_flight(r: &Rig, item: &PublicItem, target: &str, text: &str) -> MessageId {
+    let reply = MessageId::new_v7();
+    let ws = r.w.ws;
+    let (conversation_id, item_id, capability_id) =
+        (item.conversation_id, item.id, item.capability_id);
+    let (target, text) = (target.to_owned(), text.to_owned());
+    r.w.uow.edit(move |s| {
+        s.inbox.messages.push(Message {
+            id: reply,
+            workspace_id: ws,
+            conversation_id,
+            direction: Direction::Outbound,
+            author: Author::Agent,
+            body: text,
+            external_id: None,
+            status: MsgStatus::Queued,
+            cost_minor: None,
+            at: FIXED_NOW,
+        });
+        s.inbox.outbox.push(OutboxRow {
+            id: uuid::Uuid::now_v7(),
+            workspace_id: ws,
+            conversation_id,
+            message_id: reply,
+            capability_id,
+            intent: json!({"kind": "reply", "public": {"item_id": item_id, "visibility": "public",
+                "target": {"kind": "comment", "external_id": target}}}),
+            expected_generation: 0,
+            fence_snapshot: Some(json!({"send_at": FIXED_NOW.unix_timestamp_nanos().to_string()})),
+            conversation_merged: false,
+            state: "sending".into(),
+            attempts: 1,
+            last_error: None,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        });
+    });
+    reply
+}
+
+#[tokio::test]
+async fn own_comment_binds_only_our_reply_to_its_parent() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
+    deliver(&r, &ig, "comment:2", comment("2", Some(FAN))).await;
+    let s = r.w.uow.snapshot();
+    // Our reply to the second comment is in flight, with the same text.
+    let to_second = reply_in_flight(&r, &item(&s, "2"), "2", "Teşekkürler");
+    // Our comment under the first one is not that reply: answered outside Jeeta.
+    assert_eq!(
+        deliver(&r, &ig, "comment:3", own_reply("3", "1", "Teşekkürler")).await,
+        "consumed"
+    );
+    let s = r.w.uow.snapshot();
+    let unbound = s.inbox.messages.iter().find(|m| m.id == to_second).unwrap();
+    assert_eq!(unbound.external_id, None);
+    assert!(matches!(
+        item(&s, "1").answer,
+        AnswerState::Answered {
+            by: AnsweredBy::Elsewhere,
+            ..
+        }
+    ));
+    // Our comment under the second one is: bound.
+    assert_eq!(
+        deliver(&r, &ig, "comment:4", own_reply("4", "2", "Teşekkürler")).await,
+        "consumed"
+    );
+    let s = r.w.uow.snapshot();
+    let bound = s.inbox.messages.iter().find(|m| m.id == to_second).unwrap();
+    assert_eq!(bound.external_id.as_deref(), Some("4"));
+    assert_eq!(item(&s, "2").answer, AnswerState::Awaiting);
 }

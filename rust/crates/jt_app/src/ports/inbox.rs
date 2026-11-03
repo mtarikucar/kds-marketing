@@ -554,6 +554,9 @@ pub trait OutboxRepo: Send + Sync {
         visibility: Visibility,
         except: Option<Uuid>,
     ) -> Result<Vec<String>, AppError>;
+    /// The outbox row that sends outbound message `message`, if any (the oldest, should there be
+    /// more than one).
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError>;
 }
 
 impl MergeSnapshot {

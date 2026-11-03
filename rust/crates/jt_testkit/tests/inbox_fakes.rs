@@ -101,6 +101,12 @@ async fn public_replies_in_flight() {
 }
 
 #[tokio::test]
+async fn outbox_row_of_a_message() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::outbox_row_of_a_message(uow).await;
+}
+
+#[tokio::test]
 async fn erasure_refuses_held_replies() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::erasure_refuses_held_replies(uow).await;

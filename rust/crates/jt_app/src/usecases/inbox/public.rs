@@ -631,9 +631,10 @@ async fn upsert_subject(
 }
 
 /// A comment of the account itself (see `intake`): our reply's echo, bound to our reply in
-/// flight on the same conversation with the same text (its provider id set: the receipt
-/// finalises it), or else an answer given outside Jeeta, recorded as a system message on the
-/// parent item's conversation and answering the parent (`AnsweredElsewhere`). A comment
+/// flight to the same parent with the same text (its outbox intent's target is the parent: spec
+/// §6.4 step 2; its provider id set: the receipt finalises it), or else an answer given outside
+/// Jeeta, recorded as a system message on the parent item's conversation and answering the
+/// parent (`AnsweredElsewhere`). A comment
 /// answering no item the inbox knows is consumed with nothing written; two replies of ours it
 /// could be are deferred (the receipts bind them meanwhile).
 async fn own(
@@ -660,10 +661,22 @@ async fn own(
     let Some(parent) = r.public_items().lock(parent.id).await? else {
         return Ok("consumed");
     };
-    let candidates = r
+    // Our replies in flight with the same text, to this parent: a reply to another item of the
+    // conversation is not this comment.
+    let mut candidates = Vec::new();
+    for sent in r
         .messages()
         .echo_candidates(parent.conversation_id, &env.text, event.received_at)
-        .await?;
+        .await?
+    {
+        let to_parent = r.outbox().for_message(sent.id).await?.is_some_and(|row| {
+            row.intent["public"]["target"]["external_id"].as_str()
+                == Some(parent.external_id.as_str())
+        });
+        if to_parent {
+            candidates.push(sent);
+        }
+    }
     match candidates.as_slice() {
         [sent] => {
             // Only the provider id: the receipt owns status, outbox and item transitions.

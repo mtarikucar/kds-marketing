@@ -1818,4 +1818,14 @@ impl OutboxRepo for MemTenant {
             .map(|r| r.state.clone())
             .collect())
     }
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| r.workspace_id == self.ws && r.message_id == message)
+            .min_by_key(|r| (r.created_at, r.id))
+            .cloned())
+    }
 }

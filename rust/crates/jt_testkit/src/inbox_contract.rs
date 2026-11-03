@@ -1704,6 +1704,45 @@ pub async fn public_replies_in_flight(uow: Arc<dyn UnitOfWork>) {
     );
 }
 
+/// The outbox row of an outbound message, in its own workspace only.
+pub async fn outbox_row_of_a_message(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let (row, message) = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "unknown", "public", &agent, 0)
+        .await;
+    let other = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "sent", "public", &agent, 1)
+        .await;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let found = t.outbox().for_message(message).await.unwrap().unwrap();
+    assert_eq!((found.id, found.state.as_str()), (row, "unknown"));
+    assert_eq!(
+        t.outbox().for_message(other.1).await.unwrap().map(|r| r.id),
+        Some(other.0)
+    );
+    assert!(
+        t.outbox()
+            .for_message(MessageId::new_v7())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(t);
+    let mut other_ws = uow.tenant(f.other).await.unwrap();
+    assert!(
+        other_ws
+            .outbox()
+            .for_message(message)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// Insert, replay, references (the item's conversation and subject on its own capability),
 /// bounds, reads in order, updates, deadlines and the item a message is.
 pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {

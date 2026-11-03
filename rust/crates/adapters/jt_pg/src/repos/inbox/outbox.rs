@@ -123,4 +123,16 @@ impl OutboxRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "read public replies in flight"))
     }
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
+        one!(
+            sqlx::query_scalar(
+                "select to_jsonb(o) from outbox o where workspace_id=$1 and message_id=$2 \
+                 order by created_at, id limit 1"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(message.as_uuid()),
+            self,
+            OutboxRow
+        )
+    }
 }
