@@ -1160,6 +1160,12 @@ pub trait DeliveryReports: Send + Sync {
     ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
+/// The reason of the `ConnectorError::Permanent` a [`PublicSurface`] answers when the item a
+/// reply or moderation names is gone on the provider (a deleted comment, a removed question):
+/// the inbox then marks the item removed and fails the reply with `item_removed`. Which provider
+/// answer means it is each adapter's to map (Meta's is VERIFY V-M10, spec §12).
+pub const PUBLIC_ITEM_GONE: &str = "public_item_gone";
+
 /// Replies and moderation on public items: comments on posts and marketplace questions (spec
 /// 2026-10-30-inbox-comments-marketplace-design.md §6.1). `public` is as [`Connector::probe`]
 /// gets it; `target` names the item. An adapter refuses, before any call, what the credential's

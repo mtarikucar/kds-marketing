@@ -6,14 +6,18 @@
 //!   marketplace's always are (its credentials are the switch); a Meta surface's only while the
 //!   platform's comment flag for its login is on **and** its grant holds the comment scopes, so
 //!   that Meta comment code stays inert until Meta's App Review granted them (spec D11, §11).
-//! - [`intake`]: one inbound event of kind `Comment` or `Question` (its payload a
+//! - `intake`: one inbound event of kind `Comment` or `Question` (its payload a
 //!   [`PublicEnvelope`]) into person, conversation, message, item and subject, or a provider's new
 //!   state of a known item into that item. No journey is opened (D4), no ledger line written for a
 //!   new item (inbound events are records of the outside world).
-//! - [`settle_state`]: a public conversation's state from its items (`Ours` while one is owed).
-//! - [`subject_fetch`]: lock-free and best-effort before the intake's transaction, what the
+//! - `settle_state`: a public conversation's state from its items (`Ours` while one is owed).
+//! - `subject_fetch`: lock-free and best-effort before the intake's transaction, what the
 //!   provider tells of a post or product the inbox does not know yet (or knew more than a day
 //!   ago).
+//! - Replies (`inbox.reply` on a public conversation, `super::replies`): `reply_fence` (spec
+//!   §3.6 rules 2 to 6, at enqueue, claim and approval), `on_receipt` (the item answered or
+//!   privately replied, the recipient's direct-message identity linked) and `on_gone`; held
+//!   replies are approved ([`approve`]) or discarded ([`discard`]) (§3.7).
 //!
 //! Nothing here logs an item's text, an author's name or id, or a credential.
 
@@ -26,7 +30,7 @@ use jt_inbox::public::{
     MAX_SUBJECT_URL_CHARS,
 };
 use jt_inbox::*;
-use jt_tenancy::WorkspaceStatus;
+use jt_tenancy::{Permission, WorkspaceStatus};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
@@ -37,8 +41,10 @@ use crate::{
     ports::{
         CapabilityFilter, TenantRepos,
         connectors::{
-            EnvelopeStatus, EnvelopeSubject, PlatformAppConfig, PublicEnvelope, SubjectFacts,
+            EnvelopeStatus, EnvelopeSubject, PlatformAppConfig, PublicEnvelope, PublicTarget,
+            SubjectFacts,
         },
+        inbox::OutboxRow,
     },
     usecases::{
         Deps,
@@ -829,4 +835,299 @@ async fn elsewhere(
             at,
         })
         .await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Replies: the fence, receipts, approval
+// ---------------------------------------------------------------------------------------------
+
+/// A refusal of a reply on a public conversation: `FORBIDDEN` with the refusal's key as its
+/// reason (the outbox's `refused` handling and `inbox.send.refused` read it).
+pub(crate) fn refusal(reason: impl std::fmt::Display) -> AppError {
+    let reason = reason.to_string();
+    AppError {
+        code: crate::error::ErrorCode::Forbidden,
+        message: reason.clone(),
+        details: json!({ "reason": reason }),
+    }
+}
+
+/// What a reply on a public conversation answers, once fenced ([`reply_fence`]).
+pub(crate) struct Fenced {
+    pub item: PublicItem,
+    pub target: PublicTarget,
+}
+
+/// The reply fence of a public conversation (spec §3.6 rules 2 to 6; rule 1, commercial intent,
+/// is the caller's, before the domain fence): run at enqueue (`count_cap`, rule 6) and again at
+/// claim and approval. `item_id` names the item replied to on `conversation` of `cap` (on
+/// `channel`), `text` the reply, `by_agent` whether the agent sends it. The item is locked.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reply_fence(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    conversation: &Conversation,
+    cap: &Capability,
+    channel: Channel,
+    item_id: Option<PublicItemId>,
+    visibility: Visibility,
+    text: &str,
+    by_agent: bool,
+    count_cap: bool,
+) -> Result<Fenced, AppError> {
+    // 2. A Meta surface without the comment grant (a marketplace's always holds).
+    if !comments_enabled(deps.apps.as_ref(), cap) {
+        return Err(refusal(PublicRefusal::CommentsNotEnabled));
+    }
+    // 3. The item, of this conversation.
+    let id = item_id.ok_or_else(|| refusal(PublicRefusal::ItemRequired))?;
+    let item = r
+        .public_items()
+        .lock(id)
+        .await?
+        .filter(|item| item.conversation_id == conversation.id)
+        .ok_or_else(|| refusal(PublicRefusal::ItemNotInConversation))?;
+    let rules = jt_inbox::public::rules(channel)
+        .ok_or_else(|| AppError::internal("a public conversation without rules"))?;
+    // 4. The item takes this reply now.
+    jt_inbox::public::reply_allowed(&item, &rules, visibility, by_agent, ctx.now)
+        .map_err(refusal)?;
+    // 5. The text: bounds, the person's own contact data, a marketplace's contact data.
+    let contacts: Vec<String> = r
+        .identities()
+        .list(conversation.person_id)
+        .await?
+        .into_iter()
+        .filter(|i| {
+            i.active && matches!(i.channel, IdentityChannel::Phone | IdentityChannel::Email)
+        })
+        .map(|i| i.value_normalized)
+        .collect();
+    jt_inbox::public::check_text(&rules, visibility, text, &contacts).map_err(refusal)?;
+    // 6. The capability's daily cap on the agent's public replies, counted under its lock with
+    // every row of the day but refused ones: held and in-flight replies count.
+    if count_cap && by_agent && visibility == Visibility::Public {
+        let locked = crate::usecases::capabilities::locked(r, cap.id).await?;
+        if let Some(cap_per_day) = locked.policy.daily_ops_cap {
+            let (day_start, _) = crate::usecases::calls::local_day(&locked, ctx.now);
+            let today = r
+                .outbox()
+                .agent_public_replies_since(cap.id, day_start)
+                .await?;
+            if today >= cap_per_day {
+                return Err(refusal("daily_ops_cap"));
+            }
+        }
+    }
+    let subject_external_id = match item.subject_id {
+        Some(id) => r.public_subjects().get(id).await?.map(|s| s.external_id),
+        None => None,
+    };
+    let target = PublicTarget {
+        kind: item.kind,
+        external_id: item.external_id.clone(),
+        parent_external_id: item.parent_external_id.clone(),
+        subject_external_id,
+    };
+    Ok(Fenced { item, target })
+}
+
+/// What an outbox intent says of its public item: `None` for a reply that is not one.
+pub(crate) struct Intent {
+    pub item_id: PublicItemId,
+    pub visibility: Visibility,
+    pub target: PublicTarget,
+}
+
+/// The public part of outbox `intent` (`intent.public`), if any.
+pub(crate) fn intent_of(intent: &Value) -> Result<Option<Intent>, AppError> {
+    let Some(public) = intent.get("public") else {
+        return Ok(None);
+    };
+    Ok(Some(Intent {
+        item_id: serde_json::from_value(public["item_id"].clone())?,
+        visibility: serde_json::from_value(public["visibility"].clone())?,
+        target: serde_json::from_value(public["target"].clone())?,
+    }))
+}
+
+/// A public reply's receipt (spec §6.5), in the result's transaction: the item answered
+/// (`AnswerSent`: pending on a moderated surface; `agent_answers` counted for the agent's own
+/// answer) or privately replied (`PrivateReplySent`, and the recipient's direct-message id linked
+/// to the person, D5), and the conversation's state settled. A receipt is a fact: taken from any
+/// state.
+pub(crate) async fn on_receipt(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    row: &OutboxRow,
+    recipient: Option<&str>,
+) -> Result<(), AppError> {
+    let Some(intent) = intent_of(&row.intent)? else {
+        return Ok(());
+    };
+    let Some(item) = r.public_items().lock(intent.item_id).await? else {
+        return Ok(());
+    };
+    let cap = r
+        .capabilities()
+        .find(item.capability_id)
+        .await?
+        .ok_or_else(|| AppError::internal("a public item's capability is gone"))?;
+    let channel = public_channel_for_kind(&cap.kind_key)
+        .ok_or_else(|| AppError::internal("a public item on a private kind"))?;
+    let rules = jt_inbox::public::rules(channel)
+        .ok_or_else(|| AppError::internal("a public conversation without rules"))?;
+    let author = r
+        .messages()
+        .get(row.message_id)
+        .await?
+        .map(|m| m.author)
+        .ok_or_else(|| AppError::not_found("no such message"))?;
+    let event = match intent.visibility {
+        Visibility::Public => ItemEvent::AnswerSent {
+            message_id: row.message_id,
+            moderated: rules.moderated,
+        },
+        Visibility::Private => ItemEvent::PrivateReplySent {
+            message_id: row.message_id,
+        },
+    };
+    let mut next = jt_inbox::public::apply(&item, event, ctx.now)
+        .map_err(|_| AppError::internal("a receipt was refused by its item"))?;
+    if intent.visibility == Visibility::Public && author == Author::Agent {
+        next.agent_answers = next.agent_answers.saturating_add(1);
+    }
+    r.public_items().update(next).await?;
+    if intent.visibility == Visibility::Private
+        && let Some(recipient) = recipient.filter(|r| !r.trim().is_empty())
+    {
+        link_recipient(deps, ctx, r, &cap, &item, recipient).await?;
+    }
+    settle_state(r, item.conversation_id).await
+}
+
+/// Links a private reply's recipient (the commenter's direct-message id, VERIFY V-M5) to the
+/// item's person in the capability's direct-message namespace: added when nobody holds it, a
+/// merge suggestion when another person does (ledger `inbox.public.identity_linked`).
+async fn link_recipient(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    item: &PublicItem,
+    recipient: &str,
+) -> Result<(), AppError> {
+    let channel = match cap.kind_key.as_str() {
+        "instagram" => IdentityChannel::InstagramDm,
+        "facebook_page" => IdentityChannel::Messenger,
+        _ => return Ok(()),
+    };
+    let Some(account) = cap.external_id.as_deref().filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let Ok(value) = normalise(channel, recipient) else {
+        return Ok(());
+    };
+    let Some(conversation) = r.conversations().get(item.conversation_id).await? else {
+        return Ok(());
+    };
+    let outcome = people::link_identity(
+        deps,
+        ctx,
+        r,
+        conversation.person_id,
+        channel,
+        scope_opaque(account, &value),
+        value,
+    )
+    .await?;
+    if matches!(outcome, "added" | "merge_suggested") {
+        record(
+            r,
+            ctx,
+            "inbox.public.identity_linked",
+            "public_item",
+            item.id,
+            json!({"item_id": item.id, "channel": channel, "outcome": outcome}),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// A public reply the provider refused because its item is gone (`PUBLIC_ITEM_GONE`): the item
+/// is removed, and the conversation's state settled. In the result's transaction.
+pub(crate) async fn on_gone(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    row: &OutboxRow,
+) -> Result<(), AppError> {
+    let Some(intent) = intent_of(&row.intent)? else {
+        return Ok(());
+    };
+    let Some(item) = r.public_items().lock(intent.item_id).await? else {
+        return Ok(());
+    };
+    if let Ok(next) = jt_inbox::public::apply(&item, ItemEvent::Removed, ctx.now) {
+        r.public_items().update(next).await?;
+    }
+    settle_state(r, item.conversation_id).await
+}
+
+/// What approving a held reply may change.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproveInput {
+    /// The text to send instead of the draft's; fenced as the reply.
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+/// Approves held reply `outbox_id` (spec §3.7): a human with `inbox.work` (`human_required`
+/// otherwise). The full fence runs again with the approver as the author, on the edited text when
+/// one is given (which replaces the draft's); refused, the reply is refused with that reason
+/// (the panel shows why) and the refusal is the error. Else the message's author becomes the
+/// approver (the drafter stays in `intent.public.drafted_by`), the row is queued and sent.
+/// Ledger `inbox.public.approved {edited}`.
+pub async fn approve(
+    deps: &Deps,
+    ctx: &Ctx,
+    outbox_id: uuid::Uuid,
+    input: ApproveInput,
+) -> Result<super::replies::ReplyOut, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    let jt_ledger::Actor::Human { user_id } = ctx.actor else {
+        return Err(refusal("human_required"));
+    };
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let result =
+        super::replies::approve_in(deps, ctx, r.as_mut(), outbox_id, user_id, input.text).await;
+    match &result {
+        Ok(_) => r.commit().await?,
+        Err(e) if e.code == crate::error::ErrorCode::Forbidden => r.commit().await?,
+        Err(_) => {}
+    }
+    result?;
+    super::replies::send_step(deps, ctx, outbox_id).await
+}
+
+/// Discards held reply `outbox_id` (spec §3.7): a human with `inbox.work`, or the agent
+/// connection that drafted it (`not_the_drafter` otherwise). The row is refused with reason
+/// `discarded`, its message too. Ledger `inbox.public.discarded`.
+pub async fn discard(
+    deps: &Deps,
+    ctx: &Ctx,
+    outbox_id: uuid::Uuid,
+) -> Result<super::replies::ReplyOut, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let out = super::replies::discard_in(ctx, r.as_mut(), outbox_id).await?;
+    r.commit().await?;
+    Ok(out)
 }

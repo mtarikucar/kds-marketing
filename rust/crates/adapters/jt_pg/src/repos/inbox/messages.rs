@@ -6,7 +6,7 @@ use jt_app::{
     ports::inbox::{MAX_INBOX_PAGE, MessageRepo},
 };
 use jt_capability::CapabilityId;
-use jt_inbox::{ConversationId, IdentityId, Message, MessageId, MsgStatus};
+use jt_inbox::{Author, ConversationId, IdentityId, Message, MessageId, MsgStatus};
 #[async_trait]
 impl MessageRepo for PgTenantRepos {
     async fn find_by_external_id(
@@ -124,5 +124,26 @@ impl MessageRepo for PgTenantRepos {
             super::touch_conversation(self, parent.into()).await?;
         }
         Ok(())
+    }
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError> {
+        let parent: Option<uuid::Uuid> = sqlx::query_scalar(
+            "update messages set author=$3,body=$4 where workspace_id=$1 and id=$2 \
+             and direction='outbound' and status=$5 returning conversation_id",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(id.as_uuid())
+        .bind(value!(author))
+        .bind(body)
+        .bind(value!(MsgStatus::Queued))
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "revise queued message"))?;
+        let parent = parent.ok_or_else(|| AppError::not_found("no such queued message"))?;
+        super::touch_conversation(self, parent.into()).await
     }
 }

@@ -107,7 +107,8 @@ pub async fn apply(
                 .lock(parent.id)
                 .await?
                 .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
-            if outbox.state == "queued" {
+            // A reply waiting for approval is refused like a queued one (the repository does).
+            if matches!(outbox.state.as_str(), "queued" | "held") {
                 invalidated.push(parent.id);
             }
         }

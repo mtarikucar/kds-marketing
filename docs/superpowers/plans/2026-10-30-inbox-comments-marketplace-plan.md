@@ -248,6 +248,22 @@ impl PublicEnvelope {
 // people::match_or_create_with(.., open_journey: bool): intake creates people without a journey.
 // record_inbound_sender (fake and Postgres) and identity normalisation accept the public kinds'
 // namespaces (conversation_channel). Intake ledger: inbox.public.answer_rejected only.
+// As built in F6: ReplyInput.{item_id: Option<PublicItemId>, visibility: Option<Visibility>} (the
+// reply schema has both; on a private conversation VALIDATION item_requires_public_conversation; a
+// quote or appointment on a public one VALIDATION public_conversation_takes_replies_only).
+// intent.public = {item_id, visibility, target: PublicTarget, drafted_by: Actor}; the row is
+// "held" (ledger inbox.public.held) when the capability requires approval and the actor is not a
+// human. Refusal reasons: the PublicRefusal keys and daily_ops_cap (counted at enqueue under
+// CapabilityRepo::lock, the day being the capability's working-hours day, else Istanbul:
+// calls::local_day). inbox::public::{approve(deps, ctx, outbox_id, ApproveInput { text }),
+// discard(deps, ctx, outbox_id)} for F7's rows: refusals human_required, not_the_drafter, CONFLICT
+// reply_not_held; a refused approval refuses the row. MessageRepo::revise_queued(id, author, body)
+// (fake and Postgres). ports::connectors::PUBLIC_ITEM_GONE: the Permanent reason an adapter
+// answers for a gone item (M2/T2/H1 map theirs) → item Removed, outbox failed "item_removed".
+// agent_answers counts receipts of messages the agent authored (an approved draft is the
+// approver's). people::link_identity (a private reply's recipient_id → DM identity, else a merge
+// suggestion; ledger inbox.public.identity_linked). Merge refuses held rows with their request
+// keys and ledger, as queued ones.
 
 // jt_app::ports::public (re-exported from ports::inbox)
 #[async_trait] pub trait PublicItemRepo: Send + Sync {

@@ -962,6 +962,44 @@ impl MessageRepo for MemTenant {
             Ok(())
         })
     }
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            let old = t
+                .state()
+                .inbox
+                .messages
+                .iter()
+                .find(|r| {
+                    r.workspace_id == ws
+                        && r.id == id
+                        && r.direction == Direction::Outbound
+                        && r.status == MsgStatus::Queued
+                })
+                .ok_or_else(|| AppError::not_found("no such queued message"))?;
+            let conversation_id = old.conversation_id;
+            let at = t.inbox_write_at();
+            let body = body.to_owned();
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .messages
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.author = author;
+                    r.body = body.clone();
+                }
+                touch_conversation(s, ws, conversation_id, at);
+            });
+            Ok(())
+        })
+    }
 }
 #[async_trait]
 impl JourneyRepo for MemTenant {

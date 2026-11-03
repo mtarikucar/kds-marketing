@@ -387,6 +387,53 @@ pub async fn add_identity(
     Ok(out)
 }
 
+/// Links identity `value` (normalised and scoped already; `display` as received) on `channel`
+/// to `person` inside the caller's transaction, which holds the workspace lock: `"added"` when
+/// nobody held it (ledger `inbox.identity.added`), `"merge_suggested"` when another person does
+/// (it stays theirs), `"held"` when the person holds it already, `"erased"` for an erased
+/// identity (nothing written).
+pub(crate) async fn link_identity(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    person: PersonId,
+    channel: IdentityChannel,
+    value: String,
+    display: String,
+) -> Result<&'static str, AppError> {
+    match super::erasure::check_identity(r, channel, &value).await {
+        Err(e) if e.details["reason"] == "erased_identity" => return Ok("erased"),
+        Err(e) => return Err(e),
+        Ok(()) => {}
+    }
+    let person = resolve(r, person).await?;
+    match r.people().find_by_identity(channel, &value).await? {
+        Some(other) if other.id == person.id => Ok("held"),
+        Some(other) => {
+            suggest(deps, ctx, r, &person, &other, false).await?;
+            Ok("merge_suggested")
+        }
+        None => {
+            let input = IdentityInput {
+                channel,
+                value: display,
+                capability_id: None,
+            };
+            insert_identity(deps, ctx, r, person.id, &input, value).await?;
+            record(
+                r,
+                ctx,
+                "inbox.identity.added",
+                "person",
+                person.id,
+                json!({"channel": channel}),
+            )
+            .await?;
+            Ok("added")
+        }
+    }
+}
+
 /// Prefer the message sender. Without that match, a single unambiguous person can be reused.
 fn choose_person(matches: &[Option<Person>], own_identity: Option<usize>) -> Option<Person> {
     if let Some(person) = own_identity

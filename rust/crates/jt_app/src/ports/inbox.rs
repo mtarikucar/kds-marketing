@@ -214,6 +214,15 @@ pub trait MessageRepo: Send + Sync {
         external_id: Option<String>,
         cost_minor: Option<i64>,
     ) -> Result<(), AppError>;
+    /// Rewrites the author and body of outbound message `id` while it is still `Queued`, before
+    /// any provider saw it: a held reply approved (the approver its author), its text maybe
+    /// edited. `NOT_FOUND` for a message that is not an outbound queued one.
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError>;
 }
 
 #[async_trait]

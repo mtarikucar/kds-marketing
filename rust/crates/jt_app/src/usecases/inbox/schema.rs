@@ -62,7 +62,7 @@ pub fn input(action: &str) -> Value {
             &["until"],
         ),
         "reply" => object(
-            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}}}),
+            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]}}),
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
