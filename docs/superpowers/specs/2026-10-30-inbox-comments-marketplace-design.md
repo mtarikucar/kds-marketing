@@ -70,6 +70,7 @@ answers, and the phone fallback (device bridge playbooks).
 | D15 | **Deadlines come only from providers** (Hepsiburada `expireDate`; Amazon's 24 hours from receipt). Business days are never computed locally. | Holidays and time zones (bug class "server-local vs workspace time zone"). |
 | D16 | A **subject** (post or product) is its own record, linked to the Studio publication when one made the post. | The panel and agent see what was commented on; Studio context ("this comment is on hypothesis X") comes for free. |
 | D17 | A **comments backfill poll** (hourly, last 7 days of media/posts) closes webhook gaps and imports the backlog when comments are first enabled. Same external ids as webhooks, so replays store nothing new. | Webhook outages and the first-enable backlog would otherwise lose comments still within the private-reply window. |
+| D18 | (Decided in implementation, 2026-11-03.) `comments_enabled` also requires the **platform's comment flag of the login the grant came from**: `JEETA_INSTAGRAM_COMMENT_SCOPES` for an Instagram Login grant (`connector_public.access.app = "instagram"`), `JEETA_META_COMMENT_SCOPES` otherwise. A marketplace is always enabled. | Defense in depth over D11: with the flags off, no comment path (intake, replies, moderation, polls) runs and no new Meta request is made, whatever a token happens to hold; the flags are switched on only after Meta's App Review. |
 
 ---
 

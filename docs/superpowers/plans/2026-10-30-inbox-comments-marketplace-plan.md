@@ -979,7 +979,12 @@ cargo test --locked -p jt_app --test smoke_inbox_public`).
 ### Task R2: operations doc and live verification (size S, after everything merged)
 
 **Files:** create `docs/operations/inbox-public-rollout.md`: spec §11 steps with the exact env names and
-dashboard fields; the V-list of spec §12 with who runs each and where its result is recorded.
+dashboard fields; the V-list of spec §12 with who runs each and where its result is recorded. The doc
+also says (review of F4–F6): switching a comment flag (`JEETA_META_COMMENT_SCOPES`,
+`JEETA_INSTAGRAM_COMMENT_SCOPES`) off later refuses every held or queued comment reply at its approval or
+claim (`comments_not_enabled`), and the comment events arriving meanwhile are dropped at the gate or
+consumed as `comments_not_enabled` and never come back (the backfill poll re-imports at most its 7 days
+once the flag is on again).
 
 - [ ] Run the V-checks that need no new Meta permission on staging with the owner's accounts (V-T*, V-A*,
   V-H* after H0, V-M6 with an existing Studio post); record results in the doc (no ids, handles or texts of
