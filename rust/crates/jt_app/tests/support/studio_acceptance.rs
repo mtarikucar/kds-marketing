@@ -170,7 +170,21 @@ pub async fn cleanup_after_archive() {
         0
     );
     assert!(w.d.files.read(w.f.ws, file.id).await.is_ok());
+    // The file is a live material's: the owner's library outlives the 30 days after its last
+    // publication (spec 2026-11-03 D14).
     w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(30)));
+    let report = Job::StudioFilesCleanup.run(&w.d, w.d.clock.now()).await;
+    assert_eq!((report.changed, report.failed), (0, 0));
+    assert!(w.d.files.read(w.f.ws, file.id).await.is_ok());
+    // Erased, its file goes at once, and the archived evidence stays.
+    let (at, id) = (w.d.clock.now(), file.id);
+    w.uow.edit(move |s| {
+        for m in s.materials.materials.iter_mut() {
+            if m.file_id == id {
+                *m = m.redacted(at);
+            }
+        }
+    });
     let report = Job::StudioFilesCleanup.run(&w.d, w.d.clock.now()).await;
     assert_eq!((report.changed, report.failed), (1, 0));
     assert!(w.d.files.read(w.f.ws, file.id).await.is_err());
@@ -183,7 +197,8 @@ pub async fn cleanup_after_archive() {
     );
     let after = w.uow.snapshot();
     assert_eq!(after.studio.publications, before.studio.publications);
-    assert_eq!(after.studio.files[0].sha256, file.sha256);
+    let record = after.studio.files.iter().find(|f| f.id == file.id).unwrap();
+    assert_eq!(record.sha256, file.sha256);
     for row in before.ledger {
         assert!(after.ledger.iter().any(|r| r.entry == row.entry));
     }

@@ -89,6 +89,21 @@ pub async fn run_acceptance() {
     )
     .await
     .unwrap();
+    // A human makes the upload a material of a confirmed olay (spec 2026-11-03 D1): the piece
+    // shows it and speaks about that olay.
+    let olay = jt_testkit::studio_contract::confirmed_olay(w.f.ws);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(olay.clone())
+        .await
+        .unwrap();
+    r.studio_materials()
+        .insert_material(jt_testkit::studio_contract::eligible_material(
+            &olay, file.id,
+        ))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     let input = jt_app::usecases::studio::pieces::PieceInput {
         slot_id: planned.id,
         expected_revision: 0,
@@ -96,6 +111,7 @@ pub async fn run_acceptance() {
         text: "supplied by agent".into(),
         media: vec![jt_studio::MediaAsset::File { id: file.id }],
         adaptations: Default::default(),
+        subject: Some(jt_studio::Subject::Olay { olay_id: olay.id }),
     };
     jt_app::usecases::studio::pieces::piece_submit(&w.d, &w.ctx, input.clone())
         .await
