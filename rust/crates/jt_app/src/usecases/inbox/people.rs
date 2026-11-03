@@ -81,11 +81,16 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppE
 #[serde(deny_unknown_fields)]
 pub struct SetKindInput {
     pub kind: RecipientKind,
+    /// Why (up to 500 characters): kept as a note on the person's current journey, never in the
+    /// ledger.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// `jeeta.inbox.people_set_kind`: sets whom a commercial message to the person reaches (spec
 /// 2026-10-30-leads-pool-outreach-design.md §3.12): a business's own contact point or a private
-/// individual (promotion never overrides `individual`, L-02). The ledger names the kinds only.
+/// individual (promotion never overrides `individual`, L-02). A note is kept on the person's
+/// current journey; the ledger names the kinds and whether a note was kept, never its text.
 pub async fn set_kind(
     deps: &Deps,
     ctx: &Ctx,
@@ -93,6 +98,15 @@ pub async fn set_kind(
     input: SetKindInput,
 ) -> Result<Person, AppError> {
     ctx.require(Permission::InboxWork)?;
+    let note = input
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned);
+    if note.as_ref().is_some_and(|n| n.chars().count() > 500) {
+        return Err(invalid("note", "at most 500 characters"));
+    }
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
@@ -103,13 +117,34 @@ pub async fn set_kind(
     r.people()
         .set_recipient_kind(person.id, input.kind, ctx.now)
         .await?;
+    let journey = super::active_or_latest_journey(r.as_mut(), person.id).await?;
+    let kept = match (&note, &journey) {
+        (Some(text), Some(j)) => {
+            r.notes()
+                .insert(Note {
+                    id: NoteId::from(deps.ids.uuid()),
+                    workspace_id: ctx.workspace_id,
+                    journey_id: j.id,
+                    author: match ctx.actor {
+                        jt_ledger::Actor::Human { user_id } => EventSource::Human(user_id),
+                        jt_ledger::Actor::Agent { .. } => EventSource::Agent,
+                        jt_ledger::Actor::System { .. } => EventSource::System,
+                    },
+                    text: text.clone(),
+                    at: ctx.now,
+                })
+                .await?;
+            true
+        }
+        _ => false,
+    };
     record(
         r.as_mut(),
         ctx,
         "inbox.person.kind_set",
         "person",
         person.id,
-        json!({"person_id": person.id, "from": person.recipient_kind, "to": input.kind}),
+        json!({"person_id": person.id, "from": person.recipient_kind, "to": input.kind, "note": kept}),
     )
     .await?;
     let out = r

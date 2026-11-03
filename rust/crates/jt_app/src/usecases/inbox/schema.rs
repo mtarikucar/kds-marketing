@@ -87,7 +87,7 @@ pub fn input(action: &str) -> Value {
             &["display_name", "identities", "source"],
         ),
         "people.set_kind" => object(
-            json!({"kind":{"type":"string","enum":["unknown","business","individual"]}}),
+            json!({"kind":{"type":"string","enum":["unknown","business","individual"]},"note":{"type":["string","null"],"maxLength":500}}),
             &["kind"],
         ),
         "identities.add" => identity,

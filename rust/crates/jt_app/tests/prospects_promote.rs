@@ -719,7 +719,7 @@ async fn promotion_takes_inbox_then_pool_lock() {
 }
 
 #[tokio::test]
-async fn set_kind_records_the_change_in_ledger_without_values() {
+async fn set_kind_records_note_in_ledger_without_value() {
     let w = world().await;
     let person = inbound_person(&w, PHONE).await;
     let out = people::set_kind(
@@ -728,11 +728,15 @@ async fn set_kind_records_the_change_in_ledger_without_values() {
         person,
         people::SetKindInput {
             kind: RecipientKind::Business,
+            note: Some("faturada şirket unvanı var".into()),
         },
     )
     .await
     .unwrap();
     assert_eq!(out.recipient_kind, RecipientKind::Business);
+    let notes = w.uow.snapshot().inbox.notes;
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].text, "faturada şirket unvanı var");
     // The same kind again changes nothing and records nothing.
     people::set_kind(
         &w.deps,
@@ -740,6 +744,7 @@ async fn set_kind_records_the_change_in_ledger_without_values() {
         person,
         people::SetKindInput {
             kind: RecipientKind::Business,
+            note: None,
         },
     )
     .await
@@ -749,6 +754,8 @@ async fn set_kind_records_the_change_in_ledger_without_values() {
     let entry = payload(&entries[0]);
     assert_eq!(entry["from"], "unknown");
     assert_eq!(entry["to"], "business");
+    assert_eq!(entry["note"], true);
+    assert!(!entry.to_string().contains("unvan"));
     assert!(!entry.to_string().contains(PHONE));
     assert!(!entry.to_string().contains("Arayan"));
     // A person without inbox.work cannot.
@@ -759,6 +766,7 @@ async fn set_kind_records_the_change_in_ledger_without_values() {
         person,
         people::SetKindInput {
             kind: RecipientKind::Individual,
+            note: None,
         },
     )
     .await);
