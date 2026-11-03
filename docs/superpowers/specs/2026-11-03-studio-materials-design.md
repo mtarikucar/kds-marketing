@@ -255,7 +255,7 @@ material with `olay_suggestions`: confirmed or proposed olays whose date range c
 `olay_id` or `genel` (real genel: human only); an agent naming an unknown event creates a proposed olay
 first.
 
-### 5.4 Planner gate (D1) — pending the posting methodology
+### 5.4 Planner gate (D1) — superseded by §14
 
 The owner is reworking the posting methodology (per-post preparation lead, no all-at-once weekly planning,
 no fixed weekly count, bursts from an olay's new materials). Until it is settled, slot materialization is
@@ -418,17 +418,77 @@ A "Materyaller" tab in Growth Studio, phone-first (one column under 640 px, the 
   existing Ready pieces have no material uses: **they hold at publish with `no_material` once this ships.**
   On a workspace that publishes today, re-submit or cancel them; read `studio.pending` on each workspace
   before deploying.
-- The gate makes a workspace with no materials quiet by design: the planner writes çekim listesi requests.
+- The gate makes a workspace with no materials quiet by design: the triggers write çekim listesi requests (§14).
 - `0021` down refuses once materials exist.
 
-## 13. Phase 2 (later, not now)
+## 13. Auto-ingest (later, not now)
 
 Auto-ingest: photos and videos arriving in the workspace's WhatsApp or mailbox become *proposed* materials
 (origin real, permission unset, olay suggested from the conversation and the capture date), queued for a
 human's review in the Yükle screen. Nothing ingested is eligible until a human sets the permission and
 confirms the olay.
 
-## 14. Questions answered (2026-11-03)
+## 14. Olay-driven publishing (replaces weekly slot quotas)
+
+Decided 2026-11-03 (the owner settled the methodology and left the details to the coordinator). The
+owner's single requirement: **"I give materials; the system handles everything else in the best way."**
+This replaces the weekly slot materialization of `planner.rs` (§5.4 is superseded by this section).
+
+### 14.1 Decisions
+
+| # | Decision |
+|---|---|
+| D20 | **The unit is a planned post**: format (`story`, `feed_post`, `carousel`, `reel`, `tiktok_video`), channel (an organic capability), `publish_at`, `prep_start_at = publish_at − lead(format)`, its olay (or none for a generic post), its material ids, its subject, the hypothesis the agent chose among the live ones, and its state. It is stored as a Studio slot (`scheduled_at = publish_at`, so the publisher, approvals, the TikTok posting screen, attempts, publications and measurement stay as they are) plus a `studio_posts` row with the rest. |
+| D21 | **Leads per format** (per-workspace settings, defaults): story 2 h, feed_post 24 h, carousel 24 h, reel 48 h, tiktok_video 48 h (TikTok needs a human's posting-screen choice). |
+| D22 | **No weekly quota.** `sections.cadence.per_week` and the hypotheses' `slots_per_week` are informational expected volume, never enforced. A hypothesis takes posts on a channel when its organic cadence names a content type for that channel (the chain rule `validate_chain` is unchanged); the post's arm is (hypothesis, content type, channel, organic), the content type chosen by the agent among the cadence's, default its first. |
+| D23 | **Three triggers create package requests, never posts.** A package request is a work item for agents (`work.pending` kind `studio_package_request`, and `studio.pending`). Triggers: olay (D24), calendar (D25), floor (D26). |
+| D24 | **Olay trigger.** When an olay gains confirmed, eligible materials, the trigger waits until 30 minutes (setting `debounce_minutes`) after the last such change to that olay (material added, permission set, olay confirmed), then fires once: 20 photos make one request. The request lists the materials not yet in any request of that olay and the formats that performed best for this olay kind so far (D31). |
+| D25 | **Calendar trigger.** At an occasion's `window_start − lead_days` (default 21 days) it requests a package for that occasion's confirmed olay of the season year. No eligible material (or no such olay): a çekim listesi item instead (§4.6 `season:`). |
+| D26 | **Floor trigger.** If no feed-format post (feed_post, carousel, reel) was published on a channel for `floor_days` (default 4) and no package request or planned post is pending for it, it requests a package of ONE post built on a generic material (freed or genel), least recently used, freshest first. None: a çekim listesi item. A floor, not a quota. |
+| D27 | **The agent proposes; the system validates and materializes.** `studio.package_propose` answers a request with planned posts (format, channel, `publish_at`, materials, subject, hypothesis). Validation is all-or-nothing with a reason per item: request open; channel organic, connected and supporting the format (D30); `publish_at` at least `lead(format)` ahead and within 30 days; not in quiet hours; every material passes §4.3 at `publish_at` as an anchor or support with at least one anchor, and the format's media count; caps and spacing (D29) against everything already planned or published plus the package. Valid: the posts are materialized at once with their prep start; the request is answered. |
+| D28 | **Just-in-time preparation.** A planned post enters the agent's pending work only at `prep_start_at`. The agent writes the caption, picks or edits media among eligible materials, and submits the piece (`studio.piece_submit`, gated as §5.5); the truth check runs at submit and at publish. A post not ready (no piece, or for TikTok no posting-screen choice) at `publish_at` may slip within its grace (story +1 h; feed_post, carousel, reel, tiktok_video +6 h; settings). Past grace it is retired `missed_grace`, and the weekly summary names it. |
+| D29 | **Protective caps instead of quotas** (per-workspace settings, defaults): feed formats at most 2 per channel per day with at least 3 h between them; stories at most 25 per channel per day, at least 10 min apart (a 20-story package spreads out); tiktok_video at most 3 per day; quiet hours 00:00–08:00 in the workspace's time zone (setting `tz`, default `Europe/Istanbul`). A provider's own API limits are enforced by its adapter and come on top. |
+| D30 | **Formats per provider: only what is verified and built.** Each organic kind declares the formats its adapter publishes. Stories by API are **unverified** for every provider until checked against the official documentation and built: Instagram Content Publishing (`media_type=STORIES`), Facebook Page stories, TikTok (no story format is known to this design in its Content Posting API — unverified). Until verified and built, `story` is refused as `format_unsupported` everywhere; nothing is assumed. |
+| D31 | **Learning per format × olay kind × hypothesis.** The existing measurements (`studio_measurements`, the arms' posteriors) are aggregated by the post's format, its olay's kind and its hypothesis. Package requests carry the best formats for the olay kind; the floor trigger chooses its hypothesis by the arms' posterior mean. |
+| D32 | **Owner UX: no approvals by default.** The owner uploads materials and confirms the olay and the share permission when asked; the structure (material gate, truth check, caps) is the safety. The lane approval policy stays available, off by default; TikTok keeps its posting screen (TikTok's rule). The owner gets the çekim listesi and a weekly summary (`studio.weekly_summary`): published, planned, cancelled, each with its reason. |
+| D33 | **Paid lane unchanged** (D13). |
+| D34 | **Existing slots retire safely.** On the first run of the new planner, every organic slot still `planned` or `ready` that has no `studio_posts` row is retired with reason `replanned` (a new retirement reason, allowed from planned and ready), one ledger entry each; their pieces, attempts and evidence stay. Published and measured slots are untouched. |
+
+### 14.2 Storage — migration `0022_studio_posts`
+
+- `studio_posts`: the planned post of a slot (`slot_id` PK with the workspace, FK `studio_slots`): `format`,
+  `prep_start_at ≤ publish_at`, `grace_until ≥ publish_at`, `olay_id` (FK, nullable), `package_request_id`
+  (FK), `data` (materials, subject, content type).
+- `studio_package_requests`: `id`, `key` (unique: `olay:{id}:{last_change}`, `calendar:{key}:{year}`,
+  `floor:{capability}:{date}`), `trigger`, `status` (`open`, `answered`, `expired`), `data` (materials,
+  best formats, hints), `created_at`, `answered_at`. An open request expires after 7 days.
+- `studio_posting_policy`: one row per workspace (leads, graces, caps, spacing, quiet hours, `tz`,
+  `floor_days`, `debounce_minutes`); defaults when absent.
+- `0022` down refuses while a post or package request exists.
+
+### 14.3 Jobs and use cases
+
+- `studio_plan` (every 10 minutes instead of hourly) runs the triggers, retires missed posts and, once,
+  the old slots (D34). It never creates a post.
+- Twins: `studio.package_requests` (`GET /api/studio/package-requests`), `studio.package_propose`
+  (`POST /api/studio/package-requests/{request_id}/proposal`), `studio.posts_list`
+  (`GET /api/studio/posts`), `studio.weekly_summary` (`GET /api/studio/summary`). Panel only:
+  `studio.posting_policy_set` (`PUT /api/studio/posting-policy`).
+- `studio.pending` and `work.pending` list package requests and the planned posts whose prep has started;
+  a post before its prep start is listed in `studio.posts_list` only.
+
+### 14.4 Tests to pin
+
+- Zero materials + approved strategy + no-approval policy → no package request but çekim listesi items,
+  no post, no publication.
+- 20 materials added to one olay within minutes → one package request, 30 minutes after the last.
+- A package breaking a cap, the spacing, quiet hours, the lead, a material rule or the channel's formats
+  → refused whole, with each item's reason; a valid one → posts with prep starts.
+- A post is pending only from its prep start; missed past grace → retired `missed_grace`, in the summary.
+- The floor fires after `floor_days` without a feed post and not while a package is pending.
+- Old planned and ready slots retire `replanned` once; evidence is kept.
+
+## 15. Questions answered (2026-11-03)
 
 The owner left Q1–Q6 of the first draft to the coordinator, who answered them the same day: Q1 → D13,
 Q2 → D16, Q3 → D17, Q4–Q5 → D18, Q6 → D19. No question is open.

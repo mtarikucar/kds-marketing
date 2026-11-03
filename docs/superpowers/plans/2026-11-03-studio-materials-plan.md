@@ -65,22 +65,11 @@ No new catalog row: the gate changes behaviour behind existing use cases. Ships 
 - [ ] `jt_pg/src/repos/studio/materials.rs`; tests `jt_pg/tests/studio_materials.rs` (round trips, RLS
   isolation, origin trigger, insert-only uses, down refusal) — Linux CI.
 
-### P1-T5 Planner gate — PENDING METHODOLOGY (do not change `planner.rs` yet)
+### P1-T5 Planner gate — superseded by Phase 3 (olay-driven publishing)
 
-The owner is reworking the posting methodology (2026-11-03): each post gets its own preparation start, a
-reasonable lead before its publish time; planning no longer happens all at once at the start of the week;
-there is no fixed weekly count (an olay with new materials may trigger a burst, e.g. 20 stories at once).
-The slot model will change, so slot materialization in `planner.rs` stays as it is until the new model is
-settled. Intended behaviour, to be fitted to that model:
-- a slot (or post) is materialized only when `select_anchor` finds an eligible anchor for it at its
-  publish time; it records the pick as its brief (material, subject, need);
-- no pick: no slot; a `slot:` request on the çekim listesi instead, and `studio.slot.unfilled` once per key;
-- the `season:` and `olay:` requests are written ahead of their windows by `lead_days`; system requests
-  close themselves once their condition holds;
-- test: zero materials + approved strategy + no-approval policy → no slots, no publications, only requests.
-
-Until then the gate holds at the other two points (P1-T6, P1-T7): nothing without an eligible material is
-ever submitted or published. Slot briefs (`studio_slot_briefs`) wait for the new model's migration.
+`planner.rs` slot materialization is not changed in Phase 1. Phase 3 replaces it (spec §14). Until Phase 3
+ships, the gate holds at submission (P1-T6) and publish (P1-T7): nothing without an eligible material is
+ever submitted or published.
 
 ### P1-T6 Submission gate
 - [ ] Tests: piece with bytes / hosted URL / non-material file → `not_a_material`; no anchor →
@@ -117,18 +106,50 @@ archtest pins (catalog count, registry count, POST_M4 lists, studio rules), MCP 
 Each task: use-case tests in `jt_app/tests/studio_materials_*.rs` first (permission, human-only, replay,
 ledger payload without personal text), then MCP/HTTP twins.
 
-## Phase 3 — truth check
+## Phase 3 — olay-driven publishing (spec §14, replaces weekly slot quotas)
+
+Migration `0022_studio_posts` (posts, package requests, posting policy; down refuses live rows).
+
+### P3-T1 Domain: posts, formats, caps
+- [ ] `PostFormat`, leads and graces, `PlannedPost`, `PackageRequest` (olay, calendar, floor), the posting
+  policy with its defaults (D21, D28, D29), `validate_package` (all-or-nothing, a reason per item: lead,
+  horizon, quiet hours in `tz`, caps, spacing, formats per kind, media count, §4.3 per material).
+- [ ] Formats per organic kind (D30): story refused everywhere (`format_unsupported`) until the official
+  docs are checked and an adapter publishes it; the audit of what each adapter publishes today.
+
+### P3-T2 Storage and ports
+- [ ] `0022_studio_posts`, pg repo, fake, archtest table count, README.
+
+### P3-T3 Triggers (the new `studio_plan`, every 10 minutes)
+- [ ] Olay trigger with the 30-minute debounce (20 uploads → one request); calendar trigger at
+  `window_start − lead`; floor trigger (`floor_days`, not while a package or post is pending); çekim
+  listesi items when nothing is eligible; requests expire after 7 days.
+- [ ] Remove weekly materialization from `planner.rs`; retire old planned/ready slots `replanned` once
+  (D34), with a ledger entry each; `RetirementReason::Replanned` and `MissedGrace`.
+- [ ] Test: zero materials + approved strategy + no-approval policy → çekim listesi items only, no post, no
+  publication.
+
+### P3-T4 Package proposal and just-in-time work
+- [ ] `studio.package_requests`, `studio.package_propose`, `studio.posts_list`, `studio.weekly_summary`
+  (twins); `studio.posting_policy_set` (panel only); catalog, MCP, routes, archtest pins.
+- [ ] Pending lists a post only from `prep_start_at`; missed past grace → retired `missed_grace`.
+
+### P3-T5 Learning per format × olay kind × hypothesis
+- [ ] Aggregation over measurements; best formats in package requests; the floor trigger's hypothesis by
+  posterior mean.
+
+## Phase 4 — truth check
 
 - [ ] Domain `truth.rs`: Turkish folding, tokens, Turkish date parsing, every finding of spec §7, digest.
 - [ ] Submission reports caption findings in `slot_get` (`material_check`); publish holds on findings not
   released; `material_check_release` (panel only, human) for one revision and digest; TikTok title scanned.
 
-## Phase 4 — panel "Materyaller"
+## Phase 5 — panel "Materyaller"
 
 - [ ] API client and types; Materyaller tab: Yükle (phone), Olaylar + detail, Materyal editor, Takvim,
-  Çekim listesi; Today's slot card shows the brief and the hold. Vitest per screen; TR/EN parity.
+  Çekim listesi; Today's slot card shows the post's materials and the hold; the weekly summary. Vitest per screen; TR/EN parity.
 
-## Phase 5 — documents
+## Phase 6 — documents
 
 - [ ] `rust/README.md` (migration row, jobs), spec "what is built" section; final PR description with
   deploy notes (spec §12).
