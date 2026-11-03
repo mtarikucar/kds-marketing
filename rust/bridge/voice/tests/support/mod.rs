@@ -31,6 +31,8 @@ struct Fake {
     /// Whether the call's media WebSocket is connected: until it is, its channel is not in the
     /// application, and a bridge refuses it 422 (as Asterisk 22.11 does, B7 2026-10-30).
     media_up: Arc<AtomicBool>,
+    /// The channels Asterisk carries when asked (left from an earlier run).
+    leftovers: Arc<Vec<String>>,
 }
 
 impl Fake {
@@ -48,10 +50,25 @@ pub async fn fake_ari_refusing_hangups(refusals: usize) -> (String, Log) {
 /// `media_up` (its WebSocket connected; [`MediaFake::connected`]), else 422 "Channel not in Stasis
 /// application".
 pub async fn fake_ari_with(refusals: usize, media_up: Arc<AtomicBool>) -> (String, Log) {
+    fake_ari_full(refusals, media_up, Vec::new()).await
+}
+
+/// As [`fake_ari`], carrying `channels` from an earlier run when asked which channels it has.
+pub async fn fake_ari_leaving(channels: &[&str]) -> (String, Log) {
+    let leftovers = channels.iter().map(|c| (*c).to_owned()).collect();
+    fake_ari_full(0, Arc::new(AtomicBool::new(true)), leftovers).await
+}
+
+async fn fake_ari_full(
+    refusals: usize,
+    media_up: Arc<AtomicBool>,
+    leftovers: Vec<String>,
+) -> (String, Log) {
     let fake = Fake {
         log: Arc::default(),
         refusals: Arc::new(AtomicUsize::new(refusals)),
         media_up,
+        leftovers: Arc::new(leftovers),
     };
     let log = fake.log.clone();
     let app = Router::new()
@@ -63,7 +80,11 @@ pub async fn fake_ari_with(refusals: usize, media_up: Arc<AtomicBool>) -> (Strin
                     axum::Json(json!({ "id": "c-1" }))
                 },
             )
-            .get(|| async { axum::Json(json!([])) }),
+            .get(|State(f): State<Fake>| async move {
+                let channels: Vec<Value> =
+                    f.leftovers.iter().map(|id| json!({ "id": id })).collect();
+                axum::Json(Value::Array(channels))
+            }),
         )
         .route(
             "/ari/channels/externalMedia",
@@ -111,7 +132,10 @@ pub async fn fake_ari_with(refusals: usize, media_up: Arc<AtomicBool>) -> (Strin
         )
         .route(
             "/ari/bridges/{id}",
-            delete(|| async { StatusCode::NO_CONTENT }),
+            delete(|State(f): State<Fake>, Path(id): Path<String>| async move {
+                f.record(format!("DELETE bridge {id}"));
+                StatusCode::NO_CONTENT
+            }),
         )
         .with_state(fake);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

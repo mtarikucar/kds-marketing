@@ -21,6 +21,10 @@
 //! channel up. Reports go on an unbounded queue: one call's events are few, and none may be
 //! dropped (a lost utterance would lose its turn's reply, and its `taken` with it).
 //!
+//! No call ends unheard (review of D, M1): told the line stops ([`ToCall::Stop`]), a call not
+//! answered yet is hung up and a live one plays its closing within [`CLOSE_GRACE`] and hangs up,
+//! each reporting `the line stopped` first; a call whose inbox closes reports it too.
+//!
 //! No call waits on the line for ever (B6 review, [`LineWaits`]): a line that rings past its
 //! deadline is hung up as unanswered; a hangup ARI refuses is asked again, and one Asterisk never
 //! confirms ends the call all the same; a call at its longest duration (`CallSetup::max_duration`)
@@ -82,7 +86,7 @@ const HANGUP_TRIES: [Duration; 3] = [
 ];
 /// How long past its longest duration a call may take to play its closing (the caller may hold it
 /// back) before the line is cut.
-const CLOSE_GRACE: Duration = Duration::from_secs(30);
+pub const CLOSE_GRACE: Duration = Duration::from_secs(30);
 const SAMPLE_RATE: u64 = 8_000;
 /// G.711 in 20 ms frames: the only media the pacer writes (B5 review).
 const FRAME_BYTES: usize = 160;
@@ -139,6 +143,10 @@ pub enum ToCall {
     Command(Command),
     Ari(AriEvent),
     CoreLost,
+    /// The line stops (`run` ending, review of D M1): a call not answered yet is hung up, a live
+    /// one plays its closing (within [`CLOSE_GRACE`]) and hangs up; either reports `the line
+    /// stopped` first.
+    Stop,
 }
 
 /// An event of the call, when it happened, and a way to hear when it was taken (the core
@@ -455,6 +463,9 @@ fn early(message: Option<Result<Message, tungstenite::Error>>) -> Early {
     }
 }
 
+/// The failure a call reports when the line stops under it (`ToCall::Stop`, or `run` gone).
+const STOPPED: &str = "the line stopped";
+
 /// Ends a call that has not been answered for `reason`: the line is hung up (nobody is on it yet,
 /// so the call may wait for ARI) and the call reported failed.
 async fn fail_before_answer(deps: &CallDeps, id: &str, reporter: &Reporter, reason: &'static str) {
@@ -528,9 +539,17 @@ pub async fn run_call(
                 reporter.fail("the core was unreachable during the call");
                 return;
             }
+            Ok(ToCall::Stop) => {
+                info!(call = %id, "the line stopped before the dial");
+                reporter.fail(STOPPED);
+                return;
+            }
             Ok(ToCall::Ari(_)) => {}
             Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => return,
+            Err(TryRecvError::Disconnected) => {
+                reporter.fail(STOPPED);
+                return;
+            }
         }
     }
     let endpoint = format!("PJSIP/{}@netgsm", setup.dial);
@@ -554,9 +573,8 @@ pub async fn run_call(
     loop {
         tokio::select! {
             c = rx.recv() => match c {
-                None => {
-                    hang_up(&deps.ari, &id).await;
-                    return;
+                None | Some(ToCall::Stop) => {
+                    return fail_before_answer(&deps, &id, &reporter, STOPPED).await;
                 }
                 Some(ToCall::Ari(AriEvent::Ringing { channel })) if channel == id => {
                     reporter.send(BridgeEvent::Ringing);
@@ -943,6 +961,9 @@ impl Live {
         // A closed listener's stream resolves at once on every pass: its arm is disabled once it
         // ends, so the fault sentence it asks for plays instead of a tight loop (B4 review I2).
         let mut listening = true;
+        // The line stopped (`ToCall::Stop`): reported once, then the call closes as at its longest
+        // duration.
+        let mut stopping = false;
         let mut tick = tokio::time::interval(Duration::from_millis(20));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -1022,7 +1043,26 @@ impl Live {
                         self.reporter.fail("the core was unreachable during the call");
                         self.input(Input::CoreLost).await;
                     }
-                    None => break,
+                    Some(ToCall::Stop) if !stopping => {
+                        stopping = true;
+                        // Reported first (the core ends the session as failed while the closing
+                        // plays), then the closing within CLOSE_GRACE, as at the longest duration.
+                        info!(call = %self.id, "the line stopped during the call");
+                        self.reporter.fail(STOPPED);
+                        longest = None;
+                        let cut = tokio::time::Instant::now() + CLOSE_GRACE;
+                        cut_at = Some(cut_at.map_or(cut, |c| c.min(cut)));
+                        let text = self.closing.clone();
+                        self.input(Input::Close { text }).await;
+                    }
+                    Some(ToCall::Stop) => {}
+                    None => {
+                        // Nobody hands this call anything any more (`run` gone): the line stopped.
+                        if !stopping {
+                            self.reporter.fail(STOPPED);
+                        }
+                        break;
+                    }
                 },
                 r = async { delivered.as_mut().expect("guarded").await }, if delivered.is_some() => {
                     delivered = None;

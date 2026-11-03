@@ -691,3 +691,51 @@ async fn a_media_channel_asterisk_never_bridges_fails_the_call_with_aris_answer(
     r.ended().await;
     assert!(r.hangups() >= 1, "{}", r.ari());
 }
+
+fn stopped() -> BridgeEvent {
+    BridgeEvent::Error {
+        failure_line: "transient: bridge: the line stopped".into(),
+    }
+}
+
+/// Review of D, M1: a live call the line stops under reports it first, then plays its closing
+/// (the talker's own close, as at the longest duration) and hangs up.
+#[tokio::test]
+async fn a_live_call_told_the_line_stops_reports_it_and_closes() {
+    let mut r = rig("stop-live", Options::default()).await;
+    let _listen = r.answer().await;
+    r.send(ToCall::Stop).await;
+    assert_eq!(next(&mut r.reports).await.event, stopped());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while r.hangups() == 0 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the line is hung up after the closing");
+    r.send(ToCall::Ari(AriEvent::Gone {
+        channel: "c-1".into(),
+        cause: Some(16),
+    }))
+    .await;
+    assert_eq!(next(&mut r.reports).await.event, hangup("normal"));
+    r.ended().await;
+}
+
+/// Review of D, M1: a ringing call the line stops under is hung up and reported.
+#[tokio::test]
+async fn a_ringing_call_told_the_line_stops_is_hung_up_and_reported() {
+    let mut r = rig("stop-ringing", Options::default()).await;
+    let _listener = r.listener().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !r.ari().contains("POST /ari/channels") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the line is dialled");
+    r.send(ToCall::Stop).await;
+    assert_eq!(next(&mut r.reports).await.event, stopped());
+    r.ended().await;
+    assert!(r.hangups() >= 1, "{}", r.ari());
+}

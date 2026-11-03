@@ -3,6 +3,11 @@
 //! forwards Asterisk's events to the calls, and posts what the calls report, in order and as soon
 //! as it happens, each event once by its `(bridge_call_id, bridge_seq)`. When the core stays
 //! unreachable for five seconds the live calls are told (they play the fault sentence and hang up).
+//!
+//! No call ends unheard (review of D, M1): what Asterisk still carries from an earlier run is hung
+//! up and reported failed at the start; a command for a call this line does not carry is reported
+//! (a hangup of it has nothing left to do); on stop each call is told the line stops (a live one
+//! plays its closing), and the run waits for every call's task, then for the reports to be posted.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -14,11 +19,12 @@ use jt_calls::wire::{
 };
 use jt_calls::{BridgeEvent, CallCommandId, CallPlan, Command, DialScript};
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{info, warn};
 
 use crate::ari::{self, Ari, AriEvent};
-use crate::call::{CallDeps, CallSetup, LineWaits, Report, ToCall, run_call};
+use crate::call::{CLOSE_GRACE, CallDeps, CallSetup, LineWaits, Report, ToCall, run_call};
 use crate::config::Config;
 use crate::jeeta::JeetaClient;
 use crate::netgsm;
@@ -34,6 +40,11 @@ const POLL_WAIT_S: u32 = 25;
 /// How many command ids are remembered, so that a command handed out again (its
 /// acknowledgement lost) runs once.
 const SEEN_COMMANDS: usize = 1_000;
+/// How long a stop waits for the calls: a closing played within [`CLOSE_GRACE`], the hangup's
+/// confirmation, and a margin for ARI's retries.
+const STOP_WAIT: Duration = Duration::from_secs(CLOSE_GRACE.as_secs() + 15);
+/// How long a stop then waits for the last reports to be posted.
+const POST_WAIT: Duration = Duration::from_secs(5);
 
 /// What the bridge reports of itself.
 pub fn register_input(config: &Config) -> RegisterInput {
@@ -92,16 +103,14 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
             return;
         }
     };
-    // A call cannot outlive the task that ran it: whatever Asterisk still carries is hung up.
-    if let Ok(left) = ari.channel_ids().await {
-        let count = left.len();
-        for channel in left {
-            let _ = ari.hangup(&channel).await;
-        }
-        if count > 0 {
-            warn!(count, "hung up the channels left from before");
-        }
-    }
+    let calls: Registry = Arc::default();
+    // Unbounded (B5 re-review, B6 as built): a call hands its reports on without waiting, so a
+    // slow core never holds a call's loop up, and none is dropped (a lost utterance would lose its
+    // turn's reply, and `bridge_seq` would leave the core no gap to see). One call's events bound
+    // it.
+    let (reports_tx, reports_rx) = mpsc::unbounded_channel::<Report>();
+    let poster = tokio::spawn(post_reports(jeeta.clone(), reports_rx, calls.clone()));
+    sweep(&ari, &reports_tx).await;
     let deps = Arc::new(CallDeps {
         ari: ari.clone(),
         listen: config.listen.clone(),
@@ -111,18 +120,14 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
         traces: Some(TraceFile::new(config.trace_file.clone())),
         waits: LineWaits::default(),
     });
-    let calls: Registry = Arc::default();
-    // Unbounded (B5 re-review, B6 as built): a call hands its reports on without waiting, so a
-    // slow core never holds a call's loop up, and none is dropped (a lost utterance would lose its
-    // turn's reply, and `bridge_seq` would leave the core no gap to see). One call's events bound
-    // it.
-    let (reports_tx, reports_rx) = mpsc::unbounded_channel::<Report>();
     let beat = tokio::spawn(heartbeat(jeeta.clone(), register_input(&config)));
-    let poster = tokio::spawn(post_reports(jeeta.clone(), reports_rx, calls.clone()));
     let events = tokio::spawn(forward_ari(ari.clone(), calls.clone()));
     let mut seen = Seen::default();
+    let mut tasks = JoinSet::new();
     info!("the line is up");
     loop {
+        // The calls' tasks that ended are reaped as the line goes.
+        while tasks.try_join_next().is_some() {}
         let query = CommandsQuery {
             wait_s: Some(POLL_WAIT_S),
             extension: Some(config.extension.clone()),
@@ -132,7 +137,7 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
             out = jeeta.commands(&query) => match out {
                 Ok(out) => {
                     for c in out.commands {
-                        dispatch(c, &deps, &calls, &reports_tx, &mut seen).await;
+                        dispatch(c, &deps, &calls, &reports_tx, &mut seen, &mut tasks).await;
                     }
                 }
                 Err(e) => {
@@ -143,13 +148,46 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
         }
     }
     info!("stopping");
-    if let Ok(mut c) = calls.lock() {
-        c.clear();
+    // Every call is told, then waited for, while Asterisk's events still reach it and its reports
+    // are still posted; a hangup in flight is never cut.
+    let live: Vec<mpsc::Sender<ToCall>> = calls
+        .lock()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    for tx in live {
+        let _ = tx.try_send(ToCall::Stop);
+    }
+    let joined = tokio::time::timeout(STOP_WAIT, async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await;
+    if joined.is_err() {
+        let count = tasks.len();
+        warn!(count, "calls still running when the stop's wait ended");
     }
     beat.abort();
     events.abort();
     drop(reports_tx);
-    let _ = tokio::time::timeout(Duration::from_secs(5), poster).await;
+    let _ = tokio::time::timeout(POST_WAIT, poster).await;
+}
+
+/// Hangs up what Asterisk still carries from an earlier run (a crash, a restart): each call's own
+/// channel is reported failed, once (its `-m` media channel is the same call's).
+async fn sweep(ari: &Ari, reports: &mpsc::UnboundedSender<Report>) {
+    let Ok(left) = ari.channel_ids().await else {
+        return;
+    };
+    let count = left.len();
+    for channel in left {
+        let _ = ari.hangup(&channel).await;
+        if !channel.ends_with("-m") {
+            let failure_line = "transient: bridge: the line restarted during the call".to_owned();
+            let _ = reports.send(Report::now(&channel, BridgeEvent::Error { failure_line }));
+        }
+    }
+    if count > 0 {
+        warn!(count, "hung up the channels left from before");
+    }
 }
 
 /// Registers the line every heartbeat the core asks for, and every 2 s while it refuses.
@@ -175,12 +213,16 @@ async fn heartbeat(jeeta: Arc<JeetaClient>, body: RegisterInput) {
 }
 
 /// Hands command `c` to its call (a dial starts one), once, and acknowledges it however it went.
+/// A command of a call this line does not carry is reported, so a session the core still thinks
+/// live ends (a hangup of one has nothing left to do), and acknowledged all the same: an
+/// unacknowledged command would be handed out again every ten seconds for a week.
 async fn dispatch(
     c: BridgeCommand,
     deps: &Arc<CallDeps>,
     calls: &Registry,
     reports: &mpsc::UnboundedSender<Report>,
     seen: &mut Seen,
+    tasks: &mut JoinSet<()>,
 ) {
     let call = c
         .bridge_call_id
@@ -192,11 +234,18 @@ async fn dispatch(
                 to_e164,
                 plan,
                 script,
-            }) => start_call(&call, &to_e164, plan, script, deps, calls, reports),
+            }) => start_call(&call, &to_e164, plan, script, deps, calls, reports, tasks),
             Ok(command) => {
+                let hangup = matches!(command, Command::Hangup);
                 let tx = calls.lock().ok().and_then(|m| m.get(&call).cloned());
-                if let Some(tx) = tx {
-                    let _ = tx.send(ToCall::Command(command)).await;
+                let handed = match tx {
+                    Some(tx) => tx.send(ToCall::Command(command)).await.is_ok(),
+                    None => false,
+                };
+                if !handed && !hangup {
+                    warn!(call, "a command for a call this line does not carry");
+                    let failure_line = "transient: bridge: the call is not on this line".to_owned();
+                    let _ = reports.send(Report::now(&call, BridgeEvent::Error { failure_line }));
                 }
             }
             Err(_) => warn!(command = %c.id, kind = %c.kind, "a command this build cannot read"),
@@ -205,7 +254,12 @@ async fn dispatch(
     let _ = reports.send(Report::now(&call, BridgeEvent::CommandDone { id: c.id }));
 }
 
-/// Starts the task of a dialled call, or reports why the line refuses it.
+/// Starts the task of a dialled call (in `tasks`, which a stop waits for), or reports why the
+/// line refuses it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the line's state, handed down from run"
+)]
 fn start_call(
     call: &str,
     to_e164: &str,
@@ -214,6 +268,7 @@ fn start_call(
     deps: &Arc<CallDeps>,
     calls: &Registry,
     reports: &mpsc::UnboundedSender<Report>,
+    tasks: &mut JoinSet<()>,
 ) {
     let refuse = |failure_line: &str| {
         Report::now(
@@ -260,7 +315,7 @@ fn start_call(
         reports.clone(),
         call.to_owned(),
     );
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         run_call(deps, setup, rx, reports).await;
         if let Ok(mut m) = calls.lock() {
             m.remove(&call);

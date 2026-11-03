@@ -16,7 +16,7 @@ use jeeta_voice_bridge::run_loop::run;
 use jt_calls::wire::BridgeCommand;
 use jt_calls::{CallCommandId, CallId, CallPlan, Command, DialScript};
 use serde_json::{Value, json};
-use support::{fake_ari, serve_speaker, ws_server};
+use support::{fake_ari, fake_ari_leaving, serve_speaker, ws_server};
 use time::OffsetDateTime;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
@@ -197,6 +197,67 @@ async fn a_dial_reaches_the_pbx_and_every_command_is_acknowledged() {
         2,
         "{seen:?}"
     );
+    // Stopped while it rang: hung up, and reported (review of D, M1: no call ends unheard).
+    assert!(ari.contains("DELETE channel call-tr"), "{ari}");
+    assert!(seen.contains(&"call-tr error".to_owned()), "{seen:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_call_left_from_before_is_hung_up_and_reported() {
+    // A crash or a restart left a call on Asterisk: the next run hangs both of its channels up
+    // and reports the call failed, once (its `-m` media channel is the same call's).
+    let (ari_base, ari_log) = fake_ari_leaving(&["call-old", "call-old-m"]).await;
+    let (jeeta_base, seen) = fake_jeeta(Vec::new()).await;
+    let (listen, speak, _listen_conns) = speech().await;
+    let (config, dir) = config("sweep", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(config, Duration::from_millis(1_000)).await;
+    let ari = ari_log.lock().unwrap().clone();
+    assert!(
+        ari.contains(&"DELETE channel call-old".to_owned()),
+        "{ari:?}"
+    );
+    assert!(
+        ari.contains(&"DELETE channel call-old-m".to_owned()),
+        "{ari:?}"
+    );
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.contains(&"call-old error".to_owned()), "{seen:?}");
+    assert!(
+        !seen.iter().any(|e| e.starts_with("call-old-m")),
+        "{seen:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_command_for_a_call_not_on_the_line_is_reported() {
+    // A sentence for a call this line does not carry (the line restarted under it): the core hears
+    // the call failed instead of a sentence played. A hangup of one has nothing left to do. Both
+    // are acknowledged, so neither is handed out again.
+    let (ari_base, _) = fake_ari().await;
+    let say = Command::Say {
+        seq: 4,
+        text: "Perşembe uygun mu?".into(),
+        allow_barge_in: true,
+    };
+    let (jeeta_base, seen) = fake_jeeta(vec![
+        command("call-ghost", say),
+        command("call-gone", Command::Hangup),
+    ])
+    .await;
+    let (listen, speak, _listen_conns) = speech().await;
+    let (config, dir) = config("unknown", &jeeta_base, &ari_base, &listen, &speak);
+    run_for(config, Duration::from_millis(1_000)).await;
+    let seen = seen.lock().unwrap().clone();
+    for line in [
+        "call-ghost error",
+        "call-ghost command_done",
+        "call-gone command_done",
+    ] {
+        assert!(seen.contains(&line.to_owned()), "{line}: {seen:?}");
+    }
+    assert!(!seen.contains(&"call-gone error".to_owned()), "{seen:?}");
     let _ = std::fs::remove_dir_all(dir);
 }
 
