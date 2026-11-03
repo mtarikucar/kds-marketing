@@ -1704,6 +1704,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_outreach"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_inbox",
+ "jt_prospects",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "jt_panel_http"
 version = "0.1.0"
 dependencies = [

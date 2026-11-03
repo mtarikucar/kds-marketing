@@ -46,6 +46,14 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     // promotion names the inbox person and journey; `url` parses websites and does IDNA; the
     // rubric and the research areas are the strategy's types.
     ("jt_prospects", &["jt_inbox", "jt_strategy", "url"]),
+    // Outreach: audiences name inbox people, journey stages, source and recipient kinds, and
+    // the policy's business-basis channels (`jt_inbox`); a campaign's sending window is a
+    // capability's working hours, validated by its rules (`jt_capability::Hours`); a prospect
+    // filter names research tasks (`jt_prospects`); `url` checks template and privacy links.
+    (
+        "jt_outreach",
+        &["jt_inbox", "jt_capability", "jt_prospects", "url"],
+    ),
 ];
 
 #[test]
@@ -149,8 +157,9 @@ fn device_bridge_depends_on_no_server_crate() {
     }
 }
 
-/// Exact dependency sets: connector, inbox and studio use capability types; only connector
-/// and inbox hash bytes, while the other crypto crates remain connector-only (non-vacuous).
+/// Exact dependency sets: connector, inbox, studio, calls and outreach use capability types;
+/// only connector and inbox hash bytes, while the other crypto crates remain connector-only
+/// (non-vacuous).
 #[test]
 fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
     for krate in CONNECTOR_EXTRA_ALLOW {
@@ -160,7 +169,13 @@ fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
         let expected = if *krate == "jt_capability" {
-            BTreeSet::from(["jt_connector", "jt_inbox", "jt_studio", "jt_calls"])
+            BTreeSet::from([
+                "jt_connector",
+                "jt_inbox",
+                "jt_studio",
+                "jt_calls",
+                "jt_outreach",
+            ])
         } else if *krate == "sha2" {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {

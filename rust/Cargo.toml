@@ -12,6 +12,7 @@ members = [
     "crates/domain/jt_devices",
     "crates/domain/jt_device_protocol",
     "crates/domain/jt_prospects",
+    "crates/domain/jt_outreach",
     "crates/jt_app",
     "crates/adapters/jt_files",
     "crates/adapters/jt_pg",
@@ -51,6 +52,7 @@ jt_calls = { path = "crates/domain/jt_calls" }
 jt_devices = { path = "crates/domain/jt_devices" }
 jt_device_protocol = { path = "crates/domain/jt_device_protocol" }
 jt_prospects = { path = "crates/domain/jt_prospects" }
+jt_outreach = { path = "crates/domain/jt_outreach" }
 jt_app = { path = "crates/jt_app" }
 jt_files = { path = "crates/adapters/jt_files" }
 jt_pg = { path = "crates/adapters/jt_pg" }
