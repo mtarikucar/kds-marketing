@@ -2113,10 +2113,12 @@ async fn run_studio_learning(deps: &Deps, job: Job, now: OffsetDateTime) -> JobR
 /// 2. the provider is asked with no transaction open (`MessagingSender::request_app_sync`);
 /// 3. under the lock again, only while the same onboarding (`onboarded_at`) still has the
 ///    request `requesting` (else `skipped`: a new onboarding started over meanwhile): an answer
-///    is `requested` with the provider's `request_id`; a busy or unreachable provider puts it back
-///    to `due` (asked again on the next run while the window is open; `failed`); an answer that
-///    may have been lost after the request reached the provider (`Unknown`) is `unknown`, never
-///    asked again; any refusal is `refused`, with the redacted failure line as its `reason`.
+///    is `requested` with the provider's `request_id` (`null` when it named none); a throttled
+///    provider, or one the request never reached (`Transient`), puts it back to `due` (asked
+///    again on the next run while the window is open; `failed`); an answer that may have been
+///    lost after the request reached the provider, or one that neither took nor refused it (an
+///    HTTP 5xx: the adapter says `Unknown`), is `unknown`, never asked again; any refusal is
+///    `refused`, with the redacted failure line as its `reason`.
 ///
 /// Each move to `requested`, `refused`, `unknown` or `expired` writes `connector.app_sync`
 /// (`{kind_key, sync, state}`) and counts as `changed`.
@@ -2246,8 +2248,13 @@ async fn app_sync_step(
     }
     let line = |e: &ConnectorError| super::failure::failure_reason(Some(Provider::Meta), e);
     let (entry, step) = match answer {
+        // Meta's request id when it named one (kept for its support), else `null`.
         Ok(Some(receipt)) => (
-            json!({ "state": REQUESTED, "at": at, "request_id": receipt.provider_id }),
+            json!({
+                "state": REQUESTED,
+                "at": at,
+                "request_id": Some(receipt.provider_id).filter(|id| !id.is_empty()),
+            }),
             AppSyncStep::Moved,
         ),
         Ok(None) => (json!({ "state": DUE }), AppSyncStep::Idle),

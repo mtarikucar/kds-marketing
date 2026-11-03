@@ -2010,6 +2010,31 @@ fn sync_state(r: &Rig, id: CapabilityId, sync: &str) -> Value {
     r.capability(id).connector_public["business_app"][sync].clone()
 }
 
+/// Meta took a request without naming its id: the request stands (`requested`), its id unknown,
+/// and it is not asked again.
+#[tokio::test]
+async fn app_sync_records_a_request_meta_took_without_an_id() {
+    let r = rig().await;
+    let id = r
+        .connected(
+            "whatsapp_cloud",
+            "5555555555",
+            StoredStatus::Verified,
+            &wa_number(),
+            sharing(NOW - Duration::hours(1), "due", "requested"),
+        )
+        .await;
+    r.meta.push_app_sync(Ok(Some(receipt(""))));
+    assert_eq!(
+        jobs::run_whatsapp_app_sync(&r.w.deps, NOW).await,
+        report(1, 1, 0, 0)
+    );
+    assert_eq!(
+        sync_state(&r, id, "contacts"),
+        json!({ "state": "requested", "at": rfc3339(NOW), "request_id": null })
+    );
+}
+
 #[tokio::test]
 async fn app_sync_asks_for_the_contacts_then_the_history_once_each() {
     use jt_app::ports::connectors::AppSync;

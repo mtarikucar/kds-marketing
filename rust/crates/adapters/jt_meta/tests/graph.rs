@@ -3351,7 +3351,7 @@ async fn app_sync_asks_smb_app_data_once_per_request() {
     for request in &asked {
         assert_graph_auth(request, WA_TOKEN);
     }
-    // Another kind asks nothing; an answer without a request id is refused.
+    // Another kind asks nothing.
     assert_eq!(
         r.meta
             .request_app_sync(
@@ -3363,14 +3363,45 @@ async fn app_sync_asks_smb_app_data_once_per_request() {
             .unwrap(),
         None
     );
+    // Meta took it without naming its id: taken all the same, its id unknown.
     m.set(
         "POST",
         "/fb/v19.0/5555555555/smb_app_data",
         ok(json!({ "messaging_product": "whatsapp" })),
     );
-    let refused = r
+    let receipt = r
         .meta
         .request_app_sync(&wa_cred(None), &p, AppSync::History)
-        .await;
-    assert_eq!(kind_of(refused), "permanent");
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "");
+    // Meta answered, but neither took nor refused it (a server error, a transient Graph error):
+    // the request may have been taken, and Meta takes it once, so its outcome is unknown. A
+    // throttle took nothing, and an explicit refusal stays one.
+    for (answer, kind) in [
+        (status(500, json!({})), "unknown"),
+        (
+            status(
+                503,
+                json!({ "error": { "code": 2, "is_transient": true, "message": "m" } }),
+            ),
+            "unknown",
+        ),
+        (
+            status(
+                400,
+                json!({ "error": { "code": 100, "type": "OAuthException", "message": "(#100) bad" } }),
+            ),
+            "permanent",
+        ),
+        (status(429, json!({})), "throttle"),
+    ] {
+        m.set("POST", "/fb/v19.0/5555555555/smb_app_data", answer);
+        let out = r
+            .meta
+            .request_app_sync(&wa_cred(None), &p, AppSync::History)
+            .await;
+        assert_eq!(kind_of(out), kind);
+    }
 }

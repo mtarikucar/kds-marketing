@@ -150,8 +150,10 @@ pub(crate) async fn sender_name(
 /// holds: `POST /{phone_number_id}/smb_app_data` with `messaging_product: whatsapp` and
 /// `sync_type` `smb_app_state_sync` (contacts) or `history`, as Meta's onboarding page gives it
 /// (<https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>);
-/// the receipt's id is the answer's `request_id`. Another kind, or a credential that is not a
-/// WhatsApp one, asks nothing (`None`).
+/// the receipt's id is the answer's `request_id`, empty when a success names none (the request
+/// was taken all the same). Meta takes each request once, so it is sent as a one-time write
+/// ([`MetaConnector::graph_post_once`]): an answer that neither took nor refused it is `Unknown`.
+/// Another kind, or a credential that is not a WhatsApp one, asks nothing (`None`).
 pub(crate) async fn request_app_sync(
     connector: &MetaConnector,
     cred: &Credential,
@@ -175,7 +177,7 @@ pub(crate) async fn request_app_sync(
     };
     let app = connector.graph_app()?;
     let answer = connector
-        .graph_post(
+        .graph_post_once(
             &app,
             token,
             &[node(phone_number_id)?, "smb_app_data"],
@@ -183,7 +185,7 @@ pub(crate) async fn request_app_sync(
             json!({ "messaging_product": "whatsapp", "sync_type": sync_type }),
         )
         .await?;
-    let id = text(&answer["request_id"]).ok_or_else(|| missing("request id"))?;
+    let id = text(&answer["request_id"]).unwrap_or_default();
     Ok(Some(SendReceipt {
         provider_id: id,
         cost_minor: None,

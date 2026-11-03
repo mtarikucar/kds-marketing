@@ -184,6 +184,13 @@ no sharing and reconnects through the plain sign-in.
 connected in more than one workspace (an agency and its customer); a disconnection concerns all
 of them, so `account_update` is stored in each such workspace, not only in one.
 
+**D20. A one-time request's unclear answer is `unknown`.** `smb_app_data` is sent as a one-time
+write: an answer Meta gave that neither took nor refused it (an HTTP 5xx, a transient Graph
+error) means the request reached Meta and may have been taken, so the adapter says `Unknown`
+and the request is never asked again. Only a call that never reached Meta (it could not connect)
+or a throttle is asked again. A success that names no `request_id` is `requested` with
+`request_id: null`; every id Meta names is kept.
+
 ## Open questions
 
 - **Q1.** Does the dialog honour `extras` when opened by redirect? If not, the panel must launch
