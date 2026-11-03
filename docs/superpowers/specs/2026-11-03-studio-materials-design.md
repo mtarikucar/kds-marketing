@@ -59,6 +59,7 @@ workshop, and special-day photos and videos must never be picked at random for u
 | D13 | **Paid-lane slots stay ungated (decided 2026-11-03, was Q1).** The paid lane moves budgets of ad sets built from existing creatives; it carries no piece, and any creative that came from Studio already passed the gate. D1 applies to every content-producing (organic) slot. Revisit when Studio builds paid creatives itself. |
 | D14 | **Material files outlive the 30-day publication cleanup.** `StudioFilesCleanup` never deletes the file of a live material; it deletes the files of erased materials (§9). |
 | D15 | **Migration number 0021.** `0019` and `0020` are taken by open PRs (#392 inbox public, #393 prospects); sqlx applies a lower pending version after a higher applied one, so the three merge in any order. |
+| D35 | **The library needs no strategy.** Its use cases (olays, materials, tags, calendar, çekim listesi) and `studio.file_upload` are exempt from the strategy gate, not from the workspace-status check: the owner gathers materials before and while the strategy is worked out. Nothing is planned or published without an approved strategy anyway. |
 | D16 | **Retention (decided, was Q2).** Materials that show people are kept 24 months after their olay by default (§9.3); the owner may delete earlier at any time; a person's erasure removes theirs at once, whatever the retention. |
 | D17 | **AI self-permission (decided, was Q3).** D5 stands. The `depicts` flags are mandatory on every AI upload (the agent states the set, possibly empty: no face, name, child, logo, brand or club mark). Any flag set: a human decides. A human may always revoke. |
 | D18 | **Per-workspace settings (decided, was Q4–Q5).** `lead_days` 21, `reuse_days` 14, `recap_days` 30 are the materials policy's defaults, editable per workspace; the season windows of §4.4 are the defaults of the per-workspace calendar. |
@@ -210,7 +211,7 @@ before, deleted after, as `studio.file_upload` does).
 
 ### 5.2 Use cases and catalog
 
-Twins (MCP tool + panel route), all `Gated`, `studio.work` unless stated:
+Twins (MCP tool + panel route), all exempt from the strategy gate (D35), `studio.work` unless stated:
 
 | use case | route | risk |
 |---|---|---|
