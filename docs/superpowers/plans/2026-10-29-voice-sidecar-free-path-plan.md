@@ -14120,7 +14120,7 @@ git add .github/workflows/rust.yml rust/bridge/voice/deploy rust/bridge/voice/sp
 git commit -m "ci(voice): speech unit tests and the voice bridge's Linux artifact; its systemd unit; speak's own socket directory; trace rotation" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 4: [COORDINATOR, server] Serve staging**
+- [ ] **Step 4: [COORDINATOR, server] Serve staging** (the first draft; run "Step 4 as it stands" at the end of D3 instead, which also keeps the key off every command line)
 
 Preconditions: staging runs the Phase C release (E1 Step 2). In the staging panel, as the owner of the test workspace (proposed "Test Atölye"; never "Jeeta Demo", the Meta reviewers' workspace), issue a key: **API anahtarları** → new key, name "voice bridge 102", the one scope **Ses köprüsü olarak çalışma** (`calls.bridge`); copy the plaintext once. On the host:
 
@@ -14214,8 +14214,11 @@ S4. On the host, as root: the bridge's environment (staging), its binary, a chec
 ```bash
 umask 077
 install -d -m 0750 -o jeeta-voice-bridge -g jeeta-voice-bridge /var/lib/jeeta-voice /var/lib/jeeta-voice/cache
-install -m 0600 /root/jeeta-voice-src/rust/bridge/voice/deploy/bridge.env.example /etc/jeeta-voice/bridge.staging.env
-read -r -s KEY; sed -i "s|^JEETA_BRIDGE_KEY=.*|JEETA_BRIDGE_KEY=$KEY|" /etc/jeeta-voice/bridge.staging.env; unset KEY
+read -r -s KEY
+{ grep -v '^JEETA_BRIDGE_KEY=' /root/jeeta-voice-src/rust/bridge/voice/deploy/bridge.env.example
+  printf 'JEETA_BRIDGE_KEY=%s\n' "$KEY"; } > /etc/jeeta-voice/bridge.staging.env
+unset KEY
+chmod 0600 /etc/jeeta-voice/bridge.staging.env
 grep -c '^JEETA_BRIDGE_KEY=..' /etc/jeeta-voice/bridge.staging.env      # 1: the key is in
 ln -sfn /etc/jeeta-voice/bridge.staging.env /etc/jeeta-voice/bridge.env
 SHA8=<the SHA8 of S1>
@@ -14232,10 +14235,14 @@ systemctl daemon-reload && systemctl enable --now jeeta-voice-bridge
 sleep 20; journalctl -u jeeta-voice-bridge -n 20 --no-pager
 ```
 
+The key goes in through bash's builtin `printf` and a redirection (review of D, L8): it is on no process's command line, so neither `ps` nor the audit log nor a shell history sees it (the earlier `sed -i "s|…|$KEY|"` put it in `sed`'s arguments). `grep -v` reads the example, which holds no key.
+
 Expected:
 - `report`: `--since takes an RFC 3339 time`, `exit 2` (the CI binary loads with this host's libc).
 - `check` (its defaults are the new socket paths; it needs only ARI's password): `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok (voice …)`.
+- `systemd-analyze verify` names no unknown directive (the hardening of L9 needs systemd 244 or later, which the host's has).
 - The journal: `the line is up`, `registered with the core status=Verified`, `connected to Asterisk's events`; no number, no word, no key. In the staging panel, **Kabiliyetler** shows "Voice bridge 102" verified, engines `seda`/`ema`, version `0.1.0`, `max_calls` 1.
+- A restart (`systemctl restart jeeta-voice-bridge`, optional) logs `stopping` and, at the next start, `the line is up` again; with no call on the line nothing else. `/var/lib/jeeta-voice/dials.log` appears with the first dial (ids only).
 
 Rollback: `systemctl disable --now jeeta-voice-bridge` (the line then goes offline in the core; no call is placed through it). To undo the speak move as well, install `jeeta-voice-speak.service` and `jeeta-voice.tmpfiles` from `4f1830ec` (the commit before D3) the same way and restart `jeeta-voice-speak`; a bridge started after that needs `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock` in `bridge.env`.
 
@@ -14247,7 +14254,28 @@ Rollback: `systemctl disable --now jeeta-voice-bridge` (the line then goes offli
 
   The fake and Postgres implement the same rule (`acked_at = case when kind = 'dial' …` in the lease's update). A dial lost on its way ends as any unanswered call does, by the core's ring timer.
   - Tests: `calls_bridge` `a_dial_is_handed_out_at_most_once` and `unacked_command_redelivered_after_10s` (both seen failing with the dial re-handed at 11 s). The latter now pins both behaviours in one sequence: a hangup is re-handed at 12 s and the dial, taken at 0 s and never acknowledged, is not. `jt_pg` `calls_storage` `a_dial_is_taken_at_most_once` passed in CI on Postgres.
-  - The first push's run failed on `unacked_command_redelivered_after_10s` at its 11 s check, the known flake of that test: a poll leases as of its context's time plus the real time it took (`kernel::lease`), so a poll at exactly 10 s past the take may read the lease as run out. The checks now keep a second from the edge (not again at 6 s and 10 s, again at 12 s); the pull_request run of the same commit had passed.
+  - The first push's run failed on `unacked_command_redelivered_after_10s` at its 11 s check, the known flake of that test: a poll leases as of its context's time plus the real time it took (`kernel::lease`), so a poll at exactly 10 s past the take may read the lease as run out. The checks now keep a second from the edge (not again at 6 s and 10 s, again at 12 s); the pull_request run of the same commit had passed (`d2387ab5`).
+- **M2, the bridge: a dial rings nobody twice across a restart** (`967c24bf`). The bridge keeps each dial's command id in a dial log (`VOICE_DIAL_LOG`, default `/var/lib/jeeta-voice/dials.log`, ids only, its last 1 000 read back at the start). That is simpler and more robust than refusing a "stale" dial: a dial carries no time of its own, and the command id is what the bridge already dedups by. Test: `run_loop` `a_dial_handed_out_again_after_a_restart_rings_nobody` (seen failing: the second run dialled again).
+- **M3, a wedged core is noticed in seconds** (`3253cf0c`). Register and events time out after 3 s, the long-poll after 40 s, connect after 3 s; `JeetaClient::new` returns an error instead of a client without timeouts; the poster's outage counts from the first failed attempt's start (`Outage`), so a wedged core reaches the calls about 6 s after it stopped answering, not about 80 s. Tests: `jeeta_client` `a_wedged_core_fails_a_report_in_seconds_but_the_long_poll_waits` (seen failing: 40 s), unit `a_wedged_core_is_lost_five_seconds_after_the_first_attempt_began`. D1's 40 s for every request is superseded.
+- **L4, a report keeps the time it happened** (`2c44f124`). `Report.at` is stamped in `Reporter::put` (and `Report::now`), and the poster sends it. Test: `run_loop` `reports_keep_the_time_they_happened` (seen failing: four reports over about 2 s). `tests/run_loop.rs` is built around one configurable fake Jeeta.
+- **L7, the wire's libraries log at info at most** (`4d9eb945`). `log_filter` drops the spec's directives for `tungstenite`, `tokio_tungstenite`, `hyper`, `hyper_util` and `reqwest` and appends them at `info`, so `JEETA_VOICE_BRIDGE_LOG=trace` cannot put a frame of a transcript or a dialled number in the journal. Test: `log_filter` (seen failing: no function). `hyper_util` is added to the four the review named: hyper 1's client lives there.
+- **M1, no call ends unheard** (`2d4964b1`):
+  - `ToCall::Stop`: on stop each call is told; one not answered is hung up, a live one plays its closing within `CLOSE_GRACE` and hangs up, both reporting `transient: bridge: the line stopped` first; a closed inbox reports it too.
+  - `run` keeps the calls' tasks in a `JoinSet` and waits for them (`STOP_WAIT`, 45 s, inside systemd's default 90 s stop timeout) while Asterisk's events and the poster still run, then for the poster (`POST_WAIT`, 5 s). Nothing aborts a call's task or its awaited hangup.
+  - The startup sweep reports each swept call channel (not a `-m` one) as `the line restarted during the call`.
+  - A command for a call the line does not carry is reported `the call is not on this line`; a hangup of one does nothing.
+  - **Differs from the review's wording:** the command is still acknowledged (`command_done`) after the error. `take_commands` hands an unacknowledged command out again every 10 s until the purge after 7 days whatever the session's state, and not handing the commands of ended sessions would also stop the hangup that `jt_calls::end` queues for a call ended while it rings. So "reports an error" holds, and the command is acknowledged so it is not handed out again.
+  - Tests (seen failing): `call` `a_live_call_told_the_line_stops_reports_it_and_closes`, `a_ringing_call_told_the_line_stops_is_hung_up_and_reported`; `run_loop` `a_call_left_from_before_is_hung_up_and_reported`, `a_command_for_a_call_not_on_the_line_is_reported`, and `a_dial_reaches_the_pbx…` now asserts the stopped call's hangup and report.
+- **L6, nothing waits on a call** (`1e4a5d42`, `59c423f7`):
+  - `run_call_capped` cuts a call's task at `task_cap` (ring, longest duration, `CLOSE_GRACE`, the hangup's wait, `TASK_MARGIN` 60 s). It hangs up `{id}` and `{id}-m`, destroys `{id}-b` and reports `the call's task did not end`.
+  - `dispatch` and the poster use `try_send`: a full inbox reports `the call stopped taking commands`.
+  - **The registry entry is not removed on hangup but marked closing:** the busy check counts the calls not closing, so the next dial is not refused, and the closing call still gets its `Gone`. Removing it would have left the call to end by its 5 s `gone` wait, unconfirmed.
+  - Tests (seen failing): `call` `a_call_whose_task_outlives_its_cap_is_cut_and_reported`, `run_loop` `a_hangup_frees_the_line_for_the_next_dial`. The fake ARI logs bridge destroys and can leave channels from before.
+- **L8, the key is on no command line**: the runbook's S4 above (this commit).
+- **L9, exit code and hardening** (`3ea04828`):
+  - `run` returns `Result<(), RunError>` and `run` exits 1 on it, so `Restart=on-failure` applies. No test: reqwest's builder fails only when its TLS backend cannot start.
+  - The unit gains `CapabilityBoundingSet=`, `PrivateDevices`, `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectKernelLogs`, `SystemCallFilter=@system-service`, `RestrictNamespaces` and `MemoryDenyWriteExecute`; `deploy.rs` pins them (seen failing).
+- Checks on Windows (`jt_pg`'s two unix-only lines removed locally, never committed): `cargo test -p jeeta-voice-bridge` 125 (lib 2, adapters 20, call 17, connect 4, deploy 2, g711 5, jeeta_client 3, log_filter 1, logging 3, netgsm 4, pacer 8, redaction 4, run_loop 6, slice 4, talker 31, text 11); `jt_app` `calls_session` 31, `calls_bridge` 10, `calls_place` 13, `calls_end` 2, `calls_policy` 4; clippy `--all-targets -D warnings` and `cargo doc -D warnings` on the bridge, fmt clean.
 
 ## Phase E — release and acceptance
 
