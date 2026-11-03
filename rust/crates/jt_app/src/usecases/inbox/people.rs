@@ -77,7 +77,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppE
     })
 }
 /// `inbox.people.set_kind`'s input.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetKindInput {
     pub kind: RecipientKind,
