@@ -693,6 +693,76 @@ async fn a_metered_reply_without_a_strategy_is_refused_before_it_is_queued() {
     assert!(s.inbox.messages.is_empty());
 }
 
+/// An email conversation in a workspace with no strategy, its customer consenting to commercial
+/// mail, and its last inbound message `ago` before now in conversation `state`.
+async fn mail_conversation(
+    ago: time::Duration,
+    state: ConvState,
+) -> (World, ConversationId, Arc<ScriptedConnector>) {
+    let (w, id, c) = setup_channel_with("mailbox", false).await;
+    let person = w.uow.snapshot().inbox.people[0].id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.consents()
+        .insert(Consent {
+            id: ConsentId::new_v7(),
+            person_id: person,
+            channel: Channel::Email,
+            kind: ConsentKind::Explicit,
+            source: ConsentSource::Customer,
+            at: w.owner_ctx.now - time::Duration::days(60),
+            sync_state: SyncState::Pending,
+            attempts: 0,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let at = w.owner_ctx.now - ago;
+    w.uow.edit(|s| {
+        let c = s
+            .inbox
+            .conversations
+            .iter_mut()
+            .find(|c| c.id == id)
+            .unwrap();
+        c.last_inbound_at = Some(at);
+        c.state = state;
+    });
+    (w, id, c)
+}
+fn commercial() -> replies::ReplyInput {
+    serde_json::from_value(json!({"text":"An offer","intent":"commercial"})).unwrap()
+}
+
+/// A commercial message is outreach unless the customer is still talking: without a strategy it
+/// is refused once the customer's last message is older than the answering window, or the
+/// conversation is closed, whatever the channel (email has no provider window of its own).
+#[tokio::test]
+async fn a_commercial_reply_without_a_strategy_needs_a_customer_still_talking() {
+    let quiet = replies::ANSWERING_WINDOW + time::Duration::days(1);
+    for (ago, state) in [
+        (quiet, ConvState::Ours),
+        (time::Duration::hours(2), ConvState::Closed),
+    ] {
+        let (w, id, c) = mail_conversation(ago, state.clone()).await;
+        c.push_mail(accepted());
+        let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial())
+            .await
+            .unwrap_err();
+        assert_eq!(e.details["reason"], "strategy_required", "{state:?}: {e:?}");
+        assert!(c.calls().is_empty(), "{state:?}");
+        assert!(w.uow.snapshot().inbox.outbox.is_empty(), "{state:?}");
+    }
+    // Inside the window, on an open conversation, it answers the customer: no strategy needed,
+    // well past the 24 hours a reply-intent message is held to.
+    let (w, id, c) = mail_conversation(time::Duration::days(3), ConvState::Theirs).await;
+    c.push_mail(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial())
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    assert_eq!(c.calls().len(), 1);
+}
+
 #[tokio::test]
 async fn late_acceptance_preserves_newer_conversation_activity() {
     for activity in ["inbound", "close", "snooze", "none"] {
