@@ -355,3 +355,57 @@ async fn no_pool_items_while_prospecting_is_off() {
     let out = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
     assert!(pool_items(&out).is_empty(), "{:?}", out.items);
 }
+
+#[tokio::test]
+async fn prospects_to_promote_counts_qualified() {
+    let w = active_world().await;
+    approve(&w, vec![entry(0)]).await;
+    let agent = w.agent(&["prospects.work", "workspace.read"]).await;
+    let mut ids = Vec::new();
+    for n in 0..2 {
+        ids.push(
+            prospects::create(
+                &w.deps,
+                &agent,
+                prospect(&format!("Kafe {n}"), &format!("0500 000 00 0{n}")),
+            )
+            .await
+            .unwrap()
+            .prospect,
+        );
+    }
+    let none = work::pending(&w.deps, &agent).await.unwrap();
+    assert!(
+        !none
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::ProspectsToPromote { .. }))
+    );
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        ids[0].id,
+        prospects::DecideInput {
+            decision: prospects::DecideKind::Qualify,
+            reason: None,
+            note: None,
+            expected_revision: ids[0].revision,
+        },
+    )
+    .await
+    .unwrap();
+    let out = work::pending(&w.deps, &agent).await.unwrap();
+    let item = out
+        .items
+        .iter()
+        .find(|i| matches!(i.kind, WorkKind::ProspectsToPromote { .. }))
+        .unwrap();
+    assert_eq!(item.kind, WorkKind::ProspectsToPromote { count: 1 });
+    assert_eq!(item.priority, 3);
+    assert_eq!(item.kind.cleared_by(), "prospects.promote");
+    assert!(
+        item.hint.contains("jeeta.prospects.promote"),
+        "{}",
+        item.hint
+    );
+}

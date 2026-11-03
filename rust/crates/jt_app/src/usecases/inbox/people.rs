@@ -76,6 +76,51 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppE
         person,
     })
 }
+/// `inbox.people.set_kind`'s input.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetKindInput {
+    pub kind: RecipientKind,
+}
+
+/// `jeeta.inbox.people_set_kind`: sets whom a commercial message to the person reaches (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.12): a business's own contact point or a private
+/// individual (promotion never overrides `individual`, L-02). The ledger names the kinds only.
+pub async fn set_kind(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: PersonId,
+    input: SetKindInput,
+) -> Result<Person, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let person = resolve(r.as_mut(), id).await?;
+    if person.recipient_kind == input.kind {
+        return Ok(person);
+    }
+    r.people()
+        .set_recipient_kind(person.id, input.kind, ctx.now)
+        .await?;
+    record(
+        r.as_mut(),
+        ctx,
+        "inbox.person.kind_set",
+        "person",
+        person.id,
+        json!({"person_id": person.id, "from": person.recipient_kind, "to": input.kind}),
+    )
+    .await?;
+    let out = r
+        .people()
+        .get(person.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such person"))?;
+    r.commit().await?;
+    Ok(out)
+}
+
 pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<CreateOut, AppError> {
     ctx.require(Permission::InboxWork)?;
     required("display_name", &input.display_name)?;

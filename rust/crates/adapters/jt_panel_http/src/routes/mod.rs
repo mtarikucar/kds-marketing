@@ -17,6 +17,7 @@ pub mod capabilities;
 pub mod connector;
 pub mod device_bridge;
 pub mod devices;
+pub mod distribution;
 pub mod events;
 pub mod groups;
 pub mod inbox;
@@ -90,6 +91,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/inbox/commission-rates"),
     ("GET", "/api/inbox/conversations/{conversation_id}/context"),
     ("POST", "/api/inbox/people/{person_id}/erase"),
+    ("POST", "/api/inbox/people/{person_id}/kind"),
     ("GET", "/api/inbox/conversations"),
     ("GET", "/api/inbox/conversations/{conversation_id}"),
     ("GET", "/api/inbox/conversations/{conversation_id}/messages"),
@@ -232,11 +234,17 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/prospects/{prospect_id}/erase"),
     ("GET", "/api/prospects/settings"),
     ("PUT", "/api/prospects/settings"),
+    ("POST", "/api/prospects/promote"),
     ("GET", "/api/research/tasks"),
     ("GET", "/api/research/tasks/{task_id}"),
     ("POST", "/api/research/tasks"),
     ("POST", "/api/research/tasks/{task_id}/claim"),
     ("POST", "/api/research/tasks/{task_id}/close"),
+    ("GET", "/api/distribution"),
+    ("PUT", "/api/distribution/rules"),
+    ("PUT", "/api/distribution/reps/{user_id}"),
+    ("GET", "/api/distribution/assignments"),
+    ("POST", "/api/distribution/backfill"),
     ("GET", "/api/events/pending"),
     ("POST", "/api/events/ack"),
     ("GET", "/api/events"),
@@ -538,6 +546,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/inbox/people/{person_id}/erase",
             "inbox.people.erase",
             inbox::people_erase,
+        ),
+        api_route(
+            "POST",
+            "/inbox/people/{person_id}/kind",
+            "inbox.people.set_kind",
+            inbox::people_set_kind,
         ),
         api_route(
             "GET",
@@ -1167,6 +1181,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             prospects::settings_set,
         ),
         api_route(
+            "POST",
+            "/prospects/promote",
+            "prospects.promote",
+            prospects::promote,
+        ),
+        api_route(
             "GET",
             "/research/tasks",
             "research.tasks_list",
@@ -1195,6 +1215,36 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/research/tasks/{task_id}/close",
             "research.tasks_close",
             research::close,
+        ),
+        api_route(
+            "GET",
+            "/distribution",
+            "distribution.get",
+            distribution::get,
+        ),
+        api_route(
+            "PUT",
+            "/distribution/rules",
+            "distribution.rules_set",
+            distribution::rules_set,
+        ),
+        api_route(
+            "PUT",
+            "/distribution/reps/{user_id}",
+            "distribution.rep_set",
+            distribution::rep_set,
+        ),
+        api_route(
+            "GET",
+            "/distribution/assignments",
+            "distribution.assignments_list",
+            distribution::assignments_list,
+        ),
+        api_route(
+            "POST",
+            "/distribution/backfill",
+            "distribution.backfill",
+            distribution::backfill,
         ),
         api_route("GET", "/events/pending", "events.pending", events::pending),
         api_route("POST", "/events/ack", "events.ack", events::ack),

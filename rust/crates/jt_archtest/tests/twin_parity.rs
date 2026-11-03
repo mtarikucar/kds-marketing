@@ -4876,3 +4876,116 @@ async fn research_tasks_and_the_playbook_answer_the_same_over_the_panel_and_mcp(
         json!({"type": "ad_hoc", "target_count": 10})
     );
 }
+
+#[tokio::test]
+async fn promotion_distribution_and_the_recipient_kind_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("distribution").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = json_body(resp).await["prospect"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // A person promotes; both surfaces then answer the link the same.
+    let promote = json!({ "prospect_ids": [id] });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(promote.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let first = json_body(resp).await;
+    assert_eq!(first["items"][0]["outcome"], "promoted");
+    assert_eq!(first["items"][0]["owner_id"], json!(user));
+    let person = first["items"][0]["person_id"].as_str().unwrap().to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(promote.clone()),
+        ),
+    )
+    .await;
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.promote", promote).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"][0]["outcome"], "already_promoted");
+
+    for (path, tool) in [
+        ("/api/distribution", "jeeta.distribution.get"),
+        (
+            "/api/distribution/assignments",
+            "jeeta.distribution.assignments_list",
+        ),
+    ] {
+        let resp = send(&app, panel(Method::GET, path, Some(&cookie), None)).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        let human = json_body(resp).await;
+        let agent = call_tool(&app, &key, &session, tool, json!({})).await;
+        assert_eq!(human, agent, "{path}");
+    }
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/distribution", Some(&cookie), None),
+    )
+    .await;
+    let got = json_body(resp).await;
+    assert_eq!(got["mode"], "auto");
+    assert_eq!(got["ownerless"]["count"], 0);
+
+    // The recipient kind: set over the panel, the same again over MCP (no change) answers the
+    // same person.
+    let kind = json!({ "kind": "individual" });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/people/{person}/kind"),
+            Some(&cookie),
+            Some(kind),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    assert_eq!(human["recipient_kind"], "individual");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_set_kind",
+        json!({ "person_id": person, "kind": "individual" }),
+    )
+    .await;
+    assert_eq!(human, agent);
+}

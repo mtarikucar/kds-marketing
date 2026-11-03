@@ -1,5 +1,6 @@
 //! The agents' prospecting playbook (spec §3.8, Appendix A; §7.1 `prospects.playbook`) and the
-//! pool's pending work (spec §3.17: `research_due`, `prospects_to_score`).
+//! pool's pending work (spec §3.17: `research_due`, `prospects_to_score`,
+//! `prospects_to_promote`).
 
 use jt_prospects::{KeyKind, ResearchTaskId, TaskKind};
 use jt_strategy::{IcpEntry, Rubric, StrategyVersion};
@@ -134,11 +135,13 @@ pub async fn playbook(deps: &Deps, ctx: &Ctx) -> Result<PlaybookOut, AppError> {
 
 /// The pool's pending work for a caller holding `prospects.work`, under the approved `version`
 /// with prospecting on (nothing else): each open task that may still record today, and how many
-/// `new` prospects have no score under the current rubric.
+/// `new` prospects have no score under the current rubric, and how many qualified ones wait for
+/// promotion.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PoolPending {
     pub research_due: Vec<(ResearchTaskId, u32)>,
     pub to_score: u32,
+    pub to_promote: u32,
 }
 
 /// [`PoolPending`] in the caller's bundle; empty while prospecting is off.
@@ -162,5 +165,6 @@ pub async fn pending_in(
     Ok(PoolPending {
         research_due,
         to_score: r.prospects().count_unscored(&digest).await?,
+        to_promote: r.prospects().count_qualified_unpromoted().await?,
     })
 }

@@ -190,6 +190,25 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             run: settings_get,
         },
         ToolDef {
+            use_case: "prospects.promote",
+            description: "Promote prospects (prospect_ids, 1 to 50) into the inbox, each in its own \
+                          transaction: a person with the deliverable phone and email as \
+                          identities (matched to an existing person when one holds them), marked a \
+                          business recipient, with a journey of source prospect, and no consent \
+                          recorded. An agent promotes qualified prospects only (unless the pool \
+                          settings let it promote new ones). Distribution gives the journey an \
+                          owner at once. Answers {items: [{outcome: promoted (person_id, \
+                          journey_id, created_person, owner_id) | already_promoted | refused \
+                          (reason: not_found, not_qualified, daily_cap, no_contact_identity, \
+                          do_not_contact, erased_identity, identity_split, lost_journey_exists, \
+                          person_already_linked)}]}. Needs inbox.work too. A request_key replays \
+                          each promotion for 24 hours. Contact nobody before promotion; promotion \
+                          sends nothing. [risk: WRITE]",
+            permission: Permission::ProspectsWork,
+            schema: promote_schema,
+            run: promote,
+        },
+        ToolDef {
             use_case: "prospects.settings_set",
             description: "Change the pool's settings (prospects.manage): any of timezone (IANA), \
                           rejected_retention_days and unpromoted_retention_days (1 to 730), \
@@ -513,6 +532,18 @@ fn settings_schema() -> Schema {
 }
 
 /// Takes `key` out of the arguments as the prospect's id; the rest is the body.
+fn promote_schema() -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "prospect_ids": { "type": "array", "minItems": 1, "maxItems": 50, "items": uuid("A prospect.") },
+            "request_key": text(128, "Replays each promotion for 24 hours."),
+        },
+        "required": ["prospect_ids"],
+        "additionalProperties": false,
+    })
+}
+
 fn split(mut raw: Value, key: &str) -> Result<(ProspectId, Value), AppError> {
     let id = raw
         .as_object_mut()
@@ -615,5 +646,12 @@ fn settings_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
     Box::pin(async move {
         let input: SettingsInput = args(raw)?;
         to_json(&prospects::settings_set(deps, ctx, input).await?)
+    })
+}
+
+fn promote<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let input: prospects::PromoteInput = args(raw)?;
+        to_json(&prospects::promote(deps, ctx, input).await?)
     })
 }

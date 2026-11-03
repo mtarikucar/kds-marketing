@@ -7,8 +7,8 @@ use axum::Json;
 use axum::extract::State;
 use jt_app::usecases::prospects::{
     self, CheckInput, CheckOut, DecideInput, DncInput, DncOut, EraseInput, EraseOut, GetOut,
-    LiftInput, LiftOut, ListInput, ListOut, PlaybookOut, ProspectOut, ScoreOut, SettingsInput,
-    SettingsOut,
+    LiftInput, LiftOut, ListInput, ListOut, PlaybookOut, PromoteInput, PromoteOut, ProspectOut,
+    ScoreOut, SettingsInput, SettingsOut,
 };
 use jt_prospects::{CreateInput, ProspectId, ScoreInput, UpdateInput};
 
@@ -137,4 +137,13 @@ pub async fn settings_set(
     Ok(Json(
         prospects::settings_set(&state.deps, &ctx, body).await?,
     ))
+}
+
+/// `200` with one outcome per prospect (promoted, already promoted or refused with its reason).
+pub async fn promote(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<PromoteInput>,
+) -> Result<Json<PromoteOut>, ApiError> {
+    Ok(Json(prospects::promote(&state.deps, &ctx, body).await?))
 }

@@ -717,3 +717,50 @@ async fn promotion_takes_inbox_then_pool_lock() {
         "inbox before pool in the same bundle: {journal:?}"
     );
 }
+
+#[tokio::test]
+async fn set_kind_records_the_change_in_ledger_without_values() {
+    let w = world().await;
+    let person = inbound_person(&w, PHONE).await;
+    let out = people::set_kind(
+        &w.deps,
+        &w.owner_ctx,
+        person,
+        people::SetKindInput {
+            kind: RecipientKind::Business,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.recipient_kind, RecipientKind::Business);
+    // The same kind again changes nothing and records nothing.
+    people::set_kind(
+        &w.deps,
+        &w.owner_ctx,
+        person,
+        people::SetKindInput {
+            kind: RecipientKind::Business,
+        },
+    )
+    .await
+    .unwrap();
+    let entries = w.entries("inbox.person.kind_set");
+    assert_eq!(entries.len(), 1);
+    let entry = payload(&entries[0]);
+    assert_eq!(entry["from"], "unknown");
+    assert_eq!(entry["to"], "business");
+    assert!(!entry.to_string().contains(PHONE));
+    assert!(!entry.to_string().contains("Arayan"));
+    // A person without inbox.work cannot.
+    let pool_only = w.agent(&["prospects.work"]).await;
+    let e = err(people::set_kind(
+        &w.deps,
+        &pool_only,
+        person,
+        people::SetKindInput {
+            kind: RecipientKind::Individual,
+        },
+    )
+    .await);
+    assert_forbidden(&e, "inbox.work");
+}

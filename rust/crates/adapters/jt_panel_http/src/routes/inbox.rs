@@ -375,6 +375,15 @@ pub async fn commissions_pay(
     to_json(&commissions::pay(&state.deps, &ctx, id).await?)
 }
 
+pub async fn people_set_kind(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PersonId>,
+    ApiJson(input): ApiJson<people::SetKindInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&people::set_kind(&state.deps, &ctx, id, input).await?)
+}
+
 pub async fn people_erase(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

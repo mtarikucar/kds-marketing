@@ -265,6 +265,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
     twin("inbox.people.erase", GateMode::Gated, "jeeta.inbox.people_erase", ("POST", "/api/inbox/people/{person_id}/erase"), Destructive),
     twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
+    twin("inbox.people.set_kind", GateMode::Gated, "jeeta.inbox.people_set_kind", ("POST", "/api/inbox/people/{person_id}/kind"), Write),
     twin("inbox.identities.add", GateMode::Gated, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
     twin("inbox.journeys.open", GateMode::Gated, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
     twin("inbox.events.report", GateMode::Gated, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
@@ -433,12 +434,20 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.erase", Exempt, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
     twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
+    twin("prospects.promote", GateMode::Gated, "jeeta.prospects.promote", ("POST", "/api/prospects/promote"), Write),
     // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
     twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
     twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),
     twin("research.tasks_create", GateMode::Gated, "jeeta.research.tasks_create", ("POST", "/api/research/tasks"), Write),
     twin("research.tasks_claim", GateMode::Gated, "jeeta.research.tasks_claim", ("POST", "/api/research/tasks/{task_id}/claim"), Write),
     twin("research.tasks_close", GateMode::Gated, "jeeta.research.tasks_close", ("POST", "/api/research/tasks/{task_id}/close"), Write),
+    // Lead distribution (leads spec §3.9): rules, rep profiles and the assignment log, for
+    // `inbox.work` (`inbox.manage` for the rules, another member's profile and the backfill).
+    twin("distribution.get", GateMode::Gated, "jeeta.distribution.get", ("GET", "/api/distribution"), Read),
+    twin("distribution.rules_set", GateMode::Gated, "jeeta.distribution.rules_set", ("PUT", "/api/distribution/rules"), Write),
+    twin("distribution.rep_set", GateMode::Gated, "jeeta.distribution.rep_set", ("PUT", "/api/distribution/reps/{user_id}"), Write),
+    twin("distribution.assignments_list", GateMode::Gated, "jeeta.distribution.assignments_list", ("GET", "/api/distribution/assignments"), Read),
+    twin("distribution.backfill", GateMode::Gated, "jeeta.distribution.backfill", ("POST", "/api/distribution/backfill"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

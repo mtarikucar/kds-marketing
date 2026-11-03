@@ -29,7 +29,8 @@
 //!   see an item they could never clear;
 //! - `DeclareFirstCapability` (3): no capability that is not retired;
 //! - `ResearchDue` (3): each open research task that may still record prospects today, and
-//!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, only for a
+//!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, and
+//!   `ProspectsToPromote` (3): qualified prospects not promoted yet, only for a
 //!   caller holding `prospects.work` while the approved strategy has prospecting on (spec
 //!   2026-10-30-leads-pool-outreach-design.md §3.17);
 //! - `OwnerlessJourneys` (2): every open journey without an owner, whatever the cause (nobody
@@ -210,6 +211,8 @@ pub enum WorkKind {
     },
     /// `count` new prospects have no score under the approved rubric.
     ProspectsToScore { count: u32 },
+    /// `count` qualified prospects wait for promotion into the inbox.
+    ProspectsToPromote { count: u32 },
     /// `count` open journeys have no owner; `oldest_journey_id` has waited longest.
     OwnerlessJourneys {
         count: u32,
@@ -242,6 +245,7 @@ impl WorkKind {
             WorkKind::PhoneOffline { .. } => "devices.bridge.register",
             WorkKind::ResearchDue { .. } => "prospects.create",
             WorkKind::ProspectsToScore { .. } => "prospects.score",
+            WorkKind::ProspectsToPromote { .. } => "prospects.promote",
             WorkKind::OwnerlessJourneys { .. } | WorkKind::AssignmentStalled { .. } => {
                 "inbox.journeys.assign_owner"
             }
@@ -426,6 +430,18 @@ async fn pending_as_seen(
                         .into(),
                 }),
         );
+        if p.to_promote > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::ProspectsToPromote {
+                    count: p.to_promote,
+                },
+                priority: 3,
+                hint: "Promote the qualified prospects (jeeta.prospects.list with status \
+                       qualified) with jeeta.prospects.promote: each becomes an inbox person \
+                       with an owner."
+                    .into(),
+            });
+        }
         if p.to_score > 0 {
             items.push(WorkItem {
                 kind: WorkKind::ProspectsToScore { count: p.to_score },

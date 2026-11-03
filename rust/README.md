@@ -1265,6 +1265,7 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | Kişi arama (`q`, `limit`) | `GET /api/inbox/people` | `jeeta.inbox.people_search` | READ / `inbox.work` |
 | Kişi, kimlikler, açık yolculuk, konuşmalar | `GET /api/inbox/people/{person_id}` | `jeeta.inbox.people_get` | READ / `inbox.work` |
 | Kişi eşleştir/oluştur | `POST /api/inbox/people` | `jeeta.inbox.people_create` | WRITE / `inbox.work` |
+| Alıcı türü (işletme/bireysel) | `POST /api/inbox/people/{person_id}/kind` | `jeeta.inbox.people_set_kind` | WRITE / `inbox.work` |
 | Kimlik ekle / birleştirme öner | `POST /api/inbox/people/{person_id}/identities` | `jeeta.inbox.identities_add` | WRITE / `inbox.work` |
 | Yolculuk aç | `POST /api/inbox/people/{person_id}/journeys` | `jeeta.inbox.journeys_open` | WRITE / `inbox.work` |
 | Yolculuk, son 50 olay, görevler, notlar | `GET /api/inbox/journeys/{journey_id}` | `jeeta.inbox.journeys_get` | READ / `inbox.work` |
@@ -2016,6 +2017,7 @@ which the rep role does not hold.
 | `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; hard keys kept as erased hashes; any workspace status |
 | `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
 | `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
+| `prospects.promote` | `POST /api/prospects/promote` | `jeeta.prospects.promote` | WRITE | 1 to 50, each in its own transaction; also `inbox.work`; a person, an identity per deliverable phone and email, a business recipient, a journey of source `prospect`, no consent; distributed at once; one outcome per prospect; `prospects_to_promote` in `work.pending` |
 
 #### Research tasks (`jeeta.research.*`, leads L2)
 
@@ -2038,6 +2040,30 @@ without a score under the approved rubric) to keys with `prospects.work`. Gated 
 | `research.tasks_create` | `POST /api/research/tasks` | `jeeta.research.tasks_create` | WRITE | an ad-hoc `{brief, target_count, daily_cap}`; `prospecting_off` without ICP; `request_key` replays 24 h |
 | `research.tasks_claim` | `POST /api/research/tasks/{task_id}/claim` | `jeeta.research.tasks_claim` | WRITE | two hours; another recorder's live claim is answered (`held_by_other`), never taken |
 | `research.tasks_close` | `POST /api/research/tasks/{task_id}/close` | `jeeta.research.tasks_close` | WRITE | an ad-hoc task, `done` or `canceled`; a standing one is `standing_task` |
+
+#### Lead distribution (`jeeta.distribution.*`, leads L3)
+
+Who owns a new journey (spec §3.9). The ordered rules (`when`: sources, cities, sectors,
+languages, segments, minimum score; `to`: listed members or every eligible one; round robin or
+least loaded; an optional SLA in working minutes), then the implicit default rule (every
+eligible member, round robin) unless the mode is `manual`. A member is eligible while active
+with `inbox.work`, accepting, not away and under their `max_open`; members on shift come first.
+It runs inline at promotion and every minute (`lead_distribution`) for each open journey without
+an owner that no decision settled; a v1-imported journey waits for a manager's backfill. Every
+decision is a row of the assignment log (`rule`, `default`, `manual`, `sla_reassign`,
+`member_left`, `import`, `no_eligible`), so no open journey is ever silently ownerless:
+`work.pending` lists `ownerless_journeys` and `assignment_stalled` to `inbox.manage`. An
+assignment past its SLA moves to the next member of its rule (earlier owners excluded), at most
+`max_reassignments` times. A person's reply, journey event, note, completed task or call marks
+it acted on; an agent's does not. `inbox.journeys.assign_owner` writes a `manual` decision.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `distribution.get` | `GET /api/distribution` | `jeeta.distribution.get` | READ | mode, rules, members with load and eligibility, ownerless and stalled counts |
+| `distribution.rules_set` | `PUT /api/distribution/rules` | `jeeta.distribution.rules_set` | WRITE | `inbox.manage`; replaces every rule; optional `mode`, `max_reassignments` |
+| `distribution.rep_set` | `PUT /api/distribution/reps/{user_id}` | `jeeta.distribution.rep_set` | WRITE | own profile with `inbox.work`, another's with `inbox.manage`; replaced whole |
+| `distribution.assignments_list` | `GET /api/distribution/assignments` | `jeeta.distribution.assignments_list` | READ | the log, newest first; `?journey_id&user_id&limit&before_at&before_id` |
+| `distribution.backfill` | `POST /api/distribution/backfill` | `jeeta.distribution.backfill` | WRITE | `inbox.manage`; up to 200 ownerless journeys, whatever their decision |
 
 #### The voice bridge (voice V1)
 

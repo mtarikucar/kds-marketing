@@ -86,6 +86,10 @@ pub fn input(action: &str) -> Value {
             json!({"display_name":{"type":"string","minLength":1},"identities":{"type":"array","minItems":1,"items":identity},"source":{"oneOf":[{"type":"string","enum":["meta_ads","import","form","repeat"]},object(json!({"channel":{"type":"string","enum":["whats_app","instagram_dm","messenger","sms","email","webchat","phone"]}}), &["channel"])]}}),
             &["display_name", "identities", "source"],
         ),
+        "people.set_kind" => object(
+            json!({"kind":{"type":"string","enum":["unknown","business","individual"]}}),
+            &["kind"],
+        ),
         "identities.add" => identity,
         "events.report" => {
             let variants: Vec<Value> = [
@@ -130,6 +134,7 @@ pub fn tool(action: &str) -> Value {
         | "identities.add"
         | "journeys.open"
         | "people.erase"
+        | "people.set_kind"
         | "consent.record"
         | "consent.list"
         | "suppressions.add"
