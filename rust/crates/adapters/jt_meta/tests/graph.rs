@@ -1484,6 +1484,44 @@ async fn on_connected_never_registers_a_number_on_the_business_app() {
     );
 }
 
+/// Meta's explicit answer wins over how the number was connected: a number Graph says is not on
+/// the business app is registered, though it came through the app's sign-in.
+#[tokio::test]
+async fn on_connected_registers_a_number_graph_says_is_not_on_the_app() {
+    let r = rig().await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/5555555555/register",
+        ok(json!({ "success": true })),
+    );
+    let mut through_app = public("whatsapp_cloud", Some(PHONE));
+    through_app["asset"] =
+        json!({ "waba_id": "4444444444", "onboarding": "whatsapp_business_app" });
+    let facts = r
+        .meta
+        .on_connected(&wa_cred(Some("4444444444")), &through_app)
+        .await
+        .unwrap();
+    assert_eq!(facts["on_business_app"], false);
+    assert_eq!(facts["registered"], true);
+    assert_eq!(
+        r.mock
+            .requests("POST", "/fb/v19.0/5555555555/register")
+            .len(),
+        1
+    );
+}
+
 /// The override needs a public base URL and a verify token: without either, the WABA keeps the
 /// app's callback.
 #[tokio::test]
@@ -3156,6 +3194,48 @@ async fn the_business_app_numbers_come_from_the_shared_accounts() {
     );
     // The plain listing is not run.
     assert!(m.requests("GET", "/fb/v19.0/me/accounts").is_empty());
+}
+
+/// A shared number Graph says is not on the business app is offered as a plain Cloud API number:
+/// it is not tagged as onboarded beside the app, so it is registered and shares nothing.
+#[tokio::test]
+async fn a_shared_number_graph_says_is_not_on_the_app_is_not_tagged() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": {
+            "is_valid": true,
+            "granular_scopes": [
+                { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+            ],
+        }})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [{ "id": PHONE, "display_phone_number": "+90 850 000 00 00" }] })),
+    );
+    m.on(
+        "GET",
+        &format!("/fb/v19.0/{PHONE}"),
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let assets = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1, "{assets:?}");
+    assert_eq!(assets[0].public["onboarding"], Value::Null);
+    assert_eq!(assets[0].public["is_on_biz_app"], false);
 }
 
 /// A sign-in that shared no account, or an account without a number, is refused: the owner is

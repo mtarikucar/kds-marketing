@@ -54,8 +54,9 @@ pub const UNKNOWN: &str = "unknown";
 pub const EXPIRED: &str = "expired";
 
 /// `public` (a capability's `connector_public`) with the sharing started over at `now`, when the
-/// asset of kind `kind_key` was found through the coexistence flow (`flow`); else `public` as it
-/// is.
+/// asset of kind `kind_key` was found through the coexistence flow (`flow`) and is tagged as
+/// onboarded beside the app (`asset.onboarding`; the adapter leaves out a number Graph says is not
+/// on the app); else `public` as it is.
 pub(crate) fn onboarded(
     public: Value,
     flow: Option<OAuthFlow>,
@@ -65,7 +66,7 @@ pub(crate) fn onboarded(
     let Some(flow) = flow.filter(|f| *f == OAuthFlow::WhatsappBusinessApp) else {
         return Ok(public);
     };
-    if flow.kind_key() != kind_key {
+    if flow.kind_key() != kind_key || public["asset"]["onboarding"] != flow.key() {
         return Ok(public);
     }
     let mut out = object(&public);
@@ -118,7 +119,8 @@ mod tests {
     #[test]
     fn only_the_coexistence_flow_starts_a_sharing() {
         let now = datetime!(2026-11-03 10:00:00 UTC);
-        let public = json!({ "provider": "meta" });
+        let public =
+            json!({ "provider": "meta", "asset": { "onboarding": "whatsapp_business_app" } });
         let started = onboarded(
             public.clone(),
             Some(OAuthFlow::WhatsappBusinessApp),
@@ -137,6 +139,19 @@ mod tests {
         assert_eq!(
             sync_until(&started),
             Some(datetime!(2026-11-04 10:00:00 UTC))
+        );
+        // An asset not tagged as onboarded beside the app (Graph said the number is not on it)
+        // shares nothing, though it came through the app's sign-in.
+        let untagged = json!({ "provider": "meta", "asset": { "is_on_biz_app": false } });
+        assert_eq!(
+            onboarded(
+                untagged.clone(),
+                Some(OAuthFlow::WhatsappBusinessApp),
+                "whatsapp_cloud",
+                now
+            )
+            .unwrap(),
+            untagged
         );
         // Another flow, or another kind, leaves the public fields as they are.
         assert_eq!(

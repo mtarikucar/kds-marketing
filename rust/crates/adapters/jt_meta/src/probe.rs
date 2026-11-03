@@ -227,9 +227,10 @@ async fn ad_account_facts(
 ///   so each deployment receives the events of its own customers' accounts whatever the app's
 ///   callback URL is); asks whether the number is on the WhatsApp Business app
 ///   ([`on_business_app`]); and registers the number for the Cloud API
-///   (`POST /{phone_number_id}/register`) only when it is not: neither on the app, nor connected
-///   through the WhatsApp Business app's sign-in (`public["asset"]["onboarding"]`), since Meta's
-///   onboarding page says to skip registering such a number. Each step best effort; reports
+///   (`POST /{phone_number_id}/register`) only when it is not on the app: as Graph says, or, when
+///   Graph does not tell, unless it was connected through the WhatsApp Business app's sign-in
+///   (`public["asset"]["onboarding"]`), since Meta's onboarding page says to skip registering
+///   such a number. Each step best effort; reports
 ///   `{"subscribed": bool, "callback_override": bool, "on_business_app": bool or null,
 ///   "registered": bool}`;
 /// - any other Meta kind: nothing (`Null`);
@@ -279,8 +280,15 @@ pub(crate) async fn on_connected(
                 _ => false,
             };
             let on_business_app = on_business_app(connector, &app, phone_number_id, token).await;
+            // Meta's own answer wins: a number it says is not on the app is registered, however
+            // it was connected; one it says nothing about is registered unless it came through
+            // the app's sign-in.
             let through_app = public["asset"]["onboarding"] == OAuthFlow::WhatsappBusinessApp.key();
-            let registered = if on_business_app == Some(true) || through_app {
+            let on_app = match on_business_app {
+                Some(known) => known,
+                None => through_app,
+            };
+            let registered = if on_app {
                 false
             } else {
                 connector

@@ -317,8 +317,9 @@ pub(crate) async fn list_assets_for(
 
 /// The numbers the WhatsApp Business app's sign-in shared, as `whatsapp_cloud`, each with the
 /// business's token (and its expiry) and its account's id, its public facts saying
-/// `onboarding: whatsapp_business_app` and, when Graph tells them, `is_on_biz_app` and
-/// `platform_type`:
+/// `onboarding: whatsapp_business_app` (unless Graph says the number is not on the app: then
+/// `null`, and it is connected as a plain Cloud API number) and, when Graph tells them,
+/// `is_on_biz_app` and `platform_type`:
 ///
 /// 1. the WhatsApp Business Accounts the token was granted: `GET /debug_token?input_token=`
 ///    (with the Meta app's access token, `{app_id}|{app_secret}`, which Graph's `debug_token`
@@ -428,7 +429,9 @@ pub(crate) async fn business_app_numbers(
                     "display_phone_number": display,
                     "verified_name": verified,
                     "quality_rating": number["quality_rating"],
-                    "onboarding": OAuthFlow::WhatsappBusinessApp.key(),
+                    // Tagged as onboarded beside the app unless Graph says it is not on it.
+                    "onboarding": (on_app["is_on_biz_app"].as_bool() != Some(false))
+                        .then_some(OAuthFlow::WhatsappBusinessApp.key()),
                     "is_on_biz_app": on_app["is_on_biz_app"].as_bool(),
                     "platform_type": on_app["platform_type"].as_str(),
                 }),

@@ -4337,6 +4337,44 @@ async fn the_business_app_flow_signs_in_its_own_way_and_starts_the_sharing() {
     assert_no_secret("the capability", &wire(&number));
 }
 
+/// A number the business app's sign-in shared but Graph says is not on the app is not tagged as
+/// onboarded beside it: it starts no sharing (there is no app to share from), and a reconnection
+/// signs in the plain way.
+#[tokio::test]
+async fn a_shared_number_not_on_the_app_starts_no_sharing() {
+    let r = coexistence_rig().await;
+    let o = &r.w.owner_ctx;
+    let out = connector::start_oauth(&r.w.deps, o, coexistence())
+        .await
+        .unwrap();
+    let mut number = business_app_number();
+    number.public = json!({
+        "waba_id": "4444444444",
+        "display_phone_number": "+90 850 000 00 00",
+        "onboarding": null,
+        "is_on_biz_app": false,
+        "platform_type": "CLOUD_API",
+    });
+    r.meta_oauth.push_exchange(Ok(user_token("EAAB-user-2")));
+    r.meta_oauth.push_assets(Ok(vec![number]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-2")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe("5555555555"));
+    let connected = r
+        .confirm(&pending, &["5555555555"])
+        .await
+        .remove(0)
+        .capability;
+    assert_eq!(
+        connected.connector_public["business_app"],
+        serde_json::Value::Null
+    );
+    assert_eq!(connector::flow_of(&connected), None);
+}
+
 /// The business app's sign-in connects `whatsapp_cloud` only, and needs the Meta app's WhatsApp
 /// configuration; the plain sign-in starts no sharing.
 #[tokio::test]

@@ -82,8 +82,8 @@ public facts say `onboarding: "whatsapp_business_app"`.
 
 **D5. Registration is never forced on an app number.** On every `whatsapp_cloud` connection the
 connection step subscribes the WABA, then sets the override (D6), then asks the number
-`is_on_biz_app`; it registers only when the number is not on the app and the capability did not
-come through the coexistence flow. It reports `subscribed`, `callback_override`,
+`is_on_biz_app`; it registers only when the number is not on the app: as Graph says, or, when
+Graph does not tell, unless the capability came through the coexistence flow (D18). It reports `subscribed`, `callback_override`,
 `on_business_app`, `registered`.
 
 **D6. Each instance receives its own customers' WABA events.** The override URI is this
@@ -174,6 +174,11 @@ business answers from the phone, the conversation goes `theirs` and the agent st
 answered customer messages are also marked processed, so they leave `events.pending` and no agent
 is put to them after the owner replied (found by their `wamid` among the conversation's latest
 50 messages). An echo older than the customer's last message settles nothing.
+
+**D18. Meta's explicit answer wins.** A number Graph says is not on the app (`is_on_biz_app:
+false`) is registered, however it was connected; the coexistence flow's tag decides only when
+Graph does not tell. Discovery leaves such a number untagged (`onboarding: null`), so it starts
+no sharing and reconnects through the plain sign-in.
 
 ## Open questions
 
