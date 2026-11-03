@@ -52,34 +52,42 @@ async fn run_command() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // The stop signal's handler is in place before the line comes up (see `shutdown_signal`).
+    let stopping = shutdown_signal();
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
-        shutdown_signal().await;
+        stopping.await;
         let _ = stop_tx.send(true);
     });
     run_loop::run(config, stop_rx).await;
     ExitCode::SUCCESS
 }
 
-/// SIGTERM (systemd's stop) or Ctrl-C.
-async fn shutdown_signal() {
+/// SIGTERM (systemd's stop) or Ctrl-C. The SIGTERM handler is installed when this is called, not
+/// when the future is first polled: `run_command` calls it before the line comes up, so a stop
+/// that comes right after "the line is up" ends the loop cleanly instead of killing the process
+/// (the readiness-before-signal-handler class `jeeta serve` was fixed for).
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::manual_async_fn,
+        reason = "only the unix build installs a handler before the future"
+    )
+)]
+fn shutdown_signal() -> impl std::future::Future<Output = ()> {
     #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
+    let term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+    async move {
+        #[cfg(unix)]
+        {
+            if let Some(mut term) = term {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
                     _ = term.recv() => {}
                 }
-            }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
+                return;
             }
         }
-    }
-    #[cfg(not(unix))]
-    {
         let _ = tokio::signal::ctrl_c().await;
     }
 }
