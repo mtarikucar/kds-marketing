@@ -66,8 +66,8 @@ the v4 extras the onboarding page shows and does not set `extras.version`.
 the coexistence flow ("a number already in the WhatsApp Business app"), accepted only for
 `whatsapp_cloud`, and refused `CONFLICT provider_product_not_enabled` while the platform's Meta
 app has no WhatsApp configuration id. The flow is stored on the pending row
-(`oauth_pending.flow`, migration 0019), so the callback exchanges the code and lists the assets
-the way that flow needs. A reconnection of a coexistence capability signs in through the
+(`oauth_pending.flow`, migration 0023; 0019 to 0022 belong to parallel branches), so the
+callback exchanges the code and lists the assets the way that flow needs. A reconnection of a coexistence capability signs in through the
 coexistence flow again.
 
 **D4. Exchange and discovery of a coexistence flow.** The code is exchanged for the business's
@@ -99,24 +99,33 @@ is open. Each request is asked at most once: a provider answer is written in the
 (`requested` with the `request_id`, `refused` with the reason), a busy or unreachable provider is
 asked again on the next run while the window is open, an answer lost after the request may have
 reached Meta (`Unknown`) is **not** asked again (`unknown`, shown to the owner), and a window
-that closes first is `expired`. A refusal (an unsupported country included) is shown on the
-capability.
+that closes first is `expired`. Only a verified capability is asked; one that is not (an
+unreachable number) waits, but its window still closes (`expired`), so the panel never shows
+"not asked yet" for a request that can no longer be made. A refusal (an unsupported country
+included) is shown on the capability.
 
 **D8. Routing.** `smb_message_echoes`, `history` and `smb_app_state_sync` route by
 `metadata.phone_number_id`, as `messages` do. `account_update` names only the WABA: it is routed
-to every connected `whatsapp_cloud` capability whose `connector_public.asset.waba_id` is that
-WABA, in every workspace. `PARTNER_REMOVED` and `ACCOUNT_OFFBOARDED` turn each such capability
-`unreachable` with `reconnect_required` and the reason (`disconnection_info.reason`), as TikTok's
-`authorization.removed` does (left alone when the capability was verified after the event);
-every other `account_update` event is stored for the agent.
+as a number's event is (one connected capability, a verified one first, then the newest), to the
+connected `whatsapp_cloud` capability whose `connector_public.asset.waba_id` is that WABA, and
+stored once in that capability's workspace. The inbox consumer takes its effect there, on every
+live `whatsapp_cloud` capability of the workspace naming that WABA: `PARTNER_REMOVED` and
+`ACCOUNT_OFFBOARDED` turn each `unreachable` with `reconnect_required` and the reason
+(`disconnection_info.reason`), as TikTok's `authorization.removed` does (left alone when the
+capability was verified after the event); every other `account_update` event is stored for the
+agent.
 
 **D9. History is the past.** History, contact-sync and phone-app echo events are stored already
 processed (never in `events.pending`, so no agent reacts to them) and the inbox consumer files
 them: a history message becomes a message of the person's conversation with that number, at its
 own time, inbound from the customer or outbound from the business; a conversation it creates is
-**closed** and has no inbound activity (`insert_for_send`), so nothing is owed, no 24-hour
-customer service window opens (Meta: only a message to the onboarded business opens one), and no
-journey event is written. A message already filed (same `wamid`) is not filed again.
+**open** (not `ours`) and has no inbound activity (`insert_for_send`), so nothing is owed, no
+24-hour customer service window opens (Meta: only a message to the onboarded business opens one),
+and no journey event is written (a new person still gets the initial `new` journey every person
+gets). A message already filed (same `wamid`) is not filed again. A chunk's progress and a
+refusal to share (code 2593109) are ledger entries (`inbox.whatsapp_history`), not capability
+writes: a history arrives in many chunks, and the capability's `business_app` state is the sync
+job's alone to write.
 
 **D10. Phone-app echoes.** An `smb_message_echoes` item is an outbound message authored
 `business_app` ("the business, from the WhatsApp Business app"), deduplicated by its `wamid`
@@ -131,8 +140,9 @@ erasure request) and is only recorded.
 
 **D12. Failures surface.** Meta's refusals reach the owner where they happen: a refused sign-in
 on Meta's own page, a refused discovery as the callback's error, a refused sync on the capability
-(`business_app.contacts|history.state = refused` with the reason), a disconnection as
-`reconnect_required` with Meta's reason. Turkey's support is not assumed either way.
+(`business_app.contacts|history.state = refused` with the reason), a declined history in the
+ledger (`inbox.whatsapp_history`, `declined: true`), a disconnection as `reconnect_required` with
+Meta's reason. Turkey's support is not assumed either way.
 
 ## Open questions
 
