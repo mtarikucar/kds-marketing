@@ -1811,6 +1811,55 @@ async fn a_phone_app_echo_answers_the_conversation_without_the_agent() {
     assert_eq!(w.uow.snapshot().inbox.messages.len(), 2);
 }
 
+/// When the business answers from the phone, what the customer was owed is settled: their
+/// message no longer waits in `events.pending`, so no agent answers it after the owner did
+/// (owner decision 2026-11-03: the conversation goes `theirs` and the agent stays out). An echo
+/// older than the customer's message settles nothing.
+#[tokio::test]
+async fn a_phone_app_reply_settles_the_customers_pending_message() {
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    let inbound = put(
+        &w,
+        Some(c),
+        Provider::Meta,
+        meta("whatsapp_messages").remove(0),
+        10,
+    )
+    .await;
+    assert_eq!(run(&w).await.failed, 0);
+    let processed = |w: &World| {
+        w.uow
+            .snapshot()
+            .inbound_events
+            .iter()
+            .find(|e| e.event.id == inbound)
+            .unwrap()
+            .event
+            .processed_at
+    };
+    assert_eq!(processed(&w), None);
+    // An echo from before the customer wrote: nothing is settled, the reply is still owed.
+    let mut earlier = business_app(0);
+    earlier.external_id = "wamid.TEST-ECHO-EARLIER".into();
+    earlier.payload["echo"]["id"] = json!("wamid.TEST-ECHO-EARLIER");
+    put(&w, Some(c), Provider::Meta, earlier, 5).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert_eq!(processed(&w), None);
+    assert_eq!(
+        w.uow.snapshot().inbox.conversations[0].state,
+        ConvState::Ours
+    );
+    // The reply: the conversation is the customer's turn and their message is settled.
+    put(&w, Some(c), Provider::Meta, business_app(0), 20).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert!(processed(&w).is_some());
+    assert_eq!(
+        w.uow.snapshot().inbox.conversations[0].state,
+        ConvState::Theirs
+    );
+}
+
 /// A phone-app echo is matched to what Jeeta sent by its `wamid` only: a send of Jeeta's still in
 /// flight with the same text is not taken for it, and the echo is filed as the business's own.
 #[tokio::test]

@@ -1399,7 +1399,8 @@ async fn history(
 /// recorded the `wamid`): the business typed it on the phone, so a send of Jeeta's in flight with
 /// the same text is not it. When it is newer than the conversation's last inbound message and
 /// the conversation was owed a reply, the business answered from the phone: the conversation
-/// turns `theirs`, so no agent answers again. Nothing else reacts to it.
+/// turns `theirs` and the customer's messages it answered leave `events.pending`
+/// ([`settle_answered`]), so no agent answers again. Nothing else reacts to it.
 async fn app_echo(
     deps: &Deps,
     ctx: &Ctx,
@@ -1447,8 +1448,44 @@ async fn app_echo(
         r.conversations()
             .update_state(conv.id, ConvState::Theirs, Some(at))
             .await?;
+        settle_answered(ctx, r, cap, conv.id, at).await?;
     }
     Ok("consumed")
+}
+
+/// How many of a conversation's latest messages [`settle_answered`] looks through.
+const ANSWERED_SCAN: u32 = 50;
+
+/// The customer's messages of conversation `conv` that the business answered from the phone (at
+/// or before `answered_at`) and that still wait in `events.pending`, marked processed: the owner
+/// replied, so no agent is put to them afterwards (owner decision 2026-11-03: the conversation
+/// goes `theirs` and the agent stays out). Each is found by its `wamid`, among the latest
+/// [`ANSWERED_SCAN`] messages; one already processed keeps its time.
+async fn settle_answered(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    conv: ConversationId,
+    answered_at: OffsetDateTime,
+) -> Result<(), AppError> {
+    for m in r.messages().recent(conv, ANSWERED_SCAN).await? {
+        let Some(wamid) = m.external_id.as_deref() else {
+            continue;
+        };
+        if m.direction != Direction::Inbound || m.at > answered_at {
+            continue;
+        }
+        if let Some(e) = r
+            .inbound_events()
+            .find_external(Provider::Meta, wamid)
+            .await?
+            && e.processed_at.is_none()
+            && e.capability_id == Some(cap.id)
+        {
+            r.inbound_events().mark_processed(e.id, ctx.now).await?;
+        }
+    }
+    Ok(())
 }
 
 /// A contact of the WhatsApp Business app (`smb_app_state_sync`, `EventKind::ContactSync`,

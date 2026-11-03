@@ -169,6 +169,12 @@ newer bridges talking to an older server, and a stored author has nothing to fal
 Jeeta's in flight with the same text is not it, so the text match Messenger's echoes use is not
 applied to the app's.
 
+**D17. A reply from the phone settles what was owed.** Owner decision (2026-11-03, Q5): when the
+business answers from the phone, the conversation goes `theirs` and the agent stays out. The
+answered customer messages are also marked processed, so they leave `events.pending` and no agent
+is put to them after the owner replied (found by their `wamid` among the conversation's latest
+50 messages). An echo older than the customer's last message settles nothing.
+
 ## Open questions
 
 - **Q1.** Does the dialog honour `extras` when opened by redirect? If not, the panel must launch
@@ -180,6 +186,6 @@ applied to the app's.
 - **Q4.** `account_update` always goes to the app's callback, which points at staging during App
   Review: yeni does not hear its customers' disconnections until the callback points at it. The
   hourly probe is the backstop only if a disconnected number fails its probe (unverified).
-- **Q5.** D10 turns a conversation `theirs` on a phone-app reply. The owner confirms that is the
-  wanted behaviour (the alternative: the echo only joins the thread).
+- **Q5.** Decided (D17): a phone-app reply turns the conversation `theirs` and the agent stays
+  out.
 - **Q6.** Existing `whatsapp_cloud` capabilities get the override only when reconnected.
