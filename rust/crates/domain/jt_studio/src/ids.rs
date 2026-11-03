@@ -11,3 +11,6 @@ define_id!(TrendSignalId);
 define_id!(AdSetBindingId);
 define_id!(BudgetMoveId);
 define_id!(ReservationId);
+define_id!(OlayId);
+define_id!(MaterialId);
+define_id!(ShootRequestId);
