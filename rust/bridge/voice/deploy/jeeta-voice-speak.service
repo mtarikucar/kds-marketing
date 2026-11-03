@@ -8,10 +8,12 @@ StartLimitIntervalSec=600
 StartLimitBurst=5
 
 # No network, read-only, no capability, no core dumps, uid 1502 (jeeta-voice-speak) in gid 1501
-# (jeeta-voice). Its socket in /run/jeeta-voice (1770 root:jeeta-voice) is the group's, mode 0660,
-# and the sticky directory keeps the listen service (uid 1501) from removing or replacing it. The
-# writable paths are that directory and a small /tmp. No swap, so a paged-out model cannot stall a
-# sentence. The image must already be on the host (--pull never): it is built there, never pulled.
+# (jeeta-voice). It sees only its own directory, /run/jeeta-voice/speak (0710 jeeta-voice-speak:
+# jeeta-voice, jeeta-voice.tmpfiles): the group may reach the socket (0660) but create nothing there,
+# so the listen service cannot bind the name while speak restarts, and speak sees nothing of
+# listen's (as listen's unit, B3 review I4; D3). The writable paths are that directory and a small
+# /tmp. No swap, so a paged-out model cannot stall a sentence. The image must already be on the
+# host (--pull never): it is built there, never pulled.
 [Service]
 Type=simple
 EnvironmentFile=/etc/jeeta-voice/images.env
@@ -21,8 +23,8 @@ ExecStart=/usr/bin/docker run --rm --pull never --name jeeta-voice-speak --init 
   --ulimit core=0 --cpus 2 --cpu-shares 2048 --memory 2g --memory-swap 2g \
   --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
   --tmpfs /tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev \
-  --mount type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice \
-  -e SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock -e SPEAK_THREADS=2 -e SPEAK_BATCH=2 -e EMA_SEED=0 \
+  --mount type=bind,source=/run/jeeta-voice/speak,target=/run/jeeta-voice/speak \
+  -e SPEAK_SOCKET=unix:/run/jeeta-voice/speak/speak.sock -e SPEAK_THREADS=2 -e SPEAK_BATCH=2 -e EMA_SEED=0 \
   -e SPEAK_WORKERS=2 -e SPEAK_WATCHDOG_S=60 \
   ${SPEAK_IMAGE}
 ExecStop=/usr/bin/docker stop -t 10 jeeta-voice-speak

@@ -10,7 +10,7 @@
 //! | `ARI_URL`, `ARI_USER` | `http://127.0.0.1:8188`, `jeeta-voice` |
 //! | `ARI_PASSWORD` | none: always required |
 //! | `LISTEN_SOCKET` | `unix:/run/jeeta-voice/listen/listen.sock` |
-//! | `SPEAK_SOCKET` | `unix:/run/jeeta-voice/speak.sock` |
+//! | `SPEAK_SOCKET` | `unix:/run/jeeta-voice/speak/speak.sock` |
 //! | `VOICE_CACHE_DIR` | `/var/lib/jeeta-voice/cache` |
 //! | `VOICE_TRACE_FILE` | `/var/lib/jeeta-voice/traces.jsonl` |
 //! | `VOICE_MAX_CALL_S` | `600`: the slice's longest call, 1 to 3 600 s (`run` takes each plan's) |
@@ -179,7 +179,7 @@ impl Config {
             ari_user: get("ARI_USER").unwrap_or_else(|| "jeeta-voice".into()),
             ari_password: required("ARI_PASSWORD")?,
             listen: endpoint("LISTEN_SOCKET", "unix:/run/jeeta-voice/listen/listen.sock")?,
-            speak: endpoint("SPEAK_SOCKET", "unix:/run/jeeta-voice/speak.sock")?,
+            speak: endpoint("SPEAK_SOCKET", "unix:/run/jeeta-voice/speak/speak.sock")?,
             cache_dir: get("VOICE_CACHE_DIR")
                 .unwrap_or_else(|| "/var/lib/jeeta-voice/cache".into())
                 .into(),

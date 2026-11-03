@@ -13244,6 +13244,8 @@ git commit -m "feat(panel): call opening, notice and bridge phrases in the polic
 
 ## Phase D — the talker against the core
 
+**Phase D's code done (2026-11-03).** D1, D2 and D3 Steps 1–3 ran in order, one commit each (and `97cdaed2`, the SIGTERM handler before the line comes up); as-built records under each task. Open: D3 Step 4, the server steps, for the coordinator: "Step 4 as it stands" at the end of D3.
+
 ### Task D1: The Jeeta client
 
 **Files:**
@@ -14160,6 +14162,82 @@ sleep 20; journalctl -u jeeta-voice-bridge -n 20 --no-pager
 ```
 
 (`<sha8>` and the run id are the reviewed commit's; nothing else is substituted.) Expected journal lines: `the line is up`, `registered with the core status=Verified`, `connected to Asterisk's events`; no number, no word. In the staging panel, **Kabiliyetler** shows "Voice bridge 102" verified with engines `seda`/`ema`, version `0.1.0`, `max_calls` 1.
+
+**D3 as built (2026-11-03).** Steps 1 to 3 ran as written; Step 4 is the coordinator's and was not run (no server was touched): its sequence as it now stands is below. What differs:
+- **The unit** is the plan's, with a comment header and `StartLimitIntervalSec=600` / `StartLimitBurst=5` in `[Unit]`, as the speech units have: a start that keeps failing (a missing key, an environment the bridge refuses with exit 2) stops after five tries instead of every two seconds.
+- `bridge.env.example` opens with where it is installed (`bridge.staging.env`, `bridge.prod.env`, the `bridge.env` symlink) and says the key is filled in on the host only; its ≤ is written `<=` (the file stays ASCII). `images.env.example` says it documents the B2/B3 file's shape.
+- **CI:** `voice-speech` runs `python -I -m pytest -c speech/pytest.ini -m "not models" -p no:cacheprovider asterisk speech` (isolated, as the plan's own local command; no `.pytest_cache` in the checkout). `voice-bridge-linux` builds on `ubuntu-latest`, as the core's `release-artifact` does, whose binary already runs on the host; take the **push** run's artifact (named by the head commit), not the pull_request run's (the merge commit).
+- **A new test, `tests/deploy.rs`** (2 tests, seen failing with the tmpfiles file lacking speak's line): the environment example is the bridge's own defaults (`Config::from_env` of the example equals that of an empty environment), has an empty key and no ARI password, and names staging's loopback core; the speech units serve the two sockets it names, each in a `0710` directory of its own service's (tmpfiles); the trace file is the one `logrotate` rotates; the unit runs `run` from `/opt/jeeta-voice/current` as `jeeta-voice-bridge` (in `jeeta-voice`), writing only `/var/lib/jeeta-voice`, on loopback.
+- `test_speak_session.py` and `adapters.rs`' `endpoints_parse` keep `/run/jeeta-voice/speak.sock` as a parse example: they test parsing, not the default.
+- Found while writing the unit, a commit of its own (`97cdaed2`): `shutdown_signal` installs its SIGTERM handler when called, before `run` logs "the line is up", not on the spawned task's first poll (the readiness-before-signal-handler class `jeeta serve` was fixed for, PR #383). On Windows the function is a Ctrl-C wait (`clippy::manual_async_fn` is expected there only); the unix branch builds in CI.
+- Checks on Windows: `cargo test -p jeeta-voice-bridge` 114 (deploy 2 new); the Python unit tests (`pytest==8.4.2 numpy==2.5.4 websockets==17.3` in a scratch venv, as CI installs them) 222 passed, 6 skipped, 22 deselected; clippy `--all-targets -D warnings`, `cargo doc -D warnings` and fmt clean.
+
+**Step 4 as it stands (for the coordinator; 2026-11-03).** Preconditions: the head of `feat/voice-bridge-v1-t3` reviewed and green (its push run's `voice-bridge-linux` artifact exists); staging runs the Phase C release (E1 Step 2: the dial's script, the phrases, `wait_reply_s`); a bridge registering with an older staging core works too (the register, commands and events routes are V1-T1/T2's), but the calls it carries lack C1–C4. Nothing below holds a secret but the key, which is typed on the host and never echoed.
+
+S1. On the dev machine, from the repository root: the source at the reviewed commit (the deploy files are read from it) and the artifact.
+
+```bash
+SHA=$(git rev-parse origin/feat/voice-bridge-v1-t3)
+git -c core.autocrlf=false archive --format=tar "$SHA" rust | ssh root@38.242.233.166 \
+  'rm -rf /root/jeeta-voice-src && mkdir -p /root/jeeta-voice-src && tar -x -C /root/jeeta-voice-src'
+RUN=$(gh run list --branch feat/voice-bridge-v1-t3 --workflow Rust --event push --limit 10 \
+  --json databaseId,headSha --jq ".[] | select(.headSha==\"$SHA\") | .databaseId")
+rm -rf /tmp/jvb && gh run download "$RUN" -n "jeeta-voice-bridge-linux-$SHA" -D /tmp/jvb
+scp /tmp/jvb/jeeta-voice-bridge root@38.242.233.166:/tmp/jeeta-voice-bridge && rm -rf /tmp/jvb
+echo "${SHA:0:8}"      # the SHA8 of S4
+```
+
+S2. In the staging panel, as the owner of the test workspace (proposed "Test Atölye"; never "Jeeta Demo"): **API anahtarları** → new key, name "voice bridge 102", the one scope **Ses köprüsü olarak çalışma** (`calls.bridge`); copy the plaintext once.
+
+S3. On the host, as root: speak's socket moves to its own directory and the trace rotation goes in (the plan's first block of Step 4, unchanged):
+
+```bash
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice.tmpfiles /etc/tmpfiles.d/jeeta-voice.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/jeeta-voice.conf
+systemctl stop jeeta-voice-speak; rm -f /run/jeeta-voice/speak.sock
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-speak.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-speak.service
+systemctl daemon-reload && systemctl start jeeta-voice-speak
+sleep 60
+stat -c '%a %U:%G %n' /run/jeeta-voice /run/jeeta-voice/speak /run/jeeta-voice/speak/speak.sock /run/jeeta-voice/listen/listen.sock
+sudo -u jeeta-voice-bridge test -w /run/jeeta-voice/speak/speak.sock && echo "bridge can connect"
+docker exec jeeta-voice-speak ls /run/jeeta-voice
+journalctl -u jeeta-voice-speak -n 6 --no-pager
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-bridge.logrotate /etc/logrotate.d/jeeta-voice-bridge
+logrotate --debug /etc/logrotate.d/jeeta-voice-bridge 2>&1 | tail -3
+```
+
+Expected: as the plan's Step 4 says (`1770 root:jeeta-voice`, `710 jeeta-voice-speak:jeeta-voice …/speak`, `660 jeeta-voice-speak:jeeta-voice …speak/speak.sock`, listen's `660 jeeta-voice-svc:jeeta-voice …listen.sock` unchanged; `bridge can connect`; the container lists `speak` alone; the journal shows `loaded in …`, the voice id and `listening`, no text; logrotate's dry run names the file, no error). Stop on anything else.
+
+S4. On the host, as root: the bridge's environment (staging), its binary, a check, then the unit.
+
+```bash
+umask 077
+install -d -m 0750 -o jeeta-voice-bridge -g jeeta-voice-bridge /var/lib/jeeta-voice /var/lib/jeeta-voice/cache
+install -m 0600 /root/jeeta-voice-src/rust/bridge/voice/deploy/bridge.env.example /etc/jeeta-voice/bridge.staging.env
+read -r -s KEY; sed -i "s|^JEETA_BRIDGE_KEY=.*|JEETA_BRIDGE_KEY=$KEY|" /etc/jeeta-voice/bridge.staging.env; unset KEY
+grep -c '^JEETA_BRIDGE_KEY=..' /etc/jeeta-voice/bridge.staging.env      # 1: the key is in
+ln -sfn /etc/jeeta-voice/bridge.staging.env /etc/jeeta-voice/bridge.env
+SHA8=<the SHA8 of S1>
+install -d -m 0755 /opt/jeeta-voice/releases/$SHA8
+install -m 0755 /tmp/jeeta-voice-bridge /opt/jeeta-voice/releases/$SHA8/jeeta-voice-bridge && rm -f /tmp/jeeta-voice-bridge
+ln -sfn /opt/jeeta-voice/releases/$SHA8 /opt/jeeta-voice/current
+/opt/jeeta-voice/current/jeeta-voice-bridge report --since now; echo "exit $?"
+systemctl is-active jeeta-asterisk || systemctl start jeeta-asterisk     # registers ext 102: intended now
+set -a; . /etc/jeeta-voice/ari.env; set +a
+sudo -E -u jeeta-voice-bridge -g jeeta-voice-bridge /opt/jeeta-voice/current/jeeta-voice-bridge check; unset ARI_PASSWORD
+install -m 0644 /root/jeeta-voice-src/rust/bridge/voice/deploy/jeeta-voice-bridge.service /etc/systemd/system/
+systemd-analyze verify /etc/systemd/system/jeeta-voice-bridge.service
+systemctl daemon-reload && systemctl enable --now jeeta-voice-bridge
+sleep 20; journalctl -u jeeta-voice-bridge -n 20 --no-pager
+```
+
+Expected:
+- `report`: `--since takes an RFC 3339 time`, `exit 2` (the CI binary loads with this host's libc).
+- `check` (its defaults are the new socket paths; it needs only ARI's password): `ari: ok (Asterisk 22.11.0)`, `listen: ok`, `speak: ok (voice …)`.
+- The journal: `the line is up`, `registered with the core status=Verified`, `connected to Asterisk's events`; no number, no word, no key. In the staging panel, **Kabiliyetler** shows "Voice bridge 102" verified, engines `seda`/`ema`, version `0.1.0`, `max_calls` 1.
+
+Rollback: `systemctl disable --now jeeta-voice-bridge` (the line then goes offline in the core; no call is placed through it). To undo the speak move as well, install `jeeta-voice-speak.service` and `jeeta-voice.tmpfiles` from `4f1830ec` (the commit before D3) the same way and restart `jeeta-voice-speak`; a bridge started after that needs `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock` in `bridge.env`.
 
 ## Phase E — release and acceptance
 

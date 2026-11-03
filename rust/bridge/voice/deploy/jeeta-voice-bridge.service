@@ -1,0 +1,40 @@
+[Unit]
+Description=Jeeta voice bridge (the talker beside Asterisk)
+After=network-online.target jeeta-asterisk.service jeeta-voice-listen.service jeeta-voice-speak.service
+Wants=network-online.target jeeta-asterisk.service jeeta-voice-listen.service jeeta-voice-speak.service
+# A start that keeps failing (a missing key, an environment the bridge refuses) stops after five
+# tries instead of every two seconds, as the speech services' units do.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+# Loopback only: the core (JEETA_BASE_URL, 127.0.0.1:8090 or 8091), ARI (127.0.0.1:8188) and the
+# two speech services' unix sockets, which it reaches as a member of jeeta-voice. It writes only
+# /var/lib/jeeta-voice (the policy-phrase cache and traces.jsonl, numbers and call ids only).
+# bridge.env is a symlink to bridge.staging.env or bridge.prod.env: one environment at a time.
+[Service]
+Type=simple
+User=jeeta-voice-bridge
+Group=jeeta-voice-bridge
+SupplementaryGroups=jeeta-voice
+WorkingDirectory=/var/lib/jeeta-voice
+EnvironmentFile=/etc/jeeta-voice/ari.env
+EnvironmentFile=/etc/jeeta-voice/bridge.env
+ExecStart=/opt/jeeta-voice/current/jeeta-voice-bridge run
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jeeta-voice
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CPUWeight=200
+MemoryMax=256M
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

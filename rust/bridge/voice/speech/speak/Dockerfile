@@ -1,6 +1,6 @@
 # jeeta-voice-speak: EMA Lightning 1.1.2 behind Antalia-2 Mini's normaliser (plan V1-T3 B2).
 # Runs with --network none, read-only, as uid 1502 (jeeta-voice-speak) in gid 1501 (jeeta-voice),
-# serving /run/jeeta-voice/speak.sock. Build from this directory with speech/pytest.ini copied in.
+# serving /run/jeeta-voice/speak/speak.sock. Build from this directory with speech/pytest.ini copied in.
 #
 # What is pinned, and how (pins.py has the rules):
 # - the base image by digest (python:3.12-slim-bookworm as published on 2026-10-29);

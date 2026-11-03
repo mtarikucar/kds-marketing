@@ -23,8 +23,8 @@ RUN_OPTIONS = [
     "--memory", "2g", "--memory-swap", "2g",
     "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3",
     "--tmpfs", "/tmp:uid=1502,gid=1501,mode=0700,size=16m,noexec,nosuid,nodev",
-    "--mount", "type=bind,source=/run/jeeta-voice,target=/run/jeeta-voice",
-    "-e", "SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock", "-e", "SPEAK_THREADS=2", "-e", "SPEAK_BATCH=2",
+    "--mount", "type=bind,source=/run/jeeta-voice/speak,target=/run/jeeta-voice/speak",
+    "-e", "SPEAK_SOCKET=unix:/run/jeeta-voice/speak/speak.sock", "-e", "SPEAK_THREADS=2", "-e", "SPEAK_BATCH=2",
     "-e", "EMA_SEED=0", "-e", "SPEAK_WORKERS=2", "-e", "SPEAK_WATCHDOG_S=60",
     "${SPEAK_IMAGE}",
 ]

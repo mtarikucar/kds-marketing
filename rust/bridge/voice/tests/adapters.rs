@@ -81,7 +81,7 @@ fn configuration_defaults_hold_and_an_empty_value_is_unset() {
     );
     assert_eq!(
         c.speak,
-        Endpoint::Unix("/run/jeeta-voice/speak.sock".into())
+        Endpoint::Unix("/run/jeeta-voice/speak/speak.sock".into())
     );
     assert_eq!(c.timing, jeeta_voice_bridge::talker::Timing::default());
     assert_eq!(c.max_call_s, 600);

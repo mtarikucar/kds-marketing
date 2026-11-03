@@ -77,7 +77,8 @@ def test_the_image_user_is_the_units_and_not_speaks():
     assert speak_user.split(":")[1] == listen_user.split(":")[1] == "1501", "one group for both sockets"
     tmpfiles = (VOICE / "deploy" / "jeeta-voice.tmpfiles").read_text(encoding="utf-8").splitlines()
     assert tmpfiles == ["d /run/jeeta-voice 1770 root jeeta-voice -",
-                        "d /run/jeeta-voice/listen 0710 jeeta-voice-svc jeeta-voice -"]
+                        "d /run/jeeta-voice/listen 0710 jeeta-voice-svc jeeta-voice -",
+                        "d /run/jeeta-voice/speak 0710 jeeta-voice-speak jeeta-voice -"]
     mount = RUN_OPTIONS[RUN_OPTIONS.index("--mount") + 1]
     assert mount == "type=bind,source=/run/jeeta-voice/listen,target=/run/jeeta-voice/listen", \
         "listen sees its own directory only: speak cannot bind its name, it cannot reach speak's"
