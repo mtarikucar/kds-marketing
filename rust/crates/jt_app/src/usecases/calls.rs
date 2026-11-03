@@ -1087,6 +1087,10 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
     let (mut r, facts) = first_fence(r, ctx, gathered, |reason| refused(reason, None)).await?;
     let policy = policy_of(r.as_mut()).await?;
     plan.disclose_assistant |= policy.disclose_assistant;
+    // The longest the call may last is the shorter of the plan's ask and the policy's: the core's
+    // timers close it then, and the bridge, which reads the dial's plan, closes it itself a minute
+    // after (its backstop).
+    plan.max_duration_s = policy.max_duration(Some(plan.max_duration_s));
     // What the bridge is told besides the plan, from the policy that writes the opening below: its
     // lines (the workspace's opening and the notice, synthesised while the line rings) are the
     // opening's first sentences; its phrases are kept with the call, so the phrases the bridge is

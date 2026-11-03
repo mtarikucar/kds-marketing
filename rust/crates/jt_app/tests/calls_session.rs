@@ -1805,3 +1805,23 @@ async fn say_without_wait_reply_answers_at_once_as_before() {
         "{shown}"
     );
 }
+
+#[tokio::test]
+async fn a_plan_longer_than_the_policy_allows_is_dialled_with_the_policys_longest() {
+    // The bridge closes a call itself a minute past its plan's longest duration (D2): it must read
+    // the longest the core allows, not the plan's ask.
+    let r = rig_with(
+        1,
+        CallPolicy {
+            max_duration_s: 120,
+            ..policy()
+        },
+    )
+    .await;
+    let mut asks = plan();
+    asks.max_duration_s = 300;
+    let call = r.place_at(0, asks).await;
+    let dial = r.poll(1).await;
+    assert_eq!(dial[0].payload["plan"]["max_duration_s"], 120);
+    assert_eq!(r.shown(call).await.call["plan"]["max_duration_s"], 120);
+}
