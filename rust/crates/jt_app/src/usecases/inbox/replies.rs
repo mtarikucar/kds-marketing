@@ -324,6 +324,7 @@ pub(super) async fn enqueue_in(
             text: &text,
             public: Some((input.item_id, visibility)),
             count_cap: true,
+            except: None,
         },
     )
     .await;
@@ -556,6 +557,8 @@ struct Fencing<'a> {
     /// Whether the capability's daily cap is counted (at enqueue only: the row itself counts
     /// afterwards).
     count_cap: bool,
+    /// The row being claimed or approved, which is not in its own way (`reply_in_flight`).
+    except: Option<Uuid>,
 }
 
 /// Every fence of a reply: on a public conversation commercial intent first (spec §3.6 rule
@@ -591,6 +594,7 @@ async fn fence_all(
         f.text,
         matches!(f.author, Author::Agent),
         f.count_cap,
+        f.except,
     )
     .await
     .map(Some)
@@ -815,6 +819,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             text: &message.body,
             public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
             count_cap: false,
+            except: Some(row.id),
         },
     )
     .await
@@ -1428,6 +1433,7 @@ pub(super) async fn approve_in(
             text: &text,
             public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
             count_cap: false,
+            except: Some(row.id),
         },
     )
     .await;

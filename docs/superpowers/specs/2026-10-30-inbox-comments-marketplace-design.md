@@ -71,6 +71,7 @@ answers, and the phone fallback (device bridge playbooks).
 | D16 | A **subject** (post or product) is its own record, linked to the Studio publication when one made the post. | The panel and agent see what was commented on; Studio context ("this comment is on hypothesis X") comes for free. |
 | D17 | A **comments backfill poll** (hourly, last 7 days of media/posts) closes webhook gaps and imports the backlog when comments are first enabled. Same external ids as webhooks, so replays store nothing new. | Webhook outages and the first-enable backlog would otherwise lose comments still within the private-reply window. |
 | D18 | (Decided in implementation, 2026-11-03.) `comments_enabled` also requires the **platform's comment flag of the login the grant came from**: `JEETA_INSTAGRAM_COMMENT_SCOPES` for an Instagram Login grant (`connector_public.access.app = "instagram"`), `JEETA_META_COMMENT_SCOPES` otherwise. A marketplace is always enabled. | Defense in depth over D11: with the flags off, no comment path (intake, replies, moderation, polls) runs and no new Meta request is made, whatever a token happens to hold; the flags are switched on only after Meta's App Review. |
+| D19 | (Review of F4–F6, 2026-11-03.) **One reply in flight per item and visibility**: under the workspace's inbox lock, at enqueue, claim and approval, a reply is refused `reply_in_flight` while another reply of the same item and visibility is held, queued or sending (the row being claimed or approved left out). An uncertain (`unknown`) one counts as answered **for the agent** until reconciliation settles it; a human, who can look at the platform, may still answer. | Item state changes only on a receipt: without this, a timed-out send let the agent answer again, and two concurrent replies both went out (a second public comment, a second Trendyol answer). |
 
 ---
 
@@ -240,6 +241,9 @@ generation, human holds, capability live):
      `awaiting()` → `item_not_owed`;
    - private: surface without one → `private_reply_unsupported`; `now > private_reply_until` →
      `private_window_closed`; already sent → `private_reply_used`.
+   - another reply of the item with the same visibility held, queued or sending (the row being claimed
+     or approved left out), or for the agent also one whose outcome is `unknown` → `reply_in_flight`
+     (D19; `OutboxRepo::public_replies_in_flight`).
 5. `public::check_text(rules, visibility, text, person_contacts)`: bounds → `text_too_short` /
    `text_too_long`; then on the text **normalised** (Unicode whitespace and dashes, zero-width characters
    dropped, keycap and full-width digits, `at`/`(at)`/`[at]` → `@` and `dot`/`nokta` → `.` joined to their

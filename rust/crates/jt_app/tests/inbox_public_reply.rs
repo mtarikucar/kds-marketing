@@ -1377,3 +1377,141 @@ async fn state_stays_ours_while_another_item_is_owed() {
     assert_eq!(conversation_state(&r, c1.conversation_id), ConvState::Ours);
     let _: Value = json!({});
 }
+
+// ---------------------------------------------------------------------------------------------
+// Replies in flight (spec D19)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_reply_in_flight_refuses_another_on_the_same_item() {
+    let r = rig().await;
+    let agent = agent(&r).await;
+    let c1 = take(&r, &r.ig, comment("1", FAN)).await;
+    // A: the agent's reply timed out. Uncertain, it counts as answered for the agent.
+    r.meta
+        .push_reply_public(Err(ConnectorError::unknown("timed out")));
+    let out = replies::reply(
+        &r.w.deps,
+        &agent,
+        c1.conversation_id,
+        public_reply(&c1, "Merhaba"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.state, "unknown");
+    let e = replies::reply(
+        &r.w.deps,
+        &agent,
+        c1.conversation_id,
+        public_reply(&c1, "Merhaba"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "reply_in_flight");
+    assert_eq!(sends(&r.meta).len(), 1);
+    // A human, who can look at the platform, may still answer it.
+    r.meta.push_reply_public(accepted("r1"));
+    let human = replies::reply(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        c1.conversation_id,
+        public_reply(&c1, "Merhaba, yanıtımız ulaştı mı?"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(human.state, "sent");
+
+    // B: two replies before either is sent: the second is refused, whoever sends it.
+    let c2 = take(&r, &r.ig, comment("2", "fan-2")).await;
+    let replies::Enqueued::New(first) = replies::enqueue(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        c2.conversation_id,
+        public_reply(&c2, "Merhaba"),
+    )
+    .await
+    .unwrap() else {
+        panic!("a new reply")
+    };
+    for ctx in [&r.w.owner_ctx, &agent] {
+        let e = replies::reply(
+            &r.w.deps,
+            ctx,
+            c2.conversation_id,
+            public_reply(&c2, "Tekrar merhaba"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(reason(&e), "reply_in_flight");
+    }
+    // The first one is not in its own way at claim.
+    r.meta.push_reply_public(accepted("r2"));
+    assert_eq!(
+        replies::send_step(&r.w.deps, &r.w.owner_ctx, first)
+            .await
+            .unwrap()
+            .state,
+        "sent"
+    );
+
+    // A private reply in flight refuses another private one, not a public one.
+    let c3 = take(&r, &r.ig, comment("3", "fan-3")).await;
+    replies::enqueue(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        c3.conversation_id,
+        input(Some(c3.id), Some("private"), "DM'den yazdık"),
+    )
+    .await
+    .unwrap();
+    let e = replies::reply(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        c3.conversation_id,
+        input(Some(c3.id), Some("private"), "DM'den yine yazdık"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "reply_in_flight");
+    r.meta.push_reply_public(accepted("r3"));
+    assert_eq!(
+        replies::reply(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            c3.conversation_id,
+            public_reply(&c3, "Merhaba"),
+        )
+        .await
+        .unwrap()
+        .state,
+        "sent"
+    );
+}
+
+#[tokio::test]
+async fn a_held_reply_refuses_another_and_its_own_approval_goes() {
+    let r = rig().await;
+    let (c1, out, agent) = held(&r, "Merhaba").await;
+    // Another reply on the item, while one waits for approval.
+    let e = replies::reply(
+        &r.w.deps,
+        &agent,
+        c1.conversation_id,
+        public_reply(&c1, "Merhaba"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "reply_in_flight");
+    // The held one's approval is not in its own way.
+    let row = outbox(&r, out.message_id);
+    r.meta.push_reply_public(accepted("r1"));
+    let approved = public::approve(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        row.id,
+        public::ApproveInput::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(approved.state, "sent");
+}

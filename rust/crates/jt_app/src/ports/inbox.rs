@@ -542,6 +542,18 @@ pub trait OutboxRepo: Send + Sync {
         capability: CapabilityId,
         since: OffsetDateTime,
     ) -> Result<u32, AppError>;
+    /// The states of public item `item`'s replies of `visibility` that are not settled yet, row
+    /// `except` left out (the one being claimed or approved): the outbox rows whose intent names
+    /// the item (`intent.public.item_id`) with that visibility (`intent.public.visibility`), in
+    /// state `held`, `queued`, `sending` or `unknown`, one state per row, in no particular order.
+    /// What the reply fence refuses another reply for (`reply_in_flight`). The caller holds the
+    /// workspace's inbox lock, so the answer and the row it lets in are one reservation.
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError>;
 }
 
 impl MergeSnapshot {

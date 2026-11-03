@@ -1574,6 +1574,27 @@ impl Fixture {
         drafted_by: &serde_json::Value,
         minutes: i64,
     ) -> Uuid {
+        self.public_outbox_for(
+            c,
+            PublicItemId::new_v7(),
+            state,
+            visibility,
+            drafted_by,
+            minutes,
+        )
+        .await
+        .0
+    }
+    /// [`Fixture::public_outbox`] for item `item`; the row's id and its message's.
+    pub async fn public_outbox_for(
+        &self,
+        c: &Conversation,
+        item: PublicItemId,
+        state: &str,
+        visibility: &str,
+        drafted_by: &serde_json::Value,
+        minutes: i64,
+    ) -> (Uuid, MessageId) {
         let at = FIXED_NOW + Duration::minutes(minutes);
         let mut m = self.message(c.id);
         m.direction = Direction::Outbound;
@@ -1592,7 +1613,7 @@ impl Fixture {
                 message_id: m.id,
                 capability_id: c.capability_id,
                 intent: json!({"kind": "reply", "public": {
-                    "item_id": PublicItemId::new_v7(), "visibility": visibility,
+                    "item_id": item, "visibility": visibility,
                     "drafted_by": drafted_by
                 }}),
                 expected_generation: c.executor_generation,
@@ -1607,8 +1628,80 @@ impl Fixture {
             .await
             .unwrap();
         t.commit().await.unwrap();
-        id
+        (id, m.id)
     }
+}
+
+/// The replies of an item not settled yet (held, queued, sending, unknown), by visibility, with
+/// one row left out, in the item's own workspace only.
+pub async fn public_replies_in_flight(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let (item, other) = (PublicItemId::new_v7(), PublicItemId::new_v7());
+    let mut rows = Vec::new();
+    for (n, (on, state, visibility)) in [
+        (item, "held", "public"),
+        (item, "queued", "public"),
+        (item, "sending", "public"),
+        (item, "unknown", "public"),
+        (item, "sent", "public"),
+        (item, "failed", "public"),
+        (item, "refused", "public"),
+        (item, "queued", "private"),
+        (other, "queued", "public"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        rows.push(
+            f.public_outbox_for(&c, on, state, visibility, &agent, n as i64)
+                .await,
+        );
+    }
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut states = t
+        .outbox()
+        .public_replies_in_flight(item, Visibility::Public, None)
+        .await
+        .unwrap();
+    states.sort();
+    assert_eq!(states, ["held", "queued", "sending", "unknown"]);
+    // The row being claimed is left out.
+    let mut states = t
+        .outbox()
+        .public_replies_in_flight(item, Visibility::Public, Some(rows[1].0))
+        .await
+        .unwrap();
+    states.sort();
+    assert_eq!(states, ["held", "sending", "unknown"]);
+    assert_eq!(
+        t.outbox()
+            .public_replies_in_flight(item, Visibility::Private, None)
+            .await
+            .unwrap(),
+        ["queued"]
+    );
+    assert!(
+        t.outbox()
+            .public_replies_in_flight(PublicItemId::new_v7(), Visibility::Public, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(t);
+    // Another workspace sees none of them.
+    let mut other_ws = uow.tenant(f.other).await.unwrap();
+    assert!(
+        other_ws
+            .outbox()
+            .public_replies_in_flight(item, Visibility::Public, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 /// Insert, replay, references (the item's conversation and subject on its own capability),

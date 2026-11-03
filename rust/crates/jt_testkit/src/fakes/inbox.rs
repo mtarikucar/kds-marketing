@@ -1796,4 +1796,26 @@ impl OutboxRepo for MemTenant {
             .count();
         u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
     }
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError> {
+        let (item, visibility) = (serde_json::json!(item), serde_json::json!(visibility));
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && matches!(r.state.as_str(), "held" | "queued" | "sending" | "unknown")
+                    && r.intent["public"]["item_id"] == item
+                    && r.intent["public"]["visibility"] == visibility
+                    && Some(r.id) != except
+            })
+            .map(|r| r.state.clone())
+            .collect())
+    }
 }

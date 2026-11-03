@@ -6,7 +6,7 @@ use jt_app::{
     ports::inbox::{MAX_INBOX_PAGE, OutboxRepo, OutboxRow},
 };
 use jt_capability::CapabilityId;
-use jt_inbox::MessageId;
+use jt_inbox::{MessageId, PublicItemId, Visibility};
 use time::OffsetDateTime;
 use uuid::Uuid;
 #[async_trait]
@@ -98,5 +98,29 @@ impl OutboxRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "count agent public replies"))?;
         u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
+    }
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError> {
+        let visibility = match visibility {
+            Visibility::Public => "public",
+            Visibility::Private => "private",
+        };
+        sqlx::query_scalar(
+            "select state from outbox where workspace_id=$1 \
+             and state in ('held','queued','sending','unknown') \
+             and intent#>>'{public,item_id}'=$2 and intent#>>'{public,visibility}'=$3 \
+             and ($4::uuid is null or id<>$4)",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(item.as_uuid().to_string())
+        .bind(visibility)
+        .bind(except)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read public replies in flight"))
     }
 }

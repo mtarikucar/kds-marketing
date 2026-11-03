@@ -46,6 +46,12 @@ async fn outbox_counts_agent_public_replies() {
 }
 
 #[tokio::test]
+async fn public_replies_in_flight() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::public_replies_in_flight(uow(&db)).await;
+}
+
+#[tokio::test]
 async fn erasure_refuses_held_replies() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::erasure_refuses_held_replies(uow(&db)).await;
@@ -270,4 +276,270 @@ async fn event_person_finds_a_commenter() {
     assert!(!event_person(&db, &f, instagram, &question, buyer.id).await);
     // A payload without an envelope matches as before.
     assert!(!event_person(&db, &f, instagram, &json!({"text": "5150"}), commenter.id).await);
+}
+
+// ---------------------------------------------------------------------------------------------
+// One reply in flight per item and visibility (spec D19), through the use cases on PostgreSQL
+// ---------------------------------------------------------------------------------------------
+
+/// An active workspace with an approved strategy, an Instagram capability whose grant and
+/// platform flag enable comments, a scripted Meta surface and one commenter's conversation.
+struct Replying {
+    f: Fixture,
+    deps: jt_app::usecases::Deps,
+    owner: jt_app::ctx::Ctx,
+    agent: jt_app::ctx::Ctx,
+    meta: Arc<jt_testkit::fakes::ScriptedPublic>,
+    conversation: Conversation,
+}
+
+async fn replying(db: &TestDb) -> Replying {
+    let uow = uow(db);
+    let f = Fixture::new(uow.clone()).await;
+    let mut deps = jt_testkit::fakes::deps(uow.clone());
+    let mut apps = jt_testkit::fakes::FakeAppConfig::with_all_apps();
+    apps.meta.as_mut().unwrap().comment_scopes = true;
+    deps.apps = Arc::new(apps);
+    let meta = Arc::new(jt_testkit::fakes::ScriptedPublic::new(
+        jt_connector::Provider::Meta,
+    ));
+    deps.connectors =
+        Arc::new(jt_testkit::fakes::ScriptedRegistry::new().with_public(meta.clone()));
+    let scopes = [
+        "instagram_basic",
+        "instagram_manage_comments",
+        "instagram_manage_messages",
+    ];
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        f.ws,
+        NewCapability {
+            kind_key: "instagram".into(),
+            name: "Instagram".into(),
+            external_id: Some("ig-acct".into()),
+            connector_public: json!({"provider": "meta",
+                "access": {"kind": "oauth", "app": "meta", "scopes": scopes}}),
+            ..NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    cap.status = jt_capability::StoredStatus::Verified;
+    cap.last_verified_at = Some(FIXED_NOW);
+    let credential = jt_connector::Credential::OAuth {
+        access_token: "test-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    let sealed = deps
+        .seal
+        .seal(f.ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.capabilities()
+        .insert(cap.clone(), Some(sealed))
+        .await
+        .unwrap();
+    t.strategy()
+        .insert(jt_strategy::StrategyVersion {
+            id: jt_strategy::StrategyVersionId::new_v7(),
+            workspace_id: f.ws,
+            number: 1,
+            status: jt_strategy::VersionStatus::Approved,
+            sections: jt_strategy::Sections::default(),
+            created_at: FIXED_NOW,
+            created_by: jt_ledger::Actor::Human { user_id: f.user },
+            submitted_at: Some(FIXED_NOW),
+            approved_at: Some(FIXED_NOW),
+            approved_by: Some(f.user),
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let p = f.insert_person("Commenter").await;
+    let conversation = f.public_conversation(p.id, cap.id).await;
+    let ctx = |actor| jt_app::ctx::Ctx {
+        workspace_id: f.ws,
+        actor,
+        permissions: [jt_tenancy::Permission::InboxWork].into(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    let owner = ctx(jt_ledger::Actor::Human { user_id: f.user });
+    let connection = jt_tenancy::AgentConnectionId::new_v7();
+    let mut agent = ctx(jt_ledger::Actor::Agent {
+        connection_id: connection,
+        user_id: f.user,
+    });
+    agent.agent_connection_id = Some(connection);
+    Replying {
+        f,
+        deps,
+        owner,
+        agent,
+        meta,
+        conversation,
+    }
+}
+
+/// An owed comment `external_id` of the conversation, stored.
+async fn owed(r: &Replying, external_id: &str, minutes: i64) -> PublicItem {
+    let message =
+        r.f.comment_message(r.conversation.id, external_id, minutes)
+            .await;
+    let item =
+        r.f.public_item(&r.conversation, message, external_id, minutes);
+    let mut t = r.f.uow.tenant(r.f.ws).await.unwrap();
+    assert!(t.public_items().insert(item.clone()).await.unwrap());
+    t.commit().await.unwrap();
+    item
+}
+
+fn reply_to(item: &PublicItem, text: &str) -> jt_app::usecases::inbox::replies::ReplyInput {
+    serde_json::from_value(json!({"text": text, "intent": "reply", "item_id": item.id})).unwrap()
+}
+
+fn accepted(
+    id: &str,
+) -> Result<jt_app::ports::connectors::SendReceipt, jt_connector::ConnectorError> {
+    Ok(jt_app::ports::connectors::SendReceipt {
+        provider_id: id.into(),
+        cost_minor: None,
+    })
+}
+
+fn reason(e: &jt_app::error::AppError) -> &str {
+    e.details["reason"].as_str().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_timed_out_reply_refuses_the_agent_another() {
+    use jt_app::usecases::inbox::replies;
+    let db = TestDb::new().await;
+    let r = replying(&db).await;
+    let item = owed(&r, "1", 0).await;
+    r.meta
+        .push_reply_public(Err(jt_connector::ConnectorError::unknown("timed out")));
+    let first = replies::reply(
+        &r.deps,
+        &r.agent,
+        r.conversation.id,
+        reply_to(&item, "Merhaba"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.state, "unknown");
+    // The agent retries: refused, nothing sent again.
+    let e = replies::reply(
+        &r.deps,
+        &r.agent,
+        r.conversation.id,
+        reply_to(&item, "Merhaba"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "reply_in_flight");
+    assert_eq!(r.meta.calls().len(), 1);
+    // A human, who can look at the platform, may still answer.
+    r.meta.push_reply_public(accepted("r1"));
+    let human = replies::reply(
+        &r.deps,
+        &r.owner,
+        r.conversation.id,
+        reply_to(&item, "Merhaba, yanıtımız ulaştı mı?"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(human.state, "sent");
+    assert_eq!(r.meta.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn a_reply_during_another_ones_send_is_refused() {
+    use jt_app::usecases::inbox::replies;
+    let db = TestDb::new().await;
+    let r = replying(&db).await;
+    let item = owed(&r, "1", 0).await;
+    // Both enqueued before either is sent: the second is refused.
+    let replies::Enqueued::New(first) = replies::enqueue(
+        &r.deps,
+        &r.owner,
+        r.conversation.id,
+        reply_to(&item, "Merhaba"),
+    )
+    .await
+    .unwrap() else {
+        panic!("a new reply")
+    };
+    let e = replies::reply(
+        &r.deps,
+        &r.agent,
+        r.conversation.id,
+        reply_to(&item, "Selam"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "reply_in_flight");
+    // While the first one's provider call runs (the row sending, no lock held), another reply,
+    // a human's or the agent's, is refused too.
+    let refused = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (deps, owner, agent, conversation, during) = (
+        r.deps.clone(),
+        r.owner.clone(),
+        r.agent.clone(),
+        r.conversation.id,
+        refused.clone(),
+    );
+    let target = item.clone();
+    r.meta.push_hook(move || async move {
+        for ctx in [&owner, &agent] {
+            let e = replies::reply(&deps, ctx, conversation, reply_to(&target, "Tekrar"))
+                .await
+                .unwrap_err();
+            during.lock().unwrap().push(reason(&e).to_owned());
+        }
+    });
+    r.meta.push_reply_public(accepted("r1"));
+    let sent = replies::send_step(&r.deps, &r.owner, first).await.unwrap();
+    assert_eq!(sent.state, "sent");
+    assert_eq!(
+        *refused.lock().unwrap(),
+        ["reply_in_flight", "reply_in_flight"]
+    );
+    assert_eq!(r.meta.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn two_concurrent_agent_replies_send_once() {
+    use jt_app::usecases::inbox::replies;
+    let db = TestDb::new().await;
+    let r = replying(&db).await;
+    let item = owed(&r, "1", 0).await;
+    r.meta.push_reply_public(accepted("r1"));
+    let (a, b) = tokio::join!(
+        replies::reply(
+            &r.deps,
+            &r.agent,
+            r.conversation.id,
+            reply_to(&item, "Merhaba")
+        ),
+        replies::reply(
+            &r.deps,
+            &r.agent,
+            r.conversation.id,
+            reply_to(&item, "Merhaba!")
+        ),
+    );
+    let (sent, refused): (Vec<_>, Vec<_>) = [a, b].into_iter().partition(Result::is_ok);
+    assert_eq!(sent.len(), 1);
+    let e = refused.into_iter().next().unwrap().unwrap_err();
+    // In flight when it came, or already answered by the agent.
+    assert!(
+        matches!(reason(&e), "reply_in_flight" | "agent_already_replied"),
+        "{e:?}"
+    );
+    assert_eq!(r.meta.calls().len(), 1);
 }

@@ -253,7 +253,10 @@ impl PublicEnvelope {
 // quote or appointment on a public one VALIDATION public_conversation_takes_replies_only).
 // intent.public = {item_id, visibility, target: PublicTarget, drafted_by: Actor}; the row is
 // "held" (ledger inbox.public.held) when the capability requires approval and the actor is not a
-// human. Refusal reasons: the PublicRefusal keys and daily_ops_cap (counted at enqueue under
+// human. Refusal reasons: the PublicRefusal keys, reply_in_flight (spec D19:
+// OutboxRepo::public_replies_in_flight(item, visibility, except) -> states of the item's held,
+// queued, sending or unknown rows, the claimed/approved row left out; unknown counts for the agent
+// only) and daily_ops_cap (counted at enqueue under
 // CapabilityRepo::lock, the day being the capability's working-hours day, else Istanbul:
 // calls::local_day). inbox::public::{approve(deps, ctx, outbox_id, ApproveInput { text }),
 // discard(deps, ctx, outbox_id)} for F7's rows: refusals human_required, not_the_drafter, CONFLICT

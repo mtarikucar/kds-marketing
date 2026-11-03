@@ -862,6 +862,11 @@ pub(crate) struct Fenced {
 /// is the caller's, before the domain fence): run at enqueue (`count_cap`, rule 6) and again at
 /// claim and approval. `item_id` names the item replied to on `conversation` of `cap` (on
 /// `channel`), `text` the reply, `by_agent` whether the agent sends it. The item is locked.
+///
+/// Rule 4 also holds one reply in flight per item and visibility (spec D19): `reply_in_flight`
+/// while another reply of the item with that visibility is held, queued or sending (`except`,
+/// the row being claimed or approved, left out). An uncertain one (`unknown`) counts for the
+/// agent only, until reconciliation settles it: a human can look at the platform first.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn reply_fence(
     deps: &Deps,
@@ -875,6 +880,7 @@ pub(crate) async fn reply_fence(
     text: &str,
     by_agent: bool,
     count_cap: bool,
+    except: Option<uuid::Uuid>,
 ) -> Result<Fenced, AppError> {
     // 2. A Meta surface without the comment grant (a marketplace's always holds).
     if !comments_enabled(deps.apps.as_ref(), cap) {
@@ -893,6 +899,14 @@ pub(crate) async fn reply_fence(
     // 4. The item takes this reply now.
     jt_inbox::public::reply_allowed(&item, &rules, visibility, by_agent, ctx.now)
         .map_err(refusal)?;
+    // One reply in flight per item and visibility (the workspace's inbox lock is held).
+    let in_flight = r
+        .outbox()
+        .public_replies_in_flight(item.id, visibility, except)
+        .await?;
+    if in_flight.iter().any(|state| by_agent || state != "unknown") {
+        return Err(refusal("reply_in_flight"));
+    }
     // 5. The text: bounds, the person's own contact data, a marketplace's contact data.
     let contacts: Vec<String> = r
         .identities()
