@@ -13452,6 +13452,8 @@ git add rust/bridge/voice
 git commit -m "feat(voice-bridge): the client of Jeeta's voice bridge routes" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**D1 as built (2026-11-03).** The steps ran as written, test first: `jeeta_client` was seen failing to compile (E0432, no `jeeta` in `jeeta_voice_bridge`). The code is the plan's, reflowed by rustfmt; the test drops the plan's unused `Response` import (clippy `-D warnings`). `JeetaClient` has no `Debug` (it holds the key), and `lib.rs`' module map names `jeeta`. Checks on Windows: `cargo test -p jeeta-voice-bridge --test jeeta_client` 2, `logging` 3; clippy `--all-targets -D warnings`, `cargo doc -D warnings` and fmt clean.
+
 ### Task D2: The run loop (heartbeat, command poll, ARI events, ordered reports)
 
 **Files:**
