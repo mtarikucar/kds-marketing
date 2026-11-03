@@ -25,8 +25,10 @@ Finding businesses.
 - Discover candidates on public pages: search results, business directories, map listings viewed in a browser,
   the business's own website and its official social profiles.
 - Before researching a business in depth, call jeeta.prospects.check with what you know (name and city, phone,
-  website, handles). Skip it if the answer is duplicate, possible_duplicate, in_inbox, previously_rejected or
-  do_not_contact.
+  website, handles). Skip it if the answer is duplicate, in_inbox, previously_rejected or do_not_contact. A
+  possible_duplicate or previously_rejected_soft flag is not a refusal: it lists prospects with the same website
+  or the same name and city. Look at them; if this is the same business, skip it; if it is a branch or another
+  business, go on and name them in distinct_from.
 - Pace yourself like a person: open pages one at a time; never run bulk or automated extraction against a site;
   respect robots.txt and each site's terms; never log in to see data that is not public.
 
@@ -36,7 +38,9 @@ What to record (jeeta.prospects.create).
   segment_key (from the ICP entry), size (branches, employee band), signals (why it fits, each with its source).
 - Contact fields: phone, email, website, instagram, tiktok, address, contact_person. Each field needs at least
   one source URL of a public page where the business itself publishes that value (its website's contact page,
-  its official profile, its listing). Give captured_at: when you saw it.
+  its official profile, its listing). Give captured_at: when you saw it. The website is the business's own
+  site: a social profile goes in instagram or tiktok, and a marketplace store, a map listing, a link-in-bio
+  page or a short link is not a website (use it as a source instead).
 - Never record: a private individual who is not acting as a business; personal social accounts of employees or
   owners; home addresses; personal phone numbers or emails that the business does not publish as its contact;
   data from leaked databases, people-search or data-broker sites; emails you guessed from a pattern (such as

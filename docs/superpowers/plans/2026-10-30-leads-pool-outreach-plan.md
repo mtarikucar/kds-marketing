@@ -41,6 +41,14 @@ marketplace) are taken by parallel branches; if either lands after a task here, 
 merge in number order: a phase that merges out of order (L6 may be built in parallel with L1) takes the next free
 number when it merges, and the later ones shift with their pins.
 
+**Deploy hazards (L1 review, 2026-11-03).** (1) 0019 is `feat/inbox-comments-marketplace`'s. `jt_pg::recovery::
+check_schema` refuses any applied migration the build does not embed, so a database that ran a build with 0020
+refuses a build without it, and one that ran 0019 refuses a build without 0019: deploy this branch only from a
+base that holds both 0019 and 0020, never from one branch's build to the other's. (2) The L1 review fixes amended
+0020 in place (it had not merged): a database that applied the earlier 0020 (a local or staging run of this
+branch) fails `check_schema` on its checksum. Revert it with 0020's down (it refuses while the blocklist holds
+do-not-contact or erased entries) and apply it again, or recreate that database.
+
 ---
 
 ## File structure
@@ -93,12 +101,13 @@ pub struct Evidence { pub sources: Vec<SourceRef>, pub captured_at: OffsetDateTi
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SourceRef { Url { url: String, note: Option<String> }, Manual { note: String }, Import { system: String, record: String } }
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Recorder { Agent { connection_id: AgentConnectionId, user_id: UserId }, Human { user_id: UserId }, Import { system: String, record: String } }
+pub enum Recorder { Agent { connection_id: AgentConnectionId, user_id: UserId }, Human { user_id: UserId }, Import { system: String, record: String },
+                    System { job: String } }   // L1 review (spec D30): a job's own writes, e.g. L2's standing-task planner
 pub struct Signal { pub text: String, pub source: SourceRef }
 pub struct SizeHint { pub branches: Option<u16>, pub employees: Option<EmployeeBand>, pub note: Option<String> }
 pub enum EmployeeBand { B1To9, B10To49, B50To249, B250Plus }   // serde "1-9" | "10-49" | "50-249" | "250+"
 pub struct Origin { pub via: OriginVia, pub discovered_at: Vec<SourceRef>, pub distinct_from: Vec<ProspectId>, pub recorder: Recorder, pub at: OffsetDateTime }
-pub enum OriginVia { ResearchTask, Manual, Agent, V1Import }
+pub enum OriginVia { ResearchTask, Manual, Agent, V1Import, System }
 pub struct ScoreSummary { pub score: u8, pub digest: String, pub at: OffsetDateTime }
 pub struct Decision { pub kind: DecisionKind, pub note: String, pub by: Recorder, pub at: OffsetDateTime }
 pub enum DecisionKind { Rejected(RejectReason), DoNotContact(DncReason) }
@@ -141,7 +150,7 @@ pub fn scrub_for_dnc(p: &mut Prospect);                             // spec §3.
 pub fn bucket(score: u8) -> Bucket;
 #[serde(deny_unknown_fields)] pub struct ScoreInput { pub score: u8, pub reasons: Vec<ReasonInput>, pub rubric_digest: String }
 #[serde(deny_unknown_fields)] pub struct ReasonInput { pub criterion: String, pub points: u8, pub evidence: String, #[serde(default)] pub source: Option<SourceRefInput> }
-pub fn validate_score(input: &ScoreInput, rubric: &jt_strategy::Rubric) -> Result<(), ProspectError>;
+pub fn validate_score(input: &ScoreInput, rubric: &jt_strategy::Rubric, recorder: &Recorder) -> Result<(), ProspectError>; // a manual source is a person's only
 
 pub struct Brief { pub segment_key: Option<String>, pub sectors: Vec<String>, pub areas: Vec<jt_strategy::Area>, pub signals: Vec<String>,
                    pub exclusions: Vec<String>, pub size_hint: String, pub language: Option<String>, pub note: String }
@@ -153,6 +162,8 @@ pub struct Claim { pub by: Recorder, pub until: OffsetDateTime }
 pub struct ProspectsPolicy { pub rejected_retention_days: u16 /*30*/, pub unpromoted_retention_days: u16 /*180*/,
     pub rejected_memory_days: u16 /*365*/, pub max_promotions_per_day: u16 /*100*/, pub agents_promote_qualified_only: bool /*true*/ }
 pub fn purge_after(policy: &ProspectsPolicy, status: ProspectStatus, decided_at: Option<OffsetDateTime>, updated_at: OffsetDateTime) -> Option<OffsetDateTime>;
+pub struct PurgeCutoffs { pub rejected: OffsetDateTime, pub unpromoted: OffsetDateTime }   // L1 review (spec D35)
+pub fn purge_cutoffs(policy: &ProspectsPolicy, now: OffsetDateTime) -> PurgeCutoffs;      // due at now ⟺ purge_after ≤ now
 pub const MAX_DAILY_PROSPECTS: u32 = 500;
 pub const PLAYBOOK_VERSION: u32 = 1; pub const TEXT: &str;          // spec Appendix A, verbatim
 // As built (L1-T1), beyond the names above: `normalise_key(kind, raw) -> Result<String, ProspectError>`
@@ -164,6 +175,16 @@ pub const PLAYBOOK_VERSION: u32 = 1; pub const TEXT: &str;          // spec Appe
 // ways (they are `FieldInput` values); `StatusError.event` is the refused event as a past participle.
 // `jt_strategy::{Area, Rubric, Criterion}` (types and KEYS only) land in L1-T1, because `Brief` and
 // `validate_score` name them; `Prospecting`, `IcpEntry` and `Sections.prospecting` stay L2-T1.
+// L1 review (2026-11-03, spec D28–D36): `KeyKind::hard()` is also "the kinds the blocklist holds";
+// `normalise_phone(raw) -> Result<String, ProspectError>` (spec D34; `normalise_key(Phone, _)` is it) and
+// `phone_is_dialable(normalised) -> bool` (false for `TR444_PREFIX` "tr444:" keys; such a phone field is not
+// `deliverable`); `PLATFORM_HOSTS: &[(&str, PlatformKind)]` with `PlatformKind { SocialProfile, LinkInBio,
+// Messaging, MapListing, Marketplace, ShortLink, SharedHost }` and `PlatformKind::reason()`, `PLATFORM_NAMES`
+// (google, yandex under any country domain), `MAX_HOST_CHARS = 253`; `classify_website(url) ->
+// Result<WebsiteHost { Domain(String), Platform(PlatformKind), IpAddress }, ProspectError>` (`website_domain` is
+// its domain); `website_handle(kind, url) -> Option<String>` (a profile URL on the platform's host);
+// `normalise_handle` refuses reserved first path segments and a TikTok path without `@` (`not_a_profile_url`)
+// and strips `www.`/`m.` only before the platform's host; `Recorder::is_human()`.
 
 // ---- jt_strategy (L2-T1) ----
 pub struct Prospecting { pub icp: Vec<IcpEntry>, pub rubric: Rubric }
@@ -255,9 +276,22 @@ pub struct OutreachSend { pub send_id: SendId, pub enrollment_id: EnrollmentId, 
 
 Rules shared by all phases:
 - **Lock order:** inbox workspace lock (`people().lock_workspace()`) → pool lock (`prospects().lock_pool()`) →
-  rows. A use case that needs only the pool takes only the pool lock.
+  rows. A use case that needs only the pool takes only the pool lock. **A policy read never locks**: the pool
+  reads the leads policy with `workspace_policy().read()`; `get()` (which takes the workspace-policy lock) is
+  for a policy write only, and no use case of L2/L3 takes the pool lock after a locking policy read (spec D31).
+  The leads policy is written key by key with `patch_leads` (only the keys given are stored).
 - **Recorder** is built by `usecases::prospects::recorder(ctx)` from `ctx.actor` (agent → `Agent { connection_id,
-  user_id }`, human → `Human`, system → refused for pool writes except the importer).
+  user_id }`, human → `Human`, system → refused for pool writes except the importer). A job's own records (L2's
+  standing tasks) name `Recorder::System { job }`.
+- **Request keys store ids, never answers** (spec D33): a stored response is `{<entity>_id}` (`prospect_id`,
+  `task_id`, `campaign_id`, …) and a replay reads the row again; a replay is checked again after the use case's
+  lock (a racing request with the same key replays once the first commits). Erasure, do-not-contact and purge
+  delete the matching rows with `RequestKeyRepo::forget(prefix, field, value)`. Every request key of L2–L4 keeps
+  this rule.
+- **Hard keys only block** (spec D28): only phone, email, Instagram and TikTok are hashed onto the blocklist
+  (do-not-contact, erasure, rejection memory, a person's erasure) and only their hits refuse; soft keys come back
+  as `Flag`s. **Objections always run** (spec D29): `catalog::OBJECTION_USE_CASES` (do-not-contact, erase) are
+  status-exempt (`Always`) and strategy-exempt.
 - **Errors:** fences `FORBIDDEN {reason}`; duplicates and caps `CONFLICT {reason, ...}`; input `VALIDATION
   {field}`; the reason keys are the snake_case names in the spec.
 - **No provider I/O inside a transaction** (bug class "cron-lock pool starvation"): the dispatcher commits before
@@ -275,7 +309,7 @@ Rules shared by all phases:
 | L6 Attachments | T1 migration 0023 + repo + files purpose (M), T2 inbound (L), T3 outbound + erasure + purge (M) | L | — (parallel to L1) | — |
 | L7 v1 import | T1 routing + pool intake + rollback (L), T2 export runbook + staging dry run (S) | M | L1, L3 | v1 switch-off |
 | L8 Panel | T1 plumbing (S), T2 pool + tasks (L), T3 distribution (M), T4 outreach (L), T5 inbox + home (M), T6 reports (M) | XL | each its backend phase | owner use |
-| L9 Smoke + docs | T1 smoke_leads (M), T2 runbooks (S) | M | all | release |
+| L9 Smoke + docs | T1 smoke_leads (M), T2 runbooks (S), T3 request-key purge job (S) | M | all | release |
 
 v1 switch-off needs L1, L2, L3, L4, L5, L7 and L8-T2..T5 merged and deployed, the owner's answers to spec §15
 Q1–Q4, and the staging dry run read by the owner. L6 is not required (v1 never stored attachments).
@@ -328,6 +362,14 @@ fn fold(s: &str) -> String {
 - [ ] `cargo test -p jt_prospects` red → implement → green; fmt, clippy; `cargo test -p jt_archtest --test
   dependency_boundaries`.
 - [ ] **Commit** `feat(prospects): the pool's pure domain`.
+- L1 review fixes (2026-11-03): phones pre-normalise (`normalise_phone`, `tr444:`), handles come only from
+  profile URLs, `PLATFORM_HOSTS` is a table of kinds with their reasons (Turkish marketplaces, maps, short
+  links, `google.*`/`yandex.*`, `sites.google.com`), an IP and an overlong host have their own reasons, the
+  fold folds â/î/û, `Recorder::System`, `validate_score` takes the recorder, `purge_cutoffs`. Tests
+  `turkish_phone_forms_normalise_before_the_inbox_rules`, `tr444_numbers_are_a_distinct_key_and_never_dialled`,
+  `instagram_post_reel_and_story_urls_are_no_handle`, `bare_handles_keep_www_and_m`,
+  `tiktok_profile_urls_need_the_at`, `ip_and_overlong_hosts_are_no_domains`, `a_system_recorder_gives_no_manual_source`,
+  `manual_sources_in_reasons_are_for_humans_only`, `purge_cutoffs_agree_with_purge_after`.
 
 ### Task L1-T2: permissions and migration 0020
 
@@ -350,6 +392,11 @@ fn fold(s: &str) -> String {
   (`1..=17` and `20`: 0018/0019 are the parallel branches'); every round-trip test that runs older downs runs
   0020's first (its tables reference `people`, `journeys` and `strategy_versions`).
 - [ ] CI red → implement → green; **commit** `feat(prospects): tables, RLS and the prospects permissions`.
+- L1 review fixes (2026-11-03, 0020 amended in place, see the deploy hazards above): `prospects.purge_after`
+  is gone; `decided_at` (set exactly when rejected or do-not-contact, `prospects_decided_check`) and the partial
+  indexes `prospects_purge_rejected`, `prospects_purge_unpromoted` replace `prospects_purge` (index pin 10 →
+  11); `prospect_blocklist.kind` holds hard kinds only and every entry has `key_fingerprint`. Tests
+  `blocklist_holds_hard_keys_only`, `a_prospect_is_decided_exactly_when_rejected_or_do_not_contact`.
 
 ### Task L1-T3: ports, Postgres repos, fakes, contract tests
 
@@ -421,6 +468,20 @@ pub trait ProspectRepo: Send + Sync {
   bug class "stale stored aggregate").
   Postgres only: `concurrent_inserts_with_one_phone_create_one_prospect`, `pool_lock_serialises_two_bundles`.
 - [ ] CI red → green; **commit** `feat(prospects): pool repositories, fake and contracts`.
+- L1 review fixes (2026-11-03), contract changes: `WorkspacePolicyRepo::read()` (no lock) and
+  `patch_leads(patch: Value, at) -> LeadsPolicy` (merges `patch` key by key into the stored object, which holds
+  only the keys someone set; `ports::merge_object`, `ports::leads_policy_of`); `set` no longer writes the leads
+  policy. `ProspectRepo`: `purge_after` is never stored (reads answer `None`); `set_status(id, status, decision,
+  at, expected_revision)` (no purge time); `due_for_purge(cutoffs: PurgeCutoffs, limit)` selects by status and
+  `decided_at`/`updated_at`; `set_promoted -> Promoted { Ok, NotPromotable { status }, PersonAlreadyLinked {
+  prospect_id } }` (spec D32, the repository checks the status); `delete_scores(id) -> u64`; an update racing a
+  writer without the pool lock is `CONFLICT {reason: duplicate, prospect_id}`; a key over 400 characters and a
+  decision that does not match the status are `INTERNAL` in both adapters. `ProspectRow.decided_at`.
+  `BlocklistRepo::insert(.., key_fingerprint: &str)` (hard kinds only, `is_key_fingerprint`) and
+  `key_fingerprints() -> Vec<(String, u64)>`. `RequestKeyRepo::forget(prefix, field, value) -> u64`. New contract
+  tests `keys_are_bounded_and_decisions_match_the_status`, `blocklist_counts_entries_by_key_fingerprint`,
+  `request_keys_are_forgotten_by_prefix_and_field`; Postgres only `the_stored_leads_policy_holds_only_the_keys_set`
+  (the fake's twin reads its snapshot), `a_policy_read_takes_no_lock`, `a_racing_update_answers_duplicate_with_the_holder`.
 
 ### Task L1-T4: create, update, check, list, get
 
@@ -478,6 +539,16 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
   so they never meet another operation's. `usecases::hours::local_day(tz, now)` (L3 moves the calls fence's
   hours there too) counts the caps' day from local midnight to the next one, so a clock change's day is 23 or
   25 hours.
+- L1 review fixes (2026-11-03): only hard keys are checked against the blocklist and only hard keys refuse
+  (spec D28; this replaces "every key, hard and soft, is checked against the blocklist" above); soft keys come
+  back as `usecases::prospects::Flag { PossibleDuplicate { candidates }, PreviouslyRejectedSoft { candidates } }`
+  (serde tag `flag`), so `ProspectOut { prospect, flags }`, `CheckOut { ok, ...refusal, flags }` and
+  `DuplicateCandidate` gains `status`. The request key stores `{prospect_id}` and a replay reads the row again
+  (checked again after the pool lock, so a racing create with the same key replays); a `tr444:` phone is no inbox
+  identity; every answer's `purge_after` (and each list row's) is computed from the current policy. Tests
+  `possible_duplicate_is_a_flag_not_a_refusal`, `distinct_from_silences_the_flag_and_is_recorded`,
+  `a_soft_key_of_a_rejection_is_a_soft_flag`, `request_key_replays` (stores the id only; replays the current
+  revision); the Postgres use-case test `a_racing_create_with_the_same_request_key_replays`.
 
 ### Task L1-T5: score, decide, do-not-contact, lift, erase, settings, purge job
 
@@ -517,6 +588,23 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Prospe
   `settings_set` also takes `timezone` (an IANA zone) and writes `prospects.settings_set {fields}`;
   `rejected_memory_days = 0` remembers nothing. Entries about no one prospect (raw keys, a lift, a purge, the
   settings) have the subject `prospect_pool:<workspace>`.
+- L1 review fixes (2026-11-03): `score` answers `prospecting_off` while the approved strategy has no ICP entry
+  (whatever its rubric) and refuses an agent's manual source in a reason. `do_not_contact` and `erase` hash hard
+  keys only (`not_a_hard_key` for a raw soft key or a soft lift); marking a prospect deletes its score rows (the
+  latest score number stays) and the request keys that recorded it; raw keys also mark every live prospect
+  holding one (a promoted holder's person is answered: `DncOut { prospect_id, prospects, people, kinds }`, one
+  entry per prospect plus one about the pool); `erase` forgets the request keys too; both are
+  `catalog::OBJECTION_USE_CASES` (run in any status, no strategy gate, spec D29). The purge reads the current
+  policy (`purge_cutoffs`) in batches of `PURGE_BATCH` = 500, each its own transaction with its own
+  `prospects.purged {count}` entry, at most `MAX_PURGE_BATCHES` = 20 a run (`Purged.batches`), forgetting the
+  request keys of each prospect it deletes. `settings_set` patches only the keys given (`patch_leads`) and takes
+  no pool lock; a shortened retention reaches existing prospects at the next purge. Every pool write reads the
+  policy with `read()`. Tests `an_empty_icp_switches_scoring_off_whatever_the_rubric`,
+  `an_agent_gives_no_manual_source_in_a_score`, `dnc_by_raw_keys_marks_the_prospects_holding_them`,
+  `a_soft_key_is_never_lifted`, `a_shortened_retention_reaches_existing_prospects`,
+  `purge_catches_up_beyond_one_batch`, `objections_are_recordable_in_a_suspended_workspace`; the DNC and erase
+  tests assert the scores and request keys are gone; `ledger_payloads_hold_no_values` covers score, decide,
+  do-not-contact (both forms), erase and the settings.
 
 ### Task L1-T6: catalog rows, MCP tools, panel routes, pins
 
@@ -545,6 +633,13 @@ Inputs are the domain input types (schemars derive on them, `deny_unknown_fields
 - [ ] **Tests first:** the pins above red; `twin_parity` answers the same for each row; `gate_rule` lists them as
   Gated; MCP `prospects_mcp.rs`: `tools_listed_with_risks`, `create_through_mcp_records_connection`.
 - [ ] Green; **commit** `feat(prospects): pool tools and routes`.
+- L1 review fixes (2026-11-03): `prospects.do_not_contact` and `prospects.erase` are `Exempt` and
+  `StatusExemption::Always` (`catalog::OBJECTION_USE_CASES`; the gate pins in `jt_app/tests/{catalog,gate}.rs`,
+  `jt_archtest/tests/{gate_rule,m4_productisation}.rs` list them); the MCP descriptions report the flags, hard
+  keys only and the suspended-workspace rule, and no description names `jeeta.prospects.playbook` until L2-T3
+  registers it (the create tool says to call `jeeta.prospects.check` first); the do-not-contact and lift schemas
+  offer hard kinds only. Appendix A was edited (the flags; what a website is) before the playbook was ever
+  served, so it stays version 1; from its first serve on, every edit bumps it.
 
 ---
 
@@ -580,7 +675,9 @@ Inputs are the domain input types (schemars derive on them, `deny_unknown_fields
 (+5: catalog 183 → 188, `("research", 5)`), `jt_app/tests/research_tasks.rs`.
 
 - `tasks_create {brief, target_count, daily_cap, request_key?}`: `validate_brief`; `rubric_digest` of the approved
-  rubric; `kind = AdHoc`.
+  rubric; `kind = AdHoc`. The request key stores `{task_id}` only and a replay reads the task again (rule
+  "request keys store ids"); standing tasks the planner inserts name `created_by: Recorder::System { job:
+  "research_plan" }`. Neither takes the pool lock after a locking policy read.
 - `tasks_get` answers the task, `remaining_today`, `found` (prospects with that task id), and the 20 newest
   prospects of the task.
 - `tasks_claim`: sets `claim = {recorder, until: now + 2h}`; answers who else holds it if another recorder's lease
@@ -655,7 +752,15 @@ fakes, `jt_testkit/src/distribution_contract.rs`, pins (tables 79 → 82, migrat
 PromoteOutcome` the per-prospect transaction body that L4-T5's enrollment reuses), `inbox/people.rs`
 (`match_or_create` takes an optional `recipient_kind` for new people and sets `company`; `PersonOut.prospect`),
 `inbox/context.rs` (context `prospect`), `inbox/erasure.rs` (scrub the linked prospect; blocklist hashes for its
-domain, handles and name_city), `jt_app/tests/prospects_promote.rs`. The catalog row comes in L3-T5.
+hard keys only, spec D28: its Instagram and TikTok handles, phone and email being the erased-identity hashes;
+never its domain or name_city), `jt_app/tests/prospects_promote.rs`. The catalog row comes in L3-T5.
+
+L1 review notes (2026-11-03) for this task: `inbox.people.erase` also clears the **unlinked** prospects holding
+that person's phone or email (scrub, or delete when the person's erasure says the business must not be
+re-collected, with erased hashes of their hard keys) and forgets their request keys
+(`RequestKeyRepo::forget("prospects.create:", "prospect_id", id)`); `set_promoted` answers `Promoted::{Ok,
+NotPromotable, PersonAlreadyLinked}`, which promotion turns into `refused {not_qualified | already_promoted |
+person_already_linked}` outcomes; the promotion request key stores the ids only.
 
 Per spec §3.5; sketch of the transaction:
 ```rust
@@ -770,6 +875,10 @@ language.
 - [ ] Green; **commit** `feat(inbox): business-recipient basis and the OutreachSent event`.
 
 ### Task L4-T3: permissions, migration 0022, ports, repos, fakes
+
+L1 review note (2026-11-03): every outreach request key (campaign saves, launches, enrollments, sends) stores
+the ids it recorded only, and a replay reads the rows again (rule "request keys store ids"); an erasure, an
+unsubscribe or a do-not-contact mark forgets the matching keys.
 
 **Files:** `jt_tenancy/src/role.rs` (`OutreachWork`, `OutreachManage`), `rust/migrations/0022_outreach.{up,down}.sql`
 (spec §4.3, role backfill), `jt_app/src/ports/outreach.rs`, `jt_pg/src/repos/outreach/{mod,templates,campaigns,
@@ -1021,6 +1130,12 @@ migrations 20 → 21).
 
 ### Task L7-T1: routing, pool intake, rollback
 
+L1 review note (2026-11-03): the rollback must unlink the promoted prospects it imported (or delete them, by
+`promoted_person_id`) **before** `delete from people`: `prospects_person_fkey` has no on-delete rule, so a
+`people` row a prospect still names cannot be deleted. Imported rejections carry their decision time
+(`prospects_decided_check`); an imported key over 400 characters or a soft blocklist key is refused before the
+write.
+
 **Files:** `jt_app/src/usecases/v1_import.rs` (export v2 fields on `Lead`, `route`, `pool_intake`, notes for
 activities and offers, owner mapping), `jt_app/src/ports/v1_import.rs` (`ImportRepos` gains
 `member_by_email(&str) -> Option<UserId>`, `imported_prospect(lead) -> Option<ProspectId>`,
@@ -1126,7 +1241,20 @@ smoke_leads`).
 **Files:** `docs/operations/leads-outreach.md` (enabling `JEETA_OUTREACH_ENABLED`, SPF/DKIM/DMARC checklist for
 the customer's domain with V-E1/V-E2 to verify, warm-up, auto-pause handling, blocklist export before a down
 migration, the legal checklist of spec §12).
+- The blocklist's keyed hashes cannot be rebuilt (spec D36): a hash is computed from a value that is gone, so a
+  change of the platform master key (or of the `prospects.blocklist` HMAC derivation) orphans every entry of the
+  old key and silently lifts every objection. The runbook says: never rotate the master key without a plan for
+  the blocklist; before any key change, count the entries per key fingerprint
+  (`BlocklistRepo::key_fingerprints`) and keep the old key available until the owner decides.
 - [ ] **Commit** `docs(operations): leads and outreach runbook`.
+
+### Task L9-T3: purge expired request keys (L1 review, spec D33)
+Request keys are kept until a later request reuses the key; nothing deletes an expired one (inbox's included).
+**Files:** `jt_app/src/ports/inbox.rs` (`RequestKeyRepo::purge_expired(before) -> u64`), both adapters and the
+contract, `jobs.rs` (`Job::PurgeRequestKeys` `"purge_request_keys"`, daily, every workspace whatever its status),
+`bin/jeeta/src/scheduler.rs`, the job pins. Expired = `at <= now - 24 h`.
+- [ ] **Tests first:** `purge_request_keys_deletes_only_expired`, `purge_request_keys_runs_in_suspended_workspaces`.
+- [ ] Green; **commit** `feat(jobs): purge expired request keys`.
 
 ---
 

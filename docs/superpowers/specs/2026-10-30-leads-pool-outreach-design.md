@@ -64,7 +64,7 @@ attachments (§14); cold DMs on any social platform (the parallel design forbids
 | D2 | **Jeeta never researches.** No research provider adapter, no egress host, no job that fetches pages. Agents record what they found through `jeeta.prospects.*`; Jeeta serves the playbook (Appendix A) and the brief. | Owner rule 1; spec §4.2 rule 1 ("intelligence outside"). |
 | D3 | The pool holds **businesses only**: `entity_kind` is `legal_entity`, `sole_trader` or `unknown_business`; there is no individual kind. A contact person is a name and role published by the business itself. | Owner: no private individuals' data. KVKK data minimisation. A sole trader's data is personal data (L-02), so it is treated as such everywhere. |
 | D4 | **Provenance is mandatory per contact field** (phone, email, website, Instagram, TikTok, address, contact person): at least one source URL, `captured_at`, and the recorder. The recorder is set by Jeeta from the authenticated actor (agent connection, human, import), never from input. Each record also carries record-level provenance (how it was found, which task). | Owner scope 1. Evidence makes review, objection handling and KVKK answers possible; a recorder from input could be forged. |
-| D5 | **Dedupe keys**: hard keys `phone` (E.164), `email`, `instagram`, `tiktok` are unique among live prospects (database-enforced); soft keys `domain` and `name_city` produce `possible_duplicate` unless the writer names the candidates in `distinct_from`. Every write also checks inbox identities (`in_inbox`), the do-not-contact blocklist and erased identities. | Chains share a website and a brand name; one business must not become two prospects through formatting. Soft keys keep branches possible without silent duplicates. |
+| D5 | **Dedupe keys**: hard keys `phone` (E.164, or `tr444:` for a 444 number, D34), `email`, `instagram`, `tiktok` are unique among live prospects (database-enforced); soft keys `domain` and `name_city` produce a non-blocking `possible_duplicate` flag unless the writer names the candidates in `distinct_from` (D28). Every write also checks inbox identities (`in_inbox`), the do-not-contact blocklist and erased identities. | Chains share a website and a brand name; one business must not become two prospects through formatting. Soft keys keep branches possible without silent duplicates. |
 | D6 | Statuses `new → qualified → promoted`, `rejected` (fixed reason list), `do_not_contact`; a pure state machine. Promoted is terminal in the pool. | One writer of state, as journeys (B4). |
 | D7 | **The rubric is the strategy's.** A new optional strategy section `prospecting` (ICP entries and the rubric) is approved with the strategy. Agents write scores 0–100 with reasons per criterion; a score names the rubric digest it was computed under; a score at or above `qualify_at` qualifies the prospect automatically. | Owner scope 6 ("rubric owned by the workspace (strategy)"); spec §5 ("strategy is everything"); owner rule 3. |
 | D8 | **Promotion** runs the inbox's single matching function `people::match_or_create` (spec §7.2.6), opens a journey with source `Source::Prospect`, records **no consent** (state none), marks the person `recipient_kind = business`, and links the prospect to the person. Prospect facts stay on the prospect record (shown in the inbox context), not copied into notes. Agents promote only qualified prospects; humans may also promote `new` ones. | One matching path, no second identity store; the evidence stays in one place; erasure of the person reaches the prospect through the link. |
@@ -87,6 +87,21 @@ attachments (§14); cold DMs on any social platform (the parallel design forbids
 | D25 | Four new permissions: `prospects.work`, `prospects.manage`, `outreach.work`, `outreach.manage`. Owner and manager hold them; the rep role holds none by default. Distribution uses the existing `inbox.work`/`inbox.manage`. | Data minimisation inside the team: the pool is not everyone's; a custom role can grant it. |
 | D26 | **Retention, decided 2026-10-30 by the owner's delegate** (answers §15 Q2): rejected prospects are purged 30 days after the rejection, unpromoted ones 180 days after their last update, a purged rejection's keys are remembered 365 days, inbound attachments are kept 180 days; the do-not-contact list is per-workspace keyed hashes (HMAC) and survives every purge. These are the policy defaults (`ProspectsPolicy`, `LeadsPolicy.attachments`); a workspace manager may change the pool's within the bounds of §7.1. L-05 still asks the lawyer to confirm them. | The owner's delegate took the proposed numbers; the lawyer's answer can still move them without code. |
 | D27 | **`0020` down refuses while the blocklist holds a `do_not_contact` or `erased` entry** (built in L1-T2; stricter than §4.1's first draft): the operator exports those hashes and deletes them by hand before a schema rollback. Rejection memory does not hold a rollback up. | An objection must outlive deletion (D9), a rollback included; a refusing down is the repository's pattern for unsafe states (0015). |
+
+Decisions D28–D36 were taken on 2026-11-03 by the owner's delegate on the L1 review; they amend D5, D9 and
+§3.3/§3.6 where those said otherwise.
+
+| # | Decision | Reason |
+|---|---|---|
+| D28 | **Only hard keys block.** Only phone, email, Instagram and TikTok go on the blocklist (do-not-contact, erasure, rejection memory, and a person's erasure, §3.6), and only a hard key's hit refuses a write. Soft keys (domain, name_city) never refuse: a live prospect sharing one is a **non-blocking flag** in the answer, `possible_duplicate` (new, qualified or promoted candidates) or `previously_rejected_soft` (a rejection not purged yet), unless the writer names it in `distinct_from`. | A domain or a name is shared by branches, chains and unrelated businesses (a marketplace store's host, a common name in one city): hashing it would block other businesses, and an objection is a business's own phone, address or account. |
+| D29 | **An objection is always recordable**: `prospects.do_not_contact` and `prospects.erase` run whatever the workspace's status (a suspended one too) and without an approved strategy. Every other pool use case stays gated. | KVKK objection and erasure rights do not wait for a payment or a strategy. |
+| D30 | A **system recorder** `Recorder::System { job }` for what a job writes on its own (L2's standing-task planner); a manual source is a person's only (an agent's or a job's is refused, score reasons included). The application still refuses a system actor's prospect writes. | Provenance names who recorded, a job included, and is never forged from input. |
+| D31 | **The pool reads the leads policy without a lock** (`WorkspacePolicyRepo::read`); only `prospects.settings_set` takes the workspace-policy lock, and it takes no pool lock. Lock order everywhere: inbox → pool; a policy read never locks; no use case takes the pool lock after a locking policy read. | A pool write must never wait behind (or deadlock with) an unrelated policy edit. |
+| D32 | **`set_promoted` refuses typed**: a prospect not `new`/`qualified` is `NotPromotable {status}`, a person another prospect holds is `PersonAlreadyLinked {prospect_id}`; the repository checks the status. | L3's promotion turns these into `refused {reason}` outcomes instead of a database error. |
+| D33 | **Request keys store ids, never answers**: a create stores `{prospect_id}` and a replay reads the row again; an erasure, a do-not-contact mark and a purge delete the matching request keys (`RequestKeyRepo::forget`). Every later request key (L2–L4) follows the rule. Expired request keys are purged by a general job (plan, L9). | A stored copy of an answer would keep contact values after the row was scrubbed or erased. |
+| D34 | **Turkish phone forms**: before the inbox's normalisation the pool turns a leading `00` into `+`, drops a national `0` after `+90` (`+90 (0) 5…`), cuts an extension (`dahili`, `ext`, `x`, `/`) and refuses a result starting `+0`. A seven-digit `444` number is a hard key `tr444:<digits>`, kept as evidence but not deliverable (no inbox identity, never dialled). | Businesses publish numbers this way; one business must give one key. |
+| D35 | **Retention is evaluated against the current policy**: no purge time is stored; the purge selects rejections by their decision time and unpromoted prospects by their last update under the policy in force, so a shortened retention reaches every existing prospect at the next run (in batches, each its own transaction). The leads policy stores only the keys someone set, so every other key keeps following its default. | Bug class "stale stored aggregate": a stored `purge_after` or a stored copy of every default would not follow a change. |
+| D36 | **Each blocklist entry names its key's fingerprint** (the first 16 hex digits of the workspace key's MAC of a fixed label). A hash cannot be computed again without its value, which is gone, so a master-key change orphans the old entries: the operator counts them per fingerprint before any key change (runbook). | Knowing which key hashed an entry is the only way to tell a live objection from an orphaned one. |
 
 ---
 
@@ -117,13 +132,13 @@ pub struct Prospect {
     pub latest_score: Option<ScoreSummary>,// written only with a score row (§3.4)
     pub decision: Option<Decision>,        // reject/DNC reason, who, when
     pub promoted: Option<Promotion>,       // person_id, journey_id, at, score/bucket at promotion
-    pub purge_after: Option<OffsetDateTime>,
+    pub purge_after: Option<OffsetDateTime>,// never stored: computed from the current policy when answered (D35)
     pub revision: u32,
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
 }
 pub struct ContactFields {
-    pub phone: Option<Field<String>>,      // E.164 after jt_inbox::normalise(Phone)
+    pub phone: Option<Field<String>>,      // E.164 after jt_prospects::normalise_phone (D34), or tr444:<7 digits>
     pub email: Option<Field<String>>,      // jt_inbox::normalise(Email)
     pub website: Option<Field<String>>,    // absolute http(s) URL, <= 2048
     pub instagram: Option<Field<String>>,  // handle, [a-z0-9._]{1,30}
@@ -141,7 +156,7 @@ pub enum SourceRef { Url { url: String /* http(s), <= 2048 */, note: Option<Stri
                      Manual { note: String /* 1..=200, humans only: "business card at a fair" */ },
                      Import { system: String /* "v1" */, record: String } }
 pub enum Recorder { Agent { connection_id: AgentConnectionId, user_id: UserId }, Human { user_id: UserId },
-                    Import { system: String, record: String } }
+                    Import { system: String, record: String }, System { job: String } /* D30 */ }
 pub struct Signal { pub text: String /* 1..=200 */, pub source: SourceRef }
 pub struct SizeHint { pub branches: Option<u16>, pub employees: Option<EmployeeBand>, pub note: Option<String> /* <= 120 */ }
 pub enum EmployeeBand { B1To9, B10To49, B50To249, B250Plus }
@@ -149,8 +164,15 @@ pub struct Origin { pub via: OriginVia /* ResearchTask | Manual | Agent | V1Impo
                     pub recorder: Recorder, pub at: OffsetDateTime }
 ```
 
-- `website` pointing at a platform host (Instagram, Facebook, TikTok, link-in-bio, maps short links; the fixed
-  list `PLATFORM_HOSTS`) is refused with `website_is_a_platform_profile`: the handle field is the place for it.
+- `website` pointing at a platform host (the fixed table `PLATFORM_HOSTS`, each host with its kind, and the
+  providers under many country domains `PLATFORM_NAMES`: `google.*`, `yandex.*`) is refused with the kind's
+  reason: `website_is_a_platform_profile` (Instagram, Facebook, TikTok, X, LinkedIn, YouTube: the handle field
+  is the place for it), `website_is_a_link_in_bio_page` (linktr.ee, …), `website_is_a_messaging_link` (wa.me,
+  t.me, whatsapp.com), `website_is_a_map_listing` (maps.app.goo.gl, g.page, a `google.*`/`yandex.*` `/maps`
+  path or `maps.` host), `website_is_a_marketplace_listing` (trendyol.com, hepsiburada.com, n11.com,
+  ciceksepeti.com, yemeksepeti.com, getir.com, sahibinden.com, armut.com), `website_is_a_short_link` (goo.gl,
+  bit.ly), `website_is_a_shared_host` (sites.google.com, any other `google.*`/`yandex.*` page). An IP address
+  is `website_is_an_ip_address`; a host longer than 253 characters `host_too_long`.
 - Unknown fields in input are refused (`deny_unknown_fields`); stored rows read tolerantly (spec §7, as `jt_inbox`).
 - A field's `deliverable: false` (set when a promoted person's email hard-bounced, or imported from v1's
   `emailBouncedAt`) keeps the value as evidence but excludes it from promotion identities.
@@ -176,33 +198,35 @@ evidence emptied) and writes the blocklist hashes (§3.6).
 
 | Kind | Derived from | Normalisation | Strength |
 |---|---|---|---|
-| `phone` | phone | `jt_inbox::normalise(Phone)` (E.164; TR national forms gain +90) | hard |
+| `phone` | phone | `jt_prospects::normalise_phone` (D34): a leading `00` is `+`, a `0` after `+90` dropped, an extension (`dahili`, `ext`, `x`, `/`) cut, `+0…` refused, then `jt_inbox::normalise(Phone)` (E.164; TR national forms gain +90); a seven-digit `444` number is `tr444:<digits>` | hard |
 | `email` | email | `jt_inbox::normalise(Email)` | hard |
-| `instagram` | instagram, or a website on `instagram.com/<h>` | lowercase, strip `@`, `[a-z0-9._]{1,30}` | hard |
-| `tiktok` | tiktok, or `tiktok.com/@<h>` | lowercase, strip `@`, `[a-z0-9._]{2,24}` | hard |
-| `domain` | website host; email domain unless a free-mail domain (`FREE_MAIL_DOMAINS`: gmail.com, hotmail.com, outlook.com, yahoo.com, yandex.com, icloud.com, …) | lowercase, IDNA to ASCII (the `url` crate), strip one leading `www.`; never platform hosts | soft |
-| `name_city` | business name + city | Turkish-aware fold (İ→i, I→ı, then ç→c ğ→g ı→i ö→o ş→s ü→u), drop punctuation, drop legal-form tokens (`ltd`, `sti`, `şti`, `as`, `a.ş`, `limited`, `sirketi`, `şirketi`, `tic`, `san`, `ve`), collapse spaces; `name|city`; none without a city | soft |
+| `instagram` | instagram, or a website on `instagram.com/<h>` | lowercase, strip `@`, `[a-z0-9._]{1,30}`; a URL only on `instagram.com` or its `www.`/`m.` subdomain (a bare `m.kafe` is a handle), never a reserved first path segment (`p`, `reel`, `reels`, `stories`, `explore`, `tv`, `accounts`: `not_a_profile_url`) | hard |
+| `tiktok` | tiktok, or `tiktok.com/@<h>` | lowercase, strip `@`, `[a-z0-9._]{2,24}`; a URL path must be `@<h>` (`t`, `video`, `tag`, `music`, `discover` and any path without `@` are `not_a_profile_url`) | hard |
+| `domain` | website host; email domain unless a free-mail domain (`FREE_MAIL_DOMAINS`: gmail.com, hotmail.com, outlook.com, yahoo.com, yandex.com, icloud.com, …) | lowercase, IDNA to ASCII (the `url` crate), strip one leading `www.`; never platform hosts (§3.1) or IP addresses | soft |
+| `name_city` | business name + city | Turkish-aware fold (İ→i, I→ı, then ç→c ğ→g ı→i ö→o ş→s ü→u, â→a î→i û→u), drop punctuation, drop legal-form tokens (`ltd`, `sti`, `şti`, `as`, `a.ş`, `limited`, `sirketi`, `şirketi`, `tic`, `san`, `ve`), collapse spaces; `name|city`; none without a city | soft |
 
 The registrable domain (eTLD+1) is **not** computed: it needs the Public Suffix List, an external data set;
 the soft key makes the difference harmless.
 
-On every create and on every update that changes a key, in this order:
+On every create and on every update that changes a key, in this order (only hard keys refuse, D28):
 1. Each hard key against **erased identities** (`erasure::check_identity` for phone/email) → `FORBIDDEN
    {reason: erased_identity}`, and against the **blocklist** (DNC and rejected memory) → `FORBIDDEN {reason:
    do_not_contact}` or `CONFLICT {reason: previously_rejected}`. No other detail is returned.
-2. Phone and email against **active inbox identities** (`people().find_by_identity`) → `CONFLICT {reason:
-   in_inbox, person_id}`: the business is already a relationship; the agent adds a note to that person's
-   journey instead.
+2. Phone (E.164 only: a `tr444:` number is no identity) and email against **active inbox identities**
+   (`people().find_by_identity`) → `CONFLICT {reason: in_inbox, person_id}`: the business is already a
+   relationship; the agent adds a note to that person's journey instead.
 3. Hard keys against **live prospects** (`prospect_keys` unique index) → `CONFLICT {reason: duplicate,
    prospect_id}`.
-4. Soft keys against live prospects → `CONFLICT {reason: possible_duplicate, candidates: [{prospect_id,
-   business_name, city, matched: [domain|name_city]}]}` unless every candidate is listed in `distinct_from`
-   (recorded in the record's origin).
+4. Soft keys against live prospects → **flags, never a refusal**: the answer (`{prospect, flags}`, and
+   `prospects.check`'s `{ok: true, flags}`) lists `{flag: possible_duplicate, candidates: [{prospect_id,
+   business_name, city, status, matched: [domain|name_city]}]}` and, for rejections not purged yet, `{flag:
+   previously_rejected_soft, candidates}`, leaving out every candidate listed in `distinct_from` (recorded in
+   the record's origin).
 
 `jeeta.prospects.check` runs the same checks without writing (the playbook says to call it before researching
 a business deeply). Pool writes take a per-workspace pool lock (`prospects().lock_pool()`, a transaction
 advisory lock); promotion takes the inbox lock (`people().lock_workspace()`) **first**, then the pool lock: one
-lock order everywhere.
+lock order everywhere. The leads policy is read without a lock (D31).
 
 ### 3.4 Score and rubric
 
@@ -219,7 +243,9 @@ pub struct Criterion { pub key: String /* [a-z0-9_]{2,32}, unique */, pub descri
   same rubric share the digest, so their scores stay comparable.
 - **Score write** (`prospects.score`): `{prospect_id, score: 0..=100, reasons: [{criterion, points: 0..=weight,
   evidence: 1..=300 chars, source: SourceRef?}], rubric_digest}`. Rules: `rubric_digest` equals the digest of
-  the approved strategy's rubric, else `CONFLICT {reason: rubric_mismatch, current}`; every criterion appears
+  the approved strategy's rubric, else `CONFLICT {reason: rubric_mismatch, current}` (`CONFLICT {reason:
+  prospecting_off}` while the approved strategy has no ICP entry: an empty ICP is the off switch, §3.7);
+  a source is a URL, or a manual note from a person only (D30); every criterion appears
   exactly once; `score == sum(points)`; scores are append-only rows (`prospect_scores`), and the prospect's
   `latest_score` is written by the same repository call (one writer, one transaction).
 - **Auto-qualify**: a score ≥ `qualify_at` on a `new` prospect applies `Qualify` (actor: system,
@@ -268,22 +294,33 @@ why this business was chosen.
   - `rejected_memory_days = 365`: purging a rejected prospect writes its keys' hashes with `reason = rejected`
     and that expiry;
   - promoted prospects are never purged by the pool: their lifetime is the person's.
-  `purge_after` is recomputed on every status change and update (the use case computes it with
-  `jt_prospects::purge_after` and the repository stores it in the same statement); the daily `prospects_purge`
-  job deletes rows past it (keys and scores with them) and expired rejected-memory hashes. Ledger
-  `prospects.purged {count}` (system), no identifiers.
-- **Erasure** (`prospects.erase {confirm: true}`, `prospects.manage`): deletes the row now and writes DNC
-  hashes for every key (an erasure request implies the business does not want to be re-collected; L-06).
-  `inbox.people.erase` of a promoted person scrubs the linked prospect (all personal fields and evidence
-  emptied, ids kept) and writes DNC hashes of its non-identity keys (domain, handles, name_city); phone and email
-  are covered by the existing erased-identity hashes.
-- **Do-not-contact blocklist** (`prospect_blocklist`): `(workspace_id, kind, key_hash)` with `reason ∈
-  {do_not_contact, erased, rejected}`, `expires_at` (null for the first two). `key_hash` = hex
-  HMAC-SHA256(`seal.hmac_key(ws, "prospects.blocklist")`, `kind ‖ 0x00 ‖ normalised value`). The key derives
-  from the platform master key (same lifetime as sealed credentials). Checked on prospect create/update,
-  promotion and every outreach dispatch (D16). `prospects.do_not_contact` also accepts raw keys without a
-  prospect (an objection that reached a rep by phone). Lifting an entry (`prospects.dnc_lift`) needs a human
-  with `prospects.manage` and the raw value (the hash is recomputed); an agent can never lift one.
+  `purge_after` is **not stored** (D35): the pool answers it computed from the current policy
+  (`jt_prospects::purge_after` over the status, the decision time and `updated_at`), and the daily
+  `prospects_purge` job selects what is due under the policy in force (`jt_prospects::purge_cutoffs`:
+  rejections by `decided_at`, `new`/`qualified` by `updated_at`), so a changed retention reaches every
+  prospect at the next run. It deletes them (keys, scores and the create requests that recorded them with
+  them) in batches of 500, each its own transaction, at most 20 batches a run, then the expired
+  rejected-memory hashes. Ledger `prospects.purged {count}` (system) per batch, no identifiers.
+- **Erasure** (`prospects.erase {confirm: true}`, `prospects.manage`): deletes the row now (scores and request
+  keys with it) and writes erased hashes for every hard key (an erasure request implies the business does not
+  want to be re-collected; L-06). `inbox.people.erase` of a promoted person scrubs the linked prospect (all
+  personal fields and evidence emptied, ids kept) and writes DNC hashes of its **hard** keys only (its
+  Instagram and TikTok handles; phone and email are covered by the existing erased-identity hashes; a domain
+  or a name and city is never hashed, D28). L3-T3 also clears the unlinked prospects holding that person's
+  phone or email, and their request keys.
+- **Do-not-contact blocklist** (`prospect_blocklist`): `(workspace_id, kind, key_hash)` for **hard kinds only**
+  (D28) with `reason ∈ {do_not_contact, erased, rejected}`, `expires_at` (null for the first two) and
+  `key_fingerprint` (D36). `key_hash` = hex HMAC-SHA256(`seal.hmac_key(ws, "prospects.blocklist")`, `kind ‖
+  0x00 ‖ normalised value`). The key derives from the platform master key (same lifetime as sealed
+  credentials); a hash cannot be computed again without its value, so a master-key change orphans the
+  entries of the old key (the runbook counts them per fingerprint first). Checked on prospect create/update,
+  promotion and every outreach dispatch (D16). `prospects.do_not_contact` also accepts raw hard keys without
+  a prospect (an objection that reached a rep by phone): each is hashed, and every live prospect holding one
+  is marked as if named (a promoted one's inbox person is answered, for the objection to be recorded there
+  too). Marking a prospect deletes its score rows (their reasons are evidence about the business; the latest
+  score number stays) and its request keys. Both `do_not_contact` and `erase` run in any workspace status and
+  without an approved strategy (D29). Lifting an entry (`prospects.dnc_lift`) needs a human with
+  `prospects.manage` and the raw value (the hash is recomputed); an agent can never lift one.
 - **Ledger**: `prospects.*` entries carry ids, field names, statuses and reasons, **never values**, so the
   immutable ledger holds nothing a purge or erasure would have to mask.
 
@@ -667,7 +704,8 @@ Each has an English hint naming the tool; the panel's Home renders its own copy 
 ### 3.18 Ledger
 
 `prospects.created | updated {fields} | scored {score, digest} | qualified {auto} | rejected {reason} | reopened |
-promoted | do_not_contact {reason, keys} | dnc_lifted {kind} | erased | purged {count}`;
+promoted | do_not_contact {reason, keys} (and one about the pool for raw keys: {reason, keys, prospects, people}) |
+dnc_lifted {kind} | erased {keys} | purged {count} | settings_set {fields}`;
 `research.task_created | task_claimed | task_closed {outcome}`;
 `distribution.assigned {journey_id, user_id, cause, rule_id} | reassigned | rules_set | rep_set | no_eligible`;
 `outreach.template_saved | template_archived | campaign_saved {revision} | campaign_launched |
@@ -782,6 +820,14 @@ As built (L1-T2): `prospects` also has `latest_scored_at` (the `ScoreSummary.at`
 exactly when `promoted_person_id` is (`prospects_promoted_check`); `research_tasks` is closed exactly when it is
 not open (`research_tasks_closed_check`) and has the list index `research_tasks_list`; the column checks bound
 `sector`, `city`, `district` (1..=80), `country` (`^[A-Z]{2}$`), `language` (2..=8) and `segment_key` (2..=32).
+
+Amended by the L1 review fixes (2026-11-03, before the migration merged): `prospects` has no `purge_after`;
+it has `decided_at timestamptz`, set exactly when the status is `rejected` or `do_not_contact`
+(`prospects_decided_check`), and the purge reads the partial indexes `prospects_purge_rejected (workspace_id,
+decided_at) where status = 'rejected'` and `prospects_purge_unpromoted (workspace_id, updated_at) where status
+in ('new', 'qualified')` (D35). `prospect_blocklist.kind` holds hard kinds only (`phone`, `email`,
+`instagram`, `tiktok`; D28) and every entry has `key_fingerprint text not null check (key_fingerprint ~
+'^[0-9a-f]{16}$')` (D36).
 
 ### 4.2 `0021_distribution`
 
@@ -1334,8 +1380,10 @@ Finding businesses.
 - Discover candidates on public pages: search results, business directories, map listings viewed in a browser,
   the business's own website and its official social profiles.
 - Before researching a business in depth, call jeeta.prospects.check with what you know (name and city, phone,
-  website, handles). Skip it if the answer is duplicate, possible_duplicate, in_inbox, previously_rejected or
-  do_not_contact.
+  website, handles). Skip it if the answer is duplicate, in_inbox, previously_rejected or do_not_contact. A
+  possible_duplicate or previously_rejected_soft flag is not a refusal: it lists prospects with the same website
+  or the same name and city. Look at them; if this is the same business, skip it; if it is a branch or another
+  business, go on and name them in distinct_from.
 - Pace yourself like a person: open pages one at a time; never run bulk or automated extraction against a site;
   respect robots.txt and each site's terms; never log in to see data that is not public.
 
@@ -1345,7 +1393,9 @@ What to record (jeeta.prospects.create).
   segment_key (from the ICP entry), size (branches, employee band), signals (why it fits, each with its source).
 - Contact fields: phone, email, website, instagram, tiktok, address, contact_person. Each field needs at least
   one source URL of a public page where the business itself publishes that value (its website's contact page,
-  its official profile, its listing). Give captured_at: when you saw it.
+  its official profile, its listing). Give captured_at: when you saw it. The website is the business's own
+  site: a social profile goes in instagram or tiktok, and a marketplace store, a map listing, a link-in-bio
+  page or a short link is not a website (use it as a source instead).
 - Never record: a private individual who is not acting as a business; personal social accounts of employees or
   owners; home addresses; personal phone numbers or emails that the business does not publish as its contact;
   data from leaked databases, people-search or data-broker sites; emails you guessed from a pattern (such as
