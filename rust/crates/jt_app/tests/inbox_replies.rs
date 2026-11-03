@@ -650,16 +650,17 @@ async fn recovery_rechecks_the_strategy_of_a_send_queued_by_a_gated_use_case() {
     for use_case in [Some("inbox.send"), None] {
         let (w, id, c) = setup().await;
         let queued = queued(&w, id).await;
-        let mut r = w.uow.tenant(w.ws).await.unwrap();
-        let mut row = r.outbox().get(queued).await.unwrap().unwrap();
-        match use_case {
-            Some(use_case) => row.intent["use_case"] = json!(use_case),
-            None => {
-                row.intent.as_object_mut().unwrap().remove("use_case");
+        // No use case queues a reply-intent send that `inbox.send` recorded, nor one recording
+        // nothing: write the queued row's intent directly.
+        w.uow.edit(|s| {
+            let row = s.inbox.outbox.iter_mut().find(|r| r.id == queued).unwrap();
+            match use_case {
+                Some(use_case) => row.intent["use_case"] = json!(use_case),
+                None => {
+                    row.intent.as_object_mut().unwrap().remove("use_case");
+                }
             }
-        }
-        r.outbox().update(row).await.unwrap();
-        r.commit().await.unwrap();
+        });
         archive_strategy(&w).await;
         c.push_send_text(accepted());
         let report = recover(&w).await;
