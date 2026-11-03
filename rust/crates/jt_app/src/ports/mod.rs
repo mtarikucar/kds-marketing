@@ -1264,6 +1264,9 @@ pub struct OAuthPendingRow {
     /// ([`connectors::OAuthCallback::of_flow`]); for a reconnection the one that issued the
     /// capability's credential.
     pub app: connectors::OAuthCallback,
+    /// The variant of the app's sign-in the flow runs, start to completion
+    /// ([`connectors::OAuthFlow`]); `None` for the app's own sign-in.
+    pub flow: Option<connectors::OAuthFlow>,
     /// The hash of the signed state, unique across every workspace.
     pub state_hash: String,
     /// The user who started it (for an agent, the user who issued its key).
@@ -1290,6 +1293,7 @@ impl std::fmt::Debug for OAuthPendingRow {
             .field("workspace_id", &self.workspace_id)
             .field("provider", &self.provider)
             .field("app", &self.app)
+            .field("flow", &self.flow)
             .field("kind_key", &self.kind_key)
             .field("state_hash", &Masked)
             .field("started_by", &self.started_by)
@@ -1738,6 +1742,16 @@ pub trait PlatformRepos: Send + Sync {
         kind_keys: &[&str],
         external_id: &str,
     ) -> Result<Option<Capability>, AppError>;
+    /// In every workspace holding a number of the WhatsApp Business Account `waba_id`, the
+    /// connected `whatsapp_cloud` capability whose asset names it
+    /// (`connector_public.asset.waba_id`), one per workspace, in workspace id order: where an
+    /// event of the business account itself (Meta's `account_update`, which names no number) is
+    /// routed. Connected, and chosen among a workspace's several, as
+    /// [`PlatformRepos::capability_by_external`] says. Read as [`CapabilityRepo::find`] reads it.
+    async fn capabilities_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Vec<Capability>, AppError>;
     /// Every capability, in every workspace, of one of `kind_keys` that holds the provider account
     /// `external_id` with sealed credentials and is not retired, whatever else its status: all
     /// that a provider-side change of the account's one grant reaches (TikTok's token revocation

@@ -238,6 +238,7 @@ async fn page_and_linked_instagram_keep_trusted_oauth_scope_evidence() {
         &w.owner_ctx,
         connector::StartOAuth {
             kind_key: "facebook_page".into(),
+            flow: None,
         },
     )
     .await

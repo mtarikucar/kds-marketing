@@ -35,9 +35,16 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// `0021_studio_materials`.
 const TABLES_AFTER_ALL: i64 = 81;
 
-/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, and `0021_studio_materials`
-/// (`0019` and `0020` belong to other branches).
-const MIGRATIONS: i64 = 19;
+/// Migrations `0001_foundation` through `0018_tiktok_webhooks`, `0021_studio_materials`,
+/// `0023_oauth_flow` and `0024_whatsapp_erasure`.
+const MIGRATIONS: i64 = 21;
+
+/// The migration versions. `0019`, `0020` and `0022` belong to parallel branches (inbox comments
+/// and marketplace, the prospect pool, the studio materials' posts): each adds its version here
+/// when it merges.
+fn versions() -> Vec<i64> {
+    (1..=18).chain([21, 23, 24]).collect()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -191,6 +198,8 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0024_whatsapp_erasure",
+        "0023_oauth_flow",
         "0021_studio_materials",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
@@ -284,8 +293,8 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    // `0019` and `0020` belong to other branches (open PRs #392, #393).
-    assert_eq!(versions, (1..=18).chain([21]).collect::<Vec<_>>());
+    assert_eq!(versions, self::versions());
+    assert_eq!(versions.len() as i64, MIGRATIONS);
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -454,6 +463,234 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
             role_permissions(&db.pool, custom_manager).await,
             ["workspace.read", "capabilities.manage"]
         );
+    }
+}
+
+/// `0023_oauth_flow` keeps a flow's sign-in variant: its up and its down are repeatable, the check
+/// takes only a known variant (or none), and its down forgets the flows that ran a variant (each
+/// would otherwise be completed as the app's own sign-in) and keeps the others.
+#[tokio::test]
+async fn oauth_flow_migration_is_repeatable_and_its_down_drops_the_variant_flows() {
+    let db = TestDb::new().await; // already migrated up, 0023 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0023_oauth_flow.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0023_oauth_flow.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let (ws, owner) = db.seed_workspace("oauth-flow").await;
+    let insert = |flow: Option<&'static str>| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,flow,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,'meta','whatsapp_cloud','meta',$3,$4,$5,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(flow)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let flows = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from oauth_pending")
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            n
+        }
+    };
+
+    for _ in 0..2 {
+        run(&up).await;
+    }
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    assert_eq!(insert(None).await, None);
+    assert_eq!(insert(Some("whatsapp_business_app")).await, None);
+    assert_eq!(insert(Some("another")).await.as_deref(), Some("23514"));
+    assert_eq!(flows().await, 2);
+
+    for _ in 0..2 {
+        run(&down).await;
+        assert!(!column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    }
+    // The variant's flow went with the column; the app's own sign-in stays.
+    assert_eq!(flows().await, 1);
+    run(&up).await;
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+}
+
+/// `0023_oauth_flow` is the WhatsApp Business app coexistence's migration, and the code before it
+/// cannot read what the feature leaves: once a message the business wrote from the app, or a
+/// capability's sharing of the app's data, is stored, its down is refused and changes nothing.
+#[tokio::test]
+async fn oauth_flow_down_is_refused_once_the_business_app_left_data() {
+    use jt_app::ports::UnitOfWork;
+    let down = std::fs::read_to_string(migrations_dir().join("0023_oauth_flow.down.sql")).unwrap();
+    for case in ["message", "capability"] {
+        let db = TestDb::new().await;
+        let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+        let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+        let cap = f.capability().await;
+        let person = f.insert_person("App").await;
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        if case == "message" {
+            let c = t
+                .conversations()
+                .upsert_on_inbound(f.conversation(person.id, cap))
+                .await
+                .unwrap();
+            let mut m = f.message(c.id);
+            m.direction = jt_inbox::Direction::Outbound;
+            m.author = jt_inbox::Author::BusinessApp;
+            t.messages().insert_if_new(m).await.unwrap();
+        } else {
+            let mut c = t.capabilities().find(cap).await.unwrap().unwrap();
+            c.connector_public =
+                serde_json::json!({ "business_app": { "contacts": { "state": "due" } } });
+            t.capabilities().update(c).await.unwrap();
+        }
+        t.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("oauth flow rollback refused"),
+            "{case}: {refused}"
+        );
+        assert!(
+            column_exists(&db.pool, ("oauth_pending", "flow")).await,
+            "{case}"
+        );
+    }
+}
+
+/// `0024_whatsapp_erasure` lets erasure find a person in the WhatsApp Business app's events:
+/// its up and its down are repeatable, and its down is refused, changing nothing, once such an
+/// event is stored (events are never deleted, and the older functions could not find the person
+/// in it).
+#[tokio::test]
+async fn whatsapp_erasure_migration_is_repeatable_and_its_down_refuses_stored_app_events() {
+    let db = TestDb::new().await; // already migrated up, 0024 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await }
+    };
+    // Whether the erasure functions are this migration's: the mask takes a thread.
+    let current = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "select inbox_mask_personal('{\"thread\":\"905321234567\"}')",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+                == serde_json::json!({ "thread": "" })
+        }
+    };
+    let (ws, _) = db.seed_workspace("whatsapp-erasure").await;
+    let insert = |kind: &'static str, payload: serde_json::Value| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query(
+                "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)                  values($1,$2,'meta',$3,$4,$5,now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(Uuid::now_v7().to_string())
+            .bind(kind)
+            .bind(payload)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+
+    assert!(current().await);
+    // A Messenger echo is not the app's: the down still runs, twice over, and the up again.
+    insert(
+        "message_echo",
+        serde_json::json!({ "messaging": { "mid": "m" } }),
+    )
+    .await;
+    for _ in 0..2 {
+        run(&down).await.unwrap();
+        assert!(!current().await);
+    }
+    for _ in 0..2 {
+        run(&up).await.unwrap();
+        assert!(current().await);
+    }
+    // Each of the app's events refuses the down, which then changes nothing.
+    for (kind, payload) in [
+        ("history", serde_json::json!({ "thread": "905321234567" })),
+        ("contact_sync", serde_json::json!({ "state_sync": {} })),
+        (
+            "message_echo",
+            serde_json::json!({ "echo": { "to": "905321234567" } }),
+        ),
+    ] {
+        let fresh = TestDb::new().await;
+        let (ws, _) = fresh.seed_workspace("app-event").await;
+        let mut tx = TenantTx::begin(&fresh.pool, ws).await.unwrap();
+        sqlx::query(
+            "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)              values($1,$2,'meta','app-event',$3,$4,now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(ws.as_uuid())
+        .bind(kind)
+        .bind(payload)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&fresh.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("whatsapp erasure rollback refused"),
+            "{kind}: {refused}"
+        );
+        let still: serde_json::Value =
+            sqlx::query_scalar("select inbox_mask_personal('{\"thread\":\"x\"}')")
+                .fetch_one(&fresh.pool)
+                .await
+                .unwrap();
+        assert_eq!(still, serde_json::json!({ "thread": "" }), "{kind}");
     }
 }
 

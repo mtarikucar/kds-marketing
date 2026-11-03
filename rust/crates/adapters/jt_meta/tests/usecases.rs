@@ -145,6 +145,7 @@ async fn meta_error_text_echoing_the_token_never_reaches_use_case_outputs() {
         &ctx,
         StartOAuth {
             kind_key: "facebook_page".into(),
+            flow: None,
         },
     )
     .await
@@ -302,6 +303,7 @@ async fn connect_page_granting(scopes: &[&str]) -> (Mock, Vec<Capability>) {
         &ctx,
         StartOAuth {
             kind_key: "facebook_page".into(),
+            flow: None,
         },
     )
     .await

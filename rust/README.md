@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. On dokuz göç vardır (`0019` ve `0020` başka dallardadır):
+döndürür. Yirmi bir göç vardır (`0019`, `0020` ve `0022` başka dallardadır):
 
 | Göç | Ne yapar |
 |---|---|
@@ -106,6 +106,8 @@ döndürür. On dokuz göç vardır (`0019` ve `0020` başka dallardadır):
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
 | `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 81 tables. Down refuses while olays, materials, requests, calendar rows or a policy are stored. |
+| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0019` to `0022` belong to parallel branches. |
+| `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -963,6 +965,7 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
 | `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
 | `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
+| `whatsapp_app_sync` | 5 dakika | WhatsApp Business uygulamasının yanında bağlanan her numara için (`connector_public.business_app`), active ve pending_payment alanlarda, uygulamanın kişilerini sonra sohbet geçmişini Meta'dan bir kez ister (`POST /{phone_number_id}/smb_app_data`), bağlanmadan sonraki 24 saat içinde. Her istek bir karşılaştır-ve-değiştir adımıdır: `requesting` işlenir, sağlayıcı işlem açıkken çağrılmaz; yanıt `requested` (istek kimliğiyle) ya da `refused` (nedeniyle) yazılır, meşgul ya da ulaşılamayan sağlayıcı bir sonraki çalışmada yeniden sorulur, kaybolmuş bir yanıt (`unknown`) asla yeniden sorulmaz, süresi dolan `expired` olur (doğrulanmamış bir kabiliyet sorulmaz, süresi yine dolar). Her yerleşen adım `connector.app_sync` yazar | `jeeta.jobs.whatsapp_app_sync` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
