@@ -19,9 +19,9 @@ create table if not exists studio_olays (
     occasion text check (occasion is null or occasion ~ '^[a-z0-9_]{1,40}$'),
     revision bigint not null check (revision > 0),
     primary key (workspace_id, id),
-    constraint studio_olays_dates_check check (starts_on <= ends_on and ends_on - starts_on < 366),
+    constraint studio_olays_dates_rule check (starts_on <= ends_on and ends_on - starts_on < 366),
     -- A season or special day names its calendar occasion; no other kind does.
-    constraint studio_olays_occasion_check
+    constraint studio_olays_occasion_rule
         check ((occasion is not null) = (kind in ('season', 'special_day')))
 );
 create index if not exists studio_olays_dates on studio_olays (workspace_id, starts_on);
@@ -47,11 +47,11 @@ create table if not exists studio_materials (
         references studio_files (workspace_id, id),
     constraint studio_materials_olay_fkey foreign key (workspace_id, olay_id)
         references studio_olays (workspace_id, id),
-    constraint studio_materials_binding_check check ((binding = 'olay') = (olay_id is not null)),
-    constraint studio_materials_generator_check
+    constraint studio_materials_binding_rule check ((binding = 'olay') = (olay_id is not null)),
+    constraint studio_materials_generator_rule
         check ((origin = 'ai_generated') = (generator is not null)),
     -- A real genel material is one a human freed.
-    constraint studio_materials_genel_check
+    constraint studio_materials_genel_rule
         check (binding <> 'genel' or origin = 'ai_generated' or freed_at is not null)
 );
 create index if not exists studio_materials_olay on studio_materials (workspace_id, olay_id);
@@ -115,7 +115,7 @@ create table if not exists studio_calendar_entries (
     lead_days int check (lead_days is null or lead_days between 0 and 90),
     enabled boolean not null,
     primary key (workspace_id, key, year),
-    constraint studio_calendar_entries_window_check check (
+    constraint studio_calendar_entries_window_rule check (
         (window_start is null) = (window_end is null)
         and (window_start is null or (window_start <= window_end and window_end - window_start < 120))
     )
