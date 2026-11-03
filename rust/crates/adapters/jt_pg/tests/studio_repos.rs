@@ -124,6 +124,9 @@ async fn accepted_publish_response_lost_never_blindly_retries() {
 
 const UP: &str = include_str!("../../../../migrations/0009_studio.up.sql");
 const DOWN: &str = include_str!("../../../../migrations/0009_studio.down.sql");
+/// The materials library references the Studio tables: reverted before 0009, applied after it.
+const MATERIALS_UP: &str = include_str!("../../../../migrations/0021_studio_materials.up.sql");
+const MATERIALS_DOWN: &str = include_str!("../../../../migrations/0021_studio_materials.down.sql");
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -220,6 +223,10 @@ async fn roles(pool: &sqlx::PgPool, ws: jt_tenancy::WorkspaceId) -> Vec<(String,
 #[tokio::test]
 async fn studio_role_backfill_new_workspace_parity() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(MATERIALS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (old, _) = db.seed_workspace("old-studio").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -227,6 +234,7 @@ async fn studio_role_backfill_new_workspace_parity() {
     tx.commit().await.unwrap();
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
     let (new, _) = db.seed_workspace("new-studio").await;
     assert_eq!(roles(&db.pool, old).await, roles(&db.pool, new).await);
     for (key, perms) in roles(&db.pool, old).await {
@@ -238,6 +246,10 @@ async fn studio_role_backfill_new_workspace_parity() {
 #[tokio::test]
 async fn studio_backfill_down_preserves_existing_grants() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(MATERIALS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (ws, _) = db.seed_workspace("grants").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -262,6 +274,7 @@ async fn studio_backfill_down_preserves_existing_grants() {
     assert_eq!(name, "sentinel");
     drop(tx);
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
     for (key, p) in roles(&db.pool, ws).await {
         if key != "rep" {
             assert!(p.contains(&"studio.work".into()) && p.contains(&"studio.manage".into()));

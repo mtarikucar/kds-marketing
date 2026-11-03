@@ -284,7 +284,8 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=MIGRATIONS).collect::<Vec<_>>());
+    // `0019` and `0020` belong to other branches (open PRs #392, #393).
+    assert_eq!(versions, (1..=18).chain([21]).collect::<Vec<_>>());
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -699,7 +700,14 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
-    // Newest first: the call tables reference the inbox tables.
+    // Newest first: the call tables reference the inbox tables, the materials library the Studio
+    // tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_studio_materials.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
@@ -840,6 +848,13 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    // Newest first: the materials library references the Studio tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_studio_materials.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0018_tiktok_webhooks.down.sql"
     ))
@@ -907,13 +922,16 @@ async fn studio_migration_up_down_up() {
     let (ws, _) = db.seed_workspace("studio-roundtrip").await;
     let up = include_str!("../../../../migrations/0009_studio.up.sql");
     let down = include_str!("../../../../migrations/0009_studio.down.sql");
+    // The materials library references the Studio tables: reverted first, applied again last.
+    let materials_up = include_str!("../../../../migrations/0021_studio_materials.up.sql");
+    let materials_down = include_str!("../../../../migrations/0021_studio_materials.down.sql");
     let id = Uuid::now_v7();
     let h = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
-    for sql in [up, down, down, up, up] {
+    for sql in [materials_down, up, down, down, up, up, materials_up] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
