@@ -1595,3 +1595,149 @@ async fn the_dial_carries_the_policys_lines_its_phrases_and_the_hotwords() {
     );
     assert_eq!(script["hotwords"], json!(["Ada", "perşembe", "Acme"]));
 }
+
+#[tokio::test]
+async fn a_bridge_filler_is_logged_with_the_dialled_text_and_the_core_plays_no_holding_over_it() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "filler", "index": 0 }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    let last = shown.turns.last().unwrap();
+    assert_eq!(last.kind, jt_calls::TurnKind::Holding);
+    assert_eq!(last.text, "Bir saniye, hemen bakıyorum.");
+    r.timers(14).await;
+    assert!(r.poll(14).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_phrase_is_logged_with_the_text_dialled_even_after_the_owner_edits_the_policy() {
+    let dialled = jt_calls::BridgePhrases {
+        fillers: vec!["Hemen bakıyorum.".into()],
+        ..jt_calls::BridgePhrases::default()
+    };
+    let r = rig_with(
+        1,
+        CallPolicy {
+            phrases: dialled,
+            ..policy()
+        },
+    )
+    .await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    // The owner rewrites the fillers while the call is live.
+    let mut edited = policy();
+    edited.phrases.fillers = vec!["Biraz bekleyin.".into()];
+    calls::policy_set(&r.w.deps, &r.w.owner_ctx, PolicyInput::from(edited))
+        .await
+        .unwrap();
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "filler", "index": 0 }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    // The caller heard the dialled filler; the log says so.
+    assert_eq!(shown.turns.last().unwrap().text, "Hemen bakıyorum.");
+}
+
+#[tokio::test]
+async fn a_turns_trace_is_kept_and_summarised_in_the_call_view() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.report(
+        20,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "endpoint_by": "smart_turn", "stt_final_ms": 310, "delivered_ms": 340,
+            "say_ms": 4340, "first_audio_ms": 4760, "ack_ms": 620 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    assert_eq!(shown.call["metrics"]["traces"].as_array().unwrap().len(), 1);
+    assert_eq!(shown.call["latency"]["perceived"]["p50"], 620);
+    assert_eq!(shown.call["latency"]["content"]["p95"], 4760);
+    assert_eq!(
+        shown.call["latency"]["alerts"],
+        json!(["content_p95_over_3s"])
+    );
+    // No agent sentence was ever said, so nothing pairs.
+    assert_eq!(shown.call["latency"]["transport"]["n"], 0);
+}
+
+#[tokio::test]
+async fn the_transport_overhead_pairs_a_trace_with_its_reply_by_seq() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.say_at(12, call, "Uygun.").await;
+    let seq = r.shown(call).await.turns.last().unwrap().seq;
+    // The bridge's trace names the say it timed: 2.06 s from the answered POST to the say.
+    r.report(
+        14,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "stt_final_ms": 310, "delivered_ms": 340, "say_ms": 2400, "reply_seq": seq } }]),
+    )
+    .await;
+    // A last turn nobody answered: a trace with no reply, which pairs with nothing.
+    r.report(
+        16,
+        call,
+        json!([{ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300, "delivered_ms": 320 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    let latency = shown.call["metrics"]["agent_latency_ms"][0]
+        .as_u64()
+        .unwrap();
+    assert_eq!(shown.call["metrics"]["agent_replies"][0]["seq"], seq);
+    assert_eq!(shown.call["latency"]["turns"], 2);
+    assert_eq!(shown.call["latency"]["transport"]["n"], 1);
+    assert_eq!(shown.call["latency"]["transport"]["p95"], 2_060 - latency);
+}
+
+#[tokio::test]
+async fn a_calls_view_carries_neither_its_clock_nor_its_dialled_phrases() {
+    // The phrases are the reducer's source for the turn log (about ten sentences a call), not
+    // something `calls.get` or `calls.list` should repeat on every call.
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.report(
+        20,
+        call,
+        json!([{ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300, "ack_ms": 600 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    for key in ["clock", "phrases"] {
+        assert!(shown.call.get(key).is_none(), "calls.get shows {key}");
+    }
+    let listed = calls::list(&r.w.deps, &r.agent_at(25), calls::ListQuery::default())
+        .await
+        .unwrap();
+    assert!(!listed.is_empty());
+    for item in &listed {
+        for key in ["clock", "phrases"] {
+            assert!(item.get(key).is_none(), "calls.list shows {key}");
+        }
+        // A list needs the summary, not a call's up to 200 traces; `calls.get` keeps them.
+        assert!(
+            item["metrics"].get("traces").is_none(),
+            "calls.list shows metrics.traces"
+        );
+        assert_eq!(item["latency"]["perceived"]["p50"], 600);
+    }
+}

@@ -237,19 +237,40 @@ impl<'de> Deserialize<'de> for PolicyInput {
     }
 }
 
-/// The call as an output shows it (see [`CallOut`]).
+/// The call as an output shows it (see [`CallOut`]): without its timers' clock and the phrases
+/// dialled with it (the turn log's source, about ten sentences a call), with its turns' latency
+/// summed up (`latency`: p50/p95 per measure, the transport overhead and the alerts).
 fn view(session: &CallSession, reveal: bool) -> Value {
     let mut value = serde_json::to_value(session).unwrap_or_else(|_| json!({}));
     if let Some(fields) = value.as_object_mut() {
         fields.remove("clock");
+        fields.remove("phrases");
         fields.remove("counterpart_e164");
         fields.insert(
             "counterpart".into(),
             json!(mask_e164(&session.counterpart_e164)),
         );
+        fields.insert(
+            "latency".into(),
+            json!(jt_calls::summarize(
+                &session.metrics.traces,
+                &session.metrics.agent_latency_ms,
+                &session.metrics.agent_replies,
+            )),
+        );
         if reveal {
             fields.insert("counterpart_e164".into(), json!(session.counterpart_e164));
         }
+    }
+    value
+}
+
+/// A call as `calls.list` shows it: its [`view`], numbers masked, without the turn traces (up to
+/// 200 a call), which its `latency` sums up; `calls.get` keeps them.
+fn listed(session: &CallSession) -> Value {
+    let mut value = view(session, false);
+    if let Some(metrics) = value.get_mut("metrics").and_then(Value::as_object_mut) {
+        metrics.remove("traces");
     }
     value
 }
@@ -1250,7 +1271,7 @@ pub async fn list(deps: &Deps, ctx: &Ctx, query: ListQuery) -> Result<Vec<Value>
             limit: query.limit.unwrap_or(50).clamp(1, MAX_CALL_PAGE),
         })
         .await?;
-    Ok(calls.iter().map(|s| view(s, false)).collect())
+    Ok(calls.iter().map(listed).collect())
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -12734,6 +12734,12 @@ git add rust/crates/jt_app
 git commit -m "feat(calls): a call's turn traces and their p50/p95 in its view" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**C3 as built (2026-11-03).** The steps ran test first: `a_turns_trace…`, `the_transport…` and `a_calls_view…` were seen failing (`latency` null; the view carrying `phrases`), and the two filler tests passed already (A5 and C2), as the plan says. What differs:
+- **`calls.list` items leave `metrics.traces` out** (the plan's "consider"): `list` builds its items with `listed`, which is `view` without `metrics.traces`; `calls.get` (and every other `CallOut`) keeps them. `a_calls_view…` therefore answers the call and reports one trace first, and also asserts that each listed item has no `metrics.traces` and does have `latency` (`perceived.p50` 600 from that trace).
+- `view`'s doc names what it strips (the clock, the dialled phrases) and the `latency` it adds.
+- The optional follow-ups (`CallMetrics.phrase_mismatches`; `Phrase { set: NotHeard }` restarting the caller-silence clock) are not done: they stay open for D2 or a later bridge task.
+- Checks on Windows (`jt_pg`'s two unix-only lines removed locally, never committed): `jt_app` `calls_session` 28, `calls_place` 13, `calls_bridge` 9, `calls_end` 2, `calls_policy` 3; `jt_mcp` `calls_mcp` 5. Clippy `-D warnings` (jt_app lib with `tokio/time` and `calls_session`) and `cargo fmt --all -- --check` are clean.
+
 ### Task C4: `calls.say` may wait for the reply (say and listen merged, backward compatible)
 
 **Files:**
