@@ -7,7 +7,7 @@
 //! Meta's page
 //! <https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>
 //! says each of the two may be asked for once, within 24 hours of the onboarding. So the state
-//! is started over when the coexistence flow's asset is confirmed ([`onboarded`]: a new
+//! is started over when the coexistence flow's asset is confirmed (`onboarded`: a new
 //! onboarding, a new window), and each request then moves once, by the scheduled job
 //! (`super::jobs::run_whatsapp_app_sync`), through:
 //!
