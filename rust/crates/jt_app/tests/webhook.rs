@@ -1307,6 +1307,44 @@ async fn a_business_account_event_routes_to_the_number_whose_asset_names_it() {
     assert!(events_of(&w, w.ws).is_empty());
 }
 
+/// A business account's event reaches every workspace holding a number of that account: stored
+/// once in each, with the number found there.
+#[tokio::test]
+async fn a_business_account_event_reaches_every_workspace_holding_the_account() {
+    let w = world().await;
+    let (beta, _) = w.other_workspace().await;
+    activate_workspace(&w.deps, beta).await;
+    let ours = connected(&w, w.ws, "whatsapp_cloud", "5555555555").await;
+    let theirs = connected(&w, beta, "whatsapp_cloud", "5555555556").await;
+    for (ws, id) in [(w.ws, ours), (beta, theirs)] {
+        let mut t = w.uow.tenant(ws).await.unwrap();
+        let mut c = t.capabilities().find(id).await.unwrap().unwrap();
+        c.connector_public = json!({ "asset": { "waba_id": "4444444444" } });
+        t.capabilities().update(c).await.unwrap();
+        t.commit().await.unwrap();
+    }
+    let body = b"{\"object\":\"whatsapp_business_account\"}";
+    let out = webhook::receive_for_accounts(
+        &w.deps,
+        Provider::Meta,
+        vec![AccountEvent {
+            kind_keys: WHATSAPP,
+            external_account_id: "4444444444".into(),
+            route: AccountRoute::WhatsappBusinessAccount,
+            draft: draft("account-update:4444444444", EventKind::AccountUpdate),
+        }],
+        &whole(body),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out[0], Delivery::Stored(_)), "{out:?}");
+    for (ws, id) in [(w.ws, ours), (beta, theirs)] {
+        let events = events_of(&w, ws);
+        assert_eq!(events.len(), 1, "{ws:?}");
+        assert_eq!(events[0].capability_id, Some(id));
+    }
+}
+
 /// The past and what the business sent from the app are stored processed: they never wait in
 /// `events.pending`. A live message, and Messenger's echoes, still do.
 #[tokio::test]

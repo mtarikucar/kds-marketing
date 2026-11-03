@@ -1,7 +1,7 @@
 //! The platform-wide bundle: operators, their sessions, every workspace and lookups by secret
 //! hash.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -16,7 +16,7 @@ use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
 use jt_tenancy::{OperatorId, UserId};
 use time::OffsetDateTime;
 
-use super::state::{MemBundle, MemState, MemTx, exists, unique};
+use super::state::{MemBundle, MemState, MemTx, StoredCapability, exists, unique};
 
 /// A platform-wide bundle.
 pub(super) struct MemPlatform {
@@ -365,27 +365,34 @@ impl PlatformRepos for MemPlatform {
             .map(|s| state.capability_view(s)))
     }
 
-    async fn capability_by_business_account(
+    async fn capabilities_by_business_account(
         &mut self,
         waba_id: &str,
-    ) -> Result<Option<Capability>, AppError> {
+    ) -> Result<Vec<Capability>, AppError> {
         let state = self.state();
-        Ok(state
-            .capabilities
-            .iter()
-            .filter(|s| {
-                let c = &s.capability;
-                matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
-                    && s.sealed.is_some()
-                    && c.last_verified_at.is_some()
-                    && c.kind_key == "whatsapp_cloud"
-                    && c.connector_public["asset"]["waba_id"].as_str() == Some(waba_id)
-            })
-            .max_by_key(|s| {
-                let c = &s.capability;
-                (c.status == StoredStatus::Verified, c.created_at, c.id)
-            })
-            .map(|s| state.capability_view(s)))
+        // A workspace's chosen holder: a verified one first, then the newest.
+        let rank = |s: &StoredCapability| {
+            let c = &s.capability;
+            (c.status == StoredStatus::Verified, c.created_at, c.id)
+        };
+        let mut chosen: BTreeMap<WorkspaceId, &StoredCapability> = BTreeMap::new();
+        for s in state.capabilities.iter().filter(|s| {
+            let c = &s.capability;
+            matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
+                && s.sealed.is_some()
+                && c.last_verified_at.is_some()
+                && c.kind_key == "whatsapp_cloud"
+                && c.connector_public["asset"]["waba_id"].as_str() == Some(waba_id)
+        }) {
+            let ws = s.capability.workspace_id;
+            if chosen.get(&ws).is_none_or(|best| rank(s) > rank(best)) {
+                chosen.insert(ws, s);
+            }
+        }
+        Ok(chosen
+            .into_values()
+            .map(|s| state.capability_view(s))
+            .collect())
     }
 
     async fn capabilities_holding(

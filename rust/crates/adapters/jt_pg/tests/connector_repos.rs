@@ -1443,6 +1443,50 @@ async fn capability_by_external_finds_live_capability_across_workspaces() {
     assert_eq!(routed(&uow, meta, "page-3").await, Some(second.id));
 }
 
+/// The connected `whatsapp_cloud` capabilities whose asset names a WhatsApp Business Account, one
+/// per workspace (a verified one first, then the newest), in workspace id order: where the
+/// account's own events (`account_update`) go.
+#[tokio::test]
+async fn capabilities_by_business_account_answer_one_per_workspace() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("waba-a").await;
+    let (b, _) = db.seed_workspace("waba-b").await;
+    let (c, _) = db.seed_workspace("waba-c").await;
+    let named = |ws: WorkspaceId, waba: &str, number: &str, at: OffsetDateTime| Capability {
+        connector_public: json!({ "asset": { "waba_id": waba } }),
+        ..capability(ws, "whatsapp_cloud", number, at)
+    };
+    // In `a`, two numbers of the account: the verified one answers over the newer unreachable.
+    let a_verified = named(a, "4444444444", "5555555551", T0);
+    let a_lapsed = named(a, "4444444444", "5555555552", T0 + Duration::days(1));
+    connect(&uow, &a_verified, true).await;
+    connect(&uow, &a_lapsed, true).await;
+    set_status(&uow, &a_lapsed, StoredStatus::Unreachable).await;
+    // In `b`, one number of it; in `c`, one that never proved control (declared only).
+    let b_number = named(b, "4444444444", "5555555553", T0);
+    connect(&uow, &b_number, true).await;
+    insert_capability(&uow, &named(c, "4444444444", "5555555554", T0)).await;
+    // Another account's number.
+    connect(&uow, &named(a, "4444444445", "5555555555", T0), true).await;
+    let found = |waba: &'static str| {
+        let uow = uow.clone();
+        async move {
+            let mut p = uow.platform().await.unwrap();
+            p.capabilities_by_business_account(waba)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|c| (c.workspace_id, c.id))
+                .collect::<Vec<_>>()
+        }
+    };
+    let mut expected = vec![(a, a_verified.id), (b, b_number.id)];
+    expected.sort();
+    assert_eq!(found("4444444444").await, expected);
+    assert!(found("4444444449").await.is_empty());
+}
+
 /// Every live holder of an account with sealed credentials, across workspaces, whatever its
 /// status: what one provider-side change of the account's grant reaches.
 #[tokio::test]

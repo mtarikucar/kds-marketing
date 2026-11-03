@@ -151,26 +151,29 @@ pub(crate) async fn by_external(
     record.map(CapabilityRecord::into_capability).transpose()
 }
 
-/// The connected `whatsapp_cloud` capability whose asset names the WhatsApp Business Account
-/// `waba_id`, across workspaces (see `PlatformRepos::capability_by_business_account`).
+/// In every workspace, the connected `whatsapp_cloud` capability whose asset names the WhatsApp
+/// Business Account `waba_id` (see `PlatformRepos::capabilities_by_business_account`).
 pub(crate) async fn by_business_account(
     tx: &mut PlatformTx<'_>,
     waba_id: &str,
-) -> Result<Option<Capability>, AppError> {
-    let record: Option<CapabilityRecord> = sqlx::query_as(&format!(
+) -> Result<Vec<Capability>, AppError> {
+    let records: Vec<CapabilityRecord> = sqlx::query_as(&format!(
         // archtest: platform-wide
-        "select {COLUMNS} from capabilities c \
+        "select distinct on (c.workspace_id) {COLUMNS} from capabilities c \
          where c.kind_key = 'whatsapp_cloud' \
          and c.connector_public -> 'asset' ->> 'waba_id' = $1 \
          and c.status in ('verified', 'unreachable') and c.connector_sealed is not null \
          and c.last_verified_at is not null \
-         order by (c.status = 'verified') desc, c.created_at desc, c.id desc limit 1"
+         order by c.workspace_id, (c.status = 'verified') desc, c.created_at desc, c.id desc"
     ))
     .bind(waba_id)
-    .fetch_optional(tx.conn())
+    .fetch_all(tx.conn())
     .await
-    .map_err(|e| map_sqlx(e, "find capability by business account"))?;
-    record.map(CapabilityRecord::into_capability).transpose()
+    .map_err(|e| map_sqlx(e, "find capabilities by business account"))?;
+    records
+        .into_iter()
+        .map(CapabilityRecord::into_capability)
+        .collect()
 }
 
 /// Every live capability holding `external_id` under one of `kind_keys`, with sealed

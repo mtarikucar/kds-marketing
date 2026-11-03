@@ -1739,15 +1739,16 @@ pub trait PlatformRepos: Send + Sync {
         kind_keys: &[&str],
         external_id: &str,
     ) -> Result<Option<Capability>, AppError>;
-    /// The connected `whatsapp_cloud` capability, in whichever workspace it belongs to, whose
-    /// asset names the WhatsApp Business Account `waba_id` (`connector_public.asset.waba_id`):
-    /// where an event of the business account itself (Meta's `account_update`, which names no
-    /// number) is routed. Connected, and chosen among several, as
+    /// In every workspace holding a number of the WhatsApp Business Account `waba_id`, the
+    /// connected `whatsapp_cloud` capability whose asset names it
+    /// (`connector_public.asset.waba_id`), one per workspace, in workspace id order: where an
+    /// event of the business account itself (Meta's `account_update`, which names no number) is
+    /// routed. Connected, and chosen among a workspace's several, as
     /// [`PlatformRepos::capability_by_external`] says. Read as [`CapabilityRepo::find`] reads it.
-    async fn capability_by_business_account(
+    async fn capabilities_by_business_account(
         &mut self,
         waba_id: &str,
-    ) -> Result<Option<Capability>, AppError>;
+    ) -> Result<Vec<Capability>, AppError>;
     /// Every capability, in every workspace, of one of `kind_keys` that holds the provider account
     /// `external_id` with sealed credentials and is not retired, whatever else its status: all
     /// that a provider-side change of the account's one grant reaches (TikTok's token revocation

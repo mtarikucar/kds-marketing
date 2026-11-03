@@ -542,10 +542,10 @@ impl PlatformRepos for PgPlatformRepos {
         capabilities::by_external(&mut self.tx, kind_keys, external_id).await
     }
 
-    async fn capability_by_business_account(
+    async fn capabilities_by_business_account(
         &mut self,
         waba_id: &str,
-    ) -> Result<Option<Capability>, AppError> {
+    ) -> Result<Vec<Capability>, AppError> {
         capabilities::by_business_account(&mut self.tx, waba_id).await
     }
 

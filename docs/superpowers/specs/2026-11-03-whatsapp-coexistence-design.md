@@ -106,10 +106,10 @@ included) is shown on the capability.
 
 **D8. Routing.** `smb_message_echoes`, `history` and `smb_app_state_sync` route by
 `metadata.phone_number_id`, as `messages` do. `account_update` names only the WABA: it is routed
-as a number's event is (one connected capability, a verified one first, then the newest), to the
-connected `whatsapp_cloud` capability whose `connector_public.asset.waba_id` is that WABA, and
-stored once in that capability's workspace. The inbox consumer takes its effect there, on every
-live `whatsapp_cloud` capability of the workspace naming that WABA: `PARTNER_REMOVED` and
+to every workspace holding a connected `whatsapp_cloud` capability whose
+`connector_public.asset.waba_id` is that WABA (D19), and stored once in each, with that
+workspace's capability (a verified one first, then the newest). The inbox consumer takes its
+effect in each, on every live `whatsapp_cloud` capability of the workspace naming that WABA: `PARTNER_REMOVED` and
 `ACCOUNT_OFFBOARDED` turn each `unreachable` with `reconnect_required` and the reason
 (`disconnection_info.reason`), as TikTok's `authorization.removed` does (left alone when the
 capability was verified after the event); every other `account_update` event is stored for the
@@ -179,6 +179,10 @@ is put to them after the owner replied (found by their `wamid` among the convers
 false`) is registered, however it was connected; the coexistence flow's tag decides only when
 Graph does not tell. Discovery leaves such a number untagged (`onboarding: null`), so it starts
 no sharing and reconnects through the plain sign-in.
+
+**D19. A business account's event reaches every workspace holding it.** One WABA's numbers may be
+connected in more than one workspace (an agency and its customer); a disconnection concerns all
+of them, so `account_update` is stored in each such workspace, not only in one.
 
 ## Open questions
 
