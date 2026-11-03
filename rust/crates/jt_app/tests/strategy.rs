@@ -135,6 +135,9 @@ impl TenantRepos for SpyTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self.inner.studio_materials()
+    }
     fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
         self.inner.calls()
     }

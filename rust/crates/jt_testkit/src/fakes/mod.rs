@@ -84,6 +84,9 @@ mod erasure;
 mod studio;
 pub use studio::MemStudio;
 
+mod materials;
+pub use materials::MemMaterials;
+
 pub mod files;
 
 mod billing;

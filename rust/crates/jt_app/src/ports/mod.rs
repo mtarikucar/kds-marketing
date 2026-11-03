@@ -29,6 +29,7 @@ pub mod connectors;
 pub mod devices;
 pub mod files;
 pub mod inbox;
+pub mod materials;
 pub mod studio;
 use inbox::*;
 
@@ -1519,6 +1520,8 @@ pub trait TenantRepos: Send + Sync {
     fn studio(&mut self) -> &mut dyn crate::ports::studio::StudioRepo;
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
+    /// The materials library (`ports::materials`).
+    fn studio_materials(&mut self) -> &mut dyn crate::ports::materials::MaterialRepo;
     fn calls(&mut self) -> &mut dyn crate::ports::calls::CallRepo;
     fn device_commands(&mut self) -> &mut dyn crate::ports::devices::DeviceCommandRepo;
 

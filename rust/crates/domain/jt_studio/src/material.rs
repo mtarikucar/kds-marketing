@@ -244,11 +244,11 @@ impl Material {
                 .any(|d| matches!(d, Depicts::Face | Depicts::Name | Depicts::Child))
     }
 
-    /// The material as erasure leaves it (spec §9.2): its id, file, origin and binding only.
+    /// The material as erasure leaves it (spec §9.2): its id, file, origin and binding, and a
+    /// human's freeing of it (a decision, not personal data, which a genel material needs).
     pub fn redacted(&self, at: OffsetDateTime) -> Material {
         Material {
             title: String::new(),
-            freed: None,
             share: None,
             tags: Tags::default(),
             tags_reviewed_by: None,

@@ -120,6 +120,7 @@ pub struct MemState {
     pub activation_codes: Vec<jt_app::ports::billing::ActivationCodeRow>,
     pub billing_references: Vec<(WorkspaceId, String)>,
     pub studio: super::studio::MemStudio,
+    pub materials: super::materials::MemMaterials,
     pub calls: super::calls::MemCalls,
     pub devices: super::devices::MemDevices,
     pub inbox: super::inbox::MemInbox,

@@ -31,7 +31,10 @@ fn olay(n: u128, kind: OlayKind, starts: Date, ends: Date) -> Olay {
         notes: String::new(),
         occasion: kind.is_seasonal().then(|| "yilbasi".to_owned()),
         status: OlayStatus::Confirmed,
-        confirmed_by: Some(owner()),
+        confirmed: Some(HumanMark {
+            by: owner(),
+            at: datetime!(2025-01-01 0:00 UTC),
+        }),
         revision: 1,
         created_at: datetime!(2025-01-01 0:00 UTC),
     }
@@ -124,7 +127,7 @@ fn an_olay_names_its_occasion_exactly_when_seasonal_and_is_confirmed_by_a_human(
     let mut p = olay(3, OlayKind::Other, date!(2026 - 1 - 1), date!(2026 - 1 - 1));
     p.status = OlayStatus::Proposed;
     assert_eq!(p.validate(), Err(StudioError::InvalidMaterial("status")));
-    p.confirmed_by = None;
+    p.confirmed = None;
     p.validate().unwrap();
     let mut long = olay(4, OlayKind::Order, date!(2026 - 1 - 1), date!(2027 - 1 - 2));
     assert_eq!(long.validate(), Err(StudioError::InvalidMaterial("dates")));
@@ -284,7 +287,7 @@ fn every_refusal_code() {
         date!(2026 - 12 - 5),
     );
     proposed.status = OlayStatus::Proposed;
-    proposed.confirmed_by = None;
+    proposed.confirmed = None;
     let olays = [a.clone(), b.clone(), season.clone(), proposed.clone()];
     let day = date!(2026 - 11 - 20);
     let anchor = UseRole::Anchor;

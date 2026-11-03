@@ -1,7 +1,7 @@
 //! An olay: the real context a material comes from (a workshop, an order, a season collection, a
 //! special day, a product shoot), with its real dates, place and client (spec 2026-11-03 §4.1).
-use crate::{OlayId, StudioError, require_id};
-use jt_tenancy::{UserId, WorkspaceId};
+use crate::{HumanMark, OlayId, StudioError, require_id};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, UtcOffset};
 use uuid::Uuid;
@@ -72,7 +72,8 @@ pub struct Olay {
     /// other kinds.
     pub occasion: Option<String>,
     pub status: OlayStatus,
-    pub confirmed_by: Option<UserId>,
+    /// The human who confirmed it, and when (the olay trigger's clock, spec §14 D24).
+    pub confirmed: Option<HumanMark>,
     pub revision: u64,
     #[serde(with = "crate::time_compat")]
     pub created_at: OffsetDateTime,
@@ -135,8 +136,8 @@ impl Olay {
             (None, false) => {}
             _ => return Err(invalid("occasion")),
         }
-        if (self.status == OlayStatus::Confirmed) != self.confirmed_by.is_some()
-            || self.confirmed_by.is_some_and(|u| u.0.is_nil())
+        if (self.status == OlayStatus::Confirmed) != self.confirmed.is_some()
+            || self.confirmed.as_ref().is_some_and(|c| c.by.0.is_nil())
         {
             return Err(invalid("status"));
         }
