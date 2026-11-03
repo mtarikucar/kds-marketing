@@ -1050,6 +1050,22 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
     let (mut r, facts) = first_fence(r, ctx, gathered, |reason| refused(reason, None)).await?;
     let policy = policy_of(r.as_mut()).await?;
     plan.disclose_assistant |= policy.disclose_assistant;
+    // What the bridge is told besides the plan, from the policy that writes the opening below: its
+    // lines (the workspace's opening and the notice, synthesised while the line rings) are the
+    // opening's first sentences; its phrases are kept with the call, so the phrases the bridge is
+    // told are the phrases the log shows (the reducer logs a `phrase` event with
+    // `session.phrases`, not with whatever the policy says by then); its hotwords are the plan's
+    // and the workspace's name.
+    let business = r.workspace().get().await?.name;
+    let script = DialScript {
+        lines: policy
+            .opening_lines(None)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        phrases: policy.phrases.clone(),
+        hotwords: jt_calls::call_hotwords(&plan.hotwords, &business),
+    };
     // The answer plays the workspace's opening and the transcript notice before the plan's own
     // opening, as one text: the bridge splits it into sentences, plays the cached ones at once, and
     // plays it to its end (the caller's speech does not cut it: the disclosure and the notice are
@@ -1102,7 +1118,7 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         recording,
         metrics: Default::default(),
         clock: TurnClock::default(),
-        phrases: Default::default(),
+        phrases: script.phrases.clone(),
     };
     r.calls().insert(session, ctx.now).await?;
     r.commit().await?;
@@ -1132,10 +1148,6 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
         .plan
         .clone()
         .ok_or_else(|| AppError::internal("an agent's call lost its plan"))?;
-    let script = DialScript::default();
-    // The phrases the bridge is told are the phrases the log will show: keep them with the call.
-    session.phrases = script.phrases.clone();
-    r.calls().update(session.clone(), ctx.now).await?;
     let dial = Command::Dial {
         to_e164: session.counterpart_e164.clone(),
         plan,

@@ -114,6 +114,27 @@ fn the_policy_schema_names_every_policy_field_and_marks_the_approved_texts_perso
     }
 }
 
+#[test]
+fn place_takes_hotwords_and_tells_the_opening_order() {
+    let tools = tools();
+    let place = tools["jeeta.calls.place"].input_schema.as_value().clone();
+    let hotwords = &place["properties"]["plan"]["properties"]["hotwords"];
+    assert_eq!(hotwords["maxItems"], 19);
+    assert_eq!(hotwords["items"]["maxLength"], 40);
+    // The closing is optional: left out, the call policy's closing plays.
+    let required = place["properties"]["plan"]["required"].as_array().unwrap();
+    assert!(!required.iter().any(|r| r == "closing"), "{required:?}");
+    assert!(required.iter().any(|r| r == "opening"), "{required:?}");
+    let text = tools["jeeta.calls.place"].description;
+    assert!(text.contains("transcript notice"), "{text}");
+    assert!(text.contains("the call policy's closing plays"), "{text}");
+    // Which closing that is, the agent reads (descriptions stay ASCII: `registry.rs`).
+    assert!(
+        text.contains("the one jeeta.calls.policy_get shows"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
     let uow = Arc::new(InMemoryUow::new());

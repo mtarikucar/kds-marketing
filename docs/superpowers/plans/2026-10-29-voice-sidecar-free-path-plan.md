@@ -12570,6 +12570,11 @@ git add rust/crates/jt_app rust/crates/adapters/jt_mcp
 git commit -m "feat(calls): the dial carries the policy's lines, its phrases and the call's hotwords" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
+**C2 as built (2026-11-03).** The steps ran test first; both tests were seen failing as the plan says (`script.lines` empty; `hotwords` null in the schema). What differs:
+- **The script comes from the policy that writes the opening.** `place_agent` builds the `DialScript` in the first transaction, from the same `policy_of` read that composes `plan.opening`, not from a second read in the dialing transaction: the script's `lines` are then exactly the spoken opening's first sentences even if the owner edits the policy between the two transactions (a mismatch would only cost the pre-synthesis, but there is no reason to allow it). The session is inserted with `phrases: script.phrases`, so the dialing transaction no longer updates it (as before A5); the reducer logs a `phrase` event with the phrases the dial carried, as before.
+- **The `calls.place` description stays ASCII.** `jt_mcp/tests/registry.rs` `descriptions_end_with_the_catalog_risk` requires every tool description to be ASCII (since the MCP gate, `eee9997b`), so the two Turkish examples ("Ada Hanım ile mi görüşüyorum?", "Görüşmek üzere, iyi günler.") are not in it; written without their letters they would be sentences an agent might copy into a plan. The opening's part says the agent's opening "only needs to greet the person, for example by asking whether you speak with them", and the closing's says "left out, the call policy's closing plays, the one jeeta.calls.policy_get shows". `place_takes_hotwords_and_tells_the_opening_order` asserts that last phrase instead of the default closing's words.
+- Checks on Windows (the two unix-only lines of `jt_pg/src/wal.rs` removed locally, never committed): `jt_app` `calls_session` 23, `calls_place` 13, `calls_bridge` 9, `calls_end` 2, `calls_policy` 3; `jt_mcp` `calls_mcp` 5, `registry` 12. Clippy `-D warnings` (jt_app lib with `tokio/time`, its `calls_session` and `calls_policy` tests, jt_mcp all targets) and `cargo fmt --all -- --check` are clean.
+
 ### Task C3: Bridge phrases and turn traces reach the turn log and the call view
 
 **Files:**

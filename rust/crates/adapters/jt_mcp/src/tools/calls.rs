@@ -64,11 +64,19 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (rep_extension) first, then the person, through the workspace's \
                           verified NetGSM PBX. mode agent: you talk to the person yourself \
                           through the workspace's voice bridge, with a plan written before you \
-                          dial: opening (must contain the policy's disclosure_sentence), goal \
-                          (never played), holding (1 to 5 phrases played while you think), \
-                          fallback (0 to 3 lines played when you stay silent), closing (played \
-                          before the call is hung up), max_duration_s (1 to 900), language tr; \
-                          every sentence at most 600 characters. One live agent call per \
+                          dial: opening (played right after the workspace's own opening and the \
+                          transcript notice of the call policy, which already disclose the \
+                          assistant, so yours only needs to greet the person, for example by \
+                          asking whether you speak with them; the whole spoken opening must \
+                          contain the policy's disclosure_sentence), goal (never played), \
+                          holding (1 to 5 phrases played while you think when the bridge's own \
+                          fillers did not cover it), fallback (0 to 3 lines played when you \
+                          stay silent), closing (optional; played before the call is hung up; \
+                          left out, the call policy's closing plays, the one \
+                          jeeta.calls.policy_get shows), max_duration_s (1 to 900), language \
+                          tr, hotwords (at most 19 names or product words the speech \
+                          recognition should expect; the workspace's name is added); every \
+                          sentence at most 600 characters. One live agent call per \
                           connection. Then loop jeeta.calls.listen and jeeta.calls.say. Every \
                           gate is checked again right before dialing: a refusal is CONFLICT \
                           with details.reason one of workspace_inactive, strategy_required, \
@@ -261,16 +269,22 @@ fn place_schema() -> Schema {
                 "type": "object",
                 "description": "Mode agent only: the call's script, every sentence played as written.",
                 "properties": {
-                    "opening": text("Played when the person answers; must contain the policy's disclosure_sentence."),
+                    "opening": text("Played after the workspace's opening and the transcript notice."),
                     "goal": text("What the call is for; never played."),
                     "holding": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "maxLength": 600 } },
                     "fallback": { "type": "array", "maxItems": 3, "items": { "type": "string", "maxLength": 600 } },
-                    "closing": text("Played before the call is hung up."),
+                    "closing": text("Optional. Played before the call is hung up; left out, the call policy's closing plays."),
                     "max_duration_s": { "type": "integer", "minimum": 1, "maximum": 900 },
                     "language": { "type": "string", "enum": ["tr"] },
                     "disclose_assistant": { "type": "boolean" },
+                    "hotwords": {
+                        "type": "array",
+                        "maxItems": 19,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+                        "description": "Names and product words from your context the speech recognition should expect on this call (at most 19; the workspace's name is added)."
+                    },
                 },
-                "required": ["opening", "goal", "holding", "closing", "max_duration_s"],
+                "required": ["opening", "goal", "holding", "max_duration_s"],
                 "additionalProperties": false,
             },
         },

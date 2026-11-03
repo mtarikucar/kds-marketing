@@ -1565,3 +1565,33 @@ async fn a_plan_without_a_closing_is_refused_when_the_policy_has_none() {
     assert_eq!(e.code, ErrorCode::Validation);
     assert_eq!(e.details["field"], "plan.closing");
 }
+
+#[tokio::test]
+async fn the_dial_carries_the_policys_lines_its_phrases_and_the_hotwords() {
+    let r = rig_with(
+        1,
+        CallPolicy {
+            disclosure_sentence: String::new(),
+            ..CallPolicy::default()
+        },
+    )
+    .await;
+    let mut p = plan();
+    p.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    p.hotwords = vec!["Ada".into(), "perşembe".into()];
+    r.place_at(0, p).await;
+    let dial = r.poll(1).await;
+    let script = &dial[0].payload["script"];
+    assert_eq!(
+        script["lines"],
+        json!([
+            "Merhaba, ben Acme'nin dijital asistanıyım.",
+            jt_calls::TRANSCRIPT_NOTICE
+        ])
+    );
+    assert_eq!(
+        script["phrases"],
+        serde_json::to_value(jt_calls::BridgePhrases::default()).unwrap()
+    );
+    assert_eq!(script["hotwords"], json!(["Ada", "perşembe", "Acme"]));
+}
