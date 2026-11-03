@@ -180,12 +180,13 @@ async fn wedged_jeeta() -> String {
 async fn a_wedged_core_fails_a_report_in_seconds_but_the_long_poll_waits() {
     // The register and the events posts give up after about 3 s, so the line tells its calls the
     // core is lost within seconds (M3); the long-poll alone waits its 25 s and the core's answer.
+    // The bound is 8 s, not 3: a loaded machine's scheduling is not what is tested (40 s was).
     let client = JeetaClient::new(&wedged_jeeta().await, "k").unwrap();
     let started = Instant::now();
     let e = client.register(&register_input()).await.unwrap_err();
     assert!(matches!(e, ClientError::Transport) && e.retryable());
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        started.elapsed() < Duration::from_secs(8),
         "{:?}",
         started.elapsed()
     );
@@ -203,7 +204,7 @@ async fn a_wedged_core_fails_a_report_in_seconds_but_the_long_poll_waits() {
         ClientError::Transport
     ));
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        started.elapsed() < Duration::from_secs(8),
         "{:?}",
         started.elapsed()
     );

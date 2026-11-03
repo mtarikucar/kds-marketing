@@ -98,6 +98,15 @@ fn the_unit_runs_the_line_as_the_bridge_on_loopback_writing_only_its_state() {
         "ReadWritePaths=/var/lib/jeeta-voice",
         "IPAddressDeny=any",
         "IPAddressAllow=localhost",
+        // Review of D, L9: no capability, no device, no kernel knob, the service's system calls only.
+        "CapabilityBoundingSet=",
+        "PrivateDevices=yes",
+        "ProtectKernelTunables=yes",
+        "ProtectKernelModules=yes",
+        "ProtectKernelLogs=yes",
+        "SystemCallFilter=@system-service",
+        "RestrictNamespaces=yes",
+        "MemoryDenyWriteExecute=yes",
     ] {
         assert!(UNIT.lines().any(|l| l == line), "{line}");
     }

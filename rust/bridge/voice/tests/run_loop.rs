@@ -177,7 +177,8 @@ async fn run_for(config: Config, for_how_long: Duration) {
     tokio::time::timeout(Duration::from_secs(8), task)
         .await
         .unwrap()
-        .unwrap();
+        .unwrap()
+        .expect("the line started");
 }
 
 #[tokio::test]

@@ -163,20 +163,30 @@ fn rewrite(log: &Path, ids: &[CallCommandId]) -> std::io::Result<()> {
     std::fs::rename(&temporary, log)
 }
 
-/// Runs the line until `stop` turns true.
-pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
+/// Why the line could not start (review of D, L9: the process then exits 1, so the unit's
+/// `Restart=on-failure` starts it again).
+#[derive(Debug, thiserror::Error)]
+pub enum RunError {
+    #[error("the core's HTTP client could not be built")]
+    Core,
+    #[error("the ARI client could not be built")]
+    Ari,
+}
+
+/// Runs the line until `stop` turns true; an error when it cannot start.
+pub async fn run(config: Config, mut stop: watch::Receiver<bool>) -> Result<(), RunError> {
     let jeeta = match JeetaClient::new(&config.jeeta_base_url, &config.bridge_key) {
         Ok(j) => Arc::new(j),
         Err(e) => {
             warn!(error = %e, "the core's client could not be built");
-            return;
+            return Err(RunError::Core);
         }
     };
     let ari = match Ari::new(&config.ari_url, &config.ari_user, &config.ari_password) {
         Ok(a) => Arc::new(a),
         Err(e) => {
             warn!(error = %e, "the ARI client could not be built");
-            return;
+            return Err(RunError::Ari);
         }
     };
     let calls: Registry = Arc::default();
@@ -245,6 +255,7 @@ pub async fn run(config: Config, mut stop: watch::Receiver<bool>) {
     events.abort();
     drop(reports_tx);
     let _ = tokio::time::timeout(POST_WAIT, poster).await;
+    Ok(())
 }
 
 /// Hangs up what Asterisk still carries from an earlier run (a crash, a restart): each call's own

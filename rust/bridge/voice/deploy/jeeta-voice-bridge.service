@@ -11,6 +11,8 @@ StartLimitBurst=5
 # two speech services' unix sockets, which it reaches as a member of jeeta-voice. It writes only
 # /var/lib/jeeta-voice (the policy-phrase cache and traces.jsonl, numbers and call ids only).
 # bridge.env is a symlink to bridge.staging.env or bridge.prod.env: one environment at a time.
+# No capability, no device, no kernel knob, the service's system calls only, nothing written and
+# run as code; a start that cannot build its clients exits 1, which Restart=on-failure retries.
 [Service]
 Type=simple
 User=jeeta-voice-bridge
@@ -31,6 +33,14 @@ ReadWritePaths=/var/lib/jeeta-voice
 IPAddressDeny=any
 IPAddressAllow=localhost
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+SystemCallFilter=@system-service
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=yes
 CPUWeight=200
 MemoryMax=256M
 StandardOutput=journal

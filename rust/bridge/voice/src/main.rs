@@ -57,8 +57,14 @@ async fn run_command() -> ExitCode {
         stopping.await;
         let _ = stop_tx.send(true);
     });
-    run_loop::run(config, stop_rx).await;
-    ExitCode::SUCCESS
+    match run_loop::run(config, stop_rx).await {
+        Ok(()) => ExitCode::SUCCESS,
+        // Exit 1: the unit's Restart=on-failure starts the line again (review of D, L9).
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// SIGTERM (systemd's stop) or Ctrl-C. The SIGTERM handler is installed when this is called, not
