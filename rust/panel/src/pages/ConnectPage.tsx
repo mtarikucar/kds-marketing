@@ -1,13 +1,20 @@
 import { isApiError } from '@/api/client';
 import { ProviderSetup } from './ProviderSetup';
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Eye, EyeOff, LogIn } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getCapability } from '@/api/capabilities';
 import { reconnectConnector, setCredentials, startOAuth } from '@/api/connectors';
-import { PROVIDERS, type Capability, type CapabilityOut, type CredentialInput, type Provider } from '@/api/types';
+import {
+  PROVIDERS,
+  type Capability,
+  type CapabilityOut,
+  type CredentialInput,
+  type OAuthFlow,
+  type Provider,
+} from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -23,7 +30,10 @@ import {
   Field,
   IconButton,
   Input,
+  Label,
   PageHeader,
+  RadioGroup,
+  RadioGroupItem,
   cn,
 } from '@/components/ui';
 import { browser, providerUrl } from '@/lib/browser';
@@ -178,9 +188,63 @@ function CredentialForm({
   );
 }
 
+/** Which WhatsApp number a new `whatsapp_cloud` connection is: one already in the WhatsApp Business app, or a new Cloud API one. */
+type WhatsAppNumber = 'business_app' | 'cloud_api';
+
+/**
+ * The explicit choice of a new WhatsApp connection: a number the business already uses in the
+ * WhatsApp Business app on its phone (Meta's coexistence sign-in, the app keeps working), or a new
+ * Cloud API number. Nothing is chosen for the owner.
+ */
+function WhatsAppNumberChoice({
+  value,
+  onChange,
+}: {
+  value: WhatsAppNumber | null;
+  onChange: (next: WhatsAppNumber) => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const options: { value: WhatsAppNumber; label: string; hint: string }[] = [
+    { value: 'business_app', label: t('connect.whatsapp.businessApp'), hint: t('connect.whatsapp.businessAppHint') },
+    { value: 'cloud_api', label: t('connect.whatsapp.cloudApi'), hint: t('connect.whatsapp.cloudApiHint') },
+  ];
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-sm font-medium text-foreground">{t('connect.whatsapp.choice')}</legend>
+      <RadioGroup
+        value={value ?? ''}
+        onValueChange={(next) => onChange(next as WhatsAppNumber)}
+        aria-label={t('connect.whatsapp.choice')}
+        className="flex flex-col gap-3"
+      >
+        {options.map((option) => (
+          <div key={option.value} className="flex items-start gap-2">
+            <RadioGroupItem
+              value={option.value}
+              id={`${id}-${option.value}`}
+              aria-describedby={`${id}-${option.value}-hint`}
+              className="mt-0.5"
+            />
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor={`${id}-${option.value}`} className="font-normal">
+                {option.label}
+              </Label>
+              <p id={`${id}-${option.value}-hint`} className="text-caption text-muted-foreground">
+                {option.hint}
+              </p>
+            </div>
+          </div>
+        ))}
+      </RadioGroup>
+    </fieldset>
+  );
+}
+
 /**
  * Sends the browser to a provider's sign-in page: a new flow for `kind`, or a reconnection of
- * `capability` when it names its account. Nothing is asked for here; the provider asks.
+ * `capability` when it names its account. Nothing is asked for here; the provider asks. A new
+ * WhatsApp connection asks first which number it is ([`WhatsAppNumberChoice`]).
  */
 function OAuthPanel({ kind, capability }: { kind: string; capability: Capability | null }) {
   const { t } = useTranslation();
@@ -190,10 +254,13 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
   // becomes it.
   const bound = capability !== null;
   const reconnecting = bound && capability.status !== 'declared';
+  const choosesNumber = kind === 'whatsapp_cloud' && !bound;
+  const [number, setNumber] = useState<WhatsAppNumber | null>(null);
+  const flow: OAuthFlow | undefined = choosesNumber && number === 'business_app' ? 'whatsapp_business_app' : undefined;
   const [redirecting, setRedirecting] = useState(false);
   const start = useMutation({
     mutationFn: async () => {
-      const out = bound ? await reconnectConnector(capability.id) : await startOAuth(kind);
+      const out = bound ? await reconnectConnector(capability.id) : await startOAuth(kind, flow);
       const url = providerUrl(out.authorize_url);
       if (!url) throw new Error('the provider address is not an https address');
       rememberStart(out, bound ? capability.id : null);
@@ -214,10 +281,13 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
         {capability !== null && capability.external_id === null && (
           <Callout tone="info">{t('connect.oauth.firstBindsNote')}</Callout>
         )}
+        {choosesNumber && <WhatsAppNumberChoice value={number} onChange={setNumber} />}
         {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? (
           <Callout tone="warning">{t('providerSetup.missing')}</Callout>
         ) : isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_product_not_enabled' ? (
-          <Callout tone="warning">{t('providerSetup.productNotEnabled')}</Callout>
+          <Callout tone="warning">
+            {flow ? t('connect.whatsapp.notEnabled') : t('providerSetup.productNotEnabled')}
+          </Callout>
         ) : (
           <ErrorCallout error={start.error} />
         )}
@@ -225,7 +295,11 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
           <p className="text-sm text-muted-foreground">{t('capabilities.connector.redirecting')}</p>
         ) : (
           <div>
-            <Button onClick={() => start.mutate()} loading={start.isPending}>
+            <Button
+              onClick={() => start.mutate()}
+              loading={start.isPending}
+              disabled={choosesNumber && number === null}
+            >
               <LogIn className="h-4 w-4" aria-hidden="true" />
               {reconnecting
                 ? t('connect.oauth.reconnectSubmit')
@@ -238,6 +312,51 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
   );
 }
 
+const SHARING_STATES = ['due', 'requesting', 'requested', 'refused', 'unknown', 'expired'] as const;
+type SharingState = (typeof SHARING_STATES)[number];
+
+function isSharingState(value: unknown): value is SharingState {
+  return typeof value === 'string' && (SHARING_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * Where the one-time sharing of a WhatsApp Business app's contacts and history stands
+ * (`connector_public.business_app`), with Meta's reason when it refused.
+ */
+function BusinessAppSharing({ sharing }: { sharing: unknown }) {
+  const { t } = useTranslation();
+  if (!sharing || typeof sharing !== 'object') return null;
+  const record = sharing as Record<string, unknown>;
+  const until = typeof record.sync_until === 'string' ? record.sync_until : null;
+  return (
+    <div className="flex flex-col gap-1 text-sm" data-business-app="">
+      <p className="font-medium text-foreground">{t('providerSetup.businessApp.title')}</p>
+      <ul className="flex flex-col gap-1">
+        {(['contacts', 'history'] as const).map((key) => {
+          const entry = record[key] as { state?: unknown; reason?: unknown } | undefined;
+          const state: SharingState = isSharingState(entry?.state) ? entry.state : 'due';
+          const reason = typeof entry?.reason === 'string' ? entry.reason : null;
+          return (
+            <li key={key}>
+              {t(`providerSetup.businessApp.${key}`)}: {t(`providerSetup.businessApp.states.${state}`)}
+              {reason && (
+                <span className="block break-words text-caption text-muted-foreground" data-probe-reason="">
+                  {reason}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {until && (
+        <p className="text-caption text-muted-foreground">
+          {t('providerSetup.businessApp.until', { at: until })}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Public access metadata is useful both immediately after a probe and on a later visit. */
 function ConnectorAccess({ capability }: { capability: Capability }) {
   const { t } = useTranslation();
@@ -247,6 +366,7 @@ function ConnectorAccess({ capability }: { capability: Capability }) {
       <Callout tone="warning">{t('providerSetup.reconnect')}</Callout>}
     {typeof access?.expires_at === 'string' &&
       <p>{t('providerSetup.expires')}: <time dateTime={access.expires_at}>{access.expires_at}</time></p>}
+    {capability.kind_key === 'whatsapp_cloud' && <BusinessAppSharing sharing={capability.connector_public.business_app} />}
   </>;
 }
 
