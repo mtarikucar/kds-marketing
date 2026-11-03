@@ -422,10 +422,14 @@ async fn commands_long_poll_returns_within_wait_plus_one() {
 
 #[tokio::test]
 async fn unacked_command_redelivered_after_10s() {
+    // The contract (review of D, M2): a command other than a dial that is not acknowledged within
+    // ten seconds of being taken is handed out again; a dial never is (it is acknowledged as it
+    // is taken). A poll leases as of its context's time plus the real time it took, so the checks
+    // keep a second from the ten-second edge (at 11 s exactly a slow poll could read the lease
+    // as run out).
     let (w, key, bridge) = rig().await;
     let call = dialing(&w, bridge, "b-1").await;
     assert_eq!(kinds(&poll(&w, &key, FIXED_NOW).await), ["dial"]);
-    // A command after the dial (the dial itself is handed out once: a_dial_is_handed_out_at_most_once).
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.calls()
         .enqueue_commands(
@@ -441,10 +445,11 @@ async fn unacked_command_redelivered_after_10s() {
     let id = first.commands[0].id;
     // Taken: not handed out again while its lease runs.
     assert!(poll(&w, &key, later(6)).await.commands.is_empty());
-    assert!(poll(&w, &key, later(11)).await.commands.is_empty());
-    // Not acknowledged within ten seconds: handed out again, the same command.
+    assert!(poll(&w, &key, later(10)).await.commands.is_empty());
+    // Not acknowledged within ten seconds: the hangup is handed out again, the same command; the
+    // dial, taken 12 s ago and never acknowledged by the bridge, is not.
     let again = poll(&w, &key, later(12)).await;
-    assert_eq!(again.commands.len(), 1);
+    assert_eq!(kinds(&again), ["hangup"]);
     assert_eq!(again.commands[0].id, id);
     assert_eq!(again.commands[0].call_id, call);
 

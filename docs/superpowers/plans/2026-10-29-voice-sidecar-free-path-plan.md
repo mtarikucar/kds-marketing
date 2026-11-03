@@ -14239,6 +14239,16 @@ Expected:
 
 Rollback: `systemctl disable --now jeeta-voice-bridge` (the line then goes offline in the core; no call is placed through it). To undo the speak move as well, install `jeeta-voice-speak.service` and `jeeta-voice.tmpfiles` from `4f1830ec` (the commit before D3) the same way and restart `jeeta-voice-speak`; a bridge started after that needs `SPEAK_SOCKET=unix:/run/jeeta-voice/speak.sock` in `bridge.env`.
 
+**Review of D (`2d5cd369..ba1966d6`, 2026-11-03): 3 Medium, 6 Low, fixed in commits of their own.** Each test was seen failing first where the fix is testable.
+- **L5, the dial carries the core's longest duration** (`bedbd4bb`). `place_agent` clamps `plan.max_duration_s` to `policy.max_duration(Some(plan.max_duration_s))` before the session is stored and dialled, so the bridge's backstop (a minute past the dial's plan) follows what the core's timers allow. Test: `calls_session` `a_plan_longer_than_the_policy_allows_is_dialled_with_the_policys_longest` (seen failing: 300 for 120).
+- **M2, the core: a dial is handed out at most once** (`812f1808`, the test's margins in the commit after it). The contract of `take_commands` is now:
+  - a command other than a dial that is not acknowledged within `REDELIVER_AFTER` (10 s) of being taken is handed out again, as before;
+  - a dial is acknowledged as it is taken, so it is never handed out again, and the bridge's late `command_done` of it changes nothing.
+
+  The fake and Postgres implement the same rule (`acked_at = case when kind = 'dial' …` in the lease's update). A dial lost on its way ends as any unanswered call does, by the core's ring timer.
+  - Tests: `calls_bridge` `a_dial_is_handed_out_at_most_once` and `unacked_command_redelivered_after_10s` (both seen failing with the dial re-handed at 11 s). The latter now pins both behaviours in one sequence: a hangup is re-handed at 12 s and the dial, taken at 0 s and never acknowledged, is not. `jt_pg` `calls_storage` `a_dial_is_taken_at_most_once` passed in CI on Postgres.
+  - The first push's run failed on `unacked_command_redelivered_after_10s` at its 11 s check, the known flake of that test: a poll leases as of its context's time plus the real time it took (`kernel::lease`), so a poll at exactly 10 s past the take may read the lease as run out. The checks now keep a second from the edge (not again at 6 s and 10 s, again at 12 s); the pull_request run of the same commit had passed.
+
 ## Phase E — release and acceptance
 
 ### Task E1: [OWNER OK] Release the core changes (staging, then prod)
