@@ -7,7 +7,9 @@
 //!
 //! The reports are printed as they come, the think time included (it runs in a task of its own).
 //! The opening is heard in full; the caller's turn is the first one that ends after it (words over
-//! the opening, an "Alo?", are passed over). Ctrl-C hangs the line up, before the dial too (then no
+//! the opening, an "Alo?", wait), or, when the caller spoke only over the opening, the words spoken
+//! over it, once no other turn ended [`OVER_OPENING_WAIT`] after the opening ([`ReplyTurn`]).
+//! Ctrl-C hangs the line up, before the dial too (then no
 //! phone rings), and the call ends as at the caller's hangup; a second one quits at once. After an
 //! `error` the slice waits for the call's task to hang the line up before it exits. The call ends
 //! by itself `VOICE_MAX_CALL_S` after the answer (600 s), and if Asterisk's events end.
@@ -32,6 +34,75 @@ struct Args {
     reply: String,
     think: Duration,
     show_transcript: bool,
+}
+
+/// How long after the opening's end the slice waits for a turn of the caller's before it answers
+/// the words spoken over the opening: the listener's end of a turn after silence (design addendum
+/// §6, 1.5 s without Smart Turn's "complete").
+pub const OVER_OPENING_WAIT: Duration = Duration::from_millis(1_500);
+
+/// Which of the caller's turns the slice answers, once. The first turn that ends after the opening
+/// was heard to its end; words spoken over the opening (an "Alo?") wait for it. When the caller
+/// spoke only over the opening, those words are the turn, answered once [`OVER_OPENING_WAIT`]
+/// passed after the opening with no other turn (live use after B7: the slice never answered such
+/// a caller, whose wait the bridge covered with its acknowledgement, filler and long wait until
+/// the call ended at `VOICE_MAX_CALL_S`). The bridge itself owes that turn its reply from the
+/// opening's end, as the core's agent gives it in `run` (design addendum §3, "Heard in full").
+///
+/// It holds the caller's words, so it has no `Debug`.
+#[derive(Default)]
+pub struct ReplyTurn {
+    opening: Option<u32>,
+    opened: bool,
+    over_opening: Option<String>,
+    replied: bool,
+}
+
+impl ReplyTurn {
+    /// The opening was asked to play as `seq`.
+    pub fn opening_asked(&mut self, seq: u32) {
+        self.opening = Some(seq);
+    }
+
+    /// Line `seq` ended. True when it was the opening and words spoken over it wait for an
+    /// answer: the caller then waits [`OVER_OPENING_WAIT`] and asks [`ReplyTurn::waited`].
+    pub fn said(&mut self, seq: u32) -> bool {
+        if self.opened || Some(seq) != self.opening {
+            return false;
+        }
+        self.opened = true;
+        !self.replied && self.over_opening.is_some()
+    }
+
+    /// The caller's final words: the words to answer now, if this is the turn.
+    pub fn utterance(&mut self, words: String) -> Option<String> {
+        if self.replied {
+            return None;
+        }
+        if !self.opened {
+            self.over_opening = Some(words);
+            return None;
+        }
+        self.replied = true;
+        self.over_opening = None;
+        Some(words)
+    }
+
+    /// Whether the turn to answer was given out.
+    pub fn answered(&self) -> bool {
+        self.replied
+    }
+
+    /// [`OVER_OPENING_WAIT`] passed after the opening: the words spoken over it, when no other
+    /// turn was answered meanwhile.
+    pub fn waited(&mut self) -> Option<String> {
+        if self.replied || !self.opened {
+            return None;
+        }
+        let words = self.over_opening.take()?;
+        self.replied = true;
+        Some(words)
+    }
 }
 
 fn parse(args: &[String]) -> Option<Args> {
@@ -151,82 +222,85 @@ pub async fn main(args: &[String]) -> ExitCode {
     };
     tokio::spawn(run_call(deps, setup, rx, reports_tx));
     let mut seq = 0u32;
-    // The opening's seq, once it is asked, and whether it has been heard to its end.
-    let mut opening: Option<u32> = None;
-    let mut opened = false;
-    let mut replied = false;
+    let mut turns = ReplyTurn::default();
+    // When the words spoken over the opening are answered, unless another turn ends first.
+    let mut over_opening_until: Option<tokio::time::Instant> = None;
     let mut failed = false;
-    while let Some(report) = reports.recv().await {
-        if let Some(taken) = report.taken {
-            let _ = taken.send(());
-        }
-        match report.event {
-            BridgeEvent::Answered => {
-                println!("answered");
-                seq += 1;
-                opening = Some(seq);
-                let play = Command::Play {
-                    seq,
-                    clip: PlayKind::Opening,
-                    index: 0,
-                    text: args.opening.clone(),
-                };
-                let _ = to_call.send(ToCall::Command(play)).await;
-            }
-            // Words over the opening are no answer to its request for a sentence.
-            BridgeEvent::Utterance { .. } if !opened => {
-                println!("the caller spoke over the opening: the turn waits for its end");
-            }
-            BridgeEvent::Utterance { text, .. } if !replied => {
-                replied = true;
-                if args.show_transcript {
-                    println!("caller: {text}");
+    loop {
+        let wait = over_opening_until;
+        // The words of the turn to answer now, if one is.
+        let mut heard = None;
+        tokio::select! {
+            report = reports.recv() => {
+                let Some(report) = report else { break };
+                if let Some(taken) = report.taken {
+                    let _ = taken.send(());
                 }
-                // The agent's think time, in a task of its own: what the bridge plays meanwhile
-                // (its acknowledgement, filler and long wait) is printed as it happens.
-                let (say_seq, closing_seq) = (seq + 1, seq + 2);
-                seq += 2;
-                let (to_call, think, reply) = (to_call.clone(), args.think, args.reply.clone());
-                tokio::spawn(async move {
-                    tokio::time::sleep(think).await;
-                    let say = Command::Say {
-                        seq: say_seq,
-                        text: reply,
-                        allow_barge_in: true,
-                    };
-                    let _ = to_call.send(ToCall::Command(say)).await;
-                    let closing = Command::Play {
-                        seq: closing_seq,
-                        clip: PlayKind::Closing,
-                        index: 0,
-                        text: CLOSING.to_owned(),
-                    };
-                    let _ = to_call.send(ToCall::Command(closing)).await;
-                    let _ = to_call.send(ToCall::Command(Command::Hangup)).await;
-                });
+                match report.event {
+                    BridgeEvent::Answered => {
+                        println!("answered");
+                        seq += 1;
+                        turns.opening_asked(seq);
+                        let play = Command::Play {
+                            seq,
+                            clip: PlayKind::Opening,
+                            index: 0,
+                            text: args.opening.clone(),
+                        };
+                        let _ = to_call.send(ToCall::Command(play)).await;
+                    }
+                    BridgeEvent::Utterance { text, .. } => {
+                        heard = turns.utterance(text);
+                        if heard.is_some() {
+                            over_opening_until = None;
+                        } else if !turns.answered() {
+                            println!("the caller spoke over the opening: the turn waits for its end");
+                        }
+                    }
+                    BridgeEvent::Phrase { set, index } => println!("phrase {set:?} {index}"),
+                    BridgeEvent::Said {
+                        seq,
+                        interrupted_at_char,
+                        ..
+                    } => {
+                        println!("said {seq} cut at {interrupted_at_char:?}");
+                        if turns.said(seq) {
+                            over_opening_until =
+                                Some(tokio::time::Instant::now() + OVER_OPENING_WAIT);
+                        }
+                    }
+                    BridgeEvent::Trace { trace } => {
+                        println!(
+                            "trace {}",
+                            serde_json::to_string(&trace).unwrap_or_default()
+                        )
+                    }
+                    BridgeEvent::Hangup { cause } => println!("hangup {cause}"),
+                    BridgeEvent::Error { failure_line } => {
+                        // The call's task hangs the line up and then ends, which closes the
+                        // reports.
+                        eprintln!("error: {failure_line}");
+                        failed = true;
+                    }
+                    _ => {}
+                }
             }
-            BridgeEvent::Phrase { set, index } => println!("phrase {set:?} {index}"),
-            BridgeEvent::Said {
-                seq,
-                interrupted_at_char,
-                ..
-            } => {
-                opened |= Some(seq) == opening;
-                println!("said {seq} cut at {interrupted_at_char:?}");
+            // Evaluated while disabled too, so it needs an instant then (never polled).
+            () = tokio::time::sleep_until(wait.unwrap_or_else(tokio::time::Instant::now)),
+                if wait.is_some() =>
+            {
+                over_opening_until = None;
+                heard = turns.waited();
+                if heard.is_some() {
+                    println!("no turn followed the opening: the words spoken over it are answered");
+                }
             }
-            BridgeEvent::Trace { trace } => {
-                println!(
-                    "trace {}",
-                    serde_json::to_string(&trace).unwrap_or_default()
-                )
+        }
+        if let Some(text) = heard {
+            if args.show_transcript {
+                println!("caller: {text}");
             }
-            BridgeEvent::Hangup { cause } => println!("hangup {cause}"),
-            BridgeEvent::Error { failure_line } => {
-                // The call's task hangs the line up and then ends, which closes the reports.
-                eprintln!("error: {failure_line}");
-                failed = true;
-            }
-            _ => {}
+            answer(&to_call, &mut seq, args.think, args.reply.clone());
         }
     }
     if failed {
@@ -234,4 +308,30 @@ pub async fn main(args: &[String]) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Answers the caller's turn as a thinking agent would: `think` later the reply, then the closing
+/// and the hangup, in a task of its own, so what the bridge plays meanwhile (its acknowledgement,
+/// filler and long wait) is printed as it happens.
+fn answer(to_call: &mpsc::Sender<ToCall>, seq: &mut u32, think: Duration, reply: String) {
+    let (say_seq, closing_seq) = (*seq + 1, *seq + 2);
+    *seq += 2;
+    let to_call = to_call.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(think).await;
+        let say = Command::Say {
+            seq: say_seq,
+            text: reply,
+            allow_barge_in: true,
+        };
+        let _ = to_call.send(ToCall::Command(say)).await;
+        let closing = Command::Play {
+            seq: closing_seq,
+            clip: PlayKind::Closing,
+            index: 0,
+            text: CLOSING.to_owned(),
+        };
+        let _ = to_call.send(ToCall::Command(closing)).await;
+        let _ = to_call.send(ToCall::Command(Command::Hangup)).await;
+    });
 }
