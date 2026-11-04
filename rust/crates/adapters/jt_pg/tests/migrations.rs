@@ -32,7 +32,7 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
 /// device commands and device files of `0017_device_bridge`, the five pool tables of
-/// `0020_prospects`, the rep profiles, rules and assignment log of `0025_distribution`, and the
+/// `0020_prospects`, the rep profiles, rules and assignment log of `0027_distribution`, and the
 /// templates, campaigns, enrollments and sends of `0026_outreach`.
 const TABLES_AFTER_ALL: i64 = 86;
 
@@ -40,13 +40,13 @@ const TABLES_AFTER_ALL: i64 = 86;
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_AFTER_ALL - 4;
 
 /// Migrations `0001_foundation` through `0018_tiktok_webhooks`, `0020_prospects`,
-/// `0023_oauth_flow`, `0024_whatsapp_erasure`, `0025_distribution` and `0026_outreach`.
+/// `0023_oauth_flow`, `0024_whatsapp_erasure`, `0026_outreach` and `0027_distribution`.
 const MIGRATIONS: i64 = 23;
 
 /// The migration versions. `0019`, `0021` and `0022` belong to parallel branches (inbox comments
 /// and marketplace, the studio materials): each adds its version here when it merges.
 fn versions() -> Vec<i64> {
-    (1..=18).chain([20, 23, 24, 25, 26]).collect()
+    (1..=18).chain([20, 23, 24, 26, 27]).collect()
 }
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
@@ -225,8 +225,8 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0027_distribution",
         "0026_outreach",
-        "0025_distribution",
         "0024_whatsapp_erasure",
         "0023_oauth_flow",
         "0020_prospects",
@@ -968,13 +968,13 @@ async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     // Newest first: the pool and the call tables reference the inbox tables.
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0026_outreach.down.sql"
+        "../../../../migrations/0027_distribution.down.sql"
     ))
     .execute(&db.pool)
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0025_distribution.down.sql"
+        "../../../../migrations/0026_outreach.down.sql"
     ))
     .execute(&db.pool)
     .await
@@ -1126,13 +1126,13 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0026_outreach.down.sql"
+        "../../../../migrations/0027_distribution.down.sql"
     ))
     .execute(&db.pool)
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0025_distribution.down.sql"
+        "../../../../migrations/0026_outreach.down.sql"
     ))
     .execute(&db.pool)
     .await
@@ -1649,14 +1649,14 @@ async fn blocklist_reason_and_expiry_agree() {
     }
 }
 
-/// The tables of `0025_distribution`, each with its one row-level policy.
+/// The tables of `0027_distribution`, each with its one row-level policy.
 const DISTRIBUTION_TABLES: [(&str, &str); 3] = [
     ("rep_profiles", "rep_profiles_ws"),
     ("distribution_rules", "distribution_rules_ws"),
     ("journey_assignments", "journey_assignments_ws"),
 ];
 
-/// The indexes of `0025_distribution` beyond its primary keys and unique constraints.
+/// The indexes of `0027_distribution` beyond its primary keys and unique constraints.
 const DISTRIBUTION_INDEXES: [&str; 4] = [
     "journey_assignments_live",
     "journey_assignments_sla",
@@ -1669,8 +1669,8 @@ async fn distribution_up_and_down_are_repeatable() {
     let db = TestDb::new().await; // already migrated up, 0021 included
     outreach_down(&db.pool).await;
     let dir = migrations_dir();
-    let up = std::fs::read_to_string(dir.join("0025_distribution.up.sql")).unwrap();
-    let down = std::fs::read_to_string(dir.join("0025_distribution.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0027_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0027_distribution.down.sql")).unwrap();
     for _ in 0..2 {
         try_run(&db.pool, &up).await.unwrap();
         assert_eq!(table_count(&db.pool).await, TABLES_BEFORE_OUTREACH);
@@ -1717,8 +1717,8 @@ async fn distribution_down_keeps_a_recipient_kind_a_person_holds() {
     let db = TestDb::new().await;
     outreach_down(&db.pool).await;
     let dir = migrations_dir();
-    let up = std::fs::read_to_string(dir.join("0025_distribution.up.sql")).unwrap();
-    let down = std::fs::read_to_string(dir.join("0025_distribution.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0027_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0027_distribution.down.sql")).unwrap();
     let (ws, _) = db.seed_workspace("distribution-kind-kept").await;
     let person = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();

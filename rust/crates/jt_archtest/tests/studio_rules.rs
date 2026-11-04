@@ -113,7 +113,7 @@ async fn studio_exact_catalog_and_gate_set() {
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
     // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the five
-    // pool tables of 0020_prospects, the three distribution tables of 0025_distribution and the
+    // pool tables of 0020_prospects, the three distribution tables of 0027_distribution and the
     // four outreach tables of 0026_outreach.
     assert_eq!(all_tables.len(), 86);
 

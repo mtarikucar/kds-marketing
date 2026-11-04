@@ -8,9 +8,9 @@ Conventions follow `2026-10-22-jeeta-rust-yeniden-yazim-design.md` (§4.2 three 
 §10 data) and stay consistent with the parallel design `2026-10-30-inbox-comments-marketplace-design.md`
 (branch `feat/inbox-comments-marketplace`).
 
-Branch: `feat/leads-pool-outreach`. Migrations: **`0020_prospects`, `0025_distribution`, `0026_outreach`,
-`0027_mail_files`**. `0018` is taken by the TikTok webhooks work and `0019` by the inbox comments/marketplace
-work; this program starts at 0020 and touches neither of their objects (§4.6). `0021`–`0024` are other branches' (D61), hence the gap. Every count in this document is
+Branch: `feat/leads-pool-outreach`. Migrations: **`0020_prospects`, `0027_distribution`, `0026_outreach`,
+`0028_mail_files`**. `0018` is taken by the TikTok webhooks work and `0019` by the inbox comments/marketplace
+work; this program starts at 0020 and touches neither of their objects (§4.6). `0021`–`0025` are other branches' (D61), hence the gap. Every count in this document is
 relative to `958fcfe3`; a rebase over another branch adds that branch's increments (§7.3).
 
 Markers: **VERIFY (V-xx)** is an external technical fact to check before code depends on it (§13);
@@ -133,7 +133,7 @@ outreach tables).
 | D58 | **The footer's source line follows the send's basis** (L4-T1/T2, `FooterSource: From<CommercialBasis>`), not the person's first touch: a consent gives the consent line, the business basis the public-data line. The EN copy is the TR copy's meaning; both are for the lawyer (L-07). | The line says why the recipient gets this email; a promoted prospect who consented gets the consent line. |
 | D59 | **`0022` keeps an enrolled prospect without a delete action** (L4-T3): `outreach_enrollments.prospect_id` has no `on delete set null` (a composite key's `set null` would null `workspace_id` too, and the column-list form needs PostgreSQL 15); an enrolled prospect is promoted, and the pool never deletes a promoted prospect (purge, erasure and do-not-contact refuse it). Beyond §4.3 the tables check a pause reason exactly when paused, a completion time exactly when completed, no launch time on a draft, a reason exactly when stopped or skipped, a next send while active, `replied_threaded` with `replied_at`; sends reference their campaign. `0022` down refuses nothing: an unsubscribe is the inbox's suppression and withdrawn consent, which stay. | Constraints the rows' rules already state; a rollback keeps every objection. |
 | D60 | **An outreach receipt after closure changes nothing** (L4-T2): a system `OutreachSent` on a won or lost journey is a no-op like a system `Replied`; anyone else's is `Terminal`. | A late receipt must neither reopen nor refuse. |
-| D61 | **Migration numbers follow the base** (merge of 2026-11-04): `0023_oauth_flow` and `0024_whatsapp_erasure` merged into the base and `feat/studio-materials` (#394) holds `0021` (and `0022`), so this program's migrations are `0020_prospects`, **`0025_distribution`**, **`0026_outreach`** and, for L6, **`0027_mail_files`** (renamed before any of them merged). A database that ran this branch's earlier `0021`/`0022` (a local or staging run only) fails `check_schema`: revert them with their downs, or recreate it. | Migrations merge in number order (plan, "Base and branches"); a lower number taken after a higher one applied would never run. |
+| D61 | **Migration numbers follow the base** (merges of 2026-11-04): `0023_oauth_flow` and `0024_whatsapp_erasure` merged into the base, `feat/studio-materials` (#394) holds `0021`/`0022` and #392 holds `0025_inbox_public_erasure`, so this program's migrations are `0020_prospects`, **`0026_outreach`**, **`0027_distribution`** and, for L6, **`0028_mail_files`** (renamed before any of them merged; outreach and distribution do not depend on each other, so their order is free). A database that ran this branch's earlier `0021`/`0022`/`0025`/`0026` (a local or staging run only) fails `check_schema`: revert them with their downs, or recreate it. | Migrations merge in number order (plan, "Base and branches"); a lower number taken after a higher one applied would never run. |
 
 ---
 
@@ -861,7 +861,7 @@ in ('new', 'qualified')` (D35). `prospect_blocklist.kind` holds hard kinds only 
 `instagram`, `tiktok`; D28) and every entry has `key_fingerprint text not null check (key_fingerprint ~
 '^[0-9a-f]{16}$')` (D36).
 
-### 4.2 `0025_distribution`
+### 4.2 `0027_distribution`
 
 ```sql
 alter table people add column if not exists recipient_kind text not null default 'unknown'
@@ -961,7 +961,7 @@ create index if not exists outreach_sends_domain on outreach_sends (workspace_id
 `outreach_sends.outcome` is written only by the outreach hooks inside the transaction that records the outbox
 result (`record_result_in`) or the evidence (`mail_evidence`), so it cannot drift from the outbox.
 
-### 4.4 `0027_mail_files`
+### 4.4 `0028_mail_files`
 
 ```sql
 create table if not exists mail_files (
