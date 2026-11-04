@@ -2,6 +2,7 @@
 pub mod chain;
 pub mod control;
 pub mod files;
+pub mod library;
 pub mod lifecycle;
 pub mod materials;
 pub mod pieces;
