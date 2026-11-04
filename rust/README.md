@@ -2782,6 +2782,70 @@ application behavior, not live Meta/X approval, provider availability, actual bi
 or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.
 
 
+## Growth Studio materials library and olay-driven publishing
+
+Spec `docs/superpowers/specs/2026-11-03-studio-materials-design.md` (decisions D1–D59).
+Migrations `0021_studio_materials` (seven tables) and `0022_studio_posts` (three tables): 87
+tables with `0019_inbox_public`. Studio adds 26 catalog rows (17 MCP twins, 9 panel-only);
+with the inbox rows the release has 201 rows and 163 MCP tools.
+
+**Material-gated by construction (D1, D2).** Every medium of a piece is a material of the
+library; `studio.piece_submit` refuses a piece that shows none eligible as an anchor
+(`not_a_material`, `no_eligible_material`, `material_refused` with each material's code), and
+the publisher re-checks at publish time and holds (`material_check_hold`, never a failed run).
+The caption truth check (§7) reports caption findings at submission and holds at publish until
+an owner or manager releases those exact findings for that revision; an eligibility refusal is
+never releasable. Pieces submitted before the library record no material use and hold with
+`no_material`.
+
+The library needs no approved strategy (D35); planning and publishing do.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Gate |
+|---|---|---|
+| `studio.olays_list`, `studio.olay_get` | `GET /api/studio/olays[/{olay_id}]` | Exempt |
+| `studio.olay_create`, `studio.olay_update` | `POST /api/studio/olays`, `PATCH …/{olay_id}` | Exempt |
+| `studio.materials_list`, `studio.material_get` | `GET /api/studio/materials[/{material_id}]` | Exempt |
+| `studio.material_add`, `studio.material_tag` | `POST /api/studio/materials`, `PATCH …/{material_id}/tags` | Exempt |
+| `studio.slot_materials` | `GET /api/studio/slots/{slot_id}/materials` | Exempt |
+| `studio.calendar_list` | `GET /api/studio/calendar` | Exempt |
+| `studio.shoot_list`, `studio.shoot_request`, `studio.shoot_resolve` | `/api/studio/shoot-requests[/{request_id}/resolve]` | Exempt |
+| `studio.post_requests` | `GET /api/studio/post-requests` | Gated |
+| `studio.posts_propose` | `POST /api/studio/post-requests/{request_id}/proposal` | Gated |
+| `studio.posts_list`, `studio.weekly_summary` | `GET /api/studio/posts`, `GET /api/studio/summary` | Gated |
+
+Panel only, an owner's or manager's decision in person (D4): `studio.olay_confirm`,
+`studio.material_permission`, `studio.material_free`, `studio.material_bind`,
+`studio.material_delete`, `studio.calendar_set`, `studio.material_policy_set` (exempt), and
+`studio.material_check_release`, `studio.posting_policy_set` (gated). An agent may give its own
+AI image a share permission only while it depicts nothing and names no person (D5, D38).
+
+**Olay-driven publishing (§14).** `studio_plan` runs every 10 minutes and never creates a post.
+Its triggers write post requests (work items: `studio.pending`'s `post_requests`,
+`work.pending` kind `studio_post_request`) or çekim listesi items: an olay's new eligible
+materials 30 minutes after their last change, a calendar occasion within its lead, a channel
+without a feed post for four days. An agent answers a request with `studio.posts_propose`,
+checked all-or-nothing (formats per kind, materials at their time, lead, horizon, quiet hours
+and caps in the posting policy's zone, each post at its own offset) and materialized as planned
+slots at once. A post enters the pending work at its preparation start (story 2 h, feed post
+and carousel 24 h, reel and TikTok video 48 h), is never claimed past its grace, and retires
+`missed_grace` then, unless an attempt may still be going out. Stories are refused
+(`format_unsupported`) on every channel until an adapter publishes them (D30). Once per
+workspace the planner retires the weekly quotas' planned and ready organic slots
+(`replanned`), never one whose publish is in flight; the paid lane keeps its weekly positions.
+
+KVKK: materials that show people are erased with the person (`inbox.people.erase`) and 24
+months after their olay by `StudioFilesCleanup`, which deletes an erased material's bytes once
+no attempt in flight shows them. Replay receipts keep ids, never the records (D40).
+
+The panel's Growth Studio has two tabs for it: **Materyaller** (Yükle with the phone's camera,
+Olaylar, a material's tags, permission and "kullanıldığı yerler", Takvim, Çekim listesi) and
+**Paylaşımlar** (Plan: the requests waiting for the agent and the planned posts; Haftalık özet;
+Paylaşım ayarları). Today's slot card shows a piece's materials and its material check.
+
+Deploy: read `studio.pending` on each workspace first; re-submit or cancel the Ready pieces
+that will hold with `no_material`. The first planner run after the deploy retires the weekly
+quotas' organic slots once.
+
 ## M4 Task 1 — durable billing storage
 
 The implemented storage boundary is **67 tables**, **12 migration pairs** (latest
