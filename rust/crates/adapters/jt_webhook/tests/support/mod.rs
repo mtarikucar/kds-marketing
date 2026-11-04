@@ -172,6 +172,42 @@ impl World {
             .await
     }
 
+    /// A connected capability of `kind` holding `external_id` in `ws` whose Page token's grant
+    /// held `scopes`, recorded with it as the use cases record them (`access.scopes`).
+    pub async fn granted(
+        &self,
+        ws: WorkspaceId,
+        kind: &str,
+        external_id: &str,
+        scopes: &[&str],
+    ) -> CapabilityId {
+        let mut c = Capability::new(
+            CapabilityId::new_v7(),
+            ws,
+            NewCapability {
+                kind_key: kind.into(),
+                name: format!("{kind} {external_id}"),
+                external_id: Some(external_id.into()),
+                connector_public: serde_json::json!({
+                    "provider": "meta",
+                    "access": { "kind": "page_token", "app": "meta", "scopes": scopes },
+                }),
+                ..NewCapability::default()
+            },
+            FIXED_NOW,
+        )
+        .unwrap();
+        c.status = StoredStatus::Verified;
+        c.last_verified_at = Some(FIXED_NOW);
+        let mut t = self.uow.tenant(ws).await.unwrap();
+        t.capabilities()
+            .insert(c.clone(), Some(b"sealed".to_vec()))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+        c.id
+    }
+
     /// Every stored event, in every workspace, in the order stored.
     pub fn stored(&self) -> Vec<StoredInboundEvent> {
         self.uow.snapshot().inbound_events
