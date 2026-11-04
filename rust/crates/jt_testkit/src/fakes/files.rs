@@ -67,6 +67,22 @@ impl FileStore for MemoryFiles {
             .cloned()
             .ok_or_else(|| AppError::not_found("file"))
     }
+    async fn read_range(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let files = self.files.lock().unwrap();
+        let bytes = &files
+            .get(&(ws, id))
+            .ok_or_else(|| AppError::not_found("file"))?
+            .bytes;
+        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(bytes.len());
+        let end = start.saturating_add(len).min(bytes.len());
+        Ok(bytes[start..end].to_vec())
+    }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError> {
         self.files.lock().unwrap().remove(&(ws, id));
         Ok(())

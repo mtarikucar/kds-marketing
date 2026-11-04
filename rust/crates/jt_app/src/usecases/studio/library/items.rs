@@ -18,14 +18,14 @@ use crate::{
         Deps, ledger_entry,
         studio::{
             control::human_required,
-            files::{available, decode, encode, key},
+            files::{decode, encode, key},
         },
     },
 };
 use jt_capability::CapabilityId;
 use jt_studio::{
     FileId, MaterialUsage, PieceId, PublicationId, SlotId, SlotNeed, SlotState, TagKey,
-    capture_time, istanbul_day, olay_suggestions, rank_materials,
+    istanbul_day, olay_suggestions, rank_materials,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -543,10 +543,11 @@ pub async fn material_add(
     } = decide(ctx, &i)?;
     let file = add_checks(r.as_mut(), ctx, &i).await?;
     drop(r);
-    // The capture time, from the bytes the record names, read under no transaction.
-    let upload = available(d, ctx.workspace_id, &file).await?;
-    let captured_at = capture_time(&file.mime, &upload.bytes).or(i.captured_at);
-    drop(upload);
+    // The capture time, from what the stored bytes say of themselves, read under no transaction
+    // and without holding the file (D41).
+    let captured_at = super::capture::capture_time_of(d, &file)
+        .await?
+        .or(i.captured_at);
     let material = Material {
         id: MaterialId(d.ids.uuid()),
         workspace_id: ctx.workspace_id,

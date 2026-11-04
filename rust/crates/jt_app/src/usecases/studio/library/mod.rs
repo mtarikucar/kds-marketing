@@ -13,6 +13,7 @@
 //! the publisher's fence, so it never interleaves with a publish. Ledger entries name ids, codes,
 //! tag keys and kinds, never the owner's words (titles, notes, places, client names, texts).
 mod calendar;
+mod capture;
 mod items;
 mod kvkk;
 mod olays;

@@ -16,6 +16,23 @@ pub fn capture_time(mime: &str, bytes: &[u8]) -> Option<OffsetDateTime> {
     }
 }
 
+/// One ISO base media box header, for a reader that walks a stored video a header at a time
+/// instead of holding it (spec D41): from `head`, the box's first bytes (16 suffice), and `left`,
+/// the bytes from its start to its parent's end, the box's type, its whole size (its header
+/// included) and its header's length. `None` when it runs past its parent or is shorter than its
+/// own header, as [`capture_time`]'s own walk reads a box.
+pub fn mp4_box_header(head: &[u8], left: u64) -> Option<([u8; 4], u64, u64)> {
+    let kind: [u8; 4] = head.get(4..8)?.try_into().ok()?;
+    let (size, header) = crate::mp4::box_size(head, left)?;
+    Some((kind, size, header))
+}
+
+/// A video's capture time from its `moov/mvhd` box's payload alone (its header left out), as
+/// [`capture_time`] reads it from the whole file.
+pub fn mp4_mvhd_capture_time(mvhd: &[u8]) -> Option<OffsetDateTime> {
+    crate::mp4::mvhd_creation_time(mvhd)
+}
+
 /// The EXIF tag of the Exif sub-IFD pointer in IFD0.
 const EXIF_IFD: u16 = 0x8769;
 /// `DateTimeOriginal`: when the picture was taken, `YYYY:MM:DD HH:MM:SS`.

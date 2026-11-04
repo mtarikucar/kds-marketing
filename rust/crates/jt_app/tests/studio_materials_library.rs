@@ -21,8 +21,11 @@ use jt_studio::*;
 use jt_tenancy::{AgentConnectionId, UserId, WorkspaceStatus};
 use jt_testkit::fakes::{FIXED_NOW, FixedClock};
 use serde_json::{Value, json};
-use std::sync::Arc;
-use time::macros::datetime;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering::SeqCst},
+};
+use time::{OffsetDateTime, macros::datetime};
 
 fn input<T: serde::de::DeserializeOwned>(v: Value) -> T {
     serde_json::from_value(v).unwrap()
@@ -90,6 +93,83 @@ fn jpeg(date: &str) -> Vec<u8> {
     out.extend_from_slice(&tiff);
     out.extend_from_slice(&[0xFF, 0xD9]);
     out
+}
+
+/// An MP4 whose `moov`, with an `mvhd` made at `at`, follows `padding` bytes of media data.
+fn mp4(at: OffsetDateTime, padding: usize) -> Vec<u8> {
+    let mut b = 16u32.to_be_bytes().to_vec();
+    b.extend_from_slice(b"ftypisom");
+    b.extend_from_slice(&0u32.to_be_bytes());
+    b.extend_from_slice(&u32::try_from(8 + padding).unwrap().to_be_bytes());
+    b.extend_from_slice(b"mdat");
+    b.extend(std::iter::repeat_n(0u8, padding));
+    // Seconds since 1904-01-01, the epoch of ISO base media times.
+    let created = u32::try_from(at.unix_timestamp() + 2_082_844_800).unwrap();
+    // Version 0 and flags, creation and modification times, timescale, duration, the rest.
+    let mut mvhd = vec![0u8; 4];
+    mvhd.extend_from_slice(&created.to_be_bytes());
+    mvhd.extend_from_slice(&created.to_be_bytes());
+    mvhd.extend_from_slice(&1000u32.to_be_bytes());
+    mvhd.extend_from_slice(&5000u32.to_be_bytes());
+    mvhd.extend(std::iter::repeat_n(0u8, 80));
+    let mut mvhd_box = u32::try_from(8 + mvhd.len())
+        .unwrap()
+        .to_be_bytes()
+        .to_vec();
+    mvhd_box.extend_from_slice(b"mvhd");
+    mvhd_box.extend(mvhd);
+    b.extend_from_slice(&u32::try_from(8 + mvhd_box.len()).unwrap().to_be_bytes());
+    b.extend_from_slice(b"moov");
+    b.extend(mvhd_box);
+    b
+}
+
+/// A file store that counts the bytes it gives out, whichever way they are read.
+struct Counting {
+    inner: Arc<dyn jt_app::ports::files::FileStore>,
+    read: Arc<AtomicU64>,
+}
+
+#[async_trait::async_trait]
+impl jt_app::ports::files::FileStore for Counting {
+    async fn probe(&self) -> Result<(), AppError> {
+        self.inner.probe().await
+    }
+    async fn put(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+        id: FileId,
+        u: MediaUpload,
+    ) -> Result<jt_app::ports::files::StoredFile, AppError> {
+        self.inner.put(ws, id, u).await
+    }
+    async fn read(&self, ws: jt_tenancy::WorkspaceId, id: FileId) -> Result<MediaUpload, AppError> {
+        let u = self.inner.read(ws, id).await?;
+        self.read.fetch_add(u.bytes.len() as u64, SeqCst);
+        Ok(u)
+    }
+    async fn read_range(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let part = self.inner.read_range(ws, id, offset, len).await?;
+        self.read.fetch_add(part.len() as u64, SeqCst);
+        Ok(part)
+    }
+    async fn provider_url(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+        id: FileId,
+        expires_at: OffsetDateTime,
+    ) -> Result<url::Url, AppError> {
+        self.inner.provider_url(ws, id, expires_at).await
+    }
+    async fn delete(&self, ws: jt_tenancy::WorkspaceId, id: FileId) -> Result<(), AppError> {
+        self.inner.delete(ws, id).await
+    }
 }
 
 async fn upload(w: &World, key: &str, mime: &str, bytes: &[u8]) -> FileId {
@@ -436,6 +516,52 @@ async fn a_material_takes_its_capture_time_from_its_bytes_and_suggests_its_olays
         png_out.material.captured_at,
         Some(datetime!(2026-11-16 08:00 UTC))
     );
+}
+
+/// `material_add` reads a capture time from what it needs of the file, never the whole of it
+/// (spec D41): a JPEG's first part, a video's box headers and its `mvhd`.
+#[tokio::test]
+async fn a_capture_time_is_read_without_the_whole_file() {
+    let (mut w, _) = publishing_world().await;
+    let read = Arc::new(AtomicU64::new(0));
+    w.d.files = Arc::new(Counting {
+        inner: w.d.files.clone(),
+        read: read.clone(),
+    });
+    let o = olay(&w, &w.ctx, "olay", json!({})).await;
+    let padding = 3_000_000;
+    let mut big = jpeg("2026:11:16 10:30:00");
+    big.extend(std::iter::repeat_n(0u8, padding));
+    let photo = upload(&w, "photo", "image/jpeg", &big).await;
+    // The upload reads its file back whole to check it; adding it reads only its first part.
+    read.store(0, SeqCst);
+    let m = add(
+        &w,
+        &w.ctx,
+        "photo",
+        photo,
+        json!({"olay_id":o.id,"share":"shareable"}),
+    )
+    .await;
+    assert_eq!(m.captured_at, Some(datetime!(2026-11-16 10:30 +03:00)));
+    let n = read.load(SeqCst);
+    assert!(n <= 128 * 1024, "{n} bytes read of {}", big.len());
+    // A video whose `moov` follows its media data: the boxes between are skipped unread.
+    let at = datetime!(2026-11-16 07:30 UTC);
+    let video = mp4(at, padding);
+    let clip = upload(&w, "clip", "video/mp4", &video).await;
+    read.store(0, SeqCst);
+    let m = add(
+        &w,
+        &w.ctx,
+        "clip",
+        clip,
+        json!({"olay_id":o.id,"share":"shareable"}),
+    )
+    .await;
+    assert_eq!(m.captured_at, Some(at));
+    let n = read.load(SeqCst);
+    assert!(n <= 1024, "{n} bytes read of {}", video.len());
 }
 
 #[tokio::test]

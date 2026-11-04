@@ -1,0 +1,88 @@
+//! A new material's capture time, read from its stored file without holding it (spec §4.2, §5.3,
+//! D41): a JPEG's first [`JPEG_HEAD`] bytes, where its EXIF segment is; a video's boxes walked a
+//! header at a time to `moov/mvhd`, the boxes in between skipped unread. Other types name none.
+//! What is read is a suggestion of the material's olay, never a check of the file.
+use crate::{error::AppError, ports::files::StoredFile, usecases::Deps};
+use jt_studio::{capture_time, mp4_box_header, mp4_mvhd_capture_time};
+use time::OffsetDateTime;
+
+/// The bytes of a JPEG read for its capture time: its EXIF `APP1` segment is at most 64 KiB and
+/// comes before the image data.
+pub(crate) const JPEG_HEAD: usize = 128 * 1024;
+/// The most boxes walked at one level of a video.
+const MAX_BOXES: usize = 64;
+/// The bytes a box header takes at most (a 64-bit size).
+const BOX_HEAD: usize = 16;
+/// The largest `mvhd` box read (version 1: 120 bytes).
+const MAX_MVHD: u64 = 256;
+
+/// A box found in the walk: where its payload starts and where it ends, in the file.
+struct Found {
+    payload: u64,
+    end: u64,
+}
+
+/// When the photo or video `f` was taken, as its bytes say; `None` when they say nothing.
+pub(crate) async fn capture_time_of(
+    d: &Deps,
+    f: &StoredFile,
+) -> Result<Option<OffsetDateTime>, AppError> {
+    match f.mime.trim().to_ascii_lowercase().as_str() {
+        "image/jpeg" => {
+            let head = d
+                .files
+                .read_range(f.workspace_id, f.id, 0, JPEG_HEAD)
+                .await?;
+            Ok(capture_time("image/jpeg", &head))
+        }
+        "video/mp4" => {
+            let Some(moov) = find(d, f, 0, f.size_bytes, b"moov").await? else {
+                return Ok(None);
+            };
+            let Some(mvhd) = find(d, f, moov.payload, moov.end, b"mvhd").await? else {
+                return Ok(None);
+            };
+            let len = mvhd.end - mvhd.payload;
+            if len > MAX_MVHD {
+                return Ok(None);
+            }
+            let payload = d
+                .files
+                .read_range(f.workspace_id, f.id, mvhd.payload, len as usize)
+                .await?;
+            Ok(mp4_mvhd_capture_time(&payload))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The first box of type `kind` among the boxes from byte `at` to byte `end` of `f`, reading
+/// their headers alone.
+async fn find(
+    d: &Deps,
+    f: &StoredFile,
+    mut at: u64,
+    end: u64,
+    kind: &[u8; 4],
+) -> Result<Option<Found>, AppError> {
+    for _ in 0..MAX_BOXES {
+        if end.saturating_sub(at) < 8 {
+            return Ok(None);
+        }
+        let head = d
+            .files
+            .read_range(f.workspace_id, f.id, at, BOX_HEAD)
+            .await?;
+        let Some((found, size, header)) = mp4_box_header(&head, end - at) else {
+            return Ok(None);
+        };
+        if &found == kind {
+            return Ok(Some(Found {
+                payload: at + header,
+                end: at + size,
+            }));
+        }
+        at += size;
+    }
+    Ok(None)
+}

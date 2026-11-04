@@ -34,7 +34,12 @@ const MP4_EPOCH_TO_UNIX: i64 = 2_082_844_800;
 /// 8 bytes after the version and flags); `None` when it is zero (not set), unreadable, or outside
 /// 1970–2100.
 pub(crate) fn creation_time(bytes: &[u8]) -> Option<time::OffsetDateTime> {
-    let mvhd = find(find(bytes, b"moov")?, b"mvhd")?;
+    mvhd_creation_time(find(find(bytes, b"moov")?, b"mvhd")?)
+}
+
+/// The creation time an `mvhd` box's payload (`mvhd`, its header left out) names, as
+/// [`creation_time`] reads it.
+pub(crate) fn mvhd_creation_time(mvhd: &[u8]) -> Option<time::OffsetDateTime> {
     let seconds = match *mvhd.first()? {
         0 => u64::from(be32(mvhd, 4)?),
         1 => be64(mvhd, 4)?,
@@ -59,19 +64,24 @@ fn fragment_duration(moov: &[u8]) -> Option<u64> {
     (duration > 0).then_some(duration)
 }
 
+/// A box's whole size (its header included) and its header's length, from `head`, its first
+/// bytes (8, or 16 for a 64-bit size), and `left`, the bytes from its start to its parent's end:
+/// `None` when it runs past its parent or is shorter than its own header.
+pub(crate) fn box_size(head: &[u8], left: u64) -> Option<(u64, u64)> {
+    let (size, header) = match be32(head, 0)? {
+        // The box runs to the end of its parent.
+        0 => (left, 8),
+        1 => (be64(head, 8)?, 16),
+        size => (u64::from(size), 8),
+    };
+    (size >= header && size <= left).then_some((size, header))
+}
+
 /// The payload of the first box of type `kind` among the boxes `bytes` holds.
 fn find<'a>(mut bytes: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     while bytes.len() >= 8 {
-        let size = be32(bytes, 0)?;
-        let (size, header) = match size {
-            // The box runs to the end of its parent.
-            0 => (bytes.len(), 8),
-            1 => (usize::try_from(be64(bytes, 8)?).ok()?, 16),
-            size => (usize::try_from(size).ok()?, 8),
-        };
-        if size < header || size > bytes.len() {
-            return None;
-        }
+        let (size, header) = box_size(bytes, bytes.len() as u64)?;
+        let (size, header) = (usize::try_from(size).ok()?, usize::try_from(header).ok()?);
         if &bytes[4..8] == kind {
             return Some(&bytes[header..size]);
         }
