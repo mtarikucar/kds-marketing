@@ -730,6 +730,37 @@ async fn reconcile_finds_our_reply_text() {
 }
 
 #[tokio::test]
+async fn reconcile_skips_a_gone_target() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/c-gone/replies",
+        status(
+            400,
+            json!({ "error": { "message": "Unsupported get request.", "type": "GraphMethodException", "code": 100, "error_subcode": 33 } }),
+        ),
+    );
+    r.mock.on(
+        "GET",
+        &format!("/fb/v19.0/{COMMENT}/replies"),
+        ok(json!({ "data": [
+            { "id": "r-2", "text": "24 parça.", "timestamp": graph_ago(1), "from": { "id": IG } },
+        ]})),
+    );
+    let drafts = r
+        .meta
+        .reconcile(
+            &page_cred(),
+            &ig_public(),
+            &[target("c-gone"), target(COMMENT)],
+        )
+        .await
+        .unwrap();
+    let ids: Vec<&str> = drafts.iter().map(|d| d.external_id.as_str()).collect();
+    assert_eq!(ids, ["comment:r-2:open"]);
+}
+
+#[tokio::test]
 async fn poll_without_grant_calls_nothing() {
     let r = rig().await;
     let bare = public("instagram", IG, &facebook_scopes(false));

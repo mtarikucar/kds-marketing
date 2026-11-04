@@ -612,9 +612,15 @@ pub(crate) async fn poll(
             } else {
                 &[("filter", "stream"), ("fields", FB_COMMENT_FIELDS)]
             };
-            let (comments, more) = reader
+            let (comments, more) = match reader
                 .page(connector, next.take(), &[node(&id)?, "comments"], query)
-                .await?;
+                .await
+            {
+                Ok(page) => page,
+                // Deleted since it was listed: nothing more to read on it.
+                Err(e) if is_gone(&e) => (Vec::new(), None),
+                Err(e) => return Err(e),
+            };
             for comment in &comments {
                 drafts.extend(polled_comment(instagram, account, Some(&id), comment));
                 for reply in comment["replies"]["data"].as_array().into_iter().flatten() {
@@ -649,7 +655,7 @@ pub(crate) async fn poll(
 
 /// The replies Graph lists under each of `targets` (comments the inbox answered without knowing
 /// whether its answer was taken), as their events: our own reply among them settles the
-/// uncertain answer (spec D25).
+/// uncertain answer (spec D25). A target Graph says is gone is skipped.
 pub(crate) async fn reconcile(
     connector: &MetaConnector,
     cred: &Credential,
@@ -671,14 +677,21 @@ pub(crate) async fn reconcile(
         } else {
             ("comments", FB_COMMENT_FIELDS)
         };
-        let (replies, _) = reader
+        let replies = match reader
             .page(connector, None, &[comment, edge], &[("fields", fields)])
             .await
-            .map_err(gone)?;
+        {
+            Ok((replies, _)) => replies,
+            // The comment is gone: its removal reaches the item another way (a webhook, a reply's
+            // refusal); the other targets are still read.
+            Err(e) if is_gone(&e) => continue,
+            Err(e) => return Err(e),
+        };
         let subject = target.subject_external_id.as_deref();
         for reply in &replies {
             let mut reply = reply.clone();
-            // Facebook lists a reply's parent only when asked for it; its parent is the target.
+            // A reply listed under the target answers it, whether or not the listing names its
+            // parent.
             if !instagram && reply["parent"].is_null() {
                 reply["parent"] = json!({ "id": target.external_id });
             }

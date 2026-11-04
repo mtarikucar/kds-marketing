@@ -1786,7 +1786,8 @@ const MAX_RECONCILED: u32 = 50;
 /// (`inbox::public::comments_enabled`: a Meta surface whose comments are on, a marketplace)
 /// through their provider's poll (spec §6.9, D17): the items new since the capability's cursor,
 /// and the current state of the items whose public reply of ours is uncertain (`unknown`), so
-/// that our own reply found there settles it (D25). The drafts are stored as a delivery's events
+/// that our own reply found there settles it (D25; best effort: a failed reconciliation is logged
+/// and tried again next run). The drafts are stored as a delivery's events
 /// (`webhook::store_polled`: what the webhook already stored is a duplicate) and consumed. The
 /// provider is called with no transaction open; the drafts and the next cursor commit together
 /// only if the capability, its credential and its cursor are as they were when it started. Counts:
@@ -1836,12 +1837,18 @@ pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
                     .await
                     .map_err(Failure::Provider)?;
                 if !targets.is_empty() {
-                    drafts.extend(
-                        poller
-                            .reconcile(&credential, &public, &targets)
-                            .await
-                            .map_err(Failure::Provider)?,
-                    );
+                    // Best effort: a failed reconciliation is tried again next run, and the
+                    // poll's items are stored all the same.
+                    match poller.reconcile(&credential, &public, &targets).await {
+                        Ok(found) => drafts.extend(found),
+                        Err(e) => tracing::warn!(
+                            job = job.name(),
+                            workspace_id = %ws,
+                            capability_id = %cap.id,
+                            error_kind = e.kind(),
+                            "the uncertain replies could not be reconciled this run"
+                        ),
+                    }
                 }
                 drop(credential);
                 let mut r = deps.uow.tenant(ws).await?;
