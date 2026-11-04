@@ -889,6 +889,52 @@ pub async fn counts_by_window(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(s.recent_outcomes(a.id, 10).await.unwrap().len(), 4);
 }
 
+/// A mailbox's sending days are local days in the time zone asked for, refused sends and other
+/// mailboxes apart (the warm-up counts them, spec §3.11).
+pub async fn mailbox_send_days_are_local_days(uow: Arc<dyn UnitOfWork>) {
+    let w = world(uow).await;
+    let second = capability(&w.f.uow, w.f.ws, "mailbox").await;
+    let a = running(&w, 0).await;
+    let e = enrollment(a.id, person(&w).await, 0);
+    enroll(&w, std::slice::from_ref(&e)).await;
+    let d = "ornek.example.invalid";
+    // FIXED_NOW is 2026-10-22 09:00 UTC: -780 is 23:00 on the 21st in Istanbul, 05:00 on the
+    // 22nd in Tokyo; -600 is 02:00 on the 22nd in Istanbul.
+    send(&w, &e, w.mailbox, 1, d, SendOutcome::Sent, -780).await;
+    send(&w, &e, w.mailbox, 2, d, SendOutcome::Unknown, -600).await;
+    send(&w, &e, w.mailbox, 3, d, SendOutcome::Refused, -1500).await;
+    send(&w, &e, second, 4, d, SendOutcome::Sent, -1500).await;
+    send(&w, &e, w.mailbox, 5, d, SendOutcome::Queued, 0).await;
+    let day = |n: u8| time::Date::from_calendar_date(2026, time::Month::October, n).unwrap();
+    let mut t = w.f.uow.tenant(w.f.ws).await.unwrap();
+    let s = t.outreach_sends();
+    assert_eq!(
+        s.mailbox_send_days(w.mailbox, "Europe/Istanbul", at(-2000))
+            .await
+            .unwrap(),
+        vec![day(21), day(22)]
+    );
+    assert_eq!(
+        s.mailbox_send_days(w.mailbox, "Asia/Tokyo", at(-2000))
+            .await
+            .unwrap(),
+        vec![day(22)]
+    );
+    assert_eq!(
+        s.mailbox_send_days(w.mailbox, "Europe/Istanbul", at(-700))
+            .await
+            .unwrap(),
+        vec![day(22)],
+        "since bounds the sends"
+    );
+    assert_eq!(
+        s.mailbox_send_days(second, "Europe/Istanbul", at(-2000))
+            .await
+            .unwrap(),
+        vec![day(21)]
+    );
+}
+
 pub async fn domain_counts_by_mailbox(uow: Arc<dyn UnitOfWork>) {
     let w = world(uow).await;
     let second = capability(&w.f.uow, w.f.ws, "mailbox").await;

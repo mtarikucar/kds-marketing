@@ -246,7 +246,7 @@ async fn qualified(
 
 /// The hard keys a person is reached or known by: their active email and phone identities, and
 /// the hard keys of the prospect they were promoted from.
-async fn person_keys(
+pub(crate) async fn person_keys(
     r: &mut dyn TenantRepos,
     person: PersonId,
     emails: &[String],

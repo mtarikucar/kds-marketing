@@ -449,3 +449,117 @@ async fn the_unsubscribe_link_pins_its_shape() {
         None
     );
 }
+
+// ---- The dispatcher and the claim (plan L4-T5) ----
+
+#[tokio::test]
+async fn the_dispatcher_sends_nothing_while_locked() {
+    // A campaign set up as if it had been launched while the switch was on.
+    let mut o = outreach_world().await;
+    let ada = consented(&o.w).await;
+    let t = template(&o.w, &o.w.owner_ctx, "Merhaba", "Selam").await;
+    let c = running(&o, definition(t, json!({"explicit": [ada]}))).await;
+    assert_eq!(c.campaign.status, CampaignStatus::Running);
+    platform(&mut o.w, false);
+    let w = &o.w;
+    let report = dispatch(w, w.owner_ctx.now).await;
+    assert_eq!(report.changed, 0);
+    assert!(sent_mail(&o.mail).is_empty());
+    assert!(w.uow.snapshot().inbox.outbox.is_empty(), "nothing queued");
+    let e = enrollments(w, c.campaign.id).pop().unwrap();
+    assert_eq!(e.status, jt_outreach::EnrollmentStatus::Active, "it waits");
+    // Nor does the use case body when called directly.
+    let d = jt_app::usecases::outreach::dispatch::run(
+        &w.deps,
+        &jt_app::ctx::Ctx {
+            workspace_id: w.ws,
+            actor: jt_ledger::Actor::System {
+                component: "test".into(),
+            },
+            permissions: Default::default(),
+            role_key: None,
+            now: w.owner_ctx.now,
+            agent_connection_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(d, jt_app::usecases::outreach::Dispatched::default());
+}
+
+#[tokio::test]
+async fn a_queued_outreach_intent_is_refused_at_claim_while_locked() {
+    let mut o = outreach_world().await;
+    let ada = consented(&o.w).await;
+    let t = template(&o.w, &o.w.owner_ctx, "Merhaba", "Selam").await;
+    running(&o, definition(t, json!({"explicit": [ada]}))).await;
+    o.mail.push_mail(accepted("once"));
+    dispatch(&o.w, o.w.owner_ctx.now).await;
+    assert_eq!(sent_mail(&o.mail).len(), 1);
+    // As a crash before the claim leaves it: queued again (the outbox recovery claims it).
+    let mut id = None;
+    o.w.uow.edit(|s| {
+        let row = s.inbox.outbox.last_mut().unwrap();
+        row.state = "queued".into();
+        row.fence_snapshot = None;
+        id = Some(row.id);
+    });
+    platform(&mut o.w, false);
+    let out = replies::send_step(&o.w.deps, &o.w.owner_ctx, id.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(out.state, "refused");
+    assert_eq!(
+        o.w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some("outreach_disabled_on_platform")
+    );
+    assert_eq!(sent_mail(&o.mail).len(), 1, "nothing more left");
+}
+
+#[tokio::test]
+async fn a_business_recipient_without_consent_is_skipped_while_the_b2b_basis_is_off() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let firm = person(w, "Firma", "info@firma.example.invalid").await;
+    business(w, firm).await;
+    let t = template(w, &w.owner_ctx, "Merhaba", "Selam").await;
+    let c = running(&o, definition(t, json!({"explicit": [firm]}))).await;
+    let out = c.enrollment.unwrap();
+    assert_eq!(out.enrolled, 0);
+    assert_eq!(out.skipped["no_basis"], 1);
+    // Stored without the counsel's confirmation, the basis counts for nothing either.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.workspace_policy()
+        .patch_leads(
+            json!({"outreach": {"b2b_basis": ["email"]}}),
+            w.owner_ctx.now,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let preview = outreach::audience_preview(
+        &w.deps,
+        &w.owner_ctx,
+        outreach::PreviewInput {
+            audience: serde_json::from_value(json!({"explicit": [firm]})).unwrap(),
+            mailbox_id: o.mailbox,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(preview.by_skip_reason["no_basis"], 1);
+    assert!(!preview.business_basis_in_force);
+    // And an email to it through the inbox is refused.
+    let e = err(replies::send(
+        &w.deps,
+        &w.owner_ctx,
+        firm,
+        serde_json::from_value(json!({"channel": "email", "text": "Merhaba",
+                "intent": "commercial"}))
+        .unwrap(),
+    )
+    .await);
+    assert_eq!(e.message, "IZIN_YOK");
+    dispatch(w, w.owner_ctx.now).await;
+    assert!(sent_mail(&o.mail).is_empty());
+}

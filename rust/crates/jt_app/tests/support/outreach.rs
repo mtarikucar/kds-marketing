@@ -29,6 +29,8 @@ pub struct Outreach {
     pub w: World,
     pub mailbox: CapabilityId,
     pub mail: Arc<ScriptedConnector>,
+    /// NetGSM's scripted adapter: İYS lookups (`ConsentSync::search`).
+    pub netgsm: Arc<ScriptedConnector>,
 }
 
 /// The platform switch `JEETA_OUTREACH_ENABLED` of `w`.
@@ -91,11 +93,129 @@ pub async fn outreach_world() -> Outreach {
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     w.approve_strategy().await;
     let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
-    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mail.clone()));
+    let netgsm = Arc::new(ScriptedConnector::new(Provider::Netgsm));
+    w.deps.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(mail.clone())
+            .with_connector(netgsm.clone()),
+    );
     platform(&mut w, true);
     sender_identity(&w).await;
     let mailbox = add_mailbox(&w, "Satış", FROM, false).await;
-    Outreach { w, mailbox, mail }
+    Outreach {
+        w,
+        mailbox,
+        mail,
+        netgsm,
+    }
+}
+
+/// A NetGSM SMS line with an İYS slot (brand `brand-42`): the workspace's İYS capability.
+pub async fn add_iys(o: &Outreach) {
+    let w = &o.w;
+    let now = w.owner_ctx.now;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        w.ws,
+        NewCapability {
+            kind_key: "sms_line".into(),
+            name: "Hat".into(),
+            ..Default::default()
+        },
+        now,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.last_verified_at = Some(now);
+    let cred = Credential::NetgsmSms {
+        usercode: "user".into(),
+        password: "private-sms".into(),
+        msgheader: "ACME".into(),
+    };
+    let sealed = w
+        .deps
+        .seal
+        .seal(w.ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    let id = cap.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.commit().await.unwrap();
+    jt_app::usecases::connector::set_credentials(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({"capability_id": id, "credential": {
+            "kind": "netgsm_iys", "usercode": "user", "password": "iys-secret", "brand_code": "brand-42",
+        }}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+}
+
+/// The owner opens the business-recipient basis on email, the counsel's confirmation recorded,
+/// without the İYS lookup unless `iys`.
+pub async fn open_b2b(w: &World, iys: bool) {
+    outreach::settings_set(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({
+            "b2b_basis": ["email"], "require_iys_lookup": iys,
+            "legal_ack": {"counsel_confirmed": true, "note": "Avukat görüşü"},
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+}
+
+/// `person` is a business recipient.
+pub async fn business(w: &World, person: PersonId) {
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.people()
+        .set_recipient_kind(person, jt_inbox::RecipientKind::Business, w.owner_ctx.now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+}
+
+/// A draft of `definition` saved and launched by the owner: running, its audience enrolled.
+pub async fn running(o: &Outreach, definition: Definition) -> CampaignOut {
+    let c = campaign(&o.w, &o.w.owner_ctx, o.mailbox, definition).await;
+    launch(&o.w, &o.w.owner_ctx, c.campaign.id, 1)
+        .await
+        .unwrap()
+}
+
+/// One run of the `outreach_dispatch` job at `now`.
+pub async fn dispatch(w: &World, now: time::OffsetDateTime) -> jt_app::usecases::jobs::JobReport {
+    jt_app::usecases::jobs::run_outreach_dispatch(&w.deps, now).await
+}
+
+/// The enrollments of campaign `id`, oldest id first.
+pub fn enrollments(w: &World, id: CampaignId) -> Vec<jt_app::ports::outreach::EnrollmentRow> {
+    let mut rows: Vec<_> = w
+        .uow
+        .snapshot()
+        .outreach
+        .enrollments
+        .into_iter()
+        .filter(|(_, e)| e.campaign_id == id)
+        .map(|(_, e)| e)
+        .collect();
+    rows.sort_by_key(|e| e.id);
+    rows
+}
+
+/// The outreach send rows, in creation order.
+pub fn sends(w: &World) -> Vec<jt_app::ports::outreach::SendRow> {
+    w.uow
+        .snapshot()
+        .outreach
+        .sends
+        .into_iter()
+        .map(|(_, s)| s)
+        .collect()
 }
 
 /// A person with one email identity, created by the owner from a form.

@@ -301,6 +301,7 @@ fn every_job_has_a_lock_named_after_it() {
             "research_plan",
             "lead_distribution",
             "whatsapp_app_sync",
+            "outreach_dispatch",
         ]
     );
     for job in Job::ALL {

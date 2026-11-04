@@ -64,6 +64,12 @@ async fn counts_by_window() {
 }
 
 #[tokio::test]
+async fn mailbox_send_days_are_local_days() {
+    let db = TestDb::new().await;
+    jt_testkit::outreach_contract::mailbox_send_days_are_local_days(pg(&db)).await;
+}
+
+#[tokio::test]
 async fn domain_counts_by_mailbox() {
     let db = TestDb::new().await;
     jt_testkit::outreach_contract::domain_counts_by_mailbox(pg(&db)).await;

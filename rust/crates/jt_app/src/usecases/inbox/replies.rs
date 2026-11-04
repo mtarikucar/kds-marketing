@@ -171,9 +171,14 @@ pub async fn send(
         Enqueued::New(id) => send_step(deps, ctx, id).await,
     }
 }
-pub(super) enum Target {
+/// Whom a send goes to: a conversation, a person on the single verified capability of a
+/// channel, or (outreach) a person through one named mailbox.
+pub(crate) enum Target {
     Conversation(ConversationId),
     Person(PersonId, Channel),
+    /// A campaign names its mailbox: the person through capability `CapabilityId`, which must be
+    /// a verified, sealed mailbox (spec 2026-10-30-leads-pool-outreach-design.md D14).
+    PersonVia(PersonId, jt_capability::CapabilityId),
 }
 async fn enqueue_target(
     deps: &Deps,
@@ -196,10 +201,28 @@ async fn enqueue_target(
     result
 }
 
-pub(super) enum Purpose<'a> {
+/// Why a send is queued.
+pub(crate) enum Purpose<'a> {
     Reply,
     Quote(&'a crate::ports::compliance::QuoteRow, Option<&'a str>),
     Appointment(&'a crate::ports::compliance::AppointmentRow),
+    /// One step of a campaign to one enrollment (the outreach dispatcher).
+    Outreach(&'a OutreachSend),
+}
+
+/// An outreach email's facts as the dispatcher queues it (spec §3.11): its outbox entry's id
+/// (chosen first, so click links can name it), its send row, enrollment, campaign and step, the
+/// `From` display name and the footer's language. The intent records `outreach: {send_id,
+/// enrollment_id, campaign_id, step}`, so a claim fences it again.
+#[derive(Clone, Debug)]
+pub(crate) struct OutreachSend {
+    pub outbox_id: Uuid,
+    pub send_id: jt_outreach::SendId,
+    pub enrollment_id: jt_outreach::EnrollmentId,
+    pub campaign_id: jt_outreach::CampaignId,
+    pub step: u8,
+    pub from_name: String,
+    pub language: jt_outreach::Lang,
 }
 
 /// The use case that queues a send for `target` and `purpose`. It is recorded in the send's
@@ -208,8 +231,9 @@ fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
     match (target, purpose) {
         (_, Purpose::Quote(..)) => "inbox.quotes.send",
         (_, Purpose::Appointment(_)) => "inbox.appointments.book",
+        (_, Purpose::Outreach(_)) => "outreach.dispatch",
         (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
-        (Target::Person(..), Purpose::Reply) => "inbox.send",
+        (Target::Person(..) | Target::PersonVia(..), Purpose::Reply) => "inbox.send",
     }
 }
 
@@ -240,7 +264,7 @@ fn send_gate(use_case: Option<&str>, opens_conversation: bool) -> GateMode {
 pub const ANSWERING_WINDOW: Duration = Duration::days(7);
 
 /// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
-pub(super) async fn enqueue_in(
+pub(crate) async fn enqueue_in(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
@@ -316,6 +340,39 @@ pub(super) async fn enqueue_in(
                 },
             }
         }
+        Target::PersonVia(person, capability) => {
+            let cap = r
+                .capabilities()
+                .find(capability)
+                .await?
+                .filter(|c| {
+                    c.kind_key == "mailbox"
+                        && effective_status(c, ctx.now) == EffectiveStatus::Verified
+                        && c.has_sealed_config
+                })
+                .ok_or_else(|| refused("capability_down"))?;
+            match r.conversations().find(person, cap.id).await? {
+                Some(c) => c,
+                None => Conversation {
+                    id: ConversationId::from(deps.ids.uuid()),
+                    workspace_id: ctx.workspace_id,
+                    person_id: person,
+                    capability_id: cap.id,
+                    kind_key: cap.kind_key.clone(),
+                    state: ConvState::Open,
+                    executor: Executor::Agent,
+                    executor_generation: 0,
+                    last_inbound_at: None,
+                    last_outbound_at: None,
+                    created_at: ctx.now,
+                    updated_at: ctx.now,
+                },
+            }
+        }
+    };
+    let outreach = match &purpose {
+        Purpose::Outreach(send) => Some(*send),
+        _ => None,
     };
     let id = c.id;
     let opens_conversation = r.conversations().get(id).await?.is_none();
@@ -338,6 +395,7 @@ pub(super) async fn enqueue_in(
             intent: input.intent,
             outreach_enabled: deps.apps.outreach_enabled(),
             gate: send_gate(Some(use_case), opens_conversation),
+            outreach: outreach.is_some(),
         },
     )
     .await
@@ -371,7 +429,8 @@ pub(super) async fn enqueue_in(
     // Validate recipient ambiguity before creating any durable outbound intent.
     let recipient = recipient(r, &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
-    let outbox_id = deps.ids.uuid();
+    // An outreach email's outbox id was chosen before its text: its click links name it.
+    let outbox_id = outreach.map_or_else(|| deps.ids.uuid(), |s| s.outbox_id);
     let mut intent = json!({
         "kind": input.intent,
         "request_key": key,
@@ -386,6 +445,14 @@ pub(super) async fn enqueue_in(
             intent["request_key"] = json!(key);
         }
         Purpose::Appointment(appointment) => intent["appointment_id"] = json!(appointment.id),
+        Purpose::Outreach(send) => {
+            intent["outreach"] = json!({
+                "send_id": send.send_id,
+                "enrollment_id": send.enrollment_id,
+                "campaign_id": send.campaign_id,
+                "step": send.step,
+            });
+        }
     }
 
     if cap.kind_key == "mailbox" {
@@ -486,9 +553,14 @@ pub(super) async fn enqueue_in(
                     deps,
                     ctx,
                     policy,
-                    basis,
-                    outbox_id,
-                    from_address.as_deref(),
+                    &FooterOf {
+                        basis,
+                        outbox_id,
+                        from_address: from_address.as_deref(),
+                        // An outreach email's footer follows its template's language; every
+                        // other commercial email's is Turkish.
+                        lang: outreach.map_or(jt_outreach::Lang::Tr, |s| s.language),
+                    },
                     &text,
                 )?;
                 text = footed.text;
@@ -510,7 +582,7 @@ pub(super) async fn enqueue_in(
             in_reply_to,
             references,
             attachments,
-            from_name: None,
+            from_name: outreach.map(|s| s.from_name.clone()),
             list_unsubscribe,
             attachment_files: Vec::new(),
         })?;
@@ -607,6 +679,9 @@ struct Sending {
     intent: SendIntent,
     outreach_enabled: bool,
     gate: GateMode,
+    /// An outreach email (the dispatcher's, `Purpose::Outreach`): a person's hold on the
+    /// conversation stops it as it stops an agent's send, and a won journey refuses it.
+    outreach: bool,
 }
 
 /// The send fence. A commercial send needs an effective consent, or (spec
@@ -629,6 +704,7 @@ async fn fence(
         intent,
         outreach_enabled,
         gate,
+        outreach,
     } = sending;
     let person = r
         .people()
@@ -690,9 +766,12 @@ async fn fence(
             capability_live: effective_status(cap, ctx.now) == EffectiveStatus::Verified
                 && cap.has_sealed_config,
         },
-        matches!(author, Author::Agent),
+        matches!(author, Author::Agent) || outreach,
     )
     .map_err(|e| refused(e.to_string()))?;
+    if outreach && j.is_some_and(|j| j.status == JourneyStatus::Won) {
+        return Err(refused("journey_won"));
+    }
     let window_open = c.last_inbound_at.is_some_and(|at| {
         at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
     });
@@ -764,22 +843,37 @@ struct Footed {
     list_unsubscribe: ListUnsubscribe,
 }
 
+/// What a commercial email's footer is made of beyond the sender identity.
+#[derive(Clone, Copy)]
+struct FooterOf<'a> {
+    /// What the send rests on (its source line, D58).
+    basis: Option<CommercialBasis>,
+    /// The email's outbox entry: the unsubscribe link's token (D63).
+    outbox_id: Uuid,
+    /// The sending address, for the `mailto:` fallback.
+    from_address: Option<&'a str>,
+    lang: jt_outreach::Lang,
+}
+
 /// `text` with the footer appended (`jt_outreach::append_footer`): the sender identity, the
-/// line saying what the email rests on (`basis`, D58), the privacy notice and the one-click
-/// unsubscribe address of this email (its outbox entry `outbox_id` is the token, D63), in
-/// Turkish; and the `List-Unsubscribe` addresses (the https one, and `mailto:` the sending
-/// address when it can be written so). Without an `https` public address no unsubscribe link
-/// can be given: `CONFLICT`, nothing queued.
+/// line saying what the email rests on, the privacy notice and the one-click unsubscribe address
+/// of this email, in `of.lang`; and the `List-Unsubscribe` addresses (the https one, and
+/// `mailto:` the sending address when it can be written so). Without an `https` public address
+/// no unsubscribe link can be given: `CONFLICT`, nothing queued.
 fn with_footer(
     deps: &Deps,
     ctx: &Ctx,
     policy: &jt_outreach::OutreachPolicy,
-    basis: Option<CommercialBasis>,
-    outbox_id: Uuid,
-    from_address: Option<&str>,
+    of: &FooterOf<'_>,
     text: &str,
 ) -> Result<Footed, AppError> {
     use crate::usecases::outreach::links;
+    let FooterOf {
+        basis,
+        outbox_id,
+        from_address,
+        lang,
+    } = *of;
     let base = links::https_base(deps).ok_or_else(|| {
         AppError::conflict("an https public base URL is required for commercial mail")
     })?;
@@ -792,7 +886,7 @@ fn with_footer(
         unsubscribe_url: https.clone(),
         source: basis.into(),
     };
-    let text = jt_outreach::append_footer(text, &footer, jt_outreach::Lang::Tr)
+    let text = jt_outreach::append_footer(text, &footer, lang)
         .map_err(|_| refused("sender_identity_missing"))?;
     Ok(Footed {
         text,
@@ -913,29 +1007,43 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     }
-    let basis = match fence(
-        r.as_mut(),
-        ctx,
-        &c,
-        j.as_ref(),
-        &cap,
-        row.expected_generation,
-        Sending {
-            author: message.author,
-            intent: serde_json::from_value(row.intent["kind"].clone())?,
-            outreach_enabled: deps.apps.outreach_enabled(),
-            gate: send_gate(
-                row.intent.get("use_case").and_then(Value::as_str),
-                row.intent
-                    .get("opens_conversation")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            ),
-        },
-    )
-    .await
-    .and_then(|basis| footer_ready(&row, &cap).map(|()| basis))
-    {
+    // An outreach email meets the outreach fence again (the platform switch first, then the
+    // campaign, its approval, the do-not-contact list, a reply or a meeting since enrollment):
+    // both branches, the dispatcher's and this one, are authoritative (D16).
+    let outreach_fence = match row.intent.get("outreach") {
+        Some(o) => {
+            crate::usecases::outreach::dispatch::claim_fence(deps, ctx, r.as_mut(), o).await?
+        }
+        None => Ok(()),
+    };
+    let fenced = match outreach_fence {
+        Err(reason) => Err(refused(reason)),
+        Ok(()) => {
+            fence(
+                r.as_mut(),
+                ctx,
+                &c,
+                j.as_ref(),
+                &cap,
+                row.expected_generation,
+                Sending {
+                    author: message.author,
+                    intent: serde_json::from_value(row.intent["kind"].clone())?,
+                    outreach_enabled: deps.apps.outreach_enabled(),
+                    gate: send_gate(
+                        row.intent.get("use_case").and_then(Value::as_str),
+                        row.intent
+                            .get("opens_conversation")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    ),
+                    outreach: row.intent.get("outreach").is_some(),
+                },
+            )
+            .await
+        }
+    };
+    let basis = match fenced.and_then(|basis| footer_ready(&row, &cap).map(|()| basis)) {
         Ok(basis) => basis,
         Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {
             return Err(e);

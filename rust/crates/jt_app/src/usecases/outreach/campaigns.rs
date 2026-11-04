@@ -64,6 +64,10 @@ pub struct CampaignOut {
     pub campaign: CampaignRow,
     pub approval_required: bool,
     pub active_enrollments: u32,
+    /// What enrolling the audience did, when this call started the campaign (a launch, or the
+    /// approval that let it start).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enrollment: Option<super::EnrollOut>,
 }
 
 /// `NOT_FOUND` for a campaign that is not the workspace's.
@@ -165,7 +169,25 @@ async fn campaign_out(
         campaign,
         approval_required,
         active_enrollments,
+        enrollment: None,
     })
+}
+
+/// After a call that started the campaign (scheduled or running for the first time): its
+/// audience is enrolled (spec §3.10, its own transactions) and the answer counts them.
+async fn enroll_started(
+    deps: &Deps,
+    ctx: &Ctx,
+    mut out: CampaignOut,
+) -> Result<CampaignOut, AppError> {
+    let enrolled = super::enroll::enroll_audience(deps, ctx, &out.campaign).await?;
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    out.active_enrollments = r
+        .outreach_enrollments()
+        .count_active(out.campaign.id)
+        .await?;
+    out.enrollment = Some(enrolled);
+    Ok(out)
 }
 
 /// `jeeta.outreach.campaigns_save`: creates a draft (revision 1) under the approved strategy in
@@ -508,8 +530,15 @@ pub async fn campaigns_launch(
     if approved {
         approved_entry(r.as_mut(), ctx, &row).await?;
     }
+    let starts = matches!(
+        row.status,
+        CampaignStatus::Scheduled | CampaignStatus::Running
+    );
     let out = campaign_out(r.as_mut(), row).await?;
     r.commit().await?;
+    if starts {
+        return enroll_started(deps, ctx, out).await;
+    }
     Ok(out)
 }
 
@@ -583,6 +612,8 @@ pub async fn campaigns_approve(
         }
     }
     let expected = row.revision;
+    let starts = row.status == CampaignStatus::AwaitingApproval
+        && matches!(to, CampaignStatus::Scheduled | CampaignStatus::Running);
     row.status = to;
     row.approval = Some(Approval {
         revision: row.revision,
@@ -596,6 +627,9 @@ pub async fn campaigns_approve(
     approved_entry(r.as_mut(), ctx, &row).await?;
     let out = campaign_out(r.as_mut(), row).await?;
     r.commit().await?;
+    if starts {
+        return enroll_started(deps, ctx, out).await;
+    }
     Ok(out)
 }
 

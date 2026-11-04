@@ -21,6 +21,8 @@
 
 pub mod audience;
 pub mod campaigns;
+pub mod dispatch;
+pub mod enroll;
 pub mod links;
 pub mod settings;
 pub mod templates;
@@ -30,6 +32,10 @@ pub use campaigns::{
     ApproveInput, CampaignListInput, CampaignListOut, CampaignOut, CampaignSaveInput,
     ControlAction, ControlInput, LaunchInput, campaigns_approve, campaigns_control, campaigns_get,
     campaigns_launch, campaigns_list, campaigns_save,
+};
+pub use dispatch::Dispatched;
+pub use enroll::{
+    EnrollInput, EnrollOut, PersonalizeInput, PersonalizeItem, PersonalizeOut, enroll, personalize,
 };
 pub use settings::{LegalAckInput, SettingsInput, SettingsOut, settings_get, settings_set};
 pub use templates::{

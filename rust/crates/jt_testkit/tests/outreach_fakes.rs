@@ -45,6 +45,11 @@ async fn counts_by_window() {
 }
 
 #[tokio::test]
+async fn mailbox_send_days_are_local_days() {
+    jt_testkit::outreach_contract::mailbox_send_days_are_local_days(uow()).await;
+}
+
+#[tokio::test]
 async fn domain_counts_by_mailbox() {
     jt_testkit::outreach_contract::domain_counts_by_mailbox(uow()).await;
 }

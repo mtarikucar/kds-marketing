@@ -1130,6 +1130,26 @@ impl OutreachSendRepo for PgTenantRepos {
             .await
     }
 
+    async fn mailbox_send_days(
+        &mut self,
+        mailbox: CapabilityId,
+        tz: &str,
+        since: OffsetDateTime,
+    ) -> Result<Vec<time::Date>, AppError> {
+        sqlx::query_scalar(
+            "select distinct (created_at at time zone $3)::date as day from outreach_sends \
+             where workspace_id = $1 and mailbox_id = $2 and created_at >= $4 \
+             and outcome <> 'refused' order by day",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(mailbox.as_uuid())
+        .bind(tz)
+        .bind(since)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list outreach send days"))
+    }
+
     async fn count_domain_since(
         &mut self,
         mailbox: CapabilityId,

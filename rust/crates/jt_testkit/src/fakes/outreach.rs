@@ -709,6 +709,22 @@ impl OutreachSendRepo for MemTenant {
         ))
     }
 
+    async fn mailbox_send_days(
+        &mut self,
+        mailbox: CapabilityId,
+        tz: &str,
+        since: OffsetDateTime,
+    ) -> Result<Vec<time::Date>, AppError> {
+        let mut days = self
+            .counted_sends(since, |s| s.mailbox_id == mailbox)
+            .into_iter()
+            .map(|s| jt_app::usecases::hours::local_date(tz, s.created_at))
+            .collect::<Result<Vec<_>, _>>()?;
+        days.sort_unstable();
+        days.dedup();
+        Ok(days)
+    }
+
     async fn count_campaign_since(
         &mut self,
         campaign: CampaignId,

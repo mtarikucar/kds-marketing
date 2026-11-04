@@ -145,11 +145,12 @@ pub enum Job {
     ResearchPlan,
     LeadDistribution,
     WhatsappAppSync,
+    OutreachDispatch,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 32] = [
+    pub const ALL: [Job; 33] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -182,6 +183,7 @@ impl Job {
         Job::ResearchPlan,
         Job::LeadDistribution,
         Job::WhatsappAppSync,
+        Job::OutreachDispatch,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -220,6 +222,7 @@ impl Job {
             Job::ResearchPlan => "research_plan",
             Job::LeadDistribution => "lead_distribution",
             Job::WhatsappAppSync => "whatsapp_app_sync",
+            Job::OutreachDispatch => "outreach_dispatch",
         }
     }
 
@@ -263,6 +266,7 @@ impl Job {
             Job::ResearchPlan => run_research_plan(deps, now).await,
             Job::LeadDistribution => run_lead_distribution(deps, now).await,
             Job::WhatsappAppSync => run_whatsapp_app_sync(deps, now).await,
+            Job::OutreachDispatch => run_outreach_dispatch(deps, now).await,
         }
     }
 }
@@ -1247,6 +1251,33 @@ pub async fn run_lead_distribution(deps: &Deps, now: OffsetDateTime) -> JobRepor
     finish(job, report)
 }
 
+/// Sends the due outreach email of every active workspace (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.11, `outreach::dispatch::run`): nothing at all
+/// while the platform switch `JEETA_OUTREACH_ENABLED` is off. `touched` counts the workspaces
+/// with a running campaign, `changed` the emails queued, stops and pauses.
+pub async fn run_outreach_dispatch(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::OutreachDispatch;
+    let mut report = JobReport::default();
+    if !deps.apps.outreach_enabled() {
+        return finish(job, report);
+    }
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::outreach::dispatch::run(deps, &ctx).await {
+            Ok(d) if d.campaigns == 0 && d.started == 0 => report.skipped += 1,
+            Ok(d) => {
+                report.touched += 1;
+                report.changed += u64::from(d.queued + d.stopped + d.paused + d.completed);
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
 /// Deletes, in every workspace, the voice bridge's commands queued more than
 /// `calls::session::COMMAND_RETENTION` (7 days) before `now`, acknowledged or not; the calls and
 /// their turns stay. `touched` and `changed` count the commands deleted, `failed` the workspaces
@@ -1774,6 +1805,64 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
     finish(job, report)
 }
 
+/// The İYS credentials of the workspace's NetGSM SMS lines: each live connector line whose sealed
+/// İYS slot names the line's own user code and a brand code. The İYS sync and the outreach
+/// dispatcher's lookup use exactly one; none or more is ambiguous.
+pub(crate) async fn iys_credentials(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+) -> Result<Vec<Credential>, AppError> {
+    let mut credentials = Vec::new();
+    for hint in r.capabilities().list(CapabilityFilter::default()).await? {
+        if hint.kind_key != "sms_line" {
+            continue;
+        }
+        let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
+            continue;
+        };
+        let cap = snapshot.capability;
+        if cap.status == StoredStatus::Retired
+            || cap.reach != jt_capability::Reach::Connector
+            || cap.kind_key != "sms_line"
+        {
+            continue;
+        }
+        let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed) else {
+            continue;
+        };
+        let Credential::NetgsmSms {
+            usercode: line_user,
+            ..
+        } = open_credential(deps, ws, &sms)?
+        else {
+            continue;
+        };
+        let credential = open_credential(deps, ws, &sealed)?;
+        if let Credential::NetgsmIys {
+            usercode,
+            brand_code,
+            ..
+        } = &credential
+            && usercode == &line_user
+            && !brand_code.trim().is_empty()
+        {
+            credentials.push(credential);
+        }
+    }
+    Ok(credentials)
+}
+
+/// The workspace's one İYS credential (`iys_credentials`), if exactly one.
+pub(crate) async fn iys_credential(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+) -> Result<Option<Credential>, AppError> {
+    let mut all = iys_credentials(deps, r, ws).await?;
+    Ok((all.len() == 1).then(|| all.remove(0)))
+}
+
 /// Hourly retry, serialized by the scheduler's iys_sync advisory lock. A lost acknowledgement
 /// may repeat a submission. Sync metadata never changes the underlying local consent decision.
 pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
@@ -1791,44 +1880,7 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
                 if rows.is_empty() {
                     return Ok::<_, AppError>(());
                 }
-                let mut credentials = Vec::new();
-                for hint in r.capabilities().list(CapabilityFilter::default()).await? {
-                    if hint.kind_key != "sms_line" {
-                        continue;
-                    }
-                    let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
-                        continue;
-                    };
-                    let cap = snapshot.capability;
-                    if cap.status == StoredStatus::Retired
-                        || cap.reach != jt_capability::Reach::Connector
-                        || cap.kind_key != "sms_line"
-                    {
-                        continue;
-                    }
-                    let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed)
-                    else {
-                        continue;
-                    };
-                    let Credential::NetgsmSms {
-                        usercode: line_user,
-                        ..
-                    } = open_credential(deps, ws, &sms)?
-                    else {
-                        continue;
-                    };
-                    let credential = open_credential(deps, ws, &sealed)?;
-                    if let Credential::NetgsmIys {
-                        usercode,
-                        brand_code,
-                        ..
-                    } = &credential
-                        && usercode == &line_user
-                        && !brand_code.trim().is_empty()
-                    {
-                        credentials.push(credential);
-                    }
-                }
+                let mut credentials = iys_credentials(deps, r.as_mut(), ws).await?;
                 // No usable slot (or ambiguous brands) must leave consent pending and ask the owner.
                 if credentials.len() != 1 {
                     request_iys_provisioning(deps, r.as_mut(), ws, &rows, now).await?;

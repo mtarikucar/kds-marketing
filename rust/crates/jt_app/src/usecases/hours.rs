@@ -50,6 +50,24 @@ pub fn local_day(
     Ok((midnight(date)?, midnight(next)?))
 }
 
+/// The local calendar date of `at` in time zone `tz` (else [`DEFAULT_TZ`]).
+pub fn local_date(tz: &str, at: OffsetDateTime) -> Result<time::Date, AppError> {
+    let zone: chrono_tz::Tz = tz.parse().unwrap_or(chrono_tz::Europe::Istanbul);
+    let utc = chrono::DateTime::from_timestamp(at.unix_timestamp(), 0)
+        .ok_or_else(|| AppError::internal("the time is out of range"))?;
+    let d = utc.with_timezone(&zone).date_naive();
+    let month = u8::try_from(d.month())
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())
+        .ok_or_else(|| AppError::internal("the time is out of range"))?;
+    time::Date::from_calendar_date(
+        d.year(),
+        month,
+        u8::try_from(d.day()).map_err(|_| AppError::internal("the time is out of range"))?,
+    )
+    .map_err(|_| AppError::internal("the time is out of range"))
+}
+
 /// Whether `now` falls inside the window `h` (its days, from its opening hour up to its closing
 /// hour) in the window's time zone. A zone this build does not know is `CONFLICT`.
 pub fn within(h: &Hours, now: OffsetDateTime) -> Result<bool, AppError> {

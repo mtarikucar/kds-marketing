@@ -1067,6 +1067,29 @@ pub trait ConsentSync: Send + Sync {
         cred: &Credential,
         rows: &[ConsentRow],
     ) -> Result<SendReceipt, ConnectorError>;
+    /// What the registry holds for `recipient` on `channel` (the registry's own channel name, as
+    /// [`ConsentRow::channel`]: `EPOSTA` for email). The default refuses (`Permanent`): only a
+    /// registry that answers lookups implements it.
+    async fn search(
+        &self,
+        _cred: &Credential,
+        _recipient: &str,
+        _channel: &str,
+    ) -> Result<IysAnswer, ConnectorError> {
+        Err(ConnectorError::permanent("no consent lookup"))
+    }
+}
+
+/// What a consent registry (İYS) holds for one recipient on one channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IysAnswer {
+    /// `ONAY`: consent given.
+    Granted,
+    /// `RET`: consent refused or withdrawn.
+    Refused,
+    /// `YOK`: no record.
+    Absent,
 }
 
 /// A provider's OAuth flow (authorization code, with PKCE where the provider takes it).

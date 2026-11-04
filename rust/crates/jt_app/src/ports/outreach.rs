@@ -446,6 +446,15 @@ pub trait OutreachSendRepo: Send + Sync {
         person: PersonId,
         since: OffsetDateTime,
     ) -> Result<Vec<OffsetDateTime>, AppError>;
+    /// The local days (in time zone `tz`, an IANA name) on which the mailbox's sends (not
+    /// refused) created at `since` or later were made, each once, oldest first: the warm-up's
+    /// sending days.
+    async fn mailbox_send_days(
+        &mut self,
+        mailbox: CapabilityId,
+        tz: &str,
+        since: OffsetDateTime,
+    ) -> Result<Vec<time::Date>, AppError>;
     /// The campaign's newest `n` outcomes, newest first.
     async fn recent_outcomes(
         &mut self,

@@ -21,11 +21,11 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
-    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord,
-    LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
-    OAuthApp, OAuthFlow, OAuthProvider, PlatformAppConfig, PostMetrics, PublishReceipt,
-    PublishRequest, PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, Telephony,
-    TiktokApp, TiktokCreator, Url, XApp,
+    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
+    LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
+    MessagingSender, MetaApp, OAuthApp, OAuthFlow, OAuthProvider, PlatformAppConfig, PostMetrics,
+    PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost, SendReceipt,
+    SmsSender, Telephony, TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -292,6 +292,11 @@ pub enum ConnectorCall {
         credential: Credential,
         rows: Vec<ConsentRow>,
     },
+    ConsentSearch {
+        credential: Credential,
+        recipient: String,
+        channel: String,
+    },
     Report {
         credential: Credential,
         job_ids: Vec<String>,
@@ -371,6 +376,7 @@ pub struct ScriptedConnector {
     hangup: Script<Result<(), ConnectorError>>,
     call_records: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
     consent_add: Script<Result<SendReceipt, ConnectorError>>,
+    consent_search: Script<Result<IysAnswer, ConnectorError>>,
     report: Script<Result<Vec<DeliveryStatus>, ConnectorError>>,
     inbox: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
 }
@@ -434,6 +440,7 @@ impl ScriptedConnector {
             hangup: Script::default(),
             call_records: Script::default(),
             consent_add: Script::default(),
+            consent_search: Script::default(),
             report: Script::default(),
             inbox: Script::default(),
         }
@@ -615,6 +622,10 @@ impl ScriptedConnector {
         self.hangup.push(result);
     }
 
+    /// Queues the answer of the next consent lookup (`ConsentSync::search`).
+    pub fn push_consent_search(&self, result: Result<IysAnswer, ConnectorError>) {
+        self.consent_search.push(result);
+    }
     pub fn push_consent_add(&self, result: Result<SendReceipt, ConnectorError>) {
         self.consent_add.push(result);
     }
@@ -1041,6 +1052,20 @@ impl ConsentSync for ScriptedConnector {
             rows: rows.to_vec(),
         });
         self.next(&self.consent_add, "consent result")
+    }
+
+    async fn search(
+        &self,
+        cred: &Credential,
+        recipient: &str,
+        channel: &str,
+    ) -> Result<IysAnswer, ConnectorError> {
+        self.record(ConnectorCall::ConsentSearch {
+            credential: cred.clone(),
+            recipient: recipient.to_owned(),
+            channel: channel.to_owned(),
+        });
+        self.next(&self.consent_search, "consent search result")
     }
 }
 
