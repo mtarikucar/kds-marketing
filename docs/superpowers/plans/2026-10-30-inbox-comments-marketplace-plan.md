@@ -739,7 +739,7 @@ its namespace), `jt_testkit/src/fakes/inbox.rs` (in-memory erasure of public pay
 
 ## M — Meta comments (after F4; M4/M5 after F5)
 
-### Task M1: webhook parsing into the envelope (size M)
+### Task M1: webhook parsing into the envelope (size M) — done (`0881042d`)
 
 **Files:** `rust/crates/adapters/jt_meta/src/webhook.rs` (module docs' tables, `feed` and
 `comments`/`live_comments` changes), `tests/webhook.rs`, fixtures under `tests/fixtures/comments/*.json`
@@ -754,7 +754,7 @@ its namespace), `jt_testkit/src/fakes/inbox.rs` (in-memory erasure of public pay
 
 **Acceptance:** every existing webhook test passes unedited. **Risk:** low.
 
-### Task M2: replies, private replies, moderation and subjects over Graph (size M)
+### Task M2: replies, private replies, moderation and subjects over Graph (size M) — done (`dc4cf298`)
 
 **Files:** create `rust/crates/adapters/jt_meta/src/comments.rs`; modify `graph.rs` (`graph_delete`,
 `instagram_delete`, the "object does not exist" reason), `ports.rs` (`impl PublicSurface for MetaConnector`),
@@ -774,7 +774,7 @@ its namespace), `jt_testkit/src/fakes/inbox.rs` (in-memory erasure of public pay
 
 **Acceptance:** the adapter refuses every comment call for a credential whose grant lacks it. **Risk:** low.
 
-### Task M3: scopes behind flags, subscription union, probe facts, Instagram Login (size M)
+### Task M3: scopes behind flags, subscription union, probe facts, Instagram Login (size M) — done (`abea2631`)
 
 **Files:** `rust/crates/adapters/jt_meta/src/{oauth.rs,probe.rs,assets.rs,messaging.rs}`, `tests/graph.rs`.
 
@@ -805,7 +805,9 @@ loop {
 byte-for-byte today's (pinned by the "exactly today's" tests). **Risk:** medium (live subscription code);
 mitigated by those pins.
 
-### Task M4: comments backfill poll and `comments_poll` job (size M)
+### Task M4: comments backfill poll and `comments_poll` job (size M) — done (`7bd2cd8e`, `d0bb4f86`, `6dc57c81`, `e5b8ba61`)
+
+`comments_poll` polls Meta's surfaces only; `Job::ALL` is 30 (T3's `marketplace_poll` is deferred).
 
 **Files:** `rust/crates/adapters/jt_meta/src/comments.rs` (`impl PublicPoller`), `tests/comments.rs`;
 `rust/crates/jt_app/src/usecases/jobs.rs` (`Job::CommentsPoll`, `run_comments_poll`), `jt_app/tests/jobs.rs`,
@@ -828,7 +830,7 @@ Only if V-M3 shows an Instagram comment's `from.id` equals the DM IGSID for the 
 add the commenter identity to that person). **Tests:** `commenter_joins_the_dm_person_when_ids_are_equal`,
 `no_link_for_facebook`. **Commit** `feat(inbox): an Instagram commenter joins their DM person`.
 
-### Task M5: gate end-to-end with signed deliveries (size S)
+### Task M5: gate end-to-end with signed deliveries (size S) — done (`ac2f3442`)
 
 **Files:** `rust/crates/adapters/jt_webhook/tests/meta.rs`, `tests/support/mod.rs`.
 
@@ -839,9 +841,11 @@ add the commenter identity to that person). **Tests:** `commenter_joins_the_dm_p
 
 ---
 
-## T — Trendyol (after F4; T3 after F5)
+## T — Trendyol (after F4; T3 after F5) — deferred (owner, 2026-11-04)
 
-### Task T1: `jt_marketplace` crate, Trendyol client, probe, connector, egress, wiring (size M)
+**Deferred (owner, 2026-11-04).** Trendyol and Hepsiburada are out of scope for now: no marketplace adapter is built. What F1–F9 hold for them (kinds, credential shapes, the envelope, rules, the intake paths) stays as it is, inert, and is not extended.
+
+### Task T1: `jt_marketplace` crate, Trendyol client, probe, connector, egress, wiring (size M) — deferred (owner, 2026-11-04)
 
 **Files:** create `rust/crates/adapters/jt_marketplace/{Cargo.toml,src/{lib.rs,client.rs,trendyol.rs,envelope.rs},tests/{support/mod.rs,trendyol.rs}}`
 (manifest like `jt_tiktok`: `jt_app`, `jt_connector`, `jt_inbox`, `jt_outbound`, `serde_json`, `time`, `url`,
@@ -867,7 +871,7 @@ pub struct TrendyolBases { pub api: Url }      // production: https://apigw.tren
 
 **Acceptance:** a `trendyol` capability can be created with `connector.set_credentials` and probed. **Risk:** low.
 
-### Task T2: Trendyol questions poll, reconcile and answer (size M)
+### Task T2: Trendyol questions poll, reconcile and answer (size M) — deferred (owner, 2026-11-04)
 
 **Files:** `rust/crates/adapters/jt_marketplace/src/{trendyol.rs,envelope.rs}`, `tests/trendyol.rs`,
 fixtures `tests/fixtures/trendyol/*.json` (shapes from the reference pages; made-up ids, names and texts).
@@ -883,7 +887,7 @@ fixtures `tests/fixtures/trendyol/*.json` (shapes from the reference pages; made
 **Acceptance:** the envelope tests cover every status the spec maps. **Risk:** low (V-T3 rate limits may change
 the per-run budget constants).
 
-### Task T3: `marketplace_poll` job (size S)
+### Task T3: `marketplace_poll` job (size S) — deferred (owner, 2026-11-04)
 
 **Files:** `rust/crates/jt_app/src/usecases/jobs.rs` (`Job::MarketplacePoll`, `run_marketplace_poll`: the
 `run_mail_inbox_poll` shape — read sealed credential and cursor, release, poll and reconcile with no
@@ -901,7 +905,9 @@ transaction, then lock the capability, compare `updated_at` + sealed bytes + cur
 
 ---
 
-## H — Hepsiburada
+## H — Hepsiburada — deferred (owner, 2026-11-04)
+
+**Deferred (owner, 2026-11-04).** Trendyol and Hepsiburada are out of scope for now: no marketplace adapter is built. What F1–F9 hold for them (kinds, credential shapes, the envelope, rules, the intake paths) stays as it is, inert, and is not extended. H0's findings stay recorded for when it comes back.
 
 ### Task H0: verify Hepsiburada's "Satıcıya Sor" API (size S, no code) — DONE 2026-10-30 by hand
 
@@ -924,7 +930,7 @@ The portal refuses automated access (research). A human or an agent driving the 
   `HEPSIBURADA_ANSWER_BOUNDS` in `jt_inbox::public` (+ its test row); **commit**
   `docs(marketplace): Hepsiburada's ask-the-seller API as verified`.
 
-### Task H1: Hepsiburada connector, poll, answer, report (size M)
+### Task H1: Hepsiburada connector, poll, answer, report (size M) — deferred (owner, 2026-11-04)
 
 **Files:** `rust/crates/adapters/jt_marketplace/src/hepsiburada.rs`, `tests/hepsiburada.rs`;
 `jt_outbound/src/fixed_hosts.rs` (the verified host(s) under `hepsiburada`, both pinned tests);
@@ -943,9 +949,11 @@ The portal refuses automated access (research). A human or an agent driving the 
 
 ---
 
-## A — Amazon relay (after F5)
+## A — Amazon relay (after F5) — deferred (owner, 2026-11-04)
 
-### Task A1: relay classification, fences, context (size S)
+Skipped with the marketplaces: it is neither Meta nor panel work. The relay code of F1–F8 stays inert.
+
+### Task A1: relay classification, fences, context (size S) — deferred (owner, 2026-11-04)
 
 **Files:** `rust/crates/jt_app/src/usecases/inbox/{consumer.rs,replies.rs,context.rs,public.rs}`; create tests
 in `rust/crates/jt_app/tests/inbox_public_intake.rs` and `inbox_public_reply.rs`.
@@ -962,7 +970,10 @@ in `rust/crates/jt_app/tests/inbox_public_intake.rs` and `inbox_public_reply.rs`
 
 ## P — panel (after F7/F8 API shapes)
 
-### Task P1: types, list badges, deadlines, approvals queue (size M)
+### Task P1: types, list badges, deadlines, approvals queue (size M) — done (`d46cd1f3`)
+
+The approvals queue is the inbox list's queue filter, not a page of its own (spec D26); the list
+tests live in `Inbox.test.tsx`. The Amazon parts wait with A1.
 
 **Files:** `rust/panel/src/api/{types.ts,inbox.ts}` (ConversationView, PublicItem, PublicContext, held
 replies, the six calls; the capability kinds `trendyol`, `hepsiburada` and group `marketplace` with their
@@ -975,7 +986,9 @@ en/tr labels were added in the F1–F3 review round),
 - [ ] `pnpm --dir rust/panel test` and `typecheck` red → implement → green; **commit**
   `feat(panel): comments, questions and Amazon in the inbox list`.
 
-### Task P2: public conversation view, composer, held card (size L)
+### Task P2: public conversation view, composer, held card (size L) — done (`b000de49`, `0e2ddb63`)
+
+`amazon_badge_order_id_and_no_links_note` waits with A1.
 
 **Files:** new `rust/panel/src/pages/InboxPublic.tsx` (subject cards, items with threads, per-item actions,
 composer), `src/pages/InboxConversation.tsx` (renders `InboxPublic` for public/relay conversations), i18n,
@@ -989,7 +1002,10 @@ composer), `src/pages/InboxConversation.tsx` (renders `InboxPublic` for public/r
   `amazon_badge_order_id_and_no_links_note`.
 - [ ] `pnpm --dir rust/panel test` red → implement → green; **commit** `feat(panel): answer comments and questions`.
 
-### Task P3: connect forms and comment status (size M)
+### Task P3: connect forms and comment status (size M) — comment status done (`15d90636`); marketplace forms deferred
+
+The comment status is a field of `connector.health` (spec D26) shown on the capability card; the
+Trendyol and Hepsiburada forms are deferred with T and H.
 
 **Files:** `rust/panel/src/pages/ConnectPage.tsx` (+ test), `src/pages/ProviderSetup.tsx` if the forms live
 there, i18n.
@@ -1007,7 +1023,7 @@ there, i18n.
 **Files:** create `rust/crates/jt_app/tests/smoke_inbox_public.rs`; `rust/Makefile` (`smoke-inbox-public:
 cargo test --locked -p jt_app --test smoke_inbox_public`).
 
-- [ ] Scenario 1: scripted Meta comment (granted) → consumer → `inbox.context` → agent `inbox.reply` (public;
+- [ ] (Scenario 2 is deferred with T: owner, 2026-11-04.) Scenario 1: scripted Meta comment (granted) → consumer → `inbox.context` → agent `inbox.reply` (public;
   capability requires approval) → `held` → human `inbox.public.approve` → receipt → item `answered`, ledger
   lines in order. Scenario 2: scripted Trendyol poll → question → agent answer (the scenario turns approval
   on for the capability; the default is off, spec §3.7) → approve → `pending` → poll `ANSWERED` →
