@@ -468,17 +468,39 @@ This replaces the weekly slot materialization of `planner.rs` (§5.4 is supersed
 | D33 | **Paid lane unchanged** (D13). |
 | D34 | **Existing slots retire safely.** On the first run of the new planner, every organic slot still `planned` or `ready` that has no `studio_posts` row is retired with reason `replanned` (a new retirement reason, allowed from planned and ready), one ledger entry each; their pieces, attempts and evidence stay. Published and measured slots are untouched. |
 
+Decisions taken while building (2026-11-04):
+
+| # | Decision |
+|---|---|
+| D46 | **Past grace, any post not sent retires.** A post whose slot is still planned or ready with no publish attempt at `grace_until` is retired `missed_grace`: not only one with no piece or no TikTok choice (D28), but also a ready post the publisher could not send in time (brake, an approval policy, a material hold, a channel down), which is stale by then. A post with an attempt is never retired by the planner. |
+| D47 | **The triggers need a channel and a strategy.** Package requests and the triggers' çekim listesi items are written only while an approved strategy is in force, the organic lane is not braked, and some channel can take a post: an organic kind connected for writing (`capability_access`), its publisher built, chosen by the strategy, and a live hypothesis whose organic cadence names a content type for it. Otherwise the triggers wait (an olay's materials stay unlisted). D34, D46 and the 7-day expiry run whatever the strategy and the brake. |
+| D48 | **The olay trigger's time and clock.** A material counts when it passes §4.3 for its olay's own subject (anchor or support) at the olay's *use time*: now, or for a season or special day the start (12:00 Istanbul) of its season year's window when later; an undated season, or a window start past the posting horizon, waits. It fires only when one of the olay's eligible materials can anchor. Its clock is the latest of the new materials' addition, their share permission and the olay's confirmation; the key is `olay:{id}:{unix seconds}`. A tag edit carries no time: a material made eligible by one counts with its older changes. |
+| D49 | **The calendar trigger's window.** Lead: the entry's `lead_days`, else the materials policy's (D18). From `window_start − lead` to `window_end`: the request (`calendar:{key}:{year}`, once per occasion and season year, also after it expired) once the window start is within the posting horizon, for the earliest confirmed olay of the occasion and season year with materials eligible at the window start, one an anchor. It lists that olay's eligible materials no request of the olay lists yet, once they settled as D24's do (one set of materials, one request): the calendar runs before the olay trigger, so within the lead an occasion's new materials are the calendar's, and materials an earlier olay request lists ask for nothing more. With no such olay, the çekim listesi item `season:{key}:{year}` (§4.6 `SeasonAhead`), which closes itself once the request exists, such an olay has eligible materials, or the window ended. The "dates missing" items of §4.4 are not written yet. |
+| D50 | **The floor's details.** A publication of no post (the weekly quotas') counts as a feed post; a channel that never published asks at once; a channel whose kind takes no feed format (TikTok) has no floor. Pending for a channel: an open olay or calendar request (they may post anywhere), an open floor request for it, or a live planned or ready post on it. The material: one that may anchor a `generic` post at `now + lead(feed_post)`, those carrying the tags of the chosen hypothesis's content type and segment first (§4.5's need), then the least recently used (planned or published posts, published pieces), the freshest, by id. Key per local day of the policy's zone; `best_formats` keeps the channel's feed formats. With no such material, the çekim listesi item reuses §4.6's `slot:{hypothesis}:{content_type}:{week}` (`SlotUnfilled`), which closes itself once any generic anchor exists. |
+| D51 | **A package's checks, in order.** Whole-request refusals first: `request_not_open` (`CONFLICT`; answered, expired or past its 7 days), `post_count` (1–50) and `too_many_posts` (a floor request's one). Then each post's first reason: its channel (`channel_unknown`, `channel_not_organic`, `channel_unavailable`, `other_channel` for a floor request's other channel), `format_unsupported`, its hypothesis (`hypothesis_not_postable`, `content_type_unknown`, `chain_invalid`), its materials (`material_unknown`, `media_count`, `media_type`, `material_refused` with each material's code, `no_eligible_material`), then `validate_package`'s time and cap rules on the posts that passed. A post's materials need not be the request's. Quiet hours and days use the zone's offset at the proposal's time (one offset per package). Existing posts: every live post and every publication of no post (as a feed post). The slots are born in the strategy in force. |
+| D52 | **Media types per format and kind (audit of the adapters).** The adapters choose image or video from the file, so the format fixes the types (`jt_studio::media_types_ok`): Instagram `feed_post` one image (one video would go out as a reel), `carousel` images or videos, `reel` one video; Facebook Page `feed_post` one image or one video, `carousel` images; X images (JPEG, PNG, GIF, WebP); LinkedIn JPEG, PNG or GIF images or one video; TikTok one MP4. Checked at the proposal and at `studio.piece_submit`, on the media that go out on the channel (the account's adaptation's, else the piece's). |
+| D53 | **A piece for a post.** On a slot with a post, `studio.piece_submit` takes the post's subject by default and refuses another (`subject_mismatch`), and checks the format's media count and types (`media_count`, `media_type`). Its materials need not be those the post was planned with: the gate (§5.5) decides. |
+| D54 | **Why a post retired is the post's.** `studio_posts` records `retired_reason` and `retired_at`, once, on every path that retires a post's slot: the planner (`missed_grace`), `studio.slot_cancel` and a permanent media failure at publish (`cancelled`), a strategy change (`hypothesis_retired`, `strategy_archived`). `week_ended` no longer applies to a slot with a post (only to the paid lane's, or a slot stored without one). D34's `replanned` slots have no post: the summary reads their ledger entries. |
+| D55 | **The weekly summary.** The week is local Monday 00:00 to the next in the posting policy's zone (`week`: a Monday, `not_a_monday` otherwise): publications by their time (with their post's format), live planned or ready posts by `publish_at`, retired posts by retirement time with the reason, D34's slots, and `scores` (D31's table by format × olay kind × hypothesis). |
+| D56 | **The posting policy's storage and surface.** One row per workspace: the whole policy in `data`, its scalars mirrored as checked columns, and `tz` (an IANA zone, validated with `chrono-tz`). `studio.posting_policy_set` (panel only, an owner or manager in person) is behind the strategy gate as the other posting use cases; the settings are read with `studio.posts_list` (`settings`). `0022` down drops a stored policy without refusing (a setting, no history). |
+| D57 | **What learning counts.** D31's outcomes are the complete measurements' rewards (the `observations` rule) of publications that have a post; a generic post's olay kind is none. `best_formats` lists every format some kind publishes (never `story`): measured formats by mean reward (more posts first on a tie), then the rest in `PostFormat` order. The floor's hypothesis is the option with the highest arm posterior mean (0.5 with no arm), the first on a tie. |
+| D58 | **D34 runs once per workspace by a replay receipt** (`studio.replan`, key `d34`), with or without an approved strategy; slots stored later without a post are left to the weekly rules (`week_ended`). The planner still keeps the paid lane's weekly positions (`plan_week`, paid lanes only); organic arms are created by `studio.package_propose`. |
+
 ### 14.2 Storage — migration `0022_studio_posts`
 
 - `studio_posts`: the planned post of a slot (`slot_id` PK with the workspace, FK `studio_slots`): `format`,
-  `prep_start_at ≤ publish_at`, `grace_until ≥ publish_at`, `olay_id` (FK, nullable), `package_request_id`
-  (FK), `data` (materials, subject, content type).
+  `capability_id`, `publish_at`, `prep_start_at ≤ publish_at`, `grace_until ≥ publish_at`, `olay_id` (FK,
+  nullable), `package_request_id` (FK), `retired_reason` and `retired_at` (both or neither, D54),
+  `created_at`, `data` (the whole `PlannedPost`: materials, subject, hypothesis, content type). A trigger
+  refuses deletes and every change but the retirement, recorded once.
 - `studio_package_requests`: `id`, `key` (unique: `olay:{id}:{last_change}`, `calendar:{key}:{year}`,
-  `floor:{capability}:{date}`), `trigger`, `status` (`open`, `answered`, `expired`), `data` (materials,
-  best formats, hints), `created_at`, `answered_at`. An open request expires after 7 days.
-- `studio_posting_policy`: one row per workspace (leads, graces, caps, spacing, quiet hours, `tz`,
-  `floor_days`, `debounce_minutes`); defaults when absent.
-- `0022` down refuses while a post or package request exists.
+  `floor:{capability}:{date}`), `trigger`, `status` (`open`, `answered`, `expired`), `data` (the whole
+  request: olay, occasion and year, channel, materials, best formats, hints), `created_at`, `answered_at`,
+  `closed_at` (when it expired). An open request expires after 7 days.
+- `studio_posting_policy`: one row per workspace (D56): `data` (leads, graces, caps, spacing, quiet hours,
+  `floor_days`, `debounce_minutes`, `horizon_days`), the scalars as checked columns, `tz` (default
+  `Europe/Istanbul`); defaults when absent.
+- `0022` down refuses while a post or package request exists. 81 → 84 tables.
 
 ### 14.3 Jobs and use cases
 
@@ -488,8 +510,11 @@ This replaces the weekly slot materialization of `planner.rs` (§5.4 is supersed
   (`POST /api/studio/package-requests/{request_id}/proposal`), `studio.posts_list`
   (`GET /api/studio/posts`), `studio.weekly_summary` (`GET /api/studio/summary`). Panel only:
   `studio.posting_policy_set` (`PUT /api/studio/posting-policy`).
-- `studio.pending` and `work.pending` list package requests and the planned posts whose prep has started;
-  a post before its prep start is listed in `studio.posts_list` only.
+- `studio.pending` and `work.pending` list package requests (`package_requests`; `work.pending` kind
+  `studio_package_request`) and the planned posts whose prep has started; a post before its prep start
+  is listed in `studio.posts_list` only. `studio.slot_get` shows a slot's `post`.
+- `studio.posts_list` answers `{posts: [{post, slot, pending}], settings}`; `studio.weekly_summary`
+  answers `{week_start, tz, from, until, published, planned, cancelled, scores}` (D55).
 
 ### 14.4 Tests to pin
 
