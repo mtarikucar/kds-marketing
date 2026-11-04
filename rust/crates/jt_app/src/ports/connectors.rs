@@ -466,6 +466,11 @@ impl MailboxCursor {
 /// slot of the weekly quotas. Instagram publishes a `story` as a `STORIES` container (one medium,
 /// no caption) and refuses a story it cannot post as one; every other format, and every other
 /// adapter, goes by the media as before.
+///
+/// `media_mimes` is the type of each of `media_urls`, in order (`image/jpeg`, `video/mp4`), as
+/// the file store or the hosted asset names it: an adapter that hands URLs to a provider tells an
+/// image from a video by it, never by the URL (a Studio file's signed URL names no file type).
+/// Empty when unknown (a request built by hand): the adapter then reads the URL's ending.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -483,6 +488,9 @@ pub struct PublishRequest {
     /// The planned post's format, when the slot carries one (see above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format: Option<PostFormat>,
+    /// The type of each of `media_urls`, in order (see above).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_mimes: Vec<String>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
@@ -1031,6 +1039,21 @@ pub trait Publisher: Send + Sync {
         public: &Value,
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError>;
+    /// Whether the post `external_id` (a receipt's id) is on the provider, read back by its id
+    /// alone (Meta: `GET /{id}?fields=id`): how an observed attempt whose post has no counters to
+    /// read (an Instagram story) is confirmed. `Err` when it cannot be read, is another post, or
+    /// the provider has no such read (the default). A read: it never publishes anything.
+    async fn read_back(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        let _ = (cred, public, external_id);
+        Err(ConnectorError::permanent(
+            "reading a post back is unsupported",
+        ))
+    }
     /// Where the post `receipt` names stands at the provider (`public` as [`Connector::probe`]
     /// gets it). `None`, the default, for a provider whose `publish` answers only once the post is
     /// live: its receipt is the post. A read: it never publishes anything.
@@ -1736,6 +1759,7 @@ mod tests {
             privacy: None,
             tiktok: None,
             format: None,
+            media_mimes: vec![],
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

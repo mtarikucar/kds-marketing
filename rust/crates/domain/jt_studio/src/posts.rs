@@ -350,6 +350,9 @@ pub enum StoryMediaRefusal {
     VideoLength,
     /// The video names no length the server can read (its `moov` box is missing or too large).
     VideoLengthUnknown,
+    /// The video's `moov` box comes after its media data: Meta reads it at the front ("fast
+    /// start", "optimize for web" when exporting).
+    VideoNotFastStart,
 }
 
 impl StoryMediaRefusal {
@@ -360,17 +363,20 @@ impl StoryMediaRefusal {
             Self::VideoTooLarge => "story_video_too_large",
             Self::VideoLength => "story_video_length",
             Self::VideoLengthUnknown => "story_video_length_unknown",
+            Self::VideoNotFastStart => "story_video_not_fast_start",
         }
     }
 }
 
 /// What is wrong with a story's medium of type `mime`, `size_bytes` long and, for a video,
-/// `video_ms` long (`None`: unreadable); `None` when Instagram takes it. A JPEG image up to
-/// 8 MB, or an MP4 video of 3 to 60 seconds up to 100 MB; the type is [`media_types_ok`]'s.
+/// `video_ms` long (`None`: unreadable) with its `moov` box before its media data or not
+/// (`moov_first`); `None` when Instagram takes it. A JPEG image up to 8 MB, or an MP4 video of
+/// 3 to 60 seconds up to 100 MB whose `moov` comes first; the type is [`media_types_ok`]'s.
 pub fn story_media_refusal(
     mime: &str,
     size_bytes: u64,
     video_ms: Option<u64>,
+    moov_first: bool,
 ) -> Option<StoryMediaRefusal> {
     if is_video_mime(mime) {
         let (min, max) = STORY_VIDEO_MS;
@@ -379,6 +385,7 @@ pub fn story_media_refusal(
         } else {
             match video_ms {
                 None => Some(StoryMediaRefusal::VideoLengthUnknown),
+                Some(_) if !moov_first => Some(StoryMediaRefusal::VideoNotFastStart),
                 Some(ms) if ms < min || ms > max => Some(StoryMediaRefusal::VideoLength),
                 Some(_) => None,
             }

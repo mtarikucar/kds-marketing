@@ -27,8 +27,9 @@
 //!
 //! Media are public URLs handed to Meta as they are (M3 supplies them); nothing is fetched here,
 //! and the request's `media` (file bytes, for providers that take uploads only) is ignored.
-//! A URL is a video when its path ends in `.mp4`, `.mov`, `.m4v`, `.webm` or `.avi`, an image
-//! otherwise.
+//! A medium is a video when its type (`media_mimes`, the file store's) is a `video/` one: a Studio
+//! file's signed URL names no file type. Only for a request that names no types is a URL a video
+//! by its path's ending (`.mp4`, `.mov`, `.m4v`, `.webm` or `.avi`).
 
 use std::fmt;
 
@@ -47,10 +48,21 @@ const MAX_MEDIA: usize = 10;
 /// The path endings of a video URL.
 const VIDEO_ENDINGS: &[&str] = &[".mp4", ".mov", ".m4v", ".webm", ".avi"];
 
-/// Whether `url` is a video (by its path's ending).
-fn is_video(url: &Url) -> bool {
+/// Whether `url` is a video by its path's ending: only for a request that names no types.
+fn ends_as_video(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
     VIDEO_ENDINGS.iter().any(|ending| path.ends_with(ending))
+}
+
+/// Whether the `index`-th medium of `request` is a video: by its type when the request names
+/// the types of its media, else by its URL's ending.
+fn is_video(request: &PublishRequest, index: usize) -> bool {
+    match request.media_mimes.get(index) {
+        Some(mime) if request.media_mimes.len() == request.media_urls.len() => {
+            mime.trim().to_ascii_lowercase().starts_with("video/")
+        }
+        _ => request.media_urls.get(index).is_some_and(ends_as_video),
+    }
 }
 
 /// `text`, and `link` on a line of its own after it when given.
@@ -102,6 +114,46 @@ pub(crate) async fn publish(
     }
 }
 
+/// Reads the post `id` back by its id alone (`GET /{id}?fields=id`), with the token a publish of
+/// `public`'s kind uses: `Ok` when the answer names that id.
+pub(crate) async fn read_back(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    id: &str,
+) -> Result<(), ConnectorError> {
+    let kind = kind_of(public)?;
+    let cred = MetaCred::of(cred, "read back")?;
+    let answer = match (kind, cred) {
+        ("instagram", MetaCred::Instagram { token }) => {
+            Ig::Login { token }
+                .get(connector, &[node(id)?], &[("fields", "id")])
+                .await?
+        }
+        (
+            "instagram" | "facebook_page",
+            MetaCred::Page { token, .. } | MetaCred::User { token },
+        ) => {
+            let app = connector.graph_app()?;
+            connector
+                .graph_get(&app, token, &[node(id)?], &[("fields", "id")])
+                .await?
+        }
+        _ => {
+            return Err(ConnectorError::permanent(
+                "this capability does not publish posts",
+            ));
+        }
+    };
+    if text(&answer["id"]).as_deref() == Some(id) {
+        Ok(())
+    } else {
+        Err(ConnectorError::permanent(
+            "the read-back names another post",
+        ))
+    }
+}
+
 /// The Instagram account linked to the page behind `token`.
 async fn linked_instagram(
     connector: &MetaConnector,
@@ -138,7 +190,7 @@ async fn facebook(
     }
     let app = connector.graph_app()?;
     let media = &request.media_urls;
-    let videos = media.iter().filter(|m| is_video(m)).count();
+    let videos = (0..media.len()).filter(|i| is_video(request, *i)).count();
     let answer = match (media.len(), videos) {
         (0, _) => {
             let mut body = json!({ "message": request.text });
@@ -281,13 +333,13 @@ async fn instagram(
                 "an Instagram story is one image or one video",
             ));
         };
-        let body = if is_video(only) {
+        let body = if is_video(request, 0) {
             json!({ "media_type": "STORIES", "video_url": only.as_str() })
         } else {
             json!({ "media_type": "STORIES", "image_url": only.as_str() })
         };
         let container = create(connector, ig, account, body).await?;
-        return published(connector, ig, account, &container).await;
+        return published(connector, ig, account, &container, is_video(request, 0)).await;
     }
     let caption = with_link(&request.text, request.link.as_ref());
     let container = match media.as_slice() {
@@ -297,7 +349,7 @@ async fn instagram(
             ));
         }
         [only] => {
-            let body = if is_video(only) {
+            let body = if is_video(request, 0) {
                 json!({ "media_type": "REELS", "video_url": only.as_str(), "caption": caption })
             } else {
                 json!({ "image_url": only.as_str(), "caption": caption })
@@ -306,14 +358,14 @@ async fn instagram(
         }
         items => {
             let mut children = Vec::with_capacity(items.len());
-            for item in items {
-                let body = if is_video(item) {
+            for (index, item) in items.iter().enumerate() {
+                let body = if is_video(request, index) {
                     json!({ "media_type": "VIDEO", "video_url": item.as_str(), "is_carousel_item": true })
                 } else {
                     json!({ "image_url": item.as_str(), "is_carousel_item": true })
                 };
                 let child = create(connector, ig, account, body).await?;
-                wait_finished(connector, ig, &child).await?;
+                wait_finished(connector, ig, &child, is_video(request, index)).await?;
                 children.push(child);
             }
             let body = json!({
@@ -324,18 +376,20 @@ async fn instagram(
             create(connector, ig, account, body).await?
         }
     };
-    published(connector, ig, account, &container).await
+    let video = (0..media.len()).any(|i| is_video(request, i));
+    published(connector, ig, account, &container, video).await
 }
 
-/// Reads `container` until it is `FINISHED`, publishes it on `account` and answers the media's
-/// id and, best effort, its permalink.
+/// Reads `container` (holding a video when `video`) until it is `FINISHED`, publishes it on
+/// `account` and answers the media's id and, best effort, its permalink.
 async fn published(
     connector: &MetaConnector,
     ig: &Ig<'_>,
     account: &str,
     container: &str,
+    video: bool,
 ) -> Result<PublishReceipt, ConnectorError> {
-    wait_finished(connector, ig, container).await?;
+    wait_finished(connector, ig, container, video).await?;
     let published = ig
         .post(
             connector,
@@ -376,17 +430,25 @@ async fn create(
     text(&answer["id"]).ok_or_else(|| missing("container id"))
 }
 
-/// Reads container `id` until it is `FINISHED` (see the module docs).
+/// Reads container `id` until it is `FINISHED` (see the module docs): a video container longer
+/// ([`crate::ContainerPoll`]'s further reads).
 async fn wait_finished(
     connector: &MetaConnector,
     ig: &Ig<'_>,
     id: &str,
+    video: bool,
 ) -> Result<(), ConnectorError> {
     let poll = connector.poll;
-    let attempts = poll.attempts.max(1);
+    let quick = poll.attempts.max(1);
+    let attempts = quick + if video { poll.video_attempts } else { 0 };
     for attempt in 0..attempts {
-        if attempt > 0 && !poll.interval.is_zero() {
-            tokio::time::sleep(poll.interval).await;
+        let pause = if attempt >= quick {
+            poll.video_interval
+        } else {
+            poll.interval
+        };
+        if attempt > 0 && !pause.is_zero() {
+            tokio::time::sleep(pause).await;
         }
         let status = ig
             .get(connector, &[node(id)?], &[("fields", "status_code,status")])

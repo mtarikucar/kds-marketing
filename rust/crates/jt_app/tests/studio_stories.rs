@@ -106,10 +106,18 @@ fn mp4_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     b
 }
 
-/// An MP4 of `ms` milliseconds (its `mvhd` in a timescale of 1000), or with no `moov` at all.
+/// An MP4 of `ms` milliseconds (its `mvhd` in a timescale of 1000), its `moov` before its media
+/// data ("fast start"), or with no `moov` at all.
 fn mp4(ms: Option<u32>) -> Vec<u8> {
+    mp4_laid_out(ms, true)
+}
+
+/// An MP4 of `ms` milliseconds with its `moov` before its `mdat` or after it.
+fn mp4_laid_out(ms: Option<u32>, moov_first: bool) -> Vec<u8> {
     let mut b = mp4_box(b"ftyp", b"isom\x00\x00\x02\x00isom");
-    b.extend(mp4_box(b"mdat", &[0u8; 64]));
+    if !moov_first || ms.is_none() {
+        b.extend(mp4_box(b"mdat", &[0u8; 64]));
+    }
     if let Some(ms) = ms {
         let mut mvhd = vec![0u8; 4];
         mvhd.extend_from_slice(&0u32.to_be_bytes());
@@ -118,6 +126,9 @@ fn mp4(ms: Option<u32>) -> Vec<u8> {
         mvhd.extend_from_slice(&ms.to_be_bytes());
         mvhd.extend(std::iter::repeat_n(0u8, 80));
         b.extend(mp4_box(b"moov", &mp4_box(b"mvhd", &mvhd)));
+        if moov_first {
+            b.extend(mp4_box(b"mdat", &[0u8; 64]));
+        }
     }
     b
 }
@@ -183,6 +194,7 @@ async fn a_story_is_one_jpeg_up_to_8_mb_or_one_video_of_3_to_60_seconds() {
     let long = material(&w, &o, "video/mp4", mp4(Some(61_000))).await;
     let unknown = material(&w, &o, "video/mp4", mp4(None)).await;
     let video = material(&w, &o, "video/mp4", mp4(Some(10_000))).await;
+    let late = material(&w, &o, "video/mp4", mp4_laid_out(Some(10_000), false)).await;
     let q = request(&w).await;
     let at = |n: i64| MORNING + Duration::minutes(10 * n);
     let e = propose(
@@ -197,6 +209,7 @@ async fn a_story_is_one_jpeg_up_to_8_mb_or_one_video_of_3_to_60_seconds() {
             story(at(4), &long, &o, &w),
             story(at(5), &unknown, &o, &w),
             story(at(6), &video, &o, &w),
+            story(at(7), &late, &o, &w),
         ],
     )
     .await
@@ -221,6 +234,7 @@ async fn a_story_is_one_jpeg_up_to_8_mb_or_one_video_of_3_to_60_seconds() {
             (3, "story_video_length"),
             (4, "story_video_length"),
             (5, "story_video_length_unknown"),
+            (7, "story_video_not_fast_start"),
         ]
         .map(|(i, r)| (i, r.to_owned()))
     );
@@ -297,6 +311,9 @@ async fn a_story_needs_no_text_its_caption_is_not_checked_and_it_goes_out_as_a_s
         .collect();
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].format, Some(WireFormat::Story));
+    // Its signed URL names no file type: the request names it.
+    assert_eq!(sent[0].media_mimes, vec!["image/jpeg".to_owned()]);
+    assert!(!sent[0].media_urls[0].path().ends_with(".jpg"));
 
     // Never measured: its insights last a day, and learning leaves it out.
     w.d.clock = Arc::new(FixedClock(MORNING + Duration::days(8)));
@@ -308,4 +325,71 @@ async fn a_story_needs_no_text_its_caption_is_not_checked_and_it_goes_out_as_a_s
             .any(|c| matches!(c, ConnectorCall::PostMetrics { .. }))
     );
     assert!(w.uow.snapshot().studio.measurements.is_empty());
+}
+
+/// An observed story attempt (its receipt captured, the process stopped before it settled) is
+/// confirmed by reading the story back by its id: a story has no counters to read.
+#[tokio::test]
+async fn an_observed_story_is_confirmed_by_reading_it_back_not_by_its_counters() {
+    let mut w = instagram_world().await;
+    let o = workshop(&w).await;
+    let fine = material(&w, &o, "image/jpeg", jpeg(1000)).await;
+    let q = request(&w).await;
+    let out = propose(&w, q, "one", vec![story(MORNING, &fine, &o, &w)])
+        .await
+        .unwrap();
+    let slot = out.posts[0].slot.id;
+    piece_submit(
+        &w.d,
+        &ctx_at(&w, MORNING - Duration::hours(1)),
+        PieceInput {
+            slot_id: slot,
+            expected_revision: 0,
+            request_key: "piece".into(),
+            text: String::new(),
+            media: vec![MediaAsset::File { id: fine.file_id }],
+            adaptations: Default::default(),
+            subject: None,
+        },
+    )
+    .await
+    .unwrap();
+    // Sent, its receipt captured, then the process stopped.
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let a = r
+        .studio()
+        .claim_publication(MORNING)
+        .await
+        .unwrap()
+        .expect("the story is due");
+    r.studio()
+        .finish_publication(
+            a.id(),
+            jt_app::ports::studio::PublishOutcome::Observed(PublishReceipt {
+                external_id: "story-9".into(),
+                url: None,
+            }),
+            MORNING,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    w.d.clock = Arc::new(FixedClock(MORNING + Duration::minutes(2)));
+    publish::recover_publications(&w.d, w.f.ws).await.unwrap();
+    let calls = w.ads.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|c| matches!(c, ConnectorCall::PostMetrics { .. })),
+        "{calls:?}"
+    );
+    let attempt = w
+        .uow
+        .snapshot()
+        .studio
+        .attempts
+        .into_iter()
+        .find(|x| x.id() == a.id())
+        .unwrap();
+    assert_eq!(attempt.state(), PublishState::Succeeded);
 }

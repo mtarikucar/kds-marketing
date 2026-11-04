@@ -93,7 +93,8 @@ async fn request(
     p.validate_persisted()
         .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
     let (text, media, link, privacy) = content(p, c);
-    let (media_urls, media) = super::files::resolve_media(d, ws, media, &c.kind_key).await?;
+    let (media_urls, media_mimes, media) =
+        super::files::resolve_typed_media(d, ws, media, &c.kind_key).await?;
     let out = match tiktok {
         // A draft names no privacy: it is chosen in TikTok.
         Some(post) => PublishRequest {
@@ -104,6 +105,7 @@ async fn request(
             privacy: (!post.is_draft()).then(|| post.privacy_level.clone()),
             tiktok: Some(post.clone()),
             format,
+            media_mimes: media_mimes.clone(),
         },
         None => PublishRequest {
             text: text.to_owned(),
@@ -113,6 +115,7 @@ async fn request(
             privacy: privacy.map(str::to_owned),
             tiktok: None,
             format,
+            media_mimes,
         },
     };
     Ok(out)
@@ -576,12 +579,18 @@ async fn recover_observed(
                     .await?
                     .and_then(|approval| approval.tiktok)
                     .is_some_and(|post| post.expects_public_id());
-                Some((c, cred, public_id))
+                // A story has no counters: it is confirmed by reading it back by its id.
+                let story = r
+                    .studio_posts()
+                    .get_post(a.slot_id())
+                    .await?
+                    .is_some_and(|p| p.format == jt_studio::PostFormat::Story);
+                Some((c, cred, public_id, story))
             }
             Err(_) => None,
         }
     };
-    let Some((c, cred, public_id)) = prepared else {
+    let Some((c, cred, public_id, story)) = prepared else {
         return Ok(false);
     };
     let provider = provider_for_kind(&c.kind_key);
@@ -601,6 +610,26 @@ async fn recover_observed(
         .await?
         {
             return Ok(settled);
+        }
+        if story {
+            if publisher
+                .read_back(&cred, &public, &receipt.external_id)
+                .await
+                .is_err()
+            {
+                return Ok(false);
+            }
+            finish(
+                d,
+                ws,
+                a,
+                PublishOutcome::Succeeded(PublishReceipt {
+                    external_id: receipt.external_id.clone(),
+                    url: receipt.url.clone(),
+                }),
+            )
+            .await?;
+            return Ok(true);
         }
     }
     let Some(reader) = provider_for_kind(&c.kind_key).and_then(|p| d.connectors.insights(p)) else {

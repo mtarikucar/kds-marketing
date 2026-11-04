@@ -114,6 +114,15 @@ impl Publisher for MetaConnector {
     ) -> Result<PublishReceipt, ConnectorError> {
         publish::publish(self, cred, public, request).await
     }
+
+    async fn read_back(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        publish::read_back(self, cred, public, external_id).await
+    }
 }
 
 #[async_trait]

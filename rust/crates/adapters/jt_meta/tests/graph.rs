@@ -673,6 +673,7 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 privacy: None,
                 tiktok: None,
                 format: None,
+                media_mimes: vec![],
             },
         )
         .await
@@ -1571,6 +1572,7 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         privacy: None,
         tiktok: None,
         format: None,
+        media_mimes: vec![],
     }
 }
 
@@ -1727,6 +1729,162 @@ async fn facebook_publish_feed_photos_and_video() {
     assert!(m.recorded().is_empty());
 }
 
+/// A Studio medium's URL: the file store's signed URL, which names no file type.
+const SIGNED_A: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000a?workspace=w&signature=s";
+const SIGNED_B: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000b?workspace=w&signature=s";
+
+/// `request` with the type of each medium, in order, as the file store names it.
+fn typed(mut request: PublishRequest, mimes: &[&str]) -> PublishRequest {
+    request.media_mimes = mimes.iter().map(|m| (*m).to_owned()).collect();
+    request
+}
+
+/// A video is told from its type, not its URL: Studio's signed URLs have no file ending.
+#[tokio::test]
+async fn a_signed_video_url_is_a_video_by_its_type() {
+    let p = public("instagram", Some(IG));
+    let container = |m: &Mock, id: &str| {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media_publish",
+            ok(json!({ "id": "900" })),
+        );
+        m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    };
+    // A reel.
+    let r = rig().await;
+    container(&r.mock, "800");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "REELS", "video_url": SIGNED_A, "caption": "Reel" })
+    );
+    // A story's video.
+    let r = rig().await;
+    container(&r.mock, "801");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "video_url": SIGNED_A })
+    );
+    // An image stays an image.
+    let r = rig().await;
+    container(&r.mock, "802");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Foto", &[SIGNED_A], None), &["image/jpeg"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "image_url": SIGNED_A, "caption": "Foto" })
+    );
+    // A carousel's video item is a video.
+    let r = rig().await;
+    let m = &r.mock;
+    for id in ["810", "811", "812"] {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+    }
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "900" })),
+    );
+    m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(
+                post("Kaydır", &[SIGNED_A, SIGNED_B], None),
+                &["image/jpeg", "video/mp4"],
+            ),
+        )
+        .await
+        .unwrap();
+    let items: Vec<Value> = m
+        .requests("POST", "/fb/v19.0/17841400000000001/media")
+        .iter()
+        .map(Recorded::json)
+        .collect();
+    assert_eq!(
+        items[..2],
+        [
+            json!({ "image_url": SIGNED_A, "is_carousel_item": true }),
+            json!({ "media_type": "VIDEO", "video_url": SIGNED_B, "is_carousel_item": true }),
+        ]
+    );
+}
+
+/// On a Facebook Page a signed video URL goes to the Page's videos, by its type.
+#[tokio::test]
+async fn a_signed_video_url_on_a_page_is_a_video_by_its_type() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/1234567890/videos",
+        ok(json!({ "id": "77" })),
+    );
+    r.meta
+        .publish(
+            &page_cred(),
+            &public("facebook_page", Some(PAGE)),
+            &typed(post("Video", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/1234567890/videos").json()["file_url"],
+        json!(SIGNED_A)
+    );
+    assert!(m.requests("POST", "/fb/v19.0/1234567890/photos").is_empty());
+}
+
 /// `request` as an Instagram story (its planned post's format).
 fn story(mut request: PublishRequest) -> PublishRequest {
     request.format = Some(jt_app::ports::connectors::PostFormat::Story);
@@ -1830,6 +1988,111 @@ async fn ig_story_video_goes_through_instagram_login() {
         assert!(call.path.starts_with("/ig/"), "{}", call.line());
         assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN), "{}", call.line());
     }
+}
+
+/// A video container is read longer than an image one (Meta suggests reading once a minute for up
+/// to five minutes): past the image's 30 reads, 7 more, `video_interval` apart, before giving up.
+#[tokio::test]
+async fn a_video_container_is_waited_for_longer_than_an_image_one() {
+    let p = public("instagram", Some(IG));
+    // A reel finishing on its 35th read is published.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "880" })),
+    );
+    for _ in 0..34 {
+        m.on(
+            "GET",
+            "/fb/v19.0/880",
+            ok(json!({ "status_code": "IN_PROGRESS" })),
+        );
+    }
+    m.on(
+        "GET",
+        "/fb/v19.0/880",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "881" })),
+    );
+    m.on("GET", "/fb/v19.0/881", ok(json!({ "id": "881" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.requests("GET", "/fb/v19.0/880").len(), 35);
+    // A video story never finishing: 37 reads, then a transient failure and no publish.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "882" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/882",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    let e = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "transient");
+    assert_eq!(m.requests("GET", "/fb/v19.0/882").len(), 37);
+    assert!(
+        m.requests("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .is_empty()
+    );
+}
+
+/// A post is read back by its id alone (`GET /{id}?fields=id`): how an observed story, which has
+/// no counters, is confirmed; on either login path.
+#[tokio::test]
+async fn a_post_is_read_back_by_its_id_alone() {
+    use jt_app::ports::connectors::Publisher;
+    let r = rig().await;
+    let m = &r.mock;
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    r.meta
+        .read_back(&page_cred(), &public("instagram", Some(IG)), "701")
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/701").param("fields"),
+        Some("id")
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    r.meta
+        .read_back(
+            &ig_login_cred(),
+            &public("instagram", Some("17841400000000009")),
+            "9400000000",
+        )
+        .await
+        .unwrap();
+    // Another id, or nothing: not confirmed.
+    m.on("GET", "/fb/v19.0/702", ok(json!({ "id": "703" })));
+    assert!(
+        r.meta
+            .read_back(&page_cred(), &public("instagram", Some(IG)), "702")
+            .await
+            .is_err()
+    );
 }
 
 /// A story is one medium; a Facebook Page's stories are not built: both refused, nothing sent.
@@ -2000,6 +2263,8 @@ async fn ig_publish_polls_until_finished_and_gives_up_after_limit() {
     .with_container_poll(ContainerPoll {
         interval: StdDuration::from_millis(40),
         attempts: 3,
+        video_interval: StdDuration::from_millis(40),
+        video_attempts: 0,
     });
     r.mock.on(
         "POST",

@@ -59,22 +59,28 @@ pub(crate) async fn capture_time_of(
     }
 }
 
-/// How long the video `f` lasts, in milliseconds, as its `moov` box says (`mvhd`, or a
-/// fragmented video's `mvex/mehd`): its box headers walked to `moov`, then that box alone, never
-/// the media data. `None` when it says nothing the server reads.
-pub(crate) async fn video_ms_of(d: &Deps, f: &StoredFile) -> Result<Option<u64>, AppError> {
+/// What the video `f` says of itself: how long it lasts, in milliseconds, as its `moov` box
+/// says (`mvhd`, or a fragmented video's `mvex/mehd`; `None` when it says nothing the server
+/// reads), and whether that `moov` comes before its media data (`mdat`), as Meta reads it ("fast
+/// start"). Its box headers are walked to `moov`, then that box alone is read, never the media.
+pub(crate) async fn video_facts_of(
+    d: &Deps,
+    f: &StoredFile,
+) -> Result<(Option<u64>, bool), AppError> {
+    let mdat = find(d, f, 0, f.size_bytes, b"mdat").await?;
     let Some(moov) = find(d, f, 0, f.size_bytes, b"moov").await? else {
-        return Ok(None);
+        return Ok((None, false));
     };
+    let first = mdat.is_none_or(|m| moov.payload < m.payload);
     let len = moov.end - moov.payload;
     if len > MAX_MOOV {
-        return Ok(None);
+        return Ok((None, first));
     }
     let payload = d
         .files
         .read_range(f.workspace_id, f.id, moov.payload, len as usize)
         .await?;
-    Ok(mp4_moov_duration_ms(&payload))
+    Ok((mp4_moov_duration_ms(&payload), first))
 }
 
 /// The first box of type `kind` among the boxes from byte `at` to byte `end` of `f`, reading

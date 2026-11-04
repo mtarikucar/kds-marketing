@@ -2308,7 +2308,8 @@
       "story_image_too_large": "A story image can be at most 8 MB: upload a smaller JPEG.",
       "story_video_too_large": "A story video can be at most 100 MB: make the video smaller and upload it again.",
       "story_video_length": "A story video must last 3 to 60 seconds: trim the video and upload it again.",
-      "story_video_length_unknown": "The video's length could not be read: export it again as MP4 and upload it."
+      "story_video_length_unknown": "The video's length could not be read: export it again as MP4 and upload it.",
+      "story_video_not_fast_start": "The video is not set up to start fast: export it with the 'fast start / optimize for web' option and upload it again."
     },
     "invalid": {
       "media": "The file was refused: it must be JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",

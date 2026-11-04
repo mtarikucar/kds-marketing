@@ -459,7 +459,21 @@ pub async fn resolve_media(
     media: &[MediaAsset],
     kind_key: &str,
 ) -> Result<(Vec<Url>, Vec<MediaUpload>), AppError> {
+    let (urls, _, bytes) = resolve_typed_media(d, ws, media, kind_key).await?;
+    Ok((urls, bytes))
+}
+
+/// [`resolve_media`], with the type of each URL, in order, as the file store (`StoredFile::mime`)
+/// or the hosted asset names it: a signed file-store URL names no file type, so a provider is
+/// told an image from a video by it.
+pub async fn resolve_typed_media(
+    d: &Deps,
+    ws: WorkspaceId,
+    media: &[MediaAsset],
+    kind_key: &str,
+) -> Result<(Vec<Url>, Vec<String>, Vec<MediaUpload>), AppError> {
     let mut urls = vec![];
+    let mut mimes = vec![];
     let mut bytes = vec![];
     for m in media {
         match m {
@@ -483,7 +497,8 @@ pub async fn resolve_media(
                         d.files
                             .provider_url(ws, *id, d.clock.now() + Duration::hours(24))
                             .await?,
-                    )
+                    );
+                    mimes.push(f.mime.trim().to_ascii_lowercase());
                 }
             }
             MediaAsset::HostedUrl {
@@ -499,11 +514,12 @@ pub async fn resolve_media(
                 if MediaDelivery::of(kind_key, mime) == MediaDelivery::Bytes {
                     bytes.push(u)
                 } else {
-                    urls.push(url.clone())
+                    urls.push(url.clone());
+                    mimes.push(mime.trim().to_ascii_lowercase());
                 }
             }
             MediaAsset::Bytes { .. } => return Err(invalid()),
         }
     }
-    Ok((urls, bytes))
+    Ok((urls, mimes, bytes))
 }

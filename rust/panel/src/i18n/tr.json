@@ -2308,7 +2308,8 @@
       "story_image_too_large": "Hikâye görseli en çok 8 MB olabilir: daha küçük bir JPEG yükleyin.",
       "story_video_too_large": "Hikâye videosu en çok 100 MB olabilir: videoyu küçültüp yeniden yükleyin.",
       "story_video_length": "Hikâye videosu 3 ile 60 saniye arasında olmalı: videoyu kırpıp yeniden yükleyin.",
-      "story_video_length_unknown": "Videonun süresi okunamadı: videoyu MP4 olarak yeniden dışa aktarıp yükleyin."
+      "story_video_length_unknown": "Videonun süresi okunamadı: videoyu MP4 olarak yeniden dışa aktarıp yükleyin.",
+      "story_video_not_fast_start": "Video hızlı başlatmaya uygun değil: videoyu 'fast start / web için optimize' seçeneğiyle dışa aktarın ve yeniden yükleyin."
     },
     "invalid": {
       "media": "Dosya kabul edilmedi: JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) olmalı.",

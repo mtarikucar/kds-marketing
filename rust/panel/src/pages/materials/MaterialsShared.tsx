@@ -137,6 +137,7 @@ const REASONS = [
   'story_video_too_large',
   'story_video_length',
   'story_video_length_unknown',
+  'story_video_not_fast_start',
 ] as const;
 type ReasonCode = (typeof REASONS)[number];
 const isReason = (r: unknown): r is ReasonCode =>

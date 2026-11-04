@@ -625,37 +625,50 @@ fn a_story_takes_one_jpeg_up_to_8_mb_or_one_video_of_3_to_60_seconds() {
     assert!(!media_types_ok(Story, "facebook_page", &["image/jpeg"]));
     assert!(!media_types_ok(Story, "x", &["image/jpeg"]));
     let mb = 1_000_000;
-    assert_eq!(story_media_refusal("image/jpeg", 8 * mb, None), None);
+    assert_eq!(story_media_refusal("image/jpeg", 8 * mb, None, true), None);
     assert_eq!(
-        story_media_refusal("image/png", mb, None),
+        story_media_refusal("image/png", mb, None, true),
         Some(StoryMediaRefusal::ImageJpegOnly)
     );
     assert_eq!(
-        story_media_refusal("image/jpeg", 8 * mb + 1, None),
+        story_media_refusal("image/jpeg", 8 * mb + 1, None, true),
         Some(StoryMediaRefusal::ImageTooLarge)
     );
-    assert_eq!(story_media_refusal("video/mp4", 10 * mb, Some(3_000)), None);
     assert_eq!(
-        story_media_refusal("video/mp4", 10 * mb, Some(60_000)),
+        story_media_refusal("video/mp4", 10 * mb, Some(3_000), true),
         None
     );
     assert_eq!(
-        story_media_refusal("video/mp4", 10 * mb, Some(2_999)),
+        story_media_refusal("video/mp4", 10 * mb, Some(60_000), true),
+        None
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(2_999), true),
         Some(StoryMediaRefusal::VideoLength)
     );
     assert_eq!(
-        story_media_refusal("video/mp4", 10 * mb, Some(60_001)),
+        story_media_refusal("video/mp4", 10 * mb, Some(60_001), true),
         Some(StoryMediaRefusal::VideoLength)
     );
     assert_eq!(
-        story_media_refusal("video/mp4", 10 * mb, None),
+        story_media_refusal("video/mp4", 10 * mb, None, false),
         Some(StoryMediaRefusal::VideoLengthUnknown)
     );
     assert_eq!(
-        story_media_refusal("video/mp4", 100 * mb + 1, Some(10_000)),
+        story_media_refusal("video/mp4", 100 * mb + 1, Some(10_000), true),
         Some(StoryMediaRefusal::VideoTooLarge)
     );
+    // Meta reads a video's `moov` box at its front ("fast start"): one after the media data is
+    // refused, saying how to export it.
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(10_000), false),
+        Some(StoryMediaRefusal::VideoNotFastStart)
+    );
     for (r, code) in [
+        (
+            StoryMediaRefusal::VideoNotFastStart,
+            "story_video_not_fast_start",
+        ),
         (StoryMediaRefusal::ImageJpegOnly, "story_image_jpeg_only"),
         (StoryMediaRefusal::ImageTooLarge, "story_image_too_large"),
         (StoryMediaRefusal::VideoTooLarge, "story_video_too_large"),

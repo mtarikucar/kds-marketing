@@ -401,12 +401,12 @@ pub(crate) async fn story_refusal(
         .get_file(m.file_id)
         .await?
         .ok_or_else(|| AppError::not_found("file"))?;
-    let ms = if is_video_mime(&f.mime) {
-        super::library::video_ms_of(d, &f).await?
+    let (ms, moov_first) = if is_video_mime(&f.mime) {
+        super::library::video_facts_of(d, &f).await?
     } else {
-        None
+        (None, true)
     };
-    Ok(story_media_refusal(&f.mime, f.size_bytes, ms))
+    Ok(story_media_refusal(&f.mime, f.size_bytes, ms, moov_first))
 }
 
 /// Records why the post of `slot`, when it has one, was retired at `at`.

@@ -533,8 +533,14 @@ async fn hosted_url_remains_direct_and_x_fetch_is_bounded() {
         size_bytes: 13,
     }];
     let (urls, bytes) = resolve_media(&d, ws, &media, "instagram").await.unwrap();
-    assert_eq!(urls, vec![url]);
+    assert_eq!(urls, vec![url.clone()]);
     assert!(bytes.is_empty());
+    // Each URL with its type, in order: a provider is told an image from a video by it.
+    let (urls, mimes, _) =
+        jt_app::usecases::studio::files::resolve_typed_media(&d, ws, &media, "instagram")
+            .await
+            .unwrap();
+    assert_eq!((urls, mimes), (vec![url], vec!["image/png".to_owned()]));
     let (urls, bytes) = resolve_media(&d, ws, &media, "x").await.unwrap();
     assert!(urls.is_empty());
     assert_eq!(bytes[0].bytes, b"\x89PNG\r\n\x1a\nasset");
