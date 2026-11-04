@@ -357,12 +357,14 @@ pub fn post_scores(outcomes: &[PostOutcome]) -> Vec<PostScore> {
 /// measured for it by their mean reward (more posts first on a tie), then the others in
 /// [`PostFormat::ALL`]'s order. Every hypothesis counts.
 pub fn format_scores(outcomes: &[PostOutcome], olay_kind: Option<OlayKind>) -> Vec<FormatScore> {
+    // A story is never measured (its insights last a day): it is never ranked.
     let mut scores: Vec<FormatScore> = PostFormat::ALL
         .into_iter()
         .filter(|f| {
-            ORGANIC_KINDS
-                .iter()
-                .any(|k| supported_formats(k).contains(f))
+            *f != PostFormat::Story
+                && ORGANIC_KINDS
+                    .iter()
+                    .any(|k| supported_formats(k).contains(f))
         })
         .map(|format| {
             let rewards: Vec<f64> = finite_rewards(outcomes)

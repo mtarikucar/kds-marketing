@@ -1,6 +1,7 @@
 import { request, seg } from './client';
 import type { Hypothesis, HypothesisInput, LaneKind, LedgerEntryOut } from './types';
 import type { MaterialCheck, ShootRequest, Subject } from './materials';
+import type { PlannedPost } from './posts';
 export type Instant = string | number[];
 export interface Chain {
   workspace_id: string;
@@ -123,6 +124,8 @@ export interface SlotDetail {
   measurements: unknown[];
   /** The truth check of the piece shown; absent when the piece records no materials. */
   material_check?: MaterialCheck;
+  /** The planned post the slot carries; absent for the weekly quotas' slots. */
+  post?: PlannedPost;
 }
 /** A publish attempt as `slot_get` shows it; only what the panel reads is typed. */
 export interface PublishAttempt {

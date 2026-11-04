@@ -2303,7 +2303,13 @@
       "hard_findings_not_releasable": "Materyal sorunları bırakılamaz: materyali veya içeriği değiştirin.",
       "no_caption_findings": "Bırakılacak bir metin bulgusu yok.",
       "findings_changed": "Bulgular siz bakarken değişti; yenileyip tekrar bakın.",
-      "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin."
+      "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin.",
+      "story_image_jpeg_only": "Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.",
+      "story_image_too_large": "Hikâye görseli en çok 8 MB olabilir: daha küçük bir JPEG yükleyin.",
+      "story_video_too_large": "Hikâye videosu en çok 100 MB olabilir: videoyu küçültüp yeniden yükleyin.",
+      "story_video_length": "Hikâye videosu 3 ile 60 saniye arasında olmalı: videoyu kırpıp yeniden yükleyin.",
+      "story_video_length_unknown": "Videonun süresi okunamadı: videoyu MP4 olarak yeniden dışa aktarıp yükleyin.",
+      "story_video_not_fast_start": "Video hızlı başlatmaya uygun değil: videoyu 'fast start / web için optimize' seçeneğiyle dışa aktarın ve yeniden yükleyin."
     },
     "invalid": {
       "media": "Dosya kabul edilmedi: JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) olmalı.",
@@ -2549,7 +2555,8 @@
       "upload": "Materyal yükle",
       "refused_one": "Kullanılamayan {{count}} materyal",
       "refused_other": "Kullanılamayan {{count}} materyal",
-      "pick": "İçeriğin konusunu ve en az bir materyal seçin."
+      "pick": "İçeriğin konusunu ve en az bir materyal seçin.",
+      "story": "Hikâyede metin paylaşılmaz: yalnız görsel gider. Tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4 seçin."
     }
   },
   "posts": {
@@ -2649,7 +2656,7 @@
       "debounceHelp": "Bir olaya materyal eklemek bittikten bu kadar sonra plan istenir: 20 fotoğraf tek istek olur.",
       "horizon": "Planlama ufku (gün)",
       "tz": "Saat dilimi",
-      "storyNote": "Hikâyeler henüz hiçbir kanalda yayınlanmıyor.",
+      "storyNote": "Hikâyeler yalnız Instagram'da yayınlanır: tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4, metin gitmez. Facebook sayfası hikâyeleri henüz yok.",
       "save": "Ayarları kaydet",
       "saved": "Kaydedildi.",
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
