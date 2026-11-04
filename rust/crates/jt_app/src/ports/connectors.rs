@@ -382,6 +382,9 @@ impl fmt::Debug for Attachment {
 
 /// A typed outgoing mail, with credentials supplied separately. The caller persists metadata
 /// and the stable Message-ID before sending; attachment bytes never enter logs or the ledger.
+///
+/// The fields after `attachments` are read with their defaults when missing, so an intent queued
+/// before they existed still sends (as it would have).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailMessage {
     pub to: String,
@@ -391,6 +394,30 @@ pub struct MailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<Attachment>,
+    /// The display name of `From` (one line, at most 80 characters); `None` sends the address
+    /// alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_name: Option<String>,
+    /// The commercial email's unsubscribe addresses (RFC 2369, RFC 8058); every commercial email
+    /// carries them (spec 2026-10-30-leads-pool-outreach-design.md §3.14), a reply none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe: Option<ListUnsubscribe>,
+    /// Stored mail files whose bytes the sender reads into `attachments` just before the
+    /// provider call (spec §3.15): ids only, never bytes, in a stored intent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_files: Vec<uuid::Uuid>,
+}
+
+/// Where a recipient unsubscribes from commercial email: written as `List-Unsubscribe: <https>,
+/// <mailto>` with `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, so a mail client's
+/// unsubscribe button posts to `https` without opening a page (RFC 8058).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListUnsubscribe {
+    /// The one-click address: `https`, one line, no `<`, `>`, `,` or spaces.
+    pub https: String,
+    /// `mailto:{from}?subject=unsubscribe`, when the sending address can be written as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mailto: Option<String>,
 }
 
 /// The last seen UID within one mailbox's UIDVALIDITY generation.

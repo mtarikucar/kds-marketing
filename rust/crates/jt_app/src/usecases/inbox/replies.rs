@@ -470,6 +470,9 @@ pub(super) async fn enqueue_in(
             in_reply_to,
             references,
             attachments,
+            from_name: None,
+            list_unsubscribe: None,
+            attachment_files: Vec::new(),
         })?;
     } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
     {

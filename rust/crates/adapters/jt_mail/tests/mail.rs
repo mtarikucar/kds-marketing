@@ -89,7 +89,7 @@ async fn mail_socket_refuses_a_public_name_resolving_to_private_space() {
 
 mod support;
 use jt_app::ports::connectors::{
-    Attachment, Connector, MailSender, MailboxCursor, MailboxPoller, MailboxPosition,
+    Attachment, Connector, MailMessage, MailSender, MailboxCursor, MailboxPoller, MailboxPosition,
 };
 use jt_connector::{ConnectorError, EventKind, MailTls};
 use jt_mail::MailConnector;
@@ -1767,4 +1767,175 @@ async fn imap_slow_overflow_retries_still_make_progress() {
         cursor = next;
     }
     task.await.unwrap();
+}
+
+// ---- Commercial email headers (spec 2026-10-30-leads-pool-outreach-design.md §3.14, §8) ----
+
+/// The unsubscribe addresses a commercial email carries.
+fn unsubscribe() -> jt_app::ports::connectors::ListUnsubscribe {
+    jt_app::ports::connectors::ListUnsubscribe {
+        https: "https://panel.example.com/u/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/AbC-_9".into(),
+        mailto: Some("mailto:sender@example.com?subject=unsubscribe".into()),
+    }
+}
+
+#[tokio::test]
+async fn outreach_headers_are_on_the_wire() {
+    use mailparse::MailHeaderMap;
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.from_name = Some("Acme Sales".into());
+    msg.list_unsubscribe = Some(unsubscribe());
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&wire).unwrap();
+    let u = unsubscribe();
+    assert_eq!(
+        parsed.headers.get_first_value("List-Unsubscribe").unwrap(),
+        format!("<{}>, <{}>", u.https, u.mailto.unwrap())
+    );
+    assert_eq!(
+        parsed
+            .headers
+            .get_first_value("List-Unsubscribe-Post")
+            .unwrap(),
+        "List-Unsubscribe=One-Click"
+    );
+    let from =
+        mailparse::addrparse_header(parsed.headers.get_first_header("From").unwrap()).unwrap();
+    match &from[0] {
+        mailparse::MailAddr::Single(info) => {
+            assert_eq!(info.display_name.as_deref(), Some("Acme Sales"));
+            assert_eq!(info.addr, "sender@example.com");
+        }
+        other => panic!("one mailbox expected, got {other:?}"),
+    }
+    // Without a mailto fallback the https address stands alone.
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.list_unsubscribe = Some(jt_app::ports::connectors::ListUnsubscribe {
+        mailto: None,
+        ..unsubscribe()
+    });
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let parsed_wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&parsed_wire).unwrap();
+    assert_eq!(
+        parsed.headers.get_first_value("List-Unsubscribe").unwrap(),
+        format!("<{}>", unsubscribe().https)
+    );
+}
+
+#[tokio::test]
+async fn from_display_name_is_encoded() {
+    use mailparse::MailHeaderMap;
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.from_name = Some("Acme Satış, \"Ekip\"".into());
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let bytes = task.await.unwrap();
+    let header_end = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    assert!(
+        bytes[..header_end].is_ascii(),
+        "the name is an encoded word"
+    );
+    let parsed = mailparse::parse_mail(&bytes).unwrap();
+    let addrs =
+        mailparse::addrparse_header(parsed.headers.get_first_header("From").unwrap()).unwrap();
+    match &addrs[0] {
+        mailparse::MailAddr::Single(info) => {
+            assert_eq!(info.display_name.as_deref(), Some("Acme Satış, \"Ekip\""));
+            assert_eq!(info.addr, "sender@example.com");
+        }
+        other => panic!("one mailbox expected, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn header_injection_in_name_or_urls_is_refused() {
+    let https = |raw: &str| jt_app::ports::connectors::ListUnsubscribe {
+        https: raw.into(),
+        mailto: None,
+    };
+    let mailto = |raw: &str| jt_app::ports::connectors::ListUnsubscribe {
+        mailto: Some(raw.into()),
+        ..unsubscribe()
+    };
+    let named = |name: String| MailMessage {
+        from_name: Some(name),
+        ..message()
+    };
+    let unsubscribing = |u| MailMessage {
+        list_unsubscribe: Some(u),
+        ..message()
+    };
+    let cases = vec![
+        named("Acme\r\nBcc: other@example.com".into()),
+        named("x".repeat(81)),
+        named("   ".into()),
+        unsubscribing(https("https://panel.example.com/u/1\r\nBcc: o@example.com")),
+        unsubscribing(https("http://panel.example.com/u/1")),
+        unsubscribing(https("https://panel.example.com/u/1>, <x")),
+        unsubscribing(https("https://panel.example.com/u/ 1")),
+        unsubscribing(https(&format!(
+            "https://panel.example.com/{}",
+            "a".repeat(900)
+        ))),
+        unsubscribing(mailto("sender@example.com")),
+        unsubscribing(mailto("mailto:a@example.com\nBcc: b")),
+    ];
+    for (i, msg) in cases.into_iter().enumerate() {
+        // Port 465 has no listener: a message that got past the checks would fail to connect,
+        // transiently. A refused one never connects.
+        let err = connector()
+            .send(workspace(), &credential(465, 993, MailTls::Implicit), msg)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ConnectorError::Permanent { .. }),
+            "case {i}: {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn old_intents_without_new_fields_still_send() {
+    use mailparse::MailHeaderMap;
+    // A mail intent stored before the sender name, the unsubscribe addresses and the file ids.
+    let stored = json!({
+        "to": "person@example.com",
+        "subject": "Meeting",
+        "text": "See you",
+        "message_id": "<stable@example.com>",
+        "in_reply_to": null,
+        "references": [],
+        "attachments": [],
+    });
+    let msg: MailMessage = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(msg.from_name, None);
+    assert_eq!(msg.list_unsubscribe, None);
+    assert!(msg.attachment_files.is_empty());
+    // Written back, it is the same JSON: nothing new appears in an intent that has none.
+    assert_eq!(serde_json::to_value(&msg).unwrap(), stored);
+    let (port, task) = smtp(SmtpMode::default()).await;
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let parsed_wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&parsed_wire).unwrap();
+    assert!(parsed.headers.get_first_value("List-Unsubscribe").is_none());
+    assert_eq!(
+        parsed.headers.get_first_value("From").unwrap(),
+        "sender@example.com"
+    );
 }

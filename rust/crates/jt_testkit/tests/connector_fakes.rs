@@ -1534,6 +1534,9 @@ fn mail_message() -> jt_app::ports::connectors::MailMessage {
             mime: "text/calendar".into(),
             bytes: b"PRIVATE-ATTACHMENT-CONTENT".to_vec(),
         }],
+        from_name: None,
+        list_unsubscribe: None,
+        attachment_files: vec![],
     }
 }
 

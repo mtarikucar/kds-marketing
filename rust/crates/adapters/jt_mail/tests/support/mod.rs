@@ -478,6 +478,9 @@ pub fn message() -> MailMessage {
         in_reply_to: Some("<parent@example.com>".into()),
         references: vec!["<root@example.com>".into(), "<parent@example.com>".into()],
         attachments: vec![],
+        from_name: None,
+        list_unsubscribe: None,
+        attachment_files: vec![],
     }
 }
 
