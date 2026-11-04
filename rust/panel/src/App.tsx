@@ -16,6 +16,8 @@ import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
 import { PeoplePage } from '@/pages/PeoplePage';
+import { ProspectsPage } from '@/pages/ProspectsPage';
+import { OutreachPage } from '@/pages/OutreachPage';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
@@ -80,6 +82,8 @@ export const routes: RouteObject[] = [
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
           { path: 'people', element: <PeoplePage /> },
+          { path: 'prospects', element: <ProspectsPage /> },
+          { path: 'outreach', element: <OutreachPage /> },
           { path: 'calls', element: <CallsPage /> },
           { path: 'calls/:callId', element: <CallDetail /> },
           { path: 'strategy', element: <StrategyPage /> },

@@ -7,9 +7,11 @@ import {
   Inbox,
   KeyRound,
   LogOut,
+  Mail,
   Phone,
   Plug,
   ShieldCheck,
+  Target,
   UserRound,
   Users,
   Wallet,
@@ -18,7 +20,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { logout, switchWorkspace } from '@/api/auth';
-import type { MeOut } from '@/api/types';
+import type { MeOut, Permission } from '@/api/types';
 import { SESSION_KEY, useSession } from '@/auth/useSession';
 import { WorkspaceStatusBadge } from '@/components/StatusBadges';
 import { QueryState } from '@/components/QueryState';
@@ -36,13 +38,15 @@ import {
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
-import { currentMembership } from '@/lib/roles';
+import { can, currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
 
 type NavKey =
   | 'studio'
   | 'inbox'
   | 'people'
+  | 'prospects'
+  | 'outreach'
   | 'calls'
   | 'home'
   | 'strategy'
@@ -54,10 +58,13 @@ type NavKey =
   | 'agents'
   | 'ledger';
 
-const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
+/** The menu; an entry with a `permission` is listed only for those who hold it. */
+const NAV: { to: string; key: NavKey; Icon: LucideIcon; permission?: Permission }[] = [
   { to: '/', key: 'home', Icon: Home },
   { to: '/inbox', key: 'inbox', Icon: Inbox },
   { to: '/people', key: 'people', Icon: UserRound },
+  { to: '/prospects', key: 'prospects', Icon: Target, permission: 'prospects.work' },
+  { to: '/outreach', key: 'outreach', Icon: Mail, permission: 'outreach.work' },
   { to: '/calls', key: 'calls', Icon: Phone },
   { to: '/strategy', key: 'strategy', Icon: Compass },
   { to: '/capabilities', key: 'capabilities', Icon: Plug },
@@ -72,9 +79,10 @@ const NAV: { to: string; key: NavKey; Icon: LucideIcon }[] = [
 
 function NavItems({ orientation }: { orientation: 'vertical' | 'horizontal' }) {
   const { t } = useTranslation();
+  const me = useSession().data;
   return (
     <>
-      {NAV.map(({ to, key, Icon }) => (
+      {NAV.filter(({ permission }) => !permission || can(me, permission)).map(({ to, key, Icon }) => (
         <NavLink
           key={to}
           to={to}

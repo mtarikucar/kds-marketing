@@ -53,7 +53,9 @@
     "inbox": "Inbox",
     "studio": "Growth studio",
     "people": "People",
-    "calls": "Calls"
+    "calls": "Calls",
+    "prospects": "Prospects",
+    "outreach": "Campaigns"
   },
   "shell": {
     "workspace": "Workspace",
@@ -138,6 +140,10 @@
     "prospects": {
       "work": "Work the prospect pool",
       "manage": "Manage the prospect pool: reopen, lift do-not-contact, erase, retention"
+    },
+    "outreach": {
+      "work": "Work on email campaigns",
+      "manage": "Manage email campaigns: approval, cancelling, sending settings"
     }
   },
   "roleNames": {
@@ -330,7 +336,16 @@
       "merge_suggested": "Contact merge suggestion",
       "task_due": "Task due",
       "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
-      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again."
+      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again.",
+      "research_due": "An open research task is waiting for new prospects today.",
+      "prospects_to_score": "Prospects are waiting to be scored.",
+      "prospects_to_promote": "Qualified prospects are waiting to be promoted into the inbox.",
+      "ownerless_journeys": "Open journeys have no owner.",
+      "assignment_stalled": "Assignments past their SLA could not be given to anyone else.",
+      "promoted_not_contacted": "Promoted prospects have not been written to yet.",
+      "campaign_approval": "A campaign is waiting for your approval.",
+      "campaign_blocked": "A campaign has stopped; check why.",
+      "personalization_due": "A campaign's recipients are waiting for personalization."
     }
   },
   "team": {
@@ -2173,6 +2188,16 @@
         "transcript_notice": "Transcription notice",
         "closing": "Closing when the plan brings none"
       }
+    }
+  },
+  "leads": {
+    "prospects": {
+      "title": "Prospects",
+      "description": "Businesses your agents found with their own tools and recorded with evidence. They stay here, apart, until promoted into the inbox."
+    },
+    "outreach": {
+      "title": "Campaigns",
+      "description": "Plain-text email campaigns and their steps, sent from your own mailbox."
     }
   }
 }

@@ -53,7 +53,9 @@
     "inbox": "Gelen kutusu",
     "studio": "Büyüme stüdyosu",
     "people": "Kişiler",
-    "calls": "Aramalar"
+    "calls": "Aramalar",
+    "prospects": "Aday havuzu",
+    "outreach": "Kampanyalar"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -138,6 +140,10 @@
     "prospects": {
       "work": "Aday havuzunda çalışma",
       "manage": "Aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri"
+    },
+    "outreach": {
+      "work": "E-posta kampanyalarında çalışma",
+      "manage": "E-posta kampanyalarını yönetme: onay, iptal, gönderim ayarları"
     }
   },
   "roleNames": {
@@ -330,7 +336,16 @@
       "merge_suggested": "Kişi birleştirme önerisi",
       "task_due": "Zamanı gelen görev",
       "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir.",
-      "phone_offline": "{{name}} hiçbir cihaz köprüsünde görünmüyor: bir köprü onu yeniden listeleyene kadar ona komut gönderilemez."
+      "phone_offline": "{{name}} hiçbir cihaz köprüsünde görünmüyor: bir köprü onu yeniden listeleyene kadar ona komut gönderilemez.",
+      "research_due": "Açık bir araştırma görevi bugün yeni aday bekliyor.",
+      "prospects_to_score": "Puanlanmayı bekleyen adaylar var.",
+      "prospects_to_promote": "Gelen kutusuna aktarılmayı bekleyen nitelikli adaylar var.",
+      "ownerless_journeys": "Sahibi olmayan açık yolculuklar var.",
+      "assignment_stalled": "Süresi geçen atamalar başka birine verilemedi.",
+      "promoted_not_contacted": "Aktarılan ama henüz kendisine yazılmayan adaylar var.",
+      "campaign_approval": "Bir kampanya onayınızı bekliyor.",
+      "campaign_blocked": "Bir kampanya durdu; nedenine bakın.",
+      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor."
     }
   },
   "team": {
@@ -2173,6 +2188,16 @@
         "transcript_notice": "Yazıya dökme bildirimi",
         "closing": "Planda kapanış yoksa kapanış cümlesi"
       }
+    }
+  },
+  "leads": {
+    "prospects": {
+      "title": "Aday havuzu",
+      "description": "Ajanlarınızın kendi araçlarıyla bulup kanıtıyla kaydettiği işletmeler. Gelen kutusuna aktarılana kadar burada ayrı durur."
+    },
+    "outreach": {
+      "title": "Kampanyalar",
+      "description": "Kendi posta kutunuzdan giden düz metin e-posta kampanyaları ve adımları."
     }
   }
 }
