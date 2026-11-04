@@ -954,6 +954,12 @@
         "permanent": "sağlayıcı bilgileri kabul etmedi: kullanıcı kodu, parola, mesaj başlığı ve sunucu adlarını kontrol edin",
         "unknown": "sağlayıcının yanıtından işin olup olmadığı anlaşılmadı: biraz sonra yeniden yoklayın"
       },
+      "commentsLine": "Yorumlar: {{status}}",
+      "comments": {
+        "off": "kapalı (Meta onayı bekleniyor)",
+        "reconnect": "yeniden bağlanın",
+        "on": "açık"
+      },
       "reasonLine": "Sağlayıcının yanıtı: {{reason}}",
       "probeDialog": {
         "title": "Yoklama: {{name}}",

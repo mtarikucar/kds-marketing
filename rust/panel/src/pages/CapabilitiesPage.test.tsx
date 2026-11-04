@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { EFFECTIVE_STATUSES } from '@/api/types';
@@ -230,6 +230,32 @@ describe('CapabilitiesPage', () => {
     expect(within(mailboxActions).queryByRole('button', { name: tr.capabilities.connector.probe })).not.toBeInTheDocument();
     expect(within(mailboxActions).getByRole('button', { name: tr.capabilities.connector.reconnect })).toBeInTheDocument();
     expect(connectionActions(await cardOf('Eski hat'))).toBeNull();
+  });
+
+  it('meta_card_shows_comment_status_off_reconnect_on', async () => {
+    const line = (card: HTMLElement) => within(card).queryByTestId('comment-status');
+    for (const [instagram, page] of [
+      ['off', 'reconnect'],
+      ['on', 'on'],
+    ] as const) {
+      mockFetch({
+        ...withConnectors,
+        'GET /api/connectors/health': connectorHealth.map((h) =>
+          h.kind_key === 'instagram'
+            ? { ...h, comments: instagram }
+            : h.kind_key === 'facebook_page'
+              ? { ...h, comments: page }
+              : { ...h, comments: null },
+        ),
+      });
+      renderAt('/capabilities');
+      const { comments } = tr.capabilities.connector;
+      expect(line(await cardOf('Atölye Instagram'))).toHaveTextContent(comments[instagram]);
+      expect(line(await cardOf('Atölye sayfası'))).toHaveTextContent(comments[page]);
+      // A kind without comments shows no line.
+      expect(line(await cardOf('Kampanya hattı'))).toBeNull();
+      cleanup();
+    }
   });
 
   it('probes a connector, shows the outcome and refreshes the list', async () => {

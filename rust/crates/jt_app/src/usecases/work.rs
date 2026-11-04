@@ -746,8 +746,8 @@ async fn version_in_force(
 
 /// The Meta surface capabilities (Facebook Pages, Instagram accounts) not retired whose platform
 /// comment flag is on for their login but whose grant lacks the comment permissions
-/// ([`super::inbox::public::comments_enabled`] fails only on the grant): an `EnableComments` item
-/// each. With the flags off, none.
+/// ([`super::inbox::public::CommentStatus::Reconnect`]): an `EnableComments` item each. With the
+/// flags off, none.
 fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
     capabilities
         .iter()
@@ -757,14 +757,8 @@ fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<Work
                 && c.status != jt_capability::StoredStatus::Retired
         })
         .filter(|c| {
-            let flag = if c.connector_public["access"]["app"] == "instagram" {
-                deps.apps
-                    .instagram_app()
-                    .is_some_and(|app| app.comment_scopes)
-            } else {
-                deps.apps.meta_app().is_some_and(|app| app.comment_scopes)
-            };
-            flag && !super::inbox::public::comments_enabled(deps.apps.as_ref(), c)
+            super::inbox::public::comment_status(deps.apps.as_ref(), c)
+                == Some(super::inbox::public::CommentStatus::Reconnect)
         })
         .map(|c| WorkItem {
             kind: WorkKind::EnableComments {

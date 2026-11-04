@@ -23,6 +23,7 @@ use jt_app::usecases::connector::{
     SetCredentials, StartOAuth, StartOut,
 };
 use jt_app::usecases::hash_token;
+use jt_app::usecases::inbox::public::CommentStatus;
 use jt_app::usecases::work::{self, WorkKind};
 use jt_capability::{
     Capability, CapabilityId, EffectiveStatus, Evidence, NewCapability, Reach, StoredStatus,
@@ -2378,6 +2379,8 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 reason: None,
                 token_expires_at: Some(expires),
                 reconnect_required: false,
+                // The platform's comment flags are off.
+                comments: Some(CommentStatus::Off),
             },
             ConnectorHealth {
                 capability_id: page.id,
@@ -2391,6 +2394,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 reason: Some("auth: meta: revoked".into()),
                 token_expires_at: None,
                 reconnect_required: true,
+                comments: Some(CommentStatus::Off),
             },
             ConnectorHealth {
                 capability_id: mailbox.id,
@@ -2404,6 +2408,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 reason: None,
                 token_expires_at: None,
                 reconnect_required: false,
+                comments: None,
             },
         ]
     );

@@ -111,19 +111,52 @@ pub fn comments_enabled(apps: &dyn PlatformAppConfig, cap: &Capability) -> bool 
     match kind {
         "trendyol" | "hepsiburada" => true,
         "facebook_page" | "instagram" => {
-            let access = &cap.connector_public["access"];
-            let flag = if access["app"] == "instagram" {
-                apps.instagram_app().is_some_and(|app| app.comment_scopes)
-            } else {
-                apps.meta_app().is_some_and(|app| app.comment_scopes)
-            };
-            let scopes: Vec<&str> = access["scopes"]
+            let flag = comment_flag(apps, cap);
+            let scopes: Vec<&str> = cap.connector_public["access"]["scopes"]
                 .as_array()
                 .map(|scopes| scopes.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
             flag && comment_grant(kind, &scopes).enabled()
         }
         _ => false,
+    }
+}
+
+/// Whether a connector takes its comments or questions, as its health shows it (spec §9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentStatus {
+    /// The platform's comment flag for its login is off: Meta has not approved them yet.
+    Off,
+    /// The flag is on, but this account's grant lacks the comment permissions.
+    Reconnect,
+    /// Taken ([`comments_enabled`]).
+    On,
+}
+
+/// `cap`'s [`CommentStatus`]: for a kind whose comments or questions the inbox takes (a Meta
+/// surface, a marketplace); `None` for any other, a direct-message sibling included.
+pub fn comment_status(apps: &dyn PlatformAppConfig, cap: &Capability) -> Option<CommentStatus> {
+    let meta = match cap.kind_key.as_str() {
+        "facebook_page" | "instagram" => true,
+        "trendyol" | "hepsiburada" => false,
+        _ => return None,
+    };
+    Some(if comments_enabled(apps, cap) {
+        CommentStatus::On
+    } else if meta && comment_flag(apps, cap) {
+        CommentStatus::Reconnect
+    } else {
+        CommentStatus::Off
+    })
+}
+
+/// Whether the platform's comment flag of the Meta app `cap` signed in with is on.
+fn comment_flag(apps: &dyn PlatformAppConfig, cap: &Capability) -> bool {
+    if cap.connector_public["access"]["app"] == "instagram" {
+        apps.instagram_app().is_some_and(|app| app.comment_scopes)
+    } else {
+        apps.meta_app().is_some_and(|app| app.comment_scopes)
     }
 }
 

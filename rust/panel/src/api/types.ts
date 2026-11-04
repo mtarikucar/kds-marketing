@@ -934,7 +934,15 @@ export interface ConnectorHealth {
   reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
+  /**
+   * Whether it takes its comments or questions (`jt_app::usecases::inbox::public::CommentStatus`):
+   * `off` until Meta approved them, `reconnect` when this account's grant lacks them; `null` for a
+   * kind without comments. Absent from a server older than it.
+   */
+  comments?: CommentStatus | null;
 }
+
+export type CommentStatus = 'off' | 'reconnect' | 'on';
 
 // Inbox: Rust domain serde enums are externally tagged, not `{ kind: … }` objects.
 export type InboxQueue = 'ours' | 'unassigned' | 'snoozed' | 'all';

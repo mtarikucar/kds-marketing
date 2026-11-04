@@ -14,7 +14,7 @@ use jt_app::ports::connectors::{
     EnvelopeAuthor, EnvelopeStatus, EnvelopeSubject, PublicEnvelope, SendReceipt,
 };
 use jt_app::usecases::inbox::{consumer, context, conversations, people, replies};
-use jt_app::usecases::{jobs, work};
+use jt_app::usecases::{connector, jobs, work};
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{ConnectorError, Credential, EventKind, InboundEvent, InboundEventId, Provider};
 use jt_inbox::*;
@@ -638,6 +638,38 @@ async fn work_enable_comments_when_flag_on_and_grant_missing() {
         } else {
             assert!(enable.is_empty(), "{enable:?}");
         }
+    }
+}
+
+#[tokio::test]
+async fn health_shows_each_surface_its_comment_status() {
+    for flag in [true, false] {
+        let r = rig_with(flag).await;
+        let bare = capability(&r.w, "instagram", "17841400000000002", &["instagram_basic"]).await;
+        let mailbox = r.w.declare("mailbox", "Kutu").await.capability;
+        let health =
+            serde_json::to_value(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap())
+                .unwrap();
+        let comments = |id: CapabilityId| {
+            health
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["capability_id"] == json!(id))
+                .map(|h| h["comments"].clone())
+                .unwrap()
+        };
+        // Meta's: off until the platform flag is on (Meta's approval), then per grant.
+        let (granted, lacking) = if flag {
+            ("on", "reconnect")
+        } else {
+            ("off", "off")
+        };
+        assert_eq!(comments(r.ig.id), json!(granted), "flag {flag}");
+        assert_eq!(comments(bare.id), json!(lacking), "flag {flag}");
+        // A marketplace's questions are always taken; a kind without comments has no status.
+        assert_eq!(comments(r.store.id), json!("on"));
+        assert_eq!(comments(mailbox.id), Value::Null);
     }
 }
 

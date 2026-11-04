@@ -421,6 +421,8 @@ pub struct ConnectorHealth {
     #[serde(with = "time::serde::rfc3339::option")]
     pub token_expires_at: Option<OffsetDateTime>,
     pub reconnect_required: bool,
+    /// Whether it takes its comments or questions, for a kind that has them (spec §9).
+    pub comments: Option<super::inbox::public::CommentStatus>,
 }
 
 /// Where the provider's webhooks for the workspace are to be delivered, to register at each
@@ -994,8 +996,9 @@ pub async fn probe(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<ProbeOut,
 /// `ctx.now`, its last probe (when, whether it succeeded, the error's kind), read from
 /// `connector_public.health` (each probe writes it with its run, and binding another account
 /// clears it, so it is always the current binding's), and when its token expires, read from
-/// `connector_public.access.expires_at` (no sealed credential is opened), and whether it must be
-/// reconnected. Needs `workspace.read`.
+/// `connector_public.access.expires_at` (no sealed credential is opened), whether it must be
+/// reconnected, and whether it takes comments ([`super::inbox::public::comment_status`]). Needs
+/// `workspace.read`.
 pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
@@ -1025,6 +1028,7 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
             reason: last["reason"].as_str().map(str::to_owned),
             token_expires_at,
             reconnect_required: reconnect_required(&c),
+            comments: super::inbox::public::comment_status(deps.apps.as_ref(), &c),
             kind_key: c.kind_key,
             name: c.name,
         });
