@@ -484,3 +484,46 @@ it('enter_submits_netgsm_form', async () => {
     credential: { kind: 'netgsm_sms', usercode: '8508001234', password: 'gizli-parola-6', msgheader: 'ALFA' },
   });
 });
+
+it('asks which WhatsApp number it is before signing in, and signs a business app number in its own way', async () => {
+  const user = userEvent.setup();
+  const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/oauth/start': started });
+  renderAt('/connect?kind=whatsapp_cloud');
+  const submit = await screen.findByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Meta' }) });
+  // Nothing is chosen for the owner.
+  expect(screen.getByRole('radiogroup', { name: tr.connect.whatsapp.choice })).toBeInTheDocument();
+  expect(submit).toBeDisabled();
+  await user.click(screen.getByRole('radio', { name: tr.connect.whatsapp.businessApp }));
+  await user.click(submit);
+  await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
+  const start = calls.find((c) => c.method === 'POST');
+  expect(start?.body).toEqual({ kind_key: 'whatsapp_cloud', flow: 'whatsapp_business_app' });
+});
+
+it('signs a new Cloud API number in as before', async () => {
+  const user = userEvent.setup();
+  const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/oauth/start': started });
+  renderAt('/connect?kind=whatsapp_cloud');
+  await user.click(await screen.findByRole('radio', { name: tr.connect.whatsapp.cloudApi }));
+  await user.click(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Meta' }) }));
+  await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
+  expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ kind_key: 'whatsapp_cloud' });
+});
+
+it('says the WhatsApp Business app sign-in waits for the platform configuration', async () => {
+  const user = userEvent.setup();
+  mockFetch({
+    'GET /api/auth/me': me,
+    'POST /api/connectors/oauth/start': withStatus(409, {
+      code: 'CONFLICT',
+      message: 'provider product not enabled',
+      details: { reason: 'provider_product_not_enabled', provider: 'meta' },
+    }),
+  });
+  renderAt('/connect?kind=whatsapp_cloud');
+  await user.click(await screen.findByRole('radio', { name: tr.connect.whatsapp.businessApp }));
+  await user.click(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Meta' }) }));
+  expect(await screen.findByText(tr.connect.whatsapp.notEnabled)).toBeInTheDocument();
+});

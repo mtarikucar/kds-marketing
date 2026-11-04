@@ -460,3 +460,54 @@ async fn a_database_failure_is_500_so_meta_redelivers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(w.stored().len(), 4);
 }
+
+/// A WhatsApp Business Account's own event (`account_update`) names no number: the gate routes it
+/// to the connected number whose asset names that account. The business app's history, contacts
+/// and echoes of that number are stored processed: they never wait for the agent.
+#[tokio::test]
+async fn business_account_and_business_app_events_reach_the_number() {
+    use jt_app::ports::UnitOfWork;
+    let w = World::new().await;
+    let number = w.connected(w.ws, "whatsapp_cloud", WHATSAPP_NUMBER).await;
+    {
+        let mut t = w.uow.tenant(w.ws).await.unwrap();
+        let mut c = t.capabilities().find(number).await.unwrap().unwrap();
+        c.connector_public = json!({ "asset": { "waba_id": "4444444444" } });
+        t.capabilities().update(c).await.unwrap();
+        t.commit().await.unwrap();
+    }
+    let (status, _) = answer(
+        &w.app(),
+        signed(&fixture("meta/whatsapp_account_update.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = w.events_of(w.ws);
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| (e.external_id.as_str(), e.kind.clone(), e.capability_id))
+            .collect::<Vec<_>>(),
+        [(
+            "account-update:4444444444:PARTNER_REMOVED:1790000300",
+            EventKind::AccountUpdate,
+            Some(number)
+        )]
+    );
+    assert_eq!(events[0].processed_at, None);
+
+    let (status, _) = answer(
+        &w.app(),
+        signed(&fixture("meta/whatsapp_business_app.json")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let events = w.events_of(w.ws);
+    assert_eq!(events.len(), 1 + 7);
+    assert!(
+        events
+            .iter()
+            .filter(|e| e.kind != EventKind::AccountUpdate)
+            .all(|e| e.processed_at.is_some() && e.capability_id == Some(number))
+    );
+}

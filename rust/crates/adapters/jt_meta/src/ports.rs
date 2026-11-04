@@ -3,9 +3,9 @@
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, Asset, Connector, InsightsReader,
-    LeadGenFetcher, LeadGenRecord, MessagingSender, OAuthApp, OAuthProvider, PostMetrics,
-    PublishReceipt, PublishRequest, Publisher, SendReceipt,
+    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector, InsightsReader,
+    LeadGenFetcher, LeadGenRecord, MessagingSender, OAuthApp, OAuthFlow, OAuthProvider,
+    PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -68,6 +68,36 @@ impl OAuthProvider for MetaConnector {
     async fn list_assets(&self, cred: &Credential) -> Result<Vec<Asset>, ConnectorError> {
         assets::list_assets(self, cred).await
     }
+
+    fn authorize_url_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        state: &str,
+        pkce_challenge: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Url, ConnectorError> {
+        oauth::authorize_url_for(self, app, redirect, state, pkce_challenge, flow)
+    }
+
+    async fn exchange_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        code: &str,
+        pkce_verifier: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Credential, ConnectorError> {
+        oauth::exchange_for(self, app, redirect, code, pkce_verifier, flow).await
+    }
+
+    async fn list_assets_for(
+        &self,
+        cred: &Credential,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Vec<Asset>, ConnectorError> {
+        assets::list_assets_for(self, cred, flow).await
+    }
 }
 
 #[async_trait]
@@ -121,6 +151,15 @@ impl MessagingSender for MetaConnector {
         sender_id: &str,
     ) -> Result<Option<String>, ConnectorError> {
         messaging::sender_name(self, cred, public, sender_id).await
+    }
+
+    async fn request_app_sync(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sync: AppSync,
+    ) -> Result<Option<SendReceipt>, ConnectorError> {
+        messaging::request_app_sync(self, cred, public, sync).await
     }
 }
 

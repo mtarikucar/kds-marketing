@@ -1627,3 +1627,370 @@ async fn cdr_event_backfills_session_duration_and_recording() {
         .count();
     assert_eq!(made, 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A number onboarded beside the WhatsApp Business app
+// ---------------------------------------------------------------------------------------------
+
+/// The event `n` of the WhatsApp Business app fixture: 0 an echo, 1 to 3 history messages, 4 the
+/// chunk's progress, 5 a contact added, 6 a contact removed, 7 a refusal to share the history.
+fn business_app(n: usize) -> InboundEventDraft {
+    meta("whatsapp_business_app").remove(n)
+}
+
+/// A connected `whatsapp_cloud` capability whose asset names the business account `waba`.
+async fn wa_cap(w: &World, waba: &str) -> CapabilityId {
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        w.ws,
+        NewCapability {
+            kind_key: "whatsapp_cloud".into(),
+            name: "WhatsApp".into(),
+            external_id: Some(CapabilityId::new_v7().to_string()),
+            connector_public: json!({ "asset": { "waba_id": waba } }),
+            ..Default::default()
+        },
+        w.owner_ctx.now - Duration::days(2),
+    )
+    .unwrap();
+    cap.status = jt_capability::StoredStatus::Verified;
+    cap.last_verified_at = Some(w.owner_ctx.now - Duration::days(1));
+    let id = cap.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities()
+        .insert(cap, Some(b"sealed".to_vec()))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    id
+}
+
+#[tokio::test]
+async fn business_app_history_is_filed_as_the_past_and_owes_nothing() {
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    for (tick, n) in [1, 2, 3, 4].into_iter().enumerate() {
+        put(&w, Some(c), Provider::Meta, business_app(n), tick as i64).await;
+    }
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    // Two customers, each with a conversation nothing is owed in: open, no inbound activity.
+    assert_eq!(s.inbox.people.len(), 2);
+    assert_eq!(s.inbox.conversations.len(), 2);
+    for c in &s.inbox.conversations {
+        assert_eq!(c.state, ConvState::Open);
+        assert_eq!(c.last_inbound_at, None);
+    }
+    // A new person starts its journey as every person does, but the past moves none of them.
+    assert!(
+        s.inbox.events.is_empty(),
+        "the past reports nothing to a journey"
+    );
+    assert!(
+        s.inbox
+            .journeys
+            .iter()
+            .all(|j| j.status == JourneyStatus::New)
+    );
+    let filed: Vec<(&str, Direction, Author, &str)> = s
+        .inbox
+        .messages
+        .iter()
+        .map(|m| {
+            (
+                m.external_id.as_deref().unwrap(),
+                m.direction,
+                m.author,
+                m.body.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        filed,
+        [
+            (
+                "wamid.TEST-HIST-1",
+                Direction::Inbound,
+                Author::Customer,
+                "Boyama setiniz var mı?"
+            ),
+            (
+                "wamid.TEST-HIST-2",
+                Direction::Outbound,
+                Author::BusinessApp,
+                "Evet, 450 TL."
+            ),
+            (
+                "wamid.TEST-HIST-3",
+                Direction::Inbound,
+                Author::Customer,
+                ""
+            ),
+        ]
+    );
+    // Nothing waits for an answer.
+    let pending = jt_app::usecases::inbox::context::pending(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(pending.ours.is_empty() && pending.reopen_questions.is_empty());
+    let progress = w.entries("inbox.whatsapp_history");
+    assert_eq!(progress.len(), 1);
+    assert_eq!(payload(&progress[0])["progress"], 55);
+
+    // A live message of the same customer opens the conversation as any message does; its
+    // history stays.
+    let mut live = meta("whatsapp_messages").remove(0);
+    live.payload["message"]["from"] = json!("905551111111");
+    put(&w, Some(c), Provider::Meta, live, 10).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.messages.len(), 4);
+    let conv = s
+        .inbox
+        .conversations
+        .iter()
+        .find(|c| c.last_inbound_at.is_some())
+        .unwrap();
+    assert_eq!(conv.state, ConvState::Ours);
+}
+
+/// A history message already filed (a live message of the same `wamid`) is not filed again.
+#[tokio::test]
+async fn a_history_message_already_filed_is_not_filed_again() {
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    let mut live = meta("whatsapp_messages").remove(0);
+    live.payload["message"]["id"] = json!("wamid.TEST-HIST-1");
+    live.external_id = "wamid.TEST-HIST-1".into();
+    put(&w, Some(c), Provider::Meta, live, 0).await;
+    put(&w, Some(c), Provider::Meta, business_app(1), 1).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert_eq!(w.uow.snapshot().inbox.messages.len(), 1);
+}
+
+/// What the business sends from the app joins the thread as its own (`business_app`); newer than
+/// the customer's last message, it answers it, so nothing is owed any more. A message Jeeta sent
+/// itself is not filed twice.
+#[tokio::test]
+async fn a_phone_app_echo_answers_the_conversation_without_the_agent() {
+    let (w, c) = first().await;
+    assert_eq!(
+        w.uow.snapshot().inbox.conversations[0].state,
+        ConvState::Ours
+    );
+    put(&w, Some(c), Provider::Meta, business_app(0), 5).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let sent = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.external_id.as_deref() == Some("wamid.TEST-ECHO-1"))
+        .unwrap();
+    assert_eq!(
+        (sent.direction, sent.author, sent.body.as_str()),
+        (
+            Direction::Outbound,
+            Author::BusinessApp,
+            "Siparişiniz yarın kargoda."
+        )
+    );
+    assert_eq!(sent.status, MsgStatus::Sent);
+    assert_eq!(s.inbox.conversations.len(), 1);
+    assert_eq!(s.inbox.conversations[0].state, ConvState::Theirs);
+    assert_eq!(
+        s.inbox.people.len(),
+        1,
+        "the echo's customer is the one who wrote"
+    );
+
+    // An echo of a message already filed (Jeeta's own send carries its wamid) adds nothing.
+    let mut again = business_app(0);
+    again.external_id = "wamid.TEST-ECHO-1-redelivered".into();
+    put(&w, Some(c), Provider::Meta, again, 6).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert_eq!(w.uow.snapshot().inbox.messages.len(), 2);
+}
+
+/// When the business answers from the phone, what the customer was owed is settled: their
+/// message no longer waits in `events.pending`, so no agent answers it after the owner did
+/// (owner decision 2026-11-03: the conversation goes `theirs` and the agent stays out). An echo
+/// older than the customer's message settles nothing.
+#[tokio::test]
+async fn a_phone_app_reply_settles_the_customers_pending_message() {
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    let inbound = put(
+        &w,
+        Some(c),
+        Provider::Meta,
+        meta("whatsapp_messages").remove(0),
+        10,
+    )
+    .await;
+    assert_eq!(run(&w).await.failed, 0);
+    let processed = |w: &World| {
+        w.uow
+            .snapshot()
+            .inbound_events
+            .iter()
+            .find(|e| e.event.id == inbound)
+            .unwrap()
+            .event
+            .processed_at
+    };
+    assert_eq!(processed(&w), None);
+    // An echo from before the customer wrote: nothing is settled, the reply is still owed.
+    let mut earlier = business_app(0);
+    earlier.external_id = "wamid.TEST-ECHO-EARLIER".into();
+    earlier.payload["echo"]["id"] = json!("wamid.TEST-ECHO-EARLIER");
+    put(&w, Some(c), Provider::Meta, earlier, 5).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert_eq!(processed(&w), None);
+    assert_eq!(
+        w.uow.snapshot().inbox.conversations[0].state,
+        ConvState::Ours
+    );
+    // The reply: the conversation is the customer's turn and their message is settled.
+    put(&w, Some(c), Provider::Meta, business_app(0), 20).await;
+    assert_eq!(run(&w).await.failed, 0);
+    assert!(processed(&w).is_some());
+    assert_eq!(
+        w.uow.snapshot().inbox.conversations[0].state,
+        ConvState::Theirs
+    );
+}
+
+/// A phone-app echo is matched to what Jeeta sent by its `wamid` only: a send of Jeeta's still in
+/// flight with the same text is not taken for it, and the echo is filed as the business's own.
+#[tokio::test]
+async fn a_phone_app_echo_is_matched_by_its_wamid_only() {
+    use jt_app::ports::inbox::OutboxRow;
+    let (w, c) = first().await;
+    let conv = w.uow.snapshot().inbox.conversations[0].id;
+    let now = w.owner_ctx.now;
+    let sending = Message {
+        id: MessageId::new_v7(),
+        workspace_id: w.ws,
+        conversation_id: conv,
+        direction: Direction::Outbound,
+        author: Author::Agent,
+        body: "Siparişiniz yarın kargoda.".into(),
+        external_id: None,
+        status: MsgStatus::Queued,
+        cost_minor: None,
+        at: now,
+    };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages().insert_if_new(sending.clone()).await.unwrap();
+    r.outbox()
+        .insert(OutboxRow {
+            id: uuid::Uuid::now_v7(),
+            workspace_id: w.ws,
+            conversation_id: conv,
+            message_id: sending.id,
+            capability_id: c,
+            intent: json!({}),
+            expected_generation: 0,
+            fence_snapshot: Some(json!({ "send_at": now.unix_timestamp_nanos().to_string() })),
+            conversation_merged: false,
+            state: "sending".into(),
+            attempts: 0,
+            last_error: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    put(&w, Some(c), Provider::Meta, business_app(0), 5).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let ours = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.id == sending.id)
+        .unwrap();
+    assert_eq!(ours.external_id, None);
+    let echo = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.external_id.as_deref() == Some("wamid.TEST-ECHO-1"))
+        .expect("the echo is filed as its own message");
+    assert_eq!(echo.author, Author::BusinessApp);
+}
+
+/// The app's contacts become people with their phone identity, named as the app names them; a
+/// removal changes nobody.
+#[tokio::test]
+async fn business_app_contacts_become_people_and_a_removal_erases_nobody() {
+    let w = world().await;
+    let c = cap(&w, "whatsapp_cloud").await;
+    put(&w, Some(c), Provider::Meta, business_app(5), 0).await;
+    put(&w, Some(c), Provider::Meta, business_app(6), 1).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.people.len(), 1);
+    assert_eq!(s.inbox.people[0].display_name, "Ayşe Yılmaz");
+    assert_eq!(s.inbox.people[0].first_touch.source, Source::Import);
+    assert_eq!(s.inbox.identities.len(), 1);
+    assert_eq!(s.inbox.identities[0].channel, IdentityChannel::Phone);
+    assert!(s.inbox.conversations.is_empty());
+    assert_eq!(w.entries("inbox.whatsapp_contact_removed").len(), 1);
+    assert!(
+        !serde_json::to_string(&w.entries("inbox.whatsapp_contact_removed"))
+            .unwrap()
+            .contains("905554444444")
+    );
+}
+
+/// A disconnection of the business account asks every number of that account in the workspace
+/// for a reconnection, with Meta's reason; another account's number, and an event that is not a
+/// disconnection, change nothing.
+#[tokio::test]
+async fn an_account_disconnection_asks_for_a_reconnection() {
+    let w = world().await;
+    let first = wa_cap(&w, "4444444444").await;
+    let second = wa_cap(&w, "4444444444").await;
+    let other = wa_cap(&w, "9999999999").await;
+    let updates = meta("whatsapp_account_update");
+    put(&w, Some(first), Provider::Meta, updates[0].clone(), 0).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let of = |id: CapabilityId| {
+        s.capabilities
+            .iter()
+            .find(|c| c.capability.id == id)
+            .unwrap()
+            .capability
+            .clone()
+    };
+    for id in [first, second] {
+        let c = of(id);
+        assert_eq!(c.status, jt_capability::StoredStatus::Unreachable);
+        assert_eq!(c.connector_public["reconnect_required"], true);
+        let reason = c.connector_public["health"]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("PARTNER_REMOVED") && reason.contains("ACCOUNT_DISCONNECTED"),
+            "{reason}"
+        );
+    }
+    assert_eq!(of(other).status, jt_capability::StoredStatus::Verified);
+    assert_eq!(w.entries("connector.authorization_removed").len(), 2);
+
+    // A reconnection event is not the inbox's: nothing changes.
+    put(&w, Some(other), Provider::Meta, updates[2].clone(), 1).await;
+    assert_eq!(run(&w).await.failed, 0);
+    let s = w.uow.snapshot();
+    let other = s
+        .capabilities
+        .iter()
+        .find(|c| c.capability.id == other)
+        .unwrap();
+    assert_eq!(
+        other.capability.status,
+        jt_capability::StoredStatus::Verified
+    );
+}

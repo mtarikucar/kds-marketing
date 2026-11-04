@@ -1283,6 +1283,9 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
         (EventKind::LeadGen, "lead_gen"),
         (EventKind::CallEvent, "call_event"),
         (EventKind::Consent, "consent"),
+        (EventKind::History, "history"),
+        (EventKind::ContactSync, "contact_sync"),
+        (EventKind::AccountUpdate, "account_update"),
     ];
     for (kind, key) in &known {
         assert_eq!(kind.key(), *key);

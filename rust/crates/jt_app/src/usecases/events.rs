@@ -93,7 +93,8 @@ pub struct List {
     #[serde(default)]
     pub include_processed: Option<bool>,
     /// Only events of this kind (`message`, `message_echo`, `status`, `lead_gen`,
-    /// `call_event`, `consent`, or another key as stored).
+    /// `call_event`, `consent`, `history`, `contact_sync`, `account_update`, or another key as
+    /// stored).
     #[serde(default)]
     pub kind: Option<EventKind>,
     /// Only events of this provider (`meta`, `netgsm`, `x`).
