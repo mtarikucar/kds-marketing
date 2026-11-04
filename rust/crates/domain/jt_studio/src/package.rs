@@ -203,9 +203,21 @@ impl PackageRequest {
     }
 }
 
-/// The key of an olay's request after its change at `last_change`.
-pub fn olay_package_key(olay: OlayId, last_change: OffsetDateTime) -> String {
-    format!("olay:{olay}:{}", last_change.unix_timestamp())
+/// The key of an olay's request listing `materials` (spec D48): the olay, how many requests of
+/// it were written before (`earlier`, so an expired request's materials may be asked for again)
+/// and a digest of the listed set (FNV-1a over the sorted ids), so two sets never share a key,
+/// whatever times their changes carry.
+pub fn olay_package_key(olay: OlayId, earlier: usize, materials: &[MaterialId]) -> String {
+    let mut ids: Vec<MaterialId> = materials.to_vec();
+    ids.sort();
+    let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+    for id in &ids {
+        for byte in id.0.as_bytes() {
+            digest ^= u64::from(*byte);
+            digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("olay:{olay}:{earlier}:{digest:016x}")
 }
 
 /// The key of an occasion's request, once per season year.

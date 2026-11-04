@@ -194,7 +194,7 @@ async fn twenty_materials_in_minutes_make_one_request_thirty_minutes_after_the_l
     assert_eq!(q.trigger, PackageTrigger::Olay);
     assert_eq!(q.status, PackageStatus::Open);
     assert_eq!(q.olay_id, Some(o.id));
-    assert_eq!(q.key, olay_package_key(o.id, minutes(19)));
+    assert_eq!(q.key, olay_package_key(o.id, 0, &q.material_ids));
     assert_eq!(
         q.material_ids,
         added.iter().map(|m| m.id).collect::<Vec<_>>()
@@ -311,6 +311,13 @@ async fn an_occasion_its_olay_request_covers_asks_for_nothing_more() {
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].trigger, PackageTrigger::Olay);
     assert_eq!(all[0].material_ids, vec![m.id]);
+    // An agent answered it (an expired one would give its materials back).
+    w.uow.edit(|s| {
+        for q in s.posts.requests.iter_mut() {
+            q.status = PackageStatus::Answered;
+            q.answered_at = Some(datetime!(2026-11-02 10:00 UTC));
+        }
+    });
     plan(&w, datetime!(2026-11-11 09:00 UTC)).await;
     let all = requests(&w);
     assert_eq!(all.len(), 1, "{all:?}");
@@ -976,4 +983,86 @@ async fn a_cancelled_or_archived_post_records_why() {
     };
     assert_eq!(reason(a), Some(RetirementReason::Cancelled));
     assert_eq!(reason(b), Some(RetirementReason::StrategyArchived));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review of Phase 3 (2026-11-04)
+// ---------------------------------------------------------------------------------------------
+
+/// Sets the quality of material `id` as a tag edit would: a change that carries no time (D48).
+fn set_quality(w: &World, id: MaterialId, quality: Option<Quality>) {
+    w.uow.edit(|s| {
+        for m in s.materials.materials.iter_mut() {
+            if m.id == id {
+                m.tags.quality = quality;
+            }
+        }
+    });
+}
+
+/// Materials uploaded back to back share their second; tagging some of them later makes a
+/// second set, which gets its own request: an olay's request is named by its set, never by a
+/// clock two sets can share (review HIGH 1).
+#[tokio::test]
+async fn a_later_set_of_an_olays_materials_gets_its_own_request() {
+    let w = posting_world().await;
+    let o = workshop(&w).await;
+    let mut all = Vec::new();
+    for _ in 0..20 {
+        all.push(material(&w, Some(&o), FIXED_NOW, "image/png").await);
+    }
+    for m in &all[12..] {
+        set_quality(&w, m.id, Some(Quality::NeedsCrop));
+    }
+    plan(&w, minutes(31)).await;
+    let first = requests(&w);
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].material_ids,
+        all[..12].iter().map(|m| m.id).collect::<Vec<_>>()
+    );
+    for m in &all[12..] {
+        set_quality(&w, m.id, Some(Quality::Publishable));
+    }
+    plan(&w, minutes(40)).await;
+    let both = requests(&w);
+    assert_eq!(both.len(), 2, "{both:?}");
+    let second = both.iter().find(|q| q.id != first[0].id).unwrap();
+    assert_eq!(
+        second.material_ids,
+        all[12..].iter().map(|m| m.id).collect::<Vec<_>>()
+    );
+    assert_ne!(second.key, first[0].key);
+    // Nothing more once both sets are listed.
+    plan(&w, minutes(80)).await;
+    assert_eq!(requests(&w).len(), 2);
+}
+
+/// A request nobody answered gives its materials back: once it expired, they are asked for
+/// again, under a key of their own (review MEDIUM 3).
+#[tokio::test]
+async fn an_expired_requests_materials_are_asked_for_again() {
+    let w = posting_world().await;
+    let o = workshop(&w).await;
+    let ms = [
+        material(&w, Some(&o), FIXED_NOW, "image/png").await,
+        material(&w, Some(&o), FIXED_NOW, "image/png").await,
+    ];
+    plan(&w, minutes(31)).await;
+    let first = requests(&w).pop().unwrap();
+    plan(&w, FIXED_NOW + Duration::days(8)).await;
+    let olay: Vec<PackageRequest> = requests(&w)
+        .into_iter()
+        .filter(|q| q.trigger == PackageTrigger::Olay)
+        .collect();
+    assert_eq!(olay.len(), 2, "{olay:?}");
+    let expired = olay.iter().find(|q| q.id == first.id).unwrap();
+    assert_eq!(expired.status, PackageStatus::Expired);
+    let again = olay.iter().find(|q| q.id != first.id).unwrap();
+    assert_eq!(again.status, PackageStatus::Open);
+    assert_eq!(
+        again.material_ids,
+        ms.iter().map(|m| m.id).collect::<Vec<_>>()
+    );
+    assert_ne!(again.key, first.key);
 }
