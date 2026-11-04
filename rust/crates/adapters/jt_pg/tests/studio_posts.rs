@@ -891,3 +891,32 @@ async fn the_down_refuses_while_a_post_or_a_request_is_stored_and_both_repeat() 
         [request]
     );
 }
+
+/// The publisher never claims a planned post past its grace: it would go out late, maybe in the
+/// quiet hours (spec D28; review of 2026-11-04). Within its grace it does.
+#[tokio::test]
+async fn a_post_past_its_grace_is_never_claimed() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = ready(&uow).await;
+    seed_material(&uow, f.ws).await;
+    jt_testkit::studio_contract::attach_post(&uow, &f).await;
+    let grace = FIXED_NOW + Duration::hours(6);
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert!(
+        tx.studio()
+            .claim_publication(grace + Duration::seconds(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(tx);
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert!(
+        tx.studio()
+            .claim_publication(grace)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

@@ -1209,3 +1209,51 @@ async fn the_one_time_replan_waits_for_an_attempt_in_flight() {
     plan(&w, minutes(30)).await;
     assert_eq!(replanned(&w), 1);
 }
+
+/// The publisher never claims a post past its grace: it would go out late, maybe in quiet hours
+/// (review LOW 5). Within the grace it does.
+#[tokio::test]
+async fn a_post_past_its_grace_is_never_claimed() {
+    let w = world().await;
+    jt_testkit::studio_contract::attach_post(&w.uow, &w.f).await;
+    let grace = FIXED_NOW + Duration::hours(6);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    assert!(
+        r.studio()
+            .claim_publication(grace + Duration::seconds(1))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    drop(r);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    assert!(r.studio().claim_publication(grace).await.unwrap().is_some());
+}
+
+/// A preparation lead longer than a week still brings the post into the pending work at its
+/// preparation start (review LOW 6).
+#[tokio::test]
+async fn a_post_with_a_lead_beyond_a_week_is_pending_from_its_prep_start() {
+    let w = world().await;
+    let mut settings = PostingSettings::default();
+    settings.policy.lead_minutes.feed_post = 10 * 24 * 60;
+    posts::posting_policy_set(&w.d, &w.ctx, settings)
+        .await
+        .unwrap();
+    jt_testkit::studio_contract::attach_post(&w.uow, &w.f).await;
+    let publish_at = FIXED_NOW + Duration::days(9);
+    w.uow.edit(|s| {
+        for slot in s.studio.slots.iter_mut() {
+            if slot.id == w.f.slot.id {
+                slot.scheduled_at = publish_at;
+            }
+        }
+        for p in s.posts.posts.iter_mut() {
+            p.publish_at = publish_at;
+            p.prep_start_at = publish_at - Duration::days(10);
+            p.grace_until = publish_at + Duration::hours(6);
+        }
+    });
+    let pending = work::pending(&w.d, &w.ctx).await.unwrap();
+    assert!(pending.slots.iter().any(|s| s.slot.id == w.f.slot.id));
+}
