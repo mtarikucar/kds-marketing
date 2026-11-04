@@ -1903,16 +1903,27 @@ MCP surfaces simply hid what it had brought in.
   labels, lost reasons, pending and context.
 - **Unchanged:** the workspace-status check. Every inbox row, erasure and suppressions included,
   answers `WORKSPACE_INACTIVE` unless the workspace is active.
-- **Sends.** Every queued send records the use case that queued it (`intent.use_case`: `inbox.reply`,
-  `inbox.send`, `inbox.quotes.send` or `inbox.appointments.book`). A claim, recovery included,
-  checks the strategy again only for a send whose use case is gated, or one queued before the use
-  case was recorded (all of those were queued behind the gate). A metered send (an SMS line, or
-  any line with a budget item or a spend cap) reserves its spend in the approved strategy's budget
-  frame, so without a strategy it is refused (`strategy_required`) before anything is queued,
-  never left queued and sent late.
-- **New rows** (for example `inbox.public.*`) follow the same rule: a row that reads or answers
-  customer conversations is `Exempt`; a row that starts contact nobody asked for is `Gated` and
-  is named in `GATED_INBOX` in `crates/jt_archtest/tests/gate_rule.rs`, which pins the rule.
+- **Sends.** An exempt row may still send something that is outreach, so the send fence decides
+  per send, at enqueue and again at every claim (recovery included). Without an approved strategy
+  it refuses (`strategy_required`, before anything is queued or any conversation is opened):
+  - a send held to the gate: queued by a gated use case (`intent.use_case`: `inbox.reply`,
+    `inbox.send`, `inbox.quotes.send` or `inbox.appointments.book`), queued before the use case
+    was recorded (all of those were queued behind the gate), or one that **opens a conversation**
+    (`intent.opens_conversation`): a quote or a booking mailed on a channel the customer never
+    wrote on is contact nobody asked for;
+  - a **commercial** message to a customer who is no longer talking: their last message is older
+    than `ANSWERING_WINDOW` (**7 days**, `replies.rs`), or the conversation is closed. Meta's
+    channels refuse it outside their 24-hour window anyway; email and SMS have none of their own;
+  - a **metered** send (an SMS line, or any line with a budget item or a spend cap): its spend is
+    reserved in the approved strategy's budget frame.
+
+  A reply-intent message stays bound to the 24-hour reply window as before; a commercial reply
+  within seven days of the customer's last message, in a conversation that is not closed, needs no
+  strategy.
+- **New rows** (for example `inbox.public.*`) default to `Gated`. A row is exempt only once it is
+  named in `EXEMPT_INBOX` in `crates/jt_archtest/tests/gate_rule.rs`, which pins the rule: name
+  there a row that reads or answers customer conversations; leave out one that starts contact
+  nobody asked for.
 
 The panel's inbox screens have no strategy check of their own: they show whatever the server
 answers, and a gate refusal becomes the "approve a strategy" next step (`QueryState`).
