@@ -369,6 +369,9 @@ async fn moderate(
     let current = locked(r.as_mut(), id).await?;
     match result {
         Ok(()) => {}
+        // A comment to delete that is gone already: what was asked holds (spec D24).
+        Err(ConnectorError::Permanent { reason, .. })
+            if reason == PUBLIC_ITEM_GONE && action == ModerationAction::Delete => {}
         Err(ConnectorError::Permanent { reason, .. }) if reason == PUBLIC_ITEM_GONE => {
             if let Ok(next) = jt_inbox::public::apply(&current, ItemEvent::Removed, ctx.now) {
                 r.public_items().update(next).await?;

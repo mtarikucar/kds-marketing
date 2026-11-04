@@ -661,3 +661,30 @@ async fn report_only_where_the_surface_reports() {
     assert_eq!(line.payload["action"], "report");
     assert_eq!(line.payload["reason"], "spam");
 }
+
+#[tokio::test]
+async fn deleting_a_comment_already_gone_records_it_deleted() {
+    let r = rig().await;
+    let c1 = take(&r, &r.ig, comment("1", "fan-1")).await;
+    // Deleted on the platform meanwhile (by its author, or by us on another device).
+    r.meta
+        .push_moderate(Err(ConnectorError::permanent(PUBLIC_ITEM_GONE)));
+    let out = public::delete(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        c1.id,
+        public::DeleteInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    // What was asked is what holds: the comment is gone.
+    assert_eq!(out.outcome, "applied");
+    assert_eq!(item(&r, "1").moderation, Moderation::Deleted);
+    let lines = r.w.entries("inbox.public.moderated");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].payload["action"], "delete");
+    assert_eq!(
+        conversation_state(&r, c1.conversation_id),
+        ConvState::Theirs
+    );
+}
