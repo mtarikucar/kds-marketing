@@ -241,8 +241,10 @@ pub(crate) struct TestSend {
 
 /// An outreach email's facts as the dispatcher queues it (spec §3.11): its outbox entry's id
 /// (chosen first, so click links can name it), its send row, enrollment, campaign and step, the
-/// `From` display name and the footer's language. The intent records `outreach: {send_id,
-/// enrollment_id, campaign_id, step}`, so a claim fences it again.
+/// `From` display name, the footer's language and, when its links were rewritten for click
+/// tracking, the snapshot's links they lead to. The intent records `outreach: {send_id,
+/// enrollment_id, campaign_id, step}` (and `links` when there are any), so a claim fences it
+/// again and a click redirect goes where the email's own link went.
 #[derive(Clone, Debug)]
 pub(crate) struct OutreachSend {
     pub outbox_id: Uuid,
@@ -252,6 +254,9 @@ pub(crate) struct OutreachSend {
     pub step: u8,
     pub from_name: String,
     pub language: jt_outreach::Lang,
+    /// The links the email's click redirects lead to, by index; empty when its links were not
+    /// rewritten.
+    pub links: Vec<String>,
 }
 
 /// The use case that queues a send for `target` and `purpose`. It is recorded in the send's
@@ -540,6 +545,9 @@ pub(crate) async fn enqueue_in(
                 "campaign_id": send.campaign_id,
                 "step": send.step,
             });
+            if !send.links.is_empty() {
+                intent["outreach"]["links"] = json!(send.links);
+            }
         }
         Purpose::TestSend(t) => {
             intent["outreach_test"] = json!({

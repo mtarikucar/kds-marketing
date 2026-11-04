@@ -17,6 +17,8 @@
 //!   `complained`, the enrollment stops, and a bounce marks the prospect's email undeliverable.
 //! - [`on_withdrawn`], [`on_suppressed`]: email consent withdrawn (`consent_withdrawn`), a manual
 //!   suppression of email (`refused:suppressed`).
+//! - [`on_unsubscribed`]: the one-click link or an emailed `unsubscribe` (`unsubscribed`;
+//!   `links::unsubscribe` and the consumer write the suppression and the withdrawal).
 //! - [`on_journey_event`]: a booked meeting (`meeting_booked`), a won or a lost journey.
 //! - [`on_erased`], [`on_merged`]: the person erased (their personalization cleared, the rows and
 //!   their ids kept) or merged into another.
@@ -234,6 +236,16 @@ pub(crate) async fn on_withdrawn(
         stop_active(r, ctx, person, &StopReason::ConsentWithdrawn, None).await?;
     }
     Ok(())
+}
+
+/// The person unsubscribed (the one-click link or an emailed `unsubscribe`, spec §3.14): their
+/// active enrollment stops (`unsubscribed`); whether one stopped.
+pub(crate) async fn on_unsubscribed(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    person: PersonId,
+) -> Result<bool, AppError> {
+    stop_active(r, ctx, person, &StopReason::Unsubscribed, None).await
 }
 
 /// A person suppressed the person's `channel` by hand: on email, their active enrollment stops

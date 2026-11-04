@@ -614,3 +614,79 @@ async fn a_test_email_is_refused_while_locked() {
     );
     assert_eq!(sent_mail(&o.mail).len(), 1, "nothing more left");
 }
+
+// ---- The public links (plan L5-T2): they only ever reduce what may be sent ----
+
+/// The one-click unsubscribe and the click redirect have no caller to fence: they queue,
+/// send and open nothing, so the lock holds whatever they are asked. With the switch off an
+/// email sent while it was on still unsubscribes (the objection is always honoured) and its
+/// click still redirects; nothing is queued or sent, and the sequence stays stopped once the
+/// switch is back on.
+#[tokio::test]
+async fn the_public_links_only_ever_reduce_what_may_be_sent() {
+    let mut o = outreach_world().await;
+    let ada = consented(&o.w).await;
+    let t = template(
+        &o.w,
+        &o.w.owner_ctx,
+        "Merhaba",
+        "Kataloğumuz: https://acme.example.invalid/katalog",
+    )
+    .await;
+    let mut d = definition_steps(&[(t, 0), (t, 3)], json!({"explicit": [ada]}));
+    d.click_tracking = true;
+    let c = running(&o, d).await;
+    o.mail.push_mail(accepted("once"));
+    dispatch(&o.w, o.w.owner_ctx.now).await;
+    let mail = sent_mail(&o.mail).pop().unwrap();
+    platform(&mut o.w, false);
+    let w = &o.w;
+    let outbox = w.uow.snapshot().inbox.outbox.len();
+    let path = |url: &str| -> Vec<String> {
+        url.strip_prefix("https://panel.test/")
+            .unwrap()
+            .split('/')
+            .map(str::to_owned)
+            .collect()
+    };
+    let click = mail
+        .text
+        .split_whitespace()
+        .find(|t| t.starts_with("https://panel.test/c/"))
+        .unwrap()
+        .to_owned();
+    let p = path(&click);
+    let to = links::click(
+        &w.deps,
+        w.ws,
+        &p[2],
+        &p[3],
+        &p[4],
+        links::ClickFrom {
+            head: false,
+            user_agent: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(to.as_deref(), Some("https://acme.example.invalid/katalog"));
+    let p = path(&mail.list_unsubscribe.as_ref().unwrap().https);
+    assert!(
+        links::unsubscribe(&w.deps, w.ws, &p[2], &p[3])
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox.len(),
+        outbox,
+        "nothing queued"
+    );
+    assert_eq!(sent_mail(&o.mail).len(), 1, "nothing sent");
+    let e = enrollments(w, c.campaign.id).pop().unwrap();
+    assert_eq!(e.stop, Some(jt_outreach::StopReason::Unsubscribed));
+    // The switch back on: the stopped sequence sends nothing more.
+    platform(&mut o.w, true);
+    dispatch(&o.w, days_later(4)).await;
+    assert_eq!(sent_mail(&o.mail).len(), 1);
+}

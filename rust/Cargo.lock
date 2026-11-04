@@ -1938,13 +1938,17 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_ledger",
  "jt_meta",
  "jt_netgsm",
+ "jt_outreach",
  "jt_pg",
+ "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
  "jt_tiktok",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "time",
@@ -1953,6 +1957,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -1225,7 +1225,17 @@ async fn consent_event(
                 reason: SuppressionReason::Unsubscribe,
             })
             .await?;
-        crate::usecases::outreach::hooks::on_withdrawn(r, ctx, person.id, channel).await?;
+        // An email whose subject is `unsubscribe` is the `mailto:` fallback of a commercial
+        // email's `List-Unsubscribe` (spec 2026-10-30-leads-pool-outreach-design.md §3.14): from
+        // a person an outreach email reached in the last 90 days, an unsubscribe from it.
+        let mailto = event.provider == Provider::Mail
+            && text(p, "subject").is_some_and(|s| s.trim().eq_ignore_ascii_case("unsubscribe"));
+        if !(mailto
+            && crate::usecases::outreach::links::unsubscribed_by_mail(r, ctx, person.id, at)
+                .await?)
+        {
+            crate::usecases::outreach::hooks::on_withdrawn(r, ctx, person.id, channel).await?;
+        }
     }
     record(
         r,

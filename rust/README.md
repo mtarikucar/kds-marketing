@@ -838,6 +838,18 @@ Genel adres yapılandırılmamışsa liste `409 CONFLICT`'tır (`details.reason 
 | `GET /hooks/meta` (doğrulama) | `hub.mode=subscribe` ve doğru `hub.verify_token` için `hub.challenge` düz metin olarak, `200`; başka her şey `403`; Meta uygulaması yapılandırılmamışsa `404` |
 | `POST /hooks/meta` | imza başlığı yoksa ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; imza tutmazsa `401`; olaylar yazılınca (ya da kurala göre atılınca) `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir) |
 | `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | bozuk ya da bilinmeyen parça, yanlış anahtar, var olmayan ya da askıya alınmış (`suspended`) alan: gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (hiçbir şey yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` (NetGSM yeniden gönderir) |
+| `GET /u/{workspace_id}/{belirteç}/{mac}` | ticari bir e-postanın abonelikten çıkma sayfası (e-postanın alt bilgisinin dilinde, tek düğme aynı adrese `POST` eder); abonelikten **çıkarmaz** |
+| `POST /u/{workspace_id}/{belirteç}/{mac}` | RFC 8058 tek tıkla çıkış (`List-Unsubscribe=One-Click`) ya da sayfanın formu: çerez, oturum, CSRF belirteci istenmez; alanın durumu ne olursa olsun abonelikten çıkarır (tekrarı hiçbir şey yazmaz), `200` küçük bir sayfa; 1 KB üstü gövde `413` |
+| `GET`, `HEAD /c/{workspace_id}/{belirteç}/{bağlantı}/{mac}` | tıklama izleyen bir kampanyanın e-postasındaki bağlantıya `302`; `HEAD`, `User-Agent`'sız istek ve gönderimden sonraki 60 saniye içindeki tıklama otomatik sayılır; askıdaki alan yönlendirir ama sayılmaz |
+
+**Genel bağlantılar** (`/u/…`, `/c/…`): belirteç e-postanın giden kutusu kaydının kimliğidir, MAC alanın
+o amaç için türetilen anahtarıyla (`outreach.unsubscribe`, `outreach.click`) hesaplanır ve sabit zamanda
+karşılaştırılır; her şeyden önce denetlenir. Tutmayan MAC, standart biçimde olmayan belirteç ya da bağlantı
+sırası, hiçbir e-postanın olmayan belirteç: hepsi aynı `404` sayfası, hiçbir şey yazılmaz. Silinmiş
+(erasure) bir alıcının çıkışı `200` döner, hiçbir şey yazmaz ve kişi hakkında hiçbir şey söylemez. İstemci
+hakkında hiçbir şey (adres, tarayıcı dizesi) saklanmaz ya da günlüğe yazılmaz. Sayfalar `Cache-Control:
+no-store`, `Referrer-Policy: no-referrer` ve `Content-Security-Policy: default-src 'none'; style-src
+'unsafe-inline'; form-action 'self'; frame-ancestors 'none'` taşır.
 
 **Alanın durumu.** Meta olayları hesaba göre yönlendirilir ve hesabı tutan alan **etkin** ya da **ödeme
 bekliyor** (`pending_payment`) ise yazılır: ödeme beklerken bağlı hesapların olayları kaybolmaz. Alan
@@ -2166,7 +2178,10 @@ dispatcher (`outreach_dispatch`, every minute) and a test email refuse while
 again at claim. Outreach reaches consented people only, unless a human owner turned on the
 business-recipient basis (email only) with the counsel's confirmation recorded, and it counts
 only while the switch is on. Every email carries the opt-out footer and an RFC 8058 one-click
-unsubscribe (one place, `replies::enqueue_in`). A campaign is 1 to 6 steps; its audience is
+unsubscribe (one place, `replies::enqueue_in`), honoured by the public routes `/u/…` (the
+suppression, a withdrawal, the sequence stopped `unsubscribed`, whatever the workspace's status) and
+by an emailed `unsubscribe` to the mailbox; a campaign with click tracking on gets `/c/…` redirects
+to its own links (see the webhook gate's table). A campaign is 1 to 6 steps; its audience is
 frozen into enrollments at launch, one active enrollment per person; approval is revision-bound
 and needed when the outreach settings or the mailbox require it. A reply, a bounce, a
 complaint, withdrawn consent, a meeting, a won or lost journey, an erasure and a merge stop the

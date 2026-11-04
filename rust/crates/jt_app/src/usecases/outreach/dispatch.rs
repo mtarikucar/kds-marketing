@@ -826,6 +826,13 @@ async fn one(
         step,
         from_name: c.definition.sender_name.clone(),
         language: snapshot.language,
+        // What a click redirect of this email leads to: the snapshot it was rendered from (a
+        // later edit of the campaign re-snapshots its steps, spec D65).
+        links: if link_url.is_some() {
+            snapshot.links.clone()
+        } else {
+            Vec::new()
+        },
     };
     let sender = sender(ctx);
     // One transaction under the inbox lock: the fences, the outbox entry, the send row and the
