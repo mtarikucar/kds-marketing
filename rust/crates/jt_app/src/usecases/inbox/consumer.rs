@@ -789,7 +789,7 @@ async fn echo(
     };
     let candidates = r
         .messages()
-        .echo_candidates(conv.id, &content.body, event.received_at)
+        .echo_candidates(conv.id, &content.body, event.received_at, false)
         .await?;
     match candidates.as_slice() {
         [sent] => {

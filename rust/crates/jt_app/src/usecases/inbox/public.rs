@@ -705,7 +705,7 @@ async fn own(
     let mut candidates = Vec::new();
     for sent in r
         .messages()
-        .echo_candidates(parent.conversation_id, &env.text, event.received_at)
+        .echo_candidates(parent.conversation_id, &env.text, event.received_at, true)
         .await?
     {
         let to_parent = r.outbox().for_message(sent.id).await?.is_some_and(|row| {
@@ -717,6 +717,26 @@ async fn own(
         }
     }
     match candidates.as_slice() {
+        [sent] if sent.status == MsgStatus::Unknown => {
+            // Our reply timed out, and here it is: its comment is the evidence that settles it,
+            // as a receipt would (spec D25).
+            let Some(row) = r.outbox().for_message(sent.id).await? else {
+                return Ok("deferred");
+            };
+            super::replies::record_result_in(
+                deps,
+                ctx,
+                r,
+                row.id,
+                Ok(crate::ports::connectors::SendReceipt {
+                    provider_id: env.external_id.clone(),
+                    cost_minor: None,
+                }),
+                true,
+            )
+            .await?;
+            return Ok("consumed");
+        }
         [sent] => {
             // Only the provider id: the receipt owns status, outbox and item transitions.
             r.messages()

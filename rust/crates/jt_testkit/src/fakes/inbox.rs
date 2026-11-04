@@ -723,6 +723,7 @@ impl MessageRepo for MemTenant {
         conversation: ConversationId,
         body: &str,
         received_at: OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError> {
         let s = self.state();
         let mut rows: Vec<_> = s
@@ -747,6 +748,7 @@ impl MessageRepo for MemTenant {
                                 .and_then(|s| s.parse::<i128>().ok())
                                 .is_some_and(|at| at <= received_at.unix_timestamp_nanos())
                             && (o.state == "sending"
+                                || (uncertain && o.state == "unknown")
                                 || (o.state == "sent"
                                     && o.updated_at >= received_at - Duration::minutes(5)))
                     })
@@ -1758,8 +1760,6 @@ impl OutboxRepo for MemTenant {
             Ok(())
         })
     }
-    async fn failure_reasons(
-        &mut self,
     async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
         self.call(|t| {
             let ws = t.ws;
@@ -1783,6 +1783,8 @@ impl OutboxRepo for MemTenant {
             Ok(())
         })
     }
+    async fn failure_reasons(
+        &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError> {
         Ok(self

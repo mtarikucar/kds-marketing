@@ -1375,8 +1375,14 @@ async fn merged_commenters_conversation_state_follows_their_items() {
 /// Our reply in flight on `item` (`target`), with `text`: a message without a provider id and a
 /// sending outbox row.
 fn reply_in_flight(r: &Rig, item: &PublicItem, target: &str, text: &str) -> MessageId {
+    reply_in_state(r, item, target, text, "sending")
+}
+
+/// [`reply_in_flight`], its outbox row in `state` (`sending`, or `unknown` after a timeout).
+fn reply_in_state(r: &Rig, item: &PublicItem, target: &str, text: &str, state: &str) -> MessageId {
     let reply = MessageId::new_v7();
     let ws = r.w.ws;
+    let state = state.to_owned();
     let (conversation_id, item_id, capability_id) =
         (item.conversation_id, item.id, item.capability_id);
     let (target, text) = (target.to_owned(), text.to_owned());
@@ -1389,7 +1395,11 @@ fn reply_in_flight(r: &Rig, item: &PublicItem, target: &str, text: &str) -> Mess
             author: Author::Agent,
             body: text,
             external_id: None,
-            status: MsgStatus::Queued,
+            status: if state == "unknown" {
+                MsgStatus::Unknown
+            } else {
+                MsgStatus::Queued
+            },
             cost_minor: None,
             at: FIXED_NOW,
         });
@@ -1404,7 +1414,7 @@ fn reply_in_flight(r: &Rig, item: &PublicItem, target: &str, text: &str) -> Mess
             expected_generation: 0,
             fence_snapshot: Some(json!({"send_at": FIXED_NOW.unix_timestamp_nanos().to_string()})),
             conversation_merged: false,
-            state: "sending".into(),
+            state,
             attempts: 1,
             last_error: None,
             created_at: FIXED_NOW,
@@ -1475,6 +1485,40 @@ async fn our_removed_comment_never_answers_the_parent() {
     let after = r.w.uow.snapshot().inbox;
     assert_eq!(after.messages, before.messages);
     assert_eq!(after.public_items, before.public_items);
+}
+
+#[tokio::test]
+async fn own_comment_settles_our_uncertain_reply() {
+    let r = rig().await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
+    let s = r.w.uow.snapshot();
+    // Our reply timed out (its outcome unknown); then its comment shows on the post.
+    let uncertain = reply_in_state(&r, &item(&s, "1"), "1", "Teşekkürler", "unknown");
+    assert_eq!(
+        deliver(&r, &ig, "comment:2", own_reply("2", "1", "Teşekkürler")).await,
+        "consumed"
+    );
+    let s = r.w.uow.snapshot();
+    let message = s.inbox.messages.iter().find(|m| m.id == uncertain).unwrap();
+    assert_eq!(message.external_id.as_deref(), Some("2"));
+    assert_eq!(message.status, MsgStatus::Sent);
+    let row = s
+        .inbox
+        .outbox
+        .iter()
+        .find(|o| o.message_id == uncertain)
+        .unwrap();
+    assert_eq!(row.state, "sent");
+    // Our answer, not one given elsewhere; and no system message for it.
+    assert!(matches!(
+        item(&s, "1").answer,
+        AnswerState::Answered {
+            by: AnsweredBy::Us,
+            ..
+        }
+    ));
+    assert!(s.inbox.messages.iter().all(|m| m.author != Author::System));
 }
 
 // ---------------------------------------------------------------------------------------------

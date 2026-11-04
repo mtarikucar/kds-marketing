@@ -1098,7 +1098,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     t.outbox().insert(row.clone()).await.unwrap();
     assert!(
         t.messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .echo_candidates(c.id, &m.body, FIXED_NOW, false)
             .await
             .unwrap()
             .is_empty()
@@ -1109,7 +1109,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
         t.outbox().update(row.clone()).await.unwrap();
         assert!(
             t.messages()
-                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .echo_candidates(c.id, &m.body, FIXED_NOW, false)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1121,7 +1121,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
         t.outbox().update(row.clone()).await.unwrap();
         assert!(
             t.messages()
-                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .echo_candidates(c.id, &m.body, FIXED_NOW, false)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1130,28 +1130,28 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
         t.outbox().update(row.clone()).await.unwrap();
         assert_eq!(
             t.messages()
-                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .echo_candidates(c.id, &m.body, FIXED_NOW, false)
                 .await
                 .unwrap(),
             vec![pending.clone()]
         );
         assert!(
             t.messages()
-                .echo_candidates(other.id, &m.body, FIXED_NOW)
+                .echo_candidates(other.id, &m.body, FIXED_NOW, false)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert!(
             t.messages()
-                .echo_candidates(c.id, "different text", FIXED_NOW)
+                .echo_candidates(c.id, "different text", FIXED_NOW, false)
                 .await
                 .unwrap()
                 .is_empty()
         );
         assert!(
             t.messages()
-                .echo_candidates(c.id, &m.body, FIXED_NOW - Duration::seconds(1))
+                .echo_candidates(c.id, &m.body, FIXED_NOW - Duration::seconds(1), false)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1159,7 +1159,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     }
     assert!(
         t.messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW + Duration::minutes(6))
+            .echo_candidates(c.id, &m.body, FIXED_NOW + Duration::minutes(6), false)
             .await
             .unwrap()
             .is_empty()
@@ -1169,7 +1169,29 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
         t.outbox().update(row.clone()).await.unwrap();
         assert!(
             t.messages()
-                .echo_candidates(c.id, &m.body, FIXED_NOW)
+                .echo_candidates(c.id, &m.body, FIXED_NOW, false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    // A public reply whose outcome is unknown is a candidate when asked for (its own comment
+    // settles it); a failed or refused one never is.
+    row.state = "unknown".into();
+    t.outbox().update(row.clone()).await.unwrap();
+    assert_eq!(
+        t.messages()
+            .echo_candidates(c.id, &m.body, FIXED_NOW, true)
+            .await
+            .unwrap(),
+        vec![pending.clone()]
+    );
+    for state in ["failed", "refused"] {
+        row.state = state.into();
+        t.outbox().update(row.clone()).await.unwrap();
+        assert!(
+            t.messages()
+                .echo_candidates(c.id, &m.body, FIXED_NOW, true)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1186,7 +1208,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     t.outbox().insert(second_outbox.clone()).await.unwrap();
     assert_eq!(
         t.messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .echo_candidates(c.id, &m.body, FIXED_NOW, false)
             .await
             .unwrap()
             .len(),
@@ -1200,7 +1222,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     t.outbox().update(row).await.unwrap();
     assert_eq!(
         t.messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .echo_candidates(c.id, &m.body, FIXED_NOW, false)
             .await
             .unwrap(),
         vec![pending.clone()]
@@ -1225,7 +1247,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(sent.cost_minor, Some(4));
     assert!(
         t.messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .echo_candidates(c.id, &m.body, FIXED_NOW, false)
             .await
             .unwrap()
             .is_empty()
@@ -1243,7 +1265,7 @@ pub async fn message_receipt_lookup_and_echo_binding(uow: Arc<dyn UnitOfWork>) {
     assert!(
         other
             .messages()
-            .echo_candidates(c.id, &m.body, FIXED_NOW)
+            .echo_candidates(c.id, &m.body, FIXED_NOW, false)
             .await
             .unwrap()
             .is_empty()
@@ -1553,6 +1575,7 @@ impl Fixture {
             parent_external_id: None,
             root_external_id: external_id.into(),
             created_at: at,
+            taken_at: None,
             deadline: None,
             private_reply_until: Some(at + Duration::days(7)),
             answer: AnswerState::Awaiting,
@@ -1575,7 +1598,6 @@ impl Fixture {
         minutes: i64,
     ) -> Uuid {
         self.public_outbox_for(
-            taken_at: None,
             c,
             PublicItemId::new_v7(),
             state,
@@ -1705,28 +1727,6 @@ pub async fn public_replies_in_flight(uow: Arc<dyn UnitOfWork>) {
     );
 }
 
-/// The outbox row of an outbound message, in its own workspace only.
-pub async fn outbox_row_of_a_message(uow: Arc<dyn UnitOfWork>) {
-    let f = Fixture::new(uow.clone()).await;
-    let cap = f.account("instagram", "ig-1").await;
-    let p = f.insert_person("Commenter").await;
-    let c = f.public_conversation(p.id, cap).await;
-    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
-    let (row, message) = f
-        .public_outbox_for(&c, PublicItemId::new_v7(), "unknown", "public", &agent, 0)
-        .await;
-    let other = f
-        .public_outbox_for(&c, PublicItemId::new_v7(), "sent", "public", &agent, 1)
-        .await;
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    let found = t.outbox().for_message(message).await.unwrap().unwrap();
-    assert_eq!((found.id, found.state.as_str()), (row, "unknown"));
-    assert_eq!(
-        t.outbox().for_message(other.1).await.unwrap().map(|r| r.id),
-        Some(other.0)
-    );
-    assert!(
-        t.outbox()
 /// A held row is bound to a new executor generation (an approval after the conversation changed
 /// hands), and nothing else of it changes; an unknown row is `NOT_FOUND`, as in another workspace.
 pub async fn outbox_rebinds_its_generation(uow: Arc<dyn UnitOfWork>) {
@@ -1768,6 +1768,28 @@ pub async fn outbox_rebinds_its_generation(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
+/// The outbox row of an outbound message, in its own workspace only.
+pub async fn outbox_row_of_a_message(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let (row, message) = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "unknown", "public", &agent, 0)
+        .await;
+    let other = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "sent", "public", &agent, 1)
+        .await;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let found = t.outbox().for_message(message).await.unwrap().unwrap();
+    assert_eq!((found.id, found.state.as_str()), (row, "unknown"));
+    assert_eq!(
+        t.outbox().for_message(other.1).await.unwrap().map(|r| r.id),
+        Some(other.0)
+    );
+    assert!(
+        t.outbox()
             .for_message(MessageId::new_v7())
             .await
             .unwrap()
@@ -2053,6 +2075,23 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
             .unwrap(),
         vec![due_soon.clone()]
     );
+    drop(t);
+    // An answer in the platform's review can never expire: it is not due (bug class "recovery
+    // sweep window blindness": a take-N sweep must not fill up with what it cannot change).
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut in_review = due_soon.clone();
+    in_review.answer = AnswerState::Pending { message_id: m3 };
+    t.public_items().update(in_review).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_items()
+            .due_before(FIXED_NOW + Duration::hours(3), 1)
+            .await
+            .unwrap(),
+        vec![due_later.clone()],
+        "an answer in review is not due"
+    );
 
     // The item a message is.
     assert_eq!(
@@ -2079,23 +2118,6 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
 /// A subject is stored once per capability and external id; a refresh keeps its id and first
 /// sighting.
 pub async fn public_subjects_contract(uow: Arc<dyn UnitOfWork>) {
-    drop(t);
-    // An answer in the platform's review can never expire: it is not due (bug class "recovery
-    // sweep window blindness": a take-N sweep must not fill up with what it cannot change).
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    let mut in_review = due_soon.clone();
-    in_review.answer = AnswerState::Pending { message_id: m3 };
-    t.public_items().update(in_review).await.unwrap();
-    t.commit().await.unwrap();
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    assert_eq!(
-        t.public_items()
-            .due_before(FIXED_NOW + Duration::hours(3), 1)
-            .await
-            .unwrap(),
-        vec![due_later.clone()],
-        "an answer in review is not due"
-    );
     let f = Fixture::new(uow.clone()).await;
     let cap = f.account("instagram", "ig-1").await;
     let first = PublicSubject {

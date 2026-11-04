@@ -173,11 +173,14 @@ pub trait MessageRepo: Send + Sync {
     /// in sending, or sent no earlier than five minutes before receipt. The recorded send_at
     /// must precede receipt; an earlier enqueue alone is not evidence that we sent the echo.
     /// Callers must defer ambiguous matches, never guess authorship. Hold the workspace lock.
+    /// With `uncertain`, a row whose outcome is `unknown` (sent at or before receipt) is a
+    /// candidate too: the echo is the evidence that settles it (a public reply's own comment).
     async fn echo_candidates(
         &mut self,
         conversation: ConversationId,
         body: &str,
         received_at: OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError>;
 
     /// Latest messages in chronological order.
@@ -525,13 +528,13 @@ pub trait OutboxRepo: Send + Sync {
     ) -> Result<Vec<OutboxRow>, AppError>;
     /// Update only processing state; identity, intent and relationships stay immutable.
     async fn update(&mut self, row: OutboxRow) -> Result<(), AppError>;
-    /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
-    /// (state `failed` or `unknown`), one per message that has one, in no particular order.
-    async fn failure_reasons(
     /// Binds row `id` to executor generation `generation`: a held reply approved after its
     /// conversation changed hands is fenced, and sent, for the conversation as it now is. Nothing
     /// else of the row changes; `NOT_FOUND` when the workspace holds no such row.
     async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError>;
+    /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
+    /// (state `failed` or `unknown`), one per message that has one, in no particular order.
+    async fn failure_reasons(
         &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError>;
