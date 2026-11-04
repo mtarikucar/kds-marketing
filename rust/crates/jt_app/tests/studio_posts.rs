@@ -259,7 +259,12 @@ async fn an_occasion_within_its_lead_asks_for_its_olays_package_once() {
     plan(&w, FIXED_NOW).await;
     let item = shoot(&w, &season_request_key("ogretmenler_gunu", 2026)).unwrap();
     assert_eq!(item.status, ShootStatus::Open);
-    let o = special_day(&w, "ogretmenler_gunu", datetime!(2026-11-24 00:00 UTC).date()).await;
+    let o = special_day(
+        &w,
+        "ogretmenler_gunu",
+        datetime!(2026-11-24 00:00 UTC).date(),
+    )
+    .await;
     let m = material(&w, Some(&o), minutes(5), "image/png").await;
     plan(&w, minutes(10)).await;
     assert!(requests(&w).is_empty(), "the material has not settled");
