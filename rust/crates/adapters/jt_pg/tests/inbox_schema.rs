@@ -11,8 +11,16 @@ const COMPLIANCE_UP: &str = include_str!("../../../../migrations/0008_inbox_comp
 const COMPLIANCE_DOWN: &str = include_str!("../../../../migrations/0008_inbox_compliance.down.sql");
 /// The call tables of `0015_voice_calls` reference `journeys`, so they go before the inbox's own.
 const CALLS_DOWN: &str = include_str!("../../../../migrations/0015_voice_calls.down.sql");
-/// The prospect pool of `0020_prospects` references `people` and `journeys`: it goes first.
-const PROSPECTS_DOWN: &str = include_str!("../../../../migrations/0020_prospects.down.sql");
+/// The leads tables reference `people`, `journeys` and one another, so they go first, newest
+/// first: the outreach tables of `0026_outreach` (enrollments name prospects), the assignment log
+/// of `0025_distribution` (it names journeys), then the pool of `0020_prospects`.
+const PROSPECTS_DOWN: &str = concat!(
+    include_str!("../../../../migrations/0026_outreach.down.sql"),
+    "\n",
+    include_str!("../../../../migrations/0025_distribution.down.sql"),
+    "\n",
+    include_str!("../../../../migrations/0020_prospects.down.sql"),
+);
 const TABLES: &[&str] = &[
     "people",
     "identities",
