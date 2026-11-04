@@ -226,11 +226,16 @@ async fn normalize(
     }
     Ok(out)
 }
+/// Checks a submission under the control fence: the slot's chain, every medium a material, the
+/// subject named (a planned post's own by default, and no other: spec 2026-11-03 D28), the
+/// adaptations naming the slot's account, and for a planned post the media its format takes on
+/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force and
+/// the subject.
 async fn validate(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     i: &PieceInput,
-) -> Result<(Slot, jt_strategy::StrategyVersion), AppError> {
+) -> Result<(Slot, jt_strategy::StrategyVersion, Subject), AppError> {
     let frame = gated(r, ctx).await?;
     r.studio_control().lock_control().await?;
     let s = r
@@ -299,12 +304,23 @@ async fn validate(
         &i.media,
         i.adaptations.values().map(|a| a.media.as_slice()),
     ))?;
-    if i.subject.is_none() {
-        return Err(AppError::validation(
-            "the piece must name its subject",
-            json!({"field":"subject","reason":"subject_required"}),
-        ));
-    }
+    let post = r.studio_posts().get_post(s.id).await?;
+    let subject = match (&post, i.subject) {
+        (Some(p), None) => p.subject,
+        (Some(p), Some(subject)) if subject != p.subject => {
+            return Err(AppError::validation(
+                "the piece speaks about its planned post's subject",
+                json!({"field":"subject","reason":"subject_mismatch"}),
+            ));
+        }
+        (_, Some(subject)) => subject,
+        (None, None) => {
+            return Err(AppError::validation(
+                "the piece must name its subject",
+                json!({"field":"subject","reason":"subject_required"}),
+            ));
+        }
+    };
     for account in i.adaptations.keys() {
         if c.external_id.as_deref() != Some(account.as_str()) {
             return Err(AppError::validation(
@@ -313,7 +329,36 @@ async fn validate(
             ));
         }
     }
-    Ok((s, frame))
+    if let Some(p) = &post {
+        // What goes out on the channel: the account's adaptation's media, else the piece's.
+        let shown = c
+            .external_id
+            .as_deref()
+            .and_then(|a| i.adaptations.get(a))
+            .map_or(i.media.as_slice(), |a| a.media.as_slice());
+        let files = super::materials::only_files(&shown.iter().collect::<Vec<_>>())?;
+        let materials = super::materials::materials_of(r, &files).await?;
+        let refused = |reason: &str, message: &str| {
+            AppError::validation(
+                message.to_owned(),
+                json!({"field":"media","reason":reason,"format":p.format}),
+            )
+        };
+        if files.len() != shown.len() || !media_count_ok(p.format, files.len()) {
+            return Err(refused(
+                "media_count",
+                "the post's format takes another number of media",
+            ));
+        }
+        let mimes: Vec<&str> = materials.iter().map(|m| m.mime.as_str()).collect();
+        if !media_types_ok(p.format, &c.kind_key, &mimes) {
+            return Err(refused(
+                "media_type",
+                "the post's format takes other media on this channel",
+            ));
+        }
+    }
+    Ok((s, frame, subject))
 }
 /// What `studio.piece_submit`'s request key keeps (spec 2026-11-03 D40): the answer without its
 /// piece and its material check, which hold the caption and what it matched (a client's name, an
@@ -394,7 +439,7 @@ async fn submit(
     {
         return replayed(r.as_mut(), v, ctx.now).await;
     }
-    let (s, frame) = validate(r.as_mut(), ctx, &i).await?;
+    let (s, frame, subject) = validate(r.as_mut(), ctx, &i).await?;
     for f in &stored.files {
         r.studio().save_file(f.clone()).await?;
     }
@@ -430,9 +475,6 @@ async fn submit(
         }
     }
     // The material gate (spec 2026-11-03 D1), at the slot's time, under the same fence.
-    let subject = i
-        .subject
-        .ok_or_else(|| AppError::internal("subject checked above"))?;
     let files = super::materials::only_files(&super::materials::media(
         &p.media,
         p.adaptations.values().map(|a| a.media.as_slice()),

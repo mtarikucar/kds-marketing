@@ -301,6 +301,13 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     r.studio()
                         .retire_slot(slot.id, slot.revision, "cancelled")
                         .await?;
+                    super::posts::retire_post_of(
+                        r.as_mut(),
+                        slot.id,
+                        jt_studio::RetirementReason::Cancelled,
+                        d.clock.now(),
+                    )
+                    .await?;
                 }
                 r.commit().await?;
                 count += 1;

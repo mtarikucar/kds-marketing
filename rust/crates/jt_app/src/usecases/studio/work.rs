@@ -35,6 +35,10 @@ pub struct SlotOut {
     /// records no materials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material_check: Option<super::materials::MaterialCheck>,
+    /// The planned post the slot carries (spec 2026-11-03 D20): its format, materials, subject,
+    /// preparation start and grace. Absent for a slot of the weekly quotas or the paid lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post: Option<jt_studio::PlannedPost>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingSlot {
@@ -61,6 +65,10 @@ pub struct PendingStudioOut {
     /// The çekim listesi's open requests (spec 2026-11-03 §4.6): what to shoot or upload.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shoot_requests: Vec<jt_studio::ShootRequest>,
+    /// The open package requests (spec 2026-11-03 D23): materials to plan posts from, answered
+    /// with `studio.package_propose`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub package_requests: Vec<jt_studio::PackageRequest>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +116,14 @@ pub(crate) async fn pending_in(
             lane: None,
         })
         .await?;
+    // A planned post enters the pending work at its preparation start (spec 2026-11-03 D28).
+    let posts: std::collections::BTreeMap<SlotId, jt_studio::PlannedPost> = r
+        .studio_posts()
+        .list_posts()
+        .await?
+        .into_iter()
+        .map(|p| (p.slot_id, p))
+        .collect();
     let mut out = PendingStudioOut::default();
     if control.is_braked(jt_strategy::LaneKind::Paid) {
         for binding in r.studio().list_bindings().await? {
@@ -119,7 +135,9 @@ pub(crate) async fn pending_in(
     for s in slots {
         // Only unstarted work is pending. A published, measured or retired slot is never sent
         // (again), so its attempts are history in its detail, not blockers.
-        if !matches!(s.state, SlotState::Planned | SlotState::Ready) {
+        if !matches!(s.state, SlotState::Planned | SlotState::Ready)
+            || posts.get(&s.id).is_some_and(|p| ctx.now < p.prep_start_at)
+        {
             continue;
         }
         let target = ApprovalTarget::Slot(s.id);
@@ -254,6 +272,13 @@ pub(crate) async fn pending_in(
         .into_iter()
         .filter(|q| q.status == jt_studio::ShootStatus::Open)
         .collect();
+    out.package_requests = r
+        .studio_posts()
+        .list_package_requests()
+        .await?
+        .into_iter()
+        .filter(|q| q.status == jt_studio::PackageStatus::Open)
+        .collect();
     out.budget_moves = r
         .studio()
         .list_budget_moves()
@@ -369,6 +394,7 @@ pub(crate) async fn slot_in(
         Some(p) => super::materials::material_check(r, id, p, now.max(slot.scheduled_at)).await?,
         None => None,
     };
+    let post = r.studio_posts().get_post(id).await?;
     Ok(SlotOut {
         slot,
         piece,
@@ -381,6 +407,7 @@ pub(crate) async fn slot_in(
         attempts,
         measurements,
         material_check,
+        post,
     })
 }
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {
@@ -398,6 +425,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
         .studio()
         .retire_slot(input.slot_id, input.expected_revision, "cancelled")
         .await?;
+    super::posts::retire_post_of(r.as_mut(), s.id, RetirementReason::Cancelled, ctx.now).await?;
     let mut e = ledger_entry(
         ctx,
         "studio.slot_cancel",

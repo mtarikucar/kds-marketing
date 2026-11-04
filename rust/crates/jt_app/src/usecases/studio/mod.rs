@@ -9,6 +9,7 @@ pub mod pieces;
 pub mod schema;
 
 pub mod planner;
+pub mod posts;
 pub mod trends;
 pub mod work;
 

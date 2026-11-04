@@ -29,6 +29,10 @@
 //!   see an item they could never clear;
 //! - `StudioShootRequest` (3): each open request of the çekim listesi, for a caller with
 //!   `studio.work`, with or without an approved strategy (the materials library needs none);
+//! - `StudioPackageRequest` (2): each open package request (olay-driven publishing), for a
+//!   caller with `studio.work` while a strategy is approved;
+//! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
+//!   only from its preparation start;
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
 //!
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
@@ -148,6 +152,11 @@ pub enum WorkKind {
     StudioShootRequest {
         shoot_request_id: jt_studio::ShootRequestId,
     },
+    /// An open package request (spec 2026-11-03 D23): plan posts from its materials. Listed
+    /// with an approved strategy only, as `studio.package_propose` needs one.
+    StudioPackageRequest {
+        package_request_id: jt_studio::PackageRequestId,
+    },
     /// A visible conversation needs a reply.
     ReplyDue {
         conversation_id: jt_inbox::ConversationId,
@@ -213,6 +222,7 @@ impl WorkKind {
             WorkKind::StudioApproval { .. } => "studio.approve",
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
             WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
+            WorkKind::StudioPackageRequest { .. } => "studio.package_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
             WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
@@ -350,6 +360,19 @@ async fn pending_as_seen(
             },
             priority: if s.overdue { 1 } else { 2 },
             hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+        }));
+        items.extend(p.package_requests.into_iter().map(|q| {
+            WorkItem {
+                kind: WorkKind::StudioPackageRequest {
+                    package_request_id: q.id,
+                },
+                priority: 2,
+                hint:
+                    "Plan posts from the request's materials (jeeta.studio.package_requests) and \
+                   answer it with jeeta.studio.package_propose: each post's format, channel, \
+                   time, materials, subject and hypothesis, within the caps."
+                        .into(),
+            }
         }));
         items.extend(p.approvals.into_iter().map(|target| WorkItem {
             kind: WorkKind::StudioApproval { target },

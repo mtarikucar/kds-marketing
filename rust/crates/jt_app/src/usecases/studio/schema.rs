@@ -17,6 +17,9 @@ pub fn input(action: &str) -> Value {
     if let Some((properties, required)) = library(action) {
         return object(properties, required);
     }
+    if let Some((properties, required)) = posting(action) {
+        return object(properties, required);
+    }
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
     let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
@@ -240,6 +243,46 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
             json!({"request_id":uuid(),"status":{"type":"string","enum":["done","dismissed"]}}),
             &["request_id", "status"],
         ),
+        _ => return None,
+    })
+}
+
+/// Olay-driven publishing's tools (spec 2026-11-03 §14.3): their properties and required fields.
+fn posting(action: &str) -> Option<(Value, &'static [&'static str])> {
+    let instant = json!({"type":"string","format":"date-time"});
+    Some(match action {
+        "package_requests" => (
+            json!({"status":{"type":"string","enum":["open","answered","expired","all"]}}),
+            &[],
+        ),
+        "package_propose" => {
+            let formats: Vec<&str> = jt_studio::PostFormat::ALL.iter().map(|f| f.key()).collect();
+            let post = object(
+                json!({"format":{"type":"string","enum":formats},"capability_id":uuid(),
+                    "publish_at":instant,
+                    "material_ids":{"type":"array","minItems":1,"maxItems":jt_studio::MAX_POST_MATERIALS,
+                        "uniqueItems":true,"items":uuid()},
+                    "subject":subject(),"hypothesis_id":uuid(),
+                    "content_type":{"type":"string","minLength":1,"maxLength":200}}),
+                &[
+                    "format",
+                    "capability_id",
+                    "publish_at",
+                    "material_ids",
+                    "subject",
+                    "hypothesis_id",
+                ],
+            );
+            (
+                json!({"request_id":uuid(),
+                    "request_key":{"type":"string","minLength":1,"maxLength":200},
+                    "posts":{"type":"array","minItems":1,"maxItems":jt_studio::MAX_PACKAGE_POSTS,
+                        "items":post}}),
+                &["request_id", "request_key", "posts"],
+            )
+        }
+        "posts_list" => (json!({"from":instant,"until":instant}), &[]),
+        "weekly_summary" => (json!({"week":date()}), &[]),
         _ => return None,
     })
 }

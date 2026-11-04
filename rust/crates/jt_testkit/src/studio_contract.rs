@@ -1701,3 +1701,132 @@ pub async fn stored_material(
     tx.commit().await.unwrap();
     material
 }
+
+/// Makes `f`'s workspace (from [`ready`] or [`ready_in`]) able to take planned posts (spec
+/// 2026-11-03 §14): a second strategy version, now in force, chooses the X channel and keeps the
+/// hypothesis, which posts organic `text` on any channel; the X capability is verified at
+/// `verified_at` with a write credential sealed by `seal`. Answers the version in force. The
+/// caller's connector registry needs an X publisher for the channel to take posts.
+pub async fn make_postable(
+    uow: &dyn UnitOfWork,
+    f: &Fixture,
+    seal: &dyn jt_app::ports::SecretBox,
+    verified_at: OffsetDateTime,
+) -> StrategyVersionId {
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let mut v = r
+        .strategy()
+        .find(f.slot.chain.born_version_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let user = v.approved_by.unwrap();
+    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    r.strategy()
+        .set_status(v.id, VersionStatus::Archived, FIXED_NOW, Some(user))
+        .await
+        .unwrap();
+    v.id = StrategyVersionId::new_v7();
+    v.number = 2;
+    v.sections.channels = vec![jt_strategy::ChannelChoice {
+        channel: "x".into(),
+        rationale: "test".into(),
+        group_id: None,
+    }];
+    h.channel = "any".into();
+    h.cadence.insert(
+        LaneKind::Organic,
+        jt_strategy::HypothesisCadence {
+            slots_per_week: 7,
+            exploration_bps: 0,
+            content_types: vec![jt_strategy::ContentTypeShare {
+                key: "text".into(),
+                min_bps: 0,
+                max_bps: 10000,
+            }],
+        },
+    );
+    r.strategy().insert(v.clone()).await.unwrap();
+    r.hypotheses().upsert(v.id, h).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.status = jt_capability::StoredStatus::Verified;
+    c.last_verified_at = Some(verified_at);
+    c.connector_public =
+        serde_json::json!({"access":{"scopes":["tweet.read","tweet.write"],"expires_at":null}});
+    r.capabilities().update(c.clone()).await.unwrap();
+    let credential = jt_connector::Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["tweet.read".into(), "tweet.write".into()],
+    };
+    let sealed = seal
+        .seal(f.ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    r.capabilities()
+        .set_sealed(c.id, Some(sealed), verified_at)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    v.id
+}
+
+/// Gives `f`'s stored slot a planned post (spec 2026-11-03 D20), as an answered package would: a
+/// feed post at the slot's time on its channel, about nothing specific, showing the workspace's
+/// first material, from an answered floor request. The planner then leaves the slot to its post's
+/// grace instead of retiring it as one of the weekly quotas' (D34).
+pub async fn attach_post(uow: &dyn UnitOfWork, f: &Fixture) -> jt_studio::PlannedPost {
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let material = r.studio_materials().list_materials().await.unwrap()[0].id;
+    let request = jt_studio::PackageRequest {
+        id: jt_studio::PackageRequestId::new_v7(),
+        workspace_id: f.ws,
+        key: jt_studio::floor_package_key(f.slot.capability_id, f.slot.scheduled_at.date()),
+        trigger: jt_studio::PackageTrigger::Floor,
+        status: jt_studio::PackageStatus::Answered,
+        olay_id: None,
+        occasion: None,
+        year: None,
+        capability_id: Some(f.slot.capability_id),
+        material_ids: vec![material],
+        best_formats: Vec::new(),
+        hints: jt_studio::PackageHints {
+            max_posts: Some(1),
+            ..Default::default()
+        },
+        created_at: FIXED_NOW,
+        answered_at: Some(FIXED_NOW),
+        closed_at: None,
+    };
+    assert!(
+        r.studio_posts()
+            .insert_package_request(request.clone())
+            .await
+            .unwrap()
+    );
+    let post = jt_studio::PlannedPost {
+        slot_id: f.slot.id,
+        workspace_id: f.ws,
+        format: jt_studio::PostFormat::FeedPost,
+        capability_id: f.slot.capability_id,
+        publish_at: f.slot.scheduled_at,
+        prep_start_at: f.slot.scheduled_at - Duration::hours(24),
+        grace_until: f.slot.scheduled_at + Duration::hours(6),
+        olay_id: None,
+        package_request_id: request.id,
+        material_ids: vec![material],
+        subject: jt_studio::Subject::Generic,
+        hypothesis_id: f.slot.chain.hypothesis_id,
+        content_type: "text".into(),
+        retired: None,
+        created_at: FIXED_NOW,
+    };
+    r.studio_posts().insert_post(post.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    post
+}
