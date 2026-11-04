@@ -410,8 +410,17 @@ Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
 
 Stratejisi onaylanmamış bir alanda stratejiye bağlı (`Gated`) her araç ve rota (bu sürümde henüz yoktur)
 `409 {"code":"STRATEGY_REQUIRED"}` alır; kapı, alanın onaylı bir strateji sürümü olup olmadığını her çağrıda
-veritabanından okur (`jt_pg::PgStrategyGate`, panel ve MCP için aynı kapı). Strateji kayıtlı bir istişareyle
-kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklaması ajana bu sırayı söyler):
+veritabanından okur (`jt_pg::PgStrategyGate`, panel ve MCP için aynı kapı).
+
+Strateji yalnızca otomatik büyüme işini kapılar: Growth Studio (`studio.*`; fren, defter ve dışa aktarımı
+hariç), telefon aramaları (`calls.*`; politikayı okuma ve ses köprüsü hariç) ve gelen kutusunda ticari temas
+başlatan tek satır `inbox.send`. Alanın kendi müşterilerinin yazışmalarını okumak ve yanıtlamak strateji
+beklemez (sahip kararı, 2026-11-03): diğer bütün `inbox.*` satırları kapıdan muaftır, alan durumu denetimi
+(`WORKSPACE_INACTIVE`) ise silme ve engelleme listesi dahil her gelen kutusu satırında aynen sürer. Ayrıntı:
+[Inbox outside the strategy gate](#inbox-outside-the-strategy-gate-2026-11-03).
+
+Strateji kayıtlı bir istişareyle kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get`
+açıklaması ajana bu sırayı söyler):
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
@@ -1400,7 +1409,9 @@ konuşmasız echo için gelen temas oluşturmayan repository işlemi koordinatö
 
 ### Inbox pending/context and timers
 
-Only `inbox.pending` and `inbox.context` are exempt from the strategy gate; both still require
+`inbox.pending` and `inbox.context` are exempt from the strategy gate (originally the only inbox
+rows that were; since 2026-11-03 every inbox row but `inbox.send` is, see
+[Inbox outside the strategy gate](#inbox-outside-the-strategy-gate-2026-11-03)); both still require
 an active workspace and `inbox.work`. Pending queues follow the executor (unassigned human
 queues are visible to all holders). Context includes at most ten recent conversations for the
 same person, the last three messages each, ten journey events, open tasks, and live strategy
@@ -1421,9 +1432,9 @@ its down migration removes only the added policy column.
 ### M2a inbox core: model, reducer and surfaces
 
 The catalog contains **106 MCP tools: the M1b 60 plus 46 inbox tools**. Every inbox tool
-has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
-are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
-check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
+has a panel HTTP twin and a shared strict input schema. Every inbox operation but `inbox.send`
+is strategy-exempt (since 2026-11-03; at M2a only `inbox.pending` and `inbox.context` were). All
+retain the workspace-status check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
 and merges. Owner/manager have both, Rep has work; custom grants are preserved.
 `jeeta.inbox.merges_undo` requires explicit confirmation. Agents cannot take over as a person.
 
@@ -1590,7 +1601,8 @@ composition and webchat remain M2c.
 
 ## M2b consent, suppression and commercial sending
 
-Five strategy-gated compliance operations are included in the 46 inbox tools (106 total):
+Five compliance operations are included in the 46 inbox tools (106 total); since 2026-11-03 only
+`inbox.send` among them needs an approved strategy:
 
 | Row | Panel route | MCP tool | Permission |
 |---|---|---|---|
@@ -1664,7 +1676,8 @@ a line clears its İYS slot and brand metadata along with the old account creden
 
 ## M2b quotes and internal appointments
 
-Six strategy-gated `InboxWork` operations handle quotes and appointments. Each operation uses the same input, output and permission on HTTP and MCP:
+Six `InboxWork` operations handle quotes and appointments (strategy-gated until 2026-11-03,
+exempt since). Each operation uses the same input, output and permission on HTTP and MCP:
 
 | Use case | MCP tool | HTTP route |
 |---|---|---|
@@ -1721,7 +1734,7 @@ inbox (`/inbox/commissions` in the panel), with shared strict request schemas on
 | `inbox.commissions.pay` | `jeeta.inbox.commissions_pay` | POST `/api/inbox/commissions/{id}/pay` | `inbox.manage`, owner/manager authority |
 | `inbox.commission_rates.set` | `jeeta.inbox.commission_rates_set` | PUT `/api/inbox/commission-rates` | `inbox.manage` |
 
-All four operations require an approved strategy and an active workspace. MCP approval/payment
+All four operations require an active workspace (and, until 2026-11-03, an approved strategy). MCP approval/payment
 uses the issuer's owner/manager authority and effective `inbox.manage` scope. Payment records a
 human payment decision; it does not transfer funds. Only Pending → Approved → Paid is allowed;
 repeated or out-of-order decisions return CONFLICT and do not duplicate ledger entries.
@@ -1745,7 +1758,8 @@ shows snapshot rates and amounts, and offers only permitted next actions and fut
 ### Person erasure and replay protection
 
 `POST /api/inbox/people/{person_id}/erase` and `jeeta.inbox.people_erase` require
-`inbox.manage`, the strategy gate and explicit `{ "confirm": true }`. The panel provides
+`inbox.manage`, an active workspace and explicit `{ "confirm": true }`, no strategy (since
+2026-11-03; the strategy gate applied before). The panel provides
 this action on the selected person's page and conversation, with a typed confirmation dialog:
 `SİL` in Turkish, `ERASE` in English. Dismissal/reopening clears the typed confirmation.
 The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
@@ -1826,8 +1840,9 @@ unrelated inbox rows.
 The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send
 (5), quotes/internal appointments (6), commissions/rates (4), and person erasure (1).
 Together with M1b's 60 tools, the release has **106**. Catalog rows, panel HTTP routes, MCP
-registry entries and shared input schemas have exact-set parity checks. Only `inbox.pending`
-and `inbox.context` bypass the strategy gate; workspace-status checks remain on every inbox row.
+registry entries and shared input schemas have exact-set parity checks. Every inbox row but
+`inbox.send` bypasses the strategy gate (since 2026-11-03; at M2b only `inbox.pending` and
+`inbox.context` did); workspace-status checks remain on every inbox row.
 Both `inbox.merges.undo` and `inbox.people.erase` require explicit confirmation.
 
 The panel exposes consent history, effective time/source, İYS synchronization status and active
@@ -1874,6 +1889,47 @@ cd panel && pnpm test && pnpm build
 ```
 
 The wider `make check`/CI checks documented above remain the release checks.
+
+### Inbox outside the strategy gate (2026-11-03)
+
+Owner decision: reading and answering the workspace's own customers never depends on a marketing
+strategy. The strategy gates automated growth work only: the Growth Studio, calls, and the one
+inbox row that starts commercial contact. Ingestion never depended on it (the background
+consumer turns inbound events into conversations either way); before this change the panel and
+MCP surfaces simply hid what it had brought in.
+
+- **Gated:** `inbox.send`. It writes to a person rather than in a conversation, takes
+  `intent: commercial` only, and may open a conversation no customer started: outreach.
+- **Exempt:** the other 45 inbox rows: conversations, messages, reply, snooze, close, take over
+  and hand to agent, people (create, get, search, erase), identities, journeys and their events,
+  notes, tasks, consent, suppressions, merges, quotes, appointments, commissions and rates, status
+  labels, lost reasons, pending and context.
+- **Unchanged:** the workspace-status check. Every inbox row, erasure and suppressions included,
+  answers `WORKSPACE_INACTIVE` unless the workspace is active.
+- **Sends.** An exempt row may still send something that is outreach, so the send fence decides
+  per send, at enqueue and again at every claim (recovery included). Without an approved strategy
+  it refuses (`strategy_required`, before anything is queued or any conversation is opened):
+  - a send held to the gate: queued by a gated use case (`intent.use_case`: `inbox.reply`,
+    `inbox.send`, `inbox.quotes.send` or `inbox.appointments.book`), queued before the use case
+    was recorded (all of those were queued behind the gate), or one that **opens a conversation**
+    (`intent.opens_conversation`): a quote or a booking mailed on a channel the customer never
+    wrote on is contact nobody asked for;
+  - a **commercial** message to a customer who is no longer talking: their last message is older
+    than `ANSWERING_WINDOW` (**7 days**, `replies.rs`), or the conversation is closed. Meta's
+    channels refuse it outside their 24-hour window anyway; email and SMS have none of their own;
+  - a **metered** send (an SMS line, or any line with a budget item or a spend cap): its spend is
+    reserved in the approved strategy's budget frame.
+
+  A reply-intent message stays bound to the 24-hour reply window as before; a commercial reply
+  within seven days of the customer's last message, in a conversation that is not closed, needs no
+  strategy.
+- **New rows** (for example `inbox.public.*`) default to `Gated`. A row is exempt only once it is
+  named in `EXEMPT_INBOX` in `crates/jt_archtest/tests/gate_rule.rs`, which pins the rule: name
+  there a row that reads or answers customer conversations; leave out one that starts contact
+  nobody asked for.
+
+The panel's inbox screens have no strategy check of their own: they show whatever the server
+answers, and a gate refusal becomes the "approve a strategy" next step (`QueryState`).
 
 ### M3 Task 0 — controller contracts and baseline
 
