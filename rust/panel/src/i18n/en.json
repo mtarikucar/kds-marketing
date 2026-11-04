@@ -2162,6 +2162,7 @@
       "share_unset": "No share permission was given.",
       "not_shareable": "This material is marked not shareable.",
       "sensitive_needs_human": "It shows something that needs permission; an owner or manager must give the share permission.",
+      "product_only_shows_person": "Marked product only, but it shows a face, a name or a child, or names a person; nothing hides them yet.",
       "quality": "Its quality is not marked “publishable”.",
       "olay_missing": "Its event was not found.",
       "olay_unconfirmed": "Its event is not confirmed yet.",

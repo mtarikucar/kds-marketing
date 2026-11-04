@@ -36,6 +36,9 @@ pub enum Refusal {
     ShareUnset,
     NotShareable,
     SensitiveNeedsHuman,
+    /// `product_only` on a material that shows a face, a name or a child, or names a person:
+    /// nothing hides them yet (spec D39).
+    ProductOnlyShowsPerson,
     Quality,
     OlayMissing,
     OlayUnconfirmed,
@@ -56,6 +59,7 @@ impl Refusal {
             Self::ShareUnset => "share_unset",
             Self::NotShareable => "not_shareable",
             Self::SensitiveNeedsHuman => "sensitive_needs_human",
+            Self::ProductOnlyShowsPerson => "product_only_shows_person",
             Self::Quality => "quality",
             Self::OlayMissing => "olay_missing",
             Self::OlayUnconfirmed => "olay_unconfirmed",
@@ -103,6 +107,14 @@ pub fn check_use(
     }
     if m.needs_human_permission() && m.share.as_ref().is_some_and(|s| s.by.is_none()) {
         return Err(Refusal::SensitiveNeedsHuman);
+    }
+    // Faces and names are hidden by nothing yet: `product_only` cannot cover a person (D39).
+    if m.share
+        .as_ref()
+        .is_some_and(|s| s.permission == SharePermission::ProductOnly)
+        && m.is_personal_data()
+    {
+        return Err(Refusal::ProductOnlyShowsPerson);
     }
     if m.tags.quality != Some(Quality::Publishable) {
         return Err(Refusal::Quality);

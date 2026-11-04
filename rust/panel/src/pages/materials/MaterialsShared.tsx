@@ -63,6 +63,7 @@ export const FINDING_CODES = [
   'share_unset',
   'not_shareable',
   'sensitive_needs_human',
+  'product_only_shows_person',
   'quality',
   'olay_missing',
   'olay_unconfirmed',

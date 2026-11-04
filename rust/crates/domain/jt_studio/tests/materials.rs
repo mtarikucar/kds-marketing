@@ -483,6 +483,51 @@ fn a_named_person_needs_a_humans_permission_as_a_depicts_flag_does() {
     );
 }
 
+/// `product_only` hides faces and names, which nothing does yet (spec D39): a `product_only`
+/// material that shows a face, a name or a child, or names a person, is used in no role.
+#[test]
+fn a_product_only_material_that_shows_a_person_is_refused() {
+    let a = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 11 - 16),
+        date!(2026 - 11 - 16),
+    );
+    let olays = [a.clone()];
+    let day = date!(2026 - 11 - 16);
+    let sub = Subject::Olay { olay_id: a.id };
+    let mut m = material(1, bound(&a));
+    m.share.as_mut().unwrap().permission = SharePermission::ProductOnly;
+    // Only the product: usable.
+    assert_eq!(check(&m, UseRole::Anchor, sub, &olays, day), Ok(()));
+    m.tags.depicts.insert(Depicts::ClientLogo);
+    assert_eq!(check(&m, UseRole::Anchor, sub, &olays, day), Ok(()));
+    for shows in [Depicts::Face, Depicts::Name, Depicts::Child] {
+        let mut p = m.clone();
+        p.tags.depicts.insert(shows);
+        for role in [UseRole::Anchor, UseRole::Support] {
+            assert_eq!(
+                check(&p, role, sub, &olays, day),
+                Err(Refusal::ProductOnlyShowsPerson),
+                "{shows:?} {role:?}"
+            );
+        }
+    }
+    let mut named = m.clone();
+    named.people.insert(Uuid::from_u128(77));
+    assert_eq!(
+        check(&named, UseRole::Support, sub, &olays, day),
+        Err(Refusal::ProductOnlyShowsPerson)
+    );
+    assert_eq!(
+        Refusal::ProductOnlyShowsPerson.code(),
+        "product_only_shows_person"
+    );
+    // Shareable, a human's decision, covers the person.
+    named.share.as_mut().unwrap().permission = SharePermission::Shareable;
+    assert_eq!(check(&named, UseRole::Anchor, sub, &olays, day), Ok(()));
+}
+
 #[test]
 fn a_piece_needs_an_anchor_and_every_material_to_pass() {
     let a = olay(

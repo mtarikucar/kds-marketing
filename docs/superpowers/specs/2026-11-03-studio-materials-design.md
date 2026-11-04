@@ -65,6 +65,7 @@ workshop, and special-day photos and videos must never be picked at random for u
 | D18 | **Per-workspace settings (decided, was Q4–Q5).** `lead_days` 21, `reuse_days` 14, `recap_days` 30 are the materials policy's defaults, editable per workspace; the season windows of §4.4 are the defaults of the per-workspace calendar. |
 | D19 | **Hard findings are never releasable (decided, was Q6).** The fix is to change the material's binding or the caption. Only caption findings (§7) may be released by a human. |
 | D38 | **A named person counts as a `depicts` flag (review, 2026-11-04).** A material whose `people` is not empty is treated everywhere as one with a `depicts` flag (`Material::needs_human_permission`): an agent never gives it a share permission when adding it (D5, D17); naming a person on an AI image whose permission an agent set clears that permission (`studio.material_tag`); an agent-set permission on it is refused at use (`sensitive_needs_human`); and it is listed as needing review until a human gives the permission. |
+| D39 | **`product_only` never covers a person, until faces can be hidden (review, 2026-11-04).** `product_only` means "faces and names hidden", and nothing hides them yet (editing media is a non-goal). A `product_only` material whose `depicts` has `face`, `name` or `child`, or whose `people` is not empty (§9.1, personal data), is refused in every role, anchor and support (`product_only_shows_person`). A product shot with a client logo stays usable as `product_only`. Revisit when Studio can hide faces and names. |
 
 ## 4. Domain (`jt_studio`, pure)
 
@@ -122,6 +123,8 @@ Turkish line in the panel:
 1. erased → `erased`.
 2. share unset → `share_unset`; `not_shareable` → `not_shareable`.
 3. `depicts` or `people` non-empty (D38) and the permission not set by a human → `sensitive_needs_human`.
+   `product_only` and the material is personal data (§9.1: `face`, `name` or `child`, or a person) →
+   `product_only_shows_person` (D39).
 4. quality not `publishable` → `quality`.
 5. Real, bound to olay O: O missing → `olay_missing`; O not confirmed → `olay_unconfirmed`;
    subject `olay(O)`: if O is a season/special day, `at` inside the window of O's occasion and season year,
