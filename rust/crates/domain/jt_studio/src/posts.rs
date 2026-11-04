@@ -279,6 +279,52 @@ pub fn media_count_ok(format: PostFormat, n: usize) -> bool {
     }
 }
 
+/// The image types a Studio file may have.
+const IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/webp", "image/gif"];
+/// The video type a Studio file may have.
+const VIDEO_MIME: &str = "video/mp4";
+
+/// Whether `mime` is a Studio image type.
+pub fn is_image_mime(mime: &str) -> bool {
+    IMAGE_MIMES.contains(&mime.trim().to_ascii_lowercase().as_str())
+}
+
+/// Whether `mime` is an image type LinkedIn takes (JPEG, PNG or GIF).
+fn linkedin_image_mime(mime: &str) -> bool {
+    matches!(
+        mime.trim().to_ascii_lowercase().as_str(),
+        "image/jpeg" | "image/png" | "image/gif"
+    )
+}
+
+/// Whether `mime` is the Studio video type.
+pub fn is_video_mime(mime: &str) -> bool {
+    mime.trim().eq_ignore_ascii_case(VIDEO_MIME)
+}
+
+/// Whether a post of `format` on a channel of kind `kind_key` may carry media of `mimes`, in
+/// order (spec D30). The adapters choose image or video from the file, not from the format, so
+/// the format fixes the types: on Instagram a feed post is one image (one video goes out as a
+/// reel), a reel one video and a carousel images or videos; a Facebook Page post is one image or
+/// one video and its carousel images only (a video goes alone); X takes images; LinkedIn JPEG,
+/// PNG or GIF images or one video; TikTok one video. The count is [`media_count_ok`]'s.
+pub fn media_types_ok(format: PostFormat, kind_key: &str, mimes: &[&str]) -> bool {
+    let all = |f: fn(&str) -> bool| !mimes.is_empty() && mimes.iter().all(|m| f(m));
+    match (format, kind_key) {
+        (PostFormat::FeedPost, "instagram") => all(is_image_mime),
+        (PostFormat::FeedPost, "facebook_page") => all(|m| is_image_mime(m) || is_video_mime(m)),
+        (PostFormat::FeedPost, "x") => all(is_image_mime),
+        (PostFormat::FeedPost, "linkedin_member" | "linkedin_page") => {
+            all(|m| linkedin_image_mime(m) || is_video_mime(m))
+        }
+        (PostFormat::Carousel, "instagram") => all(|m| is_image_mime(m) || is_video_mime(m)),
+        (PostFormat::Carousel, "facebook_page") => all(is_image_mime),
+        (PostFormat::Reel, "instagram") => all(is_video_mime),
+        (PostFormat::TiktokVideo, "tiktok") => all(is_video_mime),
+        _ => false,
+    }
+}
+
 /// One post of a package an agent proposes (spec D27).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -325,6 +371,9 @@ pub enum PostRefusal {
     Spacing,
     /// The format's media count is not met, or a material repeats.
     MediaCount,
+    /// A medium's type is not one the format takes on the channel's kind
+    /// ([`media_types_ok`]); the application checks it, it knows the files.
+    MediaType,
 }
 
 impl PostRefusal {
@@ -337,6 +386,7 @@ impl PostRefusal {
             Self::CapPerDay => "cap_per_day",
             Self::Spacing => "spacing",
             Self::MediaCount => "media_count",
+            Self::MediaType => "media_type",
         }
     }
 }
