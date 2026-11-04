@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
-use jt_inbox::{PublicKind, SubjectKind};
+/// The kinds a [`PublicEnvelope`] names, for the adapters that build one.
+pub use jt_inbox::{PublicKind, SubjectKind};
 use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
