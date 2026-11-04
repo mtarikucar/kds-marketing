@@ -66,6 +66,7 @@ workshop, and special-day photos and videos must never be picked at random for u
 | D19 | **Hard findings are never releasable (decided, was Q6).** The fix is to change the material's binding or the caption. Only caption findings (§7) may be released by a human. |
 | D38 | **A named person counts as a `depicts` flag (review, 2026-11-04).** A material whose `people` is not empty is treated everywhere as one with a `depicts` flag (`Material::needs_human_permission`): an agent never gives it a share permission when adding it (D5, D17); naming a person on an AI image whose permission an agent set clears that permission (`studio.material_tag`); an agent-set permission on it is refused at use (`sensitive_needs_human`); and it is listed as needing review until a human gives the permission. |
 | D39 | **`product_only` never covers a person, until faces can be hidden (review, 2026-11-04).** `product_only` means "faces and names hidden", and nothing hides them yet (editing media is a non-goal). A `product_only` material whose `depicts` has `face`, `name` or `child`, or whose `people` is not empty (§9.1, personal data), is refused in every role, anchor and support (`product_only_shows_person`). A product shot with a client logo stays usable as `product_only`. Revisit when Studio can hide faces and names. |
+| D42 | **An AI poster keeps its season's window (review, 2026-11-04).** D9 holds for AI materials too: an `ai_generated` material bound to a season or special-day olay is used, as anchor or support, only while the time of use is inside the window of that olay's occasion and season year, as the olay's real materials are (`out_of_season` otherwise); D10's end of the olay still ends it as an anchor. |
 
 ## 4. Domain (`jt_studio`, pure)
 
@@ -135,7 +136,8 @@ Turkish line in the panel:
    `other_olay`.
 6. Real genel: subject `generic` only, else `genel_generic_only`.
 7. AI bound to O: as anchor only for subject `olay(O)`, O confirmed, `at`'s Istanbul date ≤ O's end (else
-   `ai_not_anchor` / `ai_olay_past`); as support only for subject `olay(O)`. AI genel: support under any
+   `ai_not_anchor` / `ai_olay_past`); as support only for subject `olay(O)`. A season or special-day O: in either role
+   only while `at` is inside the window of O's occasion and season year (else `out_of_season`, D42). AI genel: support under any
    subject, never an anchor (`ai_not_anchor`).
 
 A piece passes when every medium is a material (D2), every material passes as `support` (or `anchor`),

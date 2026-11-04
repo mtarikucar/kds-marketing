@@ -528,6 +528,53 @@ fn a_product_only_material_that_shows_a_person_is_refused() {
     assert_eq!(check(&named, UseRole::Anchor, sub, &olays, day), Ok(()));
 }
 
+/// An AI poster of a season or special-day olay is used only inside the window of its occasion and
+/// season year, as the olay's real materials are (spec D9, D42): nothing out of season.
+#[test]
+fn an_ai_poster_of_a_season_olay_waits_for_its_window() {
+    // A yılbaşı collection from 20 November; the window is 1–31 December.
+    let season = olay(
+        1,
+        OlayKind::Season,
+        date!(2026 - 11 - 20),
+        date!(2026 - 12 - 31),
+    );
+    let olays = [season.clone()];
+    let sub = Subject::Olay { olay_id: season.id };
+    let mut poster = material(1, bound(&season));
+    poster.origin = Origin::AiGenerated {
+        generator: "codex".into(),
+    };
+    poster.share.as_mut().unwrap().by = None;
+    for role in [UseRole::Anchor, UseRole::Support] {
+        assert_eq!(
+            check(&poster, role, sub, &olays, date!(2026 - 11 - 25)),
+            Err(Refusal::OutOfSeason),
+            "{role:?} before the window"
+        );
+        assert_eq!(
+            check(&poster, role, sub, &olays, date!(2026 - 12 - 10)),
+            Ok(()),
+            "{role:?} inside it"
+        );
+    }
+    // Once the olay is over its announcement is too; a later year's window is not its own.
+    assert_eq!(
+        check(&poster, UseRole::Anchor, sub, &olays, date!(2027 - 01 - 02)),
+        Err(Refusal::AiOlayPast)
+    );
+    assert_eq!(
+        check(
+            &poster,
+            UseRole::Support,
+            sub,
+            &olays,
+            date!(2027 - 12 - 10)
+        ),
+        Err(Refusal::OutOfSeason)
+    );
+}
+
 #[test]
 fn a_piece_needs_an_anchor_and_every_material_to_pass() {
     let a = olay(

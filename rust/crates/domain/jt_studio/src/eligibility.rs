@@ -90,6 +90,20 @@ impl UseContext<'_> {
     }
 }
 
+/// The windows of olay `o`'s occasion when it is a season or special day: its season year, and the
+/// years whose window contains `day`.
+fn season(o: &Olay, cx: &UseContext<'_>, day: time::Date) -> Option<(Option<i32>, Vec<i32>)> {
+    o.occasion
+        .as_deref()
+        .filter(|_| o.kind.is_seasonal())
+        .map(|key| {
+            (
+                cx.calendar.season_year(key, o.starts_on),
+                cx.calendar.years_containing(key, day),
+            )
+        })
+}
+
 /// Whether material `m` may be used as `role` in a piece about `subject` (spec §4.3).
 pub fn check_use(
     m: &Material,
@@ -138,7 +152,12 @@ pub fn check_use(
                 if role == UseRole::Anchor && o.has_ended(day) {
                     return Err(Refusal::AiOlayPast);
                 }
-                Ok(())
+                // A season's poster, as its real materials, only inside its own window (D9, D42).
+                match season(o, cx, day) {
+                    Some((Some(sy), years)) if !years.contains(&sy) => Err(Refusal::OutOfSeason),
+                    Some((None, _)) => Err(Refusal::OutOfSeason),
+                    _ => Ok(()),
+                }
             }
         };
     }
@@ -156,17 +175,7 @@ pub fn check_use(
     if !o.is_confirmed() {
         return Err(Refusal::OlayUnconfirmed);
     }
-    // The occasion's windows, for a season or special day: (season year, years containing `day`).
-    let season = o
-        .occasion
-        .as_deref()
-        .filter(|_| o.kind.is_seasonal())
-        .map(|key| {
-            (
-                cx.calendar.season_year(key, o.starts_on),
-                cx.calendar.years_containing(key, day),
-            )
-        });
+    let season = season(o, cx, day);
     match subject {
         Subject::Olay { olay_id: s } if *s == olay_id => match season {
             None => Ok(()),
