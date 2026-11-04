@@ -53,7 +53,9 @@
     "inbox": "Inbox",
     "studio": "Growth studio",
     "people": "People",
-    "calls": "Calls"
+    "calls": "Calls",
+    "prospects": "Prospects",
+    "outreach": "Campaigns"
   },
   "shell": {
     "workspace": "Workspace",
@@ -138,6 +140,10 @@
     "prospects": {
       "work": "Work the prospect pool",
       "manage": "Manage the prospect pool: reopen, lift do-not-contact, erase, retention"
+    },
+    "outreach": {
+      "work": "Work on email campaigns",
+      "manage": "Manage email campaigns: approval, cancelling, sending settings"
     }
   },
   "roleNames": {
@@ -330,7 +336,16 @@
       "merge_suggested": "Contact merge suggestion",
       "task_due": "Task due",
       "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
-      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again."
+      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again.",
+      "research_due": "An open research task is waiting for new prospects today.",
+      "prospects_to_score": "Prospects are waiting to be scored.",
+      "prospects_to_promote": "Qualified prospects are waiting to be promoted into the inbox.",
+      "ownerless_journeys": "Open journeys have no owner.",
+      "assignment_stalled": "Assignments past their SLA could not be given to anyone else.",
+      "promoted_not_contacted": "Promoted prospects have not been written to yet.",
+      "campaign_approval": "A campaign is waiting for your approval.",
+      "campaign_blocked": "A campaign has stopped; check why.",
+      "personalization_due": "A campaign's recipients are waiting for personalization."
     }
   },
   "team": {
@@ -2554,6 +2569,677 @@
       "refused_one": "{{count}} material not usable",
       "refused_other": "{{count}} materials not usable",
       "pick": "Choose what the content is about and at least one material."
+    }
+  },
+  "leads": {
+    "prospects": {
+      "title": "Prospects",
+      "description": "Businesses your agents found with their own tools and recorded with evidence. They stay here, apart, until promoted into the inbox.",
+      "tasksLink": "Research tasks",
+      "playbook": "Agent playbook",
+      "playbookFacts": "Version {{version}} · recorded today {{recorded}} / {{cap}}",
+      "filters": {
+        "status": "Status",
+        "bucket": "Score range",
+        "task": "Research task",
+        "city": "City",
+        "segment": "Segment",
+        "all": "All",
+        "thisTask": "Selected task"
+      },
+      "columns": {
+        "business": "Business",
+        "sector": "Sector",
+        "city": "City",
+        "score": "Score",
+        "status": "Status",
+        "origin": "Source",
+        "created": "Recorded"
+      },
+      "origin": {
+        "task": "Research task",
+        "direct": "Direct"
+      },
+      "selectPage": "Select everything on this page",
+      "selectRow": "Select {{name}}",
+      "empty": "No prospects in the pool",
+      "emptyBody": "They appear here as your agents record prospects for the research tasks.",
+      "previous": "Previous",
+      "next": "Next"
+    },
+    "outreach": {
+      "title": "Campaigns",
+      "description": "Plain-text email campaigns and their steps, sent from your own mailbox.",
+      "templatesLink": "Templates",
+      "settingsLink": "Email settings",
+      "newCampaign": "New campaign",
+      "statusFilter": "Status",
+      "columns": {
+        "name": "Campaign",
+        "status": "Status",
+        "steps": "Steps",
+        "revision": "Revision",
+        "launched": "Launched"
+      },
+      "empty": "No campaigns",
+      "emptyBody": "Write a template, then prepare a campaign with its steps and audience.",
+      "locked": {
+        "title": "Cold email is off on the platform",
+        "body": "No campaign can launch and no campaign email is sent until JEETA_OUTREACH_ENABLED is turned on for this server. You can still prepare campaigns."
+      },
+      "identityMissing": {
+        "title": "Sender details missing",
+        "body": "A campaign cannot launch until the details every email ends with (company name, address, privacy notice link) are set."
+      },
+      "blocked": {
+        "platform": "Cold email is off on the platform (JEETA_OUTREACH_ENABLED).",
+        "identity": "Sender details missing: company name, address and privacy notice link."
+      }
+    },
+    "bulk": {
+      "label": "Actions for the selection",
+      "selected": "Selected: {{n}}",
+      "promote": "Promote selected",
+      "reject": "Reject selected",
+      "dnc": "Do not contact selected",
+      "clear": "Clear selection",
+      "results": "Bulk action results",
+      "dismiss": "Close"
+    },
+    "actions": {
+      "promote": "Promote to inbox",
+      "reject": "Reject",
+      "dnc": "Do not contact",
+      "qualify": "Qualify",
+      "reopen": "Reopen",
+      "erase": "Erase"
+    },
+    "outcome": {
+      "promoted": "Promoted into the inbox.",
+      "alreadyPromoted": "Promoted before.",
+      "rejected": "Rejected.",
+      "blocked": "Do-not-contact recorded."
+    },
+    "promoteRefused": {
+      "not_found": "Prospect not found.",
+      "not_qualified": "Agents may promote qualified prospects only.",
+      "daily_cap": "Today's promotion limit is reached.",
+      "no_contact_identity": "No reachable phone or email.",
+      "do_not_contact": "On the do-not-contact list.",
+      "erased_identity": "Holds details of an erased person.",
+      "identity_split": "Its details match two different people; a merge suggestion was made.",
+      "lost_journey_exists": "This person has a lost journey.",
+      "person_already_linked": "The person is already linked to another prospect.",
+      "already_promoted": "Promoted before.",
+      "other": "Not promoted."
+    },
+    "status": {
+      "new": "New",
+      "qualified": "Qualified",
+      "rejected": "Rejected",
+      "promoted": "Promoted",
+      "do_not_contact": "Do not contact"
+    },
+    "reject": {
+      "title": "Reject the prospect",
+      "many": "{{n}} prospects",
+      "reason": "Reason",
+      "choose": "Choose a reason",
+      "note": "Note (optional)",
+      "noteRequired": "Note (required for \"Other\")",
+      "submit": "Reject"
+    },
+    "rejectReasons": {
+      "not_icp": "Not our ideal customer",
+      "closed_business": "Business closed",
+      "no_contact_data": "No contact details",
+      "competitor": "Competitor",
+      "already_customer": "Already a customer",
+      "duplicate": "Duplicate",
+      "other": "Other"
+    },
+    "dnc": {
+      "title": "Do not contact",
+      "description": "The prospect's contact details are deleted and its phone, email and social accounts can never be recorded again. Only a manager can undo it.",
+      "many": "{{n}} prospects",
+      "reason": "Reason",
+      "choose": "Choose a reason",
+      "note": "Note (optional)",
+      "confirm": "Type {{phrase}} to confirm",
+      "phrase": "BLOCK",
+      "submit": "Mark do not contact"
+    },
+    "dncReasons": {
+      "objected": "The business objected",
+      "legal": "Legal reason",
+      "other": "Other"
+    },
+    "erase": {
+      "title": "Erase the prospect for good",
+      "description": "The record is deleted now; its phone, email and social accounts can never be recorded again. This cannot be undone.",
+      "confirm": "Type {{phrase}} to confirm",
+      "phrase": "ERASE",
+      "submit": "Erase for good",
+      "done": "Prospect erased."
+    },
+    "source": {
+      "manual": "Team note: {{note}}",
+      "import": "{{system}} import"
+    },
+    "recorder": {
+      "agent": "Agent",
+      "agentNamed": "{{name}} (agent, for {{member}})",
+      "member": "Team member",
+      "import": "{{system}} import",
+      "system": "Jeeta ({{job}})"
+    },
+    "entityKinds": {
+      "legal_entity": "Company",
+      "sole_trader": "Sole trader",
+      "unknown_business": "Kind unknown"
+    },
+    "originVia": {
+      "research_task": "Research task",
+      "manual": "Recorded by hand",
+      "agent": "Recorded by an agent",
+      "v1_import": "Imported from the old system",
+      "system": "Jeeta"
+    },
+    "fields": {
+      "phone": "Phone",
+      "email": "Email",
+      "website": "Website",
+      "instagram": "Instagram",
+      "tiktok": "TikTok",
+      "address": "Address",
+      "contact_person": "Contact person",
+      "size": "Size"
+    },
+    "matched": {
+      "domain": "same web domain",
+      "name_city": "same name and city"
+    },
+    "prospect": {
+      "title": "Prospect",
+      "back": "Prospects",
+      "entity": "Kind",
+      "sector": "Sector",
+      "place": "Place",
+      "segment": "Segment",
+      "language": "Language",
+      "labels": "Labels",
+      "origin": "From",
+      "recordedBy": "Recorded by",
+      "created": "Recorded",
+      "purgeAfter": "Deleted on",
+      "score": "Score {{score}}",
+      "rejectedFor": "Rejected: {{reason}}",
+      "blockedFor": "Do not contact: {{reason}}",
+      "fields": "Details and their evidence",
+      "sourcesOf": "Sources of {{field}}",
+      "evidence": "{{at}} · {{by}}",
+      "undeliverable": "Unreachable",
+      "branches": "Branches: {{n}}",
+      "employees": "{{band}} employees",
+      "signals": "Signals",
+      "scores": "Score history",
+      "noScores": "Not scored yet.",
+      "scoredBy": "{{at}} · {{by}}",
+      "digest": "Rubric version {{digest}}",
+      "criterion": "Criterion",
+      "points": "Points",
+      "why": "Why",
+      "duplicates": "Possible duplicates",
+      "noDuplicates": "No similar prospect.",
+      "history": "Decision history",
+      "noHistory": "No entries.",
+      "saved": "Saved.",
+      "openInInbox": "Open in the inbox"
+    },
+    "tasks": {
+      "title": "Research tasks",
+      "description": "Tasks from the strategy's ideal customer profile and one-off tasks you open. Agents research by them and add prospects to the pool.",
+      "poolLink": "Prospects",
+      "statusFilter": "Status",
+      "statuses": {
+        "open": "Open",
+        "done": "Done",
+        "canceled": "Canceled",
+        "superseded": "Replaced by a new strategy version"
+      },
+      "kind": {
+        "standing": "Strategy task · {{key}}",
+        "ad_hoc": "One-off · {{sectors}}"
+      },
+      "target": "Target {{n}}",
+      "remaining": "Left today: {{remaining}} (daily cap {{cap}})",
+      "claim": "Claim",
+      "claimed": "The task is yours for two hours.",
+      "heldByOther": "Someone else holds the task right now.",
+      "claimedByYou": "Yours until {{until}}",
+      "claimedBy": "Held by {{name}} until {{until}}",
+      "close": "Close the task",
+      "outcome": "Outcome",
+      "outcomes": {
+        "done": "Done",
+        "canceled": "Canceled"
+      },
+      "closeNote": "Note (optional)",
+      "closeSubmit": "Close",
+      "closed": "Task closed.",
+      "progress": "Progress",
+      "found": "Found: {{found}}",
+      "foundOf": "Found: {{found}} / {{target}}",
+      "newest": "Latest prospects recorded",
+      "prospectsLink": "See this task's prospects",
+      "empty": "No tasks",
+      "emptyBody": "The approved strategy's ideal customer profile opens a task per entry; you can open a one-off task below.",
+      "brief": {
+        "segment": "Segment",
+        "sectors": "Sectors",
+        "areas": "Areas",
+        "signals": "Signals to look for",
+        "exclusions": "Excluded",
+        "size": "Size",
+        "language": "Language",
+        "note": "Note"
+      },
+      "create": {
+        "title": "Open a one-off task",
+        "description": "Tell agents what to look for, where, and what to leave out.",
+        "sectors": "Sectors (one a line)",
+        "sectorsHint": "cafe",
+        "areas": "Areas (one a line: city, or city / district)",
+        "areasHint": "Izmir / Alsancak",
+        "signals": "Signals to look for (one a line)",
+        "exclusions": "Excluded (one a line)",
+        "segment": "Segment key (optional)",
+        "size": "Size hint",
+        "language": "Language (e.g. tr)",
+        "target": "Prospects to find",
+        "dailyCap": "Daily cap",
+        "note": "Note",
+        "submit": "Open the task",
+        "created": "Task opened."
+      }
+    },
+    "errors": {
+      "not_editable": "A promoted or do-not-contact prospect cannot be changed.",
+      "stale_revision": "This record changed while you were looking at it. Reload and try again.",
+      "promoted": "The prospect is in the inbox: record the objection on the person.",
+      "erase_the_person": "The prospect is in the inbox: erase the person instead.",
+      "human_only": "Only a team member can do this.",
+      "prospecting_off": "The approved strategy has no ideal customer profile; add one first.",
+      "task_closed": "The task is closed.",
+      "standing_task": "A strategy task cannot be closed here; change the profile in the strategy.",
+      "not_scorable": "This prospect cannot be scored.",
+      "invalid_transition": "This cannot be done to a record in this state.",
+      "daily_cap": "Today's limit is reached.",
+      "duplicate": "This business is already in the pool.",
+      "in_inbox": "This person is already in the inbox.",
+      "previously_rejected": "This business was rejected before.",
+      "do_not_contact": "On the do-not-contact list.",
+      "system_actor": "The system records nothing in the pool.",
+      "rubric_mismatch": "The scoring rubric changed; score again.",
+      "outreach_disabled_on_platform": "Cold email is off on this server (JEETA_OUTREACH_ENABLED); the campaign cannot launch.",
+      "sender_identity_missing": "Sender details missing: set the company name, address and privacy notice link in the email settings.",
+      "approval_required": "Approval is needed first.",
+      "human_required": "Only a team member can do this.",
+      "owner_required": "Only the workspace owner can do this.",
+      "not_yet": "The campaign's start time has not come.",
+      "not_enrollable": "Recipients cannot be added to a campaign in this state.",
+      "enrollment_not_active": "The campaign is not running for this recipient anymore.",
+      "archived": "The template is archived.",
+      "campaign_not_running": "The campaign is not sending right now."
+    },
+    "teamTabs": {
+      "label": "Team sections",
+      "members": "Members",
+      "distribution": "Distribution"
+    },
+    "hours": {
+      "limited": "Only at set hours",
+      "tz": "Time zone",
+      "from": "From",
+      "to": "To",
+      "days": "Days"
+    },
+    "sourceKinds": {
+      "prospect": "Prospect pool",
+      "channel": "Messaging channel",
+      "meta_ads": "Meta lead form",
+      "form": "Web form",
+      "import": "Import",
+      "repeat": "Returning customer"
+    },
+    "causes": {
+      "rule": "Rule",
+      "default": "Default rotation",
+      "manual": "Assigned by hand",
+      "sla_reassign": "Past its SLA, reassigned",
+      "member_left": "Member left",
+      "import": "Import waiting",
+      "no_eligible": "Nobody eligible"
+    },
+    "distribution": {
+      "title": "Distribution",
+      "description": "Who gets each new journey: rules apply in order; in automatic mode the rest rotate among available members. No journey is ever silently ownerless.",
+      "mode": "Distribution mode",
+      "modes": {
+        "auto": "Automatic: rules, then everyone in turn",
+        "manual": "Manual: rules only, a manager assigns the rest"
+      },
+      "maxReassignments": "Most reassignments past the SLA",
+      "ownerless": "Ownerless journeys",
+      "stalled": "Stalled assignments",
+      "backfill": "Distribute the ownerless",
+      "backfillDone": "{{assigned}} journeys got an owner; nobody eligible for {{no_eligible}}.",
+      "methods": {
+        "round_robin": "In turn",
+        "least_loaded": "Least loaded"
+      },
+      "rules": {
+        "title": "Rules",
+        "description": "The first rule that matches, top to bottom, applies. An empty list matches anything.",
+        "list": "Rule list",
+        "none": "No rules; in automatic mode everyone takes their turn.",
+        "off": "off",
+        "unnamed": "Rule {{n}}",
+        "name": "Rule name",
+        "enabled": "On",
+        "up": "Move {{name}} up",
+        "down": "Move {{name}} down",
+        "remove": "Delete {{name}}",
+        "sources": "Sources",
+        "cities": "Cities (comma separated)",
+        "sectors": "Sectors (comma separated)",
+        "languages": "Languages (comma separated)",
+        "segments": "Segments (comma separated)",
+        "minScore": "Lowest score",
+        "pool": "To",
+        "allEligible": "Everyone available",
+        "members": "Chosen members",
+        "method": "Method",
+        "sla": "First contact within (working minutes)",
+        "add": "Add a rule",
+        "save": "Save the rules",
+        "saved": "Rules saved."
+      },
+      "reps": {
+        "title": "Members' availability",
+        "description": "Each member edits their own row; managers edit everyone's.",
+        "member": "Member",
+        "state": "State",
+        "load": "Open journeys",
+        "filters": "Own filters",
+        "hours": "Working hours",
+        "anyTime": "Any time",
+        "onShift": "On shift",
+        "eligible": "Takes new work",
+        "notEligible": "Takes no new work",
+        "paused": "Paused taking new work",
+        "awayTill": "Away until {{at}}",
+        "loadOpen": "{{open}}",
+        "loadOf": "{{open}} / {{max}}",
+        "edit": "Edit for {{name}}",
+        "editTitle": "{{name}}: availability",
+        "accepting": "Takes new journeys",
+        "maxOpen": "Open journeys at most",
+        "languages": "Languages (comma separated)",
+        "cities": "Cities (comma separated)",
+        "sectors": "Sectors (comma separated)",
+        "awayUntil": "Away until",
+        "saved": "Availability saved."
+      },
+      "log": {
+        "title": "Assignment log",
+        "member": "Member",
+        "empty": "No assignments",
+        "slaDue": "First contact due {{at}}",
+        "acted": "Acted on {{at}}",
+        "superseded": "Replaced by a later decision"
+      }
+    },
+    "basis": {
+      "consent": "Consent",
+      "business_recipient": "Business recipient"
+    },
+    "recipientKinds": {
+      "business": "Business",
+      "individual": "Individual",
+      "unknown": "Unknown"
+    },
+    "journeyStages": {
+      "new": "New",
+      "contacted": "Contacted",
+      "unreachable": "Unreachable",
+      "appointment": "Appointment",
+      "met": "Met",
+      "quoted": "Quoted",
+      "pending": "Pending"
+    },
+    "campaignStatus": {
+      "draft": "Draft",
+      "awaiting_approval": "Awaiting approval",
+      "scheduled": "Scheduled",
+      "running": "Sending",
+      "paused": "Paused",
+      "completed": "Completed",
+      "canceled": "Canceled"
+    },
+    "pauseReasons": {
+      "manual": "paused by hand",
+      "bounce_rate": "too many bounced emails",
+      "complaints": "complaints came in",
+      "mailbox_down": "the mailbox cannot be reached",
+      "strategy_changed": "the strategy changed"
+    },
+    "enrollmentStatus": {
+      "active": "Running",
+      "completed": "Done",
+      "stopped": "Stopped",
+      "skipped": "Skipped"
+    },
+    "stop": {
+      "replied": "Replied",
+      "bounced": "Email bounced",
+      "complained": "Complained",
+      "unsubscribed": "Unsubscribed",
+      "consent_withdrawn": "Withdrew consent",
+      "meeting_booked": "Meeting booked",
+      "journey_won": "Deal won",
+      "journey_lost": "Deal lost",
+      "person_erased": "Person erased",
+      "person_merged": "Person merged",
+      "human_holds_conversation": "A team member holds the conversation",
+      "do_not_contact": "Do not contact",
+      "campaign_canceled": "Campaign canceled",
+      "manual": "Stopped by hand",
+      "refused": "Send refused ({{reason}})",
+      "missingVariable": "Personalization missing: {{name}}"
+    },
+    "skip": {
+      "no_deliverable_email": "No deliverable email",
+      "suppressed": "Refused email",
+      "no_basis": "No basis for commercial email",
+      "do_not_contact": "On the do-not-contact list",
+      "active_elsewhere": "Running in another campaign",
+      "person_gone": "Person erased or merged",
+      "journey_closed": "Journey closed",
+      "promotion_cap": "Today's promotion limit is reached"
+    },
+    "campaign": {
+      "title": "Campaign",
+      "newTitle": "New campaign",
+      "revision": "Revision {{revision}}",
+      "editor": "Edit the campaign",
+      "name": "Campaign name",
+      "mailbox": "Sending mailbox",
+      "chooseMailbox": "Choose a mailbox",
+      "senderName": "Sender name",
+      "steps": "Steps",
+      "stepTemplate": "Template of step {{n}}",
+      "chooseTemplate": "Choose a template",
+      "delay": "After the previous step (days)",
+      "sameThread": "In the same thread",
+      "removeStep": "Remove the step",
+      "addStep": "Add a step",
+      "audience": "Audience",
+      "fromPool": "Qualified prospects of the pool (promoted into the inbox before sending)",
+      "fromInbox": "People in the inbox",
+      "segments": "Segments (comma separated)",
+      "cities": "Cities (comma separated)",
+      "sectors": "Sectors (comma separated)",
+      "minScore": "Lowest score",
+      "stages": "Journey stages",
+      "recipientKind": "Recipient kind",
+      "window": "Sending hours",
+      "startAt": "Start (optional)",
+      "perHour": "At most an hour",
+      "perDay": "At most a day",
+      "clickTracking": "Count link clicks",
+      "evergreen": "Refresh the audience daily",
+      "saveVoidsApproval": "Saving makes a new revision; the earlier approval no longer holds.",
+      "saveRevision": "Save the new revision",
+      "create": "Save the draft",
+      "saved": "Campaign saved.",
+      "preview": {
+        "title": "Audience preview",
+        "chooseMailbox": "Choose a mailbox to see the audience.",
+        "eligible": "Eligible recipients: {{n}}",
+        "basis": "Basis: consent {{consent}}, business recipient {{business}}",
+        "promotions": "Prospects promoted into the inbox first: {{n}}",
+        "noB2b": "The business-recipient basis is off: businesses without consent are skipped.",
+        "skipped": "Skipped",
+        "skip": "{{reason}}: {{n}}",
+        "truncated": "The audience is over the limit; its first part was counted."
+      },
+      "deliverability": {
+        "title": "Deliverability",
+        "body": "The sending domain needs SPF, DKIM and DMARC records. Check them with your domain provider before you launch."
+      },
+      "approval": {
+        "title": "Manager approval",
+        "body": "Revision {{revision}} is waiting for approval to launch. Drafted by: {{drafter}}.",
+        "approve": "Approve (revision {{revision}})",
+        "waiting": "Waiting for a manager's approval."
+      },
+      "approved": "Campaign approved.",
+      "run": "Sending",
+      "blockedTitle": "What blocks the launch",
+      "pausedFor": "Paused because: {{reason}}",
+      "launchApproves": "This campaign needs approval; your launch approves this revision.",
+      "launchNeedsApproval": "This campaign needs approval; once launched it waits for a manager.",
+      "launch": "Launch",
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Cancel",
+      "done": "Done.",
+      "active": "Running enrollments: {{n}}"
+    },
+    "enrollments": {
+      "title": "Recipients",
+      "empty": "No recipients yet",
+      "person": "Person",
+      "openPerson": "Open the person",
+      "prospect": "Prospect",
+      "status": "Status",
+      "step": "Next step",
+      "next": "Next send",
+      "basis": "Basis",
+      "stop": "Stop",
+      "stopped": "The campaign stopped for this recipient."
+    },
+    "templates": {
+      "title": "Templates",
+      "description": "Plain-text email templates. Variables are filled per recipient; Jeeta adds the footer.",
+      "list": "Template list",
+      "new": "New template",
+      "showArchived": "Show archived",
+      "empty": "No templates",
+      "archivedBadge": "Archived",
+      "choose": "Choose a template to edit, or start a new one.",
+      "editor": "Template editor",
+      "name": "Name",
+      "language": "Language",
+      "languages": {
+        "tr": "Turkish",
+        "en": "English"
+      },
+      "subject": "Subject",
+      "body": "Body",
+      "vars": "Variables",
+      "customHint": "Use the form {{custom}} for values the agent writes per recipient, and {{fallback}} for a fallback used when a value is missing.",
+      "problems": {
+        "unbalanced_braces": "Braces do not match in the {{where}}.",
+        "unknown_variable": "Unknown variable in the {{where}}: {{name}}",
+        "custom_key": "A custom variable name in the {{where}} may hold lowercase letters, digits and underscores only.",
+        "fallback_invalid": "A fallback in the {{where}} is empty, too long or holds braces.",
+        "literal_invalid": "The {{where}} holds a brace sequence that is not valid."
+      },
+      "create": "Save the template",
+      "saveRevision": "Save the new revision",
+      "saved": "Template saved.",
+      "archive": "Archive",
+      "archived": "Template archived.",
+      "preview": "Preview with sample values",
+      "recipient": "Recipient",
+      "recipients": {
+        "business": "Business (public details)",
+        "consent": "Person who consented"
+      },
+      "identityHint": "Sender details are missing; the footer comes from the email settings.",
+      "footerFixed": "The footer is added to every email in the template's language and cannot be changed.",
+      "links": "Links",
+      "noLinks": "No links in the body.",
+      "unsubscribeSample": "(unsubscribe link)",
+      "samples": {
+        "first_name": "Ayşe",
+        "contact_name": "Ayşe Yılmaz",
+        "company": "Sample Cafe",
+        "city": "Izmir",
+        "district": "Alsancak",
+        "sector": "cafe"
+      },
+      "missing": {
+        "company": "[company name]",
+        "address": "[address]",
+        "privacy": "[privacy notice link]"
+      }
+    },
+    "settings": {
+      "title": "Email settings",
+      "description": "Campaigns' sender details, approval, warm-up and frequency limits.",
+      "general": "General settings",
+      "readOnly": "Only managers can change these settings.",
+      "identity": "Sender details (the footer of every email)",
+      "company": "Company name",
+      "address": "Address",
+      "privacy": "Privacy notice link",
+      "sending": "Sending",
+      "requiresApproval": "Every campaign waits for a manager's approval before it starts",
+      "clickTracking": "Count link clicks in new campaigns",
+      "warmup": "Warm-up (daily limit for a new mailbox)",
+      "warmupOn": "Warm-up on",
+      "warmupStart": "First day",
+      "warmupStep": "Daily increase",
+      "warmupMax": "At most",
+      "frequency": "Frequency (per person)",
+      "minGap": "Days at least between two emails",
+      "per30": "At most in 30 days",
+      "saved": "Settings saved.",
+      "b2b": {
+        "title": "Business-recipient basis",
+        "description": "The basis for emailing businesses without consent, at their publicly listed contact details. Off by default.",
+        "legal": "Turn this on only after your lawyer confirmed this use in writing. When you do, we record the confirmation and your note.",
+        "recorded": "Confirmation on record: {{at}}",
+        "email": "Turn the business-recipient basis on for email",
+        "iys": "Look the address up in İYS before sending",
+        "counsel": "My lawyer confirmed this use in writing",
+        "note": "Note on the confirmation (who, when, what)",
+        "notInForce": "The basis is recorded, but it does not apply while cold email is off on the platform.",
+        "save": "Save the basis"
+      }
     }
   }
 }

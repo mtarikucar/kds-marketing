@@ -36,6 +36,7 @@ import {
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { can, roleLabel } from '@/lib/roles';
+import { TeamTabs } from './LeadsShared';
 
 const TEAM_KEY = ['team'] as const;
 const ROLES_KEY = ['roles'] as const;
@@ -289,6 +290,7 @@ export function TeamPage() {
           ) : null
         }
       />
+      <TeamTabs />
       <QueryState query={team}>
         <DataTable
           columns={columns}
