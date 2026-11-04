@@ -177,7 +177,9 @@ mod tests {
 
     use jt_app::std_impls::NoPlatformApps;
     use jt_outbound::FIXED_HOSTS;
-    use jt_testkit::fakes::{ScriptedConnector, ScriptedOAuth, ScriptedRegistry};
+    use jt_testkit::fakes::{
+        ScriptedConnector, ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry,
+    };
 
     use super::*;
 
@@ -303,6 +305,13 @@ mod tests {
                 Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin
             ) {
                 scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(provider)));
+            }
+            // Meta's comments: its public surface and its poll (tasks M2 and M4), inert until a
+            // grant and the platform's flags enable a capability's comments.
+            if provider == Provider::Meta {
+                scripted = scripted
+                    .with_public(Arc::new(ScriptedPublic::new(provider)))
+                    .with_poller(Arc::new(ScriptedPoller::new(provider)));
             }
         }
         let registry = production();
