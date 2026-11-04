@@ -334,6 +334,24 @@ impl MetaConnector {
             .await
     }
 
+    /// [`MetaConnector::graph_post`] for a write Meta takes once only, which must never be sent
+    /// again blindly: an answer Meta gave that neither took nor refused it (an HTTP 5xx, a
+    /// transient Graph error) means the request reached Meta and may have been taken, so it is
+    /// `Unknown`, not `Transient`. A call that never reached Meta (it could not connect) stays
+    /// `Transient`, and a throttle (which took nothing) stays `Throttle`.
+    pub(crate) async fn graph_post_once(
+        &self,
+        app: &GraphApp,
+        token: &str,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        body: Value,
+    ) -> Result<Value, ConnectorError> {
+        let url = self.graph_url(&app.version, segments, query);
+        self.send(Method::POST, url, app.auth(token), Body::Json(body), true)
+            .await
+    }
+
     /// Every item of a paged Graph read starting at `segments`: the `data` arrays of each page,
     /// following `paging.next` (with the proof again, the token in the header) for up to
     /// [`MAX_PAGES`] pages.
@@ -417,6 +435,20 @@ impl MetaConnector {
         auth: Auth<'_>,
         body: Body,
     ) -> Result<Value, ConnectorError> {
+        self.send(method, url, auth, body, false).await
+    }
+
+    /// [`MetaConnector::call`]; `once` for a write Meta takes once only, whose `Transient` answer
+    /// (Meta answered: the request reached it) is `Unknown` (see
+    /// [`MetaConnector::graph_post_once`]).
+    async fn send(
+        &self,
+        method: Method,
+        url: Url,
+        auth: Auth<'_>,
+        body: Body,
+        once: bool,
+    ) -> Result<Value, ConnectorError> {
         let (url, token) = match auth {
             Auth::None => (url, None),
             Auth::Graph { token, secret } => {
@@ -442,14 +474,24 @@ impl MetaConnector {
             .send(SCOPE)
             .await
             .map_err(|e| egress_error(e, read_only))?;
-        read(response, &secrets, read_only).await
+        read(response, &secrets, read_only)
+            .await
+            .map_err(|e| match e {
+                ConnectorError::Transient { reason, .. } if once => {
+                    ConnectorError::unknown(format!(
+                        "Meta answered a one-time request without taking or refusing it: {reason}"
+                    ))
+                }
+                other => other,
+            })
     }
 }
 
 /// The secrets of one call, to be taken out of any provider text its error quotes: the token and
 /// the app secret of `auth`; for a call without a token, every query field of `url` but
-/// [`PUBLIC_PARAMS`] (the code, the client secret, the token to exchange); and every form field
-/// of `body` but those. Empty values are left out.
+/// [`PUBLIC_PARAMS`] (the code, the client secret, the token to exchange); for any call, a token
+/// inspected in the query (`input_token`, `debug_token`'s); and every form field of `body` but
+/// those. Empty values are left out.
 fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
     let mut secrets: Vec<String> = match auth {
         Auth::None => url
@@ -460,6 +502,11 @@ fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
         Auth::Graph { token, secret } => vec![token.to_owned(), secret.to_owned()],
         Auth::Bearer(token) => vec![token.to_owned()],
     };
+    secrets.extend(
+        url.query_pairs()
+            .filter(|(name, _)| name == "input_token")
+            .map(|(_, value)| value.into_owned()),
+    );
     if let Body::Form(fields) = body {
         secrets.extend(
             fields

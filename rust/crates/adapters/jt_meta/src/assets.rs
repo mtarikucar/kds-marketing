@@ -1,14 +1,17 @@
 //! What a signed-in account can reach: its Pages (and their Messenger inboxes and linked
 //! Instagram accounts), its ad accounts and its WhatsApp numbers; or, for an Instagram Login
-//! token, its Instagram account.
+//! token, its Instagram account; or, for the WhatsApp Business app's sign-in, the numbers it
+//! shared ([`business_app_numbers`]).
 
-use jt_app::ports::connectors::Asset;
+use jt_app::ports::connectors::{Asset, OAuthFlow};
 use jt_connector::{ConnectorError, Credential};
+use jt_outbound::Method;
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 use crate::MetaConnector;
 use crate::credential::MetaCred;
-use crate::graph::{GraphApp, missing, node, text};
+use crate::graph::{Body, GraphApp, missing, node, text};
 
 /// The `account_status` of an active ad account.
 const ACTIVE_AD_ACCOUNT: i64 = 1;
@@ -297,4 +300,174 @@ async fn whatsapp_numbers(
         }
     }
     Ok(assets)
+}
+
+/// The assets `cred` reaches when the sign-in variant `flow` issued it: without one, exactly
+/// [`list_assets`]; for the WhatsApp Business app's sign-in, its numbers ([`business_app_numbers`]).
+pub(crate) async fn list_assets_for(
+    connector: &MetaConnector,
+    cred: &Credential,
+    flow: Option<OAuthFlow>,
+) -> Result<Vec<Asset>, ConnectorError> {
+    match flow {
+        None => list_assets(connector, cred).await,
+        Some(OAuthFlow::WhatsappBusinessApp) => business_app_numbers(connector, cred).await,
+    }
+}
+
+/// The numbers the WhatsApp Business app's sign-in shared, as `whatsapp_cloud`, each with the
+/// business's token (and its expiry) and its account's id, its public facts saying
+/// `onboarding: whatsapp_business_app` (unless Graph says the number is not on the app: then
+/// `null`, and it is connected as a plain Cloud API number) and, when Graph tells them,
+/// `is_on_biz_app` and `platform_type`:
+///
+/// 1. the WhatsApp Business Accounts the token was granted: `GET /debug_token?input_token=`
+///    (with the Meta app's access token, `{app_id}|{app_secret}`, which Graph's `debug_token`
+///    reference accepts, <https://developers.facebook.com/docs/graph-api/reference/debug_token/>;
+///    the token inspected travels in the query, the one place the endpoint takes it, and is taken
+///    out of any refusal's reason), the
+///    `target_ids` of its `whatsapp_business_management` granular scope, then of
+///    `whatsapp_business_messaging`, each once, in their order (Meta's "manage accounts" page:
+///    the most recently onboarded first,
+///    <https://developers.facebook.com/documentation/business-messaging/whatsapp/solution-providers/manage-accounts>);
+///    the token's own `expires_at` when the exchange named none;
+/// 2. each account's numbers, `GET /{waba}/phone_numbers` (an account that cannot be read is
+///    left out, logged);
+/// 3. each number's `GET /{phone_number_id}?fields=is_on_biz_app,platform_type` (Meta's
+///    onboarding page names these fields), best effort: unknown when they cannot be read.
+///
+/// No account, or no number, is `Permanent`: the owner is told the sign-in shared nothing.
+pub(crate) async fn business_app_numbers(
+    connector: &MetaConnector,
+    cred: &Credential,
+) -> Result<Vec<Asset>, ConnectorError> {
+    let MetaCred::User { token } = MetaCred::of(cred, "list assets")? else {
+        return Err(ConnectorError::permanent(
+            "assets are listed with a user token from a sign-in",
+        ));
+    };
+    let meta = connector.meta_app()?;
+    let app = GraphApp::of(&meta)?;
+    // The app's own access token, with its proof as every Graph call's.
+    let app_token = format!("{}|{}", meta.app_id, meta.app_secret);
+    let url = connector.graph_url(&app.version, &["debug_token"], &[("input_token", token)]);
+    let debugged = connector
+        .call(Method::GET, url, app.auth(&app_token), Body::Empty)
+        .await?;
+    let data = &debugged["data"];
+    let wabas = shared_accounts(data);
+    if wabas.is_empty() {
+        return Err(ConnectorError::permanent(
+            "the sign-in shared no WhatsApp Business Account",
+        ));
+    }
+    let expires_at = match cred {
+        Credential::OAuth {
+            expires_at: Some(at),
+            ..
+        } => Some(*at),
+        _ => crate::graph::integer(&data["expires_at"])
+            .filter(|at| *at > 0)
+            .and_then(|at| OffsetDateTime::from_unix_timestamp(at).ok()),
+    };
+    let mut assets = Vec::new();
+    for waba_id in wabas {
+        let numbers = match connector
+            .graph_pages(
+                &app,
+                token,
+                &[node(&waba_id)?, "phone_numbers"],
+                &[(
+                    "fields",
+                    "id,display_phone_number,verified_name,quality_rating",
+                )],
+            )
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if skippable(&e, "phone_numbers") => continue,
+            Err(e) => return Err(e),
+        };
+        for number in numbers {
+            let Some(phone_id) = text(&number["id"]) else {
+                continue;
+            };
+            let on_app = connector
+                .graph_get(
+                    &app,
+                    token,
+                    &[node(&phone_id)?],
+                    &[("fields", "is_on_biz_app,platform_type")],
+                )
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::debug!(
+                        error_kind = e.kind(),
+                        "whether a WhatsApp number is on the business app could not be read"
+                    );
+                    Value::Null
+                });
+            let display = number["display_phone_number"].as_str().unwrap_or_default();
+            let verified = number["verified_name"].as_str().unwrap_or_default();
+            assets.push(Asset {
+                kind_key: "whatsapp_cloud".into(),
+                external_id: phone_id.clone(),
+                name: if verified.is_empty() {
+                    display
+                } else {
+                    verified
+                }
+                .to_owned(),
+                credential: Credential::WhatsAppCloud {
+                    phone_number_id: phone_id,
+                    token: token.to_owned(),
+                    waba_id: Some(waba_id.clone()),
+                    expires_at,
+                },
+                public: json!({
+                    "waba_id": waba_id,
+                    "display_phone_number": display,
+                    "verified_name": verified,
+                    "quality_rating": number["quality_rating"],
+                    // Tagged as onboarded beside the app unless Graph says it is not on it.
+                    "onboarding": (on_app["is_on_biz_app"].as_bool() != Some(false))
+                        .then_some(OAuthFlow::WhatsappBusinessApp.key()),
+                    "is_on_biz_app": on_app["is_on_biz_app"].as_bool(),
+                    "platform_type": on_app["platform_type"].as_str(),
+                }),
+            });
+        }
+    }
+    if assets.is_empty() {
+        return Err(ConnectorError::permanent(
+            "the shared WhatsApp Business Account has no phone number",
+        ));
+    }
+    Ok(assets)
+}
+
+/// The WhatsApp Business Accounts a `debug_token` answer's `data` grants: the `target_ids` of
+/// `whatsapp_business_management`, then of `whatsapp_business_messaging`, each once, in order.
+fn shared_accounts(data: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for scope in [
+        "whatsapp_business_management",
+        "whatsapp_business_messaging",
+    ] {
+        let granted = data["granular_scopes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|g| g["scope"] == scope);
+        for grant in granted {
+            for id in grant["target_ids"].as_array().into_iter().flatten() {
+                if let Some(id) = text(id)
+                    && !out.contains(&id)
+                {
+                    out.push(id);
+                }
+            }
+        }
+    }
+    out
 }

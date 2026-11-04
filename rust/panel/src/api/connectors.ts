@@ -4,6 +4,7 @@ import type {
   ConnectorHealth,
   CredentialInput,
   HooksOut,
+  OAuthFlow,
   PbxPolicyInput,
   PbxPolicyOut,
   PendingAssetsOut,
@@ -29,9 +30,15 @@ export function setPbxPolicy(capabilityId: string, input: PbxPolicyInput): Promi
   return request('PUT', `/api/connectors/${seg(capabilityId)}/pbx-policy`, { body });
 }
 
-/** `POST /api/connectors/oauth/start`: an OAuth flow for a Meta kind or `x`. */
-export function startOAuth(kindKey: string): Promise<StartOut> {
-  return request('POST', '/api/connectors/oauth/start', { body: { kind_key: kindKey } });
+/**
+ * `POST /api/connectors/oauth/start`: an OAuth flow for a Meta kind or `x`; `flow`, when given,
+ * a variant of the provider's sign-in (`whatsapp_business_app`: a `whatsapp_cloud` number the
+ * business already uses in the WhatsApp Business app).
+ */
+export function startOAuth(kindKey: string, flow?: OAuthFlow): Promise<StartOut> {
+  const body: Record<string, string> = { kind_key: kindKey };
+  if (flow) body.flow = flow;
+  return request('POST', '/api/connectors/oauth/start', { body });
 }
 
 /**

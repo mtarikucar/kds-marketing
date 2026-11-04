@@ -1433,6 +1433,7 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "account",
             "asset",
             "bridge",
+            "business_app",
             "call_mode",
             "device",
             "facts",

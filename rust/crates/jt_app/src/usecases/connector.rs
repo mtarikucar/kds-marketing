@@ -111,7 +111,9 @@ use super::{Deps, acting_user, hash_token, invalid, nothing_to_change};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 pub use crate::ports::connectors::OAuthCallback;
-use crate::ports::connectors::{Asset, AssetPublic, Connector, OAuthApp, PlatformAppConfig, Url};
+use crate::ports::connectors::{
+    Asset, AssetPublic, Connector, OAuthApp, OAuthFlow, PlatformAppConfig, Url,
+};
 use crate::ports::{
     CapabilityFilter, Masked, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, TenantRepos,
 };
@@ -157,8 +159,9 @@ const CONNECTION_KEYS: &[&str] = &["hosts", "name", "external_id"];
 
 /// The `connector_public` keys that describe the account a capability is bound to, dropped when
 /// it is bound to another ([`rebind_account`]): the last probe, the probe's facts, the OAuth
-/// asset's facts and the account.
-const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account"];
+/// asset's facts, the account, and the sharing of a WhatsApp Business app's data
+/// (`super::whatsapp_app::BUSINESS_APP`).
+const OLD_ACCOUNT_FACTS: &[&str] = &["health", "facts", "asset", "account", "business_app"];
 
 const NO_SUCH_FLOW: &str = "no such pending connection";
 const APP_NOT_CONFIGURED: &str = "provider app not configured";
@@ -176,11 +179,16 @@ const NO_ADAPTER: &str = "provider adapter not available";
 // ---------------------------------------------------------------------------------------------
 
 /// What starting an OAuth flow takes: the kind of capability to connect (a Meta kind, `x`,
-/// `tiktok`, `linkedin_member` or `linkedin_page`).
+/// `tiktok`, `linkedin_member` or `linkedin_page`) and, optionally, a variant of its app's
+/// sign-in (`flow`, [`OAuthFlow`]: `whatsapp_business_app` connects a `whatsapp_cloud` number
+/// the business already uses in the WhatsApp Business app, which keeps working beside the Cloud
+/// API). Without `flow`, the app's own sign-in.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartOAuth {
     pub kind_key: String,
+    #[serde(default)]
+    pub flow: Option<OAuthFlow>,
 }
 
 /// A started OAuth flow: where to send the owner's browser (an agent hands it to the owner), the
@@ -460,8 +468,13 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// flow needs the LinkedIn app's organization scopes (`JEETA_LINKEDIN_ORG_SCOPES`, set once
 /// LinkedIn approved the Community Management API), else `CONFLICT` "provider product not
 /// enabled" (`details.reason = "provider_product_not_enabled"`, `details.provider`); and its
-/// adapter present, else `CONFLICT`. The state is signed for the workspace
-/// and holds the provider, the
+/// adapter present, else `CONFLICT`. A `flow` must be one for the kind ([`OAuthFlow::kind_key`]:
+/// `whatsapp_business_app` for `whatsapp_cloud`), else `VALIDATION` naming `flow`, and
+/// `whatsapp_business_app` needs the Meta app's WhatsApp Embedded Signup configuration
+/// (`JEETA_META_WHATSAPP_CONFIG_ID`), else `CONFLICT` "provider product not enabled"
+/// (`details.reason = "provider_product_not_enabled"`); the flow keeps it to its completion
+/// ([`complete_oauth`] exchanges the code and lists the assets as it says). The state is signed
+/// for the workspace and holds the provider, the
 /// kind, the time and a nonce; for X a PKCE pair is made and its verifier sealed with the flow.
 /// The redirect URI is the public base URL followed by [`OAUTH_CALLBACK_PATH`] and the key of the
 /// flow's app ([`OAuthCallback`]: `meta`, `instagram`, `x`, `tiktok` or `linkedin`), and the
@@ -469,10 +482,10 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// same one. `expires_at` is when the state stops being accepted ([`STATE_TTL`]).
 ///
 /// Writes `connector.oauth_started` about the flow (`subject.kind = "oauth_pending"`, payload
-/// `provider`, `kind_key`).
+/// `provider`, `kind_key`, and `flow` when one is run).
 pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<StartOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
-    begin_oauth(deps, ctx, input.kind_key.trim(), None).await
+    begin_oauth(deps, ctx, input.kind_key.trim(), None, input.flow).await
 }
 
 /// Completes the flow the provider called back for, and returns the assets it found for the
@@ -496,7 +509,9 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// capability ([`reconnect`]) keeps only that capability's account when it names one; a declared
 /// capability that names none is offered every asset. Either way an account that reaches no
 /// asset of the capability's kind (or not its account) is `VALIDATION` with
-/// `details.reason = "account_mismatch"`. Of two completions racing on one state, the one that
+/// `details.reason = "account_mismatch"`. A flow running a sign-in variant ([`OAuthFlow`])
+/// exchanges the code and lists the assets as the variant says (`OAuthProvider::exchange_for`,
+/// `OAuthProvider::list_assets_for`). Of two completions racing on one state, the one that
 /// stores its assets second is `FORBIDDEN`, even after asking the provider (the flow is locked
 /// and checked again before anything is stored).
 ///
@@ -572,16 +587,17 @@ pub async fn complete_oauth(
         .oauth(flow.provider)
         .ok_or_else(|| AppError::conflict(NO_ADAPTER))?;
     let credential = oauth
-        .exchange(
+        .exchange_for(
             &app,
             &redirect,
             &code,
             verifier.as_ref().map(|v| v.as_str()),
+            flow.flow,
         )
         .await
         .map_err(|e| provider_error(flow.provider, e))?;
     let mut assets = oauth
-        .list_assets(&credential)
+        .list_assets_for(&credential, flow.flow)
         .await
         .map_err(|e| provider_error(flow.provider, e))?;
     // Page tokens are derived from this authenticated OAuth grant but have no scopes field
@@ -1001,7 +1017,8 @@ pub async fn health(deps: &Deps, ctx: &Ctx) -> Result<Vec<ConnectorHealth>, AppE
 /// one of a kind no provider serves, and one that names no external account unless it is
 /// declared (never connected) are `CONFLICT`; a NetGSM capability is `VALIDATION` with
 /// `details.reason = "use_set_credentials"` (it takes new credentials by hand). Otherwise as
-/// [`start_oauth`]; the ledger payload also names the `capability_id`.
+/// [`start_oauth`]; the ledger payload also names the `capability_id`. A capability connected
+/// through a sign-in variant (its asset says so: [`flow_of`]) signs in through it again.
 pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<StartOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let capability = {
@@ -1009,7 +1026,21 @@ pub async fn reconnect(deps: &Deps, ctx: &Ctx, id: CapabilityId) -> Result<Start
         find(repos.as_mut(), id).await?
     };
     reconnectable(&capability)?;
-    begin_oauth(deps, ctx, &capability.kind_key, Some(&capability)).await
+    let flow = flow_of(&capability);
+    begin_oauth(deps, ctx, &capability.kind_key, Some(&capability), flow).await
+}
+
+/// The `connector_public.asset` key naming the sign-in variant an asset was found through
+/// ([`OAuthFlow::key`]); the Meta adapter writes it on the assets of the coexistence flow.
+pub const ASSET_ONBOARDING: &str = "onboarding";
+
+/// The sign-in variant `capability` was connected through, as its asset names it
+/// (`connector_public.asset.onboarding`, [`ASSET_ONBOARDING`]): a variant of the kind's, or none.
+pub fn flow_of(capability: &Capability) -> Option<OAuthFlow> {
+    capability.connector_public["asset"][ASSET_ONBOARDING]
+        .as_str()
+        .and_then(OAuthFlow::parse)
+        .filter(|flow| flow.kind_key() == capability.kind_key)
 }
 
 /// The webhook addresses to register at the providers, under the public base URL (its path kept,
@@ -1247,14 +1278,21 @@ pub(crate) fn retired_public(capability: &Capability) -> Value {
 /// Starts a flow for `kind_key`, bound to capability `bound` for a reconnection (which is locked
 /// and checked again in the bundle that writes the flow). A new connection signs in with the
 /// kind's app ([`OAuthCallback::of_flow`]), a reconnection with the one that issued the
-/// capability's credential ([`reconnect_app`]); the flow keeps it to its completion.
+/// capability's credential ([`reconnect_app`]); the flow keeps it to its completion, and the
+/// sign-in variant `flow` too.
 async fn begin_oauth(
     deps: &Deps,
     ctx: &Ctx,
     kind_key: &str,
     bound: Option<&Capability>,
+    flow: Option<OAuthFlow>,
 ) -> Result<StartOut, AppError> {
     let provider = oauth_kind(kind_key)?;
+    if let Some(flow) = flow
+        && flow.kind_key() != kind_key
+    {
+        return Err(invalid("flow", "this sign-in connects another kind"));
+    }
     let callback = match bound {
         Some(capability) => reconnect_app(deps.apps.as_ref(), provider, capability),
         None => OAuthCallback::of_flow(provider, kind_key),
@@ -1266,6 +1304,12 @@ async fn begin_oauth(
         oauth_app(deps.apps.as_ref(), callback).ok_or_else(|| app_not_configured(provider))?;
     if kind_key == LINKEDIN_PAGE
         && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.organization_scopes)
+    {
+        return Err(product_not_enabled(provider));
+    }
+    if flow == Some(OAuthFlow::WhatsappBusinessApp)
+        && !matches!(&app, OAuthApp::Meta(meta)
+            if meta.whatsapp_config_id.as_deref().is_some_and(|c| !c.trim().is_empty()))
     {
         return Err(product_not_enabled(provider));
     }
@@ -1300,7 +1344,7 @@ async fn begin_oauth(
     };
     // Before anything is written: a refused URL leaves no pending flow and no ledger entry.
     let authorize_url = oauth
-        .authorize_url(&app, &redirect, &token, challenge.as_deref())
+        .authorize_url_for(&app, &redirect, &token, challenge.as_deref(), flow)
         .map_err(|e| provider_error(provider, e))?;
 
     let id = OAuthPendingId(deps.ids.uuid());
@@ -1317,6 +1361,7 @@ async fn begin_oauth(
             provider,
             kind_key: kind_key.to_owned(),
             app: callback,
+            flow,
             state_hash: hash_token(&token),
             started_by,
             capability_id: bound,
@@ -1330,6 +1375,9 @@ async fn begin_oauth(
     let mut payload = json!({ "provider": provider.key(), "kind_key": kind_key });
     if let Some(capability) = bound {
         payload["capability_id"] = json!(capability);
+    }
+    if let Some(flow) = flow {
+        payload["flow"] = json!(flow.key());
     }
     let in_force = version_in_force(repos.as_mut()).await?;
     append(
@@ -1670,6 +1718,7 @@ async fn create(
             issued_asset_access(&asset, flow.app),
             Some(&asset.public),
         );
+        let public = super::whatsapp_app::onboarded(public, flow.flow, &asset.kind_key, ctx.now)?;
         let mut capability = Capability::new(
             CapabilityId(deps.ids.uuid()),
             ctx.workspace_id,
@@ -1754,14 +1803,19 @@ async fn renew(
         )
         .await?;
     }
-    capability.connector_public = connected_public(
-        &capability.connector_public,
-        flow.provider,
-        Some(&asset.name),
-        hosts,
-        issued_asset_access(&asset, flow.app),
-        Some(&asset.public),
-    );
+    capability.connector_public = super::whatsapp_app::onboarded(
+        connected_public(
+            &capability.connector_public,
+            flow.provider,
+            Some(&asset.name),
+            hosts,
+            issued_asset_access(&asset, flow.app),
+            Some(&asset.public),
+        ),
+        flow.flow,
+        &capability.kind_key,
+        ctx.now,
+    )?;
     capability.updated_at = ctx.now;
     repos.capabilities().update(capability.clone()).await?;
     if renewing {

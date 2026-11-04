@@ -1,6 +1,7 @@
 //! `oauth_pending`: OAuth flows between their start and the owner's choice of assets.
 //!
-//! `provider` holds its key, `assets_public` a JSON array. The state hash is unique across every
+//! `provider` holds its key, `flow` the key of the sign-in variant (`null` for the app's own),
+//! `assets_public` a JSON array. The state hash is unique across every
 //! workspace (a plain unique index, which row-level security does not hide), so an insert that
 //! clashes with another workspace's flow is skipped like any other clash. The sealed columns are
 //! opaque bytes sealed for the row's workspace. A reconnection's capability references the
@@ -10,7 +11,7 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::connectors::OAuthCallback;
+use jt_app::ports::connectors::{OAuthCallback, OAuthFlow};
 use jt_app::ports::{OAuthPendingId, OAuthPendingRepo, OAuthPendingRow};
 use jt_capability::CapabilityId;
 use jt_connector::Provider;
@@ -22,9 +23,9 @@ use super::capabilities::ensure_capability;
 use super::{map_sqlx, same_workspace, stored};
 use crate::uow::PgTenantRepos;
 
-const COLUMNS: &str = "id, workspace_id, provider, kind_key, app, state_hash, started_by, \
-                       capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
-                       expires_at, created_at";
+const COLUMNS: &str = "id, workspace_id, provider, kind_key, app, flow, state_hash, \
+                       started_by, capability_id, pkce_verifier_sealed, assets_sealed, \
+                       assets_public, expires_at, created_at";
 
 #[derive(sqlx::FromRow)]
 struct PendingRecord {
@@ -33,6 +34,7 @@ struct PendingRecord {
     provider: String,
     kind_key: String,
     app: String,
+    flow: Option<String>,
     state_hash: String,
     started_by: Uuid,
     capability_id: Option<Uuid>,
@@ -51,6 +53,10 @@ impl PendingRecord {
             provider: stored(Provider::parse(&self.provider), "oauth_pending.provider")?,
             kind_key: self.kind_key,
             app: stored(OAuthCallback::parse(&self.app), "oauth_pending.app")?,
+            flow: match self.flow.as_deref() {
+                Some(flow) => Some(stored(OAuthFlow::parse(flow), "oauth_pending.flow")?),
+                None => None,
+            },
             state_hash: self.state_hash,
             started_by: UserId(self.started_by),
             capability_id: self.capability_id.map(CapabilityId),
@@ -74,10 +80,10 @@ impl OAuthPendingRepo for PgTenantRepos {
             ensure_capability(self.tx.conn(), ws, capability).await?;
         }
         let done = sqlx::query(
-            "insert into oauth_pending (id, workspace_id, provider, kind_key, app, state_hash, \
-             started_by, capability_id, pkce_verifier_sealed, assets_sealed, assets_public, \
-             expires_at, created_at) \
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+            "insert into oauth_pending (id, workspace_id, provider, kind_key, app, flow, \
+             state_hash, started_by, capability_id, pkce_verifier_sealed, assets_sealed, \
+             assets_public, expires_at, created_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              on conflict do nothing",
         )
         .bind(row.id.as_uuid())
@@ -85,6 +91,7 @@ impl OAuthPendingRepo for PgTenantRepos {
         .bind(row.provider.key())
         .bind(&row.kind_key)
         .bind(row.app.key())
+        .bind(row.flow.map(OAuthFlow::key))
         .bind(&row.state_hash)
         .bind(row.started_by.as_uuid())
         .bind(row.capability_id.map(|c| c.as_uuid()))
