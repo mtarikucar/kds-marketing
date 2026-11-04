@@ -56,6 +56,8 @@ mod distribution;
 pub use distribution::MemDistribution;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod outreach;
+pub use outreach::MemOutreach;
 mod platform;
 mod prospects;
 mod providers;

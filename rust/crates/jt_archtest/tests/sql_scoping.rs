@@ -139,6 +139,10 @@ fn tenant_tables_are_read_from_the_migrations() {
         "prospect_keys",
         "prospect_scores",
         "prospect_blocklist",
+        "outreach_templates",
+        "outreach_campaigns",
+        "outreach_enrollments",
+        "outreach_sends",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

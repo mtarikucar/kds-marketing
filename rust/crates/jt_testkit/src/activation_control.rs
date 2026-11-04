@@ -103,6 +103,18 @@ impl TenantRepos for Tenant {
     fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
         self.inner.assignments()
     }
+    fn outreach_templates(&mut self) -> &mut dyn jt_app::ports::outreach::TemplateRepo {
+        self.inner.outreach_templates()
+    }
+    fn outreach_campaigns(&mut self) -> &mut dyn jt_app::ports::outreach::CampaignRepo {
+        self.inner.outreach_campaigns()
+    }
+    fn outreach_enrollments(&mut self) -> &mut dyn jt_app::ports::outreach::EnrollmentRepo {
+        self.inner.outreach_enrollments()
+    }
+    fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
+        self.inner.outreach_sends()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

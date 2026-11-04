@@ -324,6 +324,18 @@ impl TenantRepos for FailingTenant {
     fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
         self.0.assignments()
     }
+    fn outreach_templates(&mut self) -> &mut dyn jt_app::ports::outreach::TemplateRepo {
+        self.0.outreach_templates()
+    }
+    fn outreach_campaigns(&mut self) -> &mut dyn jt_app::ports::outreach::CampaignRepo {
+        self.0.outreach_campaigns()
+    }
+    fn outreach_enrollments(&mut self) -> &mut dyn jt_app::ports::outreach::EnrollmentRepo {
+        self.0.outreach_enrollments()
+    }
+    fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
+        self.0.outreach_sends()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()

@@ -1152,6 +1152,8 @@ async fn custom_role_cannot_grant_permissions_it_lacks() {
         "devices.bridge",
         "prospects.work",
         "prospects.manage",
+        "outreach.work",
+        "outreach.manage",
     ];
 
     // invite and set_role to a role wider than the lead's own.
@@ -1272,6 +1274,8 @@ async fn custom_role_cannot_demote_or_remove_a_manager() {
         "devices.bridge",
         "prospects.work",
         "prospects.manage",
+        "outreach.work",
+        "outreach.manage",
     ];
     for role_key in ["rep", "team_lead"] {
         let e = err(team::set_role(&t.w.deps, &lead.ctx, manager.membership_id, role_key).await);

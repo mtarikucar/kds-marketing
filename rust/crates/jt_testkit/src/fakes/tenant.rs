@@ -102,6 +102,22 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn outreach_templates(&mut self) -> &mut dyn jt_app::ports::outreach::TemplateRepo {
+        self
+    }
+
+    fn outreach_campaigns(&mut self) -> &mut dyn jt_app::ports::outreach::CampaignRepo {
+        self
+    }
+
+    fn outreach_enrollments(&mut self) -> &mut dyn jt_app::ports::outreach::EnrollmentRepo {
+        self
+    }
+
+    fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }

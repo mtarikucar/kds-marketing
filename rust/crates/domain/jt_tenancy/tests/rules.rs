@@ -82,6 +82,8 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "devices.bridge",
             "prospects.work",
             "prospects.manage",
+            "outreach.work",
+            "outreach.manage",
         ]
     );
 }
@@ -104,6 +106,23 @@ fn prospects_permissions_are_owner_and_manager_only() {
     for (p, key) in [
         (Permission::ProspectsWork, "prospects.work"),
         (Permission::ProspectsManage, "prospects.manage"),
+    ] {
+        assert_eq!(p.key(), key);
+        assert_eq!(Permission::parse(key), Some(p));
+        assert_eq!(serde_json::to_value(p).unwrap(), key);
+        assert!(Permission::all().contains(&p), "{key}");
+        assert!(SystemRole::Owner.permissions().contains(&p), "{key}");
+        assert!(SystemRole::Manager.permissions().contains(&p), "{key}");
+        assert!(!SystemRole::Rep.permissions().contains(&p), "{key}");
+    }
+}
+
+#[test]
+fn outreach_permissions_are_owner_and_manager_only() {
+    // Outreach is not everyone's (spec D25): a rep holds neither; a custom role may grant them.
+    for (p, key) in [
+        (Permission::OutreachWork, "outreach.work"),
+        (Permission::OutreachManage, "outreach.manage"),
     ] {
         assert_eq!(p.key(), key);
         assert_eq!(Permission::parse(key), Some(p));
@@ -279,6 +298,8 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::DevicesBridge,
             Permission::ProspectsWork,
             Permission::ProspectsManage,
+            Permission::OutreachWork,
+            Permission::OutreachManage,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -419,6 +440,8 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::DevicesBridge,
             Permission::ProspectsWork,
             Permission::ProspectsManage,
+            Permission::OutreachWork,
+            Permission::OutreachManage,
         ]),
     });
     assert_eq!(

@@ -127,6 +127,7 @@ pub struct MemState {
     pub devices: super::devices::MemDevices,
     pub prospects: super::prospects::MemProspects,
     pub distribution: super::distribution::MemDistribution,
+    pub outreach: super::outreach::MemOutreach,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,

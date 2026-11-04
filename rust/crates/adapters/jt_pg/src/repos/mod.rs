@@ -36,6 +36,7 @@ pub(crate) mod memberships;
 mod oauth_pending;
 mod operators;
 mod outbound_jobs;
+mod outreach;
 mod policies;
 mod probe_runs;
 mod prospects;

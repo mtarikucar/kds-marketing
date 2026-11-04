@@ -65,6 +65,15 @@ pub enum Permission {
     /// the pool's retention and caps.
     #[serde(rename = "prospects.manage")]
     ProspectsManage,
+    /// Work outreach: write templates and campaigns, launch, pause and resume them, enroll and
+    /// personalize, and read their reports (spec 2026-10-30-leads-pool-outreach-design.md D25).
+    #[serde(rename = "outreach.work")]
+    OutreachWork,
+    /// Manage outreach: cancel campaigns, approve a revision (a human), and set the outreach
+    /// settings (the business-recipient basis only a human owner, with the counsel's
+    /// confirmation).
+    #[serde(rename = "outreach.manage")]
+    OutreachManage,
 }
 
 const ALL_PERMISSIONS: &[Permission] = &[
@@ -85,6 +94,8 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::DevicesBridge,
     Permission::ProspectsWork,
     Permission::ProspectsManage,
+    Permission::OutreachWork,
+    Permission::OutreachManage,
 ];
 
 impl Permission {
@@ -100,6 +111,8 @@ impl Permission {
             Permission::DevicesBridge => "devices.bridge",
             Permission::ProspectsWork => "prospects.work",
             Permission::ProspectsManage => "prospects.manage",
+            Permission::OutreachWork => "outreach.work",
+            Permission::OutreachManage => "outreach.manage",
             Permission::WorkspaceRead => "workspace.read",
             Permission::TeamManage => "team.manage",
             Permission::ApiKeysManage => "api_keys.manage",

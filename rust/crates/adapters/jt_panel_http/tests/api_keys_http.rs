@@ -222,6 +222,8 @@ async fn create_refuses_bad_input_with_structured_errors() {
             "devices.bridge",
             "prospects.work",
             "prospects.manage",
+            "outreach.work",
+            "outreach.manage",
         ])
     );
 }
