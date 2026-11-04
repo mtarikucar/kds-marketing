@@ -2190,6 +2190,7 @@
       "share_required": "Paylaşım iznini seçin.",
       "olay_or_genel": "Bir olay seçin ya da materyali genel yapın.",
       "file_has_material": "Bu dosya zaten kütüphanede.",
+      "duplicate_material_file": "Bu dosyanın aynısı kütüphanede zaten bir materyal (ya da bir materyaldi ve silindi): bir fotoğraf tek bir materyaldir.",
       "material_erased": "Bu materyal silindi; değiştirilemez.",
       "genel_stays_freed": "Genel bir materyal genel kullanılabilir kalır; geri almak için önce bir olaya taşıyın.",
       "ai_material": "Yalnızca gerçek bir materyal genel kullanılabilir yapılır.",

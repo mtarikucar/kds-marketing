@@ -69,6 +69,9 @@ pub trait MaterialRepo: Send + Sync {
     ) -> Result<(), AppError>;
     async fn get_material(&mut self, id: MaterialId) -> Result<Option<Material>, AppError>;
     async fn material_by_file(&mut self, file: FileId) -> Result<Option<Material>, AppError>;
+    /// The oldest material whose file's recorded hash is `sha256`: the same bytes stored again
+    /// under another file id (spec D36). Erased materials and files already marked deleted count.
+    async fn material_by_sha256(&mut self, sha256: &str) -> Result<Option<Material>, AppError>;
     /// Every material of the workspace, erased ones included, newest first.
     async fn list_materials(&mut self) -> Result<Vec<Material>, AppError>;
 

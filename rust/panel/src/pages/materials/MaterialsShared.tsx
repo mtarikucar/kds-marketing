@@ -111,6 +111,7 @@ const REASONS = [
   'share_required',
   'olay_or_genel',
   'file_has_material',
+  'duplicate_material_file',
   'material_erased',
   'genel_stays_freed',
   'ai_material',

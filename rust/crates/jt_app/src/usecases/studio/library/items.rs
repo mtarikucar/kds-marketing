@@ -406,7 +406,7 @@ async fn stored_file(
 }
 
 /// What `material_add` checks before and after reading the file's bytes: the file is stored and no
-/// material's yet, and the olay exists.
+/// material's yet, its bytes are no material's (D36), and the olay exists.
 async fn add_checks(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -417,6 +417,18 @@ async fn add_checks(
         return Err(AppError {
             details: json!({"reason":"file_has_material","material_id":m.id}),
             ..conflict("file_has_material")
+        });
+    }
+    // The same bytes under a new file id: a photo once refused, deleted or erased with its person
+    // never comes back as another material, real or "AI" (D36, D37).
+    if let Some(m) = r
+        .studio_materials()
+        .material_by_sha256(&file.sha256)
+        .await?
+    {
+        return Err(AppError {
+            details: json!({"reason":"duplicate_material_file","material_id":m.id}),
+            ..conflict("duplicate_material_file")
         });
     }
     if let Some(o) = i.olay_id

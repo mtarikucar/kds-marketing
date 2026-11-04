@@ -282,6 +282,21 @@ impl MaterialRepo for PgTenantRepos {
             .next())
     }
 
+    async fn material_by_sha256(&mut self, sha256: &str) -> Result<Option<Material>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            "select m.data from studio_materials m join studio_files f \
+             on f.workspace_id=m.workspace_id and f.id=m.file_id \
+             where m.workspace_id=$1 and f.data->>'sha256'=$2 \
+             order by m.created_at, m.id limit 1",
+        )
+        .bind(self.workspace_id().0)
+        .bind(sha256)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read materials"))?;
+        row.map(decode).transpose()
+    }
+
     async fn list_materials(&mut self) -> Result<Vec<Material>, AppError> {
         self.material_rows("and ($2::uuid is null or id=$2)", None)
             .await

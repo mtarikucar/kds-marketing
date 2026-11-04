@@ -218,6 +218,25 @@ impl MaterialRepo for MemTenant {
             .cloned())
     }
 
+    async fn material_by_sha256(&mut self, sha256: &str) -> Result<Option<Material>, AppError> {
+        let ws = self.ws;
+        let files: Vec<FileId> = self
+            .state()
+            .studio
+            .files
+            .iter()
+            .filter(|f| f.workspace_id == ws && f.sha256 == sha256)
+            .map(|f| f.id)
+            .collect();
+        Ok(self
+            .lib()
+            .materials
+            .iter()
+            .filter(|m| m.workspace_id == ws && files.contains(&m.file_id))
+            .min_by_key(|m| (m.created_at, m.id))
+            .cloned())
+    }
+
     async fn list_materials(&mut self) -> Result<Vec<Material>, AppError> {
         let ws = self.ws;
         let mut out: Vec<Material> = self

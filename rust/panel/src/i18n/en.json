@@ -2190,6 +2190,7 @@
       "share_required": "Choose the share permission.",
       "olay_or_genel": "Choose an event, or make the material general.",
       "file_has_material": "This file is already in the library.",
+      "duplicate_material_file": "These bytes are already a material in the library (or were one, then deleted): one photo is one material.",
       "material_erased": "This material was deleted; it cannot change.",
       "genel_stays_freed": "A general material stays usable as general; move it to an event first to take that back.",
       "ai_material": "Only a real material can be made usable as general.",

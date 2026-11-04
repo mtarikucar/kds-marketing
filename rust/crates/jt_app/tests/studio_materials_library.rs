@@ -615,6 +615,107 @@ async fn an_agent_suggests_tags_and_never_removes_a_privacy_marker() {
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
+/// One photo is one material, once (spec D36): bytes a material of the workspace was made of, live
+/// or erased, its file deleted or not, never make another, whatever origin the adder claims. A
+/// refused photo cannot come back as an "AI" poster with an agent's own permission (D37).
+#[tokio::test]
+async fn bytes_a_material_was_made_of_never_make_another() {
+    let (w, _) = publishing_world().await;
+    let a = agent(&w);
+    let o = olay(
+        &w,
+        &w.ctx,
+        "olay",
+        json!({"starts_on":"2026-11-30","ends_on":"2026-11-30"}),
+    )
+    .await;
+    let photo = png(1);
+    let file = upload(&w, "photo", "image/png", &photo).await;
+    let refused_photo = add(
+        &w,
+        &w.ctx,
+        "photo",
+        file,
+        json!({"olay_id":o.id,"share":"not_shareable","depicts":["face"]}),
+    )
+    .await;
+    let ai = json!({"kind":"ai_generated","generator":"codex"});
+    // An agent's AI poster, permitted by the agent itself.
+    let poster = |extra: Value| {
+        let mut v = json!({"origin":ai,"depicts":[],"share":"shareable","quality":"publishable"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let refused = |e: AppError| {
+        assert_eq!(
+            (e.code, reason(&e)),
+            (ErrorCode::Conflict, "duplicate_material_file")
+        );
+        assert_eq!(e.details["material_id"], json!(refused_photo.id));
+    };
+    // Its bytes stored again under a new file id, as an AI poster of the upcoming olay.
+    let copy = upload(&w, "copy", "image/png", &photo).await;
+    assert_ne!(copy, file);
+    refused(
+        library::material_add(
+            &w.d,
+            &a,
+            add_input("copy", copy, poster(json!({"olay_id":o.id}))),
+        )
+        .await
+        .unwrap_err(),
+    );
+    // Deleted by the owner and its file cleaned up: still refused, as an AI poster or genel, and
+    // as a real photo from the owner.
+    library::material_delete(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":refused_photo.id,"expected_revision":1,"confirm":true})),
+    )
+    .await
+    .unwrap();
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
+    let record = |id: FileId| {
+        w.uow
+            .snapshot()
+            .studio
+            .files
+            .into_iter()
+            .find(|f| f.id == id)
+            .unwrap()
+    };
+    assert!(record(file).deleted_at.is_some());
+    let again = upload(&w, "again", "image/png", &photo).await;
+    for (n, (ctx, extra)) in [
+        (a.clone(), poster(json!({"olay_id":o.id}))),
+        (a.clone(), poster(json!({"genel":true}))),
+        (w.ctx.clone(), json!({"olay_id":o.id,"share":"shareable"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        refused(
+            library::material_add(&w.d, &ctx, add_input(&format!("again{n}"), again, extra))
+                .await
+                .unwrap_err(),
+        );
+    }
+    let all = library::materials_list(&w.d, &w.ctx, input(json!({"state":"all"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        all.iter()
+            .filter(|m| [copy, again].contains(&m.file_id))
+            .count(),
+        0
+    );
+    // Other bytes are another material.
+    let other = upload(&w, "other", "image/png", &png(2)).await;
+    add(&w, &a, "other", other, poster(json!({"olay_id":o.id}))).await;
+}
+
 /// A person named in `people` counts as a `depicts` flag (spec D38): an agent never gives such
 /// an AI image its own permission, and naming one on an image it permitted clears that permission.
 #[tokio::test]
