@@ -79,7 +79,7 @@ create table if not exists outreach_enrollments (
     last_sent_at timestamptz,
     unique (id, workspace_id),
     unique (workspace_id, campaign_id, person_id),
-    constraint outreach_enrollments_reason_check check
+    constraint outreach_enrollments_reason_status_check check
         ((status in ('stopped', 'skipped')) = (reason is not null)),
     constraint outreach_enrollments_active_check check (status <> 'active' or next_send_at is not null),
     foreign key (campaign_id, workspace_id) references outreach_campaigns (id, workspace_id),
