@@ -74,6 +74,67 @@ fn calls_tools_have_their_permissions_risks_and_strict_schemas() {
     }
 }
 
+#[test]
+fn the_policy_schema_names_every_policy_field_and_marks_the_approved_texts_person_only() {
+    let tools = tools();
+    let schema = tools["jeeta.calls.policy_set"]
+        .input_schema
+        .as_value()
+        .clone();
+    let props = &schema["properties"];
+    let policy = serde_json::to_value(jt_app::ports::calls::CallPolicy::default()).unwrap();
+    for key in policy.as_object().unwrap().keys() {
+        assert!(props.get(key).is_some(), "policy_schema lacks {key}");
+    }
+    let phrases = serde_json::to_value(jt_app::ports::calls::BridgePhrases::default()).unwrap();
+    for key in phrases.as_object().unwrap().keys() {
+        assert!(
+            props["phrases"]["properties"].get(key).is_some(),
+            "phrases lacks {key}"
+        );
+    }
+    assert_eq!(props["phrases"]["additionalProperties"], false);
+    let get = tools["jeeta.calls.policy_get"].description;
+    let person_only = [
+        "opening_outbound",
+        "transcript_notice",
+        "closing",
+        "phrases",
+        "disclosure_sentence",
+        "greeting_inbound",
+    ];
+    assert_eq!(jt_app::usecases::calls::PERSON_ONLY, person_only);
+    for key in person_only {
+        let text = props[key]["description"].as_str().unwrap();
+        assert!(
+            text.contains("Person-only; agents may read."),
+            "{key}: {text}"
+        );
+        assert!(get.contains(key), "calls.policy_get does not name {key}");
+    }
+}
+
+#[test]
+fn place_takes_hotwords_and_tells_the_opening_order() {
+    let tools = tools();
+    let place = tools["jeeta.calls.place"].input_schema.as_value().clone();
+    let hotwords = &place["properties"]["plan"]["properties"]["hotwords"];
+    assert_eq!(hotwords["maxItems"], 19);
+    assert_eq!(hotwords["items"]["maxLength"], 40);
+    // The closing is optional: left out, the call policy's closing plays.
+    let required = place["properties"]["plan"]["required"].as_array().unwrap();
+    assert!(!required.iter().any(|r| r == "closing"), "{required:?}");
+    assert!(required.iter().any(|r| r == "opening"), "{required:?}");
+    let text = tools["jeeta.calls.place"].description;
+    assert!(text.contains("transcript notice"), "{text}");
+    assert!(text.contains("the call policy's closing plays"), "{text}");
+    // Which closing that is, the agent reads (descriptions stay ASCII: `registry.rs`).
+    assert!(
+        text.contains("the one jeeta.calls.policy_get shows"),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
     let uow = Arc::new(InMemoryUow::new());
@@ -223,6 +284,17 @@ async fn place_and_end_through_the_dispatcher_keep_numbers_masked() {
         assert!(!out.to_string().contains("5321234567"), "{out}");
     }
     assert_eq!(listed["calls"][0]["counterpart"], "+90 5** *** ** 67");
+}
+
+#[test]
+fn say_offers_wait_reply_s_and_asks_for_one_short_sentence() {
+    let tools = tools();
+    let say = tools["jeeta.calls.say"].input_schema.as_value().clone();
+    assert_eq!(say["properties"]["wait_reply_s"]["maximum"], 25);
+    assert_eq!(say["properties"]["wait_reply_s"]["minimum"], 0);
+    let text = tools["jeeta.calls.say"].description;
+    assert!(text.contains("one short sentence"), "{text}");
+    assert!(text.contains("wait_reply_s"), "{text}");
 }
 
 #[tokio::test]

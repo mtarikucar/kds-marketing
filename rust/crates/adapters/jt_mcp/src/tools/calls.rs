@@ -29,7 +29,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           holding_default, the timers (slow_agent_s, holding_again_s, \
                           fallback_after_s, caller_silence_s, caller_silence_close_s), \
                           max_duration_s, handoff_extension and estimated_minor_per_minute (the \
-                          tariff per started minute, 0 when unknown). [risk: READ]",
+                          tariff per started minute, 0 when unknown), and the texts only a \
+                          person changes (you may read them): opening_outbound, \
+                          transcript_notice, closing, phrases (the six lists of sentences the \
+                          voice bridge plays on its own), disclosure_sentence and \
+                          greeting_inbound, shown with the workspace's name filled into the \
+                          approved templates the owner left unwritten. [risk: READ]",
             permission: Permission::CallsWork,
             schema: schema_for::<NoArgs>,
             run: policy_get,
@@ -38,8 +43,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "calls.policy_set",
             description: "Replace the workspace's call policy with the given one (every field \
                           as jeeta.calls.policy_get returns it; a field left out takes its \
-                          default). Only a person may turn disclose_assistant off (FORBIDDEN \
-                          for you). Returns the stored policy. [risk: WRITE]",
+                          default, except opening_outbound, transcript_notice, closing, \
+                          phrases, disclosure_sentence and greeting_inbound, which only a \
+                          person changes: left out or sent as read, they keep their stored \
+                          values; a different value is FORBIDDEN, details.reason person_only \
+                          naming the field). Only a person may turn disclose_assistant off \
+                          (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]",
             permission: Permission::CallsManage,
             schema: policy_schema,
             run: policy_set,
@@ -55,11 +64,19 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (rep_extension) first, then the person, through the workspace's \
                           verified NetGSM PBX. mode agent: you talk to the person yourself \
                           through the workspace's voice bridge, with a plan written before you \
-                          dial: opening (must contain the policy's disclosure_sentence), goal \
-                          (never played), holding (1 to 5 phrases played while you think), \
-                          fallback (0 to 3 lines played when you stay silent), closing (played \
-                          before the call is hung up), max_duration_s (1 to 900), language tr; \
-                          every sentence at most 600 characters. One live agent call per \
+                          dial: opening (played right after the workspace's own opening and the \
+                          transcript notice of the call policy, which already disclose the \
+                          assistant, so yours only needs to greet the person, for example by \
+                          asking whether you speak with them; the whole spoken opening must \
+                          contain the policy's disclosure_sentence), goal (never played), \
+                          holding (1 to 5 phrases played while you think when the bridge's own \
+                          fillers did not cover it), fallback (0 to 3 lines played when you \
+                          stay silent), closing (optional; played before the call is hung up; \
+                          left out, the call policy's closing plays, the one \
+                          jeeta.calls.policy_get shows), max_duration_s (1 to 900), language \
+                          tr, hotwords (at most 19 names or product words the speech \
+                          recognition should expect; the workspace's name is added); every \
+                          sentence at most 600 characters. One live agent call per \
                           connection. Then loop jeeta.calls.listen and jeeta.calls.say. Every \
                           gate is checked again right before dialing: a refusal is CONFLICT \
                           with details.reason one of workspace_inactive, strategy_required, \
@@ -82,24 +99,35 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           you listen again with the same after_seq. Returns {call_id, state, \
                           events: [{seq, at, kind, text, meta}], timed_out}; pass the last \
                           event's seq as after_seq next time. After the person speaks, reply \
-                          with jeeta.calls.say within 10 seconds: after 4 s the caller hears a \
-                          holding phrase, after 20 s a fallback line from your plan, and the \
-                          call ends by script once the fallback lines are spent. [risk: READ]",
+                          with jeeta.calls.say within 10 seconds: the bridge acknowledges and \
+                          fills a wait on its own; after 4 s the caller hears a holding phrase \
+                          if the bridge did not, after 20 s a fallback line from your plan, and \
+                          the call ends by script once the fallback lines are spent. \
+                          jeeta.calls.say with wait_reply_s returns the reply itself. \
+                          [risk: READ]",
             permission: Permission::CallsWork,
             schema: listen_schema,
             run: listen,
         },
         ToolDef {
             use_case: "calls.say",
-            description: "Say a sentence (text, at most 600 characters) to the person on your \
-                          live call; the voice bridge speaks it as you wrote it. expect_reply \
-                          (default true): false when you will speak again before the person \
-                          answers. allow_barge_in (default true): the person may cut it by \
-                          speaking (the turn then records interrupted_at_char). Reply within \
-                          10 seconds of the person's words: after 4 s the caller hears a \
-                          holding phrase, after 20 s a fallback line from your plan, and the \
-                          call ends by script. CONFLICT not_live once the call ended. Returns \
-                          {call_id, seq, state}. [risk: WRITE]",
+            description: "Say one short sentence (text, at most 600 characters) to the person \
+                          on your live call; the voice bridge speaks it as you wrote it. It \
+                          returns as soon as the sentence is queued, so send the next sentence \
+                          right away: the first one plays while you write the next. \
+                          wait_reply_s (0 to 25): after queuing, wait for the person's reply \
+                          (their words, a key, caller_silence or the hangup) and return \
+                          {events, timed_out} as jeeta.calls.listen would, which saves you one \
+                          listen per turn. expect_reply (default true): false when you will \
+                          speak again before the person answers. allow_barge_in (default \
+                          true): the person may cut it by speaking (the turn then records \
+                          interrupted_at_char, the characters heard). Reply within 10 seconds \
+                          of the person's words: the bridge acknowledges and fills a wait on \
+                          its own; after 4 s the caller hears a holding phrase if the bridge \
+                          did not, after 20 s a fallback line from your plan, and the call ends \
+                          by script. CONFLICT not_live once the call ended. Returns {call_id, \
+                          seq, state}, and events and timed_out with wait_reply_s. \
+                          [risk: WRITE]",
             permission: Permission::CallsWork,
             schema: say_schema,
             run: say,
@@ -194,15 +222,35 @@ fn seconds(description: &str) -> Value {
     json!({ "type": "integer", "minimum": 1, "description": description })
 }
 
+/// One of the call policy's six lists of bridge phrases: at most 5 sentences.
+fn phrase_list() -> Value {
+    json!({ "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 600 } })
+}
+
 fn policy_schema() -> Schema {
     json_schema!({
         "type": "object",
         "properties": {
-            "greeting_inbound": text("Played when an agent on duty answers an inbound call."),
+            "greeting_inbound": text("Played when an agent on duty answers an inbound call (empty: the approved greeting with the workspace's name). Person-only; agents may read."),
             "voicemail_text": text("Played before a voicemail is recorded."),
             "recording_announcement": text("Played before anything is recorded."),
             "disclose_assistant": { "type": "boolean" },
-            "disclosure_sentence": text("The sentence an agent-driven opening must contain."),
+            "disclosure_sentence": text("The sentence an agent-driven opening must contain (empty: the approved one with the workspace's name). Person-only; agents may read."),
+            "opening_outbound": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played first when an outbound agent call is answered (null: the approved opening with the workspace's name; empty: none). Person-only; agents may read." },
+            "transcript_notice": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played after the opening on every agent call (null: the approved notice; empty: none). Person-only; agents may read." },
+            "closing": { "type": ["string", "null"], "maxLength": 600,
+                "description": "Played before an agent's call is hung up when its plan brings no closing (null: the approved closing). Person-only; agents may read." },
+            "phrases": {
+                "type": "object",
+                "description": "The phrases the voice bridge plays on its own, six lists. Person-only; agents may read.",
+                "properties": {
+                    "acknowledgements": phrase_list(), "fillers": phrase_list(), "long_wait": phrase_list(),
+                    "not_heard": phrase_list(), "still_there": phrase_list(), "fault": phrase_list(),
+                },
+                "additionalProperties": false,
+            },
             "holding_default": { "type": "array", "maxItems": 5, "items": { "type": "string" } },
             "max_duration_s": { "type": "integer", "minimum": 1, "maximum": 900 },
             "slow_agent_s": seconds("Agent silence before the first holding phrase."),
@@ -232,16 +280,22 @@ fn place_schema() -> Schema {
                 "type": "object",
                 "description": "Mode agent only: the call's script, every sentence played as written.",
                 "properties": {
-                    "opening": text("Played when the person answers; must contain the policy's disclosure_sentence."),
+                    "opening": text("Played after the workspace's opening and the transcript notice."),
                     "goal": text("What the call is for; never played."),
                     "holding": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "maxLength": 600 } },
                     "fallback": { "type": "array", "maxItems": 3, "items": { "type": "string", "maxLength": 600 } },
-                    "closing": text("Played before the call is hung up."),
+                    "closing": text("Optional. Played before the call is hung up; left out, the call policy's closing plays."),
                     "max_duration_s": { "type": "integer", "minimum": 1, "maximum": 900 },
                     "language": { "type": "string", "enum": ["tr"] },
                     "disclose_assistant": { "type": "boolean" },
+                    "hotwords": {
+                        "type": "array",
+                        "maxItems": 19,
+                        "items": { "type": "string", "minLength": 1, "maxLength": 40 },
+                        "description": "Names and product words from your context the speech recognition should expect on this call (at most 19; the workspace's name is added)."
+                    },
                 },
-                "required": ["opening", "goal", "holding", "closing", "max_duration_s"],
+                "required": ["opening", "goal", "holding", "max_duration_s"],
                 "additionalProperties": false,
             },
         },
@@ -271,6 +325,7 @@ fn say_schema() -> Schema {
             "text": { "type": "string", "minLength": 1, "maxLength": 600 },
             "expect_reply": { "type": "boolean" },
             "allow_barge_in": { "type": "boolean" },
+            "wait_reply_s": { "type": "integer", "minimum": 0, "maximum": 25, "description": "Wait this long (at most 25 s) for the person's reply and return it as events; without it the call answers at once." },
         },
         "required": ["call_id", "text"],
         "additionalProperties": false,

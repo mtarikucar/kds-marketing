@@ -218,3 +218,40 @@ jobs:
           path: ${{ runner.temp }}/jeeta-release.tar
           if-no-files-found: error
           retention-days: 14
+
+  # The voice bridge's Python speech services and Asterisk configs: unit tests without the models
+  # (plan V1-T3 B1-B3, D3). The model-backed tests run on the host inside the images.
+  voice-speech:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/bridge/voice
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pytest==8.4.2 numpy==2.5.4 websockets==17.3
+      - run: python -I -m pytest -c speech/pytest.ini -m "not models" -p no:cacheprovider asterisk speech
+
+  # The voice bridge's Linux binary, for the host beside jeeta.service (plan V1-T3 D3). Build only:
+  # no deployment, no secret inputs.
+  voice-bridge-linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: voice-bridge
+      - run: cargo build --locked --release -p jeeta-voice-bridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-voice-bridge-linux-${{ github.sha }}
+          path: rust/target/release/jeeta-voice-bridge
+          if-no-files-found: error
+          retention-days: 14

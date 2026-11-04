@@ -1,8 +1,16 @@
-import { useState, type FormEvent } from 'react';
+import { Fragment, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
-import { CALL_OUTCOMES, endCall, getCall, type CallOutcome, type CallTurn } from '@/api/calls';
+import {
+  CALL_OUTCOMES,
+  endCall,
+  getCall,
+  type CallOutcome,
+  type CallTurn,
+  type LatencySummary,
+  type Percentiles,
+} from '@/api/calls';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, PageHeader, Textarea, toast } from '@/components/ui';
@@ -55,6 +63,36 @@ function Timeline({ turns }: { turns: CallTurn[] }) {
         );
       })}
     </ol>
+  );
+}
+
+/** A call's turn timings as the voice bridge measured them (p50 / p95, ms), and their alerts. */
+function Latency({ latency }: { latency: LatencySummary }) {
+  const { t } = useTranslation();
+  const rows: ['perceived' | 'content' | 'agent' | 'barge_in_stop', Percentiles][] = [
+    ['perceived', latency.perceived],
+    ['content', latency.content],
+    ['agent', latency.agent],
+    ['barge_in_stop', latency.barge_in_stop],
+  ];
+  const ms = (v: number | null) => (v === null ? '—' : String(v));
+  return (
+    <section className="mt-3" aria-label={t('calls.detail.latencyTitle')}>
+      <h3 className="mb-1 text-sm font-medium">{t('calls.detail.latencyTitle')}</h3>
+      <dl className="grid gap-1 text-sm sm:grid-cols-2">
+        {rows.map(([key, p]) => (
+          <Fragment key={key}>
+            <dt className="text-muted-foreground">{t(`calls.detail.latency_${key}`)}</dt>
+            <dd>{t('calls.detail.latencyValue', { p50: ms(p.p50), p95: ms(p.p95) })}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {latency.alerts.map((a) => (
+        <p key={a} className="text-sm text-destructive">
+          {t(`calls.detail.alerts.${a}`, { defaultValue: a })}
+        </p>
+      ))}
+    </section>
   );
 }
 
@@ -145,6 +183,7 @@ export function CallDetail() {
                     </>
                   )}
                 </dl>
+                {c.latency && c.latency.turns > 0 && <Latency latency={c.latency} />}
               </CardContent>
             </Card>
             <Card>
