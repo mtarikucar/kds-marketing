@@ -394,8 +394,24 @@ it('a_sent_slot_opens_on_why_it_failed_and_its_cancel_not_on_new_content', async
 });
 
 it('slot_detail_submits_and_cancels_the_current_revision', async () => {
+  const subject = { kind: 'olay', olay_id: 'o1' };
   const calls = mockFetch({
     ...answers,
+    'GET /api/studio/slots/s1/materials': {
+      slot_id: 's1',
+      scheduled_at: slot.scheduled_at,
+      need: {},
+      candidates: [
+        { material_id: 'm1', file_id: 'f1', mime: 'image/jpeg', subject, role: 'anchor', matches_need: true },
+        { material_id: 'm2', file_id: 'f2', mime: 'image/png', subject: { kind: 'generic' }, role: 'support', matches_need: false },
+      ],
+      refused: [{ material_id: 'm3', code: 'share_unset' }],
+    },
+    'GET /api/studio/materials': [
+      { id: 'm1', title: 'Atölye masası', mime: 'image/jpeg' },
+      { id: 'm3', title: 'İzinsiz kare', mime: 'image/jpeg' },
+    ],
+    'GET /api/studio/olays': [{ olay: { id: 'o1', title: 'Kadıköy atölyesi' }, materials: 1 }],
     'POST /api/studio/slots/s1/piece': {},
     'POST /api/studio/slots/s1/cancel': {},
   });
@@ -411,13 +427,21 @@ it('slot_detail_submits_and_cancels_the_current_revision', async () => {
   const text = await within(editor).findByLabelText('İçerik metni');
   await user.clear(text);
   await user.type(text, 'Yeni içerik');
+  // A piece names its subject and shows at least one library material (spec D2, D7).
+  await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
+  expect(await within(editor).findByText('İçeriğin konusunu ve en az bir materyal seçin.')).toBeInTheDocument();
+  expect(calls.some((c) => c.path.endsWith('/piece'))).toBe(false);
+  expect(within(editor).getByLabelText('İçerik neyle ilgili?')).toHaveDisplayValue('Olay: Kadıköy atölyesi');
+  expect(within(editor).getByText('İzinsiz kare: Paylaşım izni verilmedi.')).toBeInTheDocument();
+  await user.click(await within(editor).findByRole('checkbox', { name: /Atölye masası/ }));
   await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
   await waitFor(() =>
     expect(calls.find((c) => c.path.endsWith('/piece'))?.body).toMatchObject({
       expected_revision: 1,
       text: 'Yeni içerik',
-      media: [],
+      media: [{ kind: 'file', id: 'f1' }],
       adaptations: {},
+      subject,
     }),
   );
   await user.type(within(editor).getByLabelText('İptal nedeni'), 'Plan değişti');
