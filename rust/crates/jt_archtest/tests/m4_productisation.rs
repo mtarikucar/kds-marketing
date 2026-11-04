@@ -21,8 +21,8 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the materials library's twins).
-const POST_M4_ADDED: [(&str, &str); 28] = [
+/// device bridge's agent tools, D1-T6; the materials library's twins; olay-driven publishing's).
+const POST_M4_ADDED: [(&str, &str); 32] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -52,14 +52,19 @@ const POST_M4_ADDED: [(&str, &str); 28] = [
     ("studio.shoot_list", "jeeta.studio.shoot_list"),
     ("studio.shoot_request", "jeeta.studio.shoot_request"),
     ("studio.shoot_resolve", "jeeta.studio.shoot_resolve"),
+    // Olay-driven publishing (spec 2026-11-03 §14.3).
+    ("studio.package_requests", "jeeta.studio.package_requests"),
+    ("studio.package_propose", "jeeta.studio.package_propose"),
+    ("studio.posts_list", "jeeta.studio.posts_list"),
+    ("studio.weekly_summary", "jeeta.studio.weekly_summary"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
 /// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
 /// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4),
-/// releasing a slot's caption findings among them (§7).
-const POST_M4_PANEL_ONLY: [&str; 18] = [
+/// releasing a slot's caption findings among them (§7), and the posting policy (§14.3).
+const POST_M4_PANEL_ONLY: [&str; 19] = [
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
@@ -78,6 +83,7 @@ const POST_M4_PANEL_ONLY: [&str; 18] = [
     "studio.calendar_set",
     "studio.material_policy_set",
     "studio.material_check_release",
+    "studio.posting_policy_set",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

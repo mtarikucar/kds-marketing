@@ -32,6 +32,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           them, with capabilities.manage), studio_shoot_request with \
                           shoot_request_id (a material Studio needs, listed with \
                           jeeta.studio.shoot_list: tell the owner, who shoots it), \
+                          studio_package_request with package_request_id (plan posts from \
+                          its materials and answer it with jeeta.studio.package_propose), \
                           declare_first_capability), a priority \
                           (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \

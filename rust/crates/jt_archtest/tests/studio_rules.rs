@@ -50,6 +50,10 @@ const ACTIONS: &[&str] = &[
     "shoot_list",
     "shoot_request",
     "shoot_resolve",
+    "package_requests",
+    "package_propose",
+    "posts_list",
+    "weekly_summary",
 ];
 /// The materials library and its uploads need no approved strategy (spec 2026-11-03 D35).
 const EXEMPT: &[&str] = &[
@@ -94,6 +98,7 @@ const PANEL_ONLY: &[&str] = &[
     "calendar_set",
     "material_policy_set",
     "material_check_release",
+    "posting_policy_set",
 ];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
@@ -105,7 +110,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 42);
+    assert_eq!(rows.len(), 47);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -146,7 +151,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 153);
+    assert_eq!(jt_mcp::registry().len(), 157);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -370,6 +375,13 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
             "shoot_resolve",
             json!({"request_id":jt_studio::ShootRequestId::new_v7(),"status":"done"}),
         ),
+        (
+            "package_propose",
+            json!({"request_id":jt_studio::PackageRequestId::new_v7(),"request_key":"package",
+                "posts":[{"format":"feed_post","capability_id":w.f.slot.capability_id,
+                    "publish_at":"2026-11-01T09:00:00Z","material_ids":[w.material().id],
+                    "subject":{"kind":"generic"},"hypothesis_id":h}]}),
+        ),
     ]
 }
 #[tokio::test]
@@ -472,6 +484,20 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 ErrorCode::StrategyRequired
             },
             "material_check_release: {e:?}"
+        );
+        // The posting policy, a human's, plans content: the same gate.
+        let e =
+            jt_app::usecases::studio::posts::posting_policy_set(&w.d, &w.ctx, Default::default())
+                .await
+                .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "posting_policy_set: {e:?}"
         );
         // The library's panel-only writes, a human's decisions, meet the status check alone.
         if inactive {

@@ -57,6 +57,8 @@ const HUMAN_ONLY: &[&str] = &[
     "calendar_set",
     "material_policy_set",
     "material_check_release",
+    // Olay-driven publishing's posting policy (spec 2026-11-03 §14.3).
+    "posting_policy_set",
 ];
 
 fn tools() -> BTreeMap<&'static str, jt_mcp::ToolSpec> {

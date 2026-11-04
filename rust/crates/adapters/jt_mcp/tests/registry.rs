@@ -40,6 +40,10 @@ const TOOLS: &[&str] = &[
     "jeeta.studio.shoot_list",
     "jeeta.studio.shoot_request",
     "jeeta.studio.shoot_resolve",
+    "jeeta.studio.package_requests",
+    "jeeta.studio.package_propose",
+    "jeeta.studio.posts_list",
+    "jeeta.studio.weekly_summary",
     "jeeta.inbox.pending",
     "jeeta.inbox.context",
     "jeeta.inbox.conversations_list",
@@ -169,7 +173,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 153);
+    assert_eq!(TOOLS.len(), 157);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)

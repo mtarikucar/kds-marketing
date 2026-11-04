@@ -4,7 +4,7 @@ use jt_app::{
     ctx::Ctx,
     usecases::{
         Deps,
-        studio::{control, library, schema, trends, work},
+        studio::{control, library, posts, schema, trends, work},
     },
 };
 use jt_tenancy::Permission;
@@ -143,7 +143,94 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     ]
     .into_iter()
     .chain(library_definitions())
+    .chain(posting_definitions())
     .collect()
+}
+
+/// Olay-driven publishing's tools (spec 2026-11-03 §14): each needs an approved strategy. The
+/// posting policy is an owner's or manager's, in the panel: it has no tool.
+fn posting_definitions() -> Vec<ToolDef> {
+    let def = |use_case: &'static str,
+               description: &'static str,
+               schema: fn() -> Schema,
+               run: crate::registry::ToolRun| ToolDef {
+        use_case,
+        description,
+        permission: Permission::StudioWork,
+        schema,
+        run,
+    };
+    vec![
+        def(
+            "studio.package_requests",
+            "Read the package requests: work Studio's triggers wrote for you, never posts. An \
+             olay request lists an olay's new eligible materials (after they stop changing for \
+             30 minutes), a calendar request an occasion's olay as its window nears, a floor \
+             request ONE generic post for a channel that went days without a feed post. Each \
+             names its materials, best_formats (best first, from what was measured for its olay \
+             kind) and hints (subject, max_posts, the floor's hypothesis and content_type, a \
+             season's window). status open (the default), answered, expired or all; an open \
+             request expires after 7 days. Returns {requests: [...]}. [risk: READ]",
+            || posting_schema("package_requests"),
+            package_requests,
+        ),
+        def(
+            "studio.package_propose",
+            "Answer an open package request (request_id) with planned posts, with request_key \
+             (replayed). Each post: format (feed_post, carousel, reel, tiktok_video; story is \
+             not published anywhere yet), capability_id (an organic, connected channel taking \
+             that format: Instagram feed_post one image, carousel 2-10 images or videos, reel one \
+             video; Facebook Page feed_post one image or video, carousel images; X feed_post \
+             images; LinkedIn feed_post images or one video; TikTok tiktok_video one video), \
+             publish_at (at least the format's lead ahead, within the horizon, outside the quiet \
+             hours), material_ids (eligible for the subject at publish_at, one an anchor), \
+             subject, hypothesis_id (a live hypothesis whose organic cadence names a content \
+             type for the channel) and content_type (default the cadence's first). All or \
+             nothing: a refused package names each refused post's reason (VALIDATION \
+             package_refused, details.items: index, reason) and writes nothing; caps and spacing \
+             count every planned or published post. A valid package becomes planned slots at \
+             once; each enters jeeta.studio.pending at its preparation start (publish_at minus \
+             the format's lead), when you submit its piece with jeeta.studio.piece_submit. \
+             [risk: WRITE]",
+            || posting_schema("package_propose"),
+            package_propose,
+        ),
+        def(
+            "studio.posts_list",
+            "Read the planned posts (from, until bound publish_at), each with its slot, format, \
+             materials, subject, preparation start, grace and whether it is pending now, and the \
+             posting settings (leads, graces, caps, spacing, quiet hours, time zone). A post \
+             before its preparation start is listed here only. [risk: READ]",
+            || posting_schema("posts_list"),
+            posts_list,
+        ),
+        def(
+            "studio.weekly_summary",
+            "Read a week's summary for the owner (week: its Monday in the posting time zone; \
+             this week by default): what was published, what is planned, what was cancelled and \
+             why (missed_grace, cancelled, hypothesis_retired, strategy_archived, replanned), \
+             and what each format earned per olay kind and hypothesis so far. [risk: READ]",
+            || posting_schema("weekly_summary"),
+            weekly_summary,
+        ),
+    ]
+}
+
+fn posting_schema(action: &str) -> Schema {
+    Schema::try_from(schema::input(action)).expect("studio schema")
+}
+
+fn package_requests<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { listed("requests", &posts::package_requests(d, c, args(v)?).await?) })
+}
+fn package_propose<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&posts::package_propose(d, c, args(v)?).await?) })
+}
+fn posts_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&posts::posts_list(d, c, args(v)?).await?) })
+}
+fn weekly_summary<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&posts::weekly_summary(d, c, args(v)?).await?) })
 }
 
 /// The materials library's tools (spec 2026-11-03 §5.2, §8): none needs an approved strategy.

@@ -458,3 +458,45 @@ pub async fn shoot_resolve(
     let input = path_body(body, &[("request_id", serde_json::json!(id))])?;
     Ok(Json(library::shoot_resolve(&s.deps, &ctx, input).await?))
 }
+
+use jt_app::ports::posts::{PackageRequest, PackageRequestId, PostingSettings};
+use jt_app::usecases::studio::posts;
+pub async fn package_requests(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<posts::PackageQuery>,
+) -> Result<Json<Vec<PackageRequest>>, ApiError> {
+    Ok(Json(posts::package_requests(&s.deps, &ctx, q).await?))
+}
+/// An answer to the package request of the path: `{request_key, posts}`.
+pub async fn package_propose(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PackageRequestId>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<posts::PackageProposalOut>, ApiError> {
+    let input = path_body(body, &[("request_id", serde_json::json!(id))])?;
+    Ok(Json(posts::package_propose(&s.deps, &ctx, input).await?))
+}
+pub async fn posts_list(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<posts::PostsQuery>,
+) -> Result<Json<posts::PostsOut>, ApiError> {
+    Ok(Json(posts::posts_list(&s.deps, &ctx, q).await?))
+}
+pub async fn weekly_summary(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<posts::SummaryQuery>,
+) -> Result<Json<posts::WeeklySummaryOut>, ApiError> {
+    Ok(Json(posts::weekly_summary(&s.deps, &ctx, q).await?))
+}
+/// A human owner or manager sets the posting policy (`{policy, tz}`).
+pub async fn posting_policy_set(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<PostingSettings>,
+) -> Result<Json<PostingSettings>, ApiError> {
+    Ok(Json(posts::posting_policy_set(&s.deps, &ctx, body).await?))
+}

@@ -4,7 +4,7 @@ fn studio_tools_publish_shared_strict_schemas_and_manage_permission() {
         .into_iter()
         .filter(|t| t.name.starts_with("jeeta.studio."))
         .collect();
-    assert_eq!(tools.len(), 31);
+    assert_eq!(tools.len(), 35);
     for tool in tools {
         let action = tool.name.strip_prefix("jeeta.studio.").unwrap();
         assert_eq!(
