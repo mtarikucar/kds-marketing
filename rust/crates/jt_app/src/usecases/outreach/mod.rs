@@ -21,6 +21,7 @@
 
 pub mod audience;
 pub mod campaigns;
+pub mod links;
 pub mod settings;
 pub mod templates;
 

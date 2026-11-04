@@ -8,11 +8,21 @@ mod support;
 
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
-use jt_app::usecases::outreach::{self, ApproveInput, ControlAction, ControlInput};
-use jt_outreach::CampaignStatus;
+use jt_app::ports::connectors::MailMessage;
+use jt_app::usecases::inbox::{quotes, replies};
+use jt_app::usecases::outreach::{self, ApproveInput, ControlAction, ControlInput, links};
+use jt_inbox::{ConvState, Conversation, ConversationId, Executor, PersonId, RecipientKind};
+use jt_outreach::{CampaignStatus, MacPurpose};
 use outreach_support::*;
 use serde_json::json;
 use support::*;
+use time::format_description::well_known::Rfc3339;
+
+/// The footer's source line of a consented recipient (spec §3.10).
+const CONSENT_LINE: &str = "Bu e-postayı bizden ileti almayı kabul ettiğiniz için alıyorsunuz.";
+/// The footer's source line of a business recipient reached on its public data.
+const PUBLIC_DATA_LINE: &str =
+    "Bu e-postayı işletmenizin herkese açık iletişim bilgileri üzerinden gönderiyoruz.";
 
 #[tokio::test]
 async fn launch_refused_when_platform_disabled() {
@@ -127,5 +137,315 @@ async fn resume_and_approval_refused_when_platform_disabled() {
             .unwrap()
             .status,
         CampaignStatus::AwaitingApproval
+    );
+}
+
+// ---- The footer and the one-click unsubscribe (spec D62, D63): every commercial email ----
+
+/// An email conversation of `person` on the world's mailbox, the person having just written.
+async fn conversation(o: &Outreach, person: PersonId) -> ConversationId {
+    let w = &o.w;
+    let id = ConversationId::new_v7();
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.conversations()
+        .upsert_on_inbound(Conversation {
+            id,
+            workspace_id: w.ws,
+            person_id: person,
+            capability_id: o.mailbox,
+            kind_key: "mailbox".into(),
+            state: ConvState::Ours,
+            executor: Executor::Agent,
+            executor_generation: 0,
+            last_inbound_at: Some(w.owner_ctx.now),
+            last_outbound_at: None,
+            created_at: w.owner_ctx.now,
+            updated_at: w.owner_ctx.now,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    // An existing conversation of the person on the mailbox keeps its id.
+    w.uow
+        .snapshot()
+        .inbox
+        .conversations
+        .iter()
+        .find(|c| c.person_id == person && c.capability_id == o.mailbox)
+        .unwrap()
+        .id
+}
+
+fn send_input(intent: &str, key: &str) -> replies::SendInput {
+    serde_json::from_value(json!({
+        "channel": "email", "text": "Yeni ürünümüzü tanıtmak isteriz.", "intent": intent,
+        "request_key": key,
+    }))
+    .unwrap()
+}
+
+fn reply_input(intent: &str, key: &str) -> replies::ReplyInput {
+    serde_json::from_value(
+        json!({"text": "Teklifimiz ektedir.", "intent": intent, "request_key": key}),
+    )
+    .unwrap()
+}
+
+/// Asserts `mail` ends with the footer whose source line is `source`, and carries the one-click
+/// unsubscribe address of its own outbox entry (a MAC'd link) and the mailto fallback.
+fn assert_footed(o: &Outreach, mail: &MailMessage, source: &str) {
+    let token: uuid::Uuid = mail
+        .message_id
+        .trim_start_matches('<')
+        .split('@')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let u = mail.list_unsubscribe.as_ref().expect("List-Unsubscribe");
+    let prefix = format!("https://panel.test/u/{}/{token}/", o.w.ws);
+    let mac = u
+        .https
+        .strip_prefix(&prefix)
+        .expect("the token is the outbox entry");
+    assert!(
+        links::verify(&o.w.deps, o.w.ws, MacPurpose::Unsubscribe, token, None, mac).unwrap(),
+        "the link's MAC holds"
+    );
+    assert_eq!(
+        u.mailto.as_deref(),
+        Some("mailto:satis@acme.example.invalid?subject=unsubscribe")
+    );
+    let footer = [
+        "",
+        "",
+        "--",
+        "Acme Yazılım A.Ş. · Örnek Mah. Deneme Sk. No 1, İstanbul",
+        source,
+        "Kişisel verilerin işlenmesi hakkında: https://acme.example.invalid/kvkk",
+        &format!("Bu e-postaları almak istemiyorsanız: {}", u.https),
+    ]
+    .join("\n");
+    assert!(mail.text.ends_with(&footer), "{}", mail.text);
+}
+
+#[tokio::test]
+async fn commercial_email_without_sender_identity_is_refused() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let ada = consented(w).await;
+    let c = conversation(&o, ada).await;
+    for clear in ["sender_company", "sender_address", "privacy_notice_url"] {
+        sender_identity(w).await;
+        outreach::settings_set(
+            &w.deps,
+            &w.owner_ctx,
+            serde_json::from_value(json!({ clear: "" })).unwrap(),
+        )
+        .await
+        .unwrap();
+        let e =
+            err(replies::send(&w.deps, &w.owner_ctx, ada, send_input("commercial", clear)).await);
+        assert_eq!(e.code, ErrorCode::Forbidden, "{clear}");
+        assert_eq!(e.message, "sender_identity_missing", "{clear}");
+        let e =
+            err(replies::reply(&w.deps, &w.owner_ctx, c, reply_input("commercial", clear)).await);
+        assert_eq!(e.message, "sender_identity_missing", "{clear}");
+    }
+    assert!(sent_mail(&o.mail).is_empty(), "nothing left bare");
+    assert_eq!(w.entries("inbox.send.refused").len(), 6);
+    // A reply (answering the customer) is unchanged: no footer, no unsubscribe header.
+    o.mail.push_mail(accepted("reply-1"));
+    replies::reply(&w.deps, &w.owner_ctx, c, reply_input("reply", "plain"))
+        .await
+        .unwrap();
+    let mail = sent_mail(&o.mail).pop().unwrap();
+    assert_eq!(mail.text, "Teklifimiz ektedir.");
+    assert_eq!(mail.list_unsubscribe, None);
+}
+
+#[tokio::test]
+async fn the_footer_and_one_click_unsubscribe_are_on_every_commercial_email() {
+    let mut o = outreach_world().await;
+    // inbox.send on the consent basis.
+    let ada = consented(&o.w).await;
+    o.mail.push_mail(accepted("send-consent"));
+    let out = replies::send(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        ada,
+        send_input("commercial", "c1"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.state, "sent");
+    let first = sent_mail(&o.mail)[0].clone();
+    assert_footed(&o, &first, CONSENT_LINE);
+    // The stored message is what was sent, footer included.
+    assert!(
+        o.w.uow
+            .snapshot()
+            .inbox
+            .messages
+            .iter()
+            .any(|m| m.body == first.text)
+    );
+    // inbox.reply, commercial, in the answering window.
+    let c = conversation(&o, ada).await;
+    o.mail.push_mail(accepted("reply-commercial"));
+    replies::reply(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        c,
+        reply_input("commercial", "c2"),
+    )
+    .await
+    .unwrap();
+    assert_footed(&o, &sent_mail(&o.mail)[1], CONSENT_LINE);
+    // inbox.quotes.send, commercial, on email.
+    let journey =
+        o.w.uow
+            .snapshot()
+            .inbox
+            .journeys
+            .iter()
+            .find(|j| j.person_id == ada)
+            .unwrap()
+            .id;
+    o.mail.push_mail(accepted("quote"));
+    quotes::send(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        journey,
+        serde_json::from_value(json!({
+            "amount_minor": 125000, "currency": "TRY",
+            "valid_until": days_later(10).format(&Rfc3339).unwrap(),
+            "file_ref": null, "channel": "email", "text": "Teklifimiz: 1.250 TL.",
+            "intent": "commercial", "request_key": "q1",
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_footed(&o, &sent_mail(&o.mail)[2], CONSENT_LINE);
+    // inbox.send on the business-recipient basis: the public-data line.
+    let bora = person(&o.w, "Bora", "bora@example.invalid").await;
+    {
+        let mut r = o.w.uow.tenant(o.w.ws).await.unwrap();
+        r.people()
+            .set_recipient_kind(bora, RecipientKind::Business, o.w.owner_ctx.now)
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+    }
+    outreach::settings_set(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        serde_json::from_value(json!({"b2b_basis": ["email"],
+            "legal_ack": {"counsel_confirmed": true, "note": "Avukat görüşü"}}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    o.mail.push_mail(accepted("send-b2b"));
+    replies::send(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        bora,
+        send_input("commercial", "c3"),
+    )
+    .await
+    .unwrap();
+    assert_footed(&o, &sent_mail(&o.mail)[3], PUBLIC_DATA_LINE);
+    // With the switch off the same email has no basis at all (D53).
+    platform(&mut o.w, false);
+    let e = err(replies::send(
+        &o.w.deps,
+        &o.w.owner_ctx,
+        bora,
+        send_input("commercial", "c4"),
+    )
+    .await);
+    assert_eq!(e.message, "IZIN_YOK");
+    assert_eq!(sent_mail(&o.mail).len(), 4);
+}
+
+#[tokio::test]
+async fn a_commercial_email_queued_without_its_footer_is_refused_at_claim() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let ada = consented(w).await;
+    let c = conversation(&o, ada).await;
+    let id = match replies::enqueue(&w.deps, &w.owner_ctx, c, reply_input("commercial", "old"))
+        .await
+        .unwrap()
+    {
+        replies::Enqueued::New(id) => id,
+        other => panic!("a new intent expected, got {other:?}"),
+    };
+    // As an intent queued before the footer rule reads: no unsubscribe addresses.
+    w.uow.edit(|s| {
+        let row = s.inbox.outbox.iter_mut().find(|o| o.id == id).unwrap();
+        row.intent["mail"]
+            .as_object_mut()
+            .unwrap()
+            .remove("list_unsubscribe");
+    });
+    let out = replies::send_step(&w.deps, &w.owner_ctx, id).await.unwrap();
+    assert_eq!(out.state, "refused");
+    assert!(sent_mail(&o.mail).is_empty());
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some("footer_missing")
+    );
+}
+
+#[tokio::test]
+async fn the_unsubscribe_link_pins_its_shape() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let token = uuid::Uuid::from_u128(0x0123_4567_89ab_cdef);
+    let base = jt_app::ports::connectors::Url::parse("https://panel.test").unwrap();
+    let url = links::unsubscribe_url(&w.deps, &base, w.ws, token).unwrap();
+    let prefix = format!("https://panel.test/u/{}/{token}/", w.ws);
+    let mac = url.strip_prefix(&prefix).unwrap();
+    // 16 bytes of HMAC-SHA256, base64url without padding.
+    assert_eq!(mac.len(), 22);
+    assert!(
+        mac.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    );
+    assert_eq!(
+        mac,
+        links::mac(&w.deps, w.ws, MacPurpose::Unsubscribe, token, None).unwrap()
+    );
+    let verify = |purpose, token, link, mac: &str| {
+        links::verify(&w.deps, w.ws, purpose, token, link, mac).unwrap()
+    };
+    assert!(verify(MacPurpose::Unsubscribe, token, None, mac));
+    assert!(!verify(
+        MacPurpose::Unsubscribe,
+        uuid::Uuid::from_u128(1),
+        None,
+        mac
+    ));
+    assert!(!verify(MacPurpose::Click, token, Some(0), mac));
+    assert!(!verify(MacPurpose::Unsubscribe, token, None, &mac[..21]));
+    assert!(!verify(MacPurpose::Unsubscribe, token, None, "not base64!"));
+    // Another workspace's key gives another MAC.
+    let (other, _) = w.other_workspace().await;
+    assert_ne!(
+        links::mac(&w.deps, other, MacPurpose::Unsubscribe, token, None).unwrap(),
+        mac
+    );
+    let click = links::click_url(&w.deps, &base, w.ws, token, 3).unwrap();
+    assert!(click.starts_with(&format!("https://panel.test/c/{}/{token}/3/", w.ws)));
+    assert_eq!(
+        links::unsubscribe_mailto("satis@acme.example.invalid").as_deref(),
+        Some("mailto:satis@acme.example.invalid?subject=unsubscribe")
+    );
+    assert_eq!(
+        links::unsubscribe_mailto("satış@acme.example.invalid"),
+        None
     );
 }

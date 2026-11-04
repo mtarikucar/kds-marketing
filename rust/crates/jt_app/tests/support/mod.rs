@@ -216,6 +216,24 @@ impl World {
     }
 }
 
+/// The outreach footer's sender identity and privacy notice, written straight to the leads
+/// policy: every commercial email needs them (spec 2026-10-30-leads-pool-outreach-design.md D62).
+pub async fn sender_identity(w: &World) {
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.workspace_policy()
+        .patch_leads(
+            json!({"outreach": {
+                "sender_company": "Acme Yazılım A.Ş.",
+                "sender_address": "Örnek Mah. Deneme Sk. No 1, İstanbul",
+                "privacy_notice_url": "https://acme.example.invalid/kvkk",
+            }}),
+            w.owner_ctx.now,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+}
+
 /// What declaring a capability of `kind` called `name` takes, with nothing else set.
 pub fn declaring(kind: &str, name: &str) -> DeclareInput {
     DeclareInput {

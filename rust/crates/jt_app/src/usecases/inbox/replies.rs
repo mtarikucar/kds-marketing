@@ -7,7 +7,7 @@ use crate::{
     error::{AppError, ErrorCode},
     ports::{
         TenantRepos,
-        connectors::{MailMessage, SendReceipt},
+        connectors::{ListUnsubscribe, MailMessage, SendReceipt},
         inbox::OutboxRow,
     },
     usecases::{
@@ -259,7 +259,7 @@ pub(super) async fn enqueue_in(
     {
         return Ok(Enqueued::Existing(serde_json::from_value(out)?));
     }
-    let text = required("text", &input.text)?;
+    let mut text = required("text", &input.text)?;
     if text.len() > 1_000_000 {
         return Err(AppError::validation(
             "message too large",
@@ -326,7 +326,7 @@ pub(super) async fn enqueue_in(
         Actor::System { .. } => Author::System,
     };
     let cap = capability(r, &c).await?;
-    if let Err(error) = fence(
+    let fenced = match fence(
         r,
         ctx,
         &c,
@@ -342,19 +342,28 @@ pub(super) async fn enqueue_in(
     )
     .await
     {
-        if error.code == ErrorCode::Forbidden {
-            record(
-                r,
-                ctx,
-                "inbox.send.refused",
-                "person",
-                c.person_id,
-                json!({"person_id":c.person_id,"reason":error.message}),
-            )
-            .await?;
+        Ok(basis) => commercial_identity(r, &cap, input.intent)
+            .await
+            .map(|identity| (basis, identity)),
+        Err(error) => Err(error),
+    };
+    let (basis, identity) = match fenced {
+        Ok(fenced) => fenced,
+        Err(error) => {
+            if error.code == ErrorCode::Forbidden {
+                record(
+                    r,
+                    ctx,
+                    "inbox.send.refused",
+                    "person",
+                    c.person_id,
+                    json!({"person_id":c.person_id,"reason":error.message}),
+                )
+                .await?;
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
+    };
     // Only an accepted send may create a conversation. No inbound time is manufactured.
     if opens_conversation {
         r.conversations().insert_for_send(c.clone()).await?;
@@ -437,7 +446,9 @@ pub(super) async fn enqueue_in(
         }
         intent["mail_account"] = json!(cap.external_id);
         intent["mail_hosts"] = cap.connector_public["hosts"].clone();
-        let attachments = if let Purpose::Appointment(appointment) = &purpose {
+        // The sending address: the booking's calendar file names it, and so does a commercial
+        // email's mailto unsubscribe.
+        let from_address = if matches!(purpose, Purpose::Appointment(_)) || identity.is_some() {
             let sealed = r
                 .capabilities()
                 .read_sealed(cap.id)
@@ -448,12 +459,17 @@ pub(super) async fn enqueue_in(
             else {
                 return Err(AppError::conflict("mailbox credentials required"));
             };
+            Some(from_address)
+        } else {
+            None
+        };
+        let attachments = if let Purpose::Appointment(appointment) = &purpose {
             vec![crate::ports::connectors::Attachment {
                 filename: "appointment.ics".into(),
                 mime: "text/calendar".into(),
                 bytes: ics(
                     &appointment.appointment,
-                    &from_address,
+                    from_address.as_deref().unwrap_or_default(),
                     &recipient,
                     &appointment.id.to_string(),
                 )
@@ -461,6 +477,30 @@ pub(super) async fn enqueue_in(
             }]
         } else {
             vec![]
+        };
+        // Every commercial email ends with the footer and carries the one-click unsubscribe
+        // (spec D62), whatever path queued it: this is the one place it is added.
+        let list_unsubscribe = match &identity {
+            Some(policy) => {
+                let footed = with_footer(
+                    deps,
+                    ctx,
+                    policy,
+                    basis,
+                    outbox_id,
+                    from_address.as_deref(),
+                    &text,
+                )?;
+                text = footed.text;
+                if text.len() > 1_000_000 {
+                    return Err(AppError::validation(
+                        "message too large",
+                        json!({"field":"text"}),
+                    ));
+                }
+                Some(footed.list_unsubscribe)
+            }
+            None => None,
         };
         intent["mail"] = serde_json::to_value(MailMessage {
             to: recipient,
@@ -471,7 +511,7 @@ pub(super) async fn enqueue_in(
             references,
             attachments,
             from_name: None,
-            list_unsubscribe: None,
+            list_unsubscribe,
             attachment_files: Vec::new(),
         })?;
     } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
@@ -699,6 +739,86 @@ async fn fence(
     })
 }
 
+/// The footer's sender identity a commercial email needs (spec 2026-10-30-leads-pool-outreach-
+/// design.md §3.10, D62): the workspace's outreach policy for a commercial email, `None` for any
+/// other send. A commercial email whose sender company, address or privacy notice is not
+/// configured is refused (`sender_identity_missing`), never sent without its footer.
+async fn commercial_identity(
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    intent: SendIntent,
+) -> Result<Option<jt_outreach::OutreachPolicy>, AppError> {
+    if cap.kind_key != "mailbox" || intent != SendIntent::Commercial {
+        return Ok(None);
+    }
+    let policy = r.workspace_policy().read().await?.leads.outreach;
+    if !policy.sender_identity_complete() {
+        return Err(refused("sender_identity_missing"));
+    }
+    Ok(Some(policy))
+}
+
+/// A commercial email's text with its footer, and its unsubscribe addresses.
+struct Footed {
+    text: String,
+    list_unsubscribe: ListUnsubscribe,
+}
+
+/// `text` with the footer appended (`jt_outreach::append_footer`): the sender identity, the
+/// line saying what the email rests on (`basis`, D58), the privacy notice and the one-click
+/// unsubscribe address of this email (its outbox entry `outbox_id` is the token, D63), in
+/// Turkish; and the `List-Unsubscribe` addresses (the https one, and `mailto:` the sending
+/// address when it can be written so). Without an `https` public address no unsubscribe link
+/// can be given: `CONFLICT`, nothing queued.
+fn with_footer(
+    deps: &Deps,
+    ctx: &Ctx,
+    policy: &jt_outreach::OutreachPolicy,
+    basis: Option<CommercialBasis>,
+    outbox_id: Uuid,
+    from_address: Option<&str>,
+    text: &str,
+) -> Result<Footed, AppError> {
+    use crate::usecases::outreach::links;
+    let base = links::https_base(deps).ok_or_else(|| {
+        AppError::conflict("an https public base URL is required for commercial mail")
+    })?;
+    let basis = basis.ok_or_else(|| AppError::internal("a commercial send rests on a basis"))?;
+    let https = links::unsubscribe_url(deps, &base, ctx.workspace_id, outbox_id)?;
+    let footer = jt_outreach::Footer {
+        sender_company: policy.sender_company.clone(),
+        sender_address: policy.sender_address.clone(),
+        privacy_notice_url: policy.privacy_notice_url.clone(),
+        unsubscribe_url: https.clone(),
+        source: basis.into(),
+    };
+    let text = jt_outreach::append_footer(text, &footer, jt_outreach::Lang::Tr)
+        .map_err(|_| refused("sender_identity_missing"))?;
+    Ok(Footed {
+        text,
+        list_unsubscribe: ListUnsubscribe {
+            https,
+            mailto: from_address.and_then(links::unsubscribe_mailto),
+        },
+    })
+}
+
+/// At claim, a commercial email must carry its unsubscribe addresses (spec D62): one queued
+/// before the footer rule, or by a path that skipped it, is refused (`footer_missing`), never
+/// sent bare.
+fn footer_ready(row: &OutboxRow, cap: &Capability) -> Result<(), AppError> {
+    let commercial = row.intent.get("kind") == Some(&json!(SendIntent::Commercial));
+    let carried = row
+        .intent
+        .get("mail")
+        .and_then(|m| m.get("list_unsubscribe"))
+        .is_some_and(|u| !u.is_null());
+    if cap.kind_key == "mailbox" && commercial && !carried {
+        return Err(refused("footer_missing"));
+    }
+    Ok(())
+}
+
 struct Prepared {
     row: OutboxRow,
     message: Message,
@@ -814,6 +934,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         },
     )
     .await
+    .and_then(|basis| footer_ready(&row, &cap).map(|()| basis))
     {
         Ok(basis) => basis,
         Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {

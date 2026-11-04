@@ -3,10 +3,14 @@
 //! the public unsubscribe and click links. The MAC itself is the application's (its seal holds
 //! the keys): first [`MAC_BYTES`] bytes of HMAC-SHA256 under the purpose's key, base64url
 //! without padding.
+//!
+//! **One token for every commercial email** (spec D63): a public link names the email's outbox
+//! entry id (the id its Message-ID `<id@host>` carries), whichever path sent it. An outreach
+//! email's send row is found from it (`outreach_sends.outbox_id`); an inbox send has no send row,
+//! and its outbox entry leads to the person.
 
 use jt_tenancy::WorkspaceId;
-
-use crate::SendId;
+use uuid::Uuid;
 
 /// The longest link a template may hold, in characters.
 pub const MAX_LINK_CHARS: usize = 2_048;
@@ -128,9 +132,9 @@ pub fn rewrite_links(text: &str, links: &[String], url_for: &dyn Fn(usize) -> St
 /// What a public link's MAC proves; each purpose has its own key in the seal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MacPurpose {
-    /// `/u/{workspace}/{send}/{mac}`: one-click unsubscribe and its confirmation page.
+    /// `/u/{workspace}/{token}/{mac}`: one-click unsubscribe and its confirmation page.
     Unsubscribe,
-    /// `/c/{workspace}/{send}/{link}/{mac}`: the click redirect.
+    /// `/c/{workspace}/{token}/{link}/{mac}`: the click redirect.
     Click,
 }
 
@@ -145,15 +149,15 @@ impl MacPurpose {
     }
 }
 
-/// The bytes a public link's MAC is computed over: the purpose's label, a zero byte, the send
-/// id's 16 bytes, then `0` without a link or `1` and the link index as two big-endian bytes.
-/// Fixed width after the label, so no two inputs collide.
-pub fn mac_input(purpose: MacPurpose, send: SendId, link: Option<u16>) -> Vec<u8> {
+/// The bytes a public link's MAC is computed over: the purpose's label, a zero byte, the token's
+/// 16 bytes (the email's outbox entry id), then `0` without a link or `1` and the link index as
+/// two big-endian bytes. Fixed width after the label, so no two inputs collide.
+pub fn mac_input(purpose: MacPurpose, token: Uuid, link: Option<u16>) -> Vec<u8> {
     let label = purpose.key().as_bytes();
     let mut out = Vec::with_capacity(label.len() + 20);
     out.extend_from_slice(label);
     out.push(0);
-    out.extend_from_slice(send.as_uuid().as_bytes());
+    out.extend_from_slice(token.as_bytes());
     match link {
         None => out.push(0),
         Some(index) => {
@@ -164,12 +168,13 @@ pub fn mac_input(purpose: MacPurpose, send: SendId, link: Option<u16>) -> Vec<u8
     out
 }
 
-/// The unsubscribe link's path, `/u/{workspace_id}/{send_id}/{mac}` (`mac` already encoded).
-pub fn unsubscribe_path(ws: WorkspaceId, send: SendId, mac: &str) -> String {
-    format!("/u/{ws}/{send}/{mac}")
+/// The unsubscribe link's path, `/u/{workspace_id}/{token}/{mac}` (`mac` already encoded; the
+/// token is the email's outbox entry id).
+pub fn unsubscribe_path(ws: WorkspaceId, token: Uuid, mac: &str) -> String {
+    format!("/u/{ws}/{token}/{mac}")
 }
 
-/// The click redirect's path, `/c/{workspace_id}/{send_id}/{link}/{mac}`.
-pub fn click_path(ws: WorkspaceId, send: SendId, link: u16, mac: &str) -> String {
-    format!("/c/{ws}/{send}/{link}/{mac}")
+/// The click redirect's path, `/c/{workspace_id}/{token}/{link}/{mac}`.
+pub fn click_path(ws: WorkspaceId, token: Uuid, link: u16, mac: &str) -> String {
+    format!("/c/{ws}/{token}/{link}/{mac}")
 }

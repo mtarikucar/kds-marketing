@@ -37,7 +37,7 @@ pub use enrollment::{
     SkipReason, StopReason, next_step_after, validate_personalization,
 };
 pub use fence::{OutreachFacts, OutreachRefusal, launch_fence, outreach_fence};
-pub use footer::{Footer, FooterSource};
+pub use footer::{Footer, FooterSource, append_footer};
 pub use ids::{CampaignId, EnrollmentId, SendId, TemplateId};
 pub use links::{
     MAC_BYTES, MAX_LINK_CHARS, MacPurpose, click_path, mac_input, rewrite_links, unsubscribe_path,
@@ -49,7 +49,7 @@ pub use policy::{
 pub use template::{
     Lang, MAX_BODY_CHARS, MAX_CUSTOM_KEY_CHARS, MAX_FALLBACK_CHARS, MAX_LINKS, MAX_SUBJECT_CHARS,
     MAX_TEMPLATE_NAME_CHARS, RenderError, RenderVars, Rendered, Template, TemplateError,
-    TemplateFacts, Var, render, validate_template, validate_template_name,
+    TemplateFacts, Var, render, render_body, validate_template, validate_template_name,
 };
 pub use throttle::{
     BOUNCE_WINDOW, BudgetInput, COMPLAINT_LIMIT, COMPLAINT_WINDOW, DOMAIN_PER_HOUR,

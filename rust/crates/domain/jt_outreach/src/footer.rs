@@ -26,6 +26,13 @@ impl From<CommercialBasis> for FooterSource {
     }
 }
 
+/// `body` with the footer in `lang` after it, a blank line between: the text every commercial
+/// email ends with (spec D62: the inbox's send pipeline appends it, whatever path the email
+/// came from). [`RenderError::FooterIncomplete`] as [`Footer::render`].
+pub fn append_footer(body: &str, footer: &Footer, lang: Lang) -> Result<String, RenderError> {
+    Ok(format!("{}\n\n{}", body.trim_end(), footer.render(lang)?))
+}
+
 /// The footer's values: the workspace's sender identity and privacy notice, and this send's
 /// unsubscribe link.
 #[derive(Clone, Debug, PartialEq, Eq)]

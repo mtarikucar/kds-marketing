@@ -419,7 +419,22 @@ pub fn render(
     footer: &Footer,
     link_url: Option<&dyn Fn(usize) -> String>,
 ) -> Result<Rendered, RenderError> {
-    let footer = footer.render(s.language)?;
+    footer.render(s.language)?;
+    let body = render_body(s, vars, link_url)?;
+    Ok(Rendered {
+        text: crate::append_footer(&body.text, footer, s.language)?,
+        subject: body.subject,
+    })
+}
+
+/// [`render`] without the footer: the subject and the body as the template and the values make
+/// them, links rewritten as `render` does. The footer is appended where the email is queued
+/// ([`crate::append_footer`]), so every commercial email gets it in one place.
+pub fn render_body(
+    s: &StepSnapshot,
+    vars: &RenderVars,
+    link_url: Option<&dyn Fn(usize) -> String>,
+) -> Result<Rendered, RenderError> {
     let subject_parts = parse("subject", &s.subject).map_err(|_| RenderError::TemplateInvalid)?;
     let body_parts = parse("body", &s.body).map_err(|_| RenderError::TemplateInvalid)?;
     let subject = substitute(&subject_parts, vars, None)?;
@@ -434,7 +449,7 @@ pub fn render(
     let body = substitute(&body_parts, vars, rewrite)?;
     Ok(Rendered {
         subject: subject.to_owned(),
-        text: format!("{}\n\n{footer}", body.trim_end()),
+        text: body.trim_end().to_owned(),
     })
 }
 

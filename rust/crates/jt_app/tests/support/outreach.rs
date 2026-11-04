@@ -20,7 +20,7 @@ use jt_testkit::fakes::{ConnectorCall, FakeAppConfig, ScriptedConnector, Scripte
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 
-use crate::support::{World, world};
+use crate::support::{World, sender_identity, world};
 
 /// The mailbox's sending address.
 pub const FROM: &str = "satis@acme.example.invalid";
@@ -37,23 +37,6 @@ pub fn platform(w: &mut World, on: bool) {
         outreach_enabled: on,
         ..FakeAppConfig::default()
     });
-}
-
-/// The footer's sender identity and privacy notice, written straight to the policy.
-pub async fn sender_identity(w: &World) {
-    let mut r = w.uow.tenant(w.ws).await.unwrap();
-    r.workspace_policy()
-        .patch_leads(
-            json!({"outreach": {
-                "sender_company": "Acme Yazılım A.Ş.",
-                "sender_address": "Örnek Mah. Deneme Sk. No 1, İstanbul",
-                "privacy_notice_url": "https://acme.example.invalid/kvkk",
-            }}),
-            w.owner_ctx.now,
-        )
-        .await
-        .unwrap();
-    r.commit().await.unwrap();
 }
 
 /// A verified mailbox capability sending from `from`, sealed, added to `w`.
