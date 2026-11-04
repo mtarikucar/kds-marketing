@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { NavLink } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { decideProspect, doNotContact } from '@/api/prospects';
 import { listTeam } from '@/api/team';
@@ -9,6 +10,7 @@ import {
   DNC_REASONS,
   REJECT_REASONS,
   type DncReason,
+  type Hours,
   type ProspectStatus,
   type Recorder,
   type RejectReason,
@@ -19,6 +21,7 @@ import { ErrorCallout } from '@/components/ErrorCallout';
 import {
   Badge,
   Button,
+  cn,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -29,7 +32,9 @@ import {
   Textarea,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
+import { formatHour, weekdayName } from '@/lib/format';
 import { useInFlight, webUrl } from '@/lib/leads';
+import { can } from '@/lib/roles';
 import { selectClass } from './InboxShared';
 
 // What the leads pages share (spec 2026-10-30-leads-pool-outreach-design.md §9): query keys,
@@ -349,5 +354,145 @@ export function BulkOutcomes({ outcomes, onDismiss }: { outcomes: BulkOutcome[];
         ))}
       </ul>
     </section>
+  );
+}
+
+const HOURS_FROM = Array.from({ length: 24 }, (_, h) => h);
+const HOURS_TO = Array.from({ length: 24 }, (_, h) => h + 1);
+const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7];
+
+function localZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+/**
+ * Working hours (`jt_capability::Hours`): a time zone, from and to, and the weekdays. With
+ * `optional`, a box turns them off (`null`: any time).
+ */
+export function HoursFields({
+  label,
+  value,
+  onChange,
+  optional = false,
+}: {
+  label: string;
+  value: Hours | null;
+  onChange: (hours: Hours | null) => void;
+  optional?: boolean;
+}) {
+  const { t, i18n } = useTranslation();
+  const h: Hours = value ?? { tz: localZone(), from: 9, to: 18, days: [1, 2, 3, 4, 5] };
+  const set = (patch: Partial<Hours>) => onChange({ ...h, ...patch });
+  return (
+    <fieldset className="flex flex-col gap-2 text-sm">
+      <legend className="mb-1 font-medium">{label}</legend>
+      {optional && (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={value !== null} onChange={(e) => onChange(e.target.checked ? h : null)} />
+          {t('leads.hours.limited')}
+        </label>
+      )}
+      {value !== null && (
+        <div className="grid gap-2 sm:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            {t('leads.hours.tz')}
+            <Input className="font-mono" spellCheck={false} value={h.tz} onChange={(e) => set({ tz: e.target.value })} />
+          </label>
+          <label className="flex flex-col gap-1">
+            {t('leads.hours.from')}
+            <select className={selectClass} value={h.from} onChange={(e) => set({ from: Number(e.target.value) })}>
+              {HOURS_FROM.map((x) => (
+                <option key={x} value={x}>
+                  {formatHour(x)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            {t('leads.hours.to')}
+            <select className={selectClass} value={h.to} onChange={(e) => set({ to: Number(e.target.value) })}>
+              {HOURS_TO.map((x) => (
+                <option key={x} value={x}>
+                  {formatHour(x)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex flex-wrap gap-2 sm:col-span-3" role="group" aria-label={t('leads.hours.days')}>
+            {WEEKDAYS.map((d) => (
+              <label key={d} className="flex items-center gap-1">
+                <input
+                  type="checkbox"
+                  checked={h.days.includes(d)}
+                  onChange={(e) =>
+                    set({ days: (e.target.checked ? [...h.days, d] : h.days.filter((x) => x !== d)).sort((a, b) => a - b) })
+                  }
+                />
+                {weekdayName(d, i18n.language)}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </fieldset>
+  );
+}
+
+/** Team's tabs: its members, and lead distribution for those who hold `inbox.work`. */
+export function TeamTabs() {
+  const { t } = useTranslation();
+  const session = useSession();
+  if (!can(session.data, 'inbox.work')) return null;
+  const tab = ({ isActive }: { isActive: boolean }) =>
+    cn(
+      'rounded-md px-3 py-1.5 text-sm font-medium',
+      isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground',
+    );
+  return (
+    <nav aria-label={t('leads.teamTabs.label')} className="flex gap-1 border-b border-border pb-2">
+      <NavLink to="/team" end className={tab}>
+        {t('leads.teamTabs.members')}
+      </NavLink>
+      <NavLink to="/team/distribution" className={tab}>
+        {t('leads.teamTabs.distribution')}
+      </NavLink>
+    </nav>
+  );
+}
+
+/** The items of a list typed as `a, b, c`. */
+export function parseList(text: string): string[] {
+  return text
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/**
+ * A list typed as `a, b, c`: the text stays as typed (a comma or a space being typed is not
+ * swallowed), and the list it holds goes up on every change.
+ */
+export function ListInput({
+  value,
+  onChange,
+  ...rest
+}: { value: string[] | undefined; onChange: (items: string[]) => void } & Omit<
+  React.InputHTMLAttributes<HTMLInputElement>,
+  'value' | 'onChange'
+>) {
+  const [text, setText] = useState(() => (value ?? []).join(', '));
+  return (
+    <Input
+      {...rest}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parseList(e.target.value));
+      }}
+    />
   );
 }

@@ -2475,6 +2475,114 @@
       "do_not_contact": "On the do-not-contact list.",
       "system_actor": "The system records nothing in the pool.",
       "rubric_mismatch": "The scoring rubric changed; score again."
+    },
+    "teamTabs": {
+      "label": "Team sections",
+      "members": "Members",
+      "distribution": "Distribution"
+    },
+    "hours": {
+      "limited": "Only at set hours",
+      "tz": "Time zone",
+      "from": "From",
+      "to": "To",
+      "days": "Days"
+    },
+    "sourceKinds": {
+      "prospect": "Prospect pool",
+      "channel": "Messaging channel",
+      "meta_ads": "Meta lead form",
+      "form": "Web form",
+      "import": "Import",
+      "repeat": "Returning customer"
+    },
+    "causes": {
+      "rule": "Rule",
+      "default": "Default rotation",
+      "manual": "Assigned by hand",
+      "sla_reassign": "Past its SLA, reassigned",
+      "member_left": "Member left",
+      "import": "Import waiting",
+      "no_eligible": "Nobody eligible"
+    },
+    "distribution": {
+      "title": "Distribution",
+      "description": "Who gets each new journey: rules apply in order; in automatic mode the rest rotate among available members. No journey is ever silently ownerless.",
+      "mode": "Distribution mode",
+      "modes": {
+        "auto": "Automatic: rules, then everyone in turn",
+        "manual": "Manual: rules only, a manager assigns the rest"
+      },
+      "maxReassignments": "Most reassignments past the SLA",
+      "ownerless": "Ownerless journeys",
+      "stalled": "Stalled assignments",
+      "backfill": "Distribute the ownerless",
+      "backfillDone": "{{assigned}} journeys got an owner; nobody eligible for {{no_eligible}}.",
+      "methods": {
+        "round_robin": "In turn",
+        "least_loaded": "Least loaded"
+      },
+      "rules": {
+        "title": "Rules",
+        "description": "The first rule that matches, top to bottom, applies. An empty list matches anything.",
+        "list": "Rule list",
+        "none": "No rules; in automatic mode everyone takes their turn.",
+        "off": "off",
+        "unnamed": "Rule {{n}}",
+        "name": "Rule name",
+        "enabled": "On",
+        "up": "Move {{name}} up",
+        "down": "Move {{name}} down",
+        "remove": "Delete {{name}}",
+        "sources": "Sources",
+        "cities": "Cities (comma separated)",
+        "sectors": "Sectors (comma separated)",
+        "languages": "Languages (comma separated)",
+        "segments": "Segments (comma separated)",
+        "minScore": "Lowest score",
+        "pool": "To",
+        "allEligible": "Everyone available",
+        "members": "Chosen members",
+        "method": "Method",
+        "sla": "First contact within (working minutes)",
+        "add": "Add a rule",
+        "save": "Save the rules",
+        "saved": "Rules saved."
+      },
+      "reps": {
+        "title": "Members' availability",
+        "description": "Each member edits their own row; managers edit everyone's.",
+        "member": "Member",
+        "state": "State",
+        "load": "Open journeys",
+        "filters": "Own filters",
+        "hours": "Working hours",
+        "anyTime": "Any time",
+        "onShift": "On shift",
+        "eligible": "Takes new work",
+        "notEligible": "Takes no new work",
+        "paused": "Paused taking new work",
+        "awayTill": "Away until {{at}}",
+        "loadOpen": "{{open}}",
+        "loadOf": "{{open}} / {{max}}",
+        "edit": "Edit for {{name}}",
+        "editTitle": "{{name}}: availability",
+        "accepting": "Takes new journeys",
+        "maxOpen": "Open journeys at most",
+        "languages": "Languages (comma separated)",
+        "cities": "Cities (comma separated)",
+        "sectors": "Sectors (comma separated)",
+        "awayUntil": "Away until",
+        "saved": "Availability saved."
+      },
+      "log": {
+        "title": "Assignment log",
+        "member": "Member",
+        "empty": "No assignments",
+        "slaDue": "First contact due {{at}}",
+        "acted": "Acted on {{at}}",
+        "superseded": "Replaced by a later decision"
+      }
     }
   }
 }

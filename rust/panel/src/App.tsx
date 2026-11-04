@@ -31,6 +31,7 @@ import { RegisterPage } from '@/pages/RegisterPage';
 import { RolesPage } from '@/pages/RolesPage';
 import { StrategyPage } from '@/pages/StrategyPage';
 import { TeamPage } from '@/pages/TeamPage';
+import { DistributionPage } from '@/pages/DistributionPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
 import { PaymentsPage } from '@/pages/platform/PaymentsPage';
 import { HealthPage } from '@/pages/platform/HealthPage';
@@ -97,6 +98,7 @@ export const routes: RouteObject[] = [
           { path: 'oauth/callback/:provider', element: <OAuthCallbackPage /> },
           { path: 'budget', element: <BudgetPage /> },
           { path: 'team', element: <TeamPage /> },
+          { path: 'team/distribution', element: <DistributionPage /> },
           { path: 'roles', element: <RolesPage /> },
           { path: 'api-keys', element: <ApiKeysPage /> },
           { path: 'agents', element: <AgentsPage /> },

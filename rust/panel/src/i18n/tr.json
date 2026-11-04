@@ -2475,6 +2475,114 @@
       "do_not_contact": "İletişim yasağı listesinde.",
       "system_actor": "Sistem havuza kayıt yazamaz.",
       "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın."
+    },
+    "teamTabs": {
+      "label": "Ekip bölümleri",
+      "members": "Üyeler",
+      "distribution": "Dağıtım"
+    },
+    "hours": {
+      "limited": "Yalnızca belirli saatlerde",
+      "tz": "Saat dilimi",
+      "from": "Başlangıç",
+      "to": "Bitiş",
+      "days": "Günler"
+    },
+    "sourceKinds": {
+      "prospect": "Aday havuzu",
+      "channel": "Mesaj kanalı",
+      "meta_ads": "Meta reklam formu",
+      "form": "Web formu",
+      "import": "İçe aktarım",
+      "repeat": "Tekrar gelen müşteri"
+    },
+    "causes": {
+      "rule": "Kural",
+      "default": "Varsayılan sıra",
+      "manual": "Elle atandı",
+      "sla_reassign": "Süre doldu, yeniden atandı",
+      "member_left": "Üye ayrıldı",
+      "import": "İçe aktarım bekliyor",
+      "no_eligible": "Uygun kimse yok"
+    },
+    "distribution": {
+      "title": "Dağıtım",
+      "description": "Yeni yolculukların kime düşeceği: kurallar sırayla uygulanır; otomatik modda geri kalanı müsait üyeler arasında sırayla paylaşılır. Hiçbir yolculuk sessizce sahipsiz kalmaz.",
+      "mode": "Dağıtım modu",
+      "modes": {
+        "auto": "Otomatik: kurallar, sonra herkese sırayla",
+        "manual": "Elle: yalnızca kurallar, kalanı yönetici dağıtır"
+      },
+      "maxReassignments": "Süre dolunca en fazla yeniden atama",
+      "ownerless": "Sahipsiz yolculuk",
+      "stalled": "Takılan atama",
+      "backfill": "Sahipsizleri dağıt",
+      "backfillDone": "{{assigned}} yolculuğa sahip atandı; {{no_eligible}} için uygun kimse yok.",
+      "methods": {
+        "round_robin": "Sırayla",
+        "least_loaded": "En az yükü olana"
+      },
+      "rules": {
+        "title": "Kurallar",
+        "description": "Yukarıdan aşağıya ilk uyan kural uygulanır. Boş bir liste her şeye uyar.",
+        "list": "Kural listesi",
+        "none": "Kural yok; otomatik modda herkes sırayla alır.",
+        "off": "kapalı",
+        "unnamed": "{{n}}. kural",
+        "name": "Kural adı",
+        "enabled": "Açık",
+        "up": "{{name}} kuralını yukarı taşı",
+        "down": "{{name}} kuralını aşağı taşı",
+        "remove": "{{name}} kuralını sil",
+        "sources": "Kaynaklar",
+        "cities": "Şehirler (virgülle)",
+        "sectors": "Sektörler (virgülle)",
+        "languages": "Diller (virgülle)",
+        "segments": "Segmentler (virgülle)",
+        "minScore": "En düşük puan",
+        "pool": "Kime",
+        "allEligible": "Müsait herkes",
+        "members": "Seçilen üyeler",
+        "method": "Yöntem",
+        "sla": "İlk temas süresi (iş dakikası)",
+        "add": "Kural ekle",
+        "save": "Kuralları kaydet",
+        "saved": "Kurallar kaydedildi."
+      },
+      "reps": {
+        "title": "Üyelerin müsaitliği",
+        "description": "Her üye kendi satırını düzenler; yöneticiler herkesinkini.",
+        "member": "Üye",
+        "state": "Durum",
+        "load": "Açık yolculuk",
+        "filters": "Kendi filtreleri",
+        "hours": "Çalışma saatleri",
+        "anyTime": "Her zaman",
+        "onShift": "Mesaide",
+        "eligible": "Yeni iş alır",
+        "notEligible": "Yeni iş almaz",
+        "paused": "Yeni iş almayı durdurdu",
+        "awayTill": "{{at}} tarihine kadar izinde",
+        "loadOpen": "{{open}}",
+        "loadOf": "{{open}} / {{max}}",
+        "edit": "{{name}} için düzenle",
+        "editTitle": "{{name}}: müsaitlik",
+        "accepting": "Yeni yolculuk alıyor",
+        "maxOpen": "En fazla açık yolculuk",
+        "languages": "Diller (virgülle)",
+        "cities": "Şehirler (virgülle)",
+        "sectors": "Sektörler (virgülle)",
+        "awayUntil": "İzinli olduğu tarih",
+        "saved": "Müsaitlik kaydedildi."
+      },
+      "log": {
+        "title": "Atama geçmişi",
+        "member": "Üye",
+        "empty": "Atama yok",
+        "slaDue": "İlk temas için son: {{at}}",
+        "acted": "{{at}} tarihinde ilgilenildi",
+        "superseded": "Yerine başka bir karar geçti"
+      }
     }
   }
 }
