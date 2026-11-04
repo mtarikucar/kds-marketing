@@ -51,12 +51,17 @@ pub const FACEBOOK_SCOPES: &[&str] = &[
     "ads_management",
 ];
 
-/// The scopes Instagram Login asks for ([`INSTAGRAM_COMMENT_SCOPES`] added while the Instagram
-/// app's comment flag is on).
+/// The scopes Instagram Login asks for: the account, publishing, and its insights (Studio reads a
+/// post's and the account's counters with them; spec D29), whatever the flags;
+/// [`INSTAGRAM_COMMENT_SCOPES`] are added while the Instagram app's comment flag is on.
 pub const INSTAGRAM_SCOPES: &[&str] = &[
     "instagram_business_basic",
     "instagram_business_content_publish",
+    INSTAGRAM_INSIGHTS_SCOPE,
 ];
+
+/// The permission an Instagram Login account's insights need.
+pub const INSTAGRAM_INSIGHTS_SCOPE: &str = "instagram_business_manage_insights";
 
 /// The webhook fields a Facebook Page is always subscribed to when it is connected: its messages,
 /// the echoes of its own replies, postbacks and reactions (Instagram messages arrive through the

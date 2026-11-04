@@ -1467,10 +1467,12 @@ const FACEBOOK_SCOPES_TODAY: &[&str] = &[
     "ads_management",
 ];
 
-/// The scopes Instagram Login asks for today (`jt_meta::INSTAGRAM_SCOPES` at this change).
+/// The scopes Instagram Login asks for today (`jt_meta::INSTAGRAM_SCOPES` at this change, with
+/// its insights since spec D29).
 const INSTAGRAM_SCOPES_TODAY: &[&str] = &[
     "instagram_business_basic",
     "instagram_business_content_publish",
+    "instagram_business_manage_insights",
 ];
 
 #[test]

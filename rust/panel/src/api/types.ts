@@ -940,6 +940,11 @@ export interface ConnectorHealth {
    * kind without comments. Absent from a server older than it.
    */
   comments?: CommentStatus | null;
+  /**
+   * Whether Studio can read its counters with its grant (`MeasureStatus`), for a kind Studio
+   * publishes to: `reconnect` when the grant lacks the read scope; `null` for another kind.
+   */
+  measure?: 'on' | 'reconnect' | null;
 }
 
 export type CommentStatus = 'off' | 'reconnect' | 'on';

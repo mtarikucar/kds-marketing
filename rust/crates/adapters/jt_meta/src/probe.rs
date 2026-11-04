@@ -8,7 +8,7 @@
 //! |---|---|---|---|
 //! | `facebook_page`, `messenger` | Page or pasted token | `GET /me?fields=id,name` | the page (the token's own identity) |
 //! | `instagram`, `instagram_dm` | Page or pasted token | `GET /me?fields=id,instagram_business_account{id,username}` | the Instagram account linked to the token's own page |
-//! | any | Instagram Login token | `GET graph.instagram.com/me?fields=user_id,username` | the token's own account (`user_id`) |
+//! | any | Instagram Login token | `GET graph.instagram.com/me?fields=user_id,username` | the token's own account (`user_id`); `insights`: whether the grant holds `instagram_business_manage_insights` |
 //! | `whatsapp_cloud` | WhatsApp Cloud | `GET /{phone_number_id}?fields=id,verified_name,quality_rating,display_phone_number` | the number, as Graph names it |
 //! | `meta_ads` | user token | `GET /act_{external_id}?fields=id,account_id,name,account_status,currency` | the ad account's number, without `act_` |
 //! | others | user token | `GET /me?fields=id,name` | the user (the token's own identity) |
@@ -40,8 +40,8 @@ use crate::assets::ad_account_number;
 use crate::credential::{MetaCred, account_of, granted_scopes, kind_of};
 use crate::graph::{Auth, Body, GraphApp, integer, missing, node, text};
 use crate::oauth::{
-    INSTAGRAM_COMMENT_FIELDS, LEADS_RETRIEVAL, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD,
-    PAGE_MESSAGING_FIELDS,
+    INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, LEADS_RETRIEVAL, PAGE_FEED_FIELD,
+    PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
@@ -92,6 +92,8 @@ async fn facts(
     public: &Value,
 ) -> Result<Value, ConnectorError> {
     let kind = kind_of(public)?;
+    let insights = matches!(cred, Credential::OAuth { scopes, .. }
+        if scopes.iter().any(|s| s == INSTAGRAM_INSIGHTS_SCOPE));
     let cred = MetaCred::of(cred, "be probed")?;
     if let MetaCred::Instagram { token } = cred {
         let me = connector
@@ -100,7 +102,9 @@ async fn facts(
         let id = text(&me["user_id"])
             .or_else(|| text(&me["id"]))
             .ok_or_else(|| missing("Instagram account id"))?;
-        return Ok(json!({ "account_id": id, "username": me["username"] }));
+        // Whether the grant reads the account's insights (an Instagram Login grant of before
+        // spec D29 does not: reconnecting asks for them).
+        return Ok(json!({ "account_id": id, "username": me["username"], "insights": insights }));
     }
     let app = connector.graph_app()?;
     match (cred, kind) {

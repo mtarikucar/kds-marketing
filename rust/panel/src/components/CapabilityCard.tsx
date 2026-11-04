@@ -218,6 +218,11 @@ export function CapabilityCard({
                 })}
               </p>
             )}
+            {health?.measure === 'reconnect' && (
+              <p data-testid="measure-status" className="text-caption text-warning">
+                {t('capabilities.connector.measureReconnect')}
+              </p>
+            )}
             {connecting.length > 0 && onConnector && (
               <div role="group" aria-label={t('capabilities.connector.actionsLabel')} className="flex flex-wrap gap-2">
                 {connecting.map((action) => (

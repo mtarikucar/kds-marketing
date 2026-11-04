@@ -673,6 +673,36 @@ async fn health_shows_each_surface_its_comment_status() {
     }
 }
 
+#[tokio::test]
+async fn health_shows_whether_studio_can_measure() {
+    let r = rig().await;
+    let reads = capability(
+        &r.w,
+        "instagram",
+        "17841400000000003",
+        &["instagram_manage_insights"],
+    )
+    .await;
+    let mailbox = r.w.declare("mailbox", "Kutu").await.capability;
+    let health =
+        serde_json::to_value(connector::health(&r.w.deps, &r.w.owner_ctx).await.unwrap()).unwrap();
+    let measure = |id: CapabilityId| {
+        health
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["capability_id"] == json!(id))
+            .map(|h| h["measure"].clone())
+            .unwrap()
+    };
+    assert_eq!(measure(reads.id), json!("on"));
+    // The rig's account holds the comment scopes, not the insights: reconnect to measure.
+    assert_eq!(measure(r.ig.id), json!("reconnect"));
+    // Kinds Studio does not publish to have no such status.
+    assert_eq!(measure(r.store.id), Value::Null);
+    assert_eq!(measure(mailbox.id), Value::Null);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The response SLA
 // ---------------------------------------------------------------------------------------------

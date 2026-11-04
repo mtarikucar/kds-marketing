@@ -18,9 +18,9 @@ use jt_app::usecases::Deps;
 use jt_app::usecases::auth::{self, LoginInput, Principal};
 use jt_app::usecases::capabilities::{self, CapabilityOut, DeclareInput, UpdateCapability};
 use jt_app::usecases::connector::{
-    self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, OAUTH_STATE_PURPOSE,
-    OAuthCallback, PbxCallMode, PbxPolicyInput, PbxPolicyOut, PendingAssetsOut, ProbeOut,
-    SetCredentials, StartOAuth, StartOut,
+    self, CompleteOAuth, ConfirmAssets, ConnectorHealth, CredentialInput, MeasureStatus,
+    OAUTH_STATE_PURPOSE, OAuthCallback, PbxCallMode, PbxPolicyInput, PbxPolicyOut,
+    PendingAssetsOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
 };
 use jt_app::usecases::hash_token;
 use jt_app::usecases::inbox::public::CommentStatus;
@@ -2381,6 +2381,8 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 reconnect_required: false,
                 // The platform's comment flags are off.
                 comments: Some(CommentStatus::Off),
+                // An Instagram Login grant without its insights: reconnect to measure.
+                measure: Some(MeasureStatus::Reconnect),
             },
             ConnectorHealth {
                 capability_id: page.id,
@@ -2395,6 +2397,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 token_expires_at: None,
                 reconnect_required: true,
                 comments: Some(CommentStatus::Off),
+                measure: Some(MeasureStatus::Reconnect),
             },
             ConnectorHealth {
                 capability_id: mailbox.id,
@@ -2409,6 +2412,7 @@ async fn health_reads_expiry_from_public_facts_without_opening_secrets() {
                 token_expires_at: None,
                 reconnect_required: false,
                 comments: None,
+                measure: None,
             },
         ]
     );

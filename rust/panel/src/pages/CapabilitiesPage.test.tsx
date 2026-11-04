@@ -258,6 +258,26 @@ describe('CapabilitiesPage', () => {
     }
   });
 
+  it('a_card_asks_to_reconnect_when_its_grant_cannot_measure', async () => {
+    mockFetch({
+      ...withConnectors,
+      'GET /api/connectors/health': connectorHealth.map((h) =>
+        h.kind_key === 'instagram'
+          ? { ...h, measure: 'reconnect' }
+          : h.kind_key === 'facebook_page'
+            ? { ...h, measure: 'on' }
+            : { ...h, measure: null },
+      ),
+    });
+    renderAt('/capabilities');
+    const line = (card: HTMLElement) => within(card).queryByTestId('measure-status');
+    expect(line(await cardOf('Atölye Instagram'))).toHaveTextContent(
+      tr.capabilities.connector.measureReconnect,
+    );
+    expect(line(await cardOf('Atölye sayfası'))).toBeNull();
+    expect(line(await cardOf('Kampanya hattı'))).toBeNull();
+  });
+
   it('probes a connector, shows the outcome and refreshes the list', async () => {
     const user = userEvent.setup();
     const calls = mockFetch({

@@ -14,8 +14,8 @@ use jt_connector::{
     ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, Provider,
 };
 use jt_meta::{
-    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_SCOPES, META_HOSTS, MetaBases, MetaConnector,
-    PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
+    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES, META_HOSTS,
+    MetaBases, MetaConnector, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
 use jt_outbound::FIXED_HOSTS;
 use serde_json::{Value, json};
@@ -218,7 +218,8 @@ async fn authorize_urls_carry_scopes_or_config_id() {
             ("response_type".into(), "code".into()),
             (
                 "scope".into(),
-                "instagram_business_basic,instagram_business_content_publish".into()
+                "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights"
+                    .into()
             ),
             ("state".into(), "state-2".into()),
         ]
@@ -987,7 +988,7 @@ async fn probe_returns_account_id_per_kind() {
         .await;
     assert_eq!(
         p.facts,
-        json!({ "account_id": "17841400000000009", "username": "test.studio" })
+        json!({ "account_id": "17841400000000009", "username": "test.studio", "insights": true })
     );
 
     // WhatsApp: the number as Graph names it, read with its token.
@@ -3801,4 +3802,53 @@ async fn instagram_login_dm_send_goes_to_graph_instagram() {
         .unwrap_err();
     assert_eq!(e.kind(), "permission");
     assert!(r.mock.recorded().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Insights through Instagram Login (spec D29)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn instagram_login_asks_for_insights_whatever_the_flags() {
+    assert!(INSTAGRAM_SCOPES.contains(&INSTAGRAM_INSIGHTS_SCOPE));
+    assert_eq!(
+        INSTAGRAM_INSIGHTS_SCOPE,
+        "instagram_business_manage_insights"
+    );
+    // Still no comment permission among the scopes asked for without the flags.
+    for kind in ["facebook_page", "instagram"] {
+        assert!(
+            !jt_connector::comment_grant(kind, FACEBOOK_SCOPES).enabled(),
+            "{kind}"
+        );
+        assert!(
+            !jt_connector::comment_grant(kind, INSTAGRAM_SCOPES).enabled(),
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn instagram_login_probe_says_whether_insights_are_granted() {
+    let r = rig().await;
+    r.mock
+        .on("GET", "/ig/me", ok(graph_fixture(&r.mock, "ig_me")));
+    // A grant of before the insights scope: the probe says so, the account is still reached.
+    let earlier = Credential::OAuth {
+        access_token: IG_LOGIN_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: vec![
+            "instagram_business_basic".into(),
+            "instagram_business_content_publish".into(),
+        ],
+    };
+    let p = r.meta.probe(&earlier, &public("instagram", None)).await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(p.facts["insights"], json!(false));
+    let p = r
+        .meta
+        .probe(&ig_login_cred(), &public("instagram", None))
+        .await;
+    assert_eq!(p.facts["insights"], json!(true));
 }

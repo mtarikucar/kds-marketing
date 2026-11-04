@@ -954,6 +954,7 @@
         "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
         "unknown": "the provider's answer did not say whether it worked: probe again in a moment"
       },
+      "measureReconnect": "Measurement: reconnect; this connection's permissions do not read its results.",
       "commentsLine": "Comments: {{status}}",
       "comments": {
         "off": "off (waiting for Meta’s approval)",
@@ -1694,6 +1695,7 @@
     "requiresApproval": "Require human approval",
     "savePolicy": "Save policy",
     "reconnect": "Check connection",
+    "connectorReconnect": "The account's permissions do not read its results: reconnect it to measure.",
     "connectorUnavailable": "Connector unsupported or needs reconnection.",
     "braked": "Brake engaged; new execution held.",
     "noStrategy": "Approve a strategy first.",

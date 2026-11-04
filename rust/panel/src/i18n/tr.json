@@ -954,6 +954,7 @@
         "permanent": "sağlayıcı bilgileri kabul etmedi: kullanıcı kodu, parola, mesaj başlığı ve sunucu adlarını kontrol edin",
         "unknown": "sağlayıcının yanıtından işin olup olmadığı anlaşılmadı: biraz sonra yeniden yoklayın"
       },
+      "measureReconnect": "Ölçüm: yeniden bağlanın; bu bağlantının izinleri sonuçları okumaya yetmiyor.",
       "commentsLine": "Yorumlar: {{status}}",
       "comments": {
         "off": "kapalı (Meta onayı bekleniyor)",
@@ -1694,6 +1695,7 @@
     "requiresApproval": "İnsan onayı iste",
     "savePolicy": "Politikayı kaydet",
     "reconnect": "Bağlantıyı kontrol et",
+    "connectorReconnect": "Hesabın izinleri sonuçları okumaya yetmiyor: ölçmek için hesabı yeniden bağlayın.",
     "connectorUnavailable": "Bağlayıcı desteklenmiyor veya yeniden bağlanmalı.",
     "braked": "Fren etkin; yeni işlem durduruldu.",
     "noStrategy": "Önce bir strateji onaylayın.",
