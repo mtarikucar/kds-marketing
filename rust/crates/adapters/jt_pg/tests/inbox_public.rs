@@ -745,9 +745,12 @@ async fn erasure_masks_comment_and_question_events() {
     let mut t = r.f.uow.tenant(ws).await.unwrap();
     for item in &items {
         let stored = t.public_items().get(item.id).await.unwrap().unwrap();
-        let text = serde_json::to_string(&stored).unwrap();
+        let text = personal_text(&serde_json::to_value(&stored).unwrap());
         for personal in ["Fiyat", "ayse", "Ayşe", "5150", "777", "0532"] {
-            assert!(!text.contains(personal), "{personal} in {text}");
+            assert!(
+                !text.iter().any(|t| t.contains(personal)),
+                "{personal} in {text:?}"
+            );
         }
         let message = t.messages().get(stored.message_id).await.unwrap().unwrap();
         assert!(!message.body.contains("Fiyat"));
@@ -760,4 +763,30 @@ async fn erasure_masks_comment_and_question_events() {
     assert!(erased);
     assert_eq!(later["public"]["text"], json!(""));
     assert_eq!(later["erased_identity"], true);
+}
+
+/// The values of `value` that could hold a person's data: every string and number except an id
+/// or a time (a string that parses as a UUID or an RFC 3339 instant). Their random and clock
+/// digits would match a digit marker such as `777` by chance.
+fn personal_text(value: &Value) -> Vec<String> {
+    fn walk(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => map.values().for_each(|v| walk(v, out)),
+            Value::Array(items) => items.iter().for_each(|v| walk(v, out)),
+            Value::String(s) => {
+                let id = s.parse::<uuid::Uuid>().is_ok();
+                let time =
+                    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                        .is_ok();
+                if !id && !time {
+                    out.push(s.clone());
+                }
+            }
+            Value::Number(n) => out.push(n.to_string()),
+            Value::Bool(_) | Value::Null => {}
+        }
+    }
+    let mut out = Vec::new();
+    walk(value, &mut out);
+    out
 }
