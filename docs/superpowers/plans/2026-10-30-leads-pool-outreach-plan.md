@@ -937,6 +937,35 @@ language.
   (`tests/throttle.rs`) `warmup_schedule_and_cap`, `warmup_disabled_is_unbounded`, `frequency_gap_and_window`,
   (`tests/links.rs`) `mac_inputs_differ_by_purpose_and_link`; (`tests/fence.rs`) `refusals_in_order`.
 - [ ] `cargo test -p jt_outreach` green; **commit** `feat(outreach): templates, campaigns and throttles (pure)`.
+- As built (`a9523fcc`, spec D54–D58), contract changes: `CampaignEvent::{Launch { approval_required, now },
+  Approve { revision, now }, Start { now }, Pause { reason: PauseReason }, Resume { approval_required, now },
+  Complete, Cancel, Edit}` with `key()`; `PauseReason::{Manual, BounceRate, Complaints, MailboxDown,
+  StrategyChanged}`; `CampaignError::{Invalid { field, reason }, Transition { from, event }, StaleRevision,
+  NotYet}`; `requires_approval(policy, mailbox)`; `validate_campaign_name`, `validate_template_name`;
+  `TemplateError::{Invalid { field, reason }, UnknownVariable { field, name }}` with `field()`/`reason()`;
+  `RenderError` gains `FooterIncomplete` (a blank or multi-line footer value) and `TemplateInvalid` (a stored
+  snapshot that no longer parses); `Footer::render(lang)`; `Var` serialises as its key (`Var::parse`,
+  `custom_key`); `OwnerFilter::{User { user_id }, Unowned}`; `Definition`, `Step`, `Schedule`, `Throttle`,
+  `Audience` and both filters refuse unknown fields (a step carries no attachments). Beyond the contracts:
+  `warmup_day_index(days, today)` (an idle stretch over 30 days starts again), `BudgetInput`/`budget`
+  (`⌈per_hour / 60⌉` a run), `domain_ok`, `DOMAIN_POSTPONE`, `auto_pause(newest_first)`, `SendOutcome` (with
+  `can_become`, `left_the_mailbox`), `next_step_after(steps, sent, sent_at)`, `validate_personalization`,
+  `unsubscribe_path`/`click_path`, `MAC_BYTES`, `launch_fence(platform_enabled, sender_identity_complete)`
+  (F2 then F10), and `OutreachPolicy { requires_approval, b2b_basis, require_iys_lookup, legal_ack:
+  Option<LegalAck { counsel_confirmed, note, by, at }>, sender_company, sender_address, privacy_notice_url,
+  warmup, frequency, click_tracking_default }` with `b2b_channels()` (none without the counsel's
+  confirmation; email only, `B2B_BASIS_CHANNELS`) and `sender_identity_complete()`. `StopReason` serialises as
+  its key (`refused:<key>`, `missing_variable:<key>`). `report.rs` is not built here: the repository's
+  `StepCounts` (L4-T3) are the counts, and L4-T6 adds the report rows it needs. Tests beyond the plan's:
+  `lengths_and_lines_are_bounded`, `the_footer_is_never_blank`, `a_future_start_schedules_and_start_waits_for_it`,
+  `approval_is_bound_to_the_revision`, `definitions_refuse_unknown_fields_and_round_trip`,
+  `warmup_day_index_counts_earlier_send_days_and_resets_after_idle`, `budget_takes_the_smallest_remainder`,
+  `auto_pause_on_bounces_and_complaints`, `public_paths_name_the_workspace_the_send_and_the_mac`,
+  `a_locked_platform_refuses_whatever_else_holds`, `approval_counts_only_when_required`, the policy tests
+  (`b2b_basis_is_off_by_default`, `b2b_channels_need_the_counsel_confirmation_and_are_email_only`,
+  `sender_identity_needs_company_address_and_a_privacy_link`) and the enrollment tests
+  (`stop_and_skip_keys_are_stable`, `the_next_step_follows_the_delays`, `send_outcomes_move_forward_only`,
+  `personalization_is_bounded`).
 
 ### Task L4-T2: commercial basis and `OutreachSent`
 
@@ -951,6 +980,18 @@ language.
   (`jt_app/tests/inbox_replies.rs`) `business_basis_off_by_default_refuses_izin_yok`,
   `business_basis_on_allows_email_only`, `basis_recorded_in_fence_snapshot`.
 - [ ] Green; **commit** `feat(inbox): business-recipient basis and the OutreachSent event`.
+- As built (`370893a3`, spec D53, D58, D60): `CommercialBasis::key()` (`consent`, `business_recipient`);
+  `commercial_allowed` is `commercial_basis(.., Unknown, &[])` (its tests unchanged);
+  `commercial_basis` fails closed on rows of more than one person, consents and suppressions alike.
+  `OutreachSent` after closure is a no-op for the system like `Replied`. The **full `OutreachPolicy` lands
+  here**: `LeadsPolicy.outreach: jt_outreach::OutreachPolicy` (read key by key). The platform switch is
+  `PlatformAppConfig::outreach_enabled()`, default `false` (`FakeAppConfig.outreach_enabled`); reading
+  `JEETA_OUTREACH_ENABLED` in `bin/jeeta`'s config lands with the launch that needs it (L4-T4), so the
+  binary stays off until then. The reply fence takes a `Sending { author, intent, outreach_enabled }`
+  and answers `Option<CommercialBasis>` (`None` for a reply); the business channels are
+  `OutreachPolicy::b2b_channels()` only while the switch is on (D53); the claim's fence snapshot gains
+  `basis` (`null` for a reply). `FooterSource: From<CommercialBasis>` (D58). Tests as named, in
+  `jt_inbox/tests/{compliance,reducer}.rs` and `jt_app/tests/inbox_replies.rs`.
 
 ### Task L4-T3: permissions, migration 0022, ports, repos, fakes
 
@@ -998,6 +1039,39 @@ permissions).
   `stop_all_for_stops_only_active`, `send_outcome_written_once_per_transition`, `counts_by_window`,
   `domain_counts_by_mailbox`, `report_groups_by_step`; Postgres only: `concurrent_due_picks_never_overlap`.
 - [ ] CI green; **commit** `feat(outreach): tables, permissions and repositories`.
+- As built (`f3f5ec49`, spec D59): `Permission::{OutreachWork, OutreachManage}` after the pool's two (owner and
+  manager through `Permission::all()` and the 0022 backfill; rep none); the panel's `Permission` union and its
+  `permissions.*` labels are not pinned by a Rust test and wait for L8. Pins: tables 82 → 86, migrations 20 → 21
+  (versions gain 22), `studio_rules` 86, `sql_scoping` lists the four tables; every `migrations.rs` test that
+  runs 0020's or 0021's down runs 0022's first (`outreach_down`, `TABLES_BEFORE_OUTREACH`); new
+  `outreach_migration_is_repeatable_and_grants_only_the_system_owner_and_manager` and
+  `outreach_enrollment_checks_hold`. Ports (`ports/outreach.rs`), contract changes: rows `TemplateRow {
+  template, created_by: Actor, updated_at }`, `CampaignRow { id, name, mailbox_id, status, definition,
+  revision, approval, pause_reason, strategy_version_id, created_by: Actor, created_at, updated_at,
+  launched_at, completed_at }` (`campaign_row_valid`), `EnrollmentRow { .., status, stop: Option<StopReason>,
+  skip: Option<SkipReason>, next_step, next_send_at, personalization, basis: Option<CommercialBasis>, .. }`
+  (`enrollment_row_valid`, `enrollment_reason`: the stored `reason` is the stop or skip key), `SendRow`;
+  `TemplateRepo { insert, get, lock, update(row, expected_revision) -> bool, list(TemplateQuery) }`;
+  `CampaignRepo { insert (mailbox and strategy version of the workspace, else NOT_FOUND), get, lock,
+  update(row, expected_revision) -> bool, list(CampaignQuery), by_status(status, limit) }` (one revision-checked
+  write for saves and state changes, instead of `save`/`set_status`); `EnrollmentRepo { insert_many ->
+  InsertReport { inserted, active_elsewhere, already_enrolled }, get, due, advance -> bool, postpone -> bool,
+  stop, stop_all_for, stop_campaign, active_for, personalize -> bool, list, count_active }` (`stop_campaign`
+  is new, for a cancel); `OutreachSendRepo { insert, get, by_outbox, set_outcome -> bool (only as
+  `can_become` allows; a first `sent` keeps its time), mark_replied, latest_for_person (not refused), click
+  (NOT_FOUND without the send), unsubscribed, count_mailbox_since, count_campaign_since, count_domain_since,
+  person_send_times, recent_outcomes, report(ReportQuery { campaign_id, from, to }) -> Vec<StepCounts> }`
+  (counts per campaign and step by current outcome; L4-T6 groups them by campaign or template).
+  `mailbox_send_days` is not built here: the warm-up's local days need the window's time zone, which the
+  dispatcher (L4-T5) has; it can count them from `count_mailbox_since` per day or add the method then.
+  `TenantRepos::{outreach_templates, outreach_campaigns, outreach_enrollments, outreach_sends}` in every
+  impl. Postgres in `jt_pg/src/repos/outreach.rs` (`due`: a materialized CTE `for update skip locked`;
+  `insert_many`: `on conflict do nothing`, then the row again as skipped `active_elsewhere`); the fake in
+  `jt_testkit/src/fakes/outreach.rs` (counts from its rows). Contract tests (`outreach_contract.rs`, run by
+  `outreach_fakes.rs` and `outreach_repos.rs`): the plan's eight (`due_skips_locked_and_future` covers the
+  future and inactive rows; locks are Postgres's) plus `templates_round_trip_and_are_revision_checked`,
+  `campaigns_round_trip_and_are_revision_checked`, `rows_are_workspace_scoped`; Postgres only
+  `concurrent_due_picks_never_overlap`.
 
 ### Task L4-T4: templates and campaigns
 
