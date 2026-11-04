@@ -22,6 +22,7 @@ mod slot;
 mod tiktok;
 pub mod time_compat;
 mod trend;
+mod truth;
 
 pub use calendar::*;
 pub use capture::*;
@@ -42,6 +43,7 @@ pub use shoot::*;
 pub use slot::*;
 pub use tiktok::*;
 pub use trend::*;
+pub use truth::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StudioError {
