@@ -158,7 +158,7 @@ pub async fn remove_suppression(
 
 // Keep immutable records on their original person so merge undo needs no copied history.
 // Applied aliases remain part of the survivor's compliance history until that merge is undone.
-pub(super) async fn history(
+pub(crate) async fn history(
     r: &mut dyn TenantRepos,
     person: PersonId,
 ) -> Result<ListOut, AppError> {

@@ -998,6 +998,26 @@ impl JourneyRepo for MemTenant {
         Ok(rows)
     }
 
+    async fn list_open(
+        &mut self,
+        after: Option<JourneyId>,
+        limit: u32,
+    ) -> Result<Vec<Journey>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .journeys
+            .iter()
+            .filter(|j| {
+                j.workspace_id == self.ws && j.closed_at.is_none() && after.is_none_or(|a| j.id > a)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|j| j.id);
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
         journey(self.state(), self.ws, id)?;
         Ok(*self

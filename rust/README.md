@@ -66,6 +66,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
    ```text
    INFO jeeta::serve: provider apps: OAuth needs a configured app; webhook and redirect addresses need the public base URL providers="none" public_base_url="unset (JEETA_PUBLIC_BASE_URL)"
+   INFO jeeta::serve: outreach email: campaigns launch and send only while JEETA_OUTREACH_ENABLED is on outreach_enabled=false
    INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=4
    ```
 
@@ -185,6 +186,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
 | `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
+| `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz. Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:

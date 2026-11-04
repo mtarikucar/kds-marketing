@@ -329,6 +329,11 @@ pub(crate) fn log_providers(config: &Config) {
         "provider apps: OAuth needs a configured app; webhook and redirect addresses need the \
          public base URL"
     );
+    tracing::info!(
+        outreach_enabled = config.apps.outreach_enabled(),
+        "outreach email: campaigns launch and send only while {} is on",
+        config::OUTREACH_ENABLED
+    );
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy

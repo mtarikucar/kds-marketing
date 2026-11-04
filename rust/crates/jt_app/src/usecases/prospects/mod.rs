@@ -19,7 +19,7 @@
 //!   recorded the row.
 
 pub(crate) mod blocklist;
-mod dedupe;
+pub(crate) mod dedupe;
 pub mod playbook;
 pub mod pool;
 pub mod promote;

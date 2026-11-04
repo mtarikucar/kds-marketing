@@ -227,6 +227,12 @@ pub trait MessageRepo: Send + Sync {
 pub trait JourneyRepo: Send + Sync {
     /// All open journeys of a departing owner, without a page cap.
     async fn open_owned_by(&mut self, user: UserId) -> Result<Vec<Journey>, AppError>;
+    /// Open journeys (not closed) by id, those after `after`, at most `limit`; a read, no lock.
+    async fn list_open(
+        &mut self,
+        after: Option<JourneyId>,
+        limit: u32,
+    ) -> Result<Vec<Journey>, AppError>;
     /// Advances only when a reducer transition is persisted, never for notes/tasks/owner edits
     /// or historical receipts. Read while holding the journey lock.
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;

@@ -23,6 +23,7 @@ pub mod hours;
 pub mod inbox;
 pub mod jobs;
 pub mod ledger;
+pub mod outreach;
 pub mod platform;
 pub mod platform_payments;
 pub mod prospects;

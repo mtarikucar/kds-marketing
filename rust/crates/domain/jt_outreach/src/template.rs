@@ -192,7 +192,7 @@ fn invalid(field: &'static str, reason: &'static str) -> TemplateError {
 
 /// What a valid template uses: its variables (each once, in first appearance order, the
 /// subject's first) and its body's links (each once, in order, as written).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TemplateFacts {
     pub vars: Vec<Var>,
     pub links: Vec<String>,

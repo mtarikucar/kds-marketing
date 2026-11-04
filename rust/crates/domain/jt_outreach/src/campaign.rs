@@ -487,7 +487,9 @@ pub fn validate_definition(d: &Definition) -> Result<(), CampaignError> {
     Ok(())
 }
 
-fn validate_audience(a: &Audience) -> Result<(), CampaignError> {
+/// An audience's bounds (spec §3.10): not empty, at most [`MAX_EXPLICIT`] people named one by
+/// one, open stages only, bounded filter lists and an ordered opening window.
+pub fn validate_audience(a: &Audience) -> Result<(), CampaignError> {
     if a.people.is_none() && a.prospects.is_none() && a.explicit.is_empty() {
         return Err(invalid("audience", "empty"));
     }

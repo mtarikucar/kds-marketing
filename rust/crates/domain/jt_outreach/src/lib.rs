@@ -29,7 +29,8 @@ pub use campaign::{
     MAX_CAMPAIGN_NAME_CHARS, MAX_DELAY_DAYS, MAX_ENROLLMENTS, MAX_EXPLICIT, MAX_FILTER_VALUE_CHARS,
     MAX_FILTER_VALUES, MAX_PER_DAY, MAX_PER_HOUR, MAX_SENDER_NAME_CHARS, MAX_STEPS, OwnerFilter,
     PauseReason, PeopleFilter, ProspectFilter, Schedule, Step, StepSnapshot, Throttle,
-    campaign_next, requires_approval, validate_campaign_name, validate_definition,
+    campaign_next, requires_approval, validate_audience, validate_campaign_name,
+    validate_definition,
 };
 pub use enrollment::{
     EnrollmentStatus, MAX_PERSONALIZATION_KEYS, MAX_PERSONALIZATION_VALUE_CHARS, SendOutcome,
