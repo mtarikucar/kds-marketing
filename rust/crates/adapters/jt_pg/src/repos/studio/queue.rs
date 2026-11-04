@@ -15,7 +15,9 @@ impl PgTenantRepos {
         if control.is_braked(LaneKind::Organic) {
             return Ok(None);
         }
-        let row:Option<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.state='ready' and s.scheduled_at <= $2 and ($3::uuid is null or s.id=$3) and a.lane='organic' and not exists(select 1 from studio_publish_attempts p where p.workspace_id=s.workspace_id and p.slot_id=s.id) order by s.scheduled_at,s.id for update of s skip locked limit 1")
+        // A planned post past its grace is never sent (spec 2026-11-03 D28): late, maybe in
+        // the quiet hours.
+        let row:Option<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.state='ready' and s.scheduled_at <= $2 and ($3::uuid is null or s.id=$3) and a.lane='organic' and not exists(select 1 from studio_publish_attempts p where p.workspace_id=s.workspace_id and p.slot_id=s.id) and not exists(select 1 from studio_posts sp where sp.workspace_id=s.workspace_id and sp.slot_id=s.id and sp.grace_until < $2) order by s.scheduled_at,s.id for update of s skip locked limit 1")
             .bind(self.workspace_id().0).bind(now).bind(target.map(|id|id.0)).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"claim due Studio slot"))?;
         let Some(row) = row else { return Ok(None) };
         let slot: Slot = decode(row)?;

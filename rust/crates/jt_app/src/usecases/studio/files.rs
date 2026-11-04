@@ -185,6 +185,9 @@ impl Staging {
         }
     }
 }
+/// Stores a medium for Studio, replayed by `request_key`. Needs `studio.work` and an active
+/// workspace, not an approved strategy (spec 2026-11-03 D35): the owner gathers materials before
+/// and while the strategy is worked out.
 pub async fn file_upload(d: &Deps, ctx: &Ctx, i: FileUploadInput) -> Result<StoredFile, AppError> {
     let mut stage = Staging::new();
     let result = file_upload_in(d, ctx, i, &mut stage).await;
@@ -204,7 +207,7 @@ async fn file_upload_in(
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
     {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
-        super::work::gated(r.as_mut(), ctx).await?;
+        super::chain::active(r.as_mut()).await?;
         if let Some(v) = r
             .studio()
             .request_replay("studio.file_upload", &i.request_key, &payload)
@@ -234,7 +237,7 @@ async fn file_upload_in(
     // Fresh IDs make failed or competing uploads independent. No byte write occurs under a DB lock.
     let file = stage.put(d, ctx.workspace_id, upload).await?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    super::work::gated(r.as_mut(), ctx).await?;
+    super::chain::active(r.as_mut()).await?;
     if let Some(v) = r
         .studio()
         .request_replay("studio.file_upload", &i.request_key, &payload)
@@ -302,8 +305,59 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             d.files.delete(ws, id).await?;
         }
     }
+    // A material's file is the owner's library, not a publication's leftover (spec 2026-11-03
+    // D14): kept while the material lives; an erased (or deleted) material's file goes as soon as no
+    // queued, sending or uncertain publication still needs it, after this transaction (D43).
+    let mut materials = r.studio_materials().list_materials().await?;
+    // Retention (spec D16, §9.3): a material that shows people is erased 24 months after its
+    // olay's last day (a genel one after it was added); its file goes below, as any erased one's.
+    let olays = r.studio_materials().list_olays().await?;
+    let system = Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::System {
+            component: "scheduler:studio_files_cleanup".into(),
+        },
+        permissions: Default::default(),
+        role_key: None,
+        now,
+        agent_connection_id: None,
+    };
+    for m in materials.iter_mut() {
+        let end = m
+            .olay_id()
+            .and_then(|id| olays.iter().find(|o| o.id == id))
+            .map(|o| o.ends_on);
+        if m.retention_due(end, now) {
+            let erased = m.redacted(now);
+            r.studio_materials()
+                .update_material(erased.clone(), m.revision)
+                .await?;
+            r.ledger()
+                .append(ledger_entry(
+                    &system,
+                    "studio.material.erased",
+                    "studio_material",
+                    erased.id,
+                    json!({"file_id":erased.file_id,"reason":"retention"}),
+                )?)
+                .await?;
+            *m = erased;
+        }
+    }
+    // An erased material's file: its bytes go once this transaction is committed (D43), so a
+    // crash before leaves an erased material whose file the next run deletes, never a live one
+    // without bytes.
+    let mut after_commit = Vec::new();
     for mut f in usage.files {
         if f.deleted_at.is_some() {
+            continue;
+        }
+        let material = materials.iter().find(|m| m.file_id == f.id);
+        if material.is_some_and(|m| m.erased_at.is_none()) {
+            if f.cleanup_due_at.is_some() {
+                f.cleanup_due_at = None;
+                r.studio().save_file(f).await?;
+            }
             continue;
         }
         let pending = usage.pieces.iter().any(|(id, p)| {
@@ -332,13 +386,44 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             })
             .map(|p| p.published_at)
             .max();
-        f.cleanup_due_at = last.map(|at| at + Duration::days(30));
-        if !pending && !unknown && f.cleanup_due_at.is_some_and(|at| now >= at) {
-            d.files.delete(ws, f.id).await?;
-            f.deleted_at = Some(now);
-            count += 1;
+        let erased = material.and_then(|m| m.erased_at);
+        f.cleanup_due_at = match erased {
+            Some(erased) => Some(erased),
+            None => last.map(|at| at + Duration::days(30)),
+        };
+        // A piece showing an erased material is held by the material gate and never sent
+        // (`materials::publish_check`): only an attempt in flight still needs its bytes.
+        let waits = unknown || (pending && erased.is_none());
+        if !waits && f.cleanup_due_at.is_some_and(|at| now >= at) {
+            if erased.is_some() {
+                after_commit.push(f.id);
+            } else {
+                d.files.delete(ws, f.id).await?;
+                f.deleted_at = Some(now);
+                count += 1;
+            }
         }
         r.studio().save_file(f).await?;
+    }
+    r.commit().await?;
+    if after_commit.is_empty() {
+        return Ok(count);
+    }
+    for id in &after_commit {
+        d.files.delete(ws, *id).await?;
+    }
+    // Marked deleted once their bytes are gone; a crash between leaves them to the next run, whose
+    // delete finds nothing to remove.
+    let mut r = d.uow.tenant(ws).await?;
+    r.studio_control().lock_control().await?;
+    for id in after_commit {
+        if let Some(mut f) = r.studio().get_file(id).await?
+            && f.deleted_at.is_none()
+        {
+            f.deleted_at = Some(now);
+            r.studio().save_file(f).await?;
+            count += 1;
+        }
     }
     r.commit().await?;
     Ok(count)

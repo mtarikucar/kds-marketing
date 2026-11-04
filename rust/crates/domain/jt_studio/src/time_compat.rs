@@ -176,6 +176,19 @@ impl<'de> Visitor<'de> for DayVisitor {
     }
 }
 
+/// A `Date`: `YYYY-MM-DD` or the legacy `[year, ordinal]`; written as text.
+pub mod date {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(day: &Date, serializer: S) -> Result<S::Ok, S::Error> {
+        Day(*day).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Date, D::Error> {
+        Ok(Day::deserialize(deserializer)?.0)
+    }
+}
+
 /// `Option<Date>`: `null`, `YYYY-MM-DD` or the legacy `[year, ordinal]`; written as `null` or text.
 pub mod date_option {
     use super::*;

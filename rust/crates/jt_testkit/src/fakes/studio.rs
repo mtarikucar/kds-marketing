@@ -35,7 +35,9 @@ pub struct MemStudio {
     pub controls: Vec<StudioControl>,
     pub binding_controls: Vec<BindingControl>,
     pub approvals: Vec<(WorkspaceId, ApprovalTarget, ApprovalReceipt)>,
-    receipts: Vec<(WorkspaceId, String, String, String, Value)>,
+    /// The replay receipts (`studio_request_keys`): workspace, action, key, payload digest and
+    /// the response kept, for tests of what a receipt holds.
+    pub receipts: Vec<(WorkspaceId, String, String, String, Value)>,
 }
 fn invalid(e: StudioError) -> AppError {
     AppError::conflict(e.to_string())
@@ -1421,6 +1423,10 @@ impl MemTenant {
                         .attempts
                         .iter()
                         .any(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == s.id)
+                    // A planned post past its grace is never sent (spec 2026-11-03 D28).
+                    && !self.state().posts.posts.iter().any(|p| {
+                        p.workspace_id == self.ws && p.slot_id == s.id && p.grace_until < now
+                    })
             });
         let Some(slot) = slot else { return Ok(None) };
         let capability = CapabilityRepo::lock(self, slot.capability_id)

@@ -10,21 +10,36 @@ use jt_app::{
 };
 use jt_strategy::{HypothesisInput, LaneKind};
 use jt_studio::SlotState;
+use jt_testkit::fakes::FIXED_NOW;
 use support::*;
 use time::{Duration, macros::datetime};
 
+/// The paid lane's slots: the only weekly positions the planner still materializes (spec
+/// 2026-11-03 D13, D33).
+fn paid_slots(w: &World) -> Vec<jt_studio::Slot> {
+    let s = w.uow.snapshot().studio;
+    s.slots
+        .into_iter()
+        .filter(|slot| {
+            s.arms
+                .iter()
+                .any(|a| a.id == slot.chain.arm_id && a.key.lane == LaneKind::Paid)
+        })
+        .collect()
+}
 #[tokio::test]
-async fn same_and_overlapping_plan_runs_do_not_duplicate_slots() {
+async fn same_and_overlapping_plan_runs_do_not_duplicate_paid_positions() {
     let w = world().await;
+    w.paid().await;
     let now = datetime!(2026-10-25 21:00 UTC);
-    assert_eq!(planner::plan(&w.d, w.f.ws, now).await.unwrap(), 7);
-    assert_eq!(planner::plan(&w.d, w.f.ws, now).await.unwrap(), 0);
-    assert_eq!(
-        planner::plan(&w.d, w.f.ws, now + Duration::hours(1))
-            .await
-            .unwrap(),
-        1
-    );
+    planner::plan(&w.d, w.f.ws, now).await.unwrap();
+    assert_eq!(paid_slots(&w).len(), 7);
+    planner::plan(&w.d, w.f.ws, now).await.unwrap();
+    assert_eq!(paid_slots(&w).len(), 7);
+    planner::plan(&w.d, w.f.ws, now + Duration::hours(1))
+        .await
+        .unwrap();
+    assert_eq!(paid_slots(&w).len(), 8);
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     let s = r
         .studio()
@@ -32,7 +47,7 @@ async fn same_and_overlapping_plan_runs_do_not_duplicate_slots() {
             from: now,
             until: now + Duration::days(7),
             hypothesis_id: None,
-            lane: None,
+            lane: Some(LaneKind::Paid),
         })
         .await
         .unwrap();
@@ -44,10 +59,14 @@ async fn same_and_overlapping_plan_runs_do_not_duplicate_slots() {
             .len(),
         7
     );
+    // No organic slot comes from the weekly quotas any more: organic posts come from packages.
+    assert!(w.uow.snapshot().posts.posts.is_empty());
 }
 #[tokio::test]
 async fn istanbul_monday_and_week_end_retirement() {
     let w = world().await;
+    // The first run retires the weekly quotas' ready seed once (D34).
+    planner::plan(&w.d, w.f.ws, FIXED_NOW).await.unwrap();
     let sunday = datetime!(2026-10-25 20:59:59 UTC);
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     let mut old = w.f.slot.clone();
@@ -85,6 +104,13 @@ async fn istanbul_monday_and_week_end_retirement() {
             .state,
         SlotState::Retired
     );
+    assert!(state.ledger.iter().any(|e| {
+        e.entry.action.as_str() == "studio.slot.week_ended"
+            && e.entry
+                .subject
+                .as_ref()
+                .is_some_and(|s| s.id == old.id.to_string())
+    }));
     assert_eq!(
         state
             .studio
@@ -93,7 +119,7 @@ async fn istanbul_monday_and_week_end_retirement() {
             .find(|s| s.id == w.f.slot.id)
             .unwrap()
             .state,
-        SlotState::Ready
+        SlotState::Retired
     );
 }
 #[tokio::test]
@@ -236,19 +262,20 @@ async fn pending_context_has_brand_rules_and_learning() {
     );
 }
 #[tokio::test]
-async fn planner_runs_hourly() {
+async fn planner_runs_every_ten_minutes() {
     let w = world().await;
     let now = datetime!(2026-10-25 21:00 UTC);
     assert_eq!(Job::StudioPlan.lock_name(), "jeeta.jobs.studio_plan");
     let report = Job::StudioPlan.run(&w.d, now).await;
     assert_eq!(report.failed, 0);
-    assert_eq!(report.changed, 7);
+    assert!(report.changed > 0);
+    // Ten minutes later nothing new is due: every trigger fired once.
     assert_eq!(
         Job::StudioPlan
-            .run(&w.d, now + Duration::hours(1))
+            .run(&w.d, now + Duration::minutes(10))
             .await
             .changed,
-        1
+        0
     );
 }
 #[tokio::test]
@@ -295,5 +322,11 @@ async fn work_rows_require_permissions_and_current_strategy() {
 async fn planning_stops_on_brake_and_unselected_accounts() {
     let w = world().await;
     w.brake(true, Some(LaneKind::Organic), 0).await;
-    assert_eq!(planner::plan(&w.d, w.f.ws, w.ctx.now).await.unwrap(), 0);
+    planner::plan(&w.d, w.f.ws, datetime!(2026-10-25 21:00 UTC))
+        .await
+        .unwrap();
+    // A braked organic lane asks for no package and no material.
+    let s = w.uow.snapshot();
+    assert!(s.posts.requests.is_empty());
+    assert!(s.materials.shoot_requests.is_empty());
 }

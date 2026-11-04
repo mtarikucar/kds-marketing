@@ -2,11 +2,14 @@
 pub mod chain;
 pub mod control;
 pub mod files;
+pub mod library;
 pub mod lifecycle;
+pub mod materials;
 pub mod pieces;
 pub mod schema;
 
 pub mod planner;
+pub mod posts;
 pub mod trends;
 pub mod work;
 

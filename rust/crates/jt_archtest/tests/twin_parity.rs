@@ -3957,8 +3957,24 @@ async fn studio_file_upload_and_piece_submission_have_effect_error_and_replay_pa
     let tool = tool_result(&app, &key, &session, "jeeta.studio.file_upload", changed).await;
     assert_eq!(err["code"], "CONFLICT");
     assert_eq!(err["code"], tool["structuredContent"]["code"]);
+    // A human makes the upload a material of a confirmed olay (spec 2026-11-03 D2): the piece
+    // shows it and speaks about that olay.
+    let olay = jt_testkit::studio_contract::confirmed_olay(ws);
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(olay.clone())
+        .await
+        .unwrap();
+    r.studio_materials()
+        .insert_material(jt_testkit::studio_contract::eligible_material(
+            &olay,
+            serde_json::from_value(human["id"].clone()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     let path = format!("/api/studio/slots/{}/piece", first.id);
-    let body = json!({"expected_revision":0,"request_key":"twins-piece","text":"agent content","media":[{"kind":"file","id":human["id"]}],"adaptations":{"studio-twins":{"text":"account content","media":[]}}});
+    let body = json!({"expected_revision":0,"request_key":"twins-piece","text":"agent content","media":[{"kind":"file","id":human["id"]}],"adaptations":{"studio-twins":{"text":"account content","media":[]}},"subject":{"kind":"olay","olay_id":olay.id}});
     let out = ok(send(
         &app,
         panel(Method::POST, &path, Some(&cookie), Some(body.clone())),

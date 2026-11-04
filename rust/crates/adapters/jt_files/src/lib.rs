@@ -436,6 +436,25 @@ impl DiskFiles {
     fn read_inner(&self, ws: WorkspaceId, id: FileId) -> Result<MediaUpload, AppError> {
         self.load(ws, id).map(|(_, u)| u)
     }
+    /// At most `len` bytes of file `id` from its byte `offset` ([`FileStore::read_range`]): its
+    /// header checked as [`DiskFiles::stream_inner`] checks it, then only that part read, after a
+    /// seek past what comes before it. A part is not checked against the file's hash.
+    fn range_inner(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let (f, mut file) = self.stream_inner(ws, id)?;
+        let start = offset.min(f.size_bytes);
+        let n = (f.size_bytes - start).min(len as u64);
+        let skip = i64::try_from(start).map_err(|_| storage())?;
+        io(file.seek(std::io::SeekFrom::Current(skip)))?;
+        let mut part = vec![0; usize::try_from(n).map_err(|_| storage())?];
+        io(file.read_exact(&mut part))?;
+        Ok(part)
+    }
     fn delete_inner(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError> {
         let p = anchored(&self.root).join(ws.to_string());
         if !p.try_exists().map_err(|_| storage())? {
@@ -641,6 +660,18 @@ impl FileStore for DiskFiles {
             Err(e) if e.code == ErrorCode::NotFound => Ok(false),
             Err(e) => Err(e),
         }
+    }
+    async fn read_range(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.range_inner(ws, id, offset, len))
+            .await
+            .map_err(|_| storage())?
     }
     async fn read_stream(&self, ws: WorkspaceId, id: FileId) -> Result<StreamedFile, AppError> {
         let this = self.clone();

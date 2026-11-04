@@ -43,9 +43,30 @@ async fn uploaded() -> (support::World, jt_app::ports::files::StoredFile) {
     w.d.files = Arc::new(MemoryFiles::default());
     let i=serde_json::from_value(json!({"request_key":"upload","filename":"a.png","mime":"image/png","content":{"kind":"bytes_base64","data":STANDARD.encode(b"\x89PNG\r\n\x1a\nprivate-bytes")}})).unwrap();
     let f = file_upload(&w.d, &w.ctx, i).await.unwrap();
-    let p=serde_json::from_value(json!({"slot_id":w.f.slot.id,"expected_revision":1,"request_key":"piece","text":"text","media":[{"kind":"file","id":f.id}],"adaptations":{}})).unwrap();
-    piece_submit(&w.d, &w.ctx, p).await.unwrap();
+    // A piece submitted before the material gate (spec 2026-11-03 D2), whose file is no material:
+    // its bytes are a publication's, cleaned up 30 days after its last publication. A material's
+    // file is the owner's library and outlives it (D14, `studio_materials_gate`).
+    let mut p = w.f.piece.clone();
+    p.id = PieceId::new_v7();
+    p.revision = 2;
+    p.media = vec![MediaAsset::File { id: f.id }];
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .save_piece(w.f.slot.id, 1, p, "piece")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     (w, f)
+}
+/// The stored record of file `id`.
+fn record(w: &support::World, id: FileId) -> jt_app::ports::files::StoredFile {
+    w.uow
+        .snapshot()
+        .studio
+        .files
+        .into_iter()
+        .find(|f| f.id == id)
+        .unwrap()
 }
 async fn publish(w: &support::World, at: time::OffsetDateTime, key: &str) {
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
@@ -95,7 +116,7 @@ async fn cleanup_job_waits_30_days_after_last_publish() {
     assert_eq!(cleanup_files(&w.d, w.f.ws).await.unwrap(), 1);
     assert!(w.d.files.read(w.f.ws, f.id).await.is_err());
     assert_eq!(w.uow.snapshot().studio.publications.len(), 2);
-    assert_eq!(w.uow.snapshot().studio.files[0].sha256, f.sha256);
+    assert_eq!(record(&w, f.id).sha256, f.sha256);
     assert_eq!(
         jt_app::usecases::jobs::Job::StudioFilesCleanup.lock_name(),
         "jeeta.jobs.studio_files_cleanup"
@@ -185,7 +206,7 @@ async fn cleanup_crash_and_repeat_are_idempotent() {
         crash: AtomicBool::new(true),
     });
     assert!(cleanup_files(&w.d, w.f.ws).await.is_err());
-    assert!(w.uow.snapshot().studio.files[0].deleted_at.is_none());
+    assert!(record(&w, f.id).deleted_at.is_none());
     assert!(w.d.files.read(w.f.ws, f.id).await.is_err());
 
     // A new slot cannot adopt bytes removed by the interrupted cleanup.
@@ -199,11 +220,18 @@ async fn cleanup_crash_and_repeat_are_idempotent() {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    let i=serde_json::from_value(json!({"slot_id":slot.id,"expected_revision":0,"request_key":"after-crash","text":"text","media":[{"kind":"file","id":f.id}],"adaptations":{}})).unwrap();
-    assert!(piece_submit(&w.d, &w.ctx, i).await.is_err());
+    // Refused by the bytes check itself, before the material gate is reached.
+    let subject = jt_studio::Subject::Olay {
+        olay_id: w.material().olay_id().unwrap(),
+    };
+    let i=serde_json::from_value(json!({"slot_id":slot.id,"expected_revision":0,"request_key":"after-crash","text":"text","media":[{"kind":"file","id":f.id}],"adaptations":{},"subject":subject})).unwrap();
+    assert_eq!(
+        piece_submit(&w.d, &w.ctx, i).await.unwrap_err().code,
+        jt_app::error::ErrorCode::NotFound
+    );
     assert_eq!(cleanup_files(&w.d, w.f.ws).await.unwrap(), 1);
     assert_eq!(cleanup_files(&w.d, w.f.ws).await.unwrap(), 0);
-    assert!(w.uow.snapshot().studio.files[0].deleted_at.is_some());
+    assert!(record(&w, f.id).deleted_at.is_some());
 }
 struct PausedPut {
     inner: Arc<MemoryFiles>,
@@ -290,7 +318,10 @@ async fn paused_upload_cannot_commit_after_orphan_cleanup() {
     assert!(inner.files.lock().unwrap().is_empty());
     barrier.wait().await;
     assert!(pending.await.unwrap().is_err());
-    assert!(w.uow.snapshot().studio.files.is_empty());
+    // Only the fixture material's record: the paused upload's never committed.
+    let state = w.uow.snapshot();
+    assert_eq!(state.studio.files.len(), 1);
+    assert_eq!(state.studio.files[0].id, w.material().file_id);
 }
 
 fn ftyp(major: &[u8; 4], compatible: &[[u8; 4]]) -> Vec<u8> {

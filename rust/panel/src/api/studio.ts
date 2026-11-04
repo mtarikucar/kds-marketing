@@ -1,5 +1,6 @@
 import { request, seg } from './client';
 import type { Hypothesis, HypothesisInput, LaneKind, LedgerEntryOut } from './types';
+import type { MaterialCheck, ShootRequest, Subject } from './materials';
 export type Instant = string | number[];
 export interface Chain {
   workspace_id: string;
@@ -85,8 +86,14 @@ export interface Overview {
     slots: { slot: Slot; overdue: boolean }[];
     approvals: Target[];
     budget_moves: Move[];
-    blockers: { target: Target; reason: string; next_action?: string }[];
+    /**
+     * `details`: for a `material_check_hold`, its findings (`{kind, code, material_id?, matched?}`);
+     * its `next_action` is `fix_piece`, or `fix_piece_or_release` when only caption findings hold it.
+     */
+    blockers: { target: Target; reason: string; next_action?: string; details?: unknown }[];
     paid_alerts: { binding_id: string; reason: string; residual_provider_exposure: boolean }[];
+    /** The çekim listesi's open requests (absent when there are none). */
+    shoot_requests?: ShootRequest[];
   };
 }
 export interface Query {
@@ -114,6 +121,8 @@ export interface SlotDetail {
   learned: Arm;
   attempts: PublishAttempt[];
   measurements: unknown[];
+  /** The truth check of the piece shown; absent when the piece records no materials. */
+  material_check?: MaterialCheck;
 }
 /** A publish attempt as `slot_get` shows it; only what the panel reads is typed. */
 export interface PublishAttempt {
@@ -278,6 +287,8 @@ export const pieceSubmit = (
     text: string;
     media: Media[];
     adaptations: Record<string, unknown>;
+    /** What the piece speaks about; every medium is a material checked against it. */
+    subject?: Subject;
   },
 ) => request<SlotDetail>('POST', `/api/studio/slots/${seg(id)}/piece`, { body });
 /** The TikTok posting screen: the account read fresh, the draft and its previews. */

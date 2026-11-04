@@ -80,8 +80,42 @@ fn photo(n: u8) -> MediaUpload {
     }
 }
 
+/// Stores `uploads` as materials of one confirmed olay (spec 2026-11-03 D2): the media of a piece
+/// about that olay, and its subject.
+async fn materials(
+    w: &support::World,
+    uploads: Vec<MediaUpload>,
+) -> (Vec<MediaAsset>, jt_studio::Subject) {
+    use jt_testkit::studio_contract::{confirmed_olay, eligible_material};
+    let olay = confirmed_olay(w.f.ws);
+    let mut stored = vec![];
+    for u in uploads {
+        let mime = u.mime.clone();
+        let file = jt_app::usecases::studio::files::upload_bytes(&w.d, w.f.ws, FileId::new_v7(), u)
+            .await
+            .unwrap();
+        stored.push((file, mime));
+    }
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(olay.clone())
+        .await
+        .unwrap();
+    let mut media = vec![];
+    for (file, mime) in stored {
+        r.studio().save_file(file.clone()).await.unwrap();
+        let mut m = eligible_material(&olay, file.id);
+        m.mime = mime;
+        r.studio_materials().insert_material(m).await.unwrap();
+        media.push(MediaAsset::File { id: file.id });
+    }
+    r.commit().await.unwrap();
+    (media, jt_studio::Subject::Olay { olay_id: olay.id })
+}
+
 /// The world of `support`, with a verified TikTok account whose slot is Ready (revision 1) and
-/// due, its piece carrying `media`. The fixture's X slot is cancelled: only TikTok is wired.
+/// due, its piece carrying `media` (materials of one olay). The fixture's X slot is cancelled:
+/// only TikTok is wired.
 async fn tiktok_world(media: Vec<MediaUpload>) -> Tiktok {
     let mut w = support::world().await;
     let tt = Arc::new(ScriptedConnector::new(Provider::Tiktok));
@@ -149,6 +183,7 @@ async fn tiktok_world(media: Vec<MediaUpload>) -> Tiktok {
         .await
         .unwrap();
     r.commit().await.unwrap();
+    let (media, subject) = materials(&w, media).await;
     piece_submit(
         &w.d,
         &w.ctx,
@@ -157,11 +192,9 @@ async fn tiktok_world(media: Vec<MediaUpload>) -> Tiktok {
             expected_revision: 0,
             request_key: "tiktok-piece".into(),
             text: "Bugünün menüsü #yemek".into(),
-            media: media
-                .into_iter()
-                .map(|upload| MediaAsset::Bytes { upload })
-                .collect(),
+            media,
             adaptations: BTreeMap::new(),
+            subject: Some(subject),
         },
     )
     .await
@@ -384,6 +417,7 @@ async fn a_refusal_other_than_waiting_for_a_human_still_fails_the_run() {
         .await
         .unwrap();
     r.commit().await.unwrap();
+    let (m, subject) = t.w.stored().await;
     piece_submit(
         &t.w.d,
         &t.w.ctx,
@@ -392,8 +426,9 @@ async fn a_refusal_other_than_waiting_for_a_human_still_fails_the_run() {
             expected_revision: 0,
             request_key: "x-piece".into(),
             text: "Bugünün menüsü".into(),
-            media: vec![],
+            media: vec![MediaAsset::File { id: m.file_id }],
             adaptations: BTreeMap::new(),
+            subject: Some(subject),
         },
     )
     .await
@@ -1318,4 +1353,77 @@ async fn a_settled_post_is_upgraded_only_by_a_public_id() {
         (PublishState::Succeeded, Some(PUBLISH_ID.to_owned()))
     );
     assert_eq!(t.w.uow.snapshot().studio.publications[0].url, None);
+}
+
+/// The title a human leaves on the posting screen replaces the drafted text, so the truth check
+/// reads it (spec 2026-11-03 §7): one naming another olay holds the post until an owner or
+/// manager releases that finding.
+#[tokio::test]
+async fn a_screen_title_naming_another_olay_holds_until_released() {
+    use jt_app::usecases::studio::materials::material_check_release;
+    let t = tiktok_world(vec![mp4(30)]).await;
+    let other = jt_studio::Olay {
+        place: Some("Moda Sahnesi".into()),
+        ..jt_testkit::studio_contract::confirmed_olay(t.w.f.ws)
+    };
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(other.clone())
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let before = work::slot_get(&t.w.d, &t.w.ctx, t.slot.id)
+        .await
+        .unwrap()
+        .material_check
+        .unwrap();
+    assert!(before.findings.is_empty(), "the drafted text names nothing");
+    t.tt.push_creator_info(Ok(Some(creator())));
+    let chosen = TiktokPost {
+        title: "Moda Sahnesi'nde bu akşam #menu".into(),
+        ..choice("SELF_ONLY")
+    };
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, chosen))
+        .await
+        .unwrap();
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 0);
+    assert!(publishes(&t.tt).is_empty());
+    let pending = work::pending(&t.w.d, &t.w.ctx).await.unwrap();
+    let hold = pending
+        .blockers
+        .iter()
+        .find(|b| b.target == ApprovalTarget::Slot(t.slot.id) && b.reason == "material_check_hold")
+        .expect("held for the title");
+    assert_eq!(hold.next_action.as_deref(), Some("fix_piece_or_release"));
+    let finding = &hold.details.as_ref().unwrap()[0];
+    assert_eq!(
+        (
+            finding["kind"].clone(),
+            finding["code"].clone(),
+            finding["olay_id"].clone()
+        ),
+        (json!("caption"), json!("names_other_olay"), json!(other.id))
+    );
+    let check = work::slot_get(&t.w.d, &t.w.ctx, t.slot.id)
+        .await
+        .unwrap()
+        .material_check
+        .unwrap();
+    assert_eq!(check.findings[0].matched, "moda sahnesi");
+    material_check_release(
+        &t.w.d,
+        &t.w.ctx,
+        serde_json::from_value(json!({
+            "slot_id": t.slot.id, "expected_revision": 1, "digest": check.digest,
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    t.tt.push_publish(Ok(PublishReceipt {
+        external_id: "v_pub_file~v2-1.8".into(),
+        url: None,
+    }));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    assert_eq!(publishes(&t.tt).len(), 1);
 }

@@ -29,7 +29,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           last_seen_at (its bridge does not report it: no evidence verifies it), \
                           inbound_events with count (up to 1000: unacknowledged events to read \
                           with jeeta.events.pending; listed only to a key that may acknowledge \
-                          them, with capabilities.manage), declare_first_capability), a priority \
+                          them, with capabilities.manage), studio_shoot_request with \
+                          shoot_request_id (a material Studio needs, listed with \
+                          jeeta.studio.shoot_list: tell the owner, who shoots it), \
+                          studio_post_request with post_request_id (plan posts from \
+                          its materials and answer it with jeeta.studio.posts_propose), \
+                          declare_first_capability), a priority \
                           (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",
