@@ -35,6 +35,23 @@ fn field(value: &str) -> Option<FieldInput<String>> {
     })
 }
 
+/// The business's Instagram handle, from its name (`"Örnek Kafe"` → `ornekkafe`): a hard key, so
+/// every business of a test has its own.
+fn handle(name: &str) -> String {
+    name.chars()
+        .filter_map(|c| match c {
+            'ç' | 'Ç' => Some('c'),
+            'ğ' | 'Ğ' => Some('g'),
+            'ı' | 'İ' | 'I' => Some('i'),
+            'ö' | 'Ö' => Some('o'),
+            'ş' | 'Ş' => Some('s'),
+            'ü' | 'Ü' => Some('u'),
+            c if c.is_ascii_alphanumeric() => Some(c.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn input(name: &str, phone: Option<&str>, email: Option<&str>) -> CreateInput {
     CreateInput {
         business_name: name.into(),
@@ -49,7 +66,7 @@ fn input(name: &str, phone: Option<&str>, email: Option<&str>) -> CreateInput {
         phone: phone.and_then(field),
         email: email.and_then(field),
         website: None,
-        instagram: field("https://www.instagram.com/ornekkafe"),
+        instagram: field(&format!("https://www.instagram.com/{}", handle(name))),
         tiktok: None,
         address: None,
         contact_person: None,
