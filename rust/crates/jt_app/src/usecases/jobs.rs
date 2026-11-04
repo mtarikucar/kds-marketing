@@ -1782,9 +1782,9 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
 /// The most uncertain public replies of one capability a `comments_poll` run reconciles.
 const MAX_RECONCILED: u32 = 50;
 
-/// Backfills the public items each receiving workspace's capabilities take
-/// (`inbox::public::comments_enabled`: a Meta surface whose comments are on, a marketplace)
-/// through their provider's poll (spec §6.9, D17): the items new since the capability's cursor,
+/// Backfills the comments each receiving workspace's Meta surfaces take (`facebook_page` and
+/// `instagram` capabilities whose comments are on: `inbox::public::comments_enabled`) through
+/// their provider's poll (spec §6.9, D17): the items new since the capability's cursor,
 /// and the current state of the items whose public reply of ours is uncertain (`unknown`), so
 /// that our own reply found there settles it (D25; best effort: a failed reconciliation is logged
 /// and tried again next run). The drafts are stored as a delivery's events
@@ -1805,8 +1805,10 @@ pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
             }
         };
         let mut polled = false;
+        // Meta's surfaces (spec §6.9): the marketplaces have a poll of their own.
         for cap in capabilities.into_iter().filter(|c| {
-            c.status == StoredStatus::Verified
+            matches!(c.kind_key.as_str(), "facebook_page" | "instagram")
+                && c.status == StoredStatus::Verified
                 && super::inbox::public::comments_enabled(deps.apps.as_ref(), c)
         }) {
             let Some(provider) = provider_for_kind(&cap.kind_key) else {
