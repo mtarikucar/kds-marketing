@@ -87,6 +87,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/studio/materials/{material_id}/delete"),
     ("PUT", "/api/studio/calendar/{key}/{year}"),
     ("PUT", "/api/studio/materials/policy"),
+    ("POST", "/api/studio/slots/{slot_id}/material-check/release"),
     ("GET", "/api/inbox/pending"),
     ("POST", "/api/inbox/people/{person_id}/consents"),
     ("GET", "/api/inbox/people/{person_id}/consents"),
@@ -555,6 +556,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/studio/materials/policy",
             "studio.material_policy_set",
             studio::material_policy_set,
+        ),
+        api_route(
+            "POST",
+            "/studio/slots/{slot_id}/material-check/release",
+            "studio.material_check_release",
+            studio::material_check_release,
         ),
         api_route("GET", "/inbox/pending", "inbox.pending", inbox::pending),
         api_route(

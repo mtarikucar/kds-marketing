@@ -43,6 +43,11 @@ pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
     .await
     .unwrap();
     tx.commit().await.unwrap();
+    fixture_in(uow, ws, user).await
+}
+/// [`fixture`]'s approved strategy (approved by `user`), hypothesis, X capability, arm, slot and
+/// piece in the existing, active workspace `ws`; the arm, slot and piece are not stored.
+pub async fn fixture_in(uow: &dyn UnitOfWork, ws: WorkspaceId, user: UserId) -> Fixture {
     let v = StrategyVersion {
         id: StrategyVersionId::new_v7(),
         workspace_id: ws,
@@ -138,7 +143,10 @@ pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
     }
 }
 pub async fn seed(uow: &dyn UnitOfWork) -> Fixture {
-    let f = fixture(uow).await;
+    seeded(uow, fixture(uow).await).await
+}
+/// Stores `f`'s arm and its slot, Planned.
+async fn seeded(uow: &dyn UnitOfWork, f: Fixture) -> Fixture {
     let mut tx = uow.tenant(f.ws).await.unwrap();
     tx.studio().insert_arm(f.arm.clone()).await.unwrap();
     tx.studio()
@@ -149,7 +157,15 @@ pub async fn seed(uow: &dyn UnitOfWork) -> Fixture {
     f
 }
 pub async fn ready(uow: &dyn UnitOfWork) -> Fixture {
-    let f = seed(uow).await;
+    readied(uow, seed(uow).await).await
+}
+/// [`ready`] in the existing, active workspace `ws`, whose strategy `user` approved: its slot is
+/// Ready at revision 1, its piece showing a seeded material.
+pub async fn ready_in(uow: &dyn UnitOfWork, ws: WorkspaceId, user: UserId) -> Fixture {
+    readied(uow, seeded(uow, fixture_in(uow, ws, user).await).await).await
+}
+/// Stores `f`'s piece for its stored slot, and the material it shows.
+async fn readied(uow: &dyn UnitOfWork, f: Fixture) -> Fixture {
     let mut tx = uow.tenant(f.ws).await.unwrap();
     tx.studio()
         .save_piece(f.slot.id, 0, f.piece.clone(), "piece-1")

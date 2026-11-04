@@ -422,6 +422,19 @@ pub async fn material_policy_set(
         library::material_policy_set(&s.deps, &ctx, body).await?,
     ))
 }
+/// A human owner or manager releases the caption findings of the slot's piece at its revision
+/// (`{expected_revision, digest}`, the digest its `material_check` shows).
+pub async fn material_check_release(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<SlotId>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<work::SlotOut>, ApiError> {
+    let input = path_body(body, &[("slot_id", serde_json::json!(id))])?;
+    Ok(Json(
+        jt_app::usecases::studio::materials::material_check_release(&s.deps, &ctx, input).await?,
+    ))
+}
 pub async fn shoot_list(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

@@ -53,7 +53,9 @@ fn studio_routes_have_exact_catalog_twins() {
             ("POST", "/api/studio/materials/{material_id}/bind"),
             ("POST", "/api/studio/materials/{material_id}/delete"),
             ("PUT", "/api/studio/calendar/{key}/{year}"),
-            ("PUT", "/api/studio/materials/policy")
+            ("PUT", "/api/studio/materials/policy"),
+            // Releasing a slot's caption findings (§7): a human's, behind the strategy gate.
+            ("POST", "/api/studio/slots/{slot_id}/material-check/release")
         ]
     );
     for route in routes {

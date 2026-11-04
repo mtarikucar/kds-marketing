@@ -307,3 +307,114 @@ async fn a_materials_routes_carry_the_owners_decisions() {
     )
     .await;
 }
+
+/// Releasing a slot's caption findings (spec §7, D19): behind the strategy gate as the slot's
+/// other writes, the slot id from the path, the owner's in person; a rep may not.
+#[tokio::test]
+async fn a_slots_caption_findings_are_released_by_the_owner() {
+    let p = Panel::new().await;
+    let (owner, me) = p.register("owner@truth.example", "Truth").await;
+    let release = |slot: String| format!("/api/studio/slots/{slot}/material-check/release");
+    let zeros = "0".repeat(64);
+    expect_error(
+        p.send(
+            Method::POST,
+            &release(uuid::Uuid::from_u128(9).to_string()),
+            Some(&owner),
+            Some(json!({"expected_revision":1,"digest":zeros})),
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "STRATEGY_REQUIRED",
+    )
+    .await;
+
+    // An approved strategy, a Ready slot whose piece ("hello") shows a material, and another
+    // confirmed olay its text names.
+    let ws = workspace_of(&me);
+    let user: jt_tenancy::UserId = me["user_id"].as_str().unwrap().parse().unwrap();
+    let f = jt_testkit::studio_contract::ready_in(&p.uow, ws, user).await;
+    let other = jt_app::ports::materials::Olay {
+        title: "Hello".into(),
+        ..jt_testkit::studio_contract::confirmed_olay(ws)
+    };
+    {
+        use jt_app::ports::UnitOfWork;
+        let mut r = p.uow.tenant(ws).await.unwrap();
+        r.studio_materials()
+            .insert_olay(other.clone())
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+    }
+    let slot = ok_json(
+        p.get(&format!("/api/studio/slots/{}", f.slot.id), &owner)
+            .await,
+    )
+    .await;
+    let check = &slot["material_check"];
+    assert_eq!(check["findings"][0]["code"], "names_other_olay");
+    assert_eq!(check["findings"][0]["olay_id"], json!(other.id));
+    assert_eq!(
+        (check["released"].clone(), check["holds"].clone()),
+        (json!(false), json!(true))
+    );
+    let digest = check["digest"].as_str().unwrap().to_owned();
+    let path = release(f.slot.id.to_string());
+    expect_error(
+        p.send(
+            Method::POST,
+            &path,
+            Some(&owner),
+            Some(json!({"slot_id":f.slot.id,"expected_revision":1,"digest":digest})),
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    let body = expect_error(
+        p.send(
+            Method::POST,
+            &path,
+            Some(&owner),
+            Some(json!({"expected_revision":1,"digest":zeros})),
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "CONFLICT",
+    )
+    .await;
+    assert_eq!(body["details"]["reason"], "findings_changed");
+    let (rep, _) = p.join(&owner, "rep@truth.example", "rep").await;
+    expect_error(
+        p.send(
+            Method::POST,
+            &path,
+            Some(&rep),
+            Some(json!({"expected_revision":1,"digest":digest})),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "FORBIDDEN",
+    )
+    .await;
+    let out = ok_json(
+        p.send(
+            Method::POST,
+            &path,
+            Some(&owner),
+            Some(json!({"expected_revision":1,"digest":digest})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(out["material_check"]["released"], true);
+    assert_eq!(out["material_check"]["holds"], false);
+    let again = ok_json(
+        p.get(&format!("/api/studio/slots/{}", f.slot.id), &owner)
+            .await,
+    )
+    .await;
+    assert_eq!(again["material_check"]["released"], true);
+}
