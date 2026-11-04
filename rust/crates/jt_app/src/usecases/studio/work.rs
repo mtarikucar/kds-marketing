@@ -107,11 +107,19 @@ pub(crate) async fn pending_in(
     ctx: &Ctx,
 ) -> Result<PendingStudioOut, AppError> {
     let control = r.studio_control().lock_control().await?;
+    // A week ahead, or a planned post's longest preparation lead when it is longer: a post is
+    // pending from its preparation start (spec 2026-11-03 D28).
+    let policy = r.studio_posts().posting_settings().await?.policy;
+    let lead = jt_studio::PostFormat::ALL
+        .iter()
+        .map(|f| policy.lead(*f))
+        .max()
+        .unwrap_or_default();
     let slots = r
         .studio()
         .list_slots(SlotQuery {
             from: time::Date::MIN.midnight().assume_utc(),
-            until: ctx.now + Duration::days(7),
+            until: ctx.now + Duration::days(7).max(lead),
             hypothesis_id: None,
             lane: None,
         })

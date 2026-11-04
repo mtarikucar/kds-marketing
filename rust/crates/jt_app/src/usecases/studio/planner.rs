@@ -92,6 +92,15 @@ fn beta(a: &Arm) -> f64 {
     x / (x + y)
 }
 
+/// Whether attempt `a` may still be going out: queued, sending, or of unknown outcome (a TikTok
+/// post still processing among them).
+fn in_flight(a: &PublishAttempt) -> bool {
+    matches!(
+        a.state(),
+        PublishState::Queued | PublishState::Sending | PublishState::Unknown
+    )
+}
+
 /// The replay action and key of the one-time retirement of the weekly quotas' slots (D34).
 const REPLAN_ACTION: &str = "studio.replan";
 const REPLAN_KEY: &str = "d34";
@@ -138,18 +147,25 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
     };
     let mut retired: BTreeSet<SlotId> = BTreeSet::new();
 
-    // D34: the weekly quotas' organic slots retire once, their pieces and evidence kept.
+    // D34: the weekly quotas' organic slots retire once, their pieces and evidence kept. A slot
+    // whose publish is in flight waits: the rule runs again on later runs until none is left.
     if r.studio()
         .request_replay(REPLAN_ACTION, REPLAN_KEY, &json!({"rule": REPLAN_KEY}))
         .await?
         .is_none()
     {
         let mut n = 0u64;
+        let mut waiting = false;
         for s in slots.iter().filter(|s| {
             matches!(s.state, SlotState::Planned | SlotState::Ready)
                 && !with_post.contains(&s.id)
                 && lane_of(s) == Some(LaneKind::Organic)
         }) {
+            let (attempts, _) = r.studio().slot_evidence(s.id).await?;
+            if attempts.iter().any(in_flight) {
+                waiting = true;
+                continue;
+            }
             let next = r
                 .studio()
                 .retire_slot(s.id, s.revision, RetirementReason::Replanned.code())
@@ -168,14 +184,16 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
             retired.insert(s.id);
             n += 1;
         }
-        r.studio()
-            .request_receipt(
-                REPLAN_ACTION,
-                REPLAN_KEY,
-                &json!({"rule": REPLAN_KEY}),
-                &json!({"retired": n}),
-            )
-            .await?;
+        if !waiting {
+            r.studio()
+                .request_receipt(
+                    REPLAN_ACTION,
+                    REPLAN_KEY,
+                    &json!({"rule": REPLAN_KEY}),
+                    &json!({"retired": n}),
+                )
+                .await?;
+        }
         changed += n;
     }
 
@@ -220,8 +238,13 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
         if !matches!(s.state, SlotState::Planned | SlotState::Ready) || retired.contains(&s.id) {
             continue;
         }
-        // A post the publisher sent, or may have, is never retired here.
-        if !r.studio().slot_evidence(s.id).await?.0.is_empty() {
+        // A post the publisher sent, or may still be sending, is never retired here; one whose
+        // every attempt ended unsent (failed, refused) is never sent again: it retires (D46).
+        let (attempts, _) = r.studio().slot_evidence(s.id).await?;
+        if attempts
+            .iter()
+            .any(|a| !matches!(a.state(), PublishState::Failed | PublishState::Refused))
+        {
             continue;
         }
         let next = r
@@ -598,20 +621,20 @@ impl Triggers<'_> {
         Ok(())
     }
 
-    /// Among `eligible`, olay `o`'s materials no request of `o` lists yet, oldest change first,
-    /// once their clock (D48: the latest of their changes and `o`'s confirmation) is
-    /// `debounce_minutes` old: 20 photos make one request. `None` while there is none, or while
-    /// they are still settling.
+    /// Among `eligible`, olay `o`'s materials no open or answered request of `o` lists yet
+    /// (an expired request gives its materials back), oldest change first, once their clock
+    /// (D48: the latest of their changes and `o`'s confirmation) is `debounce_minutes` old: 20
+    /// photos make one request. `None` while there is none, or while they are still settling.
     fn settled<'m>(
         &self,
         o: &Olay,
         eligible: Vec<&'m Material>,
         policy: &PostingPolicy,
-    ) -> Option<(Vec<&'m Material>, OffsetDateTime)> {
+    ) -> Option<Vec<&'m Material>> {
         let listed: BTreeSet<MaterialId> = self
             .requests
             .iter()
-            .filter(|q| q.olay_id == Some(o.id))
+            .filter(|q| q.olay_id == Some(o.id) && q.status != PackageStatus::Expired)
             .flat_map(|q| q.material_ids.iter().copied())
             .collect();
         let mut fresh: Vec<&Material> = eligible
@@ -628,8 +651,15 @@ impl Triggers<'_> {
             .chain(o.confirmed.as_ref().map(|c| c.at))
             .max()?;
         let now = self.ctx.now;
-        (now >= last + Duration::minutes(i64::from(policy.debounce_minutes)))
-            .then_some((fresh, last))
+        (now >= last + Duration::minutes(i64::from(policy.debounce_minutes))).then_some(fresh)
+    }
+
+    /// How many requests olay `o` had: the olay key's sequence (D48).
+    fn earlier(&self, o: &Olay) -> usize {
+        self.requests
+            .iter()
+            .filter(|q| q.olay_id == Some(o.id))
+            .count()
     }
 
     /// D24: an olay's confirmed, eligible materials not yet in any of its requests, once they
@@ -662,16 +692,18 @@ impl Triggers<'_> {
             {
                 continue;
             }
-            let Some((fresh, last)) = self.settled(o, eligible, policy) else {
+            let Some(fresh) = self.settled(o, eligible, policy) else {
                 continue;
             };
-            let mut q = self.request(olay_package_key(o.id, last), PackageTrigger::Olay);
-            q.olay_id = Some(o.id);
-            q.material_ids = fresh
+            let ids: Vec<MaterialId> = fresh
                 .iter()
                 .map(|m| m.id)
                 .take(MAX_PACKAGE_MATERIALS)
                 .collect();
+            let key = olay_package_key(o.id, self.earlier(o), &ids);
+            let mut q = self.request(key, PackageTrigger::Olay);
+            q.olay_id = Some(o.id);
+            q.material_ids = ids;
             q.best_formats = format_scores(outcomes, Some(o.kind));
             q.hints.subject = Some(subject);
             self.open(r, q).await?;
@@ -715,7 +747,7 @@ impl Triggers<'_> {
                     let eligible: Vec<&Material> =
                         materials.iter().filter(|m| ids.contains(&m.id)).collect();
                     // Covered by a request of the olay already, or still settling.
-                    let Some((fresh, _)) = self.settled(o, eligible, policy) else {
+                    let Some(fresh) = self.settled(o, eligible, policy) else {
                         continue;
                     };
                     let mut q = self.request(key, PackageTrigger::Calendar);
@@ -804,9 +836,12 @@ impl Triggers<'_> {
                 .requests
                 .iter()
                 .any(|q| q.status == PackageStatus::Open && q.covers(ch.capability.id));
+            // A post past its grace is never sent: it holds nothing (it retires, or its attempt
+            // in flight settles it).
             let pending_post = posts.iter().any(|p| {
                 p.capability_id == ch.capability.id
                     && p.retired.is_none()
+                    && now <= p.grace_until
                     && state_of
                         .get(&p.slot_id)
                         .is_some_and(|s| matches!(s, SlotState::Planned | SlotState::Ready))

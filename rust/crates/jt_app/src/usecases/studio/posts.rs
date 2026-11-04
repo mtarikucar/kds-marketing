@@ -695,13 +695,9 @@ pub async fn posts_propose(
         })
         .collect();
     let existing = existing_posts(r.as_mut()).await?;
-    if let Err(list) = validate_package(
-        &inputs,
-        &existing,
-        now,
-        offset_at(tz, now),
-        &settings.policy,
-    ) {
+    // Each post's hours and day at its own time in the zone (D51).
+    let local = |at: OffsetDateTime| offset_at(tz, at);
+    if let Err(list) = validate_package(&inputs, &existing, now, &local, &settings.policy) {
         for (n, refusal) in list {
             refusals.push(ItemRefusal::new(checked[n].0, refusal.code()));
         }

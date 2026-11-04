@@ -1423,6 +1423,10 @@ impl MemTenant {
                         .attempts
                         .iter()
                         .any(|a| a.piece().chain.workspace_id == self.ws && a.slot_id() == s.id)
+                    // A planned post past its grace is never sent (spec 2026-11-03 D28).
+                    && !self.state().posts.posts.iter().any(|p| {
+                        p.workspace_id == self.ws && p.slot_id == s.id && p.grace_until < now
+                    })
             });
         let Some(slot) = slot else { return Ok(None) };
         let capability = CapabilityRepo::lock(self, slot.capability_id)

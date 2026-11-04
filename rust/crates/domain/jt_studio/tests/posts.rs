@@ -11,7 +11,7 @@ use uuid::Uuid;
 fn now() -> OffsetDateTime {
     datetime!(2026-11-04 09:00 UTC)
 }
-fn istanbul() -> UtcOffset {
+fn istanbul(_: OffsetDateTime) -> UtcOffset {
     offset!(+3)
 }
 fn channel(n: u128) -> CapabilityId {
@@ -67,7 +67,7 @@ fn validate_with(
     existing: &[ExistingPost],
     policy: &PostingPolicy,
 ) -> Result<(), Vec<(usize, PostRefusal)>> {
-    validate_package(items, existing, now(), istanbul(), policy)
+    validate_package(items, existing, now(), &istanbul, policy)
 }
 
 fn refused(items: &[PlannedPostInput], existing: &[ExistingPost]) -> Vec<(usize, PostRefusal)> {
@@ -369,11 +369,11 @@ fn twenty_stories_ten_minutes_apart_pass_and_the_twenty_sixth_breaks_the_cap() {
         "only the format refuses: {refusals:?}"
     );
     assert_eq!(
-        check_schedule(&stories(20), &[], istanbul(), &PostingPolicy::default()),
+        check_schedule(&stories(20), &[], &istanbul, &PostingPolicy::default()),
         Ok(())
     );
     assert_eq!(
-        check_schedule(&stories(26), &[], istanbul(), &PostingPolicy::default()),
+        check_schedule(&stories(26), &[], &istanbul, &PostingPolicy::default()),
         Err(vec![(25, PostRefusal::CapPerDay)])
     );
     // Nine minutes apart is too close.
@@ -382,7 +382,7 @@ fn twenty_stories_ten_minutes_apart_pass_and_the_twenty_sixth_breaks_the_cap() {
         post(Story, 1, start + Duration::minutes(9)),
     ];
     assert_eq!(
-        check_schedule(&close, &[], istanbul(), &PostingPolicy::default()),
+        check_schedule(&close, &[], &istanbul, &PostingPolicy::default()),
         Err(vec![(1, PostRefusal::Spacing)])
     );
 }
@@ -557,4 +557,49 @@ fn refusal_codes_serialize_as_their_closed_names() {
         assert_eq!(r.code(), key);
         assert_eq!(serde_json::to_value(r).unwrap(), key);
     }
+}
+
+/// Each post's hour and day are read at its own time in the zone (spec D51): across a change of
+/// the clocks a post takes its own day's offset, not the proposal's.
+#[test]
+fn quiet_hours_and_days_are_read_at_each_posts_own_offset() {
+    // Summer time (UTC+2) until 2026-10-25 01:00 UTC, winter time (UTC+1) after.
+    let berlin = |at: OffsetDateTime| {
+        if at < datetime!(2026-10-25 01:00 UTC) {
+            offset!(+2)
+        } else {
+            offset!(+1)
+        }
+    };
+    let proposed = datetime!(2026-10-22 10:00 UTC);
+    let policy = PostingPolicy::default();
+    // 06:30 UTC on 27 October is 07:30 local: quiet, though 08:30 at the proposal's offset.
+    let quiet = [post(FeedPost, 1, datetime!(2026-10-27 06:30 UTC))];
+    assert_eq!(
+        validate_package(&quiet, &[], proposed, &berlin, &policy),
+        Err(vec![(0, PostRefusal::QuietHours)])
+    );
+    let fine = [post(FeedPost, 1, datetime!(2026-10-27 07:30 UTC))];
+    assert_eq!(
+        validate_package(&fine, &[], proposed, &berlin, &policy),
+        Ok(())
+    );
+    // 23:30 UTC on 24 October is 01:30 on the 25th in summer time: quiet.
+    let summer_night = [post(FeedPost, 1, datetime!(2026-10-24 23:30 UTC))];
+    assert_eq!(
+        validate_package(&summer_night, &[], proposed, &berlin, &policy),
+        Err(vec![(0, PostRefusal::QuietHours)])
+    );
+    let day = |hour: u8| datetime!(2026-10-27 00:00 UTC) + Duration::hours(i64::from(hour));
+    // A local day's cap, in winter time: 09:00, 13:00 and 17:00 on 27 October are 08:00,
+    // 12:00 and 16:00 UTC.
+    let three = [
+        post(FeedPost, 1, day(8)),
+        post(FeedPost, 1, day(12)),
+        post(FeedPost, 1, day(16)),
+    ];
+    assert_eq!(
+        check_schedule(&three, &[], &berlin, &policy),
+        Err(vec![(2, PostRefusal::CapPerDay)])
+    );
 }

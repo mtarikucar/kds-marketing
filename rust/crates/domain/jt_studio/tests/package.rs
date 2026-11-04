@@ -86,10 +86,16 @@ fn a_request_names_what_its_trigger_needs_and_a_status_its_time() {
 #[test]
 fn request_keys_name_their_trigger() {
     let o = OlayId(id(3));
-    assert_eq!(
-        olay_package_key(o, datetime!(2026-11-04 09:00 UTC)),
-        format!("olay:{o}:1793782800")
-    );
+    let (a, b, c) = (MaterialId(id(4)), MaterialId(id(5)), MaterialId(id(6)));
+    // An olay's request is named by its listed set, whatever its order, and by how many requests
+    // of the olay came before it.
+    let key = olay_package_key(o, 0, &[a, b]);
+    assert!(key.starts_with(&format!("olay:{o}:0:")), "{key}");
+    assert_eq!(key.len(), format!("olay:{o}:0:").len() + 16);
+    assert_eq!(key, olay_package_key(o, 0, &[b, a]));
+    assert_ne!(key, olay_package_key(o, 0, &[a, c]));
+    assert_ne!(key, olay_package_key(o, 0, &[a]));
+    assert_ne!(key, olay_package_key(o, 1, &[a, b]));
     assert_eq!(
         calendar_package_key("yilbasi", 2026),
         "calendar:yilbasi:2026"
