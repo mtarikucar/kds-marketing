@@ -1861,7 +1861,7 @@ impl OutboxRepo for MemTenant {
             })
             .cloned()
             .collect();
-        rows.sort_by(|a, b| (b.updated_at, b.id).cmp(&(a.updated_at, a.id)));
+        rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
         rows.truncate(limit as usize);
         Ok(rows)
     }
