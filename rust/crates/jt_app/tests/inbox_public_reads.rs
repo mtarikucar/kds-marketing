@@ -177,6 +177,22 @@ fn question(id: &str, customer: &str, deadline: Option<OffsetDateTime>) -> Publi
 /// Takes `env` in on `cap` through the consumer; the item.
 async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
     let tick = r.tick.fetch_add(1, Ordering::Relaxed);
+    take_at(
+        r,
+        cap,
+        env,
+        FIXED_NOW - Duration::minutes(5) + Duration::seconds(tick),
+    )
+    .await
+}
+
+/// [`take`], the event stored at `received_at` (and consumed a second later).
+async fn take_at(
+    r: &Rig,
+    cap: &Capability,
+    env: PublicEnvelope,
+    received_at: OffsetDateTime,
+) -> PublicItem {
     let external_id = env.external_id.clone();
     let provider = jt_connector::provider_for_kind(&cap.kind_key).unwrap();
     let kind = match env.kind {
@@ -191,7 +207,7 @@ async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
         external_id: format!("event:{external_id}"),
         kind,
         payload: env.into_payload(json!({})),
-        received_at: FIXED_NOW - Duration::minutes(5) + Duration::seconds(tick),
+        received_at,
         processed_at: None,
     };
     let mut t = r.w.uow.tenant(r.w.ws).await.unwrap();
@@ -202,7 +218,7 @@ async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
         .unwrap();
     t.commit().await.unwrap();
     assert_eq!(
-        consumer::consume_event(&r.w.deps, &event, FIXED_NOW - Duration::minutes(4))
+        consumer::consume_event(&r.w.deps, &event, received_at + Duration::seconds(1))
             .await
             .unwrap(),
         "consumed"
@@ -644,10 +660,11 @@ fn executor(r: &Rig, id: ConversationId) -> Executor {
 async fn sla_uses_the_oldest_owed_item() {
     let r = rig().await;
     // An old comment still owed and a fresh one: the old one sets the clock.
-    let old = take(
+    let old = take_at(
         &r,
         &r.ig,
         comment("1", "fan-1", FIXED_NOW - Duration::hours(2)),
+        FIXED_NOW - Duration::hours(2),
     )
     .await;
     take(
@@ -665,10 +682,11 @@ async fn sla_uses_the_oldest_owed_item() {
     );
     // Answered, the old one no longer counts: a fresh conversation is left to the agent.
     let r = rig().await;
-    let c1 = take(
+    let c1 = take_at(
         &r,
         &r.ig,
         comment("1", "fan-1", FIXED_NOW - Duration::hours(2)),
+        FIXED_NOW - Duration::hours(2),
     )
     .await;
     take(
@@ -815,7 +833,7 @@ async fn sla_defaults_apply_to_stored_policies() {
     t.commit().await.unwrap();
     let mut old = question("q-1", "cust-1", None);
     old.created_at = FIXED_NOW - Duration::hours(2);
-    let q = take(&r, &r.store, old).await;
+    let q = take_at(&r, &r.store, old, FIXED_NOW - Duration::hours(2)).await;
     assert_eq!(
         jobs::run_response_sla(&r.w.deps, FIXED_NOW).await.changed,
         1
@@ -823,5 +841,32 @@ async fn sla_defaults_apply_to_stored_policies() {
     assert_eq!(
         executor(&r, q.conversation_id),
         Executor::Human { user_id: None }
+    );
+}
+
+#[tokio::test]
+async fn sla_clock_starts_when_the_item_is_taken_in() {
+    let r = rig().await;
+    // Written two hours ago, it reaches the inbox only now (a backfill, a late webhook).
+    let taken = FIXED_NOW - Duration::minutes(1);
+    let late = take_at(
+        &r,
+        &r.ig,
+        comment("1", "fan-1", FIXED_NOW - Duration::hours(2)),
+        taken,
+    )
+    .await;
+    assert_eq!(late.taken_at, Some(taken));
+    assert_eq!(
+        jobs::run_response_sla(&r.w.deps, FIXED_NOW).await.changed,
+        0
+    );
+    assert_eq!(executor(&r, late.conversation_id), Executor::Agent);
+    // An hour after it was taken in, it is overdue.
+    assert_eq!(
+        jobs::run_response_sla(&r.w.deps, taken + Duration::minutes(61))
+            .await
+            .changed,
+        1
     );
 }

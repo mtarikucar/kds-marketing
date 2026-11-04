@@ -4619,6 +4619,7 @@ async fn public_item(
         parent_external_id: None,
         root_external_id: external_id.into(),
         created_at: now,
+        taken_at: None,
         deadline: None,
         private_reply_until: None,
         live: false,

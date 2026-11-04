@@ -470,6 +470,8 @@ pub(crate) async fn intake(
         parent_external_id: env.parent_external_id.clone(),
         root_external_id: env.root_external_id.clone(),
         created_at: env.created_at,
+        // When its event arrived: a backfill or a late webhook is not overdue at once.
+        taken_at: Some(event.received_at),
         deadline: env.deadline,
         private_reply_until: jt_inbox::public::private_reply_until(
             &rules,

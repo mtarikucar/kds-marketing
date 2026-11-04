@@ -1575,6 +1575,7 @@ impl Fixture {
         minutes: i64,
     ) -> Uuid {
         self.public_outbox_for(
+            taken_at: None,
             c,
             PublicItemId::new_v7(),
             state,

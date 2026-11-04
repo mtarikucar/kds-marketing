@@ -46,7 +46,8 @@ create table if not exists public_subjects (
 -- inbound message's). The answer is `jt_inbox::AnswerState` as JSON; `answer_state` is derived
 -- from its tag for the indexes and is never written. `live`: a live video's comment, which takes
 -- no public reply. `agent_answers`: the agent's public answers the platform received (it may give
--- a second one after a refused first). Its conversation and its subject are on its capability.
+-- a second one after a refused first). `taken_at`: when the inbox first stored it (its event's
+-- arrival), where its response time starts. Its conversation and its subject are on its capability.
 create table if not exists public_items (
     workspace_id uuid not null references workspaces (id),
     id uuid primary key,
@@ -55,7 +56,8 @@ create table if not exists public_items (
     kind text not null check (kind in ('comment','question')),
     external_id text not null check (char_length(external_id) between 1 and 512),
     parent_external_id text, root_external_id text not null,
-    created_at timestamptz not null, deadline timestamptz, private_reply_until timestamptz,
+    created_at timestamptz not null, taken_at timestamptz, deadline timestamptz,
+    private_reply_until timestamptz,
     live boolean not null default false,
     answer jsonb not null check (jsonb_typeof(answer) = 'object' and answer ? 'state'),
     answer_state text generated always as (answer->>'state') stored

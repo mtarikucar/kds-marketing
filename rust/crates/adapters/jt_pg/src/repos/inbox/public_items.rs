@@ -17,8 +17,9 @@ use uuid::Uuid;
 
 /// The columns an insert writes: every column but the generated `answer_state`.
 const COLUMNS: &str = "workspace_id,id,capability_id,conversation_id,message_id,subject_id,kind,\
-    external_id,parent_external_id,root_external_id,created_at,deadline,private_reply_until,live,\
-    answer,moderation,private_reply_message_id,agent_answers,checked_at,updated_at";
+    external_id,parent_external_id,root_external_id,created_at,taken_at,deadline,\
+    private_reply_until,live,answer,moderation,private_reply_message_id,agent_answers,checked_at,\
+    updated_at";
 
 /// The workspace's message and subject references of `item`, each `NOT_FOUND` when missing.
 async fn references(r: &mut PgTenantRepos, item: &PublicItem) -> Result<(), AppError> {

@@ -227,6 +227,11 @@ pub struct PublicItem {
     /// When the provider says it was written; missing reads as the Unix epoch.
     #[serde(default = "epoch", with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    /// When the inbox first stored it (its inbound event's arrival): the response time runs from
+    /// here, not from `created_at`, so a backfill or a late webhook does not make an old item
+    /// overdue at once. Missing reads as `None` (the clock then starts at `created_at`).
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub taken_at: Option<OffsetDateTime>,
     /// The provider's answer deadline, when it gives one; missing reads as `None`.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub deadline: Option<OffsetDateTime>,

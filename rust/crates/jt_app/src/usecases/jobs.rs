@@ -1534,7 +1534,12 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     if jt_inbox::public_channel_for_kind(&c.kind_key).is_some() {
                         let items = r.public_items().for_conversation(c.id).await?;
                         let owed: Vec<_> = items.iter().filter(|i| i.awaiting()).collect();
-                        let Some(oldest) = owed.iter().map(|i| i.created_at).min() else {
+                        // From when each was taken in (spec D23), not when it was written.
+                        let Some(oldest) = owed
+                            .iter()
+                            .map(|i| i.taken_at.unwrap_or(i.created_at))
+                            .min()
+                        else {
                             continue;
                         };
                         since = oldest;

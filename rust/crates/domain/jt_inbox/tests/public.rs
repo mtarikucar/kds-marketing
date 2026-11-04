@@ -389,6 +389,7 @@ fn item(channel: Channel) -> PublicItem {
         parent_external_id: None,
         root_external_id: "17890".into(),
         created_at: T0,
+        taken_at: None,
         deadline: None,
         private_reply_until: rules(channel).and_then(|r| private_reply_until(&r, T0, false)),
         live: false,
