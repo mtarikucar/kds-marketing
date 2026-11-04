@@ -1231,6 +1231,29 @@ for outreach intents, `on_receipt` sets `sent`/`failed`/`unknown`), `inbox/journ
   `outreach_report_counts_by_step_and_template`, `prospects_report_groups_by_bucket_at_promotion`,
   `won_revenue_grouped_per_currency`, `report_ranges_are_half_open`.
 - [ ] Green; **commit** `feat(outreach): stop hooks and reports`.
+- As built (`77bddf08`, spec D71, D72): `usecases::outreach::hooks::{on_receipt, on_inbound,
+  on_bounce, on_withdrawn, on_suppressed, on_journey_event, on_erased, on_merged}` (crate-private), called from
+  `replies::save_result` (every outbox result: `sent` at its send time, `failed`, `unknown`, `refused`; the
+  claim's refusals and the merge's included), `consumer::message` (any channel; `In-Reply-To` for email),
+  `consumer::mail_evidence` (before the evidence settles the entry), `consumer::consent_event` and
+  `consent::record_consent` (withdrawn), `consent::add_suppression` (a manual email suppression,
+  `refused:suppressed`), `journeys::report`, `consumer::apply_from`, `appointments::enqueue`, `erasure::erase`
+  and `merge::apply`. `record_result_with` applies `OutreachSent {campaign_id, step}` for an outreach intent.
+  New ports: `EnrollmentRepo::for_person(person)` (by id) and `ProspectRepo::report_rows(from, to, limit)`
+  (created or promoted in the range, oldest first, `MAX_REPORT_ROWS` 10,000), both adapters, asserted in the
+  contracts `stop_all_for_stops_only_active`, `rows_are_workspace_scoped` and `status_promotion_and_counts`.
+  Reports: `usecases::outreach::report::{report, ReportInput {campaign_id?, from, to, group_by: campaign |
+  step | template}, ReportOut, ReportGroup}` and `usecases::prospects::report::{report, ReportInput {from, to,
+  group_by: source | research_task | segment | sector | city | score_bucket | rubric_digest}, ReportOut,
+  ReportGroup, Rates}`, both through `usecases::report_range` (`MAX_REPORT_DAYS` 366); no
+  `jt_outreach/report.rs`. `prospects.report`'s row, tool and `GET /api/prospects/report` land here (catalog
+  227, registry 189, `POST_M4_ADDED` 64, `("prospects", 15)`, README, parity
+  `the_pool_report_answers_the_same_over_the_panel_and_mcp`); `outreach.report`'s row with L4-T7. Tests: the
+  plan's names in `outreach_hooks.rs` (14) and `prospects_report.rs` (3), plus
+  `a_refused_claim_marks_the_send_refused`; `refused_at_enqueue_stops_enrollment` now writes Cem's withdrawal
+  straight to the repos (the hook would stop the enrollment first), and the dispatcher's first test reads the
+  receipt's `sent`. D67's open point (rewinding a step lost to a claim's refusal) is not built: the send row
+  says `refused` and the report counts it.
 
 ### Task L4-T7: outreach surfaces and pins
 
@@ -1239,6 +1262,27 @@ pins (+18: catalog 195 → 213; `("outreach", 18)`), parity, gate, `outreach_mcp
 - [ ] **Tests first:** pins red; `test_send_only_to_a_members_login_address` (and refused to any other address),
   parity for each row; MCP descriptions name `JEETA_OUTREACH_ENABLED` and the B2B basis.
 - [ ] Green; **commit** `feat(outreach): outreach tools and routes`.
+- As built (`32f4c61b`, spec D73–D75): the 18 rows of §7.1 (all `Gated`, its routes and risks exactly:
+  no `Destructive` row, so the twin rule's destructive list is unchanged), `jt_mcp/src/tools/outreach.rs`
+  (the descriptions of every tool that can lead to a send name `JEETA_OUTREACH_ENABLED`,
+  `outreach_disabled_on_platform`, the business-recipient basis and the counsel's confirmation; the approval's
+  `human_required`; the settings' `owner_required` and `legal_ack`), `jt_panel_http/src/routes/outreach.rs`;
+  `jt_mcp` and `jt_panel_http` now depend on `jt_outreach` (its ids). New use cases:
+  `enrollments_list(campaign, EnrollmentListInput {status?, limit?, after?}) -> {items, next}` (the panel's
+  shape), `enrollments_stop(id, StopInput {})` (`manual`; `CONFLICT not_active {status}`), `test_send(campaign,
+  TestSendInput {step?, to?}) -> TestSendOut {to, step, message_id, state}` (D73; `replies::Purpose::TestSend`,
+  `TestSend`, `Sending.test`, `test_send::claim_check`). Work items (D69, D75): `usecases::outreach::work::
+  pending_in` and `WorkKind::{PersonalizationDue {campaign_id, count}, CampaignBlocked {campaign_id, reason},
+  CampaignApproval {campaign_id, revision}, PromotedNotContacted {count}}`. Pins: catalog 245, registry 207,
+  `POST_M4_ADDED` 82, `("outreach", 18)`, README table. Tests: `test_send_only_to_a_members_login_address`,
+  `an_outreach_email_on_a_mailbox_requiring_approval_is_never_held` (spec §4.6, 0019 being in),
+  `personalization_due_raised_within_24h`, `the_outreach_work_items_name_who_clears_them`,
+  `promoted_not_contacted_counts_prospects_nobody_wrote_to` (`outreach_dispatch.rs`), the lock file's
+  `a_test_email_is_refused_while_locked` (at the use case and at claim), `jt_mcp/tests/outreach_mcp.rs` (risks,
+  permissions, schemas, the lock and basis words, named tools registered), parity
+  `outreach_answers_the_same_over_the_panel_and_mcp`. For L5-T2: a test email's unsubscribe link names its outbox
+  entry like any commercial email's (D63) and leads to the member's own inbox person; its click links are not
+  rewritten; `outreach_sends.by_outbox` answers none for it.
 
 ---
 
