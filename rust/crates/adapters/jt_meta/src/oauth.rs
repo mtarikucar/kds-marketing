@@ -16,7 +16,7 @@
 //! through `fb_exchange_token` (whether Meta would take it there is unverified).
 
 use jt_app::ports::connectors::{InstagramApp, MetaApp, OAuthApp, OAuthFlow};
-use jt_connector::{ConnectorError, Credential};
+use jt_connector::{ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES};
 use jt_outbound::Method;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -28,7 +28,10 @@ use crate::graph::{Auth, Body, GraphApp, graph_version, integer, join, missing};
 /// The scopes Facebook Login asks for when the Meta app has no login configuration: Pages
 /// (listing, posting, engagement, messaging, webhooks), Instagram through the Page (basic,
 /// messages, publishing, insights), WhatsApp Business, ads (reading, and managing: budgets),
-/// insights, lead-gen submissions (`leads_retrieval`) and business management.
+/// insights, lead-gen submissions (`leads_retrieval`) and business management. While the Meta
+/// app's comment flag is on (`MetaApp::comment_scopes`, after Meta's App Review granted them),
+/// [`FACEBOOK_COMMENT_SCOPES`] are asked for after them; a login configuration asks for whatever
+/// it is configured with in Meta's dashboard, flag or not.
 pub const FACEBOOK_SCOPES: &[&str] = &[
     "pages_show_list",
     "pages_manage_posts",
@@ -48,7 +51,8 @@ pub const FACEBOOK_SCOPES: &[&str] = &[
     "ads_management",
 ];
 
-/// The scopes Instagram Login asks for.
+/// The scopes Instagram Login asks for ([`INSTAGRAM_COMMENT_SCOPES`] added while the Instagram
+/// app's comment flag is on).
 pub const INSTAGRAM_SCOPES: &[&str] = &[
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -60,6 +64,15 @@ pub const INSTAGRAM_SCOPES: &[&str] = &[
 pub const PAGE_MESSAGING_FIELDS: &str =
     "messages,message_echoes,messaging_postbacks,message_reactions";
 
+/// The webhook field of a Page's comments (and its other feed changes, which the webhook parser
+/// leaves out), subscribed besides [`PAGE_MESSAGING_FIELDS`] only when the grant enables comments
+/// (`jt_connector::comment_grant`).
+pub const PAGE_FEED_FIELD: &str = "feed";
+
+/// The webhook fields an Instagram Login account is subscribed to when its grant enables
+/// comments; `messages` is added when it also holds `instagram_business_manage_messages`.
+pub const INSTAGRAM_COMMENT_FIELDS: &str = "comments,live_comments";
+
 /// The webhook field of a Page's lead-gen submissions, subscribed besides
 /// [`PAGE_MESSAGING_FIELDS`] only when the grant holds `leads_retrieval`: Meta refuses the whole
 /// subscription when one of its fields lacks its permission.
@@ -70,6 +83,15 @@ pub(crate) const LEADS_RETRIEVAL: &str = "leads_retrieval";
 
 /// How close to its expiry a long-lived token is renewed.
 const REFRESH_WINDOW: Duration = Duration::days(7);
+
+/// `base`, then `extra` when there is one, as a `scope` parameter.
+fn scopes(base: &[&str], extra: Option<&[&str]>) -> String {
+    base.iter()
+        .chain(extra.unwrap_or_default())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// Whether `access_token` with `scopes` is an Instagram Login token (see the crate docs).
 pub(crate) fn is_instagram_login(access_token: &str, scopes: &[String]) -> bool {
@@ -109,7 +131,13 @@ pub(crate) fn authorize_url(
                     .filter(|c| !c.trim().is_empty())
                 {
                     Some(config) => q.append_pair("config_id", config.trim()),
-                    None => q.append_pair("scope", &FACEBOOK_SCOPES.join(",")),
+                    None => q.append_pair(
+                        "scope",
+                        &scopes(
+                            FACEBOOK_SCOPES,
+                            meta.comment_scopes.then_some(FACEBOOK_COMMENT_SCOPES),
+                        ),
+                    ),
                 };
                 if let Some(challenge) = pkce_challenge {
                     q.append_pair("code_challenge", challenge)
@@ -128,7 +156,13 @@ pub(crate) fn authorize_url(
                 .append_pair("client_id", &instagram.app_id)
                 .append_pair("redirect_uri", redirect.as_str())
                 .append_pair("response_type", "code")
-                .append_pair("scope", &INSTAGRAM_SCOPES.join(","))
+                .append_pair(
+                    "scope",
+                    &scopes(
+                        INSTAGRAM_SCOPES,
+                        instagram.comment_scopes.then_some(INSTAGRAM_COMMENT_SCOPES),
+                    ),
+                )
                 .append_pair("state", state);
             Ok(url)
         }

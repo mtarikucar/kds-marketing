@@ -18,7 +18,8 @@
 //! Graph serves those nodes only to a token with access to them (neither is public), so the
 //! answer's id proves the token reaches that account. A Page, which Graph serves to anyone, is
 //! always read as `/me`. A Page's probe also reads `/me/subscribed_apps` (best effort) and reports
-//! whether the platform app is subscribed (`subscribed`).
+//! whether the platform app is subscribed (`subscribed`). A `facebook_page` or `instagram`
+//! capability whose grant enables comments also reports what it allows on them (`comments`).
 //!
 //! An ad account without `public["external_id"]` is the token's only active ad account, when it
 //! has exactly one; otherwise the probe fails `Permanent` ("name the ad account").
@@ -30,15 +31,18 @@ use std::time::Instant;
 
 use jt_app::ports::connectors::OAuthFlow;
 use jt_app::usecases::webhook::META_HOOK_PATH;
-use jt_connector::{ConnectorError, Credential, ProbeResult};
+use jt_connector::{ConnectorError, Credential, ProbeResult, comment_grant};
 use jt_outbound::Method;
 use serde_json::{Map, Value, json};
 
 use crate::MetaConnector;
 use crate::assets::ad_account_number;
-use crate::credential::{MetaCred, account_of, kind_of};
-use crate::graph::{Body, GraphApp, integer, missing, node, text};
-use crate::oauth::{LEADS_RETRIEVAL, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
+use crate::credential::{MetaCred, account_of, granted_scopes, kind_of};
+use crate::graph::{Auth, Body, GraphApp, integer, missing, node, text};
+use crate::oauth::{
+    INSTAGRAM_COMMENT_FIELDS, LEADS_RETRIEVAL, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD,
+    PAGE_MESSAGING_FIELDS,
+};
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
 /// failure is the result).
@@ -48,12 +52,37 @@ pub(crate) async fn probe(
     public: &Value,
 ) -> ProbeResult {
     let started = Instant::now();
-    let outcome = facts(connector, cred, public).await;
+    let outcome = facts(connector, cred, public)
+        .await
+        .map(|facts| with_comment_facts(facts, cred, public));
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
     match outcome {
         Ok(facts) => ProbeResult::success(latency_ms, facts),
         Err(e) => ProbeResult::failure(latency_ms, e),
     }
+}
+
+/// `facts` with, for a `facebook_page` or `instagram` capability whose grant enables comments,
+/// what it allows on them (`comments: {read, reply, hide, delete_others, private_reply}`); as they
+/// were otherwise.
+fn with_comment_facts(mut facts: Value, cred: &Credential, public: &Value) -> Value {
+    let Ok(kind @ ("facebook_page" | "instagram")) = kind_of(public) else {
+        return facts;
+    };
+    let grant = comment_grant(kind, &granted_scopes(cred, public));
+    if let (true, Value::Object(map)) = (grant.enabled(), &mut facts) {
+        map.insert(
+            "comments".into(),
+            json!({
+                "read": grant.read,
+                "reply": grant.reply,
+                "hide": grant.hide,
+                "delete_others": grant.delete_others,
+                "private_reply": grant.private_reply,
+            }),
+        );
+    }
+    facts
 }
 
 /// The facts of a successful probe (see the module docs).
@@ -242,13 +271,19 @@ pub(crate) async fn on_connected(
 ) -> Result<Value, ConnectorError> {
     let kind = kind_of(public)?;
     let leads = grants_leads(cred, public);
+    let scopes = granted_scopes(cred, public);
+    // One subscription for the page, whatever kind asks: the same union from the same grant.
+    let feed = comment_grant("facebook_page", &scopes).enabled();
     let cred = MetaCred::of(cred, "be connected")?;
     match (kind, cred) {
         ("facebook_page" | "messenger" | "instagram_dm", MetaCred::Page { page_id, token }) => {
-            subscribe_page(connector, node(page_id)?, token, leads).await
+            subscribe_page(connector, node(page_id)?, token, leads, feed).await
         }
         ("facebook_page" | "messenger" | "instagram_dm", MetaCred::User { token }) => {
-            subscribe_page(connector, "me", token, leads).await
+            subscribe_page(connector, "me", token, leads, feed).await
+        }
+        ("instagram", MetaCred::Instagram { token }) => {
+            subscribe_instagram(connector, public, token, &scopes).await
         }
         (
             "whatsapp_cloud",
@@ -418,47 +453,114 @@ async fn on_business_app(
 /// grant is not known, so it does not hold it; nor do an earlier connection's scopes kept in
 /// `public["asset"]`, which outlive the token they came with.
 fn grants_leads(cred: &Credential, public: &Value) -> bool {
-    match cred {
-        Credential::OAuth { scopes, .. } => scopes.iter().any(|s| s == LEADS_RETRIEVAL),
-        _ => public["access"]["scopes"]
-            .as_array()
-            .is_some_and(|scopes| scopes.iter().any(|s| s.as_str() == Some(LEADS_RETRIEVAL))),
+    granted_scopes(cred, public).contains(&LEADS_RETRIEVAL)
+}
+
+/// Whether `e` is Meta refusing the optional webhook field `field` for want of its permission: a
+/// `Permission` error whose reason names the field (Graph `(#200) To subscribe to the leadgen
+/// field, one of these permissions is needed: leads_retrieval`); for the lead-gen field, one
+/// naming [`PAGE_LEADGEN_FIELD`] or [`LEADS_RETRIEVAL`] anywhere.
+fn refuses_field(e: &ConnectorError, field: &str) -> bool {
+    let ConnectorError::Permission { reason, .. } = e else {
+        return false;
+    };
+    if field == PAGE_LEADGEN_FIELD {
+        return reason.contains(PAGE_LEADGEN_FIELD) || reason.contains(LEADS_RETRIEVAL);
     }
+    reason.contains(&format!("the {field} field"))
 }
 
-/// Whether `e` is Meta refusing the lead-gen field for want of its permission: a `Permission`
-/// error whose reason names [`PAGE_LEADGEN_FIELD`] or [`LEADS_RETRIEVAL`] (Graph `(#200) To
-/// subscribe to the leadgen field, one of these permissions is needed: leads_retrieval`).
-fn refuses_leadgen(e: &ConnectorError) -> bool {
-    matches!(
-        e,
-        ConnectorError::Permission { reason, .. }
-            if reason.contains(PAGE_LEADGEN_FIELD) || reason.contains(LEADS_RETRIEVAL)
-    )
-}
-
-/// Subscribes `page` (an id, or `me` for the token's own page) to the platform app's webhooks,
-/// its lead-gen submissions included when `leads` (see [`on_connected`]).
+/// Subscribes `page` (an id, or `me` for the token's own page) to the platform app's webhooks:
+/// [`PAGE_MESSAGING_FIELDS`], with its lead-gen submissions when `leads` and its feed (comments)
+/// when `feed` (see [`on_connected`]). A refusal naming one of the optional fields drops it and
+/// asks again; any other failure is the error. Reports `{"subscribed": true, "leadgen": bool}`,
+/// with `"feed": bool` when it was asked for.
 async fn subscribe_page(
     connector: &MetaConnector,
     page: &str,
     token: &str,
     leads: bool,
+    feed: bool,
 ) -> Result<Value, ConnectorError> {
     let app = connector.graph_app()?;
+    let mut optional: Vec<&str> = Vec::new();
     if leads {
-        let fields = format!("{PAGE_MESSAGING_FIELDS},{PAGE_LEADGEN_FIELD}");
+        optional.push(PAGE_LEADGEN_FIELD);
+    }
+    if feed {
+        optional.push(PAGE_FEED_FIELD);
+    }
+    loop {
+        let fields = std::iter::once(PAGE_MESSAGING_FIELDS)
+            .chain(optional.iter().copied())
+            .collect::<Vec<_>>()
+            .join(",");
         match subscribe_fields(connector, &app, page, token, &fields).await {
-            Ok(()) => return Ok(json!({ "subscribed": true, "leadgen": true })),
-            Err(e) if refuses_leadgen(&e) => tracing::warn!(
-                error_kind = e.kind(),
-                "Meta refused the lead-gen webhook field; the page is subscribed without it"
-            ),
-            Err(e) => return Err(e),
+            Ok(()) => break,
+            Err(e) => match optional.iter().position(|field| refuses_field(&e, field)) {
+                Some(refused) => {
+                    tracing::warn!(
+                        error_kind = e.kind(),
+                        field = optional[refused],
+                        "Meta refused a webhook field; the page is subscribed without it"
+                    );
+                    optional.remove(refused);
+                }
+                None => return Err(e),
+            },
         }
     }
-    subscribe_fields(connector, &app, page, token, PAGE_MESSAGING_FIELDS).await?;
-    Ok(json!({ "subscribed": true, "leadgen": false }))
+    let mut facts = json!({
+        "subscribed": true,
+        "leadgen": optional.contains(&PAGE_LEADGEN_FIELD),
+    });
+    if feed {
+        facts["feed"] = json!(optional.contains(&PAGE_FEED_FIELD));
+    }
+    Ok(facts)
+}
+
+/// Subscribes an Instagram Login account to its comments (and, with
+/// `instagram_business_manage_messages`, its messages) when its grant enables comments:
+/// `POST graph.instagram.com/{account}/subscribed_apps?subscribed_fields=...` (Meta's Instagram
+/// webhook setup, <https://developers.facebook.com/documentation/instagram-platform/webhooks/setup>).
+/// Best effort: `{"subscribed": bool}`, a failure logged; without the grant nothing is asked
+/// (`Null`).
+async fn subscribe_instagram(
+    connector: &MetaConnector,
+    public: &Value,
+    token: &str,
+    scopes: &[&str],
+) -> Result<Value, ConnectorError> {
+    if !comment_grant("instagram", scopes).enabled() {
+        return Ok(Value::Null);
+    }
+    let account = match account_of(public) {
+        Some(account) => node(account)?,
+        None => "me",
+    };
+    let mut fields = INSTAGRAM_COMMENT_FIELDS.to_owned();
+    if scopes.contains(&"instagram_business_manage_messages") {
+        fields.push_str(",messages");
+    }
+    let url = connector.instagram_url(
+        &[account, "subscribed_apps"],
+        &[("subscribed_fields", &fields)],
+    );
+    let subscribed = match connector
+        .call(Method::POST, url, Auth::Bearer(token), Body::Empty)
+        .await
+    {
+        Ok(answer) => answer["success"] != false,
+        Err(e) => {
+            tracing::warn!(
+                error_kind = e.kind(),
+                "the Instagram comment subscription failed"
+            );
+            false
+        }
+    };
+    Ok(json!({ "subscribed": subscribed }))
 }
 
 /// `POST /{page}/subscribed_apps` with `fields`; an answer saying it did not succeed is
