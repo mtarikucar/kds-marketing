@@ -2,6 +2,7 @@
 //! atomically record the result. An uncertain provider write is never retried.
 use super::record;
 use crate::{
+    catalog::{self, GateMode},
     ctx::Ctx,
     error::{AppError, ErrorCode},
     ports::{
@@ -13,6 +14,7 @@ use crate::{
         Deps,
         connector::{adapter_public, open_credential},
         failure, required,
+        studio::budget::is_metered,
     },
 };
 use jt_capability::{Capability, EffectiveStatus, effective_status};
@@ -210,6 +212,55 @@ pub(super) enum Purpose<'a> {
     Appointment(&'a crate::ports::compliance::AppointmentRow),
 }
 
+/// The use case that queues a send for `target` and `purpose`. It is recorded in the send's
+/// intent (`use_case`), so a claim, recovery included, honours that use case's strategy gate again.
+fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
+    match (target, purpose) {
+        (_, Purpose::Quote(..)) => "inbox.quotes.send",
+        (_, Purpose::Appointment(_)) => "inbox.appointments.book",
+        (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
+        (Target::Person(..), Purpose::Reply) => "inbox.send",
+    }
+}
+
+/// The strategy gate of the use case a send's intent records. A send that records none was
+/// queued before sends recorded it, when every send was queued behind the gate: it stays gated.
+fn gate_of(use_case: Option<&str>) -> GateMode {
+    use_case
+        .and_then(catalog::find)
+        .map_or(GateMode::Gated, |uc| uc.gate)
+}
+
+/// The strategy gate a send is held to: its use case's (`gate_of`), but always gated when the
+/// send opens a conversation, which is contact nobody asked for (a quote or a booking mailed on a
+/// channel the customer never wrote on included). Both facts are recorded in the send's intent.
+fn send_gate(use_case: Option<&str>, opens_conversation: bool) -> GateMode {
+    if opens_conversation {
+        GateMode::Gated
+    } else {
+        gate_of(use_case)
+    }
+}
+
+/// The strategy gate queued send `row` is held to again at claim and approval: `send_gate` of the
+/// use case and the conversation opening its intent records.
+fn queued_gate(row: &OutboxRow) -> GateMode {
+    send_gate(
+        row.intent.get("use_case").and_then(Value::as_str),
+        row.intent
+            .get("opens_conversation")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    )
+}
+
+/// How long after the customer's last message a commercial message in a conversation that is not
+/// closed still answers them rather than reaching out to them: seven days, a working week of
+/// back-and-forth (a quote a few days after the question). Later, or once the conversation is
+/// closed, a commercial message is outreach and needs an approved strategy, on every channel.
+/// Meta's channels refuse one outside their 24-hour window anyway; email and SMS have none.
+pub const ANSWERING_WINDOW: Duration = Duration::days(7);
+
 /// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
 pub(super) async fn enqueue_in(
     deps: &Deps,
@@ -237,6 +288,7 @@ pub(super) async fn enqueue_in(
             json!({"field":"text"}),
         ));
     }
+    let use_case = queued_by(&target, &purpose);
     let c = match target {
         Target::Conversation(id) => lock_conversation(r, id).await?,
         Target::Person(person, channel) => {
@@ -288,6 +340,7 @@ pub(super) async fn enqueue_in(
         }
     };
     let id = c.id;
+    let opens_conversation = r.conversations().get(id).await?.is_none();
     // A comment or question is answered by naming it; a direct message never names one.
     let public = public_channel_for_kind(&c.kind_key).is_some();
     if !public && (input.item_id.is_some() || input.visibility.is_some()) {
@@ -325,6 +378,7 @@ pub(super) async fn enqueue_in(
             public: Some((input.item_id, visibility)),
             count_cap: true,
             except: None,
+            gate: send_gate(Some(use_case), opens_conversation),
         },
     )
     .await;
@@ -346,7 +400,7 @@ pub(super) async fn enqueue_in(
         }
     };
     // Only an accepted send may create a conversation. No inbound time is manufactured.
-    if r.conversations().get(id).await?.is_none() {
+    if opens_conversation {
         r.conversations().insert_for_send(c.clone()).await?;
     }
     // Validate recipient ambiguity before creating any durable outbound intent. A public reply
@@ -358,7 +412,12 @@ pub(super) async fn enqueue_in(
     };
     let message_id = MessageId::from(deps.ids.uuid());
     let outbox_id = deps.ids.uuid();
-    let mut intent = json!({"kind":input.intent,"request_key":key});
+    let mut intent = json!({
+        "kind": input.intent,
+        "request_key": key,
+        "use_case": use_case,
+        "opens_conversation": opens_conversation,
+    });
     // An agent's (or the system's) reply on a capability that requires approval waits for a
     // human (spec §3.7); a human's never does.
     let mut held = false;
@@ -559,6 +618,9 @@ struct Fencing<'a> {
     count_cap: bool,
     /// The row being claimed or approved, which is not in its own way (`reply_in_flight`).
     except: Option<Uuid>,
+    /// The strategy gate the send is held to (`send_gate`): at enqueue from its use case, at
+    /// claim and approval from what its intent records.
+    gate: GateMode,
 }
 
 /// Every fence of a reply: on a public conversation commercial intent first (spec §3.6 rule
@@ -577,7 +639,16 @@ async fn fence_all(
             PublicRefusal::CommercialOnPublicSurface,
         ));
     }
-    fence(r, ctx, f.c, f.j, f.cap, f.generation, (f.author, f.intent)).await?;
+    fence(
+        r,
+        ctx,
+        f.c,
+        f.j,
+        f.cap,
+        f.generation,
+        (f.author, f.intent, f.gate),
+    )
+    .await?;
     let Some(channel) = channel else {
         return Ok(None);
     };
@@ -630,9 +701,9 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    purpose: (Author, SendIntent),
+    purpose: (Author, SendIntent, GateMode),
 ) -> Result<(), AppError> {
-    let (author, intent) = purpose;
+    let (author, intent, gate) = purpose;
     let person = r
         .people()
         .get(c.person_id)
@@ -698,11 +769,23 @@ async fn fence(
             return Err(refused("reply_window_closed"));
         }
     }
-    // Recovery must honor the same workspace gate as the public surfaces.
+    // Recovery must honor the same workspace gate as the public surfaces: the status check for
+    // every send, the strategy for one held to the gate (`send_gate`). Whatever queued it, two
+    // more sends need the strategy: a commercial message to a customer who is no longer talking
+    // (outreach, see ANSWERING_WINDOW), and a metered send, whose spend is reserved in the
+    // approved strategy's budget frame; without one each is refused here, never left queued to be
+    // sent late.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Err(refused("workspace_inactive"));
     }
-    if r.strategy().current_approved().await?.is_none() {
+    let answering = !matches!(c.state, ConvState::Closed)
+        && c.last_inbound_at.is_some_and(|at| {
+            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= ANSWERING_WINDOW
+        });
+    let outreach = intent == SendIntent::Commercial && !answering;
+    if (gate == GateMode::Gated || outreach || is_metered(cap))
+        && r.strategy().current_approved().await?.is_none()
+    {
         return Err(refused("strategy_required"));
     }
     Ok(())
@@ -820,6 +903,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
             count_cap: false,
             except: Some(row.id),
+            gate: queued_gate(&row),
         },
     )
     .await
@@ -1460,6 +1544,7 @@ pub(super) async fn approve_in(
             public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
             count_cap: false,
             except: Some(row.id),
+            gate: queued_gate(&row),
         },
     )
     .await;

@@ -71,6 +71,30 @@ export interface CallView {
   duration_s: number | null;
   cost_minor: number | null;
   recording: { state: 'off' | 'pending' | 'recording'; file_ref?: string | null };
+  /** The call's turn timings, summed up; absent from a server before it measured them. */
+  latency?: LatencySummary;
+}
+
+/** `jt_calls::Percentiles`. */
+export interface Percentiles {
+  n: number;
+  p50: number | null;
+  p95: number | null;
+}
+
+/** `jt_calls::LatencySummary`: a call's turn timings, in ms. */
+export interface LatencySummary {
+  turns: number;
+  perceived: Percentiles;
+  content: Percentiles;
+  endpoint: Percentiles;
+  stt_final: Percentiles;
+  core_round: Percentiles;
+  agent: Percentiles;
+  barge_in_stop: Percentiles;
+  transport: Percentiles;
+  backchannel_cuts: number;
+  alerts: string[];
 }
 
 /** `jt_calls::TurnKind`. */
@@ -96,7 +120,20 @@ export interface CallOut {
   turns: CallTurn[];
 }
 
-/** `jt_calls::CallPolicy`. */
+/** `jt_calls::BridgePhrases`: what the voice bridge may play on its own. */
+export interface CallPhrases {
+  acknowledgements: string[];
+  fillers: string[];
+  long_wait: string[];
+  not_heard: string[];
+  still_there: string[];
+  fault: string[];
+}
+
+/**
+ * `jt_calls::CallPolicy`. `GET` shows the workspace's approved templates filled in where the owner
+ * wrote none; a text saved exactly as shown keeps following the workspace's name.
+ */
 export interface CallPolicy {
   greeting_inbound: string;
   voicemail_text: string;
@@ -112,6 +149,13 @@ export interface CallPolicy {
   caller_silence_close_s: number;
   handoff_extension: string | null;
   estimated_minor_per_minute: number;
+  /** Played first on an outbound agent call; `null` (stored): the approved template; empty: none. */
+  opening_outbound: string | null;
+  /** Played after the opening on every agent call; `null` (stored): the approved notice; empty: none. */
+  transcript_notice: string | null;
+  /** Played before an agent's call ends when its plan brings none; empty: every plan brings its own. */
+  closing: string | null;
+  phrases: CallPhrases;
 }
 
 export interface PlaceInput {

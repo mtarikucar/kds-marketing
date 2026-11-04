@@ -1,0 +1,47 @@
+{
+ "note": "Synthetic speech: EMA Lightning (speak voice c7335e8185ab) at 8 kHz, line hiss, G.711 A-law; written by tests/make_fixtures.py. Bu ses yapay zekâ ile üretilmiştir.",
+ "fixtures": {
+  "digits": {
+   "parts": [
+    "Numaram sıfır beş yüz otuz iki.",
+    2000,
+    "Dört yüz on iki, otuz üç, sıfır sekiz."
+   ],
+   "seconds": 7.12
+  },
+  "multi": {
+   "parts": [
+    "Şey, ben aslında",
+    600,
+    "yarın öğleden sonra",
+    700,
+    "sizi aramayı düşünüyordum."
+   ],
+   "seconds": 5.46
+  },
+  "names": {
+   "parts": [
+    "Benim adım Selin Karaosmanoğlu.",
+    1500,
+    "Ben Zeynep Kılıçarslan, randevum vardı.",
+    1500,
+    "Siparişiniz Talas şubemize ulaştı."
+   ],
+   "seconds": 9.6
+  },
+  "pause": {
+   "parts": [
+    "Merhaba, ben Ayşe.",
+    1200,
+    "Perşembe günü uygun musunuz?"
+   ],
+   "seconds": 4.52
+  },
+  "yarin": {
+   "parts": [
+    "Evet, yarın saat on dörtte geliyorum."
+   ],
+   "seconds": 2.56
+  }
+ }
+}

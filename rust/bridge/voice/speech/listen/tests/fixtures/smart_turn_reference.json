@@ -1,0 +1,13 @@
+{
+ "note": "Smart Turn v3.2 p: transformers 5.21.0 WhisperFeatureExtractor(chunk_length=8) and the model card's call (inference.py), over the fixture decoded from A-law and resampled whole by soxr HQ to 16 kHz; `until_ms` cuts it where the session judges its first pause",
+ "cases": {
+  "yarin": {
+   "until_ms": null,
+   "p": 0.987037
+  },
+  "pause": {
+   "until_ms": 1840,
+   "p": 0.979366
+  }
+ }
+}

@@ -120,7 +120,9 @@ pub trait CallRepo: Send + Sync {
     /// Leases to the voice bridge `capability` at most `limit` (clamped to `1..=MAX_CALL_PAGE`)
     /// of the commands of its calls that are not acknowledged and were never taken, or were last
     /// taken before `stale_before`: oldest first (by creation, then id), each marked taken at
-    /// `now`. A command another bundle is leasing at that moment is passed over.
+    /// `now`. A command another bundle is leasing at that moment is passed over. A dial is also
+    /// marked acknowledged as it is taken: it is handed out at most once, so a bridge that took it
+    /// and restarted before acknowledging it never rings the person twice.
     async fn take_commands(
         &mut self,
         capability: CapabilityId,

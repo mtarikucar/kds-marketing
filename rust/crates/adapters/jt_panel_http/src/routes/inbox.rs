@@ -1,4 +1,6 @@
-//! Strategy-gated inbox routes; bodies and outputs are shared with MCP.
+//! Inbox routes; bodies and outputs are shared with MCP. The catalog gives each route its strategy
+//! gate (only `inbox.send` is gated); the send fence asks for a strategy again before outreach or a
+//! metered send.
 use crate::{
     error::{ApiError, ApiJson, ApiPath, ApiQuery},
     session::WorkspaceCtx,

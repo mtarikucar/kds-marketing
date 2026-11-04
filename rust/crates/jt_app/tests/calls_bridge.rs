@@ -90,6 +90,7 @@ fn plan() -> CallPlan {
         max_duration_s: 360,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 
@@ -126,6 +127,7 @@ async fn dialing(w: &World, bridge: CapabilityId, bridge_call_id: &str) -> CallI
         recording: RecordingState::Off,
         metrics: CallMetrics::default(),
         clock: TurnClock::default(),
+        phrases: Default::default(),
     };
     let id = session.id;
     let mut r = w.uow.tenant(w.ws).await.unwrap();
@@ -138,6 +140,7 @@ async fn dialing(w: &World, bridge: CapabilityId, bridge_call_id: &str) -> CallI
                 Command::Dial {
                     to_e164: E164.into(),
                     plan: plan(),
+                    script: Default::default(),
                 },
             )],
             FIXED_NOW,
@@ -419,26 +422,43 @@ async fn commands_long_poll_returns_within_wait_plus_one() {
 
 #[tokio::test]
 async fn unacked_command_redelivered_after_10s() {
+    // The contract (review of D, M2): a command other than a dial that is not acknowledged within
+    // ten seconds of being taken is handed out again; a dial never is (it is acknowledged as it
+    // is taken). A poll leases as of its context's time plus the real time it took, so the checks
+    // keep a second from the ten-second edge (at 11 s exactly a slow poll could read the lease
+    // as run out).
     let (w, key, bridge) = rig().await;
     let call = dialing(&w, bridge, "b-1").await;
-    let first = poll(&w, &key, FIXED_NOW).await;
-    assert_eq!(kinds(&first), ["dial"]);
+    assert_eq!(kinds(&poll(&w, &key, FIXED_NOW).await), ["dial"]);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.calls()
+        .enqueue_commands(
+            call,
+            vec![(CallCommandId::new_v7(), Command::Hangup)],
+            later(1),
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let first = poll(&w, &key, later(1)).await;
+    assert_eq!(kinds(&first), ["hangup"]);
     let id = first.commands[0].id;
     // Taken: not handed out again while its lease runs.
-    assert!(poll(&w, &key, later(5)).await.commands.is_empty());
+    assert!(poll(&w, &key, later(6)).await.commands.is_empty());
     assert!(poll(&w, &key, later(10)).await.commands.is_empty());
-    // Not acknowledged within ten seconds: handed out again, the same command.
-    let again = poll(&w, &key, later(11)).await;
-    assert_eq!(again.commands.len(), 1);
+    // Not acknowledged within ten seconds: the hangup is handed out again, the same command; the
+    // dial, taken 12 s ago and never acknowledged by the bridge, is not.
+    let again = poll(&w, &key, later(12)).await;
+    assert_eq!(kinds(&again), ["hangup"]);
     assert_eq!(again.commands[0].id, id);
     assert_eq!(again.commands[0].call_id, call);
 
     // Acknowledged: never again.
     let out = bridge::events(
         &w.deps,
-        &bridge_at(&key, later(12)),
+        &bridge_at(&key, later(13)),
         batch(json!([
-            { "bridge_call_id": "b-1", "bridge_seq": 1, "at": at(12), "kind": "command_done", "id": id },
+            { "bridge_call_id": "b-1", "bridge_seq": 1, "at": at(13), "kind": "command_done", "id": id },
         ])),
     )
     .await
@@ -446,6 +466,30 @@ async fn unacked_command_redelivered_after_10s() {
     assert_eq!(out.accepted, 1);
     assert!(poll(&w, &key, later(30)).await.commands.is_empty());
     assert!(poll(&w, &key, later(300)).await.commands.is_empty());
+}
+
+#[tokio::test]
+async fn a_dial_is_handed_out_at_most_once() {
+    // A bridge that took a dial and restarted before acknowledging it must not ring the person
+    // twice: a dial is acknowledged as it is taken, and its late command_done changes nothing.
+    let (w, key, bridge) = rig().await;
+    dialing(&w, bridge, "b-1").await;
+    let first = poll(&w, &key, FIXED_NOW).await;
+    assert_eq!(kinds(&first), ["dial"]);
+    for t in [11, 30, 300] {
+        assert!(poll(&w, &key, later(t)).await.commands.is_empty(), "{t}");
+    }
+    let out = bridge::events(
+        &w.deps,
+        &bridge_at(&key, later(301)),
+        batch(json!([
+            { "bridge_call_id": "b-1", "bridge_seq": 1, "at": at(301), "kind": "command_done", "id": first.commands[0].id },
+        ])),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.accepted, 1);
+    assert!(poll(&w, &key, later(400)).await.commands.is_empty());
 }
 
 #[tokio::test]

@@ -64,4 +64,58 @@ describe('CallDetail', () => {
       ]),
     );
   });
+
+  it('shows_the_calls_latency', async () => {
+    const timed: CallOut = {
+      call: {
+        ...call,
+        latency: {
+          turns: 2,
+          backchannel_cuts: 0,
+          alerts: ['content_p95_over_3s'],
+          perceived: { n: 2, p50: 620, p95: 640 },
+          content: { n: 2, p50: 3900, p95: 4760 },
+          endpoint: { n: 2, p50: 260, p95: 280 },
+          stt_final: { n: 2, p50: 310, p95: 330 },
+          core_round: { n: 2, p50: 3600, p95: 4000 },
+          agent: { n: 2, p50: 3200, p95: 4100 },
+          barge_in_stop: { n: 0, p50: null, p95: null },
+          transport: { n: 1, p50: 40, p95: 40 },
+        },
+      },
+      turns: [],
+    };
+    mockFetch({ 'GET /api/auth/me': manager, [`GET /api/calls/${call.id}`]: timed });
+    renderAt(`/calls/${call.id}`);
+    expect(await screen.findByText(tr.calls.detail.latencyTitle)).toBeInTheDocument();
+    expect(screen.getByText('620 / 640 ms')).toBeInTheDocument();
+    expect(screen.getByText('— / — ms')).toBeInTheDocument();
+    expect(screen.getByText(tr.calls.detail.alerts.content_p95_over_3s)).toBeInTheDocument();
+  });
+
+  it('shows_no_latency_for_a_call_without_traces', async () => {
+    const untimed: CallOut = {
+      ...open,
+      call: {
+        ...open.call,
+        latency: {
+          turns: 0,
+          backchannel_cuts: 0,
+          alerts: [],
+          perceived: { n: 0, p50: null, p95: null },
+          content: { n: 0, p50: null, p95: null },
+          endpoint: { n: 0, p50: null, p95: null },
+          stt_final: { n: 0, p50: null, p95: null },
+          core_round: { n: 0, p50: null, p95: null },
+          agent: { n: 1, p50: 3000, p95: 3000 },
+          barge_in_stop: { n: 0, p50: null, p95: null },
+          transport: { n: 0, p50: null, p95: null },
+        },
+      },
+    };
+    mockFetch({ 'GET /api/auth/me': caller, [`GET /api/calls/${call.id}`]: untimed });
+    renderAt(`/calls/${call.id}`);
+    await screen.findByRole('list', { name: tr.calls.detail.turns });
+    expect(screen.queryByText(tr.calls.detail.latencyTitle)).toBeNull();
+  });
 });
