@@ -194,7 +194,7 @@ impl PublicItemRepo for PgTenantRepos {
             sqlx::query_scalar(
                 "select to_jsonb(i) from public_items i where workspace_id=$1 \
                  and deadline is not null and deadline<$2 \
-                 and answer_state in ('awaiting','rejected','pending') \
+                 and answer_state in ('awaiting','rejected') \
                  order by deadline,id limit $3"
             )
             .bind(self.workspace_id().as_uuid())

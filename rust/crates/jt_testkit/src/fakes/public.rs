@@ -254,7 +254,11 @@ impl PublicItemRepo for MemTenant {
         limit: u32,
     ) -> Result<Vec<PublicItem>, AppError> {
         let mut rows = self.public_items_of(|r| {
-            r.deadline.is_some_and(|deadline| deadline < before) && open_or_pending(r)
+            r.deadline.is_some_and(|deadline| deadline < before)
+                && matches!(
+                    r.answer,
+                    AnswerState::Awaiting | AnswerState::Rejected { .. }
+                )
         });
         rows.sort_by_key(|r| (r.deadline, r.id));
         rows.truncate(page(limit));

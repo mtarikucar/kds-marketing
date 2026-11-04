@@ -58,10 +58,11 @@ pub trait PublicItemRepo: Send + Sync {
         root_external_id: &str,
         limit: u32,
     ) -> Result<Vec<PublicItem>, AppError>;
-    /// Items whose deadline is before `before` and whose answer is awaiting, rejected or pending,
-    /// soonest deadline first (then id), at most `limit` (clamped to `1..=MAX_INBOX_PAGE`). Every
-    /// such item, whatever its moderation and including those in review: a caller wanting the
-    /// owed ones keeps those for which [`PublicItem::awaiting`] holds.
+    /// Items whose deadline is before `before` and whose answer is awaiting or rejected, soonest
+    /// deadline first (then id), at most `limit` (clamped to `1..=MAX_INBOX_PAGE`), whatever their
+    /// moderation: a caller wanting the owed ones keeps those for which [`PublicItem::awaiting`]
+    /// holds. An answer in the platform's review is never due: it cannot expire, and a take-N
+    /// sweep must not fill up with what it cannot change.
     async fn due_before(
         &mut self,
         before: OffsetDateTime,

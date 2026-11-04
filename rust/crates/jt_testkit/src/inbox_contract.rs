@@ -2014,10 +2014,14 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
     );
     drop(t);
 
-    // Deadlines: owed and pending items before the bound, soonest first.
+    // Deadlines: owed items before the bound, soonest first.
     let mut t = uow.tenant(f.ws).await.unwrap();
     let mut due_soon = reply.clone();
-    due_soon.answer = AnswerState::Pending { message_id: m3 };
+    due_soon.answer = AnswerState::Rejected {
+        reason: "refused in review".into(),
+        message_id: Some(m3),
+        at: FIXED_NOW,
+    };
     due_soon.deadline = Some(FIXED_NOW + Duration::minutes(30));
     let mut due_later = other_thread.clone();
     due_later.deadline = Some(FIXED_NOW + Duration::minutes(50));
@@ -2056,8 +2060,12 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
         Some(answered.clone())
     );
     assert_eq!(
-        t.public_items().item_for_message(m2).await.unwrap(),
-        Some(due_soon.clone())
+        t.public_items()
+            .item_for_message(m2)
+            .await
+            .unwrap()
+            .map(|i| i.id),
+        Some(due_soon.id)
     );
     assert_eq!(
         t.public_items()
@@ -2071,6 +2079,23 @@ pub async fn public_items_contract(uow: Arc<dyn UnitOfWork>) {
 /// A subject is stored once per capability and external id; a refresh keeps its id and first
 /// sighting.
 pub async fn public_subjects_contract(uow: Arc<dyn UnitOfWork>) {
+    drop(t);
+    // An answer in the platform's review can never expire: it is not due (bug class "recovery
+    // sweep window blindness": a take-N sweep must not fill up with what it cannot change).
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let mut in_review = due_soon.clone();
+    in_review.answer = AnswerState::Pending { message_id: m3 };
+    t.public_items().update(in_review).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.public_items()
+            .due_before(FIXED_NOW + Duration::hours(3), 1)
+            .await
+            .unwrap(),
+        vec![due_later.clone()],
+        "an answer in review is not due"
+    );
     let f = Fixture::new(uow.clone()).await;
     let cap = f.account("instagram", "ig-1").await;
     let first = PublicSubject {

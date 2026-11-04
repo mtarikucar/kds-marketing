@@ -80,9 +80,9 @@ create table if not exists public_items (
 -- Owed items of a conversation (state derivation, context).
 create index if not exists public_items_owed on public_items (workspace_id, conversation_id)
     where answer_state in ('awaiting','rejected') and moderation = 'visible';
--- Deadlines (SLA job, work items).
+-- Deadlines (SLA job, work items): owed items only; an answer in review never expires.
 create index if not exists public_items_deadline on public_items (workspace_id, deadline)
-    where deadline is not null and answer_state in ('awaiting','rejected','pending');
+    where deadline is not null and answer_state in ('awaiting','rejected');
 -- Threads.
 create index if not exists public_items_thread
     on public_items (workspace_id, capability_id, root_external_id, created_at);
