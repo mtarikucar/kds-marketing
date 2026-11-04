@@ -1,5 +1,5 @@
 //! The comments backfill poll (plan 2026-10-30-inbox-comments-marketplace-plan.md, task M4; spec
-//! §6.9, D17, D25): `comments_poll` asks each capability that takes public items for what is new
+//! §6.9, D17, D25): `comments_poll` asks each Meta surface whose comments are on for what is new
 //! since its cursor, stores it as a delivery's events and consumes it, and reconciles the items
 //! whose reply of ours is uncertain. The provider's poll is scripted.
 
