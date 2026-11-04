@@ -730,6 +730,7 @@
       "community": "Community",
       "ads": "Ads",
       "calendar": "Calendar",
+      "marketplace": "Marketplaces",
       "device": "Devices",
       "agent_connection": "Agent connections",
       "computer_access": "Computer access",
@@ -763,6 +764,8 @@
       "google_ads": "Google ads",
       "google_calendar": "Google Calendar",
       "outlook_calendar": "Outlook calendar",
+      "trendyol": "Trendyol store",
+      "hepsiburada": "Hepsiburada store",
       "phone": "Phone",
       "computer": "Computer",
       "printer": "Printer",
@@ -950,6 +953,13 @@
         "transient": "could not reach the provider: check the server name and connection, then retry",
         "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
         "unknown": "the provider's answer did not say whether it worked: probe again in a moment"
+      },
+      "measureReconnect": "Measurement: reconnect; this connection's permissions do not read its results.",
+      "commentsLine": "Comments: {{status}}",
+      "comments": {
+        "off": "off (waiting for Meta’s approval)",
+        "reconnect": "reconnect to turn them on",
+        "on": "on"
       },
       "reasonLine": "The provider said: {{reason}}",
       "probeDialog": {
@@ -1553,6 +1563,88 @@
         "held": "Held",
         "cancelled": "Cancelled"
       }
+    },
+    "public": {
+      "surface": {
+        "private": "DM",
+        "comment": "Comment",
+        "question": "Question",
+        "relay": "Amazon"
+      },
+      "owed": "{{count}} waiting",
+      "heldCount": "{{count}} awaiting approval",
+      "deadlineLeft": "{{time}} left",
+      "deadlinePassed": "Deadline passed",
+      "time": {
+        "days": "{{days}} d {{hours}} h",
+        "hours": "{{hours}} h {{minutes}} min",
+        "minutes": "{{minutes}} min"
+      },
+      "approvals": "Awaiting approval",
+      "approvalFor": "Reply awaiting approval",
+      "noApprovals": "No reply awaits approval.",
+      "items": "Comments and questions",
+      "subject": {
+        "post": "Post",
+        "product": "Product"
+      },
+      "author": {
+        "us": "Us",
+        "them": "Customer",
+        "other": "Someone else"
+      },
+      "answer": {
+        "awaiting": "Waiting",
+        "pending": "In the platform's review",
+        "answered": "Answered",
+        "answeredElsewhere": "Answered elsewhere",
+        "rejected": "Rejected: {{reason}}",
+        "handled": "No reply needed",
+        "expired": "Expired"
+      },
+      "moderation": {
+        "hidden": "Hidden",
+        "deleted": "Deleted",
+        "removed": "Removed",
+        "reported": "Reported"
+      },
+      "actions": {
+        "reply": "Reply",
+        "hide": "Hide",
+        "unhide": "Show",
+        "handled": "No reply needed",
+        "report": "Report",
+        "delete": "Delete"
+      },
+      "delete": {
+        "title": "Delete the comment",
+        "description": "The comment is deleted on the platform for good.",
+        "confirm": "Type “{{phrase}}” to confirm.",
+        "phrase": "DELETE",
+        "submit": "Delete for good"
+      },
+      "held": {
+        "title": "Draft awaiting approval",
+        "text": "Draft text",
+        "approve": "Approve",
+        "edit": "Edit and approve",
+        "save": "Approve and send",
+        "cancel": "Cancel",
+        "discard": "Discard"
+      },
+      "composer": {
+        "target": "Answering",
+        "visibility": "Who sees the reply",
+        "public": "Public",
+        "private": "Private (DM)",
+        "privateLeft": "Private reply allowed: {{time}}, once",
+        "label": "Your reply",
+        "count": "{{count}} / {{max}}",
+        "send": "Send the reply",
+        "noOwed": "No comment or question is waiting for a reply."
+      },
+      "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
+      "approvalNote": "On this account the agent's replies wait for your approval."
     }
   },
   "studio": {
@@ -1603,6 +1695,7 @@
     "requiresApproval": "Require human approval",
     "savePolicy": "Save policy",
     "reconnect": "Check connection",
+    "connectorReconnect": "The account's permissions do not read its results: reconnect it to measure.",
     "connectorUnavailable": "Connector unsupported or needs reconnection.",
     "braked": "Brake engaged; new execution held.",
     "noStrategy": "Approve a strategy first.",

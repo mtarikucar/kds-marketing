@@ -21,8 +21,9 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the materials library's twins; olay-driven publishing's).
-const POST_M4_ADDED: [(&str, &str); 32] = [
+/// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the
+/// materials library's twins; olay-driven publishing's).
+const POST_M4_ADDED: [(&str, &str); 38] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -38,6 +39,15 @@ const POST_M4_ADDED: [(&str, &str); 32] = [
     ("devices.act", "jeeta.devices.act"),
     ("devices.command_get", "jeeta.devices.command_get"),
     ("devices.commands", "jeeta.devices.commands"),
+    ("inbox.public.hide", "jeeta.inbox.public_hide"),
+    ("inbox.public.delete", "jeeta.inbox.public_delete"),
+    (
+        "inbox.public.mark_handled",
+        "jeeta.inbox.public_mark_handled",
+    ),
+    ("inbox.public.report", "jeeta.inbox.public_report"),
+    ("inbox.public.approve", "jeeta.inbox.public_approve"),
+    ("inbox.public.discard", "jeeta.inbox.public_discard"),
     // The Growth Studio materials library (spec 2026-11-03 §5.2).
     ("studio.olays_list", "jeeta.studio.olays_list"),
     ("studio.olay_get", "jeeta.studio.olay_get"),

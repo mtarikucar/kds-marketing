@@ -72,6 +72,9 @@ pub struct MemInbox {
     pub consumption: Vec<StoredConsumption>,
     pub request_keys: Vec<StoredRequestKey>,
     pub outbox: Vec<OutboxRow>,
+    pub public_items: Vec<PublicItem>,
+    pub public_subjects: Vec<PublicSubject>,
+    pub public_cursors: Vec<super::public::StoredCursor>,
 }
 
 pub(super) fn initialize_defaults(state: &mut MemInbox, ws: WorkspaceId) {
@@ -720,6 +723,7 @@ impl MessageRepo for MemTenant {
         conversation: ConversationId,
         body: &str,
         received_at: OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError> {
         let s = self.state();
         let mut rows: Vec<_> = s
@@ -744,6 +748,7 @@ impl MessageRepo for MemTenant {
                                 .and_then(|s| s.parse::<i128>().ok())
                                 .is_some_and(|at| at <= received_at.unix_timestamp_nanos())
                             && (o.state == "sending"
+                                || (uncertain && o.state == "unknown")
                                 || (o.state == "sent"
                                     && o.updated_at >= received_at - Duration::minutes(5)))
                     })
@@ -801,7 +806,8 @@ impl MessageRepo for MemTenant {
                     i.workspace_id == ws && i.id == sender && i.person_id == c.person_id && i.active
                 })
                 .ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
-            if channel_for_kind(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel) {
+            if conversation_channel(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel)
+            {
                 return Err(AppError::not_found("no matching inbound sender"));
             }
             if t.state()
@@ -952,6 +958,44 @@ impl MessageRepo for MemTenant {
                     if cost_minor.is_some() {
                         r.cost_minor = cost_minor;
                     }
+                }
+                touch_conversation(s, ws, conversation_id, at);
+            });
+            Ok(())
+        })
+    }
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            let old = t
+                .state()
+                .inbox
+                .messages
+                .iter()
+                .find(|r| {
+                    r.workspace_id == ws
+                        && r.id == id
+                        && r.direction == Direction::Outbound
+                        && r.status == MsgStatus::Queued
+                })
+                .ok_or_else(|| AppError::not_found("no such queued message"))?;
+            let conversation_id = old.conversation_id;
+            let at = t.inbox_write_at();
+            let body = body.to_owned();
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .messages
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.author = author;
+                    r.body = body.clone();
                 }
                 touch_conversation(s, ws, conversation_id, at);
             });
@@ -1623,7 +1667,10 @@ impl RequestKeyRepo for MemTenant {
     }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {
-    if !["queued", "sending", "sent", "failed", "unknown", "refused"].contains(&row.state.as_str())
+    if ![
+        "queued", "sending", "sent", "failed", "unknown", "refused", "held",
+    ]
+    .contains(&row.state.as_str())
         || row.attempts > i32::MAX as u32
     {
         return Err(AppError::internal("invalid outbox state or attempts"));
@@ -1713,6 +1760,29 @@ impl OutboxRepo for MemTenant {
             Ok(())
         })
     }
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            found(
+                t.state()
+                    .inbox
+                    .outbox
+                    .iter()
+                    .any(|r| r.workspace_id == ws && r.id == id),
+            )?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .outbox
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.expected_generation = generation;
+                }
+            });
+            Ok(())
+        })
+    }
     async fn failure_reasons(
         &mut self,
         messages: &[MessageId],
@@ -1729,5 +1799,80 @@ impl OutboxRepo for MemTenant {
             })
             .filter_map(|r| r.last_error.clone().map(|e| (r.message_id, e)))
             .collect())
+    }
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let n = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.created_at >= since
+                    && r.state != "refused"
+                    && r.intent["public"]["visibility"] == "public"
+                    && r.intent["public"]["drafted_by"]["kind"] == "agent"
+            })
+            .count();
+        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
+    }
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError> {
+        let (item, visibility) = (serde_json::json!(item), serde_json::json!(visibility));
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && matches!(r.state.as_str(), "held" | "queued" | "sending" | "unknown")
+                    && r.intent["public"]["item_id"] == item
+                    && r.intent["public"]["visibility"] == visibility
+                    && Some(r.id) != except
+            })
+            .map(|r| r.state.clone())
+            .collect())
+    }
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError> {
+        let mut rows: Vec<OutboxRow> = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.state == "unknown"
+                    && r.intent["public"]["item_id"].is_string()
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| r.workspace_id == self.ws && r.message_id == message)
+            .min_by_key(|r| (r.created_at, r.id))
+            .cloned())
     }
 }

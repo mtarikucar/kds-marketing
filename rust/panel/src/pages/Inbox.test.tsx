@@ -5,6 +5,7 @@ import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { USER_ID, WS_ID } from '@/test/fixtures';
 import { inboxAnswers, inboxMe, conversation, context, journey, merge, person } from '@/test/inbox';
 import i18n from '@/i18n/config';
+import { kindLabel, kindsInGroup } from '@/lib/capabilities';
 
 /** What the server sends as `status_labels`: the fixed Turkish defaults, all nine stages. */
 const turkishDefaults = {
@@ -476,4 +477,77 @@ it('Inbox names an unnamed contact by its channel and the end of its id, never b
   expect(thread).toBeVisible();
   expect(await screen.findByRole('link', { name: /Messenger kişisi · …5601/ })).toBeVisible();
   expect(document.body.textContent).not.toContain(person.id);
+});
+
+describe('The inbox list, with comments and questions', () => {
+  const HOUR = 3_600_000;
+  const inHours = (hours: number) => new Date(Date.now() + hours * HOUR).toISOString();
+  const publicConversation = {
+    ...conversation,
+    id: 'conv-2',
+    capability_id: 'cap-ig',
+    kind_key: 'instagram',
+    executor: 'agent',
+    surface: 'public',
+    channel: 'instagram_comment',
+    owed_items: 2,
+    next_deadline: null,
+    held_replies: 0,
+  };
+  const rows = [
+    { ...conversation, id: 'conv-dm', surface: 'private', channel: 'whats_app', owed_items: 0, next_deadline: null, held_replies: 0 },
+    { ...publicConversation, id: 'conv-q', kind_key: 'trendyol', channel: 'trendyol_question', next_deadline: inHours(1), owed_items: 1 },
+    { ...publicConversation, id: 'conv-c', next_deadline: inHours(30), held_replies: 1 },
+  ];
+
+  it('list_shows_surface_badges', async () => {
+    mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: rows, next_cursor: null } });
+    renderAt('/inbox');
+    await screen.findAllByText('Deniz Örnek');
+    expect(screen.getByText('DM')).toBeInTheDocument();
+    expect(screen.getByText('Soru')).toBeInTheDocument();
+    expect(screen.getByText('Yorum')).toBeInTheDocument();
+    expect(screen.getByText('1 bekleyen')).toBeInTheDocument();
+    expect(screen.getByText('1 onay bekliyor')).toBeInTheDocument();
+  });
+
+  it('deadline_countdown_turns_red_under_two_hours', async () => {
+    mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: rows, next_cursor: null } });
+    renderAt('/inbox');
+    await screen.findAllByText('Deniz Örnek');
+    const deadlines = screen.getAllByTestId('deadline');
+    expect(deadlines.map((d) => d.dataset.urgent)).toEqual(['true', 'false']);
+    expect(deadlines[0]).toHaveTextContent(/^\d+ dk kaldı$/);
+    expect(deadlines[1]).toHaveTextContent(/^1 gün \d+ sa kaldı$/);
+  });
+
+  it('approvals_queue_lists_held_replies', async () => {
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/pending': {
+        ours: [],
+        reopen_questions: [],
+        merges: [],
+        tasks_due: [],
+        public_due: [],
+        approvals: [{ outbox_id: 'held-1', conversation_id: 'conv-2', item_id: '1', deadline: inHours(5) }],
+      },
+    });
+    renderAt('/inbox');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Onay bekleyenler' }));
+    const approval = await screen.findByTestId('approval');
+    expect(approval).toHaveAttribute('href', '/inbox/conv-2');
+    expect(within(approval).getByTestId('deadline')).toHaveTextContent(/kaldı$/);
+  });
+
+  it('marketplace_kinds_have_labels', () => {
+    const kinds = kindsInGroup('marketplace').map((k) => k.key);
+    expect(kinds).toEqual(['trendyol', 'hepsiburada']);
+    for (const lang of ['tr', 'en']) {
+      const t = i18n.getFixedT(lang);
+      for (const key of kinds) expect(kindLabel(t, key)).not.toBe(`capabilities.kinds.${key}`);
+      expect(t('capabilities.groups.marketplace')).not.toBe('capabilities.groups.marketplace');
+    }
+  });
 });

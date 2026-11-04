@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Bot, MessageCircle, Settings, Smartphone, User } from 'lucide-react';
 import { useSession } from '@/auth/useSession';
 import { listTeam } from '@/api/team';
@@ -31,6 +32,34 @@ export function useInboxMutation<T = void>(
     },
   });
 }
+const HOUR = 3_600_000;
+
+/** A time left, in days and hours, hours and minutes, or minutes. */
+export function durationText(t: TFunction, ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return t('inbox.public.time.days', { days, hours });
+  if (hours > 0) return t('inbox.public.time.hours', { hours, minutes: minutes % 60 });
+  return t('inbox.public.time.minutes', { minutes });
+}
+
+/** A deadline as its time left, red under two hours (spec §9); "passed" once it is. */
+export function Deadline({ at }: { at: string }) {
+  const { t } = useTranslation();
+  const left = new Date(at).getTime() - Date.now();
+  const urgent = left < 2 * HOUR;
+  return (
+    <span
+      data-testid="deadline"
+      data-urgent={urgent ? 'true' : 'false'}
+      className={`text-xs font-medium ${urgent ? 'text-danger' : 'text-muted-foreground'}`}
+    >
+      {left <= 0 ? t('inbox.public.deadlinePassed') : t('inbox.public.deadlineLeft', { time: durationText(t, left) })}
+    </span>
+  );
+}
+
 export function InboxTime({ at }: { at: string }) {
   const { i18n } = useTranslation();
   return (

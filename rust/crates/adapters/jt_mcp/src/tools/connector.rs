@@ -97,7 +97,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           password, msgheader}), the NetGSM PBX (netgsm_pbx, {kind: netgsm_pbx, \
                           username, password, trunk?, pbxnum?}) or a pasted Meta token ({kind: \
                           meta_token, access_token}; a Page or WhatsApp token needs external_id). \
-                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X, TikTok and LinkedIn connect through OAuth only. The credentials are sealed and probed \
+                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). A Trendyol store (kind_key trendyol) takes {kind: trendyol_seller, seller_id, api_key, api_secret} and a Hepsiburada store (hepsiburada) {kind: hepsiburada_merchant, merchant_id, service_key}; their external_id is the seller or merchant id. X, TikTok and LinkedIn connect through OAuth only. The credentials are sealed and probed \
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
@@ -233,7 +233,8 @@ struct ConfirmArgs {
 struct SetCredentialsArgs {
     /// An existing connector capability; or give kind_key and name for a new one.
     capability_id: Option<Uuid>,
-    /// The kind of a new capability: sms_line, netgsm_pbx or a Meta kind.
+    /// The kind of a new capability: sms_line, netgsm_pbx, mailbox, trendyol, hepsiburada or a
+    /// Meta kind.
     kind_key: Option<String>,
     /// The name of a new capability.
     name: Option<String>,
@@ -342,6 +343,27 @@ fn credential_schema(_: &mut SchemaGenerator) -> Schema {
                     "access_token": field("A Meta access token the owner pasted."),
                 },
                 "required": ["kind", "access_token"],
+                "additionalProperties": false,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "trendyol_seller" },
+                    "seller_id": field("The Trendyol seller id: the capability's external_id."),
+                    "api_key": field("The seller's API key (seller panel, integration info)."),
+                    "api_secret": field("The seller's API secret."),
+                },
+                "required": ["kind", "seller_id", "api_key", "api_secret"],
+                "additionalProperties": false,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "hepsiburada_merchant" },
+                    "merchant_id": field("The Hepsiburada merchant id: the capability's external_id."),
+                    "service_key": field("The service key the seller created for Jeeta as its integrator."),
+                },
+                "required": ["kind", "merchant_id", "service_key"],
                 "additionalProperties": false,
             },
         ],

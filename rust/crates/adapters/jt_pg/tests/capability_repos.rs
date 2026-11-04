@@ -1321,6 +1321,44 @@ async fn workspace_policy_defaults() {
     }
 }
 
+#[tokio::test]
+async fn stored_policy_without_new_keys_gets_their_defaults() {
+    let db = TestDb::new().await;
+    let uow = uow(&db);
+    let (a, _) = db.seed_workspace("a").await;
+    // A policy stored before the public surfaces had response times of their own (written as
+    // the workspace, under its row-level security).
+    let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
+    sqlx::query(
+        "insert into workspace_policies (workspace_id, agent_checkin_interval_minutes, \
+         updated_at, inbox_status_labels, inbox_policy) values ($1, 60, now(), '{}'::jsonb, $2) \
+         on conflict (workspace_id) do update set inbox_policy = excluded.inbox_policy",
+    )
+    .bind(a.as_uuid())
+    .bind(json!({ "max_response_s": { "whatsapp": 600 }, "unreachable_threshold": 4 }))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let mut t = uow.tenant(a).await.unwrap();
+    let inbox = t.workspace_policy().get().await.unwrap().inbox;
+    // The stored key wins; every default it lacks is read at its default.
+    let mut expected = jt_app::ports::InboxPolicy::default().max_response_s;
+    expected.insert("whatsapp".into(), 600);
+    assert_eq!(inbox.max_response_s, expected);
+    for (key, seconds) in [
+        ("instagram", 3600),
+        ("facebook_page", 3600),
+        ("trendyol", 3600),
+        ("hepsiburada", 1800),
+        ("amazon", 3600),
+        ("messenger", 900),
+    ] {
+        assert_eq!(inbox.max_response_s.get(key), Some(&seconds), "{key}");
+    }
+    assert_eq!(inbox.unreachable_threshold, 4);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The schema and row-level security
 // ---------------------------------------------------------------------------------------------

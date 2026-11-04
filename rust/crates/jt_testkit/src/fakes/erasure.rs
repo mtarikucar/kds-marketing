@@ -151,7 +151,7 @@ pub(super) fn scrub(s: &mut MemState, ws: WorkspaceId, person: PersonId) {
             };
             o.fence_snapshot = None;
             o.last_error = None;
-            if o.state == "queued" {
+            if matches!(o.state.as_str(), "queued" | "held") {
                 o.state = "refused".into();
             }
         }

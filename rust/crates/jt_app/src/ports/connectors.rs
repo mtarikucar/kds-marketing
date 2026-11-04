@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
+/// The kinds a [`PublicEnvelope`] names, for the adapters that build one.
+pub use jt_inbox::{PublicKind, SubjectKind};
 use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,6 +45,12 @@ pub struct MetaApp {
     pub whatsapp_config_id: Option<String>,
     /// The Graph API version, e.g. `"v19.0"`; `None` lets the adapter use its default.
     pub graph_version: Option<String>,
+    /// Whether Facebook Login flows ask for the comment scopes (`JEETA_META_COMMENT_SCOPES`,
+    /// default off): set by the operator once Meta's App Review granted them, since the live
+    /// app's scopes, login configuration and webhook fields stay exactly as submitted until then
+    /// (spec 2026-10-30-inbox-comments-marketplace-design.md D11). Off, every Meta request is
+    /// what it was before comments.
+    pub comment_scopes: bool,
 }
 
 impl fmt::Debug for MetaApp {
@@ -54,6 +62,7 @@ impl fmt::Debug for MetaApp {
             .field("login_config_id", &self.login_config_id)
             .field("whatsapp_config_id", &self.whatsapp_config_id)
             .field("graph_version", &self.graph_version)
+            .field("comment_scopes", &self.comment_scopes)
             .finish()
     }
 }
@@ -64,6 +73,10 @@ impl fmt::Debug for MetaApp {
 pub struct InstagramApp {
     pub app_id: String,
     pub app_secret: String,
+    /// Whether Instagram Login flows ask for the comment scopes
+    /// (`JEETA_INSTAGRAM_COMMENT_SCOPES`, default off), as [`MetaApp::comment_scopes`] for
+    /// Facebook Login.
+    pub comment_scopes: bool,
 }
 
 impl fmt::Debug for InstagramApp {
@@ -71,6 +84,7 @@ impl fmt::Debug for InstagramApp {
         f.debug_struct("InstagramApp")
             .field("app_id", &self.app_id)
             .field("app_secret", &Masked)
+            .field("comment_scopes", &self.comment_scopes)
             .finish()
     }
 }
@@ -154,6 +168,14 @@ pub trait PlatformAppConfig: Send + Sync {
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         None
     }
+    /// The platform's Hepsiburada integrator user (`JEETA_HEPSIBURADA_INTEGRATOR_USER`), the
+    /// Basic auth user of the Hepsiburada calls made with a seller's service key; `None` (the
+    /// default) while it is not configured, and the merchant id stands in for it then. Which
+    /// value goes where is VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md
+    /// §8.3, §12). Not a secret: the seller's service key is.
+    fn hepsiburada_integrator_user(&self) -> Option<String> {
+        None
+    }
     /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
@@ -234,7 +256,7 @@ impl OAuthCallback {
             Provider::X => Some(OAuthCallback::X),
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
-            Provider::Netgsm | Provider::Mail => None,
+            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
 }
@@ -601,6 +623,226 @@ pub struct InboundEventDraft {
     pub payload: Value,
     /// When it happened, by the provider's clock, when the item says.
     pub occurred_at: Option<OffsetDateTime>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Public items: comments and marketplace questions
+// ---------------------------------------------------------------------------------------------
+
+/// One comment or marketplace question as every adapter writes it into an inbound event of kind
+/// `Comment` or `Question` (spec 2026-10-30-inbox-comments-marketplace-design.md §6.3): the
+/// payload is `{"public": <envelope>, "provider_item": <the provider's item as sent>}`
+/// ([`PublicEnvelope::into_payload`]), and the inbox's one provider-agnostic intake reads it back
+/// ([`PublicEnvelope::from_payload`]). Provider knowledge stays in the adapters.
+///
+/// Read tolerantly: an unknown field is ignored and an optional part left out reads as absent;
+/// the identity fields (`kind`, `account_id`, `external_id`, `root_external_id`, `status`,
+/// `author`, `text`, `created_at`) are required, and an external id must be 1 to
+/// [`jt_inbox::public::MAX_EXTERNAL_ID_CHARS`] characters, not blank.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicEnvelope {
+    /// A comment or a question.
+    pub kind: PublicKind,
+    /// The capability's external id: the Instagram account, the Page, the seller, the merchant.
+    pub account_id: String,
+    /// The provider's comment or question id: the reply target.
+    pub external_id: String,
+    /// The comment it answers; `None` at the top level.
+    #[serde(default)]
+    pub parent_external_id: Option<String>,
+    /// The thread's top-level comment: itself at the top level.
+    pub root_external_id: String,
+    /// What the provider says of it now.
+    pub status: EnvelopeStatus,
+    /// Who wrote it.
+    pub author: EnvelopeAuthor,
+    /// What it says (personal data: never logged).
+    pub text: String,
+    /// When the provider says it was written.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// The provider's answer deadline, when it gives one (Hepsiburada's `expireDate`).
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub deadline: Option<OffsetDateTime>,
+    /// Whether it is a live video's comment.
+    #[serde(default)]
+    pub live: bool,
+    /// The post or product it is about, as much as the provider's item tells.
+    #[serde(default)]
+    pub subject: Option<EnvelopeSubject>,
+    /// The answer the provider shows, when it shows one (ours or another's).
+    #[serde(default)]
+    pub answer: Option<EnvelopeAnswer>,
+    /// The provider's refusal of an answer, when it refused one.
+    #[serde(default)]
+    pub rejection: Option<EnvelopeRejection>,
+}
+
+impl PublicEnvelope {
+    /// The inbound event payload: `{"public": <self>, "provider_item": provider_item}`.
+    pub fn into_payload(self, provider_item: Value) -> Value {
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "public".to_owned(),
+            serde_json::to_value(self).unwrap_or(Value::Null),
+        );
+        payload.insert("provider_item".to_owned(), provider_item);
+        Value::Object(payload)
+    }
+
+    /// The envelope of an inbound event payload, `None` when it holds none or one without its
+    /// identity fields (see the type's docs).
+    pub fn from_payload(payload: &Value) -> Option<PublicEnvelope> {
+        let envelope: PublicEnvelope =
+            serde_json::from_value(payload.get("public")?.clone()).ok()?;
+        let id_ok = |id: &str| {
+            !id.trim().is_empty() && id.chars().count() <= jt_inbox::public::MAX_EXTERNAL_ID_CHARS
+        };
+        let ok = id_ok(&envelope.account_id)
+            && id_ok(&envelope.external_id)
+            && id_ok(&envelope.root_external_id)
+            && envelope.parent_external_id.as_deref().is_none_or(id_ok);
+        ok.then_some(envelope)
+    }
+}
+
+/// What a provider says of a public item now. Each new provider state is a new inbound event
+/// (its own external id), a replayed one a duplicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvelopeStatus {
+    /// Written, waiting for an answer.
+    Open,
+    /// Edited by its author (a new revision of its text).
+    Edited,
+    /// Removed by its author or the platform.
+    Removed,
+    /// Answered: the envelope's `answer` is the text the provider shows.
+    Answered,
+    /// An answer is in the platform's review (Trendyol).
+    Pending,
+    /// The platform refused the answer: the envelope's `rejection` says why.
+    Rejected,
+    /// Its answer deadline passed, as the provider says.
+    Expired,
+    /// Reported to the marketplace.
+    Reported,
+}
+
+/// Who wrote a public item: the provider's id and display name of the author, when it gives
+/// them, and whether it is the account itself (our own comment).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeAuthor {
+    /// The provider's id of the author; `None` when it gives none (a one-off person then).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The name the provider shows, when it may be shown (personal data: never logged).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Whether the author is the account itself.
+    #[serde(default)]
+    pub is_self: bool,
+}
+
+/// The post or product a public item is about, as the provider's item tells it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EnvelopeSubject {
+    /// A post or a product.
+    pub kind: SubjectKind,
+    /// The provider's post (media) or product id.
+    pub external_id: String,
+    /// A caption excerpt or the product's name; empty when the item does not tell.
+    #[serde(default)]
+    pub title: String,
+    /// Its permalink.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// A thumbnail on the provider's CDN.
+    #[serde(default)]
+    pub image_url: Option<String>,
+    /// Further provider facts (media product type, barcode, ...).
+    #[serde(default)]
+    pub facts: Value,
+}
+
+/// The answer a provider shows for a public item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeAnswer {
+    /// Its text.
+    pub text: String,
+    /// When it was given, when the provider says.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub at: Option<OffsetDateTime>,
+}
+
+/// A provider's refusal of an answer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeRejection {
+    /// The provider's reason, as it gives it.
+    pub reason: String,
+    /// When it refused, when the provider says.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub at: Option<OffsetDateTime>,
+}
+
+/// What a reply or a moderation call on a public item addresses: the item's kind and external
+/// id, its parent's, and its subject's when known. Stored in an outbox intent
+/// (`intent.public.target`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicTarget {
+    pub kind: PublicKind,
+    pub external_id: String,
+    #[serde(default)]
+    pub parent_external_id: Option<String>,
+    #[serde(default)]
+    pub subject_external_id: Option<String>,
+}
+
+/// A private reply's receipt: the provider's id of the message sent, and the recipient's
+/// messaging id when the provider tells it (VERIFY V-M5), which links the commenter to their
+/// direct-message identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateReceipt {
+    pub provider_id: String,
+    #[serde(default)]
+    pub recipient_id: Option<String>,
+}
+
+/// A moderation call on a public item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ModerationAction {
+    /// Hides a comment (reversible).
+    Hide,
+    /// Shows a hidden comment again.
+    Unhide,
+    /// Deletes a comment.
+    Delete,
+    /// Reports a marketplace question.
+    Report { reason: ReportReason },
+}
+
+/// Why a question is reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportReason {
+    Spam,
+    Offensive,
+    PersonalData,
+    Irrelevant,
+    Other,
+}
+
+/// What a provider tells of a post or product when asked ([`PublicSurface::subject`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubjectFacts {
+    pub kind: SubjectKind,
+    /// A caption excerpt or the product's name.
+    pub title: String,
+    pub url: Option<String>,
+    pub image_url: Option<String>,
+    /// Further provider facts, an object.
+    pub facts: Value,
 }
 
 /// Something an OAuth-connected account can reach and the owner may connect as a capability: a
@@ -996,6 +1238,84 @@ pub trait DeliveryReports: Send + Sync {
     ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
+/// The reason of the `ConnectorError::Permanent` a [`PublicSurface`] answers when the item a
+/// reply or moderation names is gone on the provider (a deleted comment, a removed question):
+/// the inbox then marks the item removed and fails the reply with `item_removed`. Which provider
+/// answer means it is each adapter's to map (Meta's is VERIFY V-M10, spec §12).
+pub const PUBLIC_ITEM_GONE: &str = "public_item_gone";
+
+/// Replies and moderation on public items: comments on posts and marketplace questions (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md §6.1). `public` is as [`Connector::probe`]
+/// gets it; `target` names the item. An adapter refuses, before any call, what the credential's
+/// grant does not hold (a Meta token without the comment scopes).
+#[async_trait]
+pub trait PublicSurface: Send + Sync {
+    /// Answers the item in front of everyone: a comment reply, a marketplace answer. The receipt
+    /// carries the provider's id of the reply.
+    async fn reply_public(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<SendReceipt, ConnectorError>;
+    /// Answers the item's author privately (Instagram's and Facebook's private reply). The
+    /// default refuses: a surface without private replies.
+    async fn reply_private(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<PrivateReceipt, ConnectorError> {
+        let _ = (cred, public, target, text);
+        Err(ConnectorError::permanent("no private replies"))
+    }
+    /// Hides, shows again, deletes or reports the item.
+    async fn moderate(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        action: ModerationAction,
+    ) -> Result<(), ConnectorError>;
+    /// What the provider tells of the post or product `subject_external_id`; `None`, the
+    /// default, when it tells nothing more than its items do. A read.
+    async fn subject(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        subject_external_id: &str,
+    ) -> Result<Option<SubjectFacts>, ConnectorError> {
+        let _ = (cred, public, subject_external_id);
+        Ok(None)
+    }
+}
+
+/// Polls public items: the new ones from a cursor, and the current state of known ones. Each
+/// item comes back as an inbound event draft whose payload is a [`PublicEnvelope`], under the
+/// same external ids a webhook gives the same state, so a poll never duplicates a push. No
+/// cursor is stored here: the caller stores the returned cursor with the drafts.
+#[async_trait]
+pub trait PublicPoller: Send + Sync {
+    /// The items new since `cursor` (an object, `{}` before the first poll), within `ws`, and
+    /// the cursor to start from next time.
+    async fn poll(
+        &self,
+        ws: WorkspaceId,
+        cred: &Credential,
+        public: &Value,
+        cursor: &Value,
+    ) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError>;
+    /// The current state of the items `targets` names, those whose state changed.
+    async fn reconcile(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        targets: &[PublicTarget],
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
+}
+
 /// Places and ends calls through a PBX.
 #[async_trait]
 pub trait Telephony: Send + Sync {
@@ -1127,6 +1447,16 @@ pub trait ConnectorRegistry: Send + Sync {
     fn telephony(&self, provider: Provider) -> Option<Arc<dyn Telephony>>;
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>>;
     fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>>;
+    /// Replies and moderation on public items; `None`, the default, for a provider without them.
+    fn public(&self, provider: Provider) -> Option<Arc<dyn PublicSurface>> {
+        let _ = provider;
+        None
+    }
+    /// The public items' poll; `None`, the default, for a provider without one.
+    fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> {
+        let _ = provider;
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1142,10 +1472,12 @@ mod tests {
             login_config_id: Some("cfg-1".into()),
             whatsapp_config_id: None,
             graph_version: Some("v19.0".into()),
+            comment_scopes: false,
         };
         let instagram = InstagramApp {
             app_id: "ig-id".into(),
             app_secret: "ig-secret-value".into(),
+            comment_scopes: false,
         };
         let x = XApp {
             client_id: "x-id".into(),
@@ -1193,6 +1525,167 @@ mod tests {
             "ig-secret-value"
         );
         assert_eq!(OAuthApp::Meta(meta).client_id(), "meta-id");
+    }
+
+    #[test]
+    fn meta_app_debug_shows_comment_scopes_flag() {
+        let meta = MetaApp {
+            app_id: "meta-id".into(),
+            app_secret: "meta-secret-value".into(),
+            verify_token: "verify-token-value".into(),
+            login_config_id: None,
+            whatsapp_config_id: None,
+            graph_version: None,
+            comment_scopes: true,
+        };
+        let instagram = InstagramApp {
+            app_id: "ig-id".into(),
+            app_secret: "ig-secret-value".into(),
+            comment_scopes: false,
+        };
+        let printed = format!("{meta:?} {instagram:?}");
+        assert!(printed.contains("comment_scopes: true"), "{printed}");
+        assert!(printed.contains("comment_scopes: false"), "{printed}");
+        for secret in ["meta-secret-value", "verify-token-value", "ig-secret-value"] {
+            assert!(!printed.contains(secret), "{printed}");
+        }
+    }
+
+    fn envelope() -> PublicEnvelope {
+        PublicEnvelope {
+            kind: PublicKind::Comment,
+            account_id: "17841400000000001".into(),
+            external_id: "18000000000000002".into(),
+            parent_external_id: Some("18000000000000001".into()),
+            root_external_id: "18000000000000001".into(),
+            status: EnvelopeStatus::Open,
+            author: EnvelopeAuthor {
+                id: Some("17841400000000009".into()),
+                name: Some("a.customer".into()),
+                is_self: false,
+            },
+            text: "Fiyatı nedir?".into(),
+            created_at: time::macros::datetime!(2026-10-30 09:15 UTC),
+            deadline: Some(time::macros::datetime!(2026-10-31 09:15 UTC)),
+            live: true,
+            subject: Some(EnvelopeSubject {
+                kind: jt_inbox::SubjectKind::Post,
+                external_id: "17900000000000001".into(),
+                title: "Yeni sezon".into(),
+                url: Some("https://www.instagram.example/p/abc/".into()),
+                image_url: None,
+                facts: serde_json::json!({ "media_product_type": "FEED" }),
+            }),
+            answer: Some(EnvelopeAnswer {
+                text: "Merhaba".into(),
+                at: Some(time::macros::datetime!(2026-10-30 10:00 UTC)),
+            }),
+            rejection: Some(EnvelopeRejection {
+                reason: "contains a link".into(),
+                at: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn envelope_round_trips_through_a_payload() {
+        let provider_item = serde_json::json!({ "id": "18000000000000002", "from": {} });
+        let payload = envelope().into_payload(provider_item.clone());
+        assert_eq!(payload["provider_item"], provider_item);
+        assert_eq!(payload["public"]["kind"], "comment");
+        assert_eq!(payload["public"]["status"], "open");
+        assert_eq!(payload["public"]["created_at"], "2026-10-30T09:15:00Z");
+        assert_eq!(payload["public"]["subject"]["kind"], "post");
+        assert_eq!(
+            payload.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["provider_item", "public"]
+        );
+        assert_eq!(PublicEnvelope::from_payload(&payload), Some(envelope()));
+
+        // The optional parts read as absent when left out.
+        let bare = serde_json::json!({ "public": {
+            "kind": "question", "account_id": "123456", "external_id": "q-1",
+            "root_external_id": "q-1", "status": "answered", "author": {},
+            "text": "Bedeni var mı?", "created_at": "2026-10-30T09:15:00Z",
+        }});
+        let read = PublicEnvelope::from_payload(&bare).unwrap();
+        assert_eq!(read.kind, PublicKind::Question);
+        assert_eq!(read.status, EnvelopeStatus::Answered);
+        assert_eq!(read.author, EnvelopeAuthor::default());
+        assert_eq!(
+            (
+                read.parent_external_id,
+                read.deadline,
+                read.live,
+                read.subject,
+                read.answer,
+                read.rejection
+            ),
+            (None, None, false, None, None, None)
+        );
+        for (status, key) in [
+            (EnvelopeStatus::Open, "open"),
+            (EnvelopeStatus::Edited, "edited"),
+            (EnvelopeStatus::Removed, "removed"),
+            (EnvelopeStatus::Answered, "answered"),
+            (EnvelopeStatus::Pending, "pending"),
+            (EnvelopeStatus::Rejected, "rejected"),
+            (EnvelopeStatus::Expired, "expired"),
+            (EnvelopeStatus::Reported, "reported"),
+        ] {
+            assert_eq!(serde_json::to_value(status).unwrap(), key);
+        }
+    }
+
+    #[test]
+    fn envelope_from_payload_ignores_unknown_fields() {
+        let mut payload = envelope().into_payload(Value::Null);
+        payload["public"]["future_field"] = serde_json::json!(1);
+        payload["public"]["author"]["avatar"] = serde_json::json!("x");
+        payload["public"]["subject"]["price"] = serde_json::json!(450);
+        payload["occurred_at"] = serde_json::json!("2026-10-30T09:15:00Z");
+        assert_eq!(PublicEnvelope::from_payload(&payload), Some(envelope()));
+    }
+
+    #[test]
+    fn envelope_requires_its_identity_fields() {
+        let payload = envelope().into_payload(Value::Null);
+        for field in [
+            "kind",
+            "account_id",
+            "external_id",
+            "root_external_id",
+            "status",
+            "author",
+            "text",
+            "created_at",
+        ] {
+            let mut missing = payload.clone();
+            missing["public"].as_object_mut().unwrap().remove(field);
+            assert_eq!(PublicEnvelope::from_payload(&missing), None, "{field}");
+        }
+        for (field, value) in [
+            ("account_id", serde_json::json!("  ")),
+            ("external_id", serde_json::json!("")),
+            ("root_external_id", serde_json::json!(" ")),
+            ("parent_external_id", serde_json::json!("")),
+            ("external_id", serde_json::json!("9".repeat(513))),
+            ("kind", serde_json::json!("review")),
+            ("status", serde_json::json!("deleted")),
+            ("created_at", serde_json::json!("yesterday")),
+        ] {
+            let mut wrong = payload.clone();
+            wrong["public"][field] = value;
+            assert_eq!(PublicEnvelope::from_payload(&wrong), None, "{field}");
+        }
+        let mut longest = payload.clone();
+        longest["public"]["external_id"] = serde_json::json!("9".repeat(512));
+        assert!(PublicEnvelope::from_payload(&longest).is_some());
+        assert_eq!(
+            PublicEnvelope::from_payload(&serde_json::json!({ "messaging": {} })),
+            None
+        );
+        assert_eq!(PublicEnvelope::from_payload(&Value::Null), None);
     }
 
     #[test]

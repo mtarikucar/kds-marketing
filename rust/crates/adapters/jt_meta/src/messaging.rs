@@ -10,18 +10,29 @@ use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
 
 use crate::MetaConnector;
-use crate::credential::{MetaCred, kind_of};
+use crate::credential::{MetaCred, account_of, kind_of};
 use crate::graph::{missing, node, text};
 
 /// The longest WhatsApp text body, in characters.
 const MAX_WHATSAPP_TEXT: usize = 4096;
-/// The longest Messenger text, in characters.
-const MAX_MESSENGER_TEXT: usize = 2000;
+/// The longest text Instagram Login's messages take, in UTF-8 bytes (Meta's messaging reference,
+/// <https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/>).
+const MAX_INSTAGRAM_LOGIN_TEXT_BYTES: usize = 1000;
+
+/// The permission an Instagram Login account's direct messages need.
+pub(crate) const INSTAGRAM_MESSAGES_SCOPE: &str = "instagram_business_manage_messages";
+
+/// The longest Messenger text, in characters (a Facebook private reply's bound too:
+/// `jt_inbox::public::FACEBOOK_PRIVATE_MAX`, pinned equal by a test).
+pub const MAX_MESSENGER_TEXT: usize = 2000;
 
 /// Sends `text` to `recipient` (see the module docs), by the capability's kind: `whatsapp_cloud`
 /// through its number (a WhatsApp credential), `messenger`, `instagram_dm` and `facebook_page`
-/// through Messenger (a Page token, or a pasted one). Without a Meta kind, `Permanent`
-/// ("kind_key missing") before anything is sent.
+/// through Messenger (a Page token, or a pasted one); `instagram_dm` with an Instagram Login
+/// token on `graph.instagram.com` (`POST /{account}/messages`, `{recipient: {id}, message:
+/// {text}}`, at most 1000 bytes), refused (`Permission`) before anything is sent when its grant
+/// lacks `instagram_business_manage_messages`. Without a Meta kind, `Permanent` ("kind_key
+/// missing") before anything is sent.
 pub(crate) async fn send_text(
     connector: &MetaConnector,
     cred: &Credential,
@@ -36,7 +47,37 @@ pub(crate) async fn send_text(
     if text_body.trim().is_empty() {
         return Err(ConnectorError::permanent("no text to send"));
     }
+    let granted = matches!(cred, Credential::OAuth { scopes, .. }
+        if scopes.iter().any(|s| s == INSTAGRAM_MESSAGES_SCOPE));
     let cred = MetaCred::of(cred, "send messages")?;
+    if let ("instagram_dm", MetaCred::Instagram { token }) = (kind, cred) {
+        if !granted {
+            return Err(ConnectorError::permission(
+                "the Instagram account's grant does not allow direct messages: reconnect it",
+            ));
+        }
+        if text_body.len() > MAX_INSTAGRAM_LOGIN_TEXT_BYTES {
+            return Err(ConnectorError::permanent(format!(
+                "an Instagram message is at most {MAX_INSTAGRAM_LOGIN_TEXT_BYTES} bytes"
+            )));
+        }
+        let account = match account_of(public) {
+            Some(account) => node(account)?,
+            None => "me",
+        };
+        let answer = connector
+            .instagram_post(
+                token,
+                &[account, "messages"],
+                json!({ "recipient": { "id": recipient }, "message": { "text": text_body } }),
+            )
+            .await?;
+        let id = text(&answer["message_id"]).ok_or_else(|| missing("message id"))?;
+        return Ok(SendReceipt {
+            provider_id: id,
+            cost_minor: None,
+        });
+    }
     let app = connector.graph_app()?;
     match (kind, cred) {
         (

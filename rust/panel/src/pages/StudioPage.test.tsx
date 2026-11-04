@@ -475,6 +475,24 @@ it.each([
   expect(Boolean(screen.queryByText('Reklam seti bağla', { selector: 'summary' }))).toBe(visible);
 });
 
+it('organic_lane_names_a_reconnect_when_only_the_read_permission_is_missing', async () => {
+  mockFetch({
+    ...answers,
+    'GET /api/studio/overview': {
+      ...overview,
+      lane_support: {
+        ...overview.lane_support,
+        organic: { visible: true, supported: false, reason: 'connector_reconnect_required' },
+      },
+    },
+  });
+  renderAt('/studio');
+  expect(await screen.findByText(tr.studio.connectorReconnect, { exact: false })).toBeInTheDocument();
+  expect(screen.queryByText(tr.studio.connectorUnavailable)).not.toBeInTheDocument();
+  const links = screen.getAllByRole('link', { name: tr.studio.reconnect });
+  expect(links.some((l) => l.getAttribute('href') === '/capabilities')).toBe(true);
+});
+
 it('strategy_hypothesis_click_filters_regions_and_plan_names_channel_and_type', async () => {
   const calls = mockFetch(answers);
   renderAt('/studio');

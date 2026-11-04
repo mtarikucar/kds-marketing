@@ -6,7 +6,7 @@ use jt_app::{
     ports::inbox::{MAX_INBOX_PAGE, MessageRepo},
 };
 use jt_capability::CapabilityId;
-use jt_inbox::{ConversationId, IdentityId, Message, MessageId, MsgStatus};
+use jt_inbox::{Author, ConversationId, IdentityId, Message, MessageId, MsgStatus};
 #[async_trait]
 impl MessageRepo for PgTenantRepos {
     async fn find_by_external_id(
@@ -22,9 +22,10 @@ impl MessageRepo for PgTenantRepos {
         conversation: ConversationId,
         body: &str,
         received_at: time::OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError> {
-        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where m.workspace_id=$1 and m.conversation_id=$2 and m.direction='outbound' and m.external_id is null and m.body=$3 and exists(select 1 from outbox o where o.workspace_id=m.workspace_id and o.conversation_id=m.conversation_id and o.message_id=m.id and case when o.fence_snapshot->>'send_at' ~ '^-?[0-9]{1,38}$' then (o.fence_snapshot->>'send_at')::numeric <= extract(epoch from $4::timestamptz)*1000000000 else false end and (o.state='sending' or (o.state='sent' and o.updated_at >= $4 - interval '5 minutes'))) order by m.at,m.id limit 2")
-            .bind(self.workspace_id().as_uuid()).bind(conversation.as_uuid()).bind(body).bind(received_at),self,Message)
+        many!(sqlx::query_scalar("select to_jsonb(m) from messages m where m.workspace_id=$1 and m.conversation_id=$2 and m.direction='outbound' and m.external_id is null and m.body=$3 and exists(select 1 from outbox o where o.workspace_id=m.workspace_id and o.conversation_id=m.conversation_id and o.message_id=m.id and case when o.fence_snapshot->>'send_at' ~ '^-?[0-9]{1,38}$' then (o.fence_snapshot->>'send_at')::numeric <= extract(epoch from $4::timestamptz)*1000000000 else false end and (o.state='sending' or ($5 and o.state='unknown') or (o.state='sent' and o.updated_at >= $4 - interval '5 minutes'))) order by m.at,m.id limit 2")
+            .bind(self.workspace_id().as_uuid()).bind(conversation.as_uuid()).bind(body).bind(received_at).bind(uncertain),self,Message)
     }
 
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
@@ -37,7 +38,7 @@ impl MessageRepo for PgTenantRepos {
         sender: IdentityId,
     ) -> Result<(), AppError> {
         let ws = self.workspace_id();
-        let target: Option<(uuid::Uuid, Option<uuid::Uuid>)> = sqlx::query_as("select m.conversation_id,m.sender_identity_id from messages m join conversations c on (c.id,c.workspace_id)=(m.conversation_id,m.workspace_id) join identities i on i.workspace_id=c.workspace_id and i.person_id=c.person_id where m.workspace_id=$1 and m.id=$2 and i.id=$3 and i.active and m.direction='inbound' and i.channel=case c.kind_key when 'sms_line' then 'phone' when 'netgsm_pbx' then 'phone' when 'mailbox' then 'email' when 'whatsapp_cloud' then 'phone' when 'instagram_dm' then 'instagram_dm' when 'messenger' then 'messenger' else c.kind_key end")
+        let target: Option<(uuid::Uuid, Option<uuid::Uuid>)> = sqlx::query_as("select m.conversation_id,m.sender_identity_id from messages m join conversations c on (c.id,c.workspace_id)=(m.conversation_id,m.workspace_id) join identities i on i.workspace_id=c.workspace_id and i.person_id=c.person_id where m.workspace_id=$1 and m.id=$2 and i.id=$3 and i.active and m.direction='inbound' and i.channel=case c.kind_key when 'sms_line' then 'phone' when 'netgsm_pbx' then 'phone' when 'mailbox' then 'email' when 'whatsapp_cloud' then 'phone' when 'instagram_dm' then 'instagram_dm' when 'messenger' then 'messenger' when 'instagram' then 'instagram_commenter' when 'facebook_page' then 'facebook_commenter' when 'trendyol' then 'trendyol_buyer' when 'hepsiburada' then 'hepsiburada_buyer' else c.kind_key end")
             .bind(ws.as_uuid()).bind(message.as_uuid()).bind(sender.as_uuid()).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"validate inbound sender"))?;
         let (conversation, existing) =
             target.ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
@@ -124,5 +125,26 @@ impl MessageRepo for PgTenantRepos {
             super::touch_conversation(self, parent.into()).await?;
         }
         Ok(())
+    }
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError> {
+        let parent: Option<uuid::Uuid> = sqlx::query_scalar(
+            "update messages set author=$3,body=$4 where workspace_id=$1 and id=$2 \
+             and direction='outbound' and status=$5 returning conversation_id",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(id.as_uuid())
+        .bind(value!(author))
+        .bind(body)
+        .bind(value!(MsgStatus::Queued))
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "revise queued message"))?;
+        let parent = parent.ok_or_else(|| AppError::not_found("no such queued message"))?;
+        super::touch_conversation(self, parent.into()).await
     }
 }

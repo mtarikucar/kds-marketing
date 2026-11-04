@@ -12,6 +12,8 @@ use jt_inbox::*;
 use jt_ledger::Actor;
 use jt_tenancy::{Permission, UserId};
 use serde::Serialize;
+use serde_json::{Value, json};
+use time::OffsetDateTime;
 
 #[derive(Debug, Serialize)]
 pub struct PendingOut {
@@ -19,6 +21,34 @@ pub struct PendingOut {
     pub reopen_questions: Vec<Conversation>,
     pub merges: Vec<MergeRow>,
     pub tasks_due: Vec<Task>,
+    /// The owed comments and questions of the caller's conversations in `ours` and
+    /// `reopen_questions`, soonest deadline first (those without one last), then oldest.
+    pub public_due: Vec<PublicDue>,
+    /// The held replies waiting for a human (spec §3.7), oldest first: listed to human callers
+    /// only, whoever holds the conversation.
+    pub approvals: Vec<Approval>,
+}
+
+/// An owed public item (spec §3.11).
+#[derive(Clone, Debug, Serialize)]
+pub struct PublicDue {
+    pub conversation_id: ConversationId,
+    pub item_id: PublicItemId,
+    pub channel: Channel,
+    #[serde(with = "time::serde::rfc3339")]
+    pub awaiting_since: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub deadline: Option<OffsetDateTime>,
+}
+
+/// A held reply (spec §3.11).
+#[derive(Clone, Debug, Serialize)]
+pub struct Approval {
+    pub outbox_id: uuid::Uuid,
+    pub conversation_id: ConversationId,
+    pub item_id: Option<PublicItemId>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub deadline: Option<OffsetDateTime>,
 }
 #[derive(Debug, Serialize)]
 pub struct RecentConversation {
@@ -42,6 +72,174 @@ pub struct ContextOut {
     pub recent_conversations: Vec<RecentConversation>,
     pub strategy_guidance: Option<StrategyGuidance>,
     pub prohibitions: Vec<String>,
+    /// For a comment or question conversation (spec §6.8); absent for a direct one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public: Option<PublicContext>,
+}
+
+/// The most items of its conversation a public context shows: the latest.
+pub const CONTEXT_ITEMS: usize = 20;
+/// The most items of one thread a public context shows.
+pub const THREAD_ITEMS: u32 = 50;
+
+/// What a public conversation's context adds (spec §6.8).
+#[derive(Debug, Serialize)]
+pub struct PublicContext {
+    pub channel: Channel,
+    /// What the surface allows (`jt_inbox::public::rules`): text bounds, the private reply and
+    /// its window in seconds, one answer, the platform's review, moderation, marketplace.
+    pub rules: Value,
+    /// Whether the agent's replies on the capability wait for a human (spec §3.7).
+    pub approval_required: bool,
+    /// What to do, in English, for the agent.
+    pub hint: &'static str,
+    /// The conversation's latest items ([`CONTEXT_ITEMS`]), oldest first.
+    pub items: Vec<PublicItemContext>,
+}
+
+/// One item of a public context.
+#[derive(Debug, Serialize)]
+pub struct PublicItemContext {
+    pub item: PublicItem,
+    pub subject: Option<PublicSubject>,
+    /// The thread the item is in, oldest first: `them` (this conversation's person), `other`
+    /// (another author) and `us` (our answers).
+    pub thread: Vec<ThreadEntry>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub private_reply_until: Option<OffsetDateTime>,
+    /// Whether the item is owed an answer ([`PublicItem::awaiting`]).
+    pub owed: bool,
+}
+
+/// One message of a public thread.
+#[derive(Debug, Serialize)]
+pub struct ThreadEntry {
+    pub author: &'static str,
+    pub text: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub at: OffsetDateTime,
+    pub external_id: Option<String>,
+}
+
+/// `rules` as a public context shows them.
+pub(crate) fn rules_view(rules: &jt_inbox::public::PublicRules) -> Value {
+    json!({
+        "public": {"min": rules.public.min, "max": rules.public.max},
+        "private": rules.private.map(|p| json!({
+            "window_s": p.window.whole_seconds(), "max_chars": p.max_chars,
+        })),
+        "one_answer": rules.one_answer,
+        "moderated": rules.moderated,
+        "hide": rules.hide,
+        "delete": rules.delete,
+        "report": rules.report,
+        "marketplace": rules.marketplace,
+    })
+}
+
+/// The agent's hint on a surface with `rules` (spec §3.10).
+fn public_hint(rules: &jt_inbox::public::PublicRules) -> &'static str {
+    if rules.marketplace {
+        "Answer each owed question before its deadline, from the product's facts: no links, email \
+         addresses or phone numbers. Mark a question that needs no answer handled."
+    } else {
+        "Answer owed comments in public, briefly. When an item shows buying intent, open a \
+         journey for the person, then answer privately. Hide abuse; mark what needs no answer \
+         handled."
+    }
+}
+
+/// The public part of `conversation`'s context; `None` for a direct conversation.
+async fn public_context(
+    r: &mut dyn TenantRepos,
+    conversation: &Conversation,
+) -> Result<Option<PublicContext>, AppError> {
+    let Some(channel) = public_channel_for_kind(&conversation.kind_key) else {
+        return Ok(None);
+    };
+    let rules = jt_inbox::public::rules(channel)
+        .ok_or_else(|| AppError::internal("a public conversation without rules"))?;
+    let cap = r
+        .capabilities()
+        .find(conversation.capability_id)
+        .await?
+        .ok_or_else(|| AppError::internal("a public conversation's capability is gone"))?;
+    let mut items = r.public_items().for_conversation(conversation.id).await?;
+    let latest = items.split_off(items.len().saturating_sub(CONTEXT_ITEMS));
+    let mut out = Vec::with_capacity(latest.len());
+    for item in latest {
+        let subject = match item.subject_id {
+            Some(id) => r.public_subjects().get(id).await?,
+            None => None,
+        };
+        let mut thread = Vec::new();
+        for entry in r
+            .public_items()
+            .thread(item.capability_id, &item.root_external_id, THREAD_ITEMS)
+            .await?
+        {
+            if let Some(m) = r.messages().get(entry.message_id).await? {
+                thread.push(ThreadEntry {
+                    author: if entry.conversation_id == conversation.id {
+                        "them"
+                    } else {
+                        "other"
+                    },
+                    text: m.body,
+                    at: m.at,
+                    external_id: Some(entry.external_id.clone()),
+                });
+            }
+            let ours = match entry.answer {
+                AnswerState::Answered {
+                    by: AnsweredBy::Us,
+                    message_id,
+                    ..
+                } => message_id,
+                AnswerState::Pending { message_id } => Some(message_id),
+                _ => None,
+            };
+            if let Some(id) = ours
+                && let Some(m) = r.messages().get(id).await?
+            {
+                thread.push(ThreadEntry {
+                    author: "us",
+                    text: m.body,
+                    at: m.at,
+                    external_id: m.external_id,
+                });
+            }
+        }
+        thread.sort_by_key(|t| t.at);
+        out.push(PublicItemContext {
+            owed: item.awaiting(),
+            private_reply_until: item.private_reply_until,
+            subject,
+            thread,
+            item,
+        });
+    }
+    Ok(Some(PublicContext {
+        channel,
+        rules: rules_view(&rules),
+        approval_required: cap.policy.requires_human_approval,
+        hint: public_hint(&rules),
+        items: out,
+    }))
+}
+
+/// The held replies of the workspace, oldest first (at most [`crate::ports::inbox::MAX_INBOX_PAGE`]).
+pub(crate) async fn held_replies(
+    r: &mut dyn TenantRepos,
+    now: OffsetDateTime,
+) -> Result<Vec<crate::ports::inbox::OutboxRow>, AppError> {
+    r.outbox()
+        .list_pending(
+            "held",
+            now + time::Duration::days(1),
+            crate::ports::inbox::MAX_INBOX_PAGE,
+        )
+        .await
 }
 
 pub(crate) fn visible(ctx: &Ctx, executor: Executor) -> bool {
@@ -90,6 +288,8 @@ pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Pen
         reopen_questions: vec![],
         merges: vec![],
         tasks_due: vec![],
+        public_due: vec![],
+        approvals: vec![],
     };
     let people_with_conversations: std::collections::BTreeSet<_> =
         conversations.iter().map(|c| c.person_id).collect();
@@ -107,6 +307,19 @@ pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Pen
         visible_people.insert(c.person_id);
         if c.state != ConvState::Ours {
             continue;
+        }
+        if let Some(channel) = public_channel_for_kind(&c.kind_key) {
+            for item in r.public_items().for_conversation(c.id).await? {
+                if item.awaiting() {
+                    out.public_due.push(PublicDue {
+                        conversation_id: c.id,
+                        item_id: item.id,
+                        channel,
+                        awaiting_since: item.created_at,
+                        deadline: item.deadline,
+                    });
+                }
+            }
         }
         if super::active_or_latest_journey(r, c.person_id)
             .await?
@@ -156,6 +369,29 @@ pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Pen
             )
         {
             out.tasks_due.push(task);
+        }
+    }
+    out.public_due.sort_by_key(|d| {
+        (
+            d.deadline.is_none(),
+            d.deadline,
+            d.awaiting_since,
+            d.item_id,
+        )
+    });
+    if matches!(ctx.actor, Actor::Human { .. }) {
+        for row in held_replies(r, ctx.now).await? {
+            let item_id = super::public::intent_of(&row.intent)?.map(|p| p.item_id);
+            let deadline = match item_id {
+                Some(id) => r.public_items().get(id).await?.and_then(|i| i.deadline),
+                None => None,
+            };
+            out.approvals.push(Approval {
+                outbox_id: row.id,
+                conversation_id: row.conversation_id,
+                item_id,
+                deadline,
+            });
         }
     }
     Ok(out)
@@ -232,6 +468,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         None
     };
     let labels = super::dictionaries::status_labels(r.as_mut()).await?;
+    let public = public_context(r.as_mut(), &conversation).await?;
     Ok(ContextOut {
         status_labels: labels.effective,
         status_label_overrides: labels.overrides,
@@ -242,6 +479,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         recent_conversations,
         strategy_guidance,
         prohibitions,
+        public,
     })
 }
 

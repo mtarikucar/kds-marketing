@@ -75,10 +75,19 @@ pub const META_LOGIN_CONFIG_ID: &str = "JEETA_META_LOGIN_CONFIG_ID";
 pub const META_WHATSAPP_CONFIG_ID: &str = "JEETA_META_WHATSAPP_CONFIG_ID";
 /// The Graph API version, `v` and two numbers (default [`jt_meta::DEFAULT_GRAPH_VERSION`]).
 pub const META_GRAPH_VERSION: &str = "JEETA_META_GRAPH_VERSION";
+/// Whether Facebook Login flows ask for the comment scopes (`1`/`true`; default off): set once
+/// Meta's App Review granted them. Requires the Meta app.
+pub const META_COMMENT_SCOPES: &str = "JEETA_META_COMMENT_SCOPES";
 /// The platform's Instagram app id (Instagram Login).
 pub const INSTAGRAM_APP_ID: &str = "JEETA_INSTAGRAM_APP_ID";
 /// The Instagram app's secret; set together with [`INSTAGRAM_APP_ID`].
 pub const INSTAGRAM_APP_SECRET: &str = "JEETA_INSTAGRAM_APP_SECRET";
+/// Whether Instagram Login flows ask for the comment scopes (`1`/`true`; default off): set once
+/// Meta's App Review granted them. Requires the Instagram app.
+pub const INSTAGRAM_COMMENT_SCOPES: &str = "JEETA_INSTAGRAM_COMMENT_SCOPES";
+/// The platform's Hepsiburada integrator user, the Basic auth user of the calls made with a
+/// seller's service key (optional; the merchant id stands in while unset; VERIFY V-H1).
+pub const HEPSIBURADA_INTEGRATOR_USER: &str = "JEETA_HEPSIBURADA_INTEGRATOR_USER";
 /// The platform's X app (OAuth 2.0 confidential client) id.
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
@@ -133,8 +142,10 @@ const VARS: &[&str] = &[
     META_LOGIN_CONFIG_ID,
     META_WHATSAPP_CONFIG_ID,
     META_GRAPH_VERSION,
+    META_COMMENT_SCOPES,
     INSTAGRAM_APP_ID,
     INSTAGRAM_APP_SECRET,
+    INSTAGRAM_COMMENT_SCOPES,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
     TIKTOK_CLIENT_KEY,
@@ -143,6 +154,7 @@ const VARS: &[&str] = &[
     LINKEDIN_CLIENT_SECRET,
     LINKEDIN_ORG_SCOPES,
     LINKEDIN_API_VERSION,
+    HEPSIBURADA_INTEGRATOR_USER,
     PUBLIC_BASE_URL,
 ];
 
@@ -233,6 +245,7 @@ pub struct EnvPlatformApps {
     x: Option<XApp>,
     tiktok: Option<TiktokApp>,
     linkedin: Option<LinkedinApp>,
+    hepsiburada_integrator_user: Option<String>,
     public_base_url: Option<Url>,
 }
 
@@ -262,6 +275,10 @@ impl fmt::Debug for EnvPlatformApps {
             .field("tiktok", &self.tiktok)
             .field("linkedin", &self.linkedin)
             .field(
+                "hepsiburada_integrator_user",
+                &self.hepsiburada_integrator_user,
+            )
+            .field(
                 "public_base_url",
                 &self.public_base_url.as_ref().map(Url::as_str),
             )
@@ -288,6 +305,10 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         self.linkedin.clone()
+    }
+
+    fn hepsiburada_integrator_user(&self) -> Option<String> {
+        self.hepsiburada_integrator_user.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -597,6 +618,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 login_config_id: value(META_LOGIN_CONFIG_ID),
                 whatsapp_config_id: value(META_WHATSAPP_CONFIG_ID),
                 graph_version: Some(graph_version),
+                comment_scopes: parse_flag(META_COMMENT_SCOPES, get(META_COMMENT_SCOPES))?,
             })
         }
         None => {
@@ -606,6 +628,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 META_LOGIN_CONFIG_ID,
                 META_WHATSAPP_CONFIG_ID,
                 META_GRAPH_VERSION,
+                META_COMMENT_SCOPES,
             ] {
                 if get(setting).is_some() {
                     return Err(ConfigError::new(
@@ -620,8 +643,27 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
             None
         }
     };
-    let instagram = pair(&get, INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET)?
-        .map(|(app_id, app_secret)| InstagramApp { app_id, app_secret });
+    let instagram = match pair(&get, INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET)? {
+        Some((app_id, app_secret)) => Some(InstagramApp {
+            app_id,
+            app_secret,
+            comment_scopes: parse_flag(INSTAGRAM_COMMENT_SCOPES, get(INSTAGRAM_COMMENT_SCOPES))?,
+        }),
+        None => {
+            // The flag means nothing without the Instagram app: half a configuration.
+            if get(INSTAGRAM_COMMENT_SCOPES).is_some() {
+                return Err(ConfigError::new(
+                    INSTAGRAM_APP_ID,
+                    format!(
+                        "must be set (with {INSTAGRAM_APP_SECRET}) because \
+                         {INSTAGRAM_COMMENT_SCOPES} is: the Instagram app is configured as a \
+                         whole or not at all"
+                    ),
+                ));
+            }
+            None
+        }
+    };
     let x = pair(&get, X_CLIENT_ID, X_CLIENT_SECRET)?.map(|(client_id, client_secret)| XApp {
         client_id,
         client_secret,
@@ -688,6 +730,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         x,
         tiktok,
         linkedin,
+        hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
         public_base_url,
     })
 }
@@ -1325,6 +1368,72 @@ mod tests {
     }
 
     #[test]
+    fn comment_scope_flags_default_off() {
+        // The live Meta app is in review: unset, no flow asks for a comment scope.
+        let all = Config::from_map(&with(ALL_APPS)).unwrap();
+        assert!(!all.apps.meta_app().unwrap().comment_scopes);
+        assert!(!all.apps.instagram_app().unwrap().comment_scopes);
+        for off in ["", " ", "0", "false", "FALSE"] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(META_COMMENT_SCOPES.to_owned(), off.to_owned());
+            vars.insert(INSTAGRAM_COMMENT_SCOPES.to_owned(), off.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(!apps.meta_app().unwrap().comment_scopes, "{off:?}");
+            assert!(!apps.instagram_app().unwrap().comment_scopes, "{off:?}");
+        }
+        // Anything else is refused, naming the flag.
+        for (flag, bad) in [
+            (META_COMMENT_SCOPES, "yes"),
+            (INSTAGRAM_COMMENT_SCOPES, "on"),
+        ] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(flag.to_owned(), bad.to_owned());
+            assert_eq!(error(&vars).var, flag, "{bad}");
+        }
+        // A flag without its app is half a configuration.
+        for (flag, app) in [
+            (META_COMMENT_SCOPES, META_APP_ID),
+            (INSTAGRAM_COMMENT_SCOPES, INSTAGRAM_APP_ID),
+        ] {
+            let err = error(&with(&[
+                (flag, "1"),
+                (PUBLIC_BASE_URL, "https://jeeta.example"),
+            ]));
+            assert_eq!(err.var, app, "{flag}");
+            assert!(err.to_string().contains(flag), "{err}");
+        }
+        // The Hepsiburada integrator user is unset until the operator names it: the merchant id
+        // stands in for it then.
+        assert_eq!(all.apps.hepsiburada_integrator_user(), None);
+    }
+
+    #[test]
+    fn comment_scope_flags_read_1_and_true() {
+        for on in ["1", "true", " TRUE "] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(META_COMMENT_SCOPES.to_owned(), on.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(apps.meta_app().unwrap().comment_scopes, "{on:?}");
+            assert!(!apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+            let mut vars = with(ALL_APPS);
+            vars.insert(INSTAGRAM_COMMENT_SCOPES.to_owned(), on.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(!apps.meta_app().unwrap().comment_scopes, "{on:?}");
+            assert!(apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+        }
+        // The integrator user is read trimmed, on its own (it needs no provider app).
+        let apps = Config::from_map(&with(&[(HEPSIBURADA_INTEGRATOR_USER, " jeeta-int ")]))
+            .unwrap()
+            .apps;
+        assert_eq!(
+            apps.hepsiburada_integrator_user().as_deref(),
+            Some("jeeta-int")
+        );
+        assert!(apps.configured().is_empty());
+        assert!(format!("{apps:?}").contains("jeeta-int"));
+    }
+
+    #[test]
     fn public_base_url_required_when_any_app_is_configured() {
         // Any one app needs the public address.
         for app in [
@@ -1437,8 +1546,11 @@ mod tests {
             META_LOGIN_CONFIG_ID,
             META_WHATSAPP_CONFIG_ID,
             META_GRAPH_VERSION,
+            // The comment flags stay off in the example: Meta's App Review decides.
+            META_COMMENT_SCOPES,
             INSTAGRAM_APP_ID,
             INSTAGRAM_APP_SECRET,
+            INSTAGRAM_COMMENT_SCOPES,
             X_CLIENT_ID,
             X_CLIENT_SECRET,
             TIKTOK_CLIENT_KEY,
@@ -1447,6 +1559,7 @@ mod tests {
             LINKEDIN_CLIENT_SECRET,
             LINKEDIN_ORG_SCOPES,
             LINKEDIN_API_VERSION,
+            HEPSIBURADA_INTEGRATOR_USER,
             PUBLIC_BASE_URL,
         ] {
             assert_eq!(listed[var], "", "{var} is a placeholder in .env.example");

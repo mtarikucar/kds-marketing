@@ -102,8 +102,35 @@ pub(crate) fn capability_access(
             return Err(refuse("access_expired"));
         }
     }
+    let Some(required) = studio_scopes(&c.kind_key, write) else {
+        return Err(refuse("unsupported_studio_capability"));
+    };
+    if lacks_studio_scope(c, required) {
+        return Err(refuse(SCOPE_MISSING));
+    }
+    Ok(())
+}
+/// [`capability_access`]'s refusal of a grant without the scope Studio needs: reconnecting the
+/// account (which asks for it) fixes it.
+pub(crate) const SCOPE_MISSING: &str = "credential_scope_missing";
+/// Whether `c`'s grant lacks every scope of `required` (an empty list needs none).
+fn lacks_studio_scope(c: &Capability, required: &[&str]) -> bool {
     let scopes = granted_scopes(c);
-    let required: &[&str] = match (c.kind_key.as_str(), write) {
+    !required.is_empty() && !required.iter().any(|s| scopes.contains(s))
+}
+/// Whether Studio can read the counters of `c`, of a kind it publishes to, with the grant it holds:
+/// `None` for another kind, `Some(false)` when the grant lacks the read scope (a reconnection asks
+/// for it), whatever else the capability's state.
+pub(crate) fn reads_counters(c: &Capability) -> Option<bool> {
+    if !ORGANIC_KINDS.contains(&c.kind_key.as_str()) {
+        return None;
+    }
+    studio_scopes(&c.kind_key, false).map(|required| !lacks_studio_scope(c, required))
+}
+/// The scopes of which Studio needs one to write to (`write`) or read from a capability of
+/// `kind`; `None` for a kind Studio does not use.
+fn studio_scopes(kind: &str, write: bool) -> Option<&'static [&'static str]> {
+    let required: &[&str] = match (kind, write) {
         ("x", true) => &["tweet.write"],
         ("x", false) => &["tweet.read"],
         ("meta_ads", true) => &["ads_management"],
@@ -138,12 +165,9 @@ pub(crate) fn capability_access(
         // Share statistics and follower counts need the admin scope (the page ACL behind
         // them), not `r_organization_social`.
         ("linkedin_page", false) => &["rw_organization_admin"],
-        _ => return Err(refuse("unsupported_studio_capability")),
+        _ => return None,
     };
-    if !required.is_empty() && !required.iter().any(|s| scopes.contains(s)) {
-        return Err(refuse("credential_scope_missing"));
-    }
-    Ok(())
+    Some(required)
 }
 /// The scopes the capability's credential was granted, as the connector use cases recorded them
 /// from the sealed credential (`connector_public.access.scopes`).

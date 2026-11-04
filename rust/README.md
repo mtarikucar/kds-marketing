@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Yirmi iki göç vardır (`0019` ve `0020` başka dallardadır):
+döndürür. Yirmi dört göç vardır (`0020` ve `0026`–`0028` başka dallardadır):
 
 | Göç | Ne yapar |
 |---|---|
@@ -105,10 +105,12 @@ döndürür. Yirmi iki göç vardır (`0019` ve `0020` başka dallardadır):
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
-| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 81 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
-| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 84 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
-| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0019` and `0020` belong to parallel branches. |
+| `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
+| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 84 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
+| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 87 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
+| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0020` belongs to a parallel branch. |
 | `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
+| `0025_inbox_public_erasure` | Puts the erasure additions of `0019` and `0024` in one definition (each replaced 0008's functions on its own branch, so the later one dropped the other's: version order runs 0024 last, production ran 0019 last): the mask and the event matching cover public items and the WhatsApp Business app alike. No new table. Down puts back 0024's functions, and is refused once a comment or a question is stored. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -176,6 +178,9 @@ hiçbir günlük satırında görünmez.
 | `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
 | `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
+| `JEETA_INSTAGRAM_COMMENT_SCOPES` | kapalı | `1`/`true`: Instagram Login akışları yorum izinlerini de ister (onaydan sonra). Instagram uygulaması olmadan verilemez |
+| `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
@@ -1836,6 +1841,25 @@ ordered by acquisition time and journey ID. The historical Task 9 migration-test
 0007; the compliance schema lives in unreleased **0008**, whose reversible round trip retains
 unrelated inbox rows.
 
+
+## Comments and marketplace questions: the six `inbox.public` rows
+
+Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. They bring the
+inbox to 52 tools (146 in all). None needs an approved strategy: answering customers is not
+planned growth work (owner decision 2026-11-03). Each still needs an `active` workspace.
+
+| Row | Panel route | MCP tool | Risk / permission |
+|---|---|---|---|
+| `inbox.public.hide` | POST `/api/inbox/items/{item_id}/hide` `{hidden}` | `jeeta.inbox.public_hide` | WRITE / `inbox.work` |
+| `inbox.public.delete` | POST `/api/inbox/items/{item_id}/delete` `{confirm}` | `jeeta.inbox.public_delete` | DESTRUCTIVE / `inbox.manage`, humans only |
+| `inbox.public.mark_handled` | POST `/api/inbox/items/handled` `{item_ids, reason}` | `jeeta.inbox.public_mark_handled` | WRITE / `inbox.work` |
+| `inbox.public.report` | POST `/api/inbox/items/{item_id}/report` `{reason}` | `jeeta.inbox.public_report` | WRITE / `inbox.work` |
+| `inbox.public.approve` | POST `/api/inbox/replies/{outbox_id}/approve` `{text?}` | `jeeta.inbox.public_approve` | WRITE / `inbox.work`, humans only |
+| `inbox.public.discard` | POST `/api/inbox/replies/{outbox_id}/discard` | `jeeta.inbox.public_discard` | WRITE / `inbox.work`, the drafter or a human |
+
+Moderation calls the provider with no transaction open: the item is checked, the call made, and
+the result written on the item as it then is; a moderation another one beat is `skipped`, an
+item already so is `unchanged`. Marking handled (1 to 100 items, all or none) tells no provider.
 
 ## M2b panel and architecture completion
 

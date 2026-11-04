@@ -39,9 +39,10 @@ async fn studio_schema_exact_table_delta() {
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
     // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
     // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge), the
-    // materials library's seven (0021_studio_materials), and the planned posts, package requests
-    // and posting policy (0022_studio_posts).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 7 + 3);
+    // public items, subjects and cursors (0019_inbox_public), the materials library's seven
+    // (0021_studio_materials), and the planned posts, package requests and posting policy
+    // (0022_studio_posts).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 7 + 3);
 }
 
 #[tokio::test]
@@ -135,6 +136,8 @@ const MATERIALS_DOWN: &str = include_str!("../../../../migrations/0021_studio_ma
 /// applied after it.
 const POSTS_UP: &str = include_str!("../../../../migrations/0022_studio_posts.up.sql");
 const POSTS_DOWN: &str = include_str!("../../../../migrations/0022_studio_posts.down.sql");
+/// Public subjects reference Studio publications: their migration goes first.
+const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -237,6 +240,7 @@ async fn studio_role_backfill_new_workspace_parity() {
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (old, _) = db.seed_workspace("old-studio").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -262,6 +266,7 @@ async fn studio_backfill_down_preserves_existing_grants() {
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (ws, _) = db.seed_workspace("grants").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();

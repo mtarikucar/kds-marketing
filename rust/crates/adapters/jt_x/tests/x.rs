@@ -183,6 +183,7 @@ async fn authorize_url_requires_pkce_and_carries_s256() {
         login_config_id: None,
         whatsapp_config_id: None,
         graph_version: None,
+        comment_scopes: false,
     });
     assert_eq!(
         kind_of(r.x.authorize_url(&meta, &redirect(), "s", Some(&challenge))),

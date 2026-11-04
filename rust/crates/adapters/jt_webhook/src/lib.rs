@@ -23,7 +23,11 @@
 //! active or awaits payment; an event no workspace holds connected (Review Focus 1), or whose
 //! workspace is suspended, is dropped with nothing written, with a warning naming only the
 //! provider, the reason (`unrouted` or `inactive`), the kind of account and how many (one warning
-//! per reason, kind and delivery), and counted ([`counters`]`().unrouted_meta`, both reasons).
+//! per reason, kind and delivery), and counted ([`counters`]`().unrouted_meta`, both reasons). A
+//! comment for a capability whose comments are not enabled
+//! (`jt_app::usecases::inbox::public::comments_enabled`) is dropped the same way, warned once per
+//! delivery with the provider, the reason (`comments_not_enabled`) and how many, and counted
+//! apart ([`counters`]`().disabled_meta`).
 //! Each workspace keeps, beside the first event it newly stores, only its own part of the body
 //! (`jt_meta::scoped_body`: the entries, and of a WhatsApp entry the changes, its events came
 //! from; the body as received when that is all of it): one body batching several workspaces'
@@ -92,6 +96,8 @@ pub const TIKTOK_BODY_LIMIT: usize = 64 * 1024;
 /// Meta events dropped because no workspace holds their account connected, or because the one
 /// that does is suspended.
 static UNROUTED_META: AtomicU64 = AtomicU64::new(0);
+/// Meta comment events dropped because their capability's comments are not enabled.
+static DISABLED_META: AtomicU64 = AtomicU64::new(0);
 /// Signed Meta bodies the parser does not know.
 static UNPARSEABLE_META: AtomicU64 = AtomicU64::new(0);
 /// NetGSM callback bodies the parser cannot read.
@@ -112,6 +118,9 @@ pub struct Counters {
     /// Meta events dropped: for an account no workspace holds connected, or of a suspended
     /// workspace.
     pub unrouted_meta: u64,
+    /// Meta comment events dropped: their capability's comments are not enabled (the platform's
+    /// comment flag is off, or the grant lacks the comment scopes).
+    pub disabled_meta: u64,
     /// Signed Meta bodies that are not a webhook the parser knows.
     pub unparseable_meta: u64,
     /// NetGSM callback bodies the parser cannot read.
@@ -130,6 +139,7 @@ pub struct Counters {
 pub fn counters() -> Counters {
     Counters {
         unrouted_meta: UNROUTED_META.load(Ordering::Relaxed),
+        disabled_meta: DISABLED_META.load(Ordering::Relaxed),
         unparseable_meta: UNPARSEABLE_META.load(Ordering::Relaxed),
         unparseable_netgsm: UNPARSEABLE_NETGSM.load(Ordering::Relaxed),
         unrouted_tiktok: UNROUTED_TIKTOK.load(Ordering::Relaxed),

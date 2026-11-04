@@ -3,6 +3,7 @@
 //! or optional id. Locks last until the enclosing bundle commits or rolls back.
 
 pub use super::compliance::*;
+pub use super::public::*;
 
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
@@ -172,11 +173,14 @@ pub trait MessageRepo: Send + Sync {
     /// in sending, or sent no earlier than five minutes before receipt. The recorded send_at
     /// must precede receipt; an earlier enqueue alone is not evidence that we sent the echo.
     /// Callers must defer ambiguous matches, never guess authorship. Hold the workspace lock.
+    /// With `uncertain`, a row whose outcome is `unknown` (sent at or before receipt) is a
+    /// candidate too: the echo is the evidence that settles it (a public reply's own comment).
     async fn echo_candidates(
         &mut self,
         conversation: ConversationId,
         body: &str,
         received_at: OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError>;
 
     /// Latest messages in chronological order.
@@ -212,6 +216,15 @@ pub trait MessageRepo: Send + Sync {
         status: MsgStatus,
         external_id: Option<String>,
         cost_minor: Option<i64>,
+    ) -> Result<(), AppError>;
+    /// Rewrites the author and body of outbound message `id` while it is still `Queued`, before
+    /// any provider saw it: a held reply approved (the approver its author), its text maybe
+    /// edited. `NOT_FOUND` for a message that is not an outbound queued one.
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
     ) -> Result<(), AppError>;
 }
 
@@ -299,6 +312,9 @@ pub struct MergeRow {
     pub undone_at: Option<OffsetDateTime>,
 }
 /// Private restoration data: no message, note or identity text is copied into the ledger.
+///
+/// Version 2 adds the public items of the snapshotted conversations (migration 0019); a version 1
+/// snapshot reads with none.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MergeSnapshot {
     /// Maximum timestamp of the locked aggregates; merge checkpoints must advance it.
@@ -313,6 +329,9 @@ pub struct MergeSnapshot {
     pub tasks: Vec<TaskParent>,
     pub notes: Vec<NoteParent>,
     pub outbox: Vec<OutboxParent>,
+    /// Missing (a version 1 snapshot) reads as none.
+    #[serde(default)]
+    pub public_items: Vec<PublicItemParent>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IdentityParent {
@@ -346,6 +365,15 @@ pub struct OutboxParent {
     pub id: Uuid,
     pub conversation_id: ConversationId,
 }
+/// A public item and the conversation it belonged to before a merge.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicItemParent {
+    pub id: PublicItemId,
+    pub conversation_id: ConversationId,
+}
+
+/// The snapshot version adapters write: 2, with the public items.
+pub const MERGE_SNAPSHOT_VERSION: u32 = 2;
 
 #[async_trait]
 pub trait MergeRepo: Send + Sync {
@@ -353,6 +381,7 @@ pub trait MergeRepo: Send + Sync {
     /// Lock child aggregates in id order, after both people have been locked in id order.
     async fn snapshot(&mut self, a: PersonId, b: PersonId) -> Result<MergeSnapshot, AppError>;
     /// Move the snapshotted graph, preserving every message even when external IDs collide.
+    /// Public items move to their survivor before a coalesced conversation is deleted.
     async fn apply_snapshot(
         &mut self,
         snapshot: &MergeSnapshot,
@@ -499,12 +528,51 @@ pub trait OutboxRepo: Send + Sync {
     ) -> Result<Vec<OutboxRow>, AppError>;
     /// Update only processing state; identity, intent and relationships stay immutable.
     async fn update(&mut self, row: OutboxRow) -> Result<(), AppError>;
+    /// Binds row `id` to executor generation `generation`: a held reply approved after its
+    /// conversation changed hands is fenced, and sent, for the conversation as it now is. Nothing
+    /// else of the row changes; `NOT_FOUND` when the workspace holds no such row.
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError>;
     /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
     /// (state `failed` or `unknown`), one per message that has one, in no particular order.
     async fn failure_reasons(
         &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError>;
+    /// How many public replies the agent drafted on `capability` since `since`, as its
+    /// `daily_ops_cap` counts them: outbox rows created at or after `since` whose intent is a
+    /// public item's public reply (`intent.public.visibility` = `"public"`) drafted by an agent
+    /// (`intent.public.drafted_by.kind` = `"agent"`), in any state but `refused` (held, queued,
+    /// in flight, sent, failed or uncertain alike). The caller holds the capability's lock
+    /// (`CapabilityRepo::lock`), so the count and the row it lets in are one reservation.
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
+    /// The states of public item `item`'s replies of `visibility` that are not settled yet, row
+    /// `except` left out (the one being claimed or approved): the outbox rows whose intent names
+    /// the item (`intent.public.item_id`) with that visibility (`intent.public.visibility`), in
+    /// state `held`, `queued`, `sending` or `unknown`, one state per row, in no particular order.
+    /// What the reply fence refuses another reply for (`reply_in_flight`). The caller holds the
+    /// workspace's inbox lock, so the answer and the row it lets in are one reservation.
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError>;
+    /// The outbox row that sends outbound message `message`, if any (the oldest, should there be
+    /// more than one).
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError>;
+    /// Capability `capability`'s uncertain public replies: its outbox rows in state `unknown` whose
+    /// intent names a public item (`intent.public.item_id`), the most recently updated first, at
+    /// most `limit`. Only that capability's: uncertain rows of other capabilities or channels,
+    /// which may never settle, never take their places.
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError>;
 }
 
 impl MergeSnapshot {

@@ -31,6 +31,9 @@
 //!   on the other, and a half cursor is refused alike.
 //! - `connector.hooks`: the webhook addresses (the Meta webhook and the workspace's NetGSM
 //!   callback URLs with their tokens) read the same on both gates.
+//! - `inbox.public.*` (comments and marketplace questions): hide, mark handled and report answer
+//!   alike on like items without a strategy, an unknown item is refused alike, delete and approve
+//!   are refused to the agent and done by the human, and discarding a held draft answers alike.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -4596,4 +4599,471 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
             assert!(http["entries"].is_array());
         }
     }
+}
+
+/// An owed public item `external_id` of `conversation` (`kind` a comment or a question), with
+/// its inbound message, written straight to the repos at `now`.
+async fn public_item(
+    deps: &Deps,
+    conversation: &jt_inbox::Conversation,
+    kind: jt_inbox::PublicKind,
+    external_id: &str,
+    now: time::OffsetDateTime,
+) -> jt_inbox::PublicItemId {
+    use jt_inbox::*;
+    let message = Message {
+        id: MessageId::new_v7(),
+        workspace_id: conversation.workspace_id,
+        conversation_id: conversation.id,
+        direction: Direction::Inbound,
+        author: Author::Customer,
+        body: "Fiyatı nedir?".into(),
+        external_id: Some(external_id.into()),
+        status: MsgStatus::Received,
+        cost_minor: None,
+        at: now,
+    };
+    let item = PublicItem {
+        id: PublicItemId::new_v7(),
+        workspace_id: conversation.workspace_id,
+        capability_id: conversation.capability_id,
+        conversation_id: conversation.id,
+        message_id: message.id,
+        subject_id: None,
+        kind,
+        external_id: external_id.into(),
+        parent_external_id: None,
+        root_external_id: external_id.into(),
+        created_at: now,
+        taken_at: None,
+        deadline: None,
+        private_reply_until: None,
+        live: false,
+        answer: AnswerState::Awaiting,
+        moderation: Moderation::Visible,
+        private_reply_message_id: None,
+        agent_answers: 0,
+        checked_at: None,
+        updated_at: now,
+    };
+    let mut r = deps.uow.tenant(conversation.workspace_id).await.unwrap();
+    r.people().set_write_time(now).await.unwrap();
+    r.messages().insert_if_new(message).await.unwrap();
+    assert!(r.public_items().insert(item.clone()).await.unwrap());
+    r.commit().await.unwrap();
+    item.id
+}
+
+/// A verified capability of `kind` on `account` reached with `credential` and connector facts
+/// `public`, written straight to the repos (`policy` its policy), and a person's conversation on
+/// it.
+#[allow(clippy::too_many_arguments)]
+async fn public_surface(
+    deps: &Deps,
+    ws: jt_tenancy::WorkspaceId,
+    kind: &str,
+    account: &str,
+    public: Value,
+    credential: jt_connector::Credential,
+    policy: jt_capability::Policy,
+    now: time::OffsetDateTime,
+) -> jt_inbox::Conversation {
+    use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
+    use jt_inbox::*;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: kind.into(),
+            name: format!("{kind} parity"),
+            external_id: Some(account.into()),
+            connector_public: public,
+            ..NewCapability::default()
+        },
+        now,
+    )
+    .unwrap();
+    cap.status = StoredStatus::Verified;
+    cap.last_verified_at = Some(now);
+    cap.policy = policy;
+    let sealed = deps
+        .seal
+        .seal(ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    let person = Person {
+        id: PersonId::new_v7(),
+        workspace_id: ws,
+        display_name: "Commenter".into(),
+        company: String::new(),
+        first_touch: FirstTouch {
+            source: Source::Import,
+            capability_id: None,
+            at: now,
+        },
+        merged_into: None,
+        erased_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let conversation = Conversation {
+        id: ConversationId::new_v7(),
+        workspace_id: ws,
+        person_id: person.id,
+        capability_id: cap.id,
+        kind_key: kind.into(),
+        state: ConvState::Ours,
+        executor: Executor::Agent,
+        executor_generation: 0,
+        last_inbound_at: Some(now),
+        last_outbound_at: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.people().set_write_time(now).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.people().insert(person).await.unwrap();
+    let conversation = r
+        .conversations()
+        .upsert_on_inbound(conversation)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    conversation
+}
+
+/// The six `inbox.public` rows of comments and marketplace questions (F7) over the panel and
+/// MCP: hide, mark handled and report, each on a like item of its own, answer alike; an unknown
+/// item is refused alike; deleting is refused to the agent (`agent_cannot_delete`) and done by
+/// the human with `confirm: true`; approving is refused to the agent (`human_required`) and done
+/// by the human; discarding a held draft answers alike, by the agent that drafted it and by the
+/// human. Hide, mark handled, report and delete run before any strategy is approved.
+#[tokio::test]
+async fn inbox_public_rows_have_http_mcp_parity() {
+    use jt_app::ports::connectors::SendReceipt;
+    use jt_testkit::fakes::ScriptedPublic;
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    }
+    async fn refused(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert!(status.is_client_error(), "{status}: {body}");
+        body
+    }
+    /// What two like items' moderation answers share: the outcome and the item's states.
+    fn shape(out: &Value) -> Value {
+        json!({
+            "outcome": out["outcome"],
+            "moderation": out["item"]["moderation"],
+            "answer": out["item"]["answer"]["state"],
+            "kind": out["item"]["kind"],
+        })
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("public-parity").await;
+    let meta = Arc::new(ScriptedPublic::new(Provider::Meta));
+    let hepsiburada = Arc::new(ScriptedPublic::new(Provider::Hepsiburada));
+    let mut deps = deps_with(
+        &db,
+        Arc::new(
+            ScriptedRegistry::new()
+                .with_public(meta.clone())
+                .with_public(hepsiburada.clone()),
+        ),
+    );
+    let mut apps = FakeAppConfig::with_all_apps();
+    apps.meta.as_mut().unwrap().comment_scopes = true;
+    deps.apps = Arc::new(apps);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let now = deps.clock.now();
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let scopes = [
+        "instagram_basic",
+        "instagram_manage_comments",
+        "instagram_manage_messages",
+    ];
+    // Every agent reply on the Instagram account waits for a human.
+    let held = jt_capability::Policy {
+        requires_human_approval: true,
+        ..jt_capability::Policy::default()
+    };
+    let ig = public_surface(
+        &deps,
+        ws,
+        "instagram",
+        "17841400000000001",
+        json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}}),
+        jt_connector::Credential::OAuth {
+            access_token: "test-token".into(),
+            refresh_token: None,
+            expires_at: None,
+            scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+        },
+        held,
+        now,
+    )
+    .await;
+    let hb = public_surface(
+        &deps,
+        ws,
+        "hepsiburada",
+        "hb-merchant-1",
+        json!({"provider": "hepsiburada",
+            "access": {"kind": "hepsiburada_merchant", "merchant_id": "hb-merchant-1"}}),
+        jt_connector::Credential::HepsiburadaMerchant {
+            merchant_id: "hb-merchant-1".into(),
+            service_key: "test-secret".into(),
+        },
+        jt_capability::Policy::default(),
+        now,
+    )
+    .await;
+    let comment = jt_inbox::PublicKind::Comment;
+    let question = jt_inbox::PublicKind::Question;
+    let mut items = Vec::new();
+    for n in 0..9 {
+        items.push(public_item(&deps, &ig, comment, &format!("c-{n}"), now).await);
+    }
+    let q = [
+        public_item(&deps, &hb, question, "q-1", now).await,
+        public_item(&deps, &hb, question, "q-2", now).await,
+    ];
+
+    // Hide.
+    meta.push_moderate(Ok(()));
+    meta.push_moderate(Ok(()));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/items/{}/hide", items[0]),
+            Some(&cookie),
+            Some(json!({"hidden": true})),
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_hide",
+        json!({"item_id": items[1], "hidden": true}),
+    )
+    .await;
+    assert_eq!(shape(&human), shape(&agent));
+    assert_eq!(human["outcome"], "applied");
+    assert_eq!(human["item"]["moderation"], "hidden");
+    // An unknown item, alike.
+    let unknown = jt_inbox::PublicItemId::new_v7();
+    let human = refused(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/items/{unknown}/hide"),
+                Some(&cookie),
+                Some(json!({"hidden": true})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_hide",
+        json!({"item_id": unknown, "hidden": true}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["code"], "NOT_FOUND");
+
+    // Mark handled.
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/inbox/items/handled",
+            Some(&cookie),
+            Some(json!({"item_ids": [items[2]], "reason": "spam"})),
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_mark_handled",
+        json!({"item_ids": [items[3]], "reason": "spam"}),
+    )
+    .await;
+    assert_eq!(human["items"][0]["answer"]["state"], "handled");
+    assert_eq!(
+        human["items"][0]["answer"]["reason"],
+        agent["items"][0]["answer"]["reason"]
+    );
+    assert_eq!(
+        human["items"][0]["answer"]["state"],
+        agent["items"][0]["answer"]["state"]
+    );
+
+    // Report.
+    hepsiburada.push_moderate(Ok(()));
+    hepsiburada.push_moderate(Ok(()));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/items/{}/report", q[0]),
+            Some(&cookie),
+            Some(json!({"reason": "offensive"})),
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_report",
+        json!({"item_id": q[1], "reason": "offensive"}),
+    )
+    .await;
+    assert_eq!(shape(&human), shape(&agent));
+    assert_eq!(human["item"]["moderation"], "reported");
+
+    // Delete: never the agent; the human with confirm: true.
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_delete",
+        json!({"item_id": items[4], "confirm": true}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(
+        agent["structuredContent"]["details"]["reason"],
+        "agent_cannot_delete"
+    );
+    meta.push_moderate(Ok(()));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/items/{}/delete", items[4]),
+            Some(&cookie),
+            Some(json!({"confirm": true})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(human["item"]["moderation"], "deleted");
+
+    // Held drafts of the agent (a reply still needs the strategy): approving is a human's,
+    // discarding the drafter's or a human's.
+    approve_inbox_strategy(&app, &cookie).await;
+    let mut drafts = Vec::new();
+    for item in &items[5..8] {
+        let out = call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.inbox.reply",
+            json!({"conversation_id": ig.id, "text": "Merhaba", "intent": "reply",
+                "item_id": item}),
+        )
+        .await;
+        assert_eq!(out["state"], "held");
+        let message: jt_inbox::MessageId =
+            serde_json::from_value(out["message_id"].clone()).unwrap();
+        let mut r = deps.uow.tenant(ws).await.unwrap();
+        drafts.push(r.outbox().for_message(message).await.unwrap().unwrap().id);
+    }
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_approve",
+        json!({"outbox_id": drafts[0]}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(
+        agent["structuredContent"]["details"]["reason"],
+        "human_required"
+    );
+    meta.push_reply_public(Ok(SendReceipt {
+        provider_id: "reply-1".into(),
+        cost_minor: None,
+    }));
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/replies/{}/approve", drafts[0]),
+            Some(&cookie),
+            Some(json!({})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(human["state"], "sent");
+    let human = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/replies/{}/discard", drafts[1]),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_discard",
+        json!({"outbox_id": drafts[2]}),
+    )
+    .await;
+    assert_eq!(human["state"], agent["state"]);
+    assert_eq!(human["state"], "refused");
+    // Gone from the queue: approving or discarding again is refused alike.
+    let human = refused(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                &format!("/api/inbox/replies/{}/discard", drafts[1]),
+                Some(&cookie),
+                None,
+            ),
+        )
+        .await,
+    )
+    .await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.public_discard",
+        json!({"outbox_id": drafts[2]}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["details"]["reason"], "reply_not_held");
 }

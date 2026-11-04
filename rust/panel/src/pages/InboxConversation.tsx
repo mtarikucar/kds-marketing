@@ -12,8 +12,10 @@ import { personName } from '@/lib/people';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
+import { InboxPublic } from './InboxPublic';
 import {
   columnClass,
+  Deadline,
   InboxActorLabel,
   InboxTime,
   useInboxKey,
@@ -99,6 +101,7 @@ export function InboxConversation({ id }: { id: string }) {
                     {ctx ? personName(t, ctx.person, person.data?.identities) : t('inbox.thread')}
                   </h2>
                   <p className="text-xs text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
+                  {row.next_deadline && <Deadline at={row.next_deadline} />}
                 </div>
                 <Badge tone={row.executor === 'agent' ? 'neutral' : 'warning'}>
                   {row.executor === 'agent'
@@ -152,6 +155,16 @@ export function InboxConversation({ id }: { id: string }) {
                   {t('inbox.snoozedUntil')} <InboxTime at={row.state.snoozed.until} />
                 </p>
               )}
+              {row.surface === 'public' && ctx?.public ? (
+                <QueryState query={messages}>
+                  <InboxPublic
+                    conversationId={id}
+                    context={ctx.public}
+                    messages={messages.data?.pages.flatMap((page) => page.items) ?? []}
+                  />
+                </QueryState>
+              ) : (
+                <>
               <QueryState query={messages}>
                 {messages.hasNextPage && (
                   <Button
@@ -226,6 +239,8 @@ export function InboxConversation({ id }: { id: string }) {
                   {t('inbox.send')}
                 </Button>
               </form>
+                </>
+              )}
               <form
                 className="flex flex-col gap-2 border-t pt-4"
                 onSubmit={(e) => {

@@ -290,6 +290,13 @@ async fn declare_with_hosts(
     // What a person or an agent types is trimmed here (the name by `Capability::new`), and a
     // Meta ad account loses its `act_` prefix (`canonical_external_id`).
     let external_id = external_id.map(|e| canonical_external_id(&kind_key, e.trim()));
+    // None given: the kind's own default (every kind's is `Policy::default()` today, spec
+    // 2026-10-30-inbox-comments-marketplace-design.md §5.2); an unknown kind is refused below.
+    let policy = policy.unwrap_or_else(|| {
+        jt_capability::CapabilityKind::parse(&kind_key)
+            .map(jt_capability::CapabilityKind::default_policy)
+            .unwrap_or_default()
+    });
     let mut capability = Capability::new(
         CapabilityId(deps.ids.uuid()),
         ctx.workspace_id,
@@ -300,7 +307,7 @@ async fn declare_with_hosts(
             description: description.trim().to_owned(),
             external_id,
             connector_public,
-            policy: policy.unwrap_or_default(),
+            policy,
         },
         ctx.now,
     )
