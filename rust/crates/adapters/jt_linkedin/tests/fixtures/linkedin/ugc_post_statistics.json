@@ -1,0 +1,21 @@
+{
+  "paging": {
+    "count": 10,
+    "start": 0,
+    "links": []
+  },
+  "elements": [
+    {
+      "organizationalEntity": "urn:li:organization:90000001",
+      "ugcPost": "urn:li:ugcPost:7100000000000000002",
+      "totalShareStatistics": {
+        "clickCount": 1,
+        "commentCount": 0,
+        "engagement": 0.2,
+        "impressionCount": 5,
+        "likeCount": -1,
+        "shareCount": 0
+      }
+    }
+  ]
+}

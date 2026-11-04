@@ -71,6 +71,22 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self
+    }
+
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self
+    }
+
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self
+    }
+
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }
@@ -130,6 +146,15 @@ impl TenantRepos for MemTenant {
         self
     }
     fn outbox(&mut self) -> &mut dyn OutboxRepo {
+        self
+    }
+    fn public_items(&mut self) -> &mut dyn PublicItemRepo {
+        self
+    }
+    fn public_subjects(&mut self) -> &mut dyn PublicSubjectRepo {
+        self
+    }
+    fn public_cursors(&mut self) -> &mut dyn PublicCursorRepo {
         self
     }
 

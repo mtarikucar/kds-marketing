@@ -1,0 +1,32 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "1234567890",
+      "time": 1790000300,
+      "messaging": [
+        {
+          "sender": { "id": "2000000000000001" },
+          "recipient": { "id": "1234567890" },
+          "timestamp": 1790000200123,
+          "message": { "mid": "m_mixed_1", "text": "Merhaba" }
+        }
+      ],
+      "changes": [
+        {
+          "field": "feed",
+          "value": {
+            "from": { "id": "5550001", "name": "Örnek Müşteri" },
+            "message": "Fiyatı nedir?",
+            "post_id": "1234567890_111",
+            "comment_id": "111_901",
+            "created_time": 1790000100,
+            "item": "comment",
+            "parent_id": "1234567890_111",
+            "verb": "add"
+          }
+        }
+      ]
+    }
+  ]
+}

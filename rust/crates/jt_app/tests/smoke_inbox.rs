@@ -96,6 +96,7 @@ pub async fn run_acceptance() {
     assert_eq!(before.person.id, snapshot.inbox.people[0].id);
     assert_eq!(before.journey.unwrap().id, snapshot.inbox.journeys[0].id);
     assert_eq!(before.status_labels.len(), 9);
+    assert!(before.status_label_overrides.is_empty());
     connector.push_send_text(Ok(SendReceipt {
         provider_id: "smoke-send-1".into(),
         cost_minor: None,

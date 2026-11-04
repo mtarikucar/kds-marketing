@@ -7,11 +7,13 @@
 //! row-level security does not bind ([`check_database_role`]), apply pending migrations, build the
 //! shared ports once and refill the egress tenant tier from the capability records ([`boot`]),
 //! log which provider apps are configured and the public address ([`log_providers`]), create the
-//! first platform operator when configured, bind the listener, start the scheduled jobs
-//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM.
-//! On the signal no new job run starts; open connections drain for at most [`DRAIN_TIMEOUT`], then
-//! the job runs still going get up to [`scheduler::SHUTDOWN_GRACE`] to finish before they are
-//! aborted.
+//! first platform operator when configured, listen for SIGINT and SIGTERM ([`Signals`]), bind the
+//! listener and log `jeeta is listening`, start the scheduled jobs ([`crate::scheduler`], unless
+//! `JEETA_JOBS_ENABLED=false`), then serve until one of the signals. A signal before the handlers
+//! are in place ends the start at once (the signal's default action), with nothing served yet;
+//! one from the `listening` line on shuts the server down: no new job run starts, open
+//! connections drain for at most [`DRAIN_TIMEOUT`], then the job runs still going get up to
+//! [`scheduler::SHUTDOWN_GRACE`] to finish before they are aborted.
 
 use std::future::IntoFuture;
 use std::path::Path;
@@ -43,7 +45,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{self, Bootstrap, Config};
-use crate::{connectors, scheduler};
+use crate::{connectors, net, scheduler};
 
 /// How long open connections may take to finish after a shutdown signal.
 pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -82,6 +84,9 @@ pub async fn run(config: Config) -> Result<()> {
     let gate = strategy_gate(pool.clone());
 
     let app = app_with_probes(deps.clone(), gate, &config, Some(runtime_ops.clone()));
+    // Before the listener is announced: whoever stops the process once it is listening (a
+    // supervisor, a deploy) gets the drain, never the default action that kills it outright.
+    let signals = Signals::install()?;
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -95,7 +100,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     let wal_probe = runtime_ops.start_wal_probe(config.wal_archive_dir.clone());
     let jobs = scheduler::start(&config, Arc::new(deps));
-    let served = serve(listener, app, jobs.stopper()).await;
+    let served = serve(listener, app, signals, jobs.stopper()).await;
     if let Some(probe) = wal_probe {
         probe.abort();
         let _ = probe.await;
@@ -284,6 +289,10 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
     let deps = Deps {
         ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
         ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+        device_uploads: std::sync::Arc::new(
+            jt_app::usecases::devices::uploads::UploadTurns::default(),
+        ),
+        bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
         billing: config.billing.clone(),
         uow: uow.clone(),
         clock: Arc::new(SystemClock),
@@ -423,17 +432,19 @@ fn panel_status(dir: Option<&Path>) -> String {
     }
 }
 
-/// Serves until SIGINT or SIGTERM, then calls `on_signal` (which stops the scheduled jobs from
-/// starting new runs), stops accepting and lets open connections finish for at most
-/// [`DRAIN_TIMEOUT`].
+/// Serves until SIGINT or SIGTERM (one received since `signals` were installed counts), then
+/// calls `on_signal` (which stops the scheduled jobs from starting new runs), stops accepting and
+/// lets open connections finish for at most [`DRAIN_TIMEOUT`]. Every connection gives up a write
+/// its client has not taken for [`net::WRITE_TIMEOUT`] ([`net::TimedListener`]): a client that
+/// stopped reading does not keep its socket.
 async fn serve(
     listener: TcpListener,
     app: Router,
+    mut signals: Signals,
     on_signal: impl FnOnce() + Send + 'static,
 ) -> Result<()> {
-    let mut signals = Signals::install()?;
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = axum::serve(listener, app)
+    let server = axum::serve(net::TimedListener::new(listener, net::WRITE_TIMEOUT), app)
         .with_graceful_shutdown(async move {
             // A dropped sender stops the server too.
             let _ = stopped.await;
@@ -468,7 +479,9 @@ async fn serve(
     Ok(())
 }
 
-/// SIGINT and SIGTERM, installed before serving so a failure stops the start.
+/// SIGINT and SIGTERM, installed before the listener is announced: a signal from then on is
+/// caught (and kept until [`serve`] waits for it) instead of ending the process, and a failure to
+/// install stops the start.
 #[cfg(unix)]
 struct Signals {
     interrupt: tokio::signal::unix::Signal,
@@ -552,6 +565,10 @@ mod tests {
             connectors: Arc::new(ScriptedRegistry::new()),
             ops: std::sync::Arc::new(jt_app::ports::ops::UnknownOps),
             ops_signals: std::sync::Arc::new(jt_app::ports::ops::OpsSignals::default()),
+            device_uploads: std::sync::Arc::new(
+                jt_app::usecases::devices::uploads::UploadTurns::default(),
+            ),
+            bridge_signals: std::sync::Arc::new(jt_app::std_impls::LocalBridgeSignals::default()),
             billing: jt_app::usecases::billing::BillingConfig {
                 price_minor: 123,
                 price_currency: "TRY".into(),
@@ -852,6 +869,14 @@ mod tests {
         // public address: an OAuth flow cannot start (the missing address is named first, before
         // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
+            // The marketplaces' adapters come with their own tasks (T1, H1).
+            if matches!(
+                provider,
+                jt_connector::Provider::Trendyol | jt_connector::Provider::Hepsiburada
+            ) {
+                assert!(deps.connectors.connector(*provider).is_none());
+                continue;
+            }
             let connector = deps.connectors.connector(*provider).expect("an adapter");
             assert_eq!(connector.provider(), *provider);
             assert_eq!(
@@ -871,11 +896,23 @@ mod tests {
         assert!(deps.connectors.oauth(jt_connector::Provider::X).is_some());
         assert!(
             deps.connectors
+                .oauth(jt_connector::Provider::Tiktok)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Linkedin)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
                 .sms(jt_connector::Provider::Netgsm)
                 .is_some()
         );
         assert_eq!(deps.apps.meta_app(), None);
         assert_eq!(deps.apps.x_app(), None);
+        assert_eq!(deps.apps.tiktok_app(), None);
+        assert_eq!(deps.apps.linkedin_app(), None);
         assert_eq!(deps.apps.public_base_url(), None);
         let (status, _, body) = call(
             &app,
@@ -908,6 +945,10 @@ mod tests {
             (config::INSTAGRAM_APP_SECRET, "ig-secret-1"),
             (config::X_CLIENT_ID, "x-id-1"),
             (config::X_CLIENT_SECRET, "x-secret-1"),
+            (config::TIKTOK_CLIENT_KEY, "tt-key-1"),
+            (config::TIKTOK_CLIENT_SECRET, "tt-secret-1"),
+            (config::LINKEDIN_CLIENT_ID, "li-id-1"),
+            (config::LINKEDIN_CLIENT_SECRET, "li-secret-1"),
             (config::PUBLIC_BASE_URL, "https://jeeta.example"),
         ]);
         let (mut deps, _) = ports(db.pool.clone(), &config);
@@ -932,10 +973,13 @@ mod tests {
         let cookie = cookie.unwrap();
         let session = cookie.split(';').next().unwrap();
 
-        for (kind, client_id, callback) in [
-            ("facebook_page", "meta-id-1", "meta"),
-            ("instagram", "ig-id-1", "instagram"),
-            ("x", "x-id-1", "x"),
+        for (kind, id_param, client_id, callback) in [
+            ("facebook_page", "client_id", "meta-id-1", "meta"),
+            ("instagram", "client_id", "ig-id-1", "instagram"),
+            ("x", "client_id", "x-id-1", "x"),
+            // TikTok names its client id the client key.
+            ("tiktok", "client_key", "tt-key-1", "tiktok"),
+            ("linkedin_member", "client_id", "li-id-1", "linkedin"),
         ] {
             let (status, _, body) = call(
                 &app,
@@ -953,13 +997,20 @@ mod tests {
                     .find(|(k, _)| k == name)
                     .map(|(_, v)| v.into_owned())
             };
-            assert_eq!(param("client_id").as_deref(), Some(client_id), "{kind}");
+            assert_eq!(param(id_param).as_deref(), Some(client_id), "{kind}");
             assert_eq!(
                 param("redirect_uri"),
                 Some(format!("https://jeeta.example/oauth/callback/{callback}")),
                 "{kind}"
             );
-            for secret in ["meta-secret-1", "ig-secret-1", "x-secret-1", "verify-1"] {
+            for secret in [
+                "meta-secret-1",
+                "ig-secret-1",
+                "x-secret-1",
+                "tt-secret-1",
+                "li-secret-1",
+                "verify-1",
+            ] {
                 assert!(!body.to_string().contains(secret), "{kind}: {body}");
             }
         }

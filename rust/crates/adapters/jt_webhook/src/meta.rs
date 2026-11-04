@@ -8,11 +8,13 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use jt_app::usecases::webhook::{self, AccountEvent, Delivery};
+use jt_app::usecases::webhook::{self, AccountEvent, AccountRoute, Delivery};
 use jt_connector::{META_SIGNATURE_HEADER, Provider, meta_signature_ok, meta_verify_token_ok};
-use jt_meta::webhook::{Origin, ParseError, kinds_of_hint, parse, scoped_body};
+use jt_meta::webhook::{
+    KIND_HINT_WHATSAPP_ACCOUNT, Origin, ParseError, kinds_of_hint, parse, scoped_body,
+};
 
-use crate::{META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw};
+use crate::{DISABLED_META, META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw};
 
 /// What Meta is answered once a delivery is handled.
 const RECEIVED: &str = "EVENT_RECEIVED";
@@ -21,6 +23,8 @@ const RECEIVED: &str = "EVENT_RECEIVED";
 const UNROUTED: &str = "unrouted";
 /// The logged reason of an event dropped because the workspace holding its account is suspended.
 const INACTIVE: &str = "inactive";
+/// The logged reason of a comment dropped because its capability's comments are not enabled.
+const DISABLED: &str = "comments_not_enabled";
 
 /// The longest `hub.challenge` echoed back.
 const MAX_CHALLENGE_CHARS: usize = 256;
@@ -142,6 +146,11 @@ pub(crate) async fn receive(
         .into_iter()
         .map(|p| AccountEvent {
             kind_keys: kinds_of_hint(p.kind_hint),
+            route: if p.kind_hint == KIND_HINT_WHATSAPP_ACCOUNT {
+                AccountRoute::WhatsappBusinessAccount
+            } else {
+                AccountRoute::ExternalId
+            },
             external_account_id: p.external_account_id,
             draft: p.event,
         })
@@ -150,13 +159,27 @@ pub(crate) async fn receive(
         Ok(deliveries) => {
             // One warning per reason and kind of account, however many events a delivery drops.
             let mut dropped: BTreeMap<(&'static str, &'static str), u64> = BTreeMap::new();
+            let mut disabled = 0u64;
             for (delivery, kind_hint) in deliveries.iter().zip(hints) {
                 let reason = match delivery {
                     Delivery::Unrouted => UNROUTED,
                     Delivery::Inactive => INACTIVE,
+                    Delivery::Disabled => {
+                        disabled += 1;
+                        continue;
+                    }
                     Delivery::Stored(_) | Delivery::Duplicate => continue,
                 };
                 *dropped.entry((reason, kind_hint)).or_default() += 1;
+            }
+            if disabled > 0 {
+                DISABLED_META.fetch_add(disabled, Ordering::Relaxed);
+                tracing::warn!(
+                    provider = "meta",
+                    reason = DISABLED,
+                    events = disabled,
+                    "comment events for an account whose comments are not enabled: dropped"
+                );
             }
             for ((reason, kind_hint), events) in dropped {
                 UNROUTED_META.fetch_add(events, Ordering::Relaxed);

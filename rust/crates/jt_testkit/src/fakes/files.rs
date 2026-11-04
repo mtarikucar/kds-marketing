@@ -5,7 +5,7 @@ use jt_app::{
     error::AppError,
     ports::{
         connectors::MediaUpload,
-        files::{FileStore, StoredFile},
+        files::{ByteSource, FileStore, StoredFile},
     },
 };
 use jt_studio::FileId;
@@ -40,7 +40,7 @@ impl FileStore for MemoryFiles {
         id: FileId,
         u: MediaUpload,
     ) -> Result<StoredFile, AppError> {
-        jt_app::usecases::studio::files::validate_upload(&u)?;
+        jt_app::usecases::files::validate_stored(&u)?;
         let f = StoredFile {
             id,
             workspace_id: ws,
@@ -67,6 +67,24 @@ impl FileStore for MemoryFiles {
             .cloned()
             .ok_or_else(|| AppError::not_found("file"))
     }
+    async fn read_range(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let files = self.files.lock().unwrap();
+        let bytes = &files
+            .get(&(ws, id))
+            .ok_or_else(|| AppError::not_found("file"))?
+            .bytes;
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(bytes.len());
+        let end = start.saturating_add(len).min(bytes.len());
+        Ok(bytes[start..end].to_vec())
+    }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError> {
         self.files.lock().unwrap().remove(&(ws, id));
         Ok(())
@@ -81,5 +99,22 @@ impl FileStore for MemoryFiles {
         Ok(format!("https://files.example.com/files/{id}")
             .parse()
             .unwrap())
+    }
+}
+
+/// A [`ByteSource`] over chunks held in memory: a test's upload.
+pub struct Chunks(pub std::collections::VecDeque<Vec<u8>>);
+
+impl Chunks {
+    /// `bytes` in one chunk.
+    pub fn of(bytes: &[u8]) -> Chunks {
+        Chunks([bytes.to_vec()].into())
+    }
+}
+
+#[async_trait]
+impl ByteSource for Chunks {
+    async fn next_chunk(&mut self) -> Result<Option<Vec<u8>>, AppError> {
+        Ok(self.0.pop_front())
     }
 }

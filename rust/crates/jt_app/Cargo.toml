@@ -13,6 +13,9 @@ jt_capability.workspace = true
 jt_connector.workspace = true
 jt_inbox.workspace = true
 jt_studio.workspace = true
+jt_calls.workspace = true
+jt_devices.workspace = true
+jt_device_protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
@@ -29,7 +32,7 @@ base64.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
 url.workspace = true
-tokio = { workspace = true, features = ["rt", "sync"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 jt_outbound.workspace = true
@@ -37,6 +40,8 @@ jt_meta.workspace = true
 jt_netgsm.workspace = true
 jt_mail.workspace = true
 jt_testkit.workspace = true
+# `devices_agent_tracing.rs` captures what `tracing` writes.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

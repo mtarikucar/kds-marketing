@@ -19,10 +19,11 @@ pub(super) fn deferred_leadgen(
     event: &InboundEvent,
     outcome: Option<&ConsumptionOutcome>,
 ) -> bool {
-    consumer == "inbox@2"
-        && event.provider == Provider::Meta
-        && event.kind == EventKind::LeadGen
-        && outcome.is_some_and(|o| o.outcome == "deferred")
+    outcome.is_some_and(|o| o.outcome == "retry_due")
+        || (consumer == "inbox@2"
+            && event.provider == Provider::Meta
+            && event.kind == EventKind::LeadGen
+            && outcome.is_some_and(|o| o.outcome == "deferred"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,6 +32,9 @@ pub struct StoredConsumption {
     pub consumer: String,
     pub event_id: InboundEventId,
     pub outcome: Option<ConsumptionOutcome>,
+    /// How often it was deferred, and when it is due again (migration 0015).
+    pub attempts: u32,
+    pub retry_at: Option<OffsetDateTime>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct StoredRequestKey {
@@ -68,6 +72,9 @@ pub struct MemInbox {
     pub consumption: Vec<StoredConsumption>,
     pub request_keys: Vec<StoredRequestKey>,
     pub outbox: Vec<OutboxRow>,
+    pub public_items: Vec<PublicItem>,
+    pub public_subjects: Vec<PublicSubject>,
+    pub public_cursors: Vec<super::public::StoredCursor>,
 }
 
 pub(super) fn initialize_defaults(state: &mut MemInbox, ws: WorkspaceId) {
@@ -237,7 +244,12 @@ impl PersonRepo for MemTenant {
             })
             .cloned())
     }
-    async fn search(&mut self, query: &str, limit: u32) -> Result<Vec<Person>, AppError> {
+    async fn search(
+        &mut self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Person>, AppError> {
         let query = query.to_lowercase();
         let mut rows: Vec<_> = self
             .state()
@@ -254,8 +266,11 @@ impl PersonRepo for MemTenant {
             .cloned()
             .collect();
         rows.sort_by_key(|r| (r.created_at, r.id));
-        rows.truncate(limit.clamp(1, MAX_INBOX_PAGE) as usize);
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit.clamp(1, MAX_INBOX_PAGE) as usize)
+            .collect())
     }
     async fn mark_merged(
         &mut self,
@@ -708,6 +723,7 @@ impl MessageRepo for MemTenant {
         conversation: ConversationId,
         body: &str,
         received_at: OffsetDateTime,
+        uncertain: bool,
     ) -> Result<Vec<Message>, AppError> {
         let s = self.state();
         let mut rows: Vec<_> = s
@@ -732,6 +748,7 @@ impl MessageRepo for MemTenant {
                                 .and_then(|s| s.parse::<i128>().ok())
                                 .is_some_and(|at| at <= received_at.unix_timestamp_nanos())
                             && (o.state == "sending"
+                                || (uncertain && o.state == "unknown")
                                 || (o.state == "sent"
                                     && o.updated_at >= received_at - Duration::minutes(5)))
                     })
@@ -789,7 +806,8 @@ impl MessageRepo for MemTenant {
                     i.workspace_id == ws && i.id == sender && i.person_id == c.person_id && i.active
                 })
                 .ok_or_else(|| AppError::not_found("no matching inbound sender"))?;
-            if channel_for_kind(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel) {
+            if conversation_channel(&c.kind_key).map(|ch| ch.identity_channel()) != Some(i.channel)
+            {
                 return Err(AppError::not_found("no matching inbound sender"));
             }
             if t.state()
@@ -940,6 +958,44 @@ impl MessageRepo for MemTenant {
                     if cost_minor.is_some() {
                         r.cost_minor = cost_minor;
                     }
+                }
+                touch_conversation(s, ws, conversation_id, at);
+            });
+            Ok(())
+        })
+    }
+    async fn revise_queued(
+        &mut self,
+        id: MessageId,
+        author: Author,
+        body: &str,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            let old = t
+                .state()
+                .inbox
+                .messages
+                .iter()
+                .find(|r| {
+                    r.workspace_id == ws
+                        && r.id == id
+                        && r.direction == Direction::Outbound
+                        && r.status == MsgStatus::Queued
+                })
+                .ok_or_else(|| AppError::not_found("no such queued message"))?;
+            let conversation_id = old.conversation_id;
+            let at = t.inbox_write_at();
+            let body = body.to_owned();
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .messages
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.author = author;
+                    r.body = body.clone();
                 }
                 touch_conversation(s, ws, conversation_id, at);
             });
@@ -1415,6 +1471,8 @@ impl ConsumptionRepo for MemTenant {
                 consumer: consumer.into(),
                 event_id: id,
                 outcome: None,
+                attempts: 0,
+                retry_at: None,
             };
             t.tx.write(move |s| s.inbox.consumption.push(row.clone()));
             Ok(true)
@@ -1444,11 +1502,83 @@ impl ConsumptionRepo for MemTenant {
                         r.workspace_id == ws && r.consumer == consumer && r.event_id == id
                     })
                 {
+                    if outcome.outcome == "deferred" {
+                        r.attempts += 1;
+                        r.retry_at = Some(jt_app::ports::inbox::deferral_due(
+                            outcome.consumed_at,
+                            r.attempts,
+                        ));
+                    } else {
+                        r.retry_at = None;
+                    }
                     r.outcome = Some(outcome.clone());
                 }
             });
             Ok(())
         })
+    }
+    async fn release_due_deferrals(
+        &mut self,
+        consumer: &str,
+        now: OffsetDateTime,
+    ) -> Result<Vec<InboundEventId>, AppError> {
+        let ws = self.ws;
+        let cutoff = now - jt_app::ports::inbox::DEFERRAL_GIVE_UP;
+        let received: std::collections::BTreeMap<InboundEventId, OffsetDateTime> = self
+            .state()
+            .inbound_events
+            .iter()
+            .filter(|r| r.event.workspace_id == ws)
+            .map(|r| (r.event.id, r.event.received_at))
+            .collect();
+        let deferred = |r: &StoredConsumption| {
+            r.workspace_id == ws
+                && r.consumer == consumer
+                && r.outcome.as_ref().is_some_and(|o| o.outcome == "deferred")
+        };
+        let abandoned: Vec<InboundEventId> = self
+            .state()
+            .inbox
+            .consumption
+            .iter()
+            .filter(|r| deferred(r) && received.get(&r.event_id).is_some_and(|at| *at < cutoff))
+            .map(|r| r.event_id)
+            .collect();
+        let due: Vec<InboundEventId> = self
+            .state()
+            .inbox
+            .consumption
+            .iter()
+            .filter(|r| {
+                deferred(r)
+                    && !abandoned.contains(&r.event_id)
+                    && r.retry_at.is_none_or(|t| t <= now)
+            })
+            .map(|r| r.event_id)
+            .collect();
+        let consumer = consumer.to_owned();
+        let (gone, ready) = (abandoned.clone(), due);
+        self.tx.write(move |s| {
+            for r in s
+                .inbox
+                .consumption
+                .iter_mut()
+                .filter(|r| r.workspace_id == ws && r.consumer == consumer)
+            {
+                let set = |r: &mut StoredConsumption, outcome: &str| {
+                    if let Some(o) = r.outcome.as_mut() {
+                        o.outcome = outcome.into();
+                    }
+                };
+                if gone.contains(&r.event_id) {
+                    set(r, "abandoned");
+                    r.retry_at = None;
+                } else if ready.contains(&r.event_id) {
+                    set(r, "retry_due");
+                }
+            }
+        });
+        Ok(abandoned)
     }
 }
 #[async_trait]
@@ -1537,7 +1667,10 @@ impl RequestKeyRepo for MemTenant {
     }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {
-    if !["queued", "sending", "sent", "failed", "unknown", "refused"].contains(&row.state.as_str())
+    if ![
+        "queued", "sending", "sent", "failed", "unknown", "refused", "held",
+    ]
+    .contains(&row.state.as_str())
         || row.attempts > i32::MAX as u32
     {
         return Err(AppError::internal("invalid outbox state or attempts"));
@@ -1626,5 +1759,120 @@ impl OutboxRepo for MemTenant {
             });
             Ok(())
         })
+    }
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            found(
+                t.state()
+                    .inbox
+                    .outbox
+                    .iter()
+                    .any(|r| r.workspace_id == ws && r.id == id),
+            )?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .outbox
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.expected_generation = generation;
+                }
+            });
+            Ok(())
+        })
+    }
+    async fn failure_reasons(
+        &mut self,
+        messages: &[MessageId],
+    ) -> Result<Vec<(MessageId, String)>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && messages.contains(&r.message_id)
+                    && matches!(r.state.as_str(), "failed" | "unknown")
+            })
+            .filter_map(|r| r.last_error.clone().map(|e| (r.message_id, e)))
+            .collect())
+    }
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let n = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.created_at >= since
+                    && r.state != "refused"
+                    && r.intent["public"]["visibility"] == "public"
+                    && r.intent["public"]["drafted_by"]["kind"] == "agent"
+            })
+            .count();
+        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
+    }
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError> {
+        let (item, visibility) = (serde_json::json!(item), serde_json::json!(visibility));
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && matches!(r.state.as_str(), "held" | "queued" | "sending" | "unknown")
+                    && r.intent["public"]["item_id"] == item
+                    && r.intent["public"]["visibility"] == visibility
+                    && Some(r.id) != except
+            })
+            .map(|r| r.state.clone())
+            .collect())
+    }
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError> {
+        let mut rows: Vec<OutboxRow> = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.state == "unknown"
+                    && r.intent["public"]["item_id"].is_string()
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|r| std::cmp::Reverse((r.updated_at, r.id)));
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
+        Ok(self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| r.workspace_id == self.ws && r.message_id == message)
+            .min_by_key(|r| (r.created_at, r.id))
+            .cloned())
     }
 }

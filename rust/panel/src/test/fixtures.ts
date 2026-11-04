@@ -496,6 +496,7 @@ export const connectorHealth: ConnectorHealth[] = [
     last_probe_at: null,
     ok: null,
     error_kind: null,
+    reason: null,
     token_expires_at: null,
     reconnect_required: false,
   },
@@ -508,6 +509,7 @@ export const connectorHealth: ConnectorHealth[] = [
     last_probe_at: '2026-10-22T08:00:00Z',
     ok: true,
     error_kind: null,
+    reason: null,
     token_expires_at: null,
     reconnect_required: false,
   },
@@ -520,6 +522,7 @@ export const connectorHealth: ConnectorHealth[] = [
     last_probe_at: '2026-10-22T09:00:00Z',
     ok: false,
     error_kind: 'auth',
+    reason: null,
     token_expires_at: '2026-12-01T00:00:00Z',
     reconnect_required: true,
   },
@@ -557,4 +560,14 @@ export const hooks: HooksOut = {
     purpose,
     url: `https://panel.example.invalid/hooks/netgsm/${WS_ID}/${HOOK_TOKEN}/${purpose}`,
   })),
+  tiktok: {
+    url: 'https://panel.example.invalid/hooks/tiktok',
+    events: [
+      'authorization.removed',
+      'post.publish.failed',
+      'post.publish.complete',
+      'post.publish.inbox_delivered',
+      'post.publish.publicly_available',
+    ],
+  },
 };

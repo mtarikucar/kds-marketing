@@ -30,6 +30,7 @@ pub struct ReportOut {
 pub struct JourneyOut {
     pub appointments: Vec<crate::ports::compliance::AppointmentRow>,
     pub status_labels: std::collections::BTreeMap<String, String>,
+    pub status_label_overrides: std::collections::BTreeMap<String, String>,
     pub journey: Journey,
     pub attribution: Option<crate::ports::inbox::JourneyAttribution>,
     pub events: Vec<JourneyEvent>,
@@ -108,9 +109,11 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: JourneyId) -> Result<JourneyOut, Ap
         .await?
         .ok_or_else(|| AppError::not_found("no such journey"))?;
     let events = r.journeys().events(id, 50).await?;
+    let labels = super::dictionaries::status_labels(r.as_mut()).await?;
     Ok(JourneyOut {
         appointments: r.appointments().list(id).await?,
-        status_labels: super::dictionaries::effective_status_labels(r.as_mut()).await?,
+        status_labels: labels.effective,
+        status_label_overrides: labels.overrides,
         attribution: r.attribution().by_journey(id).await?,
         journey,
         events,

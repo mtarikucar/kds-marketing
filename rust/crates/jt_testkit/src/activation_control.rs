@@ -79,6 +79,18 @@ impl TenantRepos for Tenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self.inner.studio_materials()
+    }
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self.inner.studio_posts()
+    }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.inner.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.inner.device_commands()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }
@@ -138,6 +150,15 @@ impl TenantRepos for Tenant {
     }
     fn outbox(&mut self) -> &mut dyn OutboxRepo {
         self.inner.outbox()
+    }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.inner.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.inner.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.inner.public_cursors()
     }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.inner.roles()
@@ -388,11 +409,29 @@ impl PlatformRepos for Platform {
             .capability_by_external(kind_keys, external_id)
             .await
     }
+    async fn capabilities_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        self.inner.capabilities_by_business_account(waba_id).await
+    }
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        self.inner
+            .capabilities_holding(kind_keys, external_id)
+            .await
+    }
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_verified(kind_keys).await
+    }
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_live_agent_calls().await
     }
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.inner.ledger_append(entry).await

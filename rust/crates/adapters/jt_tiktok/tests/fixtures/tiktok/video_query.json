@@ -1,0 +1,16 @@
+{
+  "data": {
+    "videos": [
+      {
+        "id": "7300000000000000001",
+        "like_count": 250,
+        "comment_count": 12,
+        "share_count": 7,
+        "view_count": 9400
+      }
+    ],
+    "cursor": 0,
+    "has_more": false
+  },
+  "error": { "code": "ok", "message": "", "log_id": "20261027000000TEST0013" }
+}

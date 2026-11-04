@@ -1,0 +1,20 @@
+{
+  "results": {
+    "90000001": {
+      "id": 90000001,
+      "localizedName": "Jeeta Test Kahve",
+      "vanityName": "jeeta-test-kahve",
+      "primaryOrganizationType": "NONE"
+    },
+    "90000002": {
+      "id": 90000002,
+      "localizedName": "Jeeta Test Fırın",
+      "primaryOrganizationType": "NONE"
+    }
+  },
+  "statuses": {
+    "90000001": 200,
+    "90000002": 200
+  },
+  "errors": {}
+}

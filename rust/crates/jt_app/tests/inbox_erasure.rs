@@ -190,6 +190,7 @@ async fn imap_uidvalidity_reset_after_erasure_stores_nothing_personal() {
             )]
             .into_iter()
             .collect(),
+            read_history: false,
         };
         mail.push_mailbox_poll(Ok((vec![InboundEventDraft {
             external_id: format!("imap:support@example.com:INBOX:{validity}:1"), kind: EventKind::Message,
@@ -360,4 +361,99 @@ async fn erased_sms_jobs_are_not_polled_and_ignore_inflight_reports() {
     assert_eq!(s.outbound_jobs[0].row.state, OutboundJobState::Erased);
     assert!(s.outbound_jobs[0].row.last_status.is_none());
     assert!(s.outbound_jobs[0].status.is_none());
+}
+
+/// A number onboarded beside the WhatsApp Business app brings a person's past (the shared
+/// history, whose thread is their number), what the business wrote them from the app (echoes)
+/// and the app's contact card: erasing the person scrubs all three from the stored events, an
+/// unrelated customer's stay as they were, and one arriving after the erasure is stored masked.
+#[tokio::test]
+async fn erasure_scrubs_the_whatsapp_business_apps_history_echoes_and_contacts() {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
+    let (w, conv, _) = support::outbound::setup_channel("whatsapp_cloud").await;
+    let s = w.uow.snapshot();
+    let p = s.inbox.people[0].id;
+    let cap = s
+        .inbox
+        .conversations
+        .iter()
+        .find(|c| c.id == conv)
+        .unwrap()
+        .capability_id;
+    let shapes = |n: &str, number: &str| {
+        vec![
+            (
+                format!("history:{n}-in"),
+                EventKind::History,
+                json!({"history_message":{"from":number,"id":format!("wamid.{n}1"),"timestamp":"1789900000","type":"text","text":{"body":"private history"}},"thread":number,"business_number":"905550000000"}),
+            ),
+            (
+                format!("history:{n}-out"),
+                EventKind::History,
+                json!({"history_message":{"from":"905550000000","to":number,"id":format!("wamid.{n}2"),"type":"text","text":{"body":"private reply"}},"business_number":"905550000000"}),
+            ),
+            (
+                format!("echo:{n}"),
+                EventKind::MessageEcho,
+                json!({"echo":{"from":"905550000000","to":number,"id":format!("wamid.{n}3"),"type":"text","text":{"body":"private echo"}}}),
+            ),
+            (
+                format!("contact:{n}"),
+                EventKind::ContactSync,
+                json!({"state_sync":{"type":"contact","contact":{"full_name":"Private Person","first_name":"Private","phone_number":number},"action":"add","metadata":{"timestamp":"1789900000"}}}),
+            ),
+        ]
+    };
+    let insert = |shapes: Vec<(String, EventKind, serde_json::Value)>| {
+        let w = &w;
+        async move {
+            let mut r = w.uow.tenant(w.ws).await.unwrap();
+            for (id, kind, payload) in shapes {
+                r.inbound_events()
+                    .insert_if_new(
+                        InboundEvent {
+                            id: InboundEventId::new_v7(),
+                            workspace_id: w.ws,
+                            capability_id: Some(cap),
+                            provider: Provider::Meta,
+                            external_id: id.clone(),
+                            kind,
+                            payload,
+                            received_at: w.owner_ctx.now,
+                            processed_at: Some(w.owner_ctx.now),
+                        },
+                        Some(format!("raw {id}").into_bytes()),
+                    )
+                    .await
+                    .unwrap();
+            }
+            r.commit().await.unwrap();
+        }
+    };
+    insert(shapes("a", "905321234567")).await;
+    insert(shapes("b", "905339999999")).await;
+    erasure::erase(
+        &w.deps,
+        &w.owner_ctx,
+        p,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    insert(shapes("c", "905321234567")).await;
+
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbound_events.len(), 12);
+    for e in &s.inbound_events {
+        let text = e.event.payload.to_string();
+        if e.event.external_id.contains(":b") {
+            assert!(text.contains("905339999999"), "{text}");
+            assert!(text.contains("rivate"), "{text}");
+            assert!(e.raw.is_some(), "{}", e.event.external_id);
+        } else {
+            assert!(!text.contains("5321234567"), "{text}");
+            assert!(!text.contains("rivate"), "{text}");
+            assert!(e.raw.is_none(), "{}", e.event.external_id);
+        }
+    }
 }

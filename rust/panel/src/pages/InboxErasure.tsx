@@ -25,7 +25,8 @@ export function InboxErasure({ personId }: { personId: string }) {
   });
   if (!can(session.data, 'inbox.manage')) return null;
   return <>
-    <Button variant="destructive" onClick={() => { setConfirmed(''); setOpen(true); }}>{t('inbox.erasure.open')}</Button>
+    {/* Irreversible, so a quiet entry point; the typed confirmation in the dialog is the real gate. */}
+    <Button variant="ghost" size="sm" className="self-start text-danger" onClick={() => { setConfirmed(''); setOpen(true); }}>{t('inbox.erasure.open')}</Button>
     <Dialog open={open} onOpenChange={value => { if (!erase.isPending) setOpen(value); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>{t('inbox.erasure.open')}</DialogTitle><DialogDescription>{t('inbox.erasure.description')}</DialogDescription></DialogHeader>

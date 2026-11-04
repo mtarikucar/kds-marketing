@@ -83,7 +83,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Sekiz göç vardır:
+döndürür. Yirmi dört göç vardır (`0020` ve `0026`–`0028` başka dallardadır):
 
 | Göç | Ne yapar |
 |---|---|
@@ -99,6 +99,18 @@ döndürür. Sekiz göç vardır:
 | `0010_m4_billing` | Payment evidence, permanent entitlement history, stable workspace reference and a platform-only backfill manifest; 66 tables. Schema rollback refuses live rows. |
 | `0011_m4_activation_codes` | Workspace-locked keyed activation challenges, attempt cap and replay history; 67 tables. No plaintext or recipient binding. |
 | `0012_m4_grandfathered_backfill` | Separate reversible data migration: activated grandfathered grants for existing active workspaces; unchanged, unreferenced migration-owned rows alone can be removed. |
+| `0013_probe_reason` | `probe_runs.reason` (the failure line, at most 300 characters) and `unknown` as a legal `error_kind`; down restores the old check only while no `unknown` run is stored. No new table. |
+| `0014_social_providers` | `oauth_pending.provider` and `oauth_pending.app` accept `tiktok` and `linkedin`, for their OAuth flows. No new table; `inbound_events` is untouched. |
+| `0015_voice_calls` | Voice V0: `call_sessions`, `call_turns`, `call_commands`, `call_duty` (forced RLS, composite keys; 71 tables), `workspace_policies.calls`, `calls.work` for the system owner/manager/rep and `calls.manage` for owner/manager, and the retry columns of `event_consumption` (`attempts`, `retry_at`). Down refuses while a call is not ended. |
+| `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
+| `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
+| `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
+| `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
+| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 84 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
+| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 87 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
+| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0020` belongs to a parallel branch. |
+| `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
+| `0025_inbox_public_erasure` | Puts the erasure additions of `0019` and `0024` in one definition (each replaced 0008's functions on its own branch, so the later one dropped the other's: version order runs 0024 last, production ran 0019 last): the mask and the event matching cover public items and the WhatsApp Business app alike. No new table. Down puts back 0024's functions, and is refused once a comment or a question is stored. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -166,8 +178,17 @@ hiçbir günlük satırında görünmez.
 | `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
 | `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
+| `JEETA_INSTAGRAM_COMMENT_SCOPES` | kapalı | `1`/`true`: Instagram Login akışları yorum izinlerini de ister (onaydan sonra). Instagram uygulaması olmadan verilemez |
+| `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
+| `JEETA_TIKTOK_CLIENT_SECRET` | — | TikTok uygulamasının client secret'ı; anahtarla birlikte verilir |
+| `JEETA_LINKEDIN_CLIENT_ID` | — | Platformun LinkedIn uygulamasının (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn) istemci kimliği; sırla birlikte verilir |
+| `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
+| `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:
@@ -358,6 +379,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.health` | Bütün bağlayıcıların sağlığı: durum, son yoklama, jetonun bitişi, yeniden bağlama gereği | READ |
 | | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
 | | `jeeta.connector.hooks` | Sağlayıcılara girilecek webhook adresleri: alanın her amaç için NetGSM adresi (alanın anahtarıyla) ve platformun Meta adresi (doğrulama anahtarı asla) | READ |
+| | `jeeta.connector.set_pbx_policy` | NetGSM santralinin çağrı politikası: `call_mode` (`originate` ya da `linkup`) ve `recording_allowed` (görüşmeler santralde kaydedilsin mi); verilmeyen alan değişmez | WRITE |
 | olaylar | `jeeta.events.pending` | İşlenmemiş gelen olaylar, en eskisi başta, sayfa sayfa (`next` ile ileri) | READ |
 | | `jeeta.events.ack` | İşlenen olayları işaretler (1–200 kimlik, hepsi ya da hiçbiri); `{acked}` | WRITE |
 | | `jeeta.events.list` | Bütün gelen olaylar, en yenisi başta; işlenenler dahil, sağlayıcı ve tür süzgeçleri | READ |
@@ -395,8 +417,17 @@ Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
 
 Stratejisi onaylanmamış bir alanda stratejiye bağlı (`Gated`) her araç ve rota (bu sürümde henüz yoktur)
 `409 {"code":"STRATEGY_REQUIRED"}` alır; kapı, alanın onaylı bir strateji sürümü olup olmadığını her çağrıda
-veritabanından okur (`jt_pg::PgStrategyGate`, panel ve MCP için aynı kapı). Strateji kayıtlı bir istişareyle
-kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get` açıklaması ajana bu sırayı söyler):
+veritabanından okur (`jt_pg::PgStrategyGate`, panel ve MCP için aynı kapı).
+
+Strateji yalnızca otomatik büyüme işini kapılar: Growth Studio (`studio.*`; fren, defter ve dışa aktarımı
+hariç), telefon aramaları (`calls.*`; politikayı okuma ve ses köprüsü hariç) ve gelen kutusunda ticari temas
+başlatan tek satır `inbox.send`. Alanın kendi müşterilerinin yazışmalarını okumak ve yanıtlamak strateji
+beklemez (sahip kararı, 2026-11-03): diğer bütün `inbox.*` satırları kapıdan muaftır, alan durumu denetimi
+(`WORKSPACE_INACTIVE`) ise silme ve engelleme listesi dahil her gelen kutusu satırında aynen sürer. Ayrıntı:
+[Inbox outside the strategy gate](#inbox-outside-the-strategy-gate-2026-11-03).
+
+Strateji kayıtlı bir istişareyle kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get`
+açıklaması ajana bu sırayı söyler):
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|
@@ -473,7 +504,7 @@ alanı durumu denetiminden muaf değildir.
 
 | Grup (ulaşım yolu) | Türler (anahtar: paneldeki ad) |
 |---|---|
-| `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
+| `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `linkedin_member`: LinkedIn kişisel hesap, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
 | `messaging` Mesajlaşma (bağlayıcı) | `whatsapp_cloud`: WhatsApp Business, `instagram_dm`: Instagram mesajları, `messenger`: Messenger, `sms_line`: SMS hattı, `mailbox`: E-posta kutusu, `webchat`: Web sohbeti |
 | `telephony` Telefon (bağlayıcı) | `netgsm_pbx`: NetGSM santrali |
 | `community` Topluluk (bağlayıcı) | `discord`: Discord, `reddit`: Reddit, `review_google`: Google yorumları, `review_facebook`: Facebook yorumları |
@@ -606,6 +637,16 @@ Sistem rollerinin izinleri:
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
 | `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
 | `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
+| `studio.work` (stüdyoda çalışma) | ✓ | ✓ | — |
+| `studio.manage` (stüdyoyu yönetme) | ✓ | ✓ | — |
+| `calls.work` (arama yapma ve görüşme kaydını görme) | ✓ | ✓ | ✓ |
+| `calls.manage` (arama politikasını yönetme, görüşmenin numarasını görme) | ✓ | ✓ | — |
+| `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
+| `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+
+`calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
+verebilmek için taşır.
 
 `capabilities.manage` ve `budget.manage` M1a ile geldi. Yeni bir alanın sahip ve yönetici rolleri onları
 açılışta alır; M1a'dan önce açılmış alanlarınkine `0004_role_permissions_backfill` göçü ekler (bkz.
@@ -681,7 +722,7 @@ uygulama istemez.
 
 ### Sağlayıcı uygulamaları
 
-Meta, Instagram ve X hesapları platformun kendi OAuth uygulamalarına bağlanır: uygulamalar kiracı başına
+Meta, Instagram, X, TikTok ve LinkedIn hesapları platformun kendi OAuth uygulamalarına bağlanır: uygulamalar kiracı başına
 değil platform başınadır, ortamdan okunur (bkz. [Yapılandırma](#yapılandırma)), kiracılar kendi
 hesaplarını bu uygulamalara bağlar. Uygulamaları açmak, ayarlamak ve onaylatmak **platform sahibinin
 işidir**; Jeeta yalnız aşağıdaki değerleri okur. Kayıtlı yönlendirme adresleri, her biri sağlayıcının
@@ -692,6 +733,8 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | Meta (Facebook Login, Graph API) | `JEETA_META_APP_ID`, `JEETA_META_APP_SECRET`, `JEETA_META_VERIFY_TOKEN`; isteğe bağlı `JEETA_META_LOGIN_CONFIG_ID`, `JEETA_META_WHATSAPP_CONFIG_ID`, `JEETA_META_GRAPH_VERSION` | developers.facebook.com → uygulama → Ayarlar → Temel: Uygulama Kimliği ve Uygulama Sırrı; Facebook Login (for Business) → Ayarlar → Geçerli OAuth Yönlendirme URI'leri; Webhooks → Sayfa, Instagram ve WhatsApp Business Hesabı nesneleri için geri çağırma adresi `{genel adres}/hooks/meta` ve doğrulama anahtarı (`JEETA_META_VERIFY_TOKEN` ile aynı değer) | `{genel adres}/oauth/callback/meta` |
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
+| TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
+| LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
 
 (Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
 OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile doğrulama anahtarıdır.)
@@ -705,7 +748,9 @@ OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile do
   ancak Meta'nın incelemesinden (Advanced Access) ve iş doğrulamasından sonra çalışır; inceleme sürecinde
   uygulama yalnız rolü olan hesaplarla (yönetici, geliştirici, test kullanıcısı) denenebilir. İnceleme ve
   iş doğrulaması **sahibin işidir** (tasarım §14); Jeeta'nın kodu bunu beklemez, eksik bir izin yoklamada
-  `permission` olarak görünür.
+  `permission` olarak görünür. `leads_retrieval` verilmemişse (ya da Meta `leadgen` alanını reddederse)
+  bağlanan Sayfa yalnız mesajlaşma alanlarına abone edilir (`connector_public.leadgen = false`): mesajlar
+  gelir, lead formu gönderimleri gelmez.
 - **Webhook yalnız Meta uygulamasıyla açılır.** `/hooks/meta` Meta uygulaması (ve doğrulama anahtarı)
   yapılandırılmadıkça kapalıdır; Instagram Login webhook'ları Instagram uygulamasının sırrıyla da
   imzalanabildiği için kapı iki sırrı da dener, ama yalnız Instagram uygulaması yapılandırılmış bir
@@ -730,10 +775,12 @@ olmalıdır; değilse `permission` ("account mismatch") sayılır. Yoklamanın s
 Doğrulanmış bir kabiliyet, son başarılı yoklamasından politikanın `verify_max_age_days` süresi (varsayılan
 30 gün) geçince `stale` okunur; zamanlayıcının `probe_all` işi etkin alanlarda her canlı bağlayıcıyı
 saatte bir yokladığı için sağlıklı bir bağlantı tazeliğini korur (ödeme bekleyen bir alanın bağlantıları
-yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (yalnız sonuç sınıfı ve
-genel bilgiler, 30 gün tutulur); günlüğe (`connector.probe`) yalnız durum değiştiğinde yazılır. Sağlık
-(`connector.health`) her bağlayıcı kabiliyetinin şimdiki durumunu, son yoklamasını, jetonun bitişini ve
-yeniden bağlama gereğini mühür açmadan okur. Yeniden bağlama (`connector.reconnect`) Meta ve X için
+yoklanmaz, jetonları yine yenilenir). Her yoklama `probe_runs` kaydına yazılır (sonuç sınıfı, başarısızlık
+satırı `kind: provider: reason` (en çok 300 karakter, sağlayıcı hatasının kurucusunda maskelenmiş) ve genel
+bilgiler, 30 gün tutulur; `unknown` da geçerli bir sınıftır, migration 0013); günlüğe (`connector.probe`)
+yalnız durum değiştiğinde yazılır. Sağlık (`connector.health`) her bağlayıcı kabiliyetinin şimdiki
+durumunu, son yoklamasını (başarısızsa `reason` satırıyla), jetonun bitişini ve yeniden bağlama gereğini
+mühür açmadan okur; panel bu satırı hata türünün cümlesinin altında gösterir. Yeniden bağlama (`connector.reconnect`) Meta ve X için
 kabiliyete bağlı yeni bir OAuth akışı başlatır; NetGSM kabiliyeti yeni kimlik bilgisi alır.
 
 **Hangi uygulamayla yeniden bağlanır.** Bir OAuth akışının verdiği kimlik bilgisi, akışın oturum açtığı
@@ -880,6 +927,7 @@ yazma izni yoktur; `workspace.read` olayları yalnız okur.
 | Yoklama (gövdesiz; yanıt `{result, status}`) | `POST /api/connectors/{capability_id}/probe` | `jeeta.connector.probe` | `workspace.read` |
 | Sağlık (yanıt liste, araçta `{connectors}`) | `GET /api/connectors/health` | `jeeta.connector.health` | `workspace.read` |
 | Kabiliyete bağlı giriş: yeniden bağlama ya da `declared` bir kabiliyetin ilk bağlanması (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
+| Santralin çağrı politikası (gövde `{call_mode?, recording_allowed?}`, en az biri; yalnız `netgsm_pbx`, başka tür `409`; yanıt `{capability_id, call_mode, recording_allowed}`; günlük `connector.pbx_policy_set`). Bu iki `connector_public` anahtarı ayrılmıştır: bildirim ve bağlantı adımı yazamaz, kaydın açılması tek ve günlüklü bir karardır | `PUT /api/connectors/{capability_id}/pbx-policy` | `jeeta.connector.set_pbx_policy` | `capabilities.manage` |
 
 Kimlik bilgisi biçimleri (`credential.kind`): `netgsm_sms` (`usercode`, `password`, `msgheader`;
 `sms_line` için), `netgsm_pbx` (`username`, `password`, isteğe bağlı `trunk`, `pbxnum`; `netgsm_pbx` için)
@@ -918,14 +966,21 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `probe_all` | 15 dakika | Son yoklaması (`connector_public.health.at`) en az bir saatlik olan ya da hiç yoklanmamış her canlı bağlayıcı kabiliyetini (mühürlü kimlik bilgisi olan; kimlik bilgisi olmayan bir `declared` kabiliyet asla) `connector.probe`'un yaptığının aynısıyla yoklar; en çok dördü aynı anda (yoklama sağlayıcıyı beklerken kabiliyetin satır kilidini ve bir veritabanı bağlantısını tutar) | `jeeta.jobs.probe_all` |
 | `netgsm_dlr_poll` | 1 dakika | İletimi kesinleşmemiş gönderilerin iş kimliklerini (en çok 50) alanın doğrulanmış SMS hatlarının kimlik bilgisiyle NetGSM iletim raporuna sorar ve duyduğu durumları kaydeder. Gönderiler M2'nin tablosundadır; o gelene dek bekleyen iş yoktur ve sağlayıcıya hiç gidilmez | `jeeta.jobs.netgsm_dlr_poll` |
 | `netgsm_inbox_poll` | 1 saat | Her doğrulanmış SMS hattının NetGSM gelen kutusunu son iki saat için okur (başlangıç ve bitiş tarihi her zaman verilir) ve webhook'un kaçırdığı mesajları o hatta bağlı gelen olay olarak saklar. Kimlik webhook'unkiyle aynıdır (`netgsm-mo:<gorevid>`): webhook'un ya da önceki yoklamanın sakladığı mesaj ikinci kez yazılmaz. Yoklamanın ham gövdesi yoktur | `jeeta.jobs.netgsm_inbox_poll` |
+| `netgsm_cdr_poll` | 1 saat | Her doğrulanmış `netgsm_pbx` için santralin görüşme kayıtlarını (CDR, `/netsantral/report`) son iki saat için okur ve `cdr` çağrı olayı olarak saklar; kimlik webhook'unkiyle aynıdır (`netgsm-call:<id>:cdr`), itilen kayıt ikinci kez yazılmaz. Tüketici, Jeeta'dan yapılmış bir aramanın oturumunu süre, kayıt bağlantısı ve maliyetle tamamlar. Sunucunun IP'si NetGSM hesabının izinli listesinde olmalıdır | `jeeta.jobs.netgsm_cdr_poll` |
 | `iys_sync` | 1 saat | İYS izin kararlarını eşitler; beş hatadan sonra insan takip görevi açar | `jeeta.jobs.iys_sync` |
 | `refresh_tenant_hosts` | 1 dakika | Active/pending_payment çalışma alanlarının canlı connector host listesinden bu instance'ın tenant egress katmanını yeniler | `jeeta.jobs.refresh_tenant_hosts` |
 | `mail_inbox_poll` | 2 dakika | Doğrulanmış posta kutularında INBOX/Sent UID imleçlerini okur; olaylarla imleçleri aynı işlemde kaydeder ve gelen kutusu tüketicisini çalıştırır | `jeeta.jobs.mail_inbox_poll` |
 | `purge_raw_bodies` | 1 gün | 30 günden eski gelen olayların ham gövdesini her alanda ayrı ayrı siler (`webhook::purge_raw_in`; silinemeyen alan sayılır, ötekiler yine silinir); olaylar kalır | `jeeta.jobs.purge_raw_bodies` |
 | `purge_oauth_pending` | 1 saat | Süresi geçmiş bekleyen OAuth akışlarını siler | `jeeta.jobs.purge_oauth_pending` |
 | `purge_probe_runs` | 1 gün | 30 günden eski prob kayıtlarını siler; `probe_runs` tetikleyicisi her değişikliği ve veritabanının saatine göre 30 günden genç bir kaydın silinmesini reddeder | `jeeta.jobs.purge_probe_runs` |
-| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar | `jeeta.jobs.inbox_consume` |
+| `inbox_consume` | 10 saniye | Gelen olayları tek işlemde gelen kutusu kayıtlarına dönüştürür; active ve pending_payment alanlar. Ertelenen (`deferred`) bir olay, erteleme başına bir saat (en çok bir gün) sonra yeniden denenir; yedi günden eski olan bırakılır (`abandoned`, günlükte `inbox.event.abandoned`). Kaybedilmiş bir yolculuktaki arama yolculuğa işlenmez ama konuşmayı yeniden açar: `work.pending` bunu yeniden açma sorusu olarak gösterir. Bağlayıcısı olmadan saklanmış bir NetGSM olayı, türünün tek canlı kabiliyeti olunca ona bağlanır. Sesli mesaj ve otomatik arama raporları `inbox.netgsm_report` ile tüketilir | `jeeta.jobs.inbox_consume` |
 | `outbox_recover` | 1 dakika | 2 dakikadan eski `sending` → `unknown` (yeniden göndermez); 5 dakikadan eski `queued` kayıtlarını iki çitli gönderim adımına verir | `jeeta.jobs.outbox_recover` |
+| `call_timers` | 1 saniye | Hatta ajan araması olan alanlarda (tek bir platform okumasıyla bulunur) her aramanın zamanlayıcılarını işletir: yavaş ajana 4. ve 10. saniyede planın bekleme cümlesi, sessiz ajana her 20 saniyede planın sıradaki yedek cümlesi, yedekler bitince kapanış cümlesi ve kapatma (`agent_timeout`); en uzun süreyi aşan, arayanı sessiz kalan, 90 saniye cevapsız çalan ve köprüsü susmuş arama da senaryoyla biter. Sunucu hiçbir cümle yazmaz | `jeeta.jobs.call_timers` |
+| `purge_call_commands` | 1 gün | Ses köprüsü için 7 günden önce kuyruğa alınmış komutları (onaylanmış olsun olmasın) siler; aramalar ve konuşma kayıtları kalır | `jeeta.jobs.purge_call_commands` |
+| `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
+| `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
+| `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
+| `whatsapp_app_sync` | 5 dakika | WhatsApp Business uygulamasının yanında bağlanan her numara için (`connector_public.business_app`), active ve pending_payment alanlarda, uygulamanın kişilerini sonra sohbet geçmişini Meta'dan bir kez ister (`POST /{phone_number_id}/smb_app_data`), bağlanmadan sonraki 24 saat içinde. Her istek bir karşılaştır-ve-değiştir adımıdır: `requesting` işlenir, sağlayıcı işlem açıkken çağrılmaz; yanıt `requested` (istek kimliğiyle) ya da `refused` (nedeniyle) yazılır, meşgul ya da ulaşılamayan sağlayıcı bir sonraki çalışmada yeniden sorulur, kaybolmuş bir yanıt (`unknown`) asla yeniden sorulmaz, süresi dolan `expired` olur (doğrulanmamış bir kabiliyet sorulmaz, süresi yine dolar). Her yerleşen adım `connector.app_sync` yazar | `jeeta.jobs.whatsapp_app_sync` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1361,7 +1416,9 @@ konuşmasız echo için gelen temas oluşturmayan repository işlemi koordinatö
 
 ### Inbox pending/context and timers
 
-Only `inbox.pending` and `inbox.context` are exempt from the strategy gate; both still require
+`inbox.pending` and `inbox.context` are exempt from the strategy gate (originally the only inbox
+rows that were; since 2026-11-03 every inbox row but `inbox.send` is, see
+[Inbox outside the strategy gate](#inbox-outside-the-strategy-gate-2026-11-03)); both still require
 an active workspace and `inbox.work`. Pending queues follow the executor (unassigned human
 queues are visible to all holders). Context includes at most ten recent conversations for the
 same person, the last three messages each, ten journey events, open tasks, and live strategy
@@ -1382,9 +1439,9 @@ its down migration removes only the added policy column.
 ### M2a inbox core: model, reducer and surfaces
 
 The catalog contains **106 MCP tools: the M1b 60 plus 46 inbox tools**. Every inbox tool
-has a panel HTTP twin and a shared strict input schema. `inbox.pending` and `inbox.context`
-are strategy-exempt; all other inbox operations are gated. All retain the workspace-status
-check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
+has a panel HTTP twin and a shared strict input schema. Every inbox operation but `inbox.send`
+is strategy-exempt (since 2026-11-03; at M2a only `inbox.pending` and `inbox.context` were). All
+retain the workspace-status check. `inbox.work` covers normal work; `inbox.manage` covers owner assignment, dictionaries
 and merges. Owner/manager have both, Rep has work; custom grants are preserved.
 `jeeta.inbox.merges_undo` requires explicit confirmation. Agents cannot take over as a person.
 
@@ -1427,7 +1484,9 @@ A conversation's executor defaults to Agent and is separate from the journey own
 handover increments its generation; Human(None) is the unassigned queue. Human replies do not
 change the executor and do not require holding it. Agent replies refuse human-held conversations.
 `context` and `journeys.get` return all nine effective `status_labels`: fixed Turkish defaults
-with workspace policy overrides. Keys remain fixed; the panel renders the returned label.
+with workspace policy overrides. Keys remain fixed. They also return `status_label_overrides`,
+only the workspace's own labels: the panel renders an override when one exists and otherwise its
+own translation of the stage, so the English panel does not show the Turkish defaults.
 
 Reply uses a durable outbox: commit queued intent after the first fence, recheck under locks
 immediately before sending and persist the fence snapshot, release all locks for provider I/O,
@@ -1549,7 +1608,8 @@ composition and webchat remain M2c.
 
 ## M2b consent, suppression and commercial sending
 
-Five strategy-gated compliance operations are included in the 46 inbox tools (106 total):
+Five compliance operations are included in the 46 inbox tools (106 total); since 2026-11-03 only
+`inbox.send` among them needs an approved strategy:
 
 | Row | Panel route | MCP tool | Permission |
 |---|---|---|---|
@@ -1623,7 +1683,8 @@ a line clears its İYS slot and brand metadata along with the old account creden
 
 ## M2b quotes and internal appointments
 
-Six strategy-gated `InboxWork` operations handle quotes and appointments. Each operation uses the same input, output and permission on HTTP and MCP:
+Six `InboxWork` operations handle quotes and appointments (strategy-gated until 2026-11-03,
+exempt since). Each operation uses the same input, output and permission on HTTP and MCP:
 
 | Use case | MCP tool | HTTP route |
 |---|---|---|
@@ -1680,7 +1741,7 @@ inbox (`/inbox/commissions` in the panel), with shared strict request schemas on
 | `inbox.commissions.pay` | `jeeta.inbox.commissions_pay` | POST `/api/inbox/commissions/{id}/pay` | `inbox.manage`, owner/manager authority |
 | `inbox.commission_rates.set` | `jeeta.inbox.commission_rates_set` | PUT `/api/inbox/commission-rates` | `inbox.manage` |
 
-All four operations require an approved strategy and an active workspace. MCP approval/payment
+All four operations require an active workspace (and, until 2026-11-03, an approved strategy). MCP approval/payment
 uses the issuer's owner/manager authority and effective `inbox.manage` scope. Payment records a
 human payment decision; it does not transfer funds. Only Pending → Approved → Paid is allowed;
 repeated or out-of-order decisions return CONFLICT and do not duplicate ledger entries.
@@ -1704,7 +1765,8 @@ shows snapshot rates and amounts, and offers only permitted next actions and fut
 ### Person erasure and replay protection
 
 `POST /api/inbox/people/{person_id}/erase` and `jeeta.inbox.people_erase` require
-`inbox.manage`, the strategy gate and explicit `{ "confirm": true }`. The panel provides
+`inbox.manage`, an active workspace and explicit `{ "confirm": true }`, no strategy (since
+2026-11-03; the strategy gate applied before). The panel provides
 this action on the selected person's page and conversation, with a typed confirmation dialog:
 `SİL` in Turkish, `ERASE` in English. Dismissal/reopening clears the typed confirmation.
 The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
@@ -1780,13 +1842,33 @@ ordered by acquisition time and journey ID. The historical Task 9 migration-test
 unrelated inbox rows.
 
 
+## Comments and marketplace questions: the six `inbox.public` rows
+
+Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. They bring the
+inbox to 52 tools (146 in all). None needs an approved strategy: answering customers is not
+planned growth work (owner decision 2026-11-03). Each still needs an `active` workspace.
+
+| Row | Panel route | MCP tool | Risk / permission |
+|---|---|---|---|
+| `inbox.public.hide` | POST `/api/inbox/items/{item_id}/hide` `{hidden}` | `jeeta.inbox.public_hide` | WRITE / `inbox.work` |
+| `inbox.public.delete` | POST `/api/inbox/items/{item_id}/delete` `{confirm}` | `jeeta.inbox.public_delete` | DESTRUCTIVE / `inbox.manage`, humans only |
+| `inbox.public.mark_handled` | POST `/api/inbox/items/handled` `{item_ids, reason}` | `jeeta.inbox.public_mark_handled` | WRITE / `inbox.work` |
+| `inbox.public.report` | POST `/api/inbox/items/{item_id}/report` `{reason}` | `jeeta.inbox.public_report` | WRITE / `inbox.work` |
+| `inbox.public.approve` | POST `/api/inbox/replies/{outbox_id}/approve` `{text?}` | `jeeta.inbox.public_approve` | WRITE / `inbox.work`, humans only |
+| `inbox.public.discard` | POST `/api/inbox/replies/{outbox_id}/discard` | `jeeta.inbox.public_discard` | WRITE / `inbox.work`, the drafter or a human |
+
+Moderation calls the provider with no transaction open: the item is checked, the call made, and
+the result written on the item as it then is; a moderation another one beat is `skipped`, an
+item already so is `unchanged`. Marking handled (1 to 100 items, all or none) tells no provider.
+
 ## M2b panel and architecture completion
 
 The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send
 (5), quotes/internal appointments (6), commissions/rates (4), and person erasure (1).
 Together with M1b's 60 tools, the release has **106**. Catalog rows, panel HTTP routes, MCP
-registry entries and shared input schemas have exact-set parity checks. Only `inbox.pending`
-and `inbox.context` bypass the strategy gate; workspace-status checks remain on every inbox row.
+registry entries and shared input schemas have exact-set parity checks. Every inbox row but
+`inbox.send` bypasses the strategy gate (since 2026-11-03; at M2b only `inbox.pending` and
+`inbox.context` did); workspace-status checks remain on every inbox row.
 Both `inbox.merges.undo` and `inbox.people.erase` require explicit confirmation.
 
 The panel exposes consent history, effective time/source, İYS synchronization status and active
@@ -1833,6 +1915,47 @@ cd panel && pnpm test && pnpm build
 ```
 
 The wider `make check`/CI checks documented above remain the release checks.
+
+### Inbox outside the strategy gate (2026-11-03)
+
+Owner decision: reading and answering the workspace's own customers never depends on a marketing
+strategy. The strategy gates automated growth work only: the Growth Studio, calls, and the one
+inbox row that starts commercial contact. Ingestion never depended on it (the background
+consumer turns inbound events into conversations either way); before this change the panel and
+MCP surfaces simply hid what it had brought in.
+
+- **Gated:** `inbox.send`. It writes to a person rather than in a conversation, takes
+  `intent: commercial` only, and may open a conversation no customer started: outreach.
+- **Exempt:** the other 45 inbox rows: conversations, messages, reply, snooze, close, take over
+  and hand to agent, people (create, get, search, erase), identities, journeys and their events,
+  notes, tasks, consent, suppressions, merges, quotes, appointments, commissions and rates, status
+  labels, lost reasons, pending and context.
+- **Unchanged:** the workspace-status check. Every inbox row, erasure and suppressions included,
+  answers `WORKSPACE_INACTIVE` unless the workspace is active.
+- **Sends.** An exempt row may still send something that is outreach, so the send fence decides
+  per send, at enqueue and again at every claim (recovery included). Without an approved strategy
+  it refuses (`strategy_required`, before anything is queued or any conversation is opened):
+  - a send held to the gate: queued by a gated use case (`intent.use_case`: `inbox.reply`,
+    `inbox.send`, `inbox.quotes.send` or `inbox.appointments.book`), queued before the use case
+    was recorded (all of those were queued behind the gate), or one that **opens a conversation**
+    (`intent.opens_conversation`): a quote or a booking mailed on a channel the customer never
+    wrote on is contact nobody asked for;
+  - a **commercial** message to a customer who is no longer talking: their last message is older
+    than `ANSWERING_WINDOW` (**7 days**, `replies.rs`), or the conversation is closed. Meta's
+    channels refuse it outside their 24-hour window anyway; email and SMS have none of their own;
+  - a **metered** send (an SMS line, or any line with a budget item or a spend cap): its spend is
+    reserved in the approved strategy's budget frame.
+
+  A reply-intent message stays bound to the 24-hour reply window as before; a commercial reply
+  within seven days of the customer's last message, in a conversation that is not closed, needs no
+  strategy.
+- **New rows** (for example `inbox.public.*`) default to `Gated`. A row is exempt only once it is
+  named in `EXEMPT_INBOX` in `crates/jt_archtest/tests/gate_rule.rs`, which pins the rule: name
+  there a row that reads or answers customer conversations; leave out one that starts contact
+  nobody asked for.
+
+The panel's inbox screens have no strategy check of their own: they show whatever the server
+answers, and a gate refusal becomes the "approve a strategy" next step (`QueryState`).
 
 ### M3 Task 0 — controller contracts and baseline
 
@@ -1894,6 +2017,147 @@ budget moves and controls. Its dependencies are pure domain types, serialization
 UUID/time/error types and the URL parser; it performs no I/O. Existing application
 port paths re-export the shared records, including connector `MediaUpload` and
 `PublishReceipt`, without changing repository or provider method signatures.
+
+### Calls (voice V0, V1)
+
+`crates/domain/jt_calls` holds the call session and its state machine, the plan and the policy,
+the fence and the timers (spec `docs/superpowers/specs/2026-10-27-agent-voice-calls-design.md`).
+V0 places a rep's call through the NetGSM PBX (`Telephony::click_to_call`: the rep's extension
+rings, then the person) and keeps the call log. V1 lets the connected agent talk on the call
+itself through the workspace's voice bridge: `calls.place{mode: "agent", plan}`, then
+`calls.listen` → think → `calls.say` until `calls.end` (or `calls.transfer` to a rep). Every
+placed call passes the fence twice, the second time in the transaction that dials (right before
+the PBX is asked; for an agent's call, the one that queues the bridge's `dial`); numbers are
+masked in every output and ledger payload (`calls.get` shows a person holding `calls.manage` the
+number; the bridge is handed the number it dials).
+
+The server never composes a sentence: the bridge plays only the plan's opening, holding phrases,
+fallback lines and closing, the policy's recording announcement, and the agent's own `say`
+texts. The `call_timers` job (every second, only for workspaces with an agent's call on the
+line) covers a slow agent with a holding phrase after 4 s and 10 s, a silent one with the next
+fallback line every 20 s, and then plays the closing and hangs up (`agent_timeout`); it also
+ends a call at its maximum duration, a caller who stays silent (`caller_silent`), a line left
+ringing for 90 s (`no_answer`), and a call whose bridge stopped reporting (`bridge_offline`; a
+closing never reported played is taken for done after 60 s). Every end of an agent's call (the
+caller's hangup, the timers, a transfer) is settled once: the journey's `CallMade{connected}`,
+the spend at the policy's tariff on the bridge's budget item, `calls.ended`; `calls.end` then
+records the outcome (`calls.outcome_recorded`). The long-polls (`calls.listen`, the bridge's
+commands) are woken at once by an in-process signal (`BridgeSignals`, on the calls' key) and
+read again at least every second, so a second server instance only adds up to a second. The
+bridge's commands are purged after 7 days (`purge_call_commands`, daily); erasing a person
+removes their calls' commands and the bridge's event notes, and empties their calls' plans.
+
+| Use case | Panel | MCP | Risk | Permission |
+|---|---|---|---|---|
+| `calls.policy_get` | `GET /api/calls/policy` | `jeeta.calls.policy_get` | READ | `calls.work` |
+| `calls.policy_set` | `PUT /api/calls/policy` | `jeeta.calls.policy_set` | WRITE | `calls.manage` (only a person turns the disclosure off) |
+| `calls.place` | `POST /api/calls` | `jeeta.calls.place` | SPEND | `calls.work`; refusals are `409` with `details.reason` and one `calls.refused` |
+| `calls.get` | `GET /api/calls/{call_id}` | `jeeta.calls.get` | READ | `calls.work` |
+| `calls.list` | `GET /api/calls` | `jeeta.calls.list` | READ | `calls.work` |
+| `calls.end` | `POST /api/calls/{call_id}/end` | `jeeta.calls.end` | WRITE | `calls.work`; journey `CallMade`, note, task, spend once |
+| `calls.listen` | `GET /api/calls/{call_id}/events?after_seq&wait_s` | `jeeta.calls.listen` | READ | `calls.work`; long-poll of at most 25 s: `{call_id, state, events, timed_out}` |
+| `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
+| `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
+
+#### The voice bridge (voice V1)
+
+The voice bridge (`docs/operations/voice-bridge.md`) is the sidecar that is a workspace's phone
+line for agent calls. Its three use cases are panel-only rows served under `/api/voice/bridge/*`
+to its bearer API key alone, a key issued with `calls.bridge` and nothing else (any other key,
+and every session cookie, is refused); no MCP tool reaches them. Its registration every 15
+seconds verifies its `voice_bridge` capability (reached like a device, verified only by this
+heartbeat): stale after 60 seconds, unreachable after 10 minutes (the `voice_bridge_health` job,
+every minute), listed as `voice_bridge_offline` pending work meanwhile. The key check, the
+heartbeat, the health job's marking and the long-poll are the bridge kernel's
+(`jt_app::usecases::bridges::kernel`), which every bridge shares; the voice bridge is its first.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `calls.bridge.register` | `POST /api/voice/bridge/register` | WRITE | declares the extension's bridge on its first registration; `calls.bridge.online` when it comes back |
+| `calls.bridge.commands` | `GET /api/voice/bridge/commands?wait_s&extension` | READ | long-poll of at most 25 s; a command not acknowledged within 10 s is handed out again |
+| `calls.bridge.events` | `POST /api/voice/bridge/events` | WRITE | at most 100 events, each applied once by `(bridge_call_id, bridge_seq)` |
+
+#### The device bridge (device bridge D1)
+
+The device bridge (`jeeta-device-bridge`, spec `docs/superpowers/specs/2026-10-28-device-bridge-design.md`)
+runs on the PC a workspace's phones are plugged into, on the same kernel as the voice bridge. Its
+four use cases are panel-only rows served under `/api/devices/bridge/*` to its bearer API key
+alone, a key issued with `devices.bridge` and nothing else; no MCP tool reaches them. The key is
+also which bridge calls, so each bridge program holds a key of its own. The bodies are
+`jt_device_protocol`'s; a body that breaks a limit is a `422` whose `details.field` names the
+field.
+
+| Use case | Panel | Risk | Notes |
+|---|---|---|---|
+| `devices.bridge.register` | `POST /api/devices/bridge/register` | WRITE | a `phone` capability per phone (`{platform}:{serial}`), facts merged key by key under `connector_public.device` (only the bridge writes it); a phone that fails its checks, is retired (`phone_retired`) or is held by another bridge that registered it within 60 s (`phone_held_by_another_bridge`) is listed in `refused`, never the registration |
+| `devices.bridge.commands` | `GET /api/devices/bridge/commands?wait_s&limit` | READ | long-poll of at most 25 s, at most 20 commands, for the phones the bridge's latest registration lists; a command the phone's bridge no longer lists is failed `unsupported_by_bridge`; `push_file` carries a 10-minute signed `download_url` |
+| `devices.bridge.results` | `POST /api/devices/bridge/results` | WRITE | at most 100 results, 2 MiB; each applied once, from the bridge the command was leased to (or the one that holds its phone now), else counted `unknown`; a file id that is not a device file this bridge uploaded refuses the batch |
+| `devices.bridge.files` | `POST /api/devices/bridge/files` | WRITE | the body is the file itself, streamed (`image/png` up to 25 MB, `application/octet-stream` up to 95 MiB, under Cloudflare's 100 MB); each workspace uploads two screenshots and two pulled files at a time, a wait over 10 s is a retryable `503`; a device file kept seven days; `{"file_id"}` |
+
+A phone (`phone`, like `voice_bridge`, a kind with a heartbeat) is verified only by the
+registrations that list it: `capability.verify` refuses it (`409`, `details.reason =
+"verified_by_heartbeat"`, `details.cleared_by = "devices.bridge.register"`). It reads stale a
+minute after the last registration that listed it,
+and the `device_bridge_health` job (every minute) marks it unreachable after ten minutes, writing
+`devices.bridge.offline`; meanwhile `work.pending` lists it as `phone_offline` (never as a voice
+bridge). The `device_command_expiry` job (every minute) ends the commands past their time limit as
+`expired`, 200 per transaction, with a `devices.command.finished` each (`leased_by` the bridge
+last handed it, `result_sha256` `null`); a leased command's late result still replaces `expired`,
+with a second entry. The `device_file_purge` job (hourly) deletes the device files past their seven
+days, bytes then record, reading on past a file it cannot delete; it writes no ledger entry.
+Command rows are never deleted (an archtest refuses `delete from device_commands`).
+
+**Deploy note (device bridge D1-T7).** A `phone` verified by evidence before this release reads
+stale at once and, unless a device bridge lists it, goes unreachable within about 11 minutes (the
+`device_bridge_health` job) and stays listed as `phone_offline`: retire it. Phones are now declared
+and kept alive by their device bridge.
+
+#### Phones for agents (device bridge D1-T6)
+
+An agent, or a person holding `devices.work` (the owner and the manager; a rep does not), drives a
+phone through these (`jt_app::usecases::devices::agent`). `act` is the one way a command is queued:
+it checks the command's bounds, that a `push_file`'s file is stored, that the phone is online
+(it reads verified: registered within its heartbeat's minute by the bridge that holds it, and
+listed in that bridge's latest registration) and that its bridge lists what the command needs,
+then queues it
+(it expires after five minutes), writes `devices.command.queued` with the whole command (typed
+text and shell arguments included) and waits up to 20 seconds for its result. A queued command is
+not a done one: the answer is the command as it then stands (`queued`, `leased`, `done`,
+`failed`, `expired`, the last also for one past its expiry that the sweep has not ended yet), and
+`command_get` waits on it again. Once a command is queued, `act` answers it, never an error (a
+wait that fails answers it as queued): an error means nothing was queued.
+`devices.command.finished` carries `result_sha256`, the hash of the result kept on the command. There is no allowlist, rate cap,
+approval or address filter (owner, spec §1); `tracing` carries ids, kinds and statuses only.
+Exempt from the strategy gate, not from the status check.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `devices.list` | `GET /api/devices` | `jeeta.devices.list` | READ | the phones that are not retired: `online`, status, platform, serial, model, OS, screen, features, `unicode`, bridge, last seen |
+| `devices.observe` | `POST /api/devices/{capability_id}/observe` | `jeeta.devices.observe` | WRITE | `act` with `observe {screenshot}`: the observation, and a 10-minute `file_url` for the screenshot |
+| `devices.act` | `POST /api/devices/{capability_id}/act` | `jeeta.devices.act` | WRITE | `{command, wait_s ≤ 20}`; `422` `unsupported_by_bridge` (`details.kind`) or `unicode_unsupported` (install and enable ADBKeyBoard), `409` `device_offline` or `phone_retired` |
+| `devices.command_get` | `GET /api/devices/commands/{command_id}?wait_s` | `jeeta.devices.command_get` | READ | waits up to 20 s for the command to end; at once once it has |
+| `devices.commands` | `GET /api/devices/{capability_id}/commands?limit` | `jeeta.devices.commands` | READ | the phone's log, newest first, 1 to 200 (50), with arguments, without results (`command_get` reads one) |
+
+The signed file address (`GET /files/{id}`, which a `push_file` download and a `file_url` use) is
+served as a stream: 64 KiB read at a time, hashed as it is read, its length announced and its last
+chunk sent only once the hash is the stored one, so a large file, or many reads of one at once,
+are never held in memory whole. The first chunk is read before anything is answered, so a
+tampered file that fits in it is a `404`; a larger one is cut off short of its length. Reads take
+turns: at most 3 at once of one file, 8 of one workspace's provider fetches (studio's media) and 8
+of its devices' reads (`push_file` downloads and `file_url`s, addresses signed with
+`purpose=device`), and 96 in all; a request waits up to 10 s for its turns, then `503`. A response
+whose client takes nothing for 30 s, or that runs past 30 minutes, is cut off and lets go of its
+turns, and the server closes any connection whose write its client has taken nothing of for 60 s.
+
+`JEETA_LOG` is always followed by `rmcp=warn`: rmcp logs whole MCP requests at `debug`, tool
+arguments (typed text, shell arguments) among them.
+
+Every Studio timestamp (slots, approvals, attempts, publications, measurements and their
+dates, trends, bindings, budget moves, spend reservations and their windows, stored files) goes
+through `jt_studio::time_compat`: written as RFC 3339 text (a date as `YYYY-MM-DD`), so MCP
+outputs and panel answers carry text; read as that text or as `time`'s compact tuple, which rows
+and ledger payloads stored before it keep. See the deployment release note for the 24-hour
+request-key replay effect.
 The T0 application `PublishOutcome` still transports `AppError`; persistence must
 map it to the domain's closed redacted outcome codes, never store diagnostic text.
 
@@ -2076,7 +2340,14 @@ generation service was added.
 | `studio.hypothesis_propose` | `POST /api/studio/hypotheses/proposals` | `studio.work` + `team.manage` | Required |
 
 All five require an active workspace, including direct application calls.
-`studio_plan` runs hourly under `jeeta.jobs.studio_plan`. Weeks start Monday
+`studio_plan` runs every 10 minutes under `jeeta.jobs.studio_plan`. Organic posts
+are olay-driven (spec `2026-11-03-studio-materials-design.md` §14): the planner never
+creates one; its triggers (an olay's new eligible materials, a calendar occasion within
+its lead, a channel's floor) write package requests or çekim listesi items, an agent
+answers a request with `studio.posts_propose`, and a post enters the pending work at
+its preparation start and retires `missed_grace` after its grace. Once, it retires the
+weekly quotas' planned and ready organic slots (`replanned`). The paid lane keeps the
+weekly positions described next. Weeks start Monday
 00:00 Europe/Istanbul; cadence positions are spaced evenly across the week and
 only positions in the next seven days are materialized. Missed positions are not
 caught up. Stable workspace/hypothesis/lane/week/ordinal IDs survive overlapping
@@ -2511,6 +2782,71 @@ application behavior, not live Meta/X approval, provider availability, actual bi
 or the provider's eventual spend. The broader release checks remain `make check panel-test panel-build`.
 
 
+## Growth Studio materials library and olay-driven publishing
+
+Spec `docs/superpowers/specs/2026-11-03-studio-materials-design.md` (decisions D1–D59).
+Migrations `0021_studio_materials` (seven tables) and `0022_studio_posts` (three tables): 87
+tables with `0019_inbox_public`. Studio adds 26 catalog rows (17 MCP twins, 9 panel-only);
+with the inbox rows the release has 201 rows and 163 MCP tools.
+
+**Material-gated by construction (D1, D2).** Every medium of a piece is a material of the
+library; `studio.piece_submit` refuses a piece that shows none eligible as an anchor
+(`not_a_material`, `no_eligible_material`, `material_refused` with each material's code), and
+the publisher re-checks at publish time and holds (`material_check_hold`, never a failed run).
+The caption truth check (§7) reports caption findings at submission and holds at publish until
+an owner or manager releases those exact findings for that revision; an eligibility refusal is
+never releasable. Pieces submitted before the library record no material use and hold with
+`no_material`.
+
+The library needs no approved strategy (D35); planning and publishing do.
+
+| Use case / MCP suffix after `jeeta.` | HTTP | Gate |
+|---|---|---|
+| `studio.olays_list`, `studio.olay_get` | `GET /api/studio/olays[/{olay_id}]` | Exempt |
+| `studio.olay_create`, `studio.olay_update` | `POST /api/studio/olays`, `PATCH …/{olay_id}` | Exempt |
+| `studio.materials_list`, `studio.material_get` | `GET /api/studio/materials[/{material_id}]` | Exempt |
+| `studio.material_add`, `studio.material_tag` | `POST /api/studio/materials`, `PATCH …/{material_id}/tags` | Exempt |
+| `studio.slot_materials` | `GET /api/studio/slots/{slot_id}/materials` | Exempt |
+| `studio.calendar_list` | `GET /api/studio/calendar` | Exempt |
+| `studio.shoot_list`, `studio.shoot_request`, `studio.shoot_resolve` | `/api/studio/shoot-requests[/{request_id}/resolve]` | Exempt |
+| `studio.post_requests` | `GET /api/studio/post-requests` | Gated |
+| `studio.posts_propose` | `POST /api/studio/post-requests/{request_id}/proposal` | Gated |
+| `studio.posts_list`, `studio.weekly_summary` | `GET /api/studio/posts`, `GET /api/studio/summary` | Gated |
+
+Panel only, an owner's or manager's decision in person (D4): `studio.olay_confirm`,
+`studio.material_permission`, `studio.material_free`, `studio.material_bind`,
+`studio.material_delete`, `studio.calendar_set`, `studio.material_policy_set` (exempt), and
+`studio.material_check_release`, `studio.posting_policy_set` (gated). An agent may give its own
+AI image a share permission only while it depicts nothing and names no person (D5, D38).
+
+**Olay-driven publishing (§14).** `studio_plan` runs every 10 minutes and never creates a post.
+Its triggers write post requests (work items: `studio.pending`'s `post_requests`,
+`work.pending` kind `studio_post_request`) or çekim listesi items: an olay's new eligible
+materials 30 minutes after their last change, a calendar occasion within its lead, a channel
+without a feed post for four days. An agent answers a request with `studio.posts_propose`,
+checked all-or-nothing (formats per kind, materials at their time, lead, horizon, quiet hours
+and caps in the posting policy's zone, each post at its own offset) and materialized as planned
+slots at once. A post enters the pending work at its preparation start (story 2 h, feed post
+and carousel 24 h, reel and TikTok video 48 h), is never claimed past its grace, and retires
+`missed_grace` then, unless an attempt may still be going out. Stories go out on Instagram
+only (D60): one JPEG of at most 8 MB or one MP4 of 3 to 60 s, without text, never measured
+nor learned from; everywhere else a story is `format_unsupported`. Once per
+workspace the planner retires the weekly quotas' planned and ready organic slots
+(`replanned`), never one whose publish is in flight; the paid lane keeps its weekly positions.
+
+KVKK: materials that show people are erased with the person (`inbox.people.erase`) and 24
+months after their olay by `StudioFilesCleanup`, which deletes an erased material's bytes once
+no attempt in flight shows them. Replay receipts keep ids, never the records (D40).
+
+The panel's Growth Studio has two tabs for it: **Materyaller** (Yükle with the phone's camera,
+Olaylar, a material's tags, permission and "kullanıldığı yerler", Takvim, Çekim listesi) and
+**Paylaşımlar** (Plan: the requests waiting for the agent and the planned posts; Haftalık özet;
+Paylaşım ayarları). Today's slot card shows a piece's materials and its material check.
+
+Deploy: read `studio.pending` on each workspace first; re-submit or cancel the Ready pieces
+that will hold with `no_material`. The first planner run after the deploy retires the weekly
+quotas' organic slots once.
+
 ## M4 Task 1 — durable billing storage
 
 The implemented storage boundary is **67 tables**, **12 migration pairs** (latest
@@ -2846,7 +3182,7 @@ late responses cannot repopulate an exited page. Activation codes never enter UR
 storage or logs. API-key plaintext is component-local, copied only on an explicit
 click, and lost on dialog close/navigation; creation responses are not cached.
 
-Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x}`
+Provider guidance derives `${JEETA_PUBLIC_BASE_URL}/oauth/callback/{meta|instagram|x|tiktok|linkedin}`
 from the existing hooks API's configured public base, preserving any path prefix.
 It displays actual webhook addresses, reconnection requirements and access expiry.
 The missing-app `CONFLICT` reason is shown as “Sağlayıcı uygulaması yapılandırılmadı”;

@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A provider with an adapter inside the system (spec §13 M1: Meta, NetGSM, X).
+/// A provider with an adapter inside the system (spec §13 M1: Meta, NetGSM, X; then mail,
+/// TikTok and LinkedIn; then the marketplaces, spec 2026-10-30-inbox-comments-marketplace-design
+/// §5.3, each its own egress scope).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -14,6 +16,14 @@ pub enum Provider {
     X,
     /// SMTP and IMAP mailbox.
     Mail,
+    /// Posts on a TikTok account (Login Kit and the Content Posting API).
+    Tiktok,
+    /// Posts on a LinkedIn member's own feed and on the organization pages they administer.
+    Linkedin,
+    /// Customer questions on a Trendyol seller's products.
+    Trendyol,
+    /// Customer questions on a Hepsiburada merchant's products.
+    Hepsiburada,
 }
 
 const ALL: &[Provider] = &[
@@ -21,6 +31,10 @@ const ALL: &[Provider] = &[
     Provider::Netgsm,
     Provider::X,
     Provider::Mail,
+    Provider::Tiktok,
+    Provider::Linkedin,
+    Provider::Trendyol,
+    Provider::Hepsiburada,
 ];
 
 /// The capability kinds Meta serves.
@@ -40,13 +54,17 @@ const NETGSM_KINDS: &[&str] = &["sms_line", "netgsm_pbx"];
 /// The capability kinds X serves.
 const X_KINDS: &[&str] = &["x"];
 
+/// The capability kinds TikTok serves.
+const TIKTOK_KINDS: &[&str] = &["tiktok"];
+
+/// The capability kinds LinkedIn serves: a member's own feed, and an organization page.
+const LINKEDIN_KINDS: &[&str] = &["linkedin_member", "linkedin_page"];
+
 /// The connector kinds of the closed list ([`jt_capability::KINDS`] whose reach is
 /// [`jt_capability::Reach::Connector`]) that no provider serves yet. Every connector kind is
 /// either served by exactly one [`Provider`] or listed here, so a new connector kind cannot be
 /// forgotten: the crate's tests fail until it is placed.
 pub const UNSUPPORTED_CONNECTOR_KINDS: &[&str] = &[
-    "linkedin_page",
-    "tiktok",
     "pinterest",
     "youtube",
     "google_business",
@@ -69,6 +87,10 @@ impl Provider {
             Provider::Netgsm => "netgsm",
             Provider::X => "x",
             Provider::Mail => "mail",
+            Provider::Tiktok => "tiktok",
+            Provider::Linkedin => "linkedin",
+            Provider::Trendyol => "trendyol",
+            Provider::Hepsiburada => "hepsiburada",
         }
     }
 
@@ -89,6 +111,10 @@ impl Provider {
             Provider::Netgsm => NETGSM_KINDS,
             Provider::X => X_KINDS,
             Provider::Mail => &["mailbox"],
+            Provider::Tiktok => TIKTOK_KINDS,
+            Provider::Linkedin => LINKEDIN_KINDS,
+            Provider::Trendyol => &["trendyol"],
+            Provider::Hepsiburada => &["hepsiburada"],
         }
     }
 }

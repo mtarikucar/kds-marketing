@@ -8,6 +8,8 @@
 //!   HTML under a script's name.
 //! - Paths of the API, MCP and health endpoints ([`is_reserved`]) never reach the panel: they
 //!   are a structured `404` when no route matched them.
+//! - A path with a segment longer than a file name can be ([`names_too_long`]) is a structured
+//!   `404` too: no file answers it, and the file services would answer it with a `500`.
 
 use std::path::Path;
 
@@ -29,6 +31,8 @@ pub const ASSET_CACHE: &str = "public, max-age=31536000, immutable";
 pub const ASSETS_PREFIX: &str = "/assets/";
 /// Path prefixes that belong to the server, not the panel.
 const RESERVED: &[&str] = &["/api", "/mcp", "/healthz", "/readyz", "/metrics"];
+/// The longest file name a path segment can name, in bytes (`NAME_MAX`).
+const MAX_NAME_BYTES: usize = 255;
 
 /// The file services over one panel directory.
 #[derive(Clone, Debug)]
@@ -56,13 +60,29 @@ pub fn is_reserved(path: &str) -> bool {
     })
 }
 
+/// Whether some segment of `path`, its `%XX` escapes decoded, is longer than a file name can be.
+pub fn names_too_long(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| decoded_len(segment) > MAX_NAME_BYTES)
+}
+
+/// The length in bytes of `segment` once its `%XX` escapes are decoded.
+fn decoded_len(segment: &str) -> usize {
+    let bytes = segment.as_bytes();
+    let escapes = bytes
+        .windows(3)
+        .filter(|w| w[0] == b'%' && w[1].is_ascii_hexdigit() && w[2].is_ascii_hexdigit())
+        .count();
+    bytes.len() - 2 * escapes
+}
+
 /// Answers a request no route matched: from the panel when there is one and the path is not
 /// reserved, else a structured `404`.
 pub async fn serve(panel: Option<Panel>, req: Request) -> Response {
     let path = req.uri().path();
     let asset = path.starts_with(ASSETS_PREFIX);
     let panel = match panel {
-        Some(panel) if !is_reserved(path) => panel,
+        Some(panel) if !is_reserved(path) && !names_too_long(path) => panel,
         _ => return not_found(),
     };
     let served = if asset {
@@ -109,5 +129,20 @@ mod tests {
         for path in ["/", "/apis", "/team", "/mcpx", "/healthzz", "/assets/api"] {
             assert!(!is_reserved(path), "{path}");
         }
+    }
+
+    #[test]
+    fn a_segment_longer_than_a_file_name_is_too_long_once_decoded() {
+        let at_limit = "a".repeat(MAX_NAME_BYTES);
+        let over = "a".repeat(MAX_NAME_BYTES + 1);
+        assert!(!names_too_long(&format!("/{at_limit}")));
+        assert!(names_too_long(&format!("/{over}")));
+        assert!(names_too_long(&format!("/assets/{over}.js")));
+        // 300 escapes decode to 100 bytes.
+        assert!(!names_too_long(&format!("/{}", "%41".repeat(100))));
+        assert!(names_too_long(&format!("/{}", "%41".repeat(256))));
+        assert!(!names_too_long(
+            "/studio/people/01a17fe6-f65a-72dc-9683-e0f0d84964a7"
+        ));
     }
 }

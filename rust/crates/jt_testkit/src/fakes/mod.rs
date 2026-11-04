@@ -45,11 +45,17 @@
 //! unit of work; `tenant`, `strategy`, `capability`, `connector`, `user` and `platform` the
 //! bundles' repos.
 
+mod calls;
+pub use calls::MemCalls;
 mod capability;
 mod compliance;
 mod connector;
+mod devices;
+pub use devices::MemDevices;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod public;
+pub use public::StoredCursor;
 mod platform;
 mod providers;
 mod services;
@@ -59,8 +65,9 @@ mod tenant;
 mod user;
 
 pub use providers::{
-    ConnectorCall, FakeAppConfig, OAuthCall, ScriptedConnector, ScriptedOAuth, ScriptedRegistry,
-    TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL,
+    ConnectorCall, FakeAppConfig, OAuthCall, PollCall, PublicCall, ScriptedConnector,
+    ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, TEST_OAUTH_HOST,
+    TEST_PUBLIC_BASE_URL,
 };
 pub use services::{
     DEPS_TOKENS, FIXED_NOW, FakeJobLock, FakeOpsSnapshot, FixedChannelCatalog, FixedClock,
@@ -79,6 +86,12 @@ mod erasure;
 
 mod studio;
 pub use studio::MemStudio;
+
+mod materials;
+pub use materials::MemMaterials;
+
+mod posts;
+pub use posts::MemPosts;
 
 pub mod files;
 

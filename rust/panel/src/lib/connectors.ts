@@ -9,10 +9,36 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   netgsm: ['sms_line', 'netgsm_pbx'],
   x: ['x'],
   mail: ['mailbox'],
+  tiktok: ['tiktok'],
+  linkedin: ['linkedin_member', 'linkedin_page'],
 };
 
+/**
+ * Kinds a provider serves that cannot be connected yet: no sign-in finds an asset of them and
+ * nothing ingests their events (Facebook comments have no comment ingestion), so the connect page
+ * does not offer them and a declared one has no connect action.
+ */
+export const NOT_CONNECTABLE: readonly KindKey[] = ['review_facebook'];
+
+/** Whether `kind` can be connected here: a provider serves it and it is not [`NOT_CONNECTABLE`]. */
+export function isConnectable(kind: string): boolean {
+  return providerOf(kind) !== null && !(NOT_CONNECTABLE as readonly string[]).includes(kind);
+}
+
+/** The kinds the connect page offers for `provider`, in its order. */
+export function connectableKinds(provider: Provider): readonly KindKey[] {
+  return PROVIDER_KINDS[provider].filter(isConnectable);
+}
+
 /** A provider's name as shown (brand names, the same in every language). */
-export const PROVIDER_NAMES: Record<Provider, string> = { meta: 'Meta', netgsm: 'NetGSM', x: 'X', mail: 'Email' };
+export const PROVIDER_NAMES: Record<Provider, string> = {
+  meta: 'Meta',
+  netgsm: 'NetGSM',
+  x: 'X',
+  mail: 'Email',
+  tiktok: 'TikTok',
+  linkedin: 'LinkedIn',
+};
 
 /** The provider that serves `kind`, or `null` for a kind none serves yet. */
 export function providerOf(kind: string): Provider | null {
@@ -22,10 +48,10 @@ export function providerOf(kind: string): Provider | null {
   return null;
 }
 
-/** Meta and X kinds connect by signing in at the provider (OAuth). */
+/** Meta, X, TikTok and LinkedIn kinds connect by signing in at the provider (OAuth). */
 export function connectsByOAuth(kind: string): boolean {
   const provider = providerOf(kind);
-  return provider === 'meta' || provider === 'x';
+  return provider === 'meta' || provider === 'x' || provider === 'tiktok' || provider === 'linkedin';
 }
 
 /** The credentials a NetGSM kind takes by hand, or `null` for any other kind. */
@@ -48,7 +74,7 @@ export type HealthView =
   | { kind: 'reconnect' }
   | { kind: 'expired' }
   | { kind: 'expiresSoon'; at: string }
-  | { kind: 'failed'; at: string; errorKind: string | null }
+  | { kind: 'failed'; at: string; errorKind: string | null; reason: string | null }
   | { kind: 'ok'; at: string }
   | { kind: 'never' };
 
@@ -60,14 +86,14 @@ export function healthView(health: ConnectorHealth, now: Date = new Date()): Hea
     if (left <= TOKEN_WARNING_DAYS * 86_400_000) return { kind: 'expiresSoon', at: health.token_expires_at };
   }
   if (health.last_probe_at && health.ok === false) {
-    return { kind: 'failed', at: health.last_probe_at, errorKind: health.error_kind };
+    return { kind: 'failed', at: health.last_probe_at, errorKind: health.error_kind, reason: health.reason ?? null };
   }
   if (health.last_probe_at && health.ok) return { kind: 'ok', at: health.last_probe_at };
   return { kind: 'never' };
 }
 
-/** The `jt_connector::ConnectorError` kinds the panel names. */
-export const ERROR_KINDS = ['auth', 'permission', 'throttle', 'transient', 'permanent'] as const;
+/** The `jt_connector::ConnectorError` kinds the panel names (`unknown`: the outcome is not known). */
+export const ERROR_KINDS = ['auth', 'permission', 'throttle', 'transient', 'unknown', 'permanent'] as const;
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 
 export function isErrorKind(value: unknown): value is ErrorKind {

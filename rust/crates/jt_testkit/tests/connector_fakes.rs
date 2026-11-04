@@ -112,6 +112,7 @@ fn pending(
         provider: Provider::Meta,
         kind_key: "facebook_page".into(),
         app: OAuthCallback::Meta,
+        flow: None,
         state_hash: hash.into(),
         started_by: user,
         capability_id: None,
@@ -131,6 +132,7 @@ fn probe_run(c: &Capability, at: OffsetDateTime, ok: bool) -> ProbeRun {
         at,
         ok,
         error_kind: (!ok).then(|| "transient".to_owned()),
+        reason: None,
         latency_ms: 80,
         facts: json!({}),
     }
@@ -961,6 +963,8 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
     assert_eq!(config.meta_app(), None);
     assert_eq!(config.instagram_app(), None);
     assert_eq!(config.x_app(), None);
+    assert_eq!(config.tiktok_app(), None);
+    assert_eq!(config.linkedin_app(), None);
     assert_eq!(
         config.public_base_url().unwrap().as_str(),
         "https://panel.test/"
@@ -969,6 +973,13 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
     let all = FakeAppConfig::with_all_apps();
     assert!(all.meta_app().is_some());
     assert!(all.instagram_app().is_some());
+    assert_eq!(all.tiktok_app().unwrap().client_key, "tiktok-client-key");
+    let linkedin = all.linkedin_app().unwrap();
+    assert_eq!(linkedin.client_id, "linkedin-client-id");
+    assert!(
+        !linkedin.organization_scopes,
+        "off, as on a server before LinkedIn approved them"
+    );
     assert_eq!(
         all.x_app(),
         Some(XApp {
@@ -1137,6 +1148,10 @@ async fn scripted_connector_covers_every_operation() {
         media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
         link: None,
         media: vec![],
+        privacy: None,
+        tiktok: None,
+        format: None,
+        media_mimes: vec![],
     };
     let publisher = registry.publisher(Provider::Meta).unwrap();
     assert_eq!(
@@ -1433,6 +1448,32 @@ fn testkit_deps_have_no_apps_and_an_empty_scripted_registry() {
     }
 }
 
+#[tokio::test]
+async fn scripted_resolve_answers_none_unless_scripted_and_records_receipts() {
+    use jt_app::ports::connectors::{PublishResolution, Publisher};
+    let tiktok = ScriptedConnector::new(Provider::Tiktok);
+    let receipt = PublishReceipt {
+        external_id: "v_pub_1".into(),
+        url: None,
+    };
+    let cred = Credential::OAuth {
+        access_token: "tok".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    // Nothing queued: the trait's default, the receipt is the post.
+    assert_eq!(tiktok.resolve(&cred, &json!({}), &receipt).await, Ok(None));
+    tiktok.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(
+        tiktok.resolve(&cred, &json!({}), &receipt).await,
+        Ok(Some(PublishResolution::Pending))
+    );
+    assert_eq!(tiktok.resolve_calls(), vec![receipt.clone(), receipt]);
+    // A status read is no call of its own: the publication calls stay as they were.
+    assert!(tiktok.calls().is_empty());
+}
+
 #[test]
 fn send_receipt_unknown_cost_is_none() {
     let receipt: SendReceipt = serde_json::from_value(json!({ "provider_id": "job-1" })).unwrap();
@@ -1573,6 +1614,7 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
         ]
         .into_iter()
         .collect(),
+        read_history: false,
     };
     assert!(MailboxCursor::default().mailboxes.is_empty());
     let encoded = serde_json::to_value(&cursor).unwrap();

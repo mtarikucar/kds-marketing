@@ -13,21 +13,36 @@ async fn studio_schema_exact_table_delta() {
             "studio_adset_bindings",
             "studio_arms",
             "studio_budget_moves",
+            "studio_calendar_entries",
             "studio_control",
             "studio_files",
             "studio_learning_applications",
+            "studio_material_policy",
+            "studio_material_releases",
+            "studio_materials",
             "studio_measurements",
+            "studio_olays",
+            "studio_package_requests",
+            "studio_piece_materials",
             "studio_pieces",
+            "studio_posting_policy",
+            "studio_posts",
             "studio_publications",
             "studio_publish_attempts",
             "studio_request_keys",
+            "studio_shoot_requests",
             "studio_slots",
             "studio_spend_reservations",
             "studio_trends"
         ]
     );
     let count: i64 = sqlx::query_scalar("select count(*) from pg_tables where schemaname='public' and tablename <> '_sqlx_migrations'").fetch_one(&db.pool).await.unwrap();
-    assert_eq!(count, 48 + 14 + 5);
+    // 48 inbox-era tables, 14 Studio, 5 billing, 4 calls (0015_voice_calls), the bridge's event
+    // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge), the
+    // public items, subjects and cursors (0019_inbox_public), the materials library's seven
+    // (0021_studio_materials), and the planned posts, package requests and posting policy
+    // (0022_studio_posts).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 7 + 3);
 }
 
 #[tokio::test]
@@ -114,6 +129,15 @@ async fn accepted_publish_response_lost_never_blindly_retries() {
 
 const UP: &str = include_str!("../../../../migrations/0009_studio.up.sql");
 const DOWN: &str = include_str!("../../../../migrations/0009_studio.down.sql");
+/// The materials library references the Studio tables: reverted before 0009, applied after it.
+const MATERIALS_UP: &str = include_str!("../../../../migrations/0021_studio_materials.up.sql");
+const MATERIALS_DOWN: &str = include_str!("../../../../migrations/0021_studio_materials.down.sql");
+/// The planned posts reference the materials library and the Studio tables: reverted before 0021,
+/// applied after it.
+const POSTS_UP: &str = include_str!("../../../../migrations/0022_studio_posts.up.sql");
+const POSTS_DOWN: &str = include_str!("../../../../migrations/0022_studio_posts.down.sql");
+/// Public subjects reference Studio publications: their migration goes first.
+const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -127,7 +151,9 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .fetch_all(&db.pool)
     .await
     .unwrap();
-    assert_eq!(tables.len(), 14);
+    // 14 Studio tables, the materials library's seven (0021_studio_materials) and the three of
+    // olay-driven publishing (0022_studio_posts).
+    assert_eq!(tables.len(), 14 + 7 + 3);
     for table in tables {
         let forced: bool = sqlx::query_scalar(
             "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1",
@@ -209,6 +235,12 @@ async fn roles(pool: &sqlx::PgPool, ws: jt_tenancy::WorkspaceId) -> Vec<(String,
 #[tokio::test]
 async fn studio_role_backfill_new_workspace_parity() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (old, _) = db.seed_workspace("old-studio").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -216,6 +248,8 @@ async fn studio_role_backfill_new_workspace_parity() {
     tx.commit().await.unwrap();
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(POSTS_UP).execute(&db.pool).await.unwrap();
     let (new, _) = db.seed_workspace("new-studio").await;
     assert_eq!(roles(&db.pool, old).await, roles(&db.pool, new).await);
     for (key, perms) in roles(&db.pool, old).await {
@@ -227,6 +261,12 @@ async fn studio_role_backfill_new_workspace_parity() {
 #[tokio::test]
 async fn studio_backfill_down_preserves_existing_grants() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (ws, _) = db.seed_workspace("grants").await;
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
@@ -251,6 +291,8 @@ async fn studio_backfill_down_preserves_existing_grants() {
     assert_eq!(name, "sentinel");
     drop(tx);
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
+    sqlx::raw_sql(POSTS_UP).execute(&db.pool).await.unwrap();
     for (key, p) in roles(&db.pool, ws).await {
         if key != "rep" {
             assert!(p.contains(&"studio.work".into()) && p.contains(&"studio.manage".into()));
@@ -311,6 +353,13 @@ async fn outcome_categories_survive_redaction() {
 }
 
 #[tokio::test]
+async fn failure_reason_is_kept_beside_the_category() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::failure_reason_is_kept_beside_the_category(&uow).await;
+}
+
+#[tokio::test]
 async fn completion_time_differs_from_claim_time() {
     let db = jt_testkit::TestDb::new().await;
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
@@ -345,4 +394,12 @@ async fn binding_refresh_invalidates_old_intents() {
     let db = jt_testkit::TestDb::new().await;
     let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
     jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
+}
+
+/// `studio_upgrade_receipt`'s and `attempt_by_receipt`'s SQL, against PostgreSQL.
+#[tokio::test]
+async fn receipt_upgrade_and_lookup() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = jt_pg::PgUnitOfWork::new(db.pool.clone());
+    jt_testkit::studio_contract::receipt_upgrade_and_lookup(&uow).await;
 }

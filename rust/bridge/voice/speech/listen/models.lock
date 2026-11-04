@@ -1,0 +1,46 @@
+{
+  "files": {
+    "seda-v0.1/decoder.onnx": {
+      "sha256": "dc28b7ae3f5e67c0daa2d51886dae2ac8287a25333f46a363f3684b3cd1220c9",
+      "size": 2093081,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/decoder.onnx"
+    },
+    "seda-v0.1/encoder.int8.onnx": {
+      "sha256": "2596861911cec5ca1de31adc12a7fc983d05395434f92239f4e007eeae3a5dcc",
+      "size": 70487305,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/encoder.int8.onnx"
+    },
+    "seda-v0.1/joiner.int8.onnx": {
+      "sha256": "b4d1cff7c410d14c85c143885954be09a6a4a076cd35d22aeba58655665582bb",
+      "size": 259417,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/joiner.int8.onnx"
+    },
+    "seda-v0.1/lm/2gram.fst": {
+      "sha256": "52eb47abd4758ed834bbb0d1af7573bda9e6ce34bde92c231a3d75478091f2f5",
+      "size": 1519846,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/lm/2gram.fst"
+    },
+    "seda-v0.1/lm/rnnlm.int8.onnx": {
+      "sha256": "d74691d1f2ba5e05950786d22269c4f30391d3c5cee76473b4d2e01384d8172a",
+      "size": 4748444,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/lm/rnnlm.int8.onnx"
+    },
+    "seda-v0.1/tokens.txt": {
+      "sha256": "f6e134fa357558d0c4ab56fbe380323c30e3d50a13fe402a68328d5a13c2236b",
+      "size": 5203,
+      "url": "https://huggingface.co/atasoglu/seda-v0.1/resolve/5cbbda1b34bde5e3004e79b137dc3871587ea282/tokens.txt"
+    },
+    "silero-vad/silero_vad.onnx": {
+      "archive_sha256": "7b7f5436cfcb02fae583a05b512ea96467fd449fe54cb49a5e4f06c51a1e43b8",
+      "member": "silero_vad/data/silero_vad.onnx",
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "size": 2327524,
+      "url": "https://files.pythonhosted.org/packages/84/ef/9099037ed6f180ea33220178df4107112c0ce2bf5fb4d6f6ab19db2844ed/silero_vad-6.2.3-py3-none-any.whl"
+    },
+    "smart-turn/smart-turn-v3.2-cpu.onnx": {
+      "sha256": "2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f",
+      "size": 8679182,
+      "url": "https://huggingface.co/pipecat-ai/smart-turn-v3/resolve/f766f81d3cfdf7737ac64aad813d91bbfd56bf93/smart-turn-v3.2-cpu.onnx"
+    }
+  }
+}

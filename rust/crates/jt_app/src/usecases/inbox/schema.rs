@@ -62,7 +62,7 @@ pub fn input(action: &str) -> Value {
             &["until"],
         ),
         "reply" => object(
-            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}}}),
+            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]}}),
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
@@ -79,7 +79,7 @@ pub fn input(action: &str) -> Value {
         ),
         "notes.add" => object(json!({"text":{"type":"string","minLength":1}}), &["text"]),
         "people.search" => object(
-            json!({"q":{"type":"string","default":""},"limit":{"type":["integer","null"],"minimum":1,"maximum":500,"default":50}}),
+            json!({"q":{"type":"string","default":""},"limit":{"type":["integer","null"],"minimum":1,"maximum":500,"default":50},"offset":{"type":["integer","null"],"minimum":0,"default":0}}),
             &[],
         ),
         "people.create" => object(
@@ -111,6 +111,20 @@ pub fn input(action: &str) -> Value {
         ),
         "journeys.assign_owner" => object(
             json!({"user_id":{"type":["string","null"],"format":"uuid"}}),
+            &[],
+        ),
+        "public.hide" => object(json!({"hidden":{"type":"boolean"}}), &["hidden"]),
+        "public.delete" => object(json!({"confirm":{"type":"boolean","default":false}}), &[]),
+        "public.mark_handled" => object(
+            json!({"item_ids":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string","format":"uuid"}},"reason":{"enum":["no_reply_needed","spam","duplicate","answered_elsewhere"]}}),
+            &["item_ids", "reason"],
+        ),
+        "public.report" => object(
+            json!({"reason":{"enum":["spam","offensive","personal_data","irrelevant","other"]}}),
+            &["reason"],
+        ),
+        "public.approve" => object(
+            json!({"text":{"type":["string","null"],"minLength":1}}),
             &[],
         ),
         "status_labels.set" => object(
@@ -148,6 +162,8 @@ pub fn tool(action: &str) -> Value {
         "quotes.accept" => Some("quote_id"),
         "commissions.approve" | "commissions.pay" => Some("commission_id"),
         "appointments.cancel" | "appointments.held" => Some("appointment_id"),
+        "public.hide" | "public.delete" | "public.report" => Some("item_id"),
+        "public.approve" | "public.discard" => Some("outbox_id"),
         _ => None,
     };
     if let Some(id) = id {

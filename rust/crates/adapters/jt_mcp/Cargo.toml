@@ -24,6 +24,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 jt_ledger.workspace = true
+# The device bridge's bodies, for `devices_mcp.rs`'s scripted bridge.
+jt_device_protocol.workspace = true
 jt_pg.workspace = true
 jt_testkit = { workspace = true, features = ["panel"] }
 # An MCP client for the integration tests only; it brings an HTTP client, which the normal

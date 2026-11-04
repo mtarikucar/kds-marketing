@@ -55,6 +55,23 @@ pub fn sends(x: &ScriptedConnector) -> usize {
         .filter(|c| matches!(c, ConnectorCall::Publish { .. }))
         .count()
 }
+/// Uploads a small PNG as a Studio file (not a material).
+pub async fn attach_file_only(w: &world::World) -> jt_studio::FileId {
+    files::file_upload(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(serde_json::json!({
+            "request_key":"smoke-upload-only", "filename":"other.png", "mime":"image/png",
+            "content":{"kind":"bytes_base64","data":"iVBORw0KGgpvdGhlcg=="}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+    .id
+}
+/// Uploads a small PNG, makes it an eligible material of a confirmed olay, and submits the
+/// fixture slot's next piece showing it.
 pub async fn attach_file(w: &world::World) -> jt_app::ports::files::StoredFile {
     let file = files::file_upload(
         &w.d,
@@ -67,6 +84,18 @@ pub async fn attach_file(w: &world::World) -> jt_app::ports::files::StoredFile {
     )
     .await
     .unwrap();
+    let olay = jt_testkit::studio_contract::confirmed_olay(w.f.ws);
+    let material = jt_testkit::studio_contract::eligible_material(&olay, file.id);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(olay.clone())
+        .await
+        .unwrap();
+    r.studio_materials()
+        .insert_material(material)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     pieces::piece_submit(
         &w.d,
         &w.ctx,
@@ -77,6 +106,7 @@ pub async fn attach_file(w: &world::World) -> jt_app::ports::files::StoredFile {
             text: "Agent supplied content".into(),
             media: vec![MediaAsset::File { id: file.id }],
             adaptations: Default::default(),
+            subject: Some(jt_studio::Subject::Olay { olay_id: olay.id }),
         },
     )
     .await
@@ -140,7 +170,21 @@ pub async fn cleanup_after_archive() {
         0
     );
     assert!(w.d.files.read(w.f.ws, file.id).await.is_ok());
+    // The file is a live material's: the owner's library outlives the 30 days after its last
+    // publication (spec 2026-11-03 D14).
     w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(30)));
+    let report = Job::StudioFilesCleanup.run(&w.d, w.d.clock.now()).await;
+    assert_eq!((report.changed, report.failed), (0, 0));
+    assert!(w.d.files.read(w.f.ws, file.id).await.is_ok());
+    // Erased, its file goes at once, and the archived evidence stays.
+    let (at, id) = (w.d.clock.now(), file.id);
+    w.uow.edit(move |s| {
+        for m in s.materials.materials.iter_mut() {
+            if m.file_id == id {
+                *m = m.redacted(at);
+            }
+        }
+    });
     let report = Job::StudioFilesCleanup.run(&w.d, w.d.clock.now()).await;
     assert_eq!((report.changed, report.failed), (1, 0));
     assert!(w.d.files.read(w.f.ws, file.id).await.is_err());
@@ -153,7 +197,8 @@ pub async fn cleanup_after_archive() {
     );
     let after = w.uow.snapshot();
     assert_eq!(after.studio.publications, before.studio.publications);
-    assert_eq!(after.studio.files[0].sha256, file.sha256);
+    let record = after.studio.files.iter().find(|f| f.id == file.id).unwrap();
+    assert_eq!(record.sha256, file.sha256);
     for row in before.ledger {
         assert!(after.ledger.iter().any(|r| r.entry == row.entry));
     }

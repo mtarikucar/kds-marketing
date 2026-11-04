@@ -52,10 +52,19 @@ export function formatMoney(minor: number, currency: string, language: string): 
 
 /**
  * A decimal amount typed by a person (`12,50` or `12.50`) in minor units with `digits` decimals,
- * or `null` when it is not a number with at most that many decimals.
+ * or `null` when it is not a number with at most that many decimals. With the panel's `language`,
+ * that language's thousands grouping is understood too: Turkish `14.900` / `14.900,50`, English
+ * `14,900` / `14,900.50`. Grouping is read only in strict groups of three, so `12,50` stays a
+ * decimal in both languages.
  */
-export function parseMinor(text: string, digits: number): number | null {
-  const normalised = text.trim().replace(/\s/g, '').replace(',', '.');
+export function parseMinor(text: string, digits: number, language?: string): number | null {
+  let typed = text.trim().replace(/\s/g, '');
+  if (language === 'tr' && /^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(typed)) {
+    typed = typed.replace(/\./g, '');
+  } else if (language === 'en' && /^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(typed)) {
+    typed = typed.replace(/,/g, '');
+  }
+  const normalised = typed.replace(',', '.');
   if (!/^-?\d+(\.\d+)?$/.test(normalised)) return null;
   const [whole, fraction = ''] = normalised.replace('-', '').split('.');
   if (fraction.length > digits) return null;

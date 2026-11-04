@@ -1,8 +1,22 @@
 //! Facebook Login and Instagram Login: authorize URLs, code exchanges (long-lived tokens) and
-//! token refresh.
+//! token refresh; and the WhatsApp Embedded Signup of a number already in the WhatsApp Business
+//! app ([`OAuthFlow::WhatsappBusinessApp`]).
+//!
+//! **The WhatsApp Business app's sign-in** (coexistence, Meta's page
+//! <https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>):
+//! Facebook Login's dialog with the Meta app's WhatsApp configuration
+//! (`MetaApp::whatsapp_config_id`) as `config_id`, `response_type=code`,
+//! `override_default_response_type=true` and the `extras` that page gives ([`BUSINESS_APP_EXTRAS`]).
+//! Meta documents Embedded Signup launched by its JavaScript SDK (`FB.login`); that the dialog
+//! honours `extras` when the browser is sent to it is unverified. Its code is exchanged for the
+//! business's token at `oauth/access_token` (with the flow's redirect URI, as every redirect
+//! flow's), and that token is kept as it is: Meta's Tech Provider onboarding page
+//! (<https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider/>)
+//! calls it a business integration system user access token, not a user token, so it is not put
+//! through `fb_exchange_token` (whether Meta would take it there is unverified).
 
-use jt_app::ports::connectors::{InstagramApp, MetaApp, OAuthApp};
-use jt_connector::{ConnectorError, Credential};
+use jt_app::ports::connectors::{InstagramApp, MetaApp, OAuthApp, OAuthFlow};
+use jt_connector::{ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES};
 use jt_outbound::Method;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -14,7 +28,10 @@ use crate::graph::{Auth, Body, GraphApp, graph_version, integer, join, missing};
 /// The scopes Facebook Login asks for when the Meta app has no login configuration: Pages
 /// (listing, posting, engagement, messaging, webhooks), Instagram through the Page (basic,
 /// messages, publishing, insights), WhatsApp Business, ads (reading, and managing: budgets),
-/// insights, lead-gen submissions (`leads_retrieval`) and business management.
+/// insights, lead-gen submissions (`leads_retrieval`) and business management. While the Meta
+/// app's comment flag is on (`MetaApp::comment_scopes`, after Meta's App Review granted them),
+/// [`FACEBOOK_COMMENT_SCOPES`] are asked for after them; a login configuration asks for whatever
+/// it is configured with in Meta's dashboard, flag or not.
 pub const FACEBOOK_SCOPES: &[&str] = &[
     "pages_show_list",
     "pages_manage_posts",
@@ -34,18 +51,52 @@ pub const FACEBOOK_SCOPES: &[&str] = &[
     "ads_management",
 ];
 
-/// The scopes Instagram Login asks for.
+/// The scopes Instagram Login asks for: the account, publishing, and its insights (Studio reads a
+/// post's and the account's counters with them; spec D29), whatever the flags;
+/// [`INSTAGRAM_COMMENT_SCOPES`] are added while the Instagram app's comment flag is on.
 pub const INSTAGRAM_SCOPES: &[&str] = &[
     "instagram_business_basic",
     "instagram_business_content_publish",
+    INSTAGRAM_INSIGHTS_SCOPE,
 ];
 
-/// The webhook fields a Facebook Page is subscribed to when it is connected.
-pub const PAGE_SUBSCRIBED_FIELDS: &str =
-    "messages,message_echoes,messaging_postbacks,message_reactions,leadgen";
+/// The permission an Instagram Login account's insights need.
+pub const INSTAGRAM_INSIGHTS_SCOPE: &str = "instagram_business_manage_insights";
+
+/// The webhook fields a Facebook Page is always subscribed to when it is connected: its messages,
+/// the echoes of its own replies, postbacks and reactions (Instagram messages arrive through the
+/// linked page's subscription).
+pub const PAGE_MESSAGING_FIELDS: &str =
+    "messages,message_echoes,messaging_postbacks,message_reactions";
+
+/// The webhook field of a Page's comments (and its other feed changes, which the webhook parser
+/// leaves out), subscribed besides [`PAGE_MESSAGING_FIELDS`] only when the grant enables comments
+/// (`jt_connector::comment_grant`).
+pub const PAGE_FEED_FIELD: &str = "feed";
+
+/// The webhook fields an Instagram Login account is subscribed to when its grant enables
+/// comments; `messages` is added when it also holds `instagram_business_manage_messages`.
+pub const INSTAGRAM_COMMENT_FIELDS: &str = "comments,live_comments";
+
+/// The webhook field of a Page's lead-gen submissions, subscribed besides
+/// [`PAGE_MESSAGING_FIELDS`] only when the grant holds `leads_retrieval`: Meta refuses the whole
+/// subscription when one of its fields lacks its permission.
+pub const PAGE_LEADGEN_FIELD: &str = "leadgen";
+
+/// The permission Meta requires of a [`PAGE_LEADGEN_FIELD`] subscription.
+pub(crate) const LEADS_RETRIEVAL: &str = "leads_retrieval";
 
 /// How close to its expiry a long-lived token is renewed.
 const REFRESH_WINDOW: Duration = Duration::days(7);
+
+/// `base`, then `extra` when there is one, as a `scope` parameter.
+fn scopes(base: &[&str], extra: Option<&[&str]>) -> String {
+    base.iter()
+        .chain(extra.unwrap_or_default())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 /// Whether `access_token` with `scopes` is an Instagram Login token (see the crate docs).
 pub(crate) fn is_instagram_login(access_token: &str, scopes: &[String]) -> bool {
@@ -85,7 +136,13 @@ pub(crate) fn authorize_url(
                     .filter(|c| !c.trim().is_empty())
                 {
                     Some(config) => q.append_pair("config_id", config.trim()),
-                    None => q.append_pair("scope", &FACEBOOK_SCOPES.join(",")),
+                    None => q.append_pair(
+                        "scope",
+                        &scopes(
+                            FACEBOOK_SCOPES,
+                            meta.comment_scopes.then_some(FACEBOOK_COMMENT_SCOPES),
+                        ),
+                    ),
                 };
                 if let Some(challenge) = pkce_challenge {
                     q.append_pair("code_challenge", challenge)
@@ -104,12 +161,122 @@ pub(crate) fn authorize_url(
                 .append_pair("client_id", &instagram.app_id)
                 .append_pair("redirect_uri", redirect.as_str())
                 .append_pair("response_type", "code")
-                .append_pair("scope", &INSTAGRAM_SCOPES.join(","))
+                .append_pair(
+                    "scope",
+                    &scopes(
+                        INSTAGRAM_SCOPES,
+                        instagram.comment_scopes.then_some(INSTAGRAM_COMMENT_SCOPES),
+                    ),
+                )
                 .append_pair("state", state);
             Ok(url)
         }
         OAuthApp::X(_) => Err(ConnectorError::permanent("an X app cannot sign in to Meta")),
+        OAuthApp::Tiktok(_) | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent(
+            "only a Meta or Instagram app signs in to Meta",
+        )),
     }
+}
+
+/// The `extras` of the WhatsApp Business app's sign-in, as Meta's onboarding page gives them:
+/// Embedded Signup's onboarding of a number already in the WhatsApp Business app, reporting
+/// session info version 3.
+pub const BUSINESS_APP_EXTRAS: &str =
+    r#"{"setup":{},"featureType":"whatsapp_business_app_onboarding","sessionInfoVersion":"3"}"#;
+
+/// [`authorize_url`] for the sign-in variant `flow`: without one, exactly `authorize_url`; the
+/// WhatsApp Business app's sign-in (see the module docs) needs the Meta app and its WhatsApp
+/// configuration, else `Permanent`.
+pub(crate) fn authorize_url_for(
+    connector: &MetaConnector,
+    app: &OAuthApp,
+    redirect: &Url,
+    state: &str,
+    pkce_challenge: Option<&str>,
+    flow: Option<OAuthFlow>,
+) -> Result<Url, ConnectorError> {
+    let Some(OAuthFlow::WhatsappBusinessApp) = flow else {
+        return authorize_url(connector, app, redirect, state, pkce_challenge);
+    };
+    let OAuthApp::Meta(meta) = app else {
+        return Err(ConnectorError::permanent(
+            "the WhatsApp Business app sign-in runs under the Meta app",
+        ));
+    };
+    let config = whatsapp_config(meta)?;
+    let version = graph_version(meta).unwrap_or_else(|_| crate::DEFAULT_GRAPH_VERSION.to_owned());
+    let mut url = join(
+        &connector.bases().facebook_dialog,
+        &[&version, "dialog", "oauth"],
+        &[],
+    );
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("client_id", &meta.app_id)
+            .append_pair("redirect_uri", redirect.as_str())
+            .append_pair("state", state)
+            .append_pair("response_type", "code")
+            .append_pair("config_id", config)
+            .append_pair("override_default_response_type", "true")
+            .append_pair("extras", BUSINESS_APP_EXTRAS);
+        if let Some(challenge) = pkce_challenge {
+            q.append_pair("code_challenge", challenge)
+                .append_pair("code_challenge_method", "S256");
+        }
+    }
+    Ok(url)
+}
+
+/// The Meta app's WhatsApp Embedded Signup configuration, else `Permanent`.
+fn whatsapp_config(meta: &MetaApp) -> Result<&str, ConnectorError> {
+    meta.whatsapp_config_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            ConnectorError::permanent("the Meta app has no WhatsApp Embedded Signup configuration")
+        })
+}
+
+/// [`exchange`] for the sign-in variant `flow`: without one, exactly `exchange`; the WhatsApp
+/// Business app's sign-in exchanges the code for the business's token, kept as it is (see the
+/// module docs), its expiry the answer's `expires_in` when it names one.
+pub(crate) async fn exchange_for(
+    connector: &MetaConnector,
+    app: &OAuthApp,
+    redirect: &Url,
+    code: &str,
+    pkce_verifier: Option<&str>,
+    flow: Option<OAuthFlow>,
+) -> Result<Credential, ConnectorError> {
+    let Some(OAuthFlow::WhatsappBusinessApp) = flow else {
+        return exchange(connector, app, redirect, code, pkce_verifier).await;
+    };
+    let OAuthApp::Meta(meta) = app else {
+        return Err(ConnectorError::permanent(
+            "the WhatsApp Business app sign-in runs under the Meta app",
+        ));
+    };
+    let graph = GraphApp::of(meta)?;
+    let mut query = vec![
+        ("client_id", meta.app_id.as_str()),
+        ("client_secret", meta.app_secret.as_str()),
+        ("redirect_uri", redirect.as_str()),
+        ("code", code),
+    ];
+    if let Some(verifier) = pkce_verifier {
+        query.push(("code_verifier", verifier));
+    }
+    let url = connector.graph_url(&graph.version, &["oauth", "access_token"], &query);
+    let answer = connector
+        .call(Method::GET, url, Auth::None, Body::Empty)
+        .await?;
+    Ok(Credential::OAuth {
+        expires_at: expiry(&answer, OffsetDateTime::now_utc()),
+        access_token: token_of(&answer)?,
+        refresh_token: None,
+        scopes: Vec::new(),
+    })
 }
 
 /// The long-lived credential the code is exchanged for under `app`.
@@ -128,6 +295,9 @@ pub(crate) async fn exchange(
             instagram_exchange(connector, instagram, redirect, code).await
         }
         OAuthApp::X(_) => Err(ConnectorError::permanent("an X app cannot sign in to Meta")),
+        OAuthApp::Tiktok(_) | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent(
+            "only a Meta or Instagram app signs in to Meta",
+        )),
     }
 }
 

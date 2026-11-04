@@ -29,6 +29,10 @@ pub enum Author {
     /// A system-produced message; the default when old storage omits the author.
     #[default]
     System,
+    /// The business itself, from the WhatsApp Business app on its phone: a number onboarded
+    /// beside the app shares what the business sends there (and the history it had), which
+    /// neither the system nor any of its people or agents wrote.
+    BusinessApp,
 }
 
 /// The known delivery state; uncertain delivery must never trigger a blind resend.

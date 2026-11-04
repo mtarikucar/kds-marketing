@@ -104,6 +104,10 @@ fn channel_key(channel: Channel) -> &'static str {
         Channel::Email => "email",
         Channel::Webchat => "webchat",
         Channel::Phone => "phone",
+        Channel::InstagramComment => "instagram_comment",
+        Channel::FacebookComment => "facebook_comment",
+        Channel::TrendyolQuestion => "trendyol_question",
+        Channel::HepsiburadaQuestion => "hepsiburada_question",
     }
 }
 fn reason_key(reason: SuppressionReason) -> &'static str {

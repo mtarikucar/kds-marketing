@@ -115,6 +115,18 @@ impl TenantRepos for SpyTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self.inner.studio_materials()
+    }
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self.inner.studio_posts()
+    }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.inner.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.inner.device_commands()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
@@ -176,6 +188,15 @@ impl TenantRepos for SpyTenant {
     }
     fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
         self.inner.outbox()
+    }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.inner.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.inner.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.inner.public_cursors()
     }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.inner.roles()
@@ -515,7 +536,7 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         ..w.deps.clone()
     };
     let o = &w.owner_ctx;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     let ads = w.declare("meta_ads", "Meta reklam").await.capability.id;
     let cash = budget::create_item(
         &w.deps,
@@ -544,24 +565,24 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         text: "adb devices listed it".into(),
         refs: vec![],
     };
-    capabilities::verify(&deps, o, phone, evidence)
+    capabilities::verify(&deps, o, computer, evidence)
         .await
         .unwrap();
     locked_first("verify", &spy.take());
-    capabilities::set_policy(&deps, o, phone, Policy::default())
+    capabilities::set_policy(&deps, o, computer, Policy::default())
         .await
         .unwrap();
     locked_first("set_policy", &spy.take());
-    capabilities::mark_unreachable(&deps, o, phone, "şarj bitti".into())
+    capabilities::mark_unreachable(&deps, o, computer, "şarj bitti".into())
         .await
         .unwrap();
     locked_first("mark_unreachable", &spy.take());
     capabilities::update(
         &deps,
         o,
-        phone,
+        computer,
         UpdateCapability {
-            name: Some("Saha telefonu".into()),
+            name: Some("Saha bilgisayarı".into()),
             ..UpdateCapability::default()
         },
     )

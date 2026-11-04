@@ -8,7 +8,7 @@ use jt_app::{
     ports::UnitOfWork,
     usecases::{
         jobs::Job,
-        studio::{ads, chain::dispatch_execution, publish},
+        studio::{ads, chain::dispatch_execution, publish, tiktok},
     },
 };
 use jt_archtest::{direct_deps, rust_sources_in, workspace_dir};
@@ -37,8 +37,69 @@ const ACTIONS: &[&str] = &[
     "overview",
     "ledger",
     "ledger_export",
+    "olays_list",
+    "olay_get",
+    "olay_create",
+    "olay_update",
+    "materials_list",
+    "material_get",
+    "material_add",
+    "material_tag",
+    "slot_materials",
+    "calendar_list",
+    "shoot_list",
+    "shoot_request",
+    "shoot_resolve",
+    "post_requests",
+    "posts_propose",
+    "posts_list",
+    "weekly_summary",
 ];
-const EXEMPT: &[&str] = &["brake", "ledger", "ledger_export"];
+/// The materials library and its uploads need no approved strategy (spec 2026-11-03 D35).
+const EXEMPT: &[&str] = &[
+    "brake",
+    "ledger",
+    "ledger_export",
+    "file_upload",
+    "olays_list",
+    "olay_get",
+    "olay_create",
+    "olay_update",
+    "materials_list",
+    "material_get",
+    "material_add",
+    "material_tag",
+    "slot_materials",
+    "calendar_list",
+    "shoot_list",
+    "shoot_request",
+    "shoot_resolve",
+    "olay_confirm",
+    "material_permission",
+    "material_free",
+    "material_bind",
+    "material_delete",
+    "calendar_set",
+    "material_policy_set",
+];
+/// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
+/// (TikTok's Content Sharing Guidelines), and its published post's counters.
+/// The materials library's human decisions (D4), releasing a slot's caption findings (§7) among
+/// them, are panel routes without a tool too.
+const PANEL_ONLY: &[&str] = &[
+    "tiktok_posting",
+    "tiktok_post",
+    "tiktok_metrics",
+    "olay_confirm",
+    "material_permission",
+    "material_free",
+    "material_bind",
+    "material_delete",
+    "calendar_set",
+    "material_policy_set",
+    "material_check_release",
+    "posting_policy_set",
+];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
 }
@@ -49,11 +110,16 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 18);
+    assert_eq!(rows.len(), 47);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
-        set(ACTIONS.iter().copied())
+        set(ACTIONS.iter().chain(PANEL_ONLY).copied())
     );
+    for row in &rows {
+        let panel_only = PANEL_ONLY.contains(&row.id.strip_prefix("studio.").unwrap());
+        assert_eq!(row.panel_only, panel_only, "{}", row.id);
+        assert_eq!(row.mcp_tool.is_none(), panel_only, "{}", row.id);
+    }
     assert_eq!(
         set(rows
             .iter()
@@ -85,7 +151,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 125);
+    assert_eq!(jt_mcp::registry().len(), 163);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -103,9 +169,15 @@ async fn studio_exact_catalog_and_gate_set() {
             all_tables.insert(name.to_owned());
         }
     }
-    assert_eq!(all_tables.len(), 67);
+    // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the
+    // public items, subjects and cursors of 0019_inbox_public, the materials library's seven of
+    // 0021_studio_materials, and the planned posts, package requests and posting policy of
+    // 0022_studio_posts.
+    assert_eq!(all_tables.len(), 87);
 
-    // All fourteen Studio tables are tenant-scoped.
+    // All twenty-four Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
+    // 0021_studio_materials, three of 0022_studio_posts.
     assert_eq!(
         set(tables
             .iter()
@@ -125,7 +197,17 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_budget_moves",
             "studio_spend_reservations",
             "studio_control",
-            "studio_request_keys"
+            "studio_request_keys",
+            "studio_olays",
+            "studio_materials",
+            "studio_piece_materials",
+            "studio_calendar_entries",
+            "studio_shoot_requests",
+            "studio_material_policy",
+            "studio_material_releases",
+            "studio_package_requests",
+            "studio_posts",
+            "studio_posting_policy"
         ])
     );
 }
@@ -205,6 +287,22 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
             );
         }
     }
+    // The panel's own rows: a route whose handler calls the service, and no tool at all.
+    for action in PANEL_ONLY {
+        let row = CATALOG
+            .iter()
+            .find(|r| r.id == format!("studio.{action}"))
+            .unwrap();
+        assert!(jt_panel_http::ROUTES.contains(&row.panel_route.unwrap()));
+        let handlers = functions(&http);
+        let handler = handlers.iter().find(|f| f.sig.ident == *action).unwrap();
+        assert!(
+            calls(handler).iter().any(|n| n == action),
+            "missing service dispatch: {action}"
+        );
+        assert!(functions(&mcp).iter().all(|f| f.sig.ident != *action));
+        assert!(registry.iter().all(|t| t.use_case != row.id));
+    }
 }
 fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
     let id = w.f.slot.id;
@@ -240,7 +338,7 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
         ),
         (
             "piece_submit",
-            json!({"slot_id":id,"expected_revision":1,"request_key":"piece","text":"test","media":[],"adaptations":{}}),
+            json!({"slot_id":id,"expected_revision":1,"request_key":"piece","text":"test","media":[],"adaptations":{},"subject":{"kind":"generic"}}),
         ),
         (
             "judgment_record",
@@ -253,6 +351,37 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
         (
             "budget_move",
             json!({"binding_id":jt_studio::AdSetBindingId::new_v7(),"daily_budget_minor":1,"currency":"TRY","request_key":"budget"}),
+        ),
+        (
+            "olay_create",
+            json!({"request_key":"olay","kind":"workshop","title":"Atölye","starts_on":"2026-11-16","ends_on":"2026-11-16"}),
+        ),
+        (
+            "olay_update",
+            json!({"olay_id":w.material().olay_id(),"expected_revision":1,"title":"Atölye"}),
+        ),
+        (
+            "material_add",
+            json!({"request_key":"material","file_id":w.material().file_id,"origin":{"kind":"real"},"genel":true}),
+        ),
+        (
+            "material_tag",
+            json!({"material_id":w.material().id,"expected_revision":1,"doors":[]}),
+        ),
+        (
+            "shoot_request",
+            json!({"request_key":"shoot","text":"Ürün fotoğrafı yükle"}),
+        ),
+        (
+            "shoot_resolve",
+            json!({"request_id":jt_studio::ShootRequestId::new_v7(),"status":"done"}),
+        ),
+        (
+            "posts_propose",
+            json!({"request_id":jt_studio::PackageRequestId::new_v7(),"request_key":"package",
+                "posts":[{"format":"feed_post","capability_id":w.f.slot.capability_id,
+                    "publish_at":"2026-11-01T09:00:00Z","material_ids":[w.material().id],
+                    "subject":{"kind":"generic"},"hypothesis_id":h}]}),
         ),
     ]
 }
@@ -286,7 +415,8 @@ async fn every_studio_write_reaches_shared_execution_gate() {
             .map(|t| t.use_case.strip_prefix("studio.").unwrap()));
         assert_eq!(actual, expected, "exercise every write, including new rows");
         for (action, args) in args {
-            if !inactive && action == "brake" {
+            // An exempt write runs without a strategy: only the status check refuses it.
+            if !inactive && EXEMPT.contains(&action) {
                 continue;
             }
             let tool = registry
@@ -305,9 +435,132 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 "{action}: {e:?}"
             );
         }
+        // The panel-only write, the TikTok posting screen's publish button, meets the same gate.
+        let e = tiktok::tiktok_post(
+            &w.d,
+            &w.ctx,
+            tiktok::TiktokPostInput {
+                slot_id: w.f.slot.id,
+                expected_revision: 1,
+                post: serde_json::from_value(json!({
+                    "title": "test",
+                    "privacy_level": "SELF_ONLY",
+                    "allow_comment": false,
+                    "allow_duet": false,
+                    "allow_stitch": false,
+                    "disclose_commercial": false,
+                    "your_brand": false,
+                    "branded_content": false,
+                }))
+                .unwrap(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "tiktok_post: {e:?}"
+        );
+        // So does releasing a slot's caption findings, a human's decision on the slot.
+        let e = jt_app::usecases::studio::materials::material_check_release(
+            &w.d,
+            &w.ctx,
+            serde_json::from_value(json!({
+                "slot_id": w.f.slot.id, "expected_revision": 1, "digest": "0".repeat(64),
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "material_check_release: {e:?}"
+        );
+        // The posting policy, a human's, plans content: the same gate.
+        let e =
+            jt_app::usecases::studio::posts::posting_policy_set(&w.d, &w.ctx, Default::default())
+                .await
+                .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "posting_policy_set: {e:?}"
+        );
+        // The library's panel-only writes, a human's decisions, meet the status check alone.
+        if inactive {
+            use jt_app::usecases::studio::library;
+            let m = w.material();
+            let at = |extra: Value| {
+                let mut v = json!({"material_id":m.id,"expected_revision":1});
+                v.as_object_mut()
+                    .unwrap()
+                    .extend(extra.as_object().unwrap().clone());
+                v
+            };
+            fn parse<T: serde::de::DeserializeOwned>(v: Value) -> T {
+                serde_json::from_value(v).unwrap()
+            }
+            let refusals = [
+                library::olay_confirm(
+                    &w.d,
+                    &w.ctx,
+                    parse(json!({"olay_id":m.olay_id(),"expected_revision":1})),
+                )
+                .await
+                .map(|_| ()),
+                library::material_permission(
+                    &w.d,
+                    &w.ctx,
+                    parse(at(json!({"permission":"shareable"}))),
+                )
+                .await
+                .map(|_| ()),
+                library::material_free(&w.d, &w.ctx, parse(at(json!({"free":true}))))
+                    .await
+                    .map(|_| ()),
+                library::material_bind(
+                    &w.d,
+                    &w.ctx,
+                    parse(at(json!({"binding":{"kind":"genel"}}))),
+                )
+                .await
+                .map(|_| ()),
+                library::material_delete(&w.d, &w.ctx, parse(at(json!({"confirm":true}))))
+                    .await
+                    .map(|_| ()),
+                library::calendar_set(
+                    &w.d,
+                    &w.ctx,
+                    parse(json!({"key":"yilbasi","year":2026,"name":"Yılbaşı","kind":"season","enabled":false})),
+                )
+                .await
+                .map(|_| ()),
+                library::material_policy_set(&w.d, &w.ctx, Default::default())
+                    .await
+                    .map(|_| ()),
+            ];
+            for e in refusals {
+                assert_eq!(e.unwrap_err().code, ErrorCode::WorkspaceInactive);
+            }
+        }
         let after = w.uow.snapshot();
         assert_eq!(after.ledger.len(), before.ledger.len());
         assert_eq!(after.studio.slots, before.studio.slots);
+        assert!(after.studio.approvals.is_empty());
         assert!(w.ads.calls().is_empty());
     }
 }
@@ -449,6 +702,10 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "AdBudgetWriter",
             "LeadGenFetcher",
             "OAuthProvider",
+            // Replies, moderation and polls on public items (comments, marketplace questions):
+            // plan 2026-10-30-inbox-comments-marketplace-plan.md, task F4.
+            "PublicSurface",
+            "PublicPoller",
             "ConnectorRegistry"
         ]
         .into_iter()
@@ -518,7 +775,7 @@ fn no_paid_creation_api() {
         .map(str::to_owned)
         .collect()
     );
-    // Product catalog's exhaustive 18-name assertion above precludes creation/commission/setup tools.
+    // Product catalog's exhaustive 41-name assertion above precludes creation/commission/setup tools.
 }
 #[tokio::test]
 async fn only_learning_updates_derived_confidence() {

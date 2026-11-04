@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use axum::http::uri::Authority;
-use jt_app::ports::connectors::{InstagramApp, MetaApp, PlatformAppConfig, Url, XApp};
+use jt_app::ports::connectors::{
+    InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokApp, Url, XApp,
+};
 use tracing_subscriber::EnvFilter;
 
 /// The application's PostgreSQL URL (required).
@@ -73,14 +75,39 @@ pub const META_LOGIN_CONFIG_ID: &str = "JEETA_META_LOGIN_CONFIG_ID";
 pub const META_WHATSAPP_CONFIG_ID: &str = "JEETA_META_WHATSAPP_CONFIG_ID";
 /// The Graph API version, `v` and two numbers (default [`jt_meta::DEFAULT_GRAPH_VERSION`]).
 pub const META_GRAPH_VERSION: &str = "JEETA_META_GRAPH_VERSION";
+/// Whether Facebook Login flows ask for the comment scopes (`1`/`true`; default off): set once
+/// Meta's App Review granted them. Requires the Meta app.
+pub const META_COMMENT_SCOPES: &str = "JEETA_META_COMMENT_SCOPES";
 /// The platform's Instagram app id (Instagram Login).
 pub const INSTAGRAM_APP_ID: &str = "JEETA_INSTAGRAM_APP_ID";
 /// The Instagram app's secret; set together with [`INSTAGRAM_APP_ID`].
 pub const INSTAGRAM_APP_SECRET: &str = "JEETA_INSTAGRAM_APP_SECRET";
+/// Whether Instagram Login flows ask for the comment scopes (`1`/`true`; default off): set once
+/// Meta's App Review granted them. Requires the Instagram app.
+pub const INSTAGRAM_COMMENT_SCOPES: &str = "JEETA_INSTAGRAM_COMMENT_SCOPES";
+/// The platform's Hepsiburada integrator user, the Basic auth user of the calls made with a
+/// seller's service key (optional; the merchant id stands in while unset; VERIFY V-H1).
+pub const HEPSIBURADA_INTEGRATOR_USER: &str = "JEETA_HEPSIBURADA_INTEGRATOR_USER";
 /// The platform's X app (OAuth 2.0 confidential client) id.
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
 pub const X_CLIENT_SECRET: &str = "JEETA_X_CLIENT_SECRET";
+/// The platform's TikTok app (Login Kit, Content Posting API) client key.
+pub const TIKTOK_CLIENT_KEY: &str = "JEETA_TIKTOK_CLIENT_KEY";
+/// The TikTok app's client secret; set together with [`TIKTOK_CLIENT_KEY`].
+pub const TIKTOK_CLIENT_SECRET: &str = "JEETA_TIKTOK_CLIENT_SECRET";
+/// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn)
+/// client id.
+pub const LINKEDIN_CLIENT_ID: &str = "JEETA_LINKEDIN_CLIENT_ID";
+/// The LinkedIn app's client secret; set together with [`LINKEDIN_CLIENT_ID`].
+pub const LINKEDIN_CLIENT_SECRET: &str = "JEETA_LINKEDIN_CLIENT_SECRET";
+/// Whether LinkedIn flows ask for the organization scopes (`1`/`true`; default off): set once
+/// LinkedIn approved the Community Management API for the app, which enables `linkedin_page`
+/// connections. Requires the LinkedIn app.
+pub const LINKEDIN_ORG_SCOPES: &str = "JEETA_LINKEDIN_ORG_SCOPES";
+/// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (default
+/// [`jt_linkedin::DEFAULT_API_VERSION`]). Requires the LinkedIn app.
+pub const LINKEDIN_API_VERSION: &str = "JEETA_LINKEDIN_API_VERSION";
 /// Where the panel is reached from outside (`https://host[:port]`), for OAuth redirect URIs and
 /// webhook URLs; required whenever a provider app is configured.
 pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
@@ -115,10 +142,19 @@ const VARS: &[&str] = &[
     META_LOGIN_CONFIG_ID,
     META_WHATSAPP_CONFIG_ID,
     META_GRAPH_VERSION,
+    META_COMMENT_SCOPES,
     INSTAGRAM_APP_ID,
     INSTAGRAM_APP_SECRET,
+    INSTAGRAM_COMMENT_SCOPES,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
+    TIKTOK_CLIENT_KEY,
+    TIKTOK_CLIENT_SECRET,
+    LINKEDIN_CLIENT_ID,
+    LINKEDIN_CLIENT_SECRET,
+    LINKEDIN_ORG_SCOPES,
+    LINKEDIN_API_VERSION,
+    HEPSIBURADA_INTEGRATOR_USER,
     PUBLIC_BASE_URL,
 ];
 
@@ -126,6 +162,12 @@ pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
 /// `info`, with rmcp held to warnings: rmcp logs every new MCP session id at `info`, and a
 /// session id must not reach the logs.
 pub const DEFAULT_LOG: &str = "info,rmcp=warn";
+/// What every log filter ends with, the operator's own (`JEETA_LOG`) included: rmcp held to
+/// warnings. Besides session ids at `info`, rmcp logs whole requests at `debug`, a tool call's
+/// arguments among them (a phone's typed text and shell arguments). Given last, it replaces any
+/// directive the operator gave for `rmcp` itself; `ops::install_tracing` also caps every `rmcp::*`
+/// target at warnings, whatever the filter says.
+pub const RMCP_CAP: &str = "rmcp=warn";
 
 /// The env files tried in order; the first that exists is loaded (from the repository root, or
 /// from `rust/` itself).
@@ -201,16 +243,22 @@ pub struct EnvPlatformApps {
     meta: Option<MetaApp>,
     instagram: Option<InstagramApp>,
     x: Option<XApp>,
+    tiktok: Option<TiktokApp>,
+    linkedin: Option<LinkedinApp>,
+    hepsiburada_integrator_user: Option<String>,
     public_base_url: Option<Url>,
 }
 
 impl EnvPlatformApps {
-    /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`.
+    /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`, `tiktok`,
+    /// `linkedin`.
     pub fn configured(&self) -> Vec<&'static str> {
         [
             ("meta", self.meta.is_some()),
             ("instagram", self.instagram.is_some()),
             ("x", self.x.is_some()),
+            ("tiktok", self.tiktok.is_some()),
+            ("linkedin", self.linkedin.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, on)| on.then_some(name))
@@ -224,6 +272,12 @@ impl fmt::Debug for EnvPlatformApps {
             .field("meta", &self.meta)
             .field("instagram", &self.instagram)
             .field("x", &self.x)
+            .field("tiktok", &self.tiktok)
+            .field("linkedin", &self.linkedin)
+            .field(
+                "hepsiburada_integrator_user",
+                &self.hepsiburada_integrator_user,
+            )
             .field(
                 "public_base_url",
                 &self.public_base_url.as_ref().map(Url::as_str),
@@ -243,6 +297,18 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn x_app(&self) -> Option<XApp> {
         self.x.clone()
+    }
+
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        self.tiktok.clone()
+    }
+
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        self.linkedin.clone()
+    }
+
+    fn hepsiburada_integrator_user(&self) -> Option<String> {
+        self.hepsiburada_integrator_user.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -443,7 +509,10 @@ impl Config {
         }
         let stdio_api_key = get(STDIO_API_KEY).map(|key| key.trim().to_owned());
 
-        let log_filter = get(LOG).map_or(DEFAULT_LOG, str::trim).to_owned();
+        let log_filter = match get(LOG) {
+            Some(filter) => format!("{},{RMCP_CAP}", filter.trim().trim_end_matches(',')),
+            None => DEFAULT_LOG.to_owned(),
+        };
         EnvFilter::try_new(&log_filter)
             .map_err(|_| ConfigError::new(LOG, "is not a valid tracing filter"))?;
 
@@ -549,6 +618,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 login_config_id: value(META_LOGIN_CONFIG_ID),
                 whatsapp_config_id: value(META_WHATSAPP_CONFIG_ID),
                 graph_version: Some(graph_version),
+                comment_scopes: parse_flag(META_COMMENT_SCOPES, get(META_COMMENT_SCOPES))?,
             })
         }
         None => {
@@ -558,6 +628,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 META_LOGIN_CONFIG_ID,
                 META_WHATSAPP_CONFIG_ID,
                 META_GRAPH_VERSION,
+                META_COMMENT_SCOPES,
             ] {
                 if get(setting).is_some() {
                     return Err(ConfigError::new(
@@ -572,17 +643,80 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
             None
         }
     };
-    let instagram = pair(&get, INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET)?
-        .map(|(app_id, app_secret)| InstagramApp { app_id, app_secret });
+    let instagram = match pair(&get, INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET)? {
+        Some((app_id, app_secret)) => Some(InstagramApp {
+            app_id,
+            app_secret,
+            comment_scopes: parse_flag(INSTAGRAM_COMMENT_SCOPES, get(INSTAGRAM_COMMENT_SCOPES))?,
+        }),
+        None => {
+            // The flag means nothing without the Instagram app: half a configuration.
+            if get(INSTAGRAM_COMMENT_SCOPES).is_some() {
+                return Err(ConfigError::new(
+                    INSTAGRAM_APP_ID,
+                    format!(
+                        "must be set (with {INSTAGRAM_APP_SECRET}) because \
+                         {INSTAGRAM_COMMENT_SCOPES} is: the Instagram app is configured as a \
+                         whole or not at all"
+                    ),
+                ));
+            }
+            None
+        }
+    };
     let x = pair(&get, X_CLIENT_ID, X_CLIENT_SECRET)?.map(|(client_id, client_secret)| XApp {
         client_id,
         client_secret,
     });
+    let tiktok =
+        pair(&get, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET)?.map(|(client_key, client_secret)| {
+            TiktokApp {
+                client_key,
+                client_secret,
+            }
+        });
+    let linkedin = match pair(&get, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET)? {
+        Some((client_id, client_secret)) => {
+            let api_version = value(LINKEDIN_API_VERSION)
+                .unwrap_or_else(|| jt_linkedin::DEFAULT_API_VERSION.to_owned());
+            if !is_linkedin_version(&api_version) {
+                return Err(ConfigError::new(
+                    LINKEDIN_API_VERSION,
+                    "must be a LinkedIn API version, YYYYMM such as 202610",
+                ));
+            }
+            Some(LinkedinApp {
+                client_id,
+                client_secret,
+                organization_scopes: parse_flag(LINKEDIN_ORG_SCOPES, get(LINKEDIN_ORG_SCOPES))?,
+                api_version: Some(api_version),
+            })
+        }
+        None => {
+            // The LinkedIn app's settings mean nothing without it: half a configuration.
+            for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+                if get(setting).is_some() {
+                    return Err(ConfigError::new(
+                        LINKEDIN_CLIENT_ID,
+                        format!(
+                            "must be set (with {LINKEDIN_CLIENT_SECRET}) because {setting} is: \
+                             the LinkedIn app is configured as a whole or not at all"
+                        ),
+                    ));
+                }
+            }
+            None
+        }
+    };
 
     let public_base_url = get(PUBLIC_BASE_URL)
         .map(|raw| parse_public_base_url(raw.trim()))
         .transpose()?;
-    let any_app = meta.is_some() || instagram.is_some() || x.is_some();
+    let any_app = meta.is_some()
+        || instagram.is_some()
+        || x.is_some()
+        || tiktok.is_some()
+        || linkedin.is_some();
     if any_app && public_base_url.is_none() {
         return Err(ConfigError::new(
             PUBLIC_BASE_URL,
@@ -594,8 +728,19 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         meta,
         instagram,
         x,
+        tiktok,
+        linkedin,
+        hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
         public_base_url,
     })
+}
+
+/// Whether `version` is a LinkedIn API version: six digits, `YYYYMM`, with a month from 01 to 12
+/// (`202610`), as the LinkedIn adapter sends it in `LinkedIn-Version`.
+fn is_linkedin_version(version: &str) -> bool {
+    version.len() == 6
+        && version.bytes().all(|b| b.is_ascii_digit())
+        && matches!(version[4..].parse::<u8>(), Ok(1..=12))
 }
 
 /// An app's id and secret: both or neither. One without the other is an error naming the one
@@ -895,7 +1040,7 @@ mod tests {
         assert_eq!(config.panel_dir, Some(PathBuf::from("panel/dist")));
         assert!(!config.cookie_secure);
         assert_eq!(config.stdio_api_key.as_deref(), Some("jt_live_abc"));
-        assert_eq!(config.log_filter, "jeeta=debug,info");
+        assert_eq!(config.log_filter, "jeeta=debug,info,rmcp=warn");
         assert_eq!(config.log_format, LogFormat::Json);
 
         let blank = Config::from_map(&with(&[
@@ -926,6 +1071,44 @@ mod tests {
         ] {
             assert_eq!(error(&with(&[(var, bad)])).var, var, "{var}={bad}");
         }
+    }
+
+    #[test]
+    fn an_operator_filter_never_raises_rmcp() {
+        use tracing::Level;
+        use tracing_subscriber::prelude::*;
+        assert!(DEFAULT_LOG.ends_with(RMCP_CAP));
+        for operator in [
+            "debug",
+            "trace",
+            "rmcp=debug",
+            "info,rmcp=trace,",
+            " jeeta=debug ",
+        ] {
+            let config = Config::from_map(&with(&[(LOG, operator)])).unwrap();
+            assert!(config.log_filter.ends_with(",rmcp=warn"), "{operator}");
+            let filter = EnvFilter::try_new(&config.log_filter).unwrap();
+            let subscriber = tracing_subscriber::registry().with(filter);
+            tracing::subscriber::with_default(subscriber, || {
+                assert!(
+                    !tracing::enabled!(target: "rmcp", Level::DEBUG),
+                    "{operator}: rmcp debug, which carries tool arguments"
+                );
+                assert!(
+                    !tracing::enabled!(target: "rmcp", Level::INFO),
+                    "{operator}"
+                );
+                assert!(tracing::enabled!(target: "rmcp", Level::WARN), "{operator}");
+            });
+        }
+        // What the operator asked for stays, for every other target.
+        let config = Config::from_map(&with(&[(LOG, "debug")])).unwrap();
+        assert_eq!(config.log_filter, "debug,rmcp=warn");
+        let subscriber =
+            tracing_subscriber::registry().with(EnvFilter::try_new(&config.log_filter).unwrap());
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(tracing::enabled!(target: "jeeta", Level::DEBUG));
+        });
     }
 
     #[test]
@@ -998,6 +1181,10 @@ mod tests {
         (INSTAGRAM_APP_SECRET, "IG-SECRET-SENTINEL"),
         (X_CLIENT_ID, "x-id-1"),
         (X_CLIENT_SECRET, "X-SECRET-SENTINEL"),
+        (TIKTOK_CLIENT_KEY, "tt-key-1"),
+        (TIKTOK_CLIENT_SECRET, "TT-SECRET-SENTINEL"),
+        (LINKEDIN_CLIENT_ID, "li-id-1"),
+        (LINKEDIN_CLIENT_SECRET, "LI-SECRET-SENTINEL"),
         (PUBLIC_BASE_URL, "https://jeeta.example"),
     ];
 
@@ -1007,6 +1194,8 @@ mod tests {
         "VERIFY-TOKEN-SENTINEL",
         "IG-SECRET-SENTINEL",
         "X-SECRET-SENTINEL",
+        "TT-SECRET-SENTINEL",
+        "LI-SECRET-SENTINEL",
     ];
 
     #[test]
@@ -1018,7 +1207,29 @@ mod tests {
 
         // Every app, configured as a whole.
         let all = Config::from_map(&with(ALL_APPS)).unwrap();
-        assert_eq!(all.apps.configured(), ["meta", "instagram", "x"]);
+        assert_eq!(
+            all.apps.configured(),
+            ["meta", "instagram", "x", "tiktok", "linkedin"]
+        );
+        let tiktok = all.apps.tiktok_app().unwrap();
+        assert_eq!(
+            (tiktok.client_key.as_str(), tiktok.client_secret.as_str()),
+            ("tt-key-1", "TT-SECRET-SENTINEL")
+        );
+        let linkedin = all.apps.linkedin_app().unwrap();
+        assert_eq!(
+            (linkedin.client_id.as_str(), linkedin.client_secret.as_str()),
+            ("li-id-1", "LI-SECRET-SENTINEL")
+        );
+        assert!(
+            !linkedin.organization_scopes,
+            "off until the operator enables them"
+        );
+        assert_eq!(
+            linkedin.api_version.as_deref(),
+            Some(jt_linkedin::DEFAULT_API_VERSION),
+            "the adapter's default when unset"
+        );
         let meta = all.apps.meta_app().unwrap();
         assert_eq!(meta.app_id, "meta-id-1");
         assert_eq!(meta.app_secret, "META-SECRET-SENTINEL");
@@ -1071,6 +1282,13 @@ mod tests {
             ((INSTAGRAM_APP_SECRET, "HALF-SENTINEL"), INSTAGRAM_APP_ID),
             ((X_CLIENT_ID, "x-id-1"), X_CLIENT_SECRET),
             ((X_CLIENT_SECRET, "HALF-SENTINEL"), X_CLIENT_ID),
+            ((TIKTOK_CLIENT_KEY, "tt-key-1"), TIKTOK_CLIENT_SECRET),
+            ((TIKTOK_CLIENT_SECRET, "HALF-SENTINEL"), TIKTOK_CLIENT_KEY),
+            ((LINKEDIN_CLIENT_ID, "li-id-1"), LINKEDIN_CLIENT_SECRET),
+            (
+                (LINKEDIN_CLIENT_SECRET, "HALF-SENTINEL"),
+                LINKEDIN_CLIENT_ID,
+            ),
         ] {
             let err = error(&with(&[given, base, (META_VERIFY_TOKEN, "")]));
             assert_eq!(err.var, missing, "{given:?}");
@@ -1097,6 +1315,31 @@ mod tests {
             assert!(err.to_string().contains(setting), "{err}");
             assert!(!err.to_string().contains("HALF-SENTINEL"), "{err}");
         }
+        // The LinkedIn app's settings: the organization scopes (a flag) and the API version.
+        let mut tuned = with(ALL_APPS);
+        tuned.insert(LINKEDIN_ORG_SCOPES.to_owned(), "1".to_owned());
+        tuned.insert(LINKEDIN_API_VERSION.to_owned(), " 202609 ".to_owned());
+        let linkedin = Config::from_map(&tuned)
+            .unwrap()
+            .apps
+            .linkedin_app()
+            .unwrap();
+        assert!(linkedin.organization_scopes);
+        assert_eq!(linkedin.api_version.as_deref(), Some("202609"));
+        for bad in ["2026-10", "20261", "202613", "202600", "latest"] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(LINKEDIN_API_VERSION.to_owned(), bad.to_owned());
+            assert_eq!(error(&vars).var, LINKEDIN_API_VERSION, "{bad}");
+        }
+        let mut vars = with(ALL_APPS);
+        vars.insert(LINKEDIN_ORG_SCOPES.to_owned(), "yes".to_owned());
+        assert_eq!(error(&vars).var, LINKEDIN_ORG_SCOPES);
+        // A LinkedIn setting without the LinkedIn app is half a configuration too.
+        for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+            let err = error(&with(&[(setting, "1"), base]));
+            assert_eq!(err.var, LINKEDIN_CLIENT_ID, "{setting}");
+            assert!(err.to_string().contains(setting), "{err}");
+        }
         // A Graph version is v and two numbers.
         for bad in ["19.0", "v19", "v19.0.1", "latest", "v1x.0"] {
             let mut vars = with(ALL_APPS);
@@ -1112,10 +1355,82 @@ mod tests {
             (INSTAGRAM_APP_SECRET, ""),
             (X_CLIENT_ID, ""),
             (X_CLIENT_SECRET, ""),
+            (TIKTOK_CLIENT_KEY, ""),
+            (TIKTOK_CLIENT_SECRET, ""),
+            (LINKEDIN_CLIENT_ID, ""),
+            (LINKEDIN_CLIENT_SECRET, ""),
+            (LINKEDIN_ORG_SCOPES, ""),
+            (LINKEDIN_API_VERSION, ""),
             (PUBLIC_BASE_URL, ""),
         ]))
         .unwrap();
         assert_eq!(blank.apps, EnvPlatformApps::default());
+    }
+
+    #[test]
+    fn comment_scope_flags_default_off() {
+        // The live Meta app is in review: unset, no flow asks for a comment scope.
+        let all = Config::from_map(&with(ALL_APPS)).unwrap();
+        assert!(!all.apps.meta_app().unwrap().comment_scopes);
+        assert!(!all.apps.instagram_app().unwrap().comment_scopes);
+        for off in ["", " ", "0", "false", "FALSE"] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(META_COMMENT_SCOPES.to_owned(), off.to_owned());
+            vars.insert(INSTAGRAM_COMMENT_SCOPES.to_owned(), off.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(!apps.meta_app().unwrap().comment_scopes, "{off:?}");
+            assert!(!apps.instagram_app().unwrap().comment_scopes, "{off:?}");
+        }
+        // Anything else is refused, naming the flag.
+        for (flag, bad) in [
+            (META_COMMENT_SCOPES, "yes"),
+            (INSTAGRAM_COMMENT_SCOPES, "on"),
+        ] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(flag.to_owned(), bad.to_owned());
+            assert_eq!(error(&vars).var, flag, "{bad}");
+        }
+        // A flag without its app is half a configuration.
+        for (flag, app) in [
+            (META_COMMENT_SCOPES, META_APP_ID),
+            (INSTAGRAM_COMMENT_SCOPES, INSTAGRAM_APP_ID),
+        ] {
+            let err = error(&with(&[
+                (flag, "1"),
+                (PUBLIC_BASE_URL, "https://jeeta.example"),
+            ]));
+            assert_eq!(err.var, app, "{flag}");
+            assert!(err.to_string().contains(flag), "{err}");
+        }
+        // The Hepsiburada integrator user is unset until the operator names it: the merchant id
+        // stands in for it then.
+        assert_eq!(all.apps.hepsiburada_integrator_user(), None);
+    }
+
+    #[test]
+    fn comment_scope_flags_read_1_and_true() {
+        for on in ["1", "true", " TRUE "] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(META_COMMENT_SCOPES.to_owned(), on.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(apps.meta_app().unwrap().comment_scopes, "{on:?}");
+            assert!(!apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+            let mut vars = with(ALL_APPS);
+            vars.insert(INSTAGRAM_COMMENT_SCOPES.to_owned(), on.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(!apps.meta_app().unwrap().comment_scopes, "{on:?}");
+            assert!(apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+        }
+        // The integrator user is read trimmed, on its own (it needs no provider app).
+        let apps = Config::from_map(&with(&[(HEPSIBURADA_INTEGRATOR_USER, " jeeta-int ")]))
+            .unwrap()
+            .apps;
+        assert_eq!(
+            apps.hepsiburada_integrator_user().as_deref(),
+            Some("jeeta-int")
+        );
+        assert!(apps.configured().is_empty());
+        assert!(format!("{apps:?}").contains("jeeta-int"));
     }
 
     #[test]
@@ -1129,6 +1444,8 @@ mod tests {
             ][..],
             &[(INSTAGRAM_APP_ID, "i"), (INSTAGRAM_APP_SECRET, "s")][..],
             &[(X_CLIENT_ID, "x"), (X_CLIENT_SECRET, "s")][..],
+            &[(TIKTOK_CLIENT_KEY, "t"), (TIKTOK_CLIENT_SECRET, "s")][..],
+            &[(LINKEDIN_CLIENT_ID, "l"), (LINKEDIN_CLIENT_SECRET, "s")][..],
         ] {
             let err = error(&with(app));
             assert_eq!(err.var, PUBLIC_BASE_URL, "{app:?}");
@@ -1229,10 +1546,20 @@ mod tests {
             META_LOGIN_CONFIG_ID,
             META_WHATSAPP_CONFIG_ID,
             META_GRAPH_VERSION,
+            // The comment flags stay off in the example: Meta's App Review decides.
+            META_COMMENT_SCOPES,
             INSTAGRAM_APP_ID,
             INSTAGRAM_APP_SECRET,
+            INSTAGRAM_COMMENT_SCOPES,
             X_CLIENT_ID,
             X_CLIENT_SECRET,
+            TIKTOK_CLIENT_KEY,
+            TIKTOK_CLIENT_SECRET,
+            LINKEDIN_CLIENT_ID,
+            LINKEDIN_CLIENT_SECRET,
+            LINKEDIN_ORG_SCOPES,
+            LINKEDIN_API_VERSION,
+            HEPSIBURADA_INTEGRATOR_USER,
             PUBLIC_BASE_URL,
         ] {
             assert_eq!(listed[var], "", "{var} is a placeholder in .env.example");

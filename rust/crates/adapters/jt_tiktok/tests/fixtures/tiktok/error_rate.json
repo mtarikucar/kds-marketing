@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API rate limit exceeded, please retry later.",
+    "log_id": "20261027000000TEST0016"
+  }
+}

@@ -172,6 +172,42 @@ impl World {
             .await
     }
 
+    /// A connected capability of `kind` holding `external_id` in `ws` whose Page token's grant
+    /// held `scopes`, recorded with it as the use cases record them (`access.scopes`).
+    pub async fn granted(
+        &self,
+        ws: WorkspaceId,
+        kind: &str,
+        external_id: &str,
+        scopes: &[&str],
+    ) -> CapabilityId {
+        let mut c = Capability::new(
+            CapabilityId::new_v7(),
+            ws,
+            NewCapability {
+                kind_key: kind.into(),
+                name: format!("{kind} {external_id}"),
+                external_id: Some(external_id.into()),
+                connector_public: serde_json::json!({
+                    "provider": "meta",
+                    "access": { "kind": "page_token", "app": "meta", "scopes": scopes },
+                }),
+                ..NewCapability::default()
+            },
+            FIXED_NOW,
+        )
+        .unwrap();
+        c.status = StoredStatus::Verified;
+        c.last_verified_at = Some(FIXED_NOW);
+        let mut t = self.uow.tenant(ws).await.unwrap();
+        t.capabilities()
+            .insert(c.clone(), Some(b"sealed".to_vec()))
+            .await
+            .unwrap();
+        t.commit().await.unwrap();
+        c.id
+    }
+
     /// Every stored event, in every workspace, in the order stored.
     pub fn stored(&self) -> Vec<StoredInboundEvent> {
         self.uow.snapshot().inbound_events
@@ -300,6 +336,18 @@ impl TenantRepos for FailingTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.0.studio_control()
     }
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self.0.studio_materials()
+    }
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self.0.studio_posts()
+    }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.0.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.0.device_commands()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()
@@ -362,6 +410,15 @@ impl TenantRepos for FailingTenant {
     fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
         self.0.outbox()
     }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.0.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.0.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.0.public_cursors()
+    }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.0.roles()
     }
@@ -421,12 +478,34 @@ impl TenantRepos for FailingTenant {
 
 #[async_trait]
 impl InboundEventRepo for FailingTenant {
+    async fn find_external(
+        &mut self,
+        provider: jt_connector::Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        self.0
+            .inbound_events()
+            .find_external(provider, external_id)
+            .await
+    }
+
     async fn call_events(
         &mut self,
         unique_id: &str,
         until: OffsetDateTime,
     ) -> Result<Vec<InboundEvent>, AppError> {
         self.0.inbound_events().call_events(unique_id, until).await
+    }
+
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        self.0
+            .inbound_events()
+            .mail_subject(capability, message_id)
+            .await
     }
 
     async fn list_for_consumer(

@@ -8,6 +8,11 @@
 //! status exemption covers its status, then `STRATEGY_REQUIRED` for a `Gated` use case without
 //! an approved strategy. Without a valid session the route answers `401`, without a current workspace
 //! `409 CONFLICT` ("no current workspace"), before the handler runs.
+//!
+//! A bridge's use cases (the voice bridge's and the device bridge's,
+//! [`crate::bearer::takes_bearer_key`]) are checked the same way for the workspace of the
+//! request's bearer key instead (sharing the lookup with the handler's `BridgeCtx` or
+//! `DeviceBridgeCtx`): no session is read for them, and without a usable key they answer `401`.
 
 use axum::extract::{FromRequestParts, Request, State};
 use axum::middleware::Next;
@@ -18,6 +23,7 @@ use jt_app::gate::check_gate;
 use jt_app::usecases::auth::Principal;
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 
+use crate::bearer;
 use crate::error::ApiError;
 use crate::session::Authed;
 use crate::state::AppState;
@@ -70,8 +76,16 @@ pub async fn require_gate(State(route): State<RouteGate>, req: Request, next: Ne
     }
     let (mut parts, body) = req.into_parts();
     let checked = async {
-        let Authed(principal) = Authed::from_request_parts(&mut parts, &route.state).await?;
-        let (ws, status) = current_workspace(&principal)?;
+        let (ws, status) = if bearer::takes_bearer_key(&route.use_case) {
+            let ws = bearer::principal(&mut parts, &route.state)
+                .await?
+                .workspace_id;
+            let mut repos = route.state.deps.uow.tenant(ws).await?;
+            (ws, repos.workspace().get().await?.status)
+        } else {
+            let Authed(principal) = Authed::from_request_parts(&mut parts, &route.state).await?;
+            current_workspace(&principal)?
+        };
         check_gate(&route.use_case, status, route.state.gate.as_ref(), ws).await?;
         Ok::<(), ApiError>(())
     };

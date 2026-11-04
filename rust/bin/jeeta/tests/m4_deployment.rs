@@ -147,6 +147,9 @@ impl Server {
         });
         Self { child, log }
     }
+    /// SIGTERM as soon as the child says it listens: from that line on it must drain and exit 0.
+    /// A failure shows the child's status (`signal: 15` is SIGTERM's default action: no handler
+    /// yet) and its log.
     async fn stop(mut self) -> String {
         let pid = self.child.id().unwrap();
         assert!(
@@ -156,12 +159,16 @@ impl Server {
                 .unwrap()
                 .success()
         );
-        let status = tokio::time::timeout(Duration::from_secs(45), self.child.wait())
-            .await
-            .expect("shutdown exceeded HTTP + job grace")
+        let status = tokio::time::timeout(Duration::from_secs(45), self.child.wait()).await;
+        if status.is_err() {
+            self.child.kill().await.unwrap();
+        }
+        let log = self.log.await.unwrap();
+        let status = status
+            .unwrap_or_else(|_| panic!("shutdown exceeded HTTP + job grace:\n{log}"))
             .unwrap();
-        assert!(status.success());
-        self.log.await.unwrap()
+        assert!(status.success(), "{status}:\n{log}");
+        log
     }
 }
 
@@ -434,6 +441,8 @@ async fn provider_apps_require_public_url_and_complete_credentials() {
         ],
         vec!["JEETA_INSTAGRAM_APP_ID", "JEETA_INSTAGRAM_APP_SECRET"],
         vec!["JEETA_X_CLIENT_ID", "JEETA_X_CLIENT_SECRET"],
+        vec!["JEETA_TIKTOK_CLIENT_KEY", "JEETA_TIKTOK_CLIENT_SECRET"],
+        vec!["JEETA_LINKEDIN_CLIENT_ID", "JEETA_LINKEDIN_CLIENT_SECRET"],
     ] {
         for missing in 0..=group.len() {
             let mut c = command(

@@ -204,7 +204,8 @@ const fn mcp_only(id: &'static str, gate: GateMode, mcp_tool: &'static str, risk
     }
 }
 
-/// Every use case of this release. Inbox operations require an approved strategy.
+/// Every use case of this release. The inbox answers customers without an approved strategy;
+/// only `inbox.send`, which starts commercial contact, needs one.
 #[rustfmt::skip]
 pub static CATALOG: &[UseCase] = &[
     twin("studio.overview", GateMode::Gated, "jeeta.studio.overview", ("GET", "/api/studio/overview"), Read),
@@ -216,7 +217,8 @@ pub static CATALOG: &[UseCase] = &[
 
     twin("studio.learned", GateMode::Gated, "jeeta.studio.learned", ("GET", "/api/studio/learned"), Read),
     twin("studio.judgment_record", GateMode::Gated, "jeeta.studio.judgment_record", ("POST", "/api/studio/judgments"), Write),
-    twin("studio.file_upload", GateMode::Gated, "jeeta.studio.file_upload", ("POST", "/api/studio/files"), Write),
+    // The materials library needs no approved strategy (spec 2026-11-03 D35), nor its uploads.
+    twin("studio.file_upload", Exempt, "jeeta.studio.file_upload", ("POST", "/api/studio/files"), Write),
     twin("studio.piece_submit", GateMode::Gated, "jeeta.studio.piece_submit", ("POST", "/api/studio/slots/{slot_id}/piece"), Write),
     twin("studio.pending", GateMode::Gated, "jeeta.studio.pending", ("GET", "/api/studio/pending"), Read),
     twin("studio.slot_get", GateMode::Gated, "jeeta.studio.slot_get", ("GET", "/api/studio/slots/{slot_id}"), Read),
@@ -226,52 +228,104 @@ pub static CATALOG: &[UseCase] = &[
     twin("studio.brake", Exempt, "jeeta.studio.brake", ("POST", "/api/studio/brake"), Write),
     twin("studio.policy_set", GateMode::Gated, "jeeta.studio.policy_set", ("PUT", "/api/studio/policy"), Write),
     twin("studio.approve", GateMode::Gated, "jeeta.studio.approve", ("POST", "/api/studio/approvals"), Write),
-    twin("inbox.pending", GateMode::Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
-    twin("inbox.context", GateMode::Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
-    twin("inbox.conversations.list", GateMode::Gated, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
-    twin("inbox.conversations.get", GateMode::Gated, "jeeta.inbox.conversations_get", ("GET", "/api/inbox/conversations/{conversation_id}"), Read),
-    twin("inbox.messages.list", GateMode::Gated, "jeeta.inbox.messages_list", ("GET", "/api/inbox/conversations/{conversation_id}/messages"), Read),
-    twin("inbox.take_over", GateMode::Gated, "jeeta.inbox.take_over", ("POST", "/api/inbox/conversations/{conversation_id}/take-over"), Write),
-    twin("inbox.hand_to_agent", GateMode::Gated, "jeeta.inbox.hand_to_agent", ("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent"), Write),
-    twin("inbox.snooze", GateMode::Gated, "jeeta.inbox.snooze", ("POST", "/api/inbox/conversations/{conversation_id}/snooze"), Write),
-    twin("inbox.unsnooze", GateMode::Gated, "jeeta.inbox.unsnooze", ("POST", "/api/inbox/conversations/{conversation_id}/unsnooze"), Write),
-    twin("inbox.close", GateMode::Gated, "jeeta.inbox.close", ("POST", "/api/inbox/conversations/{conversation_id}/close"), Write),
-    twin("inbox.reply", GateMode::Gated, "jeeta.inbox.reply", ("POST", "/api/inbox/conversations/{conversation_id}/reply"), Write),
-    twin("inbox.people.search", GateMode::Gated, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
-    twin("inbox.people.get", GateMode::Gated, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
-    twin("inbox.people.erase", GateMode::Gated, "jeeta.inbox.people_erase", ("POST", "/api/inbox/people/{person_id}/erase"), Destructive),
-    twin("inbox.people.create", GateMode::Gated, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
-    twin("inbox.identities.add", GateMode::Gated, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
-    twin("inbox.journeys.open", GateMode::Gated, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
-    twin("inbox.events.report", GateMode::Gated, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
-    twin("inbox.lost_reasons.list", GateMode::Gated, "jeeta.inbox.lost_reasons_list", ("GET", "/api/inbox/lost-reasons"), Read),
-    twin("inbox.lost_reasons.set", GateMode::Gated, "jeeta.inbox.lost_reasons_set", ("PUT", "/api/inbox/lost-reasons"), Write),
-    twin("inbox.journeys.get", GateMode::Gated, "jeeta.inbox.journeys_get", ("GET", "/api/inbox/journeys/{journey_id}"), Read),
-    twin("inbox.journeys.assign_owner", GateMode::Gated, "jeeta.inbox.journeys_assign_owner", ("POST", "/api/inbox/journeys/{journey_id}/owner"), Write),
-    twin("inbox.status_labels.set", GateMode::Gated, "jeeta.inbox.status_labels_set", ("PUT", "/api/inbox/status-labels"), Write),
-    twin("inbox.merges.list", GateMode::Gated, "jeeta.inbox.merges_list", ("GET", "/api/inbox/merges"), Read),
-    twin("inbox.merges.apply", GateMode::Gated, "jeeta.inbox.merges_apply", ("POST", "/api/inbox/merges/{merge_id}/apply"), Write),
-    twin("inbox.merges.undo", GateMode::Gated, "jeeta.inbox.merges_undo", ("POST", "/api/inbox/merges/{merge_id}/undo"), Destructive),
-    twin("inbox.merges.refuse", GateMode::Gated, "jeeta.inbox.merges_refuse", ("POST", "/api/inbox/merges/{merge_id}/refuse"), Write),
-    twin("inbox.tasks.create", GateMode::Gated, "jeeta.inbox.tasks_create", ("POST", "/api/inbox/journeys/{journey_id}/tasks"), Write),
-    twin("inbox.tasks.complete", GateMode::Gated, "jeeta.inbox.tasks_complete", ("POST", "/api/inbox/tasks/{task_id}/complete"), Write),
-    twin("inbox.tasks.list", GateMode::Gated, "jeeta.inbox.tasks_list", ("GET", "/api/inbox/tasks"), Read),
-    twin("inbox.notes.add", GateMode::Gated, "jeeta.inbox.notes_add", ("POST", "/api/inbox/journeys/{journey_id}/notes"), Write),
-    twin("inbox.consent.record", GateMode::Gated, "jeeta.inbox.consent_record", ("POST", "/api/inbox/people/{person_id}/consents"), Write),
-    twin("inbox.consent.list", GateMode::Gated, "jeeta.inbox.consent_list", ("GET", "/api/inbox/people/{person_id}/consents"), Read),
-    twin("inbox.suppressions.add", GateMode::Gated, "jeeta.inbox.suppressions_add", ("POST", "/api/inbox/people/{person_id}/suppressions"), Write),
-    twin("inbox.suppressions.remove", GateMode::Gated, "jeeta.inbox.suppressions_remove", ("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}"), Write),
+    // The TikTok posting screen: a human's alone (TikTok's Content Sharing Guidelines), so no agent tool.
+    panel_only("studio.tiktok_posting", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok"), Read),
+    panel_only("studio.tiktok_post", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/tiktok"), Write),
+    // A published TikTok post's counters, beside the screen in the slot's detail.
+    panel_only("studio.tiktok_metrics", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"), Read),
+    // The materials library (spec 2026-11-03 §5.2): exempt from the strategy gate (D35), never
+    // from the workspace-status check.
+    twin("studio.olays_list", Exempt, "jeeta.studio.olays_list", ("GET", "/api/studio/olays"), Read),
+    twin("studio.olay_get", Exempt, "jeeta.studio.olay_get", ("GET", "/api/studio/olays/{olay_id}"), Read),
+    twin("studio.olay_create", Exempt, "jeeta.studio.olay_create", ("POST", "/api/studio/olays"), Write),
+    twin("studio.olay_update", Exempt, "jeeta.studio.olay_update", ("PATCH", "/api/studio/olays/{olay_id}"), Write),
+    twin("studio.materials_list", Exempt, "jeeta.studio.materials_list", ("GET", "/api/studio/materials"), Read),
+    twin("studio.material_get", Exempt, "jeeta.studio.material_get", ("GET", "/api/studio/materials/{material_id}"), Read),
+    twin("studio.material_add", Exempt, "jeeta.studio.material_add", ("POST", "/api/studio/materials"), Write),
+    twin("studio.material_tag", Exempt, "jeeta.studio.material_tag", ("PATCH", "/api/studio/materials/{material_id}/tags"), Write),
+    twin("studio.slot_materials", Exempt, "jeeta.studio.slot_materials", ("GET", "/api/studio/slots/{slot_id}/materials"), Read),
+    twin("studio.calendar_list", Exempt, "jeeta.studio.calendar_list", ("GET", "/api/studio/calendar"), Read),
+    twin("studio.shoot_list", Exempt, "jeeta.studio.shoot_list", ("GET", "/api/studio/shoot-requests"), Read),
+    twin("studio.shoot_request", Exempt, "jeeta.studio.shoot_request", ("POST", "/api/studio/shoot-requests"), Write),
+    twin("studio.shoot_resolve", Exempt, "jeeta.studio.shoot_resolve", ("POST", "/api/studio/shoot-requests/{request_id}/resolve"), Write),
+    // A human's decisions (D4): an owner or manager in the panel, never an agent.
+    panel_only("studio.olay_confirm", Exempt, ("POST", "/api/studio/olays/{olay_id}/confirm"), Write),
+    panel_only("studio.material_permission", Exempt, ("PUT", "/api/studio/materials/{material_id}/permission"), Write),
+    panel_only("studio.material_free", Exempt, ("POST", "/api/studio/materials/{material_id}/free"), Write),
+    panel_only("studio.material_bind", Exempt, ("POST", "/api/studio/materials/{material_id}/bind"), Write),
+    panel_only("studio.material_delete", Exempt, ("POST", "/api/studio/materials/{material_id}/delete"), Destructive),
+    panel_only("studio.calendar_set", Exempt, ("PUT", "/api/studio/calendar/{key}/{year}"), Write),
+    panel_only("studio.material_policy_set", Exempt, ("PUT", "/api/studio/materials/policy"), Write),
+    // Releasing a slot's caption findings (spec 2026-11-03 §7, D19): a human's, behind the
+    // strategy gate as the slot's other writes are.
+    panel_only("studio.material_check_release", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/material-check/release"), Write),
+    // Olay-driven publishing (spec 2026-11-03 §14): they plan content, so behind the strategy
+    // gate; the posting policy is a human's.
+    twin("studio.post_requests", GateMode::Gated, "jeeta.studio.post_requests", ("GET", "/api/studio/post-requests"), Read),
+    twin("studio.posts_propose", GateMode::Gated, "jeeta.studio.posts_propose", ("POST", "/api/studio/post-requests/{request_id}/proposal"), Write),
+    twin("studio.posts_list", GateMode::Gated, "jeeta.studio.posts_list", ("GET", "/api/studio/posts"), Read),
+    twin("studio.weekly_summary", GateMode::Gated, "jeeta.studio.weekly_summary", ("GET", "/api/studio/summary"), Read),
+    panel_only("studio.posting_policy_set", GateMode::Gated, ("PUT", "/api/studio/posting-policy"), Write),
+    // The inbox: reading and answering the workspace's own customers never waits for a marketing
+    // strategy (owner decision of 2026-11-03), so every row is exempt from the strategy gate but
+    // `inbox.send`, which writes to a person with commercial intent and may open a conversation
+    // no customer started: outreach. None is exempt from the status check. A new row is gated
+    // until it is named in the gate rule's EXEMPT_INBOX; the send fence still holds outreach and
+    // metered sends from exempt rows to the strategy.
+    twin("inbox.pending", Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
+    twin("inbox.context", Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
+    twin("inbox.conversations.list", Exempt, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
+    twin("inbox.conversations.get", Exempt, "jeeta.inbox.conversations_get", ("GET", "/api/inbox/conversations/{conversation_id}"), Read),
+    twin("inbox.messages.list", Exempt, "jeeta.inbox.messages_list", ("GET", "/api/inbox/conversations/{conversation_id}/messages"), Read),
+    twin("inbox.take_over", Exempt, "jeeta.inbox.take_over", ("POST", "/api/inbox/conversations/{conversation_id}/take-over"), Write),
+    twin("inbox.hand_to_agent", Exempt, "jeeta.inbox.hand_to_agent", ("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent"), Write),
+    twin("inbox.snooze", Exempt, "jeeta.inbox.snooze", ("POST", "/api/inbox/conversations/{conversation_id}/snooze"), Write),
+    twin("inbox.unsnooze", Exempt, "jeeta.inbox.unsnooze", ("POST", "/api/inbox/conversations/{conversation_id}/unsnooze"), Write),
+    twin("inbox.close", Exempt, "jeeta.inbox.close", ("POST", "/api/inbox/conversations/{conversation_id}/close"), Write),
+    twin("inbox.reply", Exempt, "jeeta.inbox.reply", ("POST", "/api/inbox/conversations/{conversation_id}/reply"), Write),
+    twin("inbox.people.search", Exempt, "jeeta.inbox.people_search", ("GET", "/api/inbox/people"), Read),
+    twin("inbox.people.get", Exempt, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
+    twin("inbox.people.erase", Exempt, "jeeta.inbox.people_erase", ("POST", "/api/inbox/people/{person_id}/erase"), Destructive),
+    twin("inbox.people.create", Exempt, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
+    twin("inbox.identities.add", Exempt, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
+    twin("inbox.journeys.open", Exempt, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
+    twin("inbox.events.report", Exempt, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
+    twin("inbox.lost_reasons.list", Exempt, "jeeta.inbox.lost_reasons_list", ("GET", "/api/inbox/lost-reasons"), Read),
+    twin("inbox.lost_reasons.set", Exempt, "jeeta.inbox.lost_reasons_set", ("PUT", "/api/inbox/lost-reasons"), Write),
+    twin("inbox.journeys.get", Exempt, "jeeta.inbox.journeys_get", ("GET", "/api/inbox/journeys/{journey_id}"), Read),
+    twin("inbox.journeys.assign_owner", Exempt, "jeeta.inbox.journeys_assign_owner", ("POST", "/api/inbox/journeys/{journey_id}/owner"), Write),
+    twin("inbox.status_labels.set", Exempt, "jeeta.inbox.status_labels_set", ("PUT", "/api/inbox/status-labels"), Write),
+    twin("inbox.merges.list", Exempt, "jeeta.inbox.merges_list", ("GET", "/api/inbox/merges"), Read),
+    twin("inbox.merges.apply", Exempt, "jeeta.inbox.merges_apply", ("POST", "/api/inbox/merges/{merge_id}/apply"), Write),
+    twin("inbox.merges.undo", Exempt, "jeeta.inbox.merges_undo", ("POST", "/api/inbox/merges/{merge_id}/undo"), Destructive),
+    twin("inbox.merges.refuse", Exempt, "jeeta.inbox.merges_refuse", ("POST", "/api/inbox/merges/{merge_id}/refuse"), Write),
+    twin("inbox.tasks.create", Exempt, "jeeta.inbox.tasks_create", ("POST", "/api/inbox/journeys/{journey_id}/tasks"), Write),
+    twin("inbox.tasks.complete", Exempt, "jeeta.inbox.tasks_complete", ("POST", "/api/inbox/tasks/{task_id}/complete"), Write),
+    twin("inbox.tasks.list", Exempt, "jeeta.inbox.tasks_list", ("GET", "/api/inbox/tasks"), Read),
+    twin("inbox.notes.add", Exempt, "jeeta.inbox.notes_add", ("POST", "/api/inbox/journeys/{journey_id}/notes"), Write),
+    twin("inbox.consent.record", Exempt, "jeeta.inbox.consent_record", ("POST", "/api/inbox/people/{person_id}/consents"), Write),
+    twin("inbox.consent.list", Exempt, "jeeta.inbox.consent_list", ("GET", "/api/inbox/people/{person_id}/consents"), Read),
+    twin("inbox.suppressions.add", Exempt, "jeeta.inbox.suppressions_add", ("POST", "/api/inbox/people/{person_id}/suppressions"), Write),
+    twin("inbox.suppressions.remove", Exempt, "jeeta.inbox.suppressions_remove", ("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}"), Write),
     twin("inbox.send", GateMode::Gated, "jeeta.inbox.send", ("POST", "/api/inbox/people/{person_id}/send"), Write),
-    twin("inbox.quotes.send", GateMode::Gated, "jeeta.inbox.quotes_send", ("POST", "/api/inbox/journeys/{journey_id}/quotes"), Write),
-    twin("inbox.quotes.accept", GateMode::Gated, "jeeta.inbox.quotes_accept", ("POST", "/api/inbox/quotes/{id}/accept"), Write),
-    twin("inbox.quotes.list", GateMode::Gated, "jeeta.inbox.quotes_list", ("GET", "/api/inbox/journeys/{journey_id}/quotes"), Read),
-    twin("inbox.appointments.book", GateMode::Gated, "jeeta.inbox.appointments_book", ("POST", "/api/inbox/journeys/{journey_id}/appointments"), Write),
-    twin("inbox.appointments.cancel", GateMode::Gated, "jeeta.inbox.appointments_cancel", ("POST", "/api/inbox/appointments/{id}/cancel"), Write),
-    twin("inbox.appointments.held", GateMode::Gated, "jeeta.inbox.appointments_held", ("POST", "/api/inbox/appointments/{id}/held"), Write),
-    twin("inbox.commissions.list", GateMode::Gated, "jeeta.inbox.commissions_list", ("GET", "/api/inbox/commissions"), Read),
-    twin("inbox.commissions.approve", GateMode::Gated, "jeeta.inbox.commissions_approve", ("POST", "/api/inbox/commissions/{id}/approve"), Write),
-    twin("inbox.commissions.pay", GateMode::Gated, "jeeta.inbox.commissions_pay", ("POST", "/api/inbox/commissions/{id}/pay"), Write),
-    twin("inbox.commission_rates.set", GateMode::Gated, "jeeta.inbox.commission_rates_set", ("PUT", "/api/inbox/commission-rates"), Write),
+    twin("inbox.quotes.send", Exempt, "jeeta.inbox.quotes_send", ("POST", "/api/inbox/journeys/{journey_id}/quotes"), Write),
+    twin("inbox.quotes.accept", Exempt, "jeeta.inbox.quotes_accept", ("POST", "/api/inbox/quotes/{id}/accept"), Write),
+    twin("inbox.quotes.list", Exempt, "jeeta.inbox.quotes_list", ("GET", "/api/inbox/journeys/{journey_id}/quotes"), Read),
+    twin("inbox.appointments.book", Exempt, "jeeta.inbox.appointments_book", ("POST", "/api/inbox/journeys/{journey_id}/appointments"), Write),
+    twin("inbox.appointments.cancel", Exempt, "jeeta.inbox.appointments_cancel", ("POST", "/api/inbox/appointments/{id}/cancel"), Write),
+    twin("inbox.appointments.held", Exempt, "jeeta.inbox.appointments_held", ("POST", "/api/inbox/appointments/{id}/held"), Write),
+    twin("inbox.commissions.list", Exempt, "jeeta.inbox.commissions_list", ("GET", "/api/inbox/commissions"), Read),
+    twin("inbox.commissions.approve", Exempt, "jeeta.inbox.commissions_approve", ("POST", "/api/inbox/commissions/{id}/approve"), Write),
+    twin("inbox.commissions.pay", Exempt, "jeeta.inbox.commissions_pay", ("POST", "/api/inbox/commissions/{id}/pay"), Write),
+    twin("inbox.commission_rates.set", Exempt, "jeeta.inbox.commission_rates_set", ("PUT", "/api/inbox/commission-rates"), Write),
+    // Comments and marketplace questions (spec 2026-10-30 §7.1): answering customers is not
+    // planned growth work, so no strategy is needed (owner decision 2026-11-03).
+    twin("inbox.public.hide", Exempt, "jeeta.inbox.public_hide", ("POST", "/api/inbox/items/{item_id}/hide"), Write),
+    twin("inbox.public.delete", Exempt, "jeeta.inbox.public_delete", ("POST", "/api/inbox/items/{item_id}/delete"), Destructive),
+    twin("inbox.public.mark_handled", Exempt, "jeeta.inbox.public_mark_handled", ("POST", "/api/inbox/items/handled"), Write),
+    twin("inbox.public.report", Exempt, "jeeta.inbox.public_report", ("POST", "/api/inbox/items/{item_id}/report"), Write),
+    twin("inbox.public.approve", Exempt, "jeeta.inbox.public_approve", ("POST", "/api/inbox/replies/{outbox_id}/approve"), Write),
+    twin("inbox.public.discard", Exempt, "jeeta.inbox.public_discard", ("POST", "/api/inbox/replies/{outbox_id}/discard"), Write),
 
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
@@ -349,6 +403,46 @@ pub static CATALOG: &[UseCase] = &[
     // The webhook addresses to register at the providers; the NetGSM ones carry the workspace's
     // hook tokens, so `capabilities.manage` reads them.
     twin("connector.hooks", Exempt, "jeeta.connector.hooks", ("GET", "/api/connectors/hooks"), Read),
+    // A PBX's call policy (call mode, whether calls are recorded): reserved public keys only this
+    // writes, with a ledger entry.
+    twin("connector.set_pbx_policy", Exempt, "jeeta.connector.set_pbx_policy", ("PUT", "/api/connectors/{capability_id}/pbx-policy"), Write),
+    // Phone calls (voice V0, V1): gated by the strategy, except reading the policy. Placing a
+    // call spends the line's tariff; an agent's call is then driven turn by turn (listen, say,
+    // transfer).
+    twin("calls.policy_get", Exempt, "jeeta.calls.policy_get", ("GET", "/api/calls/policy"), Read),
+    twin("calls.policy_set", GateMode::Gated, "jeeta.calls.policy_set", ("PUT", "/api/calls/policy"), Write),
+    twin("calls.place", GateMode::Gated, "jeeta.calls.place", ("POST", "/api/calls"), Spend),
+    twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
+    twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
+    twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
+    // A long-poll of at most 25 seconds: `?after_seq&wait_s`.
+    twin("calls.listen", GateMode::Gated, "jeeta.calls.listen", ("GET", "/api/calls/{call_id}/events"), Read),
+    twin("calls.say", GateMode::Gated, "jeeta.calls.say", ("POST", "/api/calls/{call_id}/say"), Write),
+    twin("calls.transfer", GateMode::Gated, "jeeta.calls.transfer", ("POST", "/api/calls/{call_id}/transfer"), Write),
+    // The voice bridge's own surface (voice V1): served under /api/voice/bridge/* to the bridge's
+    // API key alone (`calls.bridge`, nothing else), never to a panel session and never as an MCP
+    // tool; exempt from the strategy gate, since the line is set up before any strategy.
+    panel_only("calls.bridge.register", Exempt, ("POST", "/api/voice/bridge/register"), Write),
+    panel_only("calls.bridge.commands", Exempt, ("GET", "/api/voice/bridge/commands"), Read),
+    panel_only("calls.bridge.events", Exempt, ("POST", "/api/voice/bridge/events"), Write),
+    // The device bridge's own surface (spec 2026-10-28-device-bridge-design.md §5.4): served
+    // under /api/devices/bridge/* to the bridge's API key alone (`devices.bridge`, nothing else),
+    // never to a panel session and never as an MCP tool; exempt from the strategy gate, since
+    // phones are set up before any strategy. `commands` is a long-poll of at most 25 seconds;
+    // `files` takes the file's own bytes as its body.
+    panel_only("devices.bridge.register", Exempt, ("POST", "/api/devices/bridge/register"), Write),
+    panel_only("devices.bridge.commands", Exempt, ("GET", "/api/devices/bridge/commands"), Read),
+    panel_only("devices.bridge.results", Exempt, ("POST", "/api/devices/bridge/results"), Write),
+    panel_only("devices.bridge.files", Exempt, ("POST", "/api/devices/bridge/files"), Write),
+    // The workspace's phones, for an agent or a person holding `devices.work` (spec §5.4):
+    // exempt from the strategy gate like the bridge, not from the status check. `observe` and
+    // `act` queue a command for a phone and wait up to 20 seconds for its result; `command_get`
+    // waits the same way for one command.
+    twin("devices.list", Exempt, "jeeta.devices.list", ("GET", "/api/devices"), Read),
+    twin("devices.observe", Exempt, "jeeta.devices.observe", ("POST", "/api/devices/{capability_id}/observe"), Write),
+    twin("devices.act", Exempt, "jeeta.devices.act", ("POST", "/api/devices/{capability_id}/act"), Write),
+    twin("devices.command_get", Exempt, "jeeta.devices.command_get", ("GET", "/api/devices/commands/{command_id}"), Read),
+    twin("devices.commands", Exempt, "jeeta.devices.commands", ("GET", "/api/devices/{capability_id}/commands"), Read),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

@@ -73,6 +73,23 @@ impl InboundEventRepo for PgTenantRepos {
         records.into_iter().map(EventRecord::into_event).collect()
     }
 
+    async fn mail_subject(
+        &mut self,
+        capability: CapabilityId,
+        message_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        let subject: Option<Option<String>> = sqlx::query_scalar(
+            "select payload->>'subject' from inbound_events where workspace_id=$1              and capability_id=$2 and provider='mail' and kind='message'              and payload->>'message_id'=$3 order by received_at desc, id desc limit 1",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(message_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read a mail subject"))?;
+        Ok(subject.flatten())
+    }
+
     async fn list_for_consumer(
         &mut self,
         consumer: &str,
@@ -80,7 +97,7 @@ impl InboundEventRepo for PgTenantRepos {
         limit: u32,
     ) -> Result<Vec<InboundEvent>, AppError> {
         let records: Vec<EventRecord> = sqlx::query_as(&format!(
-            "select {COLUMNS} from inbound_events e where workspace_id=$1 and ($3::timestamptz is null or (received_at,id)>($3,$4)) and not exists (select 1 from event_consumption c where c.workspace_id=e.workspace_id and c.event_id=e.id and c.consumer=$2 and not (c.consumer='inbox@2' and e.provider='meta' and e.kind='lead_gen' and c.outcome is not distinct from 'deferred')) order by received_at,id limit $5"
+            "select {COLUMNS} from inbound_events e where workspace_id=$1 and ($3::timestamptz is null or (received_at,id)>($3,$4)) and not exists (select 1 from event_consumption c where c.workspace_id=e.workspace_id and c.event_id=e.id and c.consumer=$2 and not (c.outcome is not distinct from 'retry_due' or (c.consumer='inbox@2' and e.provider='meta' and e.kind='lead_gen' and c.outcome is not distinct from 'deferred'))) order by received_at,id limit $5"
         )).bind(self.workspace_id().as_uuid()).bind(consumer).bind(cursor.map(|(at,_)|at)).bind(cursor.map(|(_,id)|id.as_uuid())).bind(i64::from(limit.clamp(1,MAX_EVENT_PAGE)))
         .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e,"list events for consumer"))?;
         records.into_iter().map(EventRecord::into_event).collect()
@@ -148,6 +165,25 @@ impl InboundEventRepo for PgTenantRepos {
         } else {
             Err(AppError::conflict("the inbound event id is already taken"))
         }
+    }
+
+    async fn find_external(
+        &mut self,
+        provider: Provider,
+        external_id: &str,
+    ) -> Result<Option<InboundEvent>, AppError> {
+        // The unique key `(workspace_id, provider, external_id)` serves it.
+        let record: Option<EventRecord> = sqlx::query_as(&format!(
+            "select {COLUMNS} from inbound_events \
+             where workspace_id = $1 and provider = $2 and external_id = $3"
+        ))
+        .bind(self.workspace_id().as_uuid())
+        .bind(provider.key())
+        .bind(external_id)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find an inbound event by its provider id"))?;
+        record.map(EventRecord::into_event).transpose()
     }
 
     async fn list_pending(&mut self, limit: u32) -> Result<Vec<InboundEvent>, AppError> {

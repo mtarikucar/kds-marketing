@@ -49,6 +49,25 @@ fn invalid() -> ConnectorError {
 fn header(mail: &ParsedMail<'_>, name: &str) -> Option<String> {
     mail.headers.get_first_value(name)
 }
+/// The longest sender display name a payload carries.
+const MAX_DISPLAY_NAME: usize = 200;
+/// The display name of a `From` address (`Ada Lovelace <ada@example.com>`), its encoded words
+/// decoded, control characters dropped, trimmed and cut to [`MAX_DISPLAY_NAME`]; `None` when it
+/// is empty or merely repeats the address.
+fn display_name(name: Option<&str>, addr: &str) -> Option<String> {
+    let name: String = name?
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .trim_matches('"')
+        .trim()
+        .chars()
+        .take(MAX_DISPLAY_NAME)
+        .collect();
+    let name = name.trim();
+    (!name.is_empty() && !name.eq_ignore_ascii_case(addr)).then(|| name.to_owned())
+}
 fn attachment(mail: &ParsedMail<'_>) -> bool {
     mail.get_content_disposition().disposition == mailparse::DispositionType::Attachment
         || mail
@@ -214,12 +233,18 @@ pub fn event(
         .as_deref()
         .and_then(|d| mailparse::dateparse(d).ok())
         .and_then(|d| OffsetDateTime::from_unix_timestamp(d).ok());
-    let from = header(&mail, "From")
-        .and_then(|raw| mailparse::addrparse(&raw).ok())
-        .and_then(|list| list.extract_single_info())
-        .map(|single| single.addr);
+    let sender = mail
+        .headers
+        .get_first_header("From")
+        .and_then(|h| mailparse::addrparse_header(h).ok())
+        .and_then(|list| list.extract_single_info());
+    let name = sender
+        .as_ref()
+        .and_then(|single| display_name(single.display_name.as_deref(), &single.addr));
+    let from = sender.map(|single| single.addr);
     let subject = header(&mail, "Subject").unwrap_or_default();
-    let mut payload = json!({"from":from, "to":header(&mail,"To"), "subject":subject,
+    // `name` (the sender's display name) is one of the keys erasure masks, like `from`.
+    let mut payload = json!({"from":from, "name":name, "to":header(&mail,"To"), "subject":subject,
         "text":text, "message_id":header(&mail,"Message-ID"), "in_reply_to":header(&mail,"In-Reply-To"),
         "date":date, "attachments":attachments, "mailbox":mailbox, "account_id":account});
     let mut kind = EventKind::Message;
@@ -287,5 +312,37 @@ mod tests {
         let draft = super::event("support@example.com", "INBOX", 7, 1,
             b"From: Ada Lovelace <ADA@Example.com>\r\nTo: support@example.com\r\nMessage-ID: <a@example.com>\r\nSubject: Help\r\n\r\nHello", false).unwrap();
         assert_eq!(draft.payload["from"], "ADA@Example.com");
+        assert_eq!(draft.payload["name"], "Ada Lovelace");
+    }
+
+    #[test]
+    fn the_display_name_is_decoded_cleaned_and_absent_when_it_says_nothing() {
+        let draft = |from: &str| {
+            let raw = format!(
+                "From: {from}\r\nTo: support@example.com\r\nMessage-ID: <a@example.com>\r\nSubject: Help\r\n\r\nHello"
+            );
+            super::event("support@example.com", "INBOX", 7, 1, raw.as_bytes(), false).unwrap()
+        };
+        // An RFC 2047 encoded word, as Turkish names usually arrive.
+        assert_eq!(
+            draft("=?UTF-8?B?QXnFn2UgWcSxbG1heg==?= <ayse@example.com>").payload["name"],
+            "Ayşe Yılmaz"
+        );
+        assert_eq!(
+            draft("\"  Ada  \" <ada@example.com>").payload["name"],
+            "Ada"
+        );
+        assert!(draft("ada@example.com").payload["name"].is_null());
+        assert!(draft("<ada@example.com>").payload["name"].is_null());
+        assert!(draft("\"ada@example.com\" <ada@example.com>").payload["name"].is_null());
+        let long = format!("{} <ada@example.com>", "A".repeat(300));
+        assert_eq!(
+            draft(&long).payload["name"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            super::MAX_DISPLAY_NAME
+        );
     }
 }

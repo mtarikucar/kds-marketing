@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jt_connector::{ConnectorError, Credential, EventKind, ProbeResult, Provider};
+/// The kinds a [`PublicEnvelope`] names, for the adapters that build one.
+pub use jt_inbox::{PublicKind, SubjectKind};
 use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,6 +45,12 @@ pub struct MetaApp {
     pub whatsapp_config_id: Option<String>,
     /// The Graph API version, e.g. `"v19.0"`; `None` lets the adapter use its default.
     pub graph_version: Option<String>,
+    /// Whether Facebook Login flows ask for the comment scopes (`JEETA_META_COMMENT_SCOPES`,
+    /// default off): set by the operator once Meta's App Review granted them, since the live
+    /// app's scopes, login configuration and webhook fields stay exactly as submitted until then
+    /// (spec 2026-10-30-inbox-comments-marketplace-design.md D11). Off, every Meta request is
+    /// what it was before comments.
+    pub comment_scopes: bool,
 }
 
 impl fmt::Debug for MetaApp {
@@ -54,6 +62,7 @@ impl fmt::Debug for MetaApp {
             .field("login_config_id", &self.login_config_id)
             .field("whatsapp_config_id", &self.whatsapp_config_id)
             .field("graph_version", &self.graph_version)
+            .field("comment_scopes", &self.comment_scopes)
             .finish()
     }
 }
@@ -64,6 +73,10 @@ impl fmt::Debug for MetaApp {
 pub struct InstagramApp {
     pub app_id: String,
     pub app_secret: String,
+    /// Whether Instagram Login flows ask for the comment scopes
+    /// (`JEETA_INSTAGRAM_COMMENT_SCOPES`, default off), as [`MetaApp::comment_scopes`] for
+    /// Facebook Login.
+    pub comment_scopes: bool,
 }
 
 impl fmt::Debug for InstagramApp {
@@ -71,6 +84,7 @@ impl fmt::Debug for InstagramApp {
         f.debug_struct("InstagramApp")
             .field("app_id", &self.app_id)
             .field("app_secret", &Masked)
+            .field("comment_scopes", &self.comment_scopes)
             .finish()
     }
 }
@@ -91,6 +105,54 @@ impl fmt::Debug for XApp {
     }
 }
 
+/// The platform's TikTok app (Login Kit and the Content Posting API). TikTok names its client id
+/// the client key. `Debug` masks the client secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TiktokApp {
+    pub client_key: String,
+    pub client_secret: String,
+}
+
+impl fmt::Debug for TiktokApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TiktokApp")
+            .field("client_key", &self.client_key)
+            .field("client_secret", &Masked)
+            .finish()
+    }
+}
+
+/// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn
+/// and, once LinkedIn approves it, the Community Management API). `Debug` masks the client
+/// secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkedinApp {
+    pub client_id: String,
+    pub client_secret: String,
+    /// Whether flows may ask for the organization scopes (`r_organization_social`,
+    /// `w_organization_social`, `rw_organization_admin`): set by the operator once LinkedIn has
+    /// approved the Community Management API for the app (`JEETA_LINKEDIN_ORG_SCOPES`), since
+    /// LinkedIn refuses a whole authorize request that names a scope the app was not granted.
+    /// Every LinkedIn flow then asks for them (LinkedIn invalidates a member's earlier tokens
+    /// when a flow asks for another set of scopes); without them, `linkedin_page` flows are
+    /// refused.
+    pub organization_scopes: bool,
+    /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (`JEETA_LINKEDIN_API_VERSION`);
+    /// `None` lets the adapter use its pinned default.
+    pub api_version: Option<String>,
+}
+
+impl fmt::Debug for LinkedinApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkedinApp")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Masked)
+            .field("organization_scopes", &self.organization_scopes)
+            .field("api_version", &self.api_version)
+            .finish()
+    }
+}
+
 /// The platform's provider apps and its public address, read-only. The binary implements it from
 /// the environment; an app that is not configured is `None`, and the kinds it serves cannot be
 /// connected by OAuth.
@@ -98,6 +160,22 @@ pub trait PlatformAppConfig: Send + Sync {
     fn meta_app(&self) -> Option<MetaApp>;
     fn instagram_app(&self) -> Option<InstagramApp>;
     fn x_app(&self) -> Option<XApp>;
+    /// The TikTok app; `None` (the default) while it is not configured.
+    fn tiktok_app(&self) -> Option<TiktokApp> {
+        None
+    }
+    /// The LinkedIn app; `None` (the default) while it is not configured.
+    fn linkedin_app(&self) -> Option<LinkedinApp> {
+        None
+    }
+    /// The platform's Hepsiburada integrator user (`JEETA_HEPSIBURADA_INTEGRATOR_USER`), the
+    /// Basic auth user of the Hepsiburada calls made with a seller's service key; `None` (the
+    /// default) while it is not configured, and the merchant id stands in for it then. Which
+    /// value goes where is VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md
+    /// §8.3, §12). Not a secret: the seller's service key is.
+    fn hepsiburada_integrator_user(&self) -> Option<String> {
+        None
+    }
     /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
@@ -115,12 +193,16 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
 /// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
 /// | `x` | the X app | `x` | `x` |
+/// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
+/// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthCallback {
     Meta,
     Instagram,
     X,
+    Tiktok,
+    Linkedin,
 }
 
 impl OAuthCallback {
@@ -130,15 +212,20 @@ impl OAuthCallback {
             OAuthCallback::Meta,
             OAuthCallback::Instagram,
             OAuthCallback::X,
+            OAuthCallback::Tiktok,
+            OAuthCallback::Linkedin,
         ]
     }
 
-    /// The redirect URI's last segment, also what is stored: `meta`, `instagram` or `x`.
+    /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`
+    /// or `linkedin`.
     pub fn key(self) -> &'static str {
         match self {
             OAuthCallback::Meta => "meta",
             OAuthCallback::Instagram => "instagram",
             OAuthCallback::X => "x",
+            OAuthCallback::Tiktok => "tiktok",
+            OAuthCallback::Linkedin => "linkedin",
         }
     }
 
@@ -155,6 +242,8 @@ impl OAuthCallback {
         match self {
             OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
             OAuthCallback::X => Provider::X,
+            OAuthCallback::Tiktok => Provider::Tiktok,
+            OAuthCallback::Linkedin => Provider::Linkedin,
         }
     }
 
@@ -165,27 +254,36 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
-            Provider::Netgsm | Provider::Mail => None,
+            Provider::Tiktok => Some(OAuthCallback::Tiktok),
+            Provider::Linkedin => Some(OAuthCallback::Linkedin),
+            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
 }
 
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta
-/// app, and Instagram Login with the Instagram app; the variant tells the adapter which.
+/// app, and Instagram Login with the Instagram app; the variant tells the adapter which. A
+/// LinkedIn flow's app says whether the flow asks for the organization scopes
+/// ([`LinkedinApp::organization_scopes`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OAuthApp {
     Meta(MetaApp),
     Instagram(InstagramApp),
     X(XApp),
+    Tiktok(TiktokApp),
+    Linkedin(LinkedinApp),
 }
 
 impl OAuthApp {
-    /// The public client id: the Meta or Instagram app id, or the X client id.
+    /// The public client id: the Meta or Instagram app id, the X or LinkedIn client id, or the
+    /// TikTok client key.
     pub fn client_id(&self) -> &str {
         match self {
             OAuthApp::Meta(app) => &app.app_id,
             OAuthApp::Instagram(app) => &app.app_id,
             OAuthApp::X(app) => &app.client_id,
+            OAuthApp::Tiktok(app) => &app.client_key,
+            OAuthApp::Linkedin(app) => &app.client_id,
         }
     }
 
@@ -195,6 +293,71 @@ impl OAuthApp {
             OAuthApp::Meta(app) => &app.app_secret,
             OAuthApp::Instagram(app) => &app.app_secret,
             OAuthApp::X(app) => &app.client_secret,
+            OAuthApp::Tiktok(app) => &app.client_secret,
+            OAuthApp::Linkedin(app) => &app.client_secret,
+        }
+    }
+}
+
+/// A variant of a provider's sign-in, chosen when a flow starts and kept with it to its
+/// completion (`OAuthPendingRow::flow`): the authorize URL, the code exchange and the asset
+/// listing each follow it ([`OAuthProvider::authorize_url_for`],
+/// [`OAuthProvider::exchange_for`], [`OAuthProvider::list_assets_for`]). A flow without one is the
+/// provider's own sign-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthFlow {
+    /// Meta's WhatsApp Embedded Signup for a number the business already uses in the WhatsApp
+    /// Business app, which keeps working beside the Cloud API ("coexistence",
+    /// <https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>):
+    /// signed in with the Meta app's WhatsApp configuration (`MetaApp::whatsapp_config_id`), it
+    /// connects `whatsapp_cloud` only.
+    WhatsappBusinessApp,
+}
+
+impl OAuthFlow {
+    /// Every flow, in a fixed order.
+    pub fn all() -> &'static [OAuthFlow] {
+        &[OAuthFlow::WhatsappBusinessApp]
+    }
+
+    /// Its key, also what is stored: `whatsapp_business_app`.
+    pub fn key(self) -> &'static str {
+        match self {
+            OAuthFlow::WhatsappBusinessApp => "whatsapp_business_app",
+        }
+    }
+
+    /// The flow whose key is `key`, if one is.
+    pub fn parse(key: &str) -> Option<OAuthFlow> {
+        OAuthFlow::all().iter().copied().find(|f| f.key() == key)
+    }
+
+    /// The one capability kind the flow connects.
+    pub fn kind_key(self) -> &'static str {
+        match self {
+            OAuthFlow::WhatsappBusinessApp => "whatsapp_cloud",
+        }
+    }
+}
+
+/// What a WhatsApp Business app shares once, when its number has been onboarded beside it
+/// ([`MessagingSender::request_app_sync`]): its contacts, or its chat history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppSync {
+    /// The app's contacts (Meta's `sync_type: smb_app_state_sync`).
+    Contacts,
+    /// The app's one-to-one chat history (Meta's `sync_type: history`).
+    History,
+}
+
+impl AppSync {
+    /// Its key, as stored: `contacts` or `history`.
+    pub fn key(self) -> &'static str {
+        match self {
+            AppSync::Contacts => "contacts",
+            AppSync::History => "history",
         }
     }
 }
@@ -254,9 +417,28 @@ pub struct MailboxPosition {
 
 /// Independent positions for mailbox names (INBOX and Sent). The caller persists the returned
 /// cursor atomically with the inbound drafts, so a failed transaction can safely poll again.
+///
+/// A mailbox the cursor holds no position for (a newly connected mailbox, a Sent folder found
+/// later) or whose UIDVALIDITY changed (renumbering every message) starts at its current end: the
+/// poll records its position and ingests only mail that arrives afterwards, never the history
+/// already in it, which would otherwise land in the reply-owed queue as if it were new.
+/// `read_history` reads such a mailbox from its first message instead; it is a call-time option
+/// (an explicit import, the adapter tests) that is never persisted, so no connected mailbox sets it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailboxCursor {
     pub mailboxes: BTreeMap<String, MailboxPosition>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_history: bool,
+}
+
+impl MailboxCursor {
+    /// An empty cursor that reads every mailbox from its first message.
+    pub fn reading_history() -> MailboxCursor {
+        MailboxCursor {
+            read_history: true,
+            ..MailboxCursor::default()
+        }
+    }
 }
 
 /// A post to publish: its text, the media to attach and an optional link.
@@ -269,6 +451,26 @@ pub struct MailboxCursor {
 ///
 /// `media` is never serialised: a request written out carries no bytes, and one read back has
 /// none (`media` empty), so the bytes are supplied again where they are needed.
+///
+/// `privacy` is who may see the post, by the provider's own name (TikTok's `privacy_level`:
+/// `PUBLIC_TO_EVERYONE`, `MUTUAL_FOLLOW_FRIENDS`, `FOLLOWER_OF_CREATOR` or `SELF_ONLY`); `None`
+/// lets the adapter post publicly. An adapter that cannot honour it refuses the post rather than
+/// posting to another audience; one without such a setting ignores it.
+///
+/// `tiktok` is what a human chose on the TikTok posting screen (`jt_studio::TiktokPost`): the
+/// caption (then `text`, with no `link`), the privacy (then also `privacy`), the interactions and
+/// the commercial content disclosure. The TikTok adapter posts nothing without it and never
+/// picks a privacy itself; every other adapter ignores it.
+///
+/// `format` is the planned post's (`jt_studio::PostFormat`, spec 2026-11-03 D20), `None` for a
+/// slot of the weekly quotas. Instagram publishes a `story` as a `STORIES` container (one medium,
+/// no caption) and refuses a story it cannot post as one; every other format, and every other
+/// adapter, goes by the media as before.
+///
+/// `media_mimes` is the type of each of `media_urls`, in order (`image/jpeg`, `video/mp4`), as
+/// the file store or the hosted asset names it: an adapter that hands URLs to a provider tells an
+/// image from a video by it, never by the URL (a Studio file's signed URL names no file type).
+/// Empty when unknown (a request built by hand): the adapter then reads the URL's ending.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -277,10 +479,25 @@ pub struct PublishRequest {
     /// The files to upload, in the order they are attached. Never serialised.
     #[serde(skip)]
     pub media: Vec<MediaUpload>,
+    /// Who may see the post (see above); `None`: public.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub privacy: Option<String>,
+    /// The TikTok posting screen's choice (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiktok: Option<TiktokPost>,
+    /// The planned post's format, when the slot carries one (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<PostFormat>,
+    /// The type of each of `media_urls`, in order (see above).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_mimes: Vec<String>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
-pub use jt_studio::{MediaUpload, PublishReceipt};
+pub use jt_studio::{
+    MediaUpload, PostFormat, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost,
+    TiktokPostFlags, TiktokPostMode, TiktokPostRefusal,
+};
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +508,20 @@ pub struct PostMetrics {
 /// An account's counters, by the provider's metric name (e.g. `"followers"`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountMetrics {
+    pub metrics: BTreeMap<String, i64>,
+}
+
+/// One of an account's recent public posts, as its provider lists them
+/// ([`InsightsReader::recent_posts`]): its id, title, cover image and page (browser URLs, never
+/// fetched), when it was posted, and its counters by the provider's metric name.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentPost {
+    pub id: String,
+    pub title: Option<String>,
+    pub cover_image_url: Option<Url>,
+    pub share_url: Option<Url>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub created_at: Option<OffsetDateTime>,
     pub metrics: BTreeMap<String, i64>,
 }
 
@@ -408,6 +639,226 @@ pub struct InboundEventDraft {
     pub payload: Value,
     /// When it happened, by the provider's clock, when the item says.
     pub occurred_at: Option<OffsetDateTime>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Public items: comments and marketplace questions
+// ---------------------------------------------------------------------------------------------
+
+/// One comment or marketplace question as every adapter writes it into an inbound event of kind
+/// `Comment` or `Question` (spec 2026-10-30-inbox-comments-marketplace-design.md §6.3): the
+/// payload is `{"public": <envelope>, "provider_item": <the provider's item as sent>}`
+/// ([`PublicEnvelope::into_payload`]), and the inbox's one provider-agnostic intake reads it back
+/// ([`PublicEnvelope::from_payload`]). Provider knowledge stays in the adapters.
+///
+/// Read tolerantly: an unknown field is ignored and an optional part left out reads as absent;
+/// the identity fields (`kind`, `account_id`, `external_id`, `root_external_id`, `status`,
+/// `author`, `text`, `created_at`) are required, and an external id must be 1 to
+/// [`jt_inbox::public::MAX_EXTERNAL_ID_CHARS`] characters, not blank.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PublicEnvelope {
+    /// A comment or a question.
+    pub kind: PublicKind,
+    /// The capability's external id: the Instagram account, the Page, the seller, the merchant.
+    pub account_id: String,
+    /// The provider's comment or question id: the reply target.
+    pub external_id: String,
+    /// The comment it answers; `None` at the top level.
+    #[serde(default)]
+    pub parent_external_id: Option<String>,
+    /// The thread's top-level comment: itself at the top level.
+    pub root_external_id: String,
+    /// What the provider says of it now.
+    pub status: EnvelopeStatus,
+    /// Who wrote it.
+    pub author: EnvelopeAuthor,
+    /// What it says (personal data: never logged).
+    pub text: String,
+    /// When the provider says it was written.
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    /// The provider's answer deadline, when it gives one (Hepsiburada's `expireDate`).
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub deadline: Option<OffsetDateTime>,
+    /// Whether it is a live video's comment.
+    #[serde(default)]
+    pub live: bool,
+    /// The post or product it is about, as much as the provider's item tells.
+    #[serde(default)]
+    pub subject: Option<EnvelopeSubject>,
+    /// The answer the provider shows, when it shows one (ours or another's).
+    #[serde(default)]
+    pub answer: Option<EnvelopeAnswer>,
+    /// The provider's refusal of an answer, when it refused one.
+    #[serde(default)]
+    pub rejection: Option<EnvelopeRejection>,
+}
+
+impl PublicEnvelope {
+    /// The inbound event payload: `{"public": <self>, "provider_item": provider_item}`.
+    pub fn into_payload(self, provider_item: Value) -> Value {
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "public".to_owned(),
+            serde_json::to_value(self).unwrap_or(Value::Null),
+        );
+        payload.insert("provider_item".to_owned(), provider_item);
+        Value::Object(payload)
+    }
+
+    /// The envelope of an inbound event payload, `None` when it holds none or one without its
+    /// identity fields (see the type's docs).
+    pub fn from_payload(payload: &Value) -> Option<PublicEnvelope> {
+        let envelope: PublicEnvelope =
+            serde_json::from_value(payload.get("public")?.clone()).ok()?;
+        let id_ok = |id: &str| {
+            !id.trim().is_empty() && id.chars().count() <= jt_inbox::public::MAX_EXTERNAL_ID_CHARS
+        };
+        let ok = id_ok(&envelope.account_id)
+            && id_ok(&envelope.external_id)
+            && id_ok(&envelope.root_external_id)
+            && envelope.parent_external_id.as_deref().is_none_or(id_ok);
+        ok.then_some(envelope)
+    }
+}
+
+/// What a provider says of a public item now. Each new provider state is a new inbound event
+/// (its own external id), a replayed one a duplicate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvelopeStatus {
+    /// Written, waiting for an answer.
+    Open,
+    /// Edited by its author (a new revision of its text).
+    Edited,
+    /// Removed by its author or the platform.
+    Removed,
+    /// Answered: the envelope's `answer` is the text the provider shows.
+    Answered,
+    /// An answer is in the platform's review (Trendyol).
+    Pending,
+    /// The platform refused the answer: the envelope's `rejection` says why.
+    Rejected,
+    /// Its answer deadline passed, as the provider says.
+    Expired,
+    /// Reported to the marketplace.
+    Reported,
+}
+
+/// Who wrote a public item: the provider's id and display name of the author, when it gives
+/// them, and whether it is the account itself (our own comment).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeAuthor {
+    /// The provider's id of the author; `None` when it gives none (a one-off person then).
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The name the provider shows, when it may be shown (personal data: never logged).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Whether the author is the account itself.
+    #[serde(default)]
+    pub is_self: bool,
+}
+
+/// The post or product a public item is about, as the provider's item tells it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EnvelopeSubject {
+    /// A post or a product.
+    pub kind: SubjectKind,
+    /// The provider's post (media) or product id.
+    pub external_id: String,
+    /// A caption excerpt or the product's name; empty when the item does not tell.
+    #[serde(default)]
+    pub title: String,
+    /// Its permalink.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// A thumbnail on the provider's CDN.
+    #[serde(default)]
+    pub image_url: Option<String>,
+    /// Further provider facts (media product type, barcode, ...).
+    #[serde(default)]
+    pub facts: Value,
+}
+
+/// The answer a provider shows for a public item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeAnswer {
+    /// Its text.
+    pub text: String,
+    /// When it was given, when the provider says.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub at: Option<OffsetDateTime>,
+}
+
+/// A provider's refusal of an answer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvelopeRejection {
+    /// The provider's reason, as it gives it.
+    pub reason: String,
+    /// When it refused, when the provider says.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub at: Option<OffsetDateTime>,
+}
+
+/// What a reply or a moderation call on a public item addresses: the item's kind and external
+/// id, its parent's, and its subject's when known. Stored in an outbox intent
+/// (`intent.public.target`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicTarget {
+    pub kind: PublicKind,
+    pub external_id: String,
+    #[serde(default)]
+    pub parent_external_id: Option<String>,
+    #[serde(default)]
+    pub subject_external_id: Option<String>,
+}
+
+/// A private reply's receipt: the provider's id of the message sent, and the recipient's
+/// messaging id when the provider tells it (VERIFY V-M5), which links the commenter to their
+/// direct-message identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateReceipt {
+    pub provider_id: String,
+    #[serde(default)]
+    pub recipient_id: Option<String>,
+}
+
+/// A moderation call on a public item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum ModerationAction {
+    /// Hides a comment (reversible).
+    Hide,
+    /// Shows a hidden comment again.
+    Unhide,
+    /// Deletes a comment.
+    Delete,
+    /// Reports a marketplace question.
+    Report { reason: ReportReason },
+}
+
+/// Why a question is reported.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportReason {
+    Spam,
+    Offensive,
+    PersonalData,
+    Irrelevant,
+    Other,
+}
+
+/// What a provider tells of a post or product when asked ([`PublicSurface::subject`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubjectFacts {
+    pub kind: SubjectKind,
+    /// A caption excerpt or the product's name.
+    pub title: String,
+    pub url: Option<String>,
+    pub image_url: Option<String>,
+    /// Further provider facts, an object.
+    pub facts: Value,
 }
 
 /// Something an OAuth-connected account can reach and the owner may connect as a capability: a
@@ -533,6 +984,15 @@ pub trait Connector: Send + Sync {
         let _ = (cred, public);
         Ok(Value::Null)
     }
+    /// Gives back, at the provider, the access `cred` grants the platform's app, once its
+    /// capability is retired (TikTok's token revocation: the app then leaves the account's
+    /// authorized apps). Best effort: the retirement, and the credential's erasure, never wait on
+    /// it. The default does nothing (a provider that offers no revocation, or one this system does
+    /// not call).
+    async fn revoke(&self, cred: &Credential) -> Result<(), ConnectorError> {
+        let _ = cred;
+        Ok(())
+    }
 }
 
 /// Sends SMS.
@@ -551,6 +1011,25 @@ pub trait SmsSender: Send + Sync {
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
+/// Where a post stands at the provider once [`Publisher::publish`] returned its receipt, for a
+/// provider that publishes in the background (TikTok processes a video after accepting it).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishResolution {
+    /// The post is live: its own receipt, whose id may differ from the one `publish` returned
+    /// (TikTok's publish id becomes the post's id).
+    Published(PublishReceipt),
+    /// The post is live but the provider names no public id for it yet: TikTok names one only
+    /// once the post is public and passed its moderation, so a post everyone may see can read
+    /// complete before it has one, and one fewer may see never does. The receipt is the post as
+    /// known now (TikTok's publish id, no URL): the publication settles as it unless a public id
+    /// may still come (see `usecases::studio::publish::PUBLIC_ID_WAIT`).
+    AwaitingPublicId(PublishReceipt),
+    /// Not settled yet: ask again later.
+    Pending,
+    /// The provider gave up on it, for this reason.
+    Failed(ConnectorError),
+}
+
 /// Publishes posts.
 #[async_trait]
 pub trait Publisher: Send + Sync {
@@ -560,6 +1039,46 @@ pub trait Publisher: Send + Sync {
         public: &Value,
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError>;
+    /// Whether the post `external_id` (a receipt's id) is on the provider, read back by its id
+    /// alone (Meta: `GET /{id}?fields=id`): how an observed attempt whose post has no counters to
+    /// read (an Instagram story) is confirmed. `Err` when it cannot be read, is another post, or
+    /// the provider has no such read (the default). A read: it never publishes anything.
+    async fn read_back(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        let _ = (cred, public, external_id);
+        Err(ConnectorError::permanent(
+            "reading a post back is unsupported",
+        ))
+    }
+    /// Where the post `receipt` names stands at the provider (`public` as [`Connector::probe`]
+    /// gets it). `None`, the default, for a provider whose `publish` answers only once the post is
+    /// live: its receipt is the post. A read: it never publishes anything.
+    async fn resolve(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Option<PublishResolution>, ConnectorError> {
+        let _ = (cred, public, receipt);
+        Ok(None)
+    }
+    /// What the provider says, right now, about the account a post goes to, for a provider whose
+    /// posts a human makes on its posting screen (TikTok's `creator_info`, read fresh each time
+    /// the screen is shown and before a choice is accepted; an account that may not post at this
+    /// moment says why in [`TiktokCreator::cannot_post`] rather than failing). `None`, the
+    /// default, for a provider without such a screen. A read: it never publishes anything.
+    async fn creator_info(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<TiktokCreator>, ConnectorError> {
+        let _ = (cred, public);
+        Ok(None)
+    }
 }
 
 /// Reads the counters of posts and accounts.
@@ -578,6 +1097,18 @@ pub trait InsightsReader: Send + Sync {
         cred: &Credential,
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError>;
+    /// The account's most recent public posts, newest first, at most `limit` (the provider may
+    /// cap it), each with its counters, for a provider that lists them (TikTok's
+    /// `/v2/video/list/`). `None`, the default, for one that does not.
+    async fn recent_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        limit: u32,
+    ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
+        let _ = (cred, public, limit);
+        Ok(None)
+    }
 }
 
 /// Sends direct messages (Messenger, Instagram, WhatsApp).
@@ -591,6 +1122,32 @@ pub trait MessagingSender: Send + Sync {
         recipient_id: &str,
         text: &str,
     ) -> Result<SendReceipt, ConnectorError>;
+    /// The name the provider shows for `sender_id`, the provider's id of a person who wrote to
+    /// the capability (`public` as [`Connector::probe`] gets it); `None` when it tells none.
+    /// Best-effort: the inbox only asks for a person it has no name for, and goes on without one.
+    async fn sender_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sender_id: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        let _ = (cred, public, sender_id);
+        Ok(None)
+    }
+    /// Asks the provider to share, once, what the WhatsApp Business app behind the capability
+    /// holds (`sync`): its contacts or its chat history, which then arrive by webhook. The
+    /// receipt's `provider_id` is the provider's request id. A provider takes each request once
+    /// per onboarding: a request whose answer was lost is `Unknown` and must not be asked again
+    /// blindly. `None`, the default, for a provider or a capability without such an app.
+    async fn request_app_sync(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sync: AppSync,
+    ) -> Result<Option<SendReceipt>, ConnectorError> {
+        let _ = (cred, public, sync);
+        Ok(None)
+    }
 }
 
 /// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.
@@ -712,6 +1269,84 @@ pub trait DeliveryReports: Send + Sync {
     ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
+/// The reason of the `ConnectorError::Permanent` a [`PublicSurface`] answers when the item a
+/// reply or moderation names is gone on the provider (a deleted comment, a removed question):
+/// the inbox then marks the item removed and fails the reply with `item_removed`. Which provider
+/// answer means it is each adapter's to map (Meta's is VERIFY V-M10, spec §12).
+pub const PUBLIC_ITEM_GONE: &str = "public_item_gone";
+
+/// Replies and moderation on public items: comments on posts and marketplace questions (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md §6.1). `public` is as [`Connector::probe`]
+/// gets it; `target` names the item. An adapter refuses, before any call, what the credential's
+/// grant does not hold (a Meta token without the comment scopes).
+#[async_trait]
+pub trait PublicSurface: Send + Sync {
+    /// Answers the item in front of everyone: a comment reply, a marketplace answer. The receipt
+    /// carries the provider's id of the reply.
+    async fn reply_public(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<SendReceipt, ConnectorError>;
+    /// Answers the item's author privately (Instagram's and Facebook's private reply). The
+    /// default refuses: a surface without private replies.
+    async fn reply_private(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<PrivateReceipt, ConnectorError> {
+        let _ = (cred, public, target, text);
+        Err(ConnectorError::permanent("no private replies"))
+    }
+    /// Hides, shows again, deletes or reports the item.
+    async fn moderate(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        action: ModerationAction,
+    ) -> Result<(), ConnectorError>;
+    /// What the provider tells of the post or product `subject_external_id`; `None`, the
+    /// default, when it tells nothing more than its items do. A read.
+    async fn subject(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        subject_external_id: &str,
+    ) -> Result<Option<SubjectFacts>, ConnectorError> {
+        let _ = (cred, public, subject_external_id);
+        Ok(None)
+    }
+}
+
+/// Polls public items: the new ones from a cursor, and the current state of known ones. Each
+/// item comes back as an inbound event draft whose payload is a [`PublicEnvelope`], under the
+/// same external ids a webhook gives the same state, so a poll never duplicates a push. No
+/// cursor is stored here: the caller stores the returned cursor with the drafts.
+#[async_trait]
+pub trait PublicPoller: Send + Sync {
+    /// The items new since `cursor` (an object, `{}` before the first poll), within `ws`, and
+    /// the cursor to start from next time.
+    async fn poll(
+        &self,
+        ws: WorkspaceId,
+        cred: &Credential,
+        public: &Value,
+        cursor: &Value,
+    ) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError>;
+    /// The current state of the items `targets` names, those whose state changed.
+    async fn reconcile(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        targets: &[PublicTarget],
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
+}
+
 /// Places and ends calls through a PBX.
 #[async_trait]
 pub trait Telephony: Send + Sync {
@@ -730,6 +1365,14 @@ pub trait Telephony: Send + Sync {
     /// (NetGSM: the `unique_id`). That is not always the receipt's correlation id: a NetGSM
     /// receipt carries the `crm_id`, which the call events carry beside the `unique_id`.
     async fn hangup(&self, cred: &Credential, call_id: &str) -> Result<(), ConnectorError>;
+    /// The PBX's call records between `from` and `to`, as call events whose `external_id` is
+    /// the one its webhook gives the same record, so a poll never duplicates a push.
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError>;
 }
 
 /// Records consent changes in the consent registry (İYS).
@@ -768,6 +1411,55 @@ pub trait OAuthProvider: Send + Sync {
     ) -> Result<Credential, ConnectorError>;
     /// What the account behind `cred` can reach, each with the credential to reach it with.
     async fn list_assets(&self, cred: &Credential) -> Result<Vec<Asset>, ConnectorError>;
+    /// [`OAuthProvider::authorize_url`] for the sign-in variant `flow` ([`OAuthFlow`]); without
+    /// one, exactly `authorize_url`. The default refuses every variant (`Permanent`): a provider
+    /// that has one overrides it.
+    fn authorize_url_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        state: &str,
+        pkce_challenge: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Url, ConnectorError> {
+        match flow {
+            None => self.authorize_url(app, redirect, state, pkce_challenge),
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
+    /// [`OAuthProvider::exchange`] for the sign-in variant `flow`; without one, exactly
+    /// `exchange`. The default refuses every variant.
+    async fn exchange_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        code: &str,
+        pkce_verifier: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Credential, ConnectorError> {
+        match flow {
+            None => self.exchange(app, redirect, code, pkce_verifier).await,
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
+    /// [`OAuthProvider::list_assets`] for a credential the sign-in variant `flow` issued; without
+    /// one, exactly `list_assets`. The default refuses every variant.
+    async fn list_assets_for(
+        &self,
+        cred: &Credential,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Vec<Asset>, ConnectorError> {
+        match flow {
+            None => self.list_assets(cred).await,
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
 }
 
 /// The provider adapters this process has. Every getter answers `None` for a provider without
@@ -786,6 +1478,16 @@ pub trait ConnectorRegistry: Send + Sync {
     fn telephony(&self, provider: Provider) -> Option<Arc<dyn Telephony>>;
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>>;
     fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>>;
+    /// Replies and moderation on public items; `None`, the default, for a provider without them.
+    fn public(&self, provider: Provider) -> Option<Arc<dyn PublicSurface>> {
+        let _ = provider;
+        None
+    }
+    /// The public items' poll; `None`, the default, for a provider without one.
+    fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> {
+        let _ = provider;
+        None
+    }
 }
 
 #[cfg(test)]
@@ -801,36 +1503,220 @@ mod tests {
             login_config_id: Some("cfg-1".into()),
             whatsapp_config_id: None,
             graph_version: Some("v19.0".into()),
+            comment_scopes: false,
         };
         let instagram = InstagramApp {
             app_id: "ig-id".into(),
             app_secret: "ig-secret-value".into(),
+            comment_scopes: false,
         };
         let x = XApp {
             client_id: "x-id".into(),
             client_secret: "x-secret-value".into(),
         };
+        let tiktok = TiktokApp {
+            client_key: "tt-key".into(),
+            client_secret: "tt-secret-value".into(),
+        };
+        let linkedin = LinkedinApp {
+            client_id: "li-id".into(),
+            client_secret: "li-secret-value".into(),
+            organization_scopes: true,
+            api_version: Some("202610".into()),
+        };
         let printed = format!(
-            "{meta:?} {instagram:?} {x:?} {:?}",
-            OAuthApp::Meta(meta.clone())
+            "{meta:?} {instagram:?} {x:?} {tiktok:?} {linkedin:?} {:?} {:?} {:?}",
+            OAuthApp::Meta(meta.clone()),
+            OAuthApp::Tiktok(tiktok.clone()),
+            OAuthApp::Linkedin(linkedin.clone())
         );
         for secret in [
             "meta-secret-value",
             "verify-token-value",
             "ig-secret-value",
             "x-secret-value",
+            "tt-secret-value",
+            "li-secret-value",
         ] {
             assert!(!printed.contains(secret), "{printed}");
         }
-        for public in ["meta-id", "cfg-1", "v19.0", "ig-id", "x-id"] {
+        for public in [
+            "meta-id", "cfg-1", "v19.0", "ig-id", "x-id", "tt-key", "li-id", "202610",
+        ] {
             assert!(printed.contains(public), "{printed}");
         }
+        assert_eq!(OAuthApp::Tiktok(tiktok).client_id(), "tt-key");
+        assert_eq!(
+            OAuthApp::Linkedin(linkedin).client_secret(),
+            "li-secret-value"
+        );
         assert_eq!(OAuthApp::X(x).client_id(), "x-id");
         assert_eq!(
             OAuthApp::Instagram(instagram).client_secret(),
             "ig-secret-value"
         );
         assert_eq!(OAuthApp::Meta(meta).client_id(), "meta-id");
+    }
+
+    #[test]
+    fn meta_app_debug_shows_comment_scopes_flag() {
+        let meta = MetaApp {
+            app_id: "meta-id".into(),
+            app_secret: "meta-secret-value".into(),
+            verify_token: "verify-token-value".into(),
+            login_config_id: None,
+            whatsapp_config_id: None,
+            graph_version: None,
+            comment_scopes: true,
+        };
+        let instagram = InstagramApp {
+            app_id: "ig-id".into(),
+            app_secret: "ig-secret-value".into(),
+            comment_scopes: false,
+        };
+        let printed = format!("{meta:?} {instagram:?}");
+        assert!(printed.contains("comment_scopes: true"), "{printed}");
+        assert!(printed.contains("comment_scopes: false"), "{printed}");
+        for secret in ["meta-secret-value", "verify-token-value", "ig-secret-value"] {
+            assert!(!printed.contains(secret), "{printed}");
+        }
+    }
+
+    fn envelope() -> PublicEnvelope {
+        PublicEnvelope {
+            kind: PublicKind::Comment,
+            account_id: "17841400000000001".into(),
+            external_id: "18000000000000002".into(),
+            parent_external_id: Some("18000000000000001".into()),
+            root_external_id: "18000000000000001".into(),
+            status: EnvelopeStatus::Open,
+            author: EnvelopeAuthor {
+                id: Some("17841400000000009".into()),
+                name: Some("a.customer".into()),
+                is_self: false,
+            },
+            text: "Fiyatı nedir?".into(),
+            created_at: time::macros::datetime!(2026-10-30 09:15 UTC),
+            deadline: Some(time::macros::datetime!(2026-10-31 09:15 UTC)),
+            live: true,
+            subject: Some(EnvelopeSubject {
+                kind: jt_inbox::SubjectKind::Post,
+                external_id: "17900000000000001".into(),
+                title: "Yeni sezon".into(),
+                url: Some("https://www.instagram.example/p/abc/".into()),
+                image_url: None,
+                facts: serde_json::json!({ "media_product_type": "FEED" }),
+            }),
+            answer: Some(EnvelopeAnswer {
+                text: "Merhaba".into(),
+                at: Some(time::macros::datetime!(2026-10-30 10:00 UTC)),
+            }),
+            rejection: Some(EnvelopeRejection {
+                reason: "contains a link".into(),
+                at: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn envelope_round_trips_through_a_payload() {
+        let provider_item = serde_json::json!({ "id": "18000000000000002", "from": {} });
+        let payload = envelope().into_payload(provider_item.clone());
+        assert_eq!(payload["provider_item"], provider_item);
+        assert_eq!(payload["public"]["kind"], "comment");
+        assert_eq!(payload["public"]["status"], "open");
+        assert_eq!(payload["public"]["created_at"], "2026-10-30T09:15:00Z");
+        assert_eq!(payload["public"]["subject"]["kind"], "post");
+        assert_eq!(
+            payload.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["provider_item", "public"]
+        );
+        assert_eq!(PublicEnvelope::from_payload(&payload), Some(envelope()));
+
+        // The optional parts read as absent when left out.
+        let bare = serde_json::json!({ "public": {
+            "kind": "question", "account_id": "123456", "external_id": "q-1",
+            "root_external_id": "q-1", "status": "answered", "author": {},
+            "text": "Bedeni var mı?", "created_at": "2026-10-30T09:15:00Z",
+        }});
+        let read = PublicEnvelope::from_payload(&bare).unwrap();
+        assert_eq!(read.kind, PublicKind::Question);
+        assert_eq!(read.status, EnvelopeStatus::Answered);
+        assert_eq!(read.author, EnvelopeAuthor::default());
+        assert_eq!(
+            (
+                read.parent_external_id,
+                read.deadline,
+                read.live,
+                read.subject,
+                read.answer,
+                read.rejection
+            ),
+            (None, None, false, None, None, None)
+        );
+        for (status, key) in [
+            (EnvelopeStatus::Open, "open"),
+            (EnvelopeStatus::Edited, "edited"),
+            (EnvelopeStatus::Removed, "removed"),
+            (EnvelopeStatus::Answered, "answered"),
+            (EnvelopeStatus::Pending, "pending"),
+            (EnvelopeStatus::Rejected, "rejected"),
+            (EnvelopeStatus::Expired, "expired"),
+            (EnvelopeStatus::Reported, "reported"),
+        ] {
+            assert_eq!(serde_json::to_value(status).unwrap(), key);
+        }
+    }
+
+    #[test]
+    fn envelope_from_payload_ignores_unknown_fields() {
+        let mut payload = envelope().into_payload(Value::Null);
+        payload["public"]["future_field"] = serde_json::json!(1);
+        payload["public"]["author"]["avatar"] = serde_json::json!("x");
+        payload["public"]["subject"]["price"] = serde_json::json!(450);
+        payload["occurred_at"] = serde_json::json!("2026-10-30T09:15:00Z");
+        assert_eq!(PublicEnvelope::from_payload(&payload), Some(envelope()));
+    }
+
+    #[test]
+    fn envelope_requires_its_identity_fields() {
+        let payload = envelope().into_payload(Value::Null);
+        for field in [
+            "kind",
+            "account_id",
+            "external_id",
+            "root_external_id",
+            "status",
+            "author",
+            "text",
+            "created_at",
+        ] {
+            let mut missing = payload.clone();
+            missing["public"].as_object_mut().unwrap().remove(field);
+            assert_eq!(PublicEnvelope::from_payload(&missing), None, "{field}");
+        }
+        for (field, value) in [
+            ("account_id", serde_json::json!("  ")),
+            ("external_id", serde_json::json!("")),
+            ("root_external_id", serde_json::json!(" ")),
+            ("parent_external_id", serde_json::json!("")),
+            ("external_id", serde_json::json!("9".repeat(513))),
+            ("kind", serde_json::json!("review")),
+            ("status", serde_json::json!("deleted")),
+            ("created_at", serde_json::json!("yesterday")),
+        ] {
+            let mut wrong = payload.clone();
+            wrong["public"][field] = value;
+            assert_eq!(PublicEnvelope::from_payload(&wrong), None, "{field}");
+        }
+        let mut longest = payload.clone();
+        longest["public"]["external_id"] = serde_json::json!("9".repeat(512));
+        assert!(PublicEnvelope::from_payload(&longest).is_some());
+        assert_eq!(
+            PublicEnvelope::from_payload(&serde_json::json!({ "messaging": {} })),
+            None
+        );
+        assert_eq!(PublicEnvelope::from_payload(&Value::Null), None);
     }
 
     #[test]
@@ -870,6 +1756,10 @@ mod tests {
                 mime: "image/png".into(),
                 filename: "a.png".into(),
             }],
+            privacy: None,
+            tiktok: None,
+            format: None,
+            media_mimes: vec![],
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

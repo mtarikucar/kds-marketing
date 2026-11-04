@@ -921,6 +921,30 @@ async fn probe_pbx_names_the_username() {
         .set("GET", &pbx("queuestats"), rest("santral_unverified"));
     let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
     assert_eq!(probe.error.map(|e| e.kind()), Some("auth"));
+    // So is Netsantral's live refusal: HTTP 401 before the request is read.
+    r.mock.set(
+        "GET",
+        &pbx("queuestats"),
+        status(
+            401,
+            json!({ "status": "Error", "message": "Kullanici dogrulanamadi" }),
+        ),
+    );
+    let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
+    assert_eq!(probe.error.map(|e| e.kind()), Some("auth"));
+    // An account without a call queue: the credentials pass, then the request is refused
+    // (HTTP 400, code 30 "Eksik yada yanlis parametre"), which still verifies them.
+    r.mock.set(
+        "GET",
+        &pbx("queuestats"),
+        status(
+            400,
+            json!({ "code": "30", "status": "Error", "message": "Eksik yada yanlis parametre" }),
+        ),
+    );
+    let probe = r.netgsm.probe(&pbx_cred(), &public("netgsm_pbx")).await;
+    assert!(probe.ok, "{probe:?}");
+    assert_eq!(probe.facts["account_id"], PBX_USER);
 }
 
 #[tokio::test]
@@ -1097,6 +1121,12 @@ async fn netsantral_errors_map_by_the_table() {
         (rest("santral_error"), "permanent"),
         (rest("santral_unverified"), "auth"),
         (ok(json!({ "code": "30", "status": "Error" })), "auth"),
+        (
+            ok(
+                json!({ "code": "30", "status": "Error", "message": "Eksik yada yanlis parametre" }),
+            ),
+            "permanent",
+        ),
         (ok(json!({ "code": "80", "status": "Error" })), "throttle"),
         (raw(200, "40 trunk yetkisiz"), "permission"),
         (raw(200, ""), "permanent"),
@@ -1170,6 +1200,53 @@ async fn call_records_send_the_credentials_in_the_body() {
     for draft in &drafts {
         let text = draft.payload.to_string();
         assert!(!text.contains("SECRET"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn call_records_with_no_record_in_the_window_are_none() {
+    let r = rig().await;
+    let window = (
+        datetime!(2026-10-23 06:00 UTC),
+        datetime!(2026-10-23 08:00 UTC),
+    );
+    // Netsantral's report answers code 40 when no call matches the query, as an object or as
+    // a bare code.
+    for reply in [
+        ok(json!({"code": "40", "message": "Kayit bulunamadi"})),
+        raw(200, "40"),
+    ] {
+        r.mock.set("POST", CDR, reply);
+        let drafts = r
+            .netgsm
+            .call_records(&pbx_cred(), window.0, window.1)
+            .await
+            .unwrap();
+        assert!(drafts.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn call_records_name_the_report_codes() {
+    let r = rig().await;
+    let window = (
+        datetime!(2026-10-23 06:00 UTC),
+        datetime!(2026-10-23 08:00 UTC),
+    );
+    for (code, kind, words) in [
+        ("50", "permanent", "date format"),
+        ("60", "permanent", "24 hours"),
+        ("100", "throttle", ""),
+        ("101", "throttle", ""),
+    ] {
+        r.mock.set("POST", CDR, ok(json!({"code": code})));
+        let e = r
+            .netgsm
+            .call_records(&pbx_cred(), window.0, window.1)
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), kind, "code {code}: {e}");
+        assert!(e.to_string().contains(words), "code {code}: {e}");
     }
 }
 

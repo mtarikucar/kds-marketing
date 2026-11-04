@@ -34,9 +34,30 @@ export const conversationAction = (
 ) => request<InboxConversationRow>('POST', `${conv(id)}/${action}`);
 export const snooze = (id: string, until: string) =>
   request<InboxConversationRow>('POST', `${conv(id)}/snooze`, { body: { until } });
+/** Answers comment or question `item_id` of public conversation `id`, in public or privately (a DM). */
+export const replyToItem = (
+  id: string,
+  input: { item_id: string; visibility: import('./types').Visibility; text: string; request_key: string },
+) => request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { ...input, intent: 'reply' } });
+const item = (id: string) => `${root}/items/${seg(id)}`;
+export const hideItem = (id: string, hidden: boolean) =>
+  request<import('./types').ModerationOut>('POST', `${item(id)}/hide`, { body: { hidden } });
+export const deleteItem = (id: string) =>
+  request<import('./types').ModerationOut>('POST', `${item(id)}/delete`, { body: { confirm: true } });
+export const reportItem = (id: string, reason: import('./types').ReportReason) =>
+  request<import('./types').ModerationOut>('POST', `${item(id)}/report`, { body: { reason } });
+export const markHandled = (item_ids: string[], reason: import('./types').HandledReason) =>
+  request<{ items: import('./types').PublicItem[] }>('POST', `${root}/items/handled`, { body: { item_ids, reason } });
+const held = (id: string) => `${root}/replies/${seg(id)}`;
+/** Approves a held reply, as drafted or with `text` in its place. */
+export const approveReply = (id: string, text?: string) =>
+  request<InboxReplyOut>('POST', `${held(id)}/approve`, { body: text === undefined ? {} : { text } });
+export const discardReply = (id: string) => request<InboxReplyOut>('POST', `${held(id)}/discard`);
 export const reply = (id: string, text: string, request_key?: string, subject?: string) =>
   request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }) } });
-export const searchPeople = (q: string) => request<InboxPerson[]>('GET', `${root}/people`, { query: { q } });
+/** People by name/company; an empty query pages through everyone (`limit`/`offset`, oldest first). */
+export const searchPeople = (q: string, limit?: number, offset?: number) =>
+  request<InboxPerson[]>('GET', `${root}/people`, { query: { q, limit, offset } });
 export const getPerson = (id: string) => request<InboxPersonOut>('GET', `${root}/people/${seg(id)}`);
 export const getJourney = (id: string) => request<InboxJourneyOut>('GET', journey(id));
 export const reportEvent = (id: string, input: ReportInput) =>

@@ -1,5 +1,7 @@
 //! The gate rule, structural half (spec §5, B1): only the use cases the Global Constraints list
-//! may be `Exempt` from the strategy gate; every other use case is `Gated`. Separately, only
+//! may be `Exempt` from the strategy gate; every other use case is `Gated`. The inbox rows that
+//! read or answer customers are listed one by one ([`EXEMPT_INBOX`]), so a new inbox row is
+//! `Gated` until someone decides it answers customers. Separately, only
 //! `auth.*`, `workspace.*` and `platform.*` use cases run whatever the workspace's status, and
 //! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
@@ -29,6 +31,67 @@ const EXEMPT_PREFIXES: &[&str] = &[
     "events.",
 ];
 
+/// The inbox rows that read or answer the workspace's own customers, which never waits for a
+/// marketing strategy (owner decision of 2026-11-03). Listed one by one, never as a prefix: a
+/// new inbox row stays `Gated` until it is added here. The one inbox row left out starts contact
+/// nobody asked for: `inbox.send` writes to a person, not in a conversation, with commercial
+/// intent only, and may open a conversation no customer started.
+const EXEMPT_INBOX: &[&str] = &[
+    "inbox.pending",
+    "inbox.context",
+    "inbox.conversations.list",
+    "inbox.conversations.get",
+    "inbox.messages.list",
+    "inbox.take_over",
+    "inbox.hand_to_agent",
+    "inbox.snooze",
+    "inbox.unsnooze",
+    "inbox.close",
+    "inbox.reply",
+    "inbox.people.search",
+    "inbox.people.get",
+    "inbox.people.erase",
+    "inbox.people.create",
+    "inbox.identities.add",
+    "inbox.journeys.open",
+    "inbox.events.report",
+    "inbox.lost_reasons.list",
+    "inbox.lost_reasons.set",
+    "inbox.journeys.get",
+    "inbox.journeys.assign_owner",
+    "inbox.status_labels.set",
+    "inbox.merges.list",
+    "inbox.merges.apply",
+    "inbox.merges.undo",
+    "inbox.merges.refuse",
+    "inbox.tasks.create",
+    "inbox.tasks.complete",
+    "inbox.tasks.list",
+    "inbox.notes.add",
+    "inbox.consent.record",
+    "inbox.consent.list",
+    "inbox.suppressions.add",
+    "inbox.suppressions.remove",
+    "inbox.quotes.send",
+    "inbox.quotes.accept",
+    "inbox.quotes.list",
+    "inbox.appointments.book",
+    "inbox.appointments.cancel",
+    "inbox.appointments.held",
+    "inbox.commissions.list",
+    "inbox.commissions.approve",
+    "inbox.commissions.pay",
+    "inbox.commission_rates.set",
+    // Comments and marketplace questions: moderating, marking handled, reporting, and approving
+    // or discarding a held answer are answering customers too.
+    "inbox.public.hide",
+    "inbox.public.delete",
+    "inbox.public.mark_handled",
+    "inbox.public.report",
+    "inbox.public.approve",
+    "inbox.public.discard",
+];
+
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
     "ops.health",
@@ -36,15 +99,53 @@ const EXEMPT_IDS: &[&str] = &[
     "billing.activate",
     "billing.report_payment",
     "ledger.list",
-    "inbox.pending",
-    "inbox.context",
     "studio.brake",
     "studio.ledger",
     "studio.ledger_export",
+    // The materials library: the owner gathers materials before and while the strategy is
+    // worked out (spec 2026-11-03 D35), uploads included.
+    "studio.file_upload",
+    "studio.olays_list",
+    "studio.olay_get",
+    "studio.olay_create",
+    "studio.olay_update",
+    "studio.olay_confirm",
+    "studio.materials_list",
+    "studio.material_get",
+    "studio.material_add",
+    "studio.material_tag",
+    "studio.material_permission",
+    "studio.material_free",
+    "studio.material_bind",
+    "studio.material_delete",
+    "studio.slot_materials",
+    "studio.calendar_list",
+    "studio.calendar_set",
+    "studio.material_policy_set",
+    "studio.shoot_list",
+    "studio.shoot_request",
+    "studio.shoot_resolve",
+    "calls.policy_get",
+    // The voice bridge's line is set up before any strategy.
+    "calls.bridge.register",
+    "calls.bridge.commands",
+    "calls.bridge.events",
+    // So are the phones the device bridge drives, and what an agent does with them.
+    "devices.bridge.register",
+    "devices.bridge.commands",
+    "devices.bridge.results",
+    "devices.bridge.files",
+    "devices.list",
+    "devices.observe",
+    "devices.act",
+    "devices.command_get",
+    "devices.commands",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
-    EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p)) || EXEMPT_IDS.contains(&id)
+    EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
+        || EXEMPT_IDS.contains(&id)
+        || EXEMPT_INBOX.contains(&id)
 }
 
 #[test]
@@ -118,7 +219,7 @@ fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
         .iter()
         .filter(|uc| uc.id.starts_with("connector.") || uc.id.starts_with("events."))
         .collect();
-    // Eight connection use cases (seven tools and the panel's OAuth callback) and three event
+    // Nine connection use cases (eight tools and the panel's OAuth callback) and three event
     // ones: not vacuous.
     let ids: Vec<&str> = rows.iter().map(|uc| uc.id).collect();
     assert_eq!(
@@ -132,6 +233,7 @@ fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
             "connector.health",
             "connector.reconnect",
             "connector.hooks",
+            "connector.set_pbx_policy",
             "events.pending",
             "events.ack",
             "events.list",
@@ -158,6 +260,11 @@ fn the_exempt_list_rejects_other_use_cases() {
     assert!(may_be_exempt("work.pending"));
     assert!(may_be_exempt("connector.probe"));
     assert!(may_be_exempt("events.ack"));
+    assert!(may_be_exempt("inbox.reply"));
+    // An inbox row is exempt only by name: a new one, and outreach, are not.
+    assert!(!may_be_exempt("inbox.send"));
+    assert!(!may_be_exempt("inbox.broadcast"));
+    assert!(!may_be_exempt("inboxes.list"));
     assert!(!may_be_exempt("connectors.list"));
     assert!(!may_be_exempt("event.list"));
     assert!(!may_be_exempt("strategies.list"));
@@ -199,36 +306,33 @@ fn catalog_ids_are_dotted_lowercase() {
 }
 
 #[test]
-fn inbox_core_keeps_exact_read_exemptions_and_status_gate() {
+fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
     let rows: Vec<_> = CATALOG
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 46);
+    assert_eq!(rows.len(), 52);
     for row in rows {
+        // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(
             row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
+            if EXEMPT_INBOX.contains(&row.id) {
                 GateMode::Exempt
             } else {
                 GateMode::Gated
-            }
+            },
+            "{}",
+            row.id
         );
-        assert_eq!(row.status_exemption, StatusExemption::Never);
+        // Only the strategy part changed: every inbox row, erasure and suppressions among them,
+        // still answers WORKSPACE_INACTIVE unless the workspace is active.
+        assert_eq!(row.status_exemption, StatusExemption::Never, "{}", row.id);
     }
-}
-
-#[test]
-fn only_pending_and_context_are_exempt_inbox_reads() {
-    for row in CATALOG.iter().filter(|r| r.id.starts_with("inbox.")) {
-        assert_eq!(
-            row.gate,
-            if ["inbox.pending", "inbox.context"].contains(&row.id) {
-                GateMode::Exempt
-            } else {
-                GateMode::Gated
-            }
-        );
-        assert_eq!(row.status_exemption, StatusExemption::Never);
+    assert_eq!(
+        jt_app::catalog::find("inbox.send").map(|uc| uc.gate),
+        Some(GateMode::Gated)
+    );
+    for id in EXEMPT_INBOX {
+        assert!(jt_app::catalog::find(id).is_some(), "{id} is a catalog row");
     }
 }

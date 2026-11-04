@@ -115,18 +115,34 @@ pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverv
                 && selected(c)
                 && chain::capability_access(c, ctx.now, false).is_ok()
         });
-    let organic = caps.iter().any(|c| {
-        matches!(c.kind_key.as_str(), "x" | "instagram" | "facebook_page")
-            && selected(c)
-            && chain::capability_access(c, ctx.now, false).is_ok()
-            && jt_connector::provider_for_kind(&c.kind_key)
-                .is_some_and(|p| d.connectors.publisher(p).is_some())
+    let candidates: Vec<_> = caps
+        .iter()
+        .filter(|c| {
+            super::chain::ORGANIC_KINDS.contains(&c.kind_key.as_str())
+                && selected(c)
+                && jt_connector::provider_for_kind(&c.kind_key)
+                    .is_some_and(|p| d.connectors.publisher(p).is_some())
+        })
+        .map(|c| chain::capability_access(c, ctx.now, false))
+        .collect();
+    let organic = candidates.iter().any(Result::is_ok);
+    // A grant that lacks only what Studio reads with is fixed by reconnecting the account: the
+    // lane says so rather than calling the connector unavailable.
+    let reconnect = candidates.iter().any(|a| {
+        a.as_ref()
+            .is_err_and(|e| e.details["reason"] == chain::SCOPE_MISSING)
     });
     let lane_support = LaneSupport {
         organic: LaneAvailability {
             visible: true,
             supported: organic,
-            reason: (!organic).then(|| "connector_unavailable".into()),
+            reason: (!organic).then(|| {
+                if reconnect {
+                    "connector_reconnect_required".into()
+                } else {
+                    "connector_unavailable".into()
+                }
+            }),
         },
         paid: LaneAvailability {
             visible: paid,

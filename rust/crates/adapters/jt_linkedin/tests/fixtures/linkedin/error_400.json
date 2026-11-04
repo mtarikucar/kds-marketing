@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "serviceErrorCode": 100,
+  "code": "FIELD_LENGTH_TOO_LONG",
+  "message": "/commentary length exceeds the allowed maximum"
+}

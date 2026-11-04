@@ -128,7 +128,7 @@ pub async fn record(d: &Deps, m: Measurement) -> Result<bool, AppError> {
 fn invalid(e: StudioError) -> AppError {
     AppError::conflict(e.to_string())
 }
-async fn access(
+pub(crate) async fn access(
     d: &Deps,
     r: &mut dyn TenantRepos,
     target: HistoricalTarget,
@@ -143,17 +143,31 @@ async fn access(
     Ok((p.capability, cred))
 }
 pub async fn measure_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
-    let (publications, bindings, rows) = {
+    let (publications, bindings, rows, stories) = {
         let mut r = d.uow.tenant(ws).await?;
+        // A story is left out of measurement and learning: its insights last a day only
+        // (Instagram's media insights reference), shorter than the first window's reading.
+        let stories: std::collections::BTreeSet<_> = r
+            .studio_posts()
+            .list_posts()
+            .await?
+            .into_iter()
+            .filter(|p| p.format == jt_studio::PostFormat::Story)
+            .map(|p| p.slot_id)
+            .collect();
         (
             r.studio().list_publications().await?,
             r.studio().list_bindings().await?,
             r.studio().list_measurements().await?,
+            stories,
         )
     };
     let now = d.clock.now();
     let mut changed = 0;
-    for p in publications {
+    for p in publications
+        .into_iter()
+        .filter(|p| !stories.contains(&p.slot_id))
+    {
         for window in [
             MeasurementWindow::Hours24,
             MeasurementWindow::Hours72,
@@ -172,9 +186,11 @@ pub async fn measure_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             let previous = rows
                 .iter()
                 .find(|m| m.publication_id == Some(p.id) && m.window == window);
+            // A provider's permanent refusal (LinkedIn has no member post metrics; a post with
+            // no public id; a deleted post) is final for the window: never asked again.
             if previous
                 .and_then(|m| m.failure.as_ref())
-                .is_some_and(|f| f.retry_at > now)
+                .is_some_and(|f| f.retry_at > now || f.category == PERMANENT)
             {
                 continue;
             }
@@ -245,6 +261,8 @@ async fn measure_publication(
         && let Some(n) = raw
             .get("impression_count")
             .or_else(|| raw.get("post_impressions"))
+            // TikTok counts a video's views.
+            .or_else(|| raw.get("view_count"))
             .copied()
     {
         raw.insert("impressions".into(), n);
@@ -267,6 +285,10 @@ async fn measure_publication(
             "reply_count",
             "retweet_count",
             "quote_count",
+            // TikTok's and LinkedIn's (organization share statistics) names.
+            "comment_count",
+            "share_count",
+            "click_count",
             "saved",
             "post_reactions_like_total",
             "post_clicks",
@@ -324,6 +346,8 @@ fn target_failure(e: &AppError) -> bool {
             | ErrorCode::UpstreamUnavailable
     )
 }
+/// The failure category of a provider's permanent refusal ([`provider_failure`]).
+const PERMANENT: &str = "permanent";
 fn provider_failure(e: jt_connector::ConnectorError) -> AppError {
     super::chain::refuse(e.kind())
 }

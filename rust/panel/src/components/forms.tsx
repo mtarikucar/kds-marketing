@@ -108,13 +108,14 @@ export function MoneyInput({
 }) {
   const { i18n } = useTranslation();
   const digits = minorDigits(currency);
+  const language = i18n.language;
   const show = (value: number | null) => (value === null ? '' : minorToInput(value, digits));
   const [text, setText] = useState(() => show(minor));
   // Follow a value changed from outside (a reset), but not the echo of what was just typed.
   useEffect(() => {
-    if (parseMinor(text, digits) !== minor) setText(show(minor));
+    if (parseMinor(text, digits, language) !== minor) setText(show(minor));
   }, [minor, digits]);
-  const invalid = text.trim() !== '' && parseMinor(text, digits) === null;
+  const invalid = text.trim() !== '' && parseMinor(text, digits, language) === null;
   return (
     <Input
       id={id}
@@ -128,8 +129,9 @@ export function MoneyInput({
       onChange={(e) => {
         setText(e.target.value);
         if (e.target.value.trim() === '') return onChange(null);
-        const parsed = parseMinor(e.target.value, digits);
-        if (parsed !== null) onChange(parsed);
+        const parsed = parseMinor(e.target.value, digits, language);
+        // An unreadable amount clears the value, so a stale earlier amount is never submitted.
+        onChange(parsed);
       }}
     />
   );

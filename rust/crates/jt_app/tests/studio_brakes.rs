@@ -56,18 +56,22 @@ async fn approval_cannot_authorize_changed_payload() {
     p.revision = 2;
     p.text = "changed".into();
     r.studio()
-        .save_piece(w.f.slot.id, 1, p, "piece-v2")
+        .save_piece(w.f.slot.id, 1, p.clone(), "piece-v2")
         .await
         .unwrap();
     r.commit().await.unwrap();
+    // The new revision shows its material: only the approval stops it.
+    w.record(w.f.slot.id, &p).await;
     assert!(w.permit().await.is_err());
     let mut input = w.execution();
     input.expected_revision = 2;
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
-    assert!(
+    assert_eq!(
         authorize_execution_at(r.as_mut(), input, FIXED_NOW)
             .await
-            .is_err()
+            .unwrap_err()
+            .details["reason"],
+        "human approval is required for this revision"
     );
 }
 #[tokio::test]

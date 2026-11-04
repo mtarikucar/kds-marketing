@@ -91,6 +91,12 @@ async fn outcome_categories_survive_redaction() {
 }
 
 #[tokio::test]
+async fn failure_reason_is_kept_beside_the_category() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::failure_reason_is_kept_beside_the_category(&uow).await;
+}
+
+#[tokio::test]
 async fn completion_time_differs_from_claim_time() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::studio_contract::completion_time_differs_from_claim_time(&uow).await;
@@ -110,4 +116,10 @@ async fn liability_uses_each_item_period() {
 async fn binding_refresh_invalidates_old_intents() {
     let uow = jt_testkit::fakes::InMemoryUow::new();
     jt_testkit::studio_contract::binding_refresh_invalidates_old_intents(&uow).await;
+}
+
+#[tokio::test]
+async fn receipt_upgrade_and_lookup() {
+    let uow = jt_testkit::fakes::InMemoryUow::new();
+    jt_testkit::studio_contract::receipt_upgrade_and_lookup(&uow).await;
 }

@@ -180,9 +180,18 @@ The integrated sources define the following limits:
 | `/mcp` | **280,000,000 bytes**, `with_max_request_body_bytes` in [MCP HTTP service](../../rust/crates/adapters/jt_mcp/src/http.rs) |
 | Meta webhooks | **3,145,728 bytes (3 MiB)**, `META_BODY_LIMIT` in [webhook router](../../rust/crates/adapters/jt_webhook/src/lib.rs) |
 | NetGSM webhooks | **262,144 bytes (256 KiB)**, `NETGSM_BODY_LIMIT` in the same router |
+| `POST /api/devices/bridge/results` | **2,097,152 bytes (2 MiB)**, `MAX_RESULTS_BODY_BYTES` (`jt_device_protocol`) as an explicit `DefaultBodyLimit` in the panel router |
+| `POST /api/devices/bridge/files` | Streamed, never buffered whole: **99,614,720 bytes (95 MiB)** for a pulled file (`DEVICE_FILE_LIMIT`, `jt_app::usecases::files`), 25,000,000 bytes for a screenshot (`IMAGE_LIMIT`); a body idle for 30 s is refused; each workspace uploads two screenshots and two pulled files at a time, and an upload that waits 10 s for its turn is answered `503` ([`devices::uploads`](../../rust/crates/jt_app/src/usecases/devices/uploads.rs)) |
 
 Configure route-specific proxy body ceilings to preserve these limits; do not
 apply a small global ceiling that breaks the supported upload/MCP payloads.
+yeni.jeetagrowth.com and staging are behind Cloudflare: on the Free and Pro plans
+Cloudflare refuses a request body over 100 MB at the edge (`413`), before the
+server sees it. The device bridge's file uploads are held to 95 MiB for that
+reason (the bridge program refuses a larger one before sending it); its
+`push_file` downloads stay at up to 256 MiB, since Cloudflare does not cap a
+proxied download's size that way. The studio and MCP limits above are larger
+than Cloudflare passes on those plans.
 These are transport limits; individual use cases can reject smaller invalid
 payloads. Preserve signed webhook bytes without transformation. Allow streaming
 MCP responses and disable response buffering for `/mcp`.
@@ -328,6 +337,17 @@ demotion**. Do not promise immediate revocation within an existing process.
 
 For the v1 transition, additionally follow [v1 cutover](v1-cutover.md); restarting
 an older sender without fencing the new sender can duplicate external writes.
+
+### Release note: Studio timestamps become RFC 3339 text
+
+From the release carrying `jt_studio::time_compat`, every Studio timestamp is written, and
+returned by MCP and the panel, as RFC 3339 text instead of `time`'s 9-element tuple. Stored rows
+and older ledger payloads keep their tuples and keep decoding (the reader accepts both); nothing
+is rewritten by a migration. One visible effect for at most 24 hours after the deploy: a Studio
+request key created before it and replayed after it digests a differently encoded payload and is
+answered `409 CONFLICT` "request key payload mismatch" (`studio_request_keys` keep 24 hours).
+Agents treat that as "do not retry blindly"; a fresh request key succeeds. Do not roll back to a
+release without `time_compat` once new rows are written: it cannot read the text timestamps.
 
 ## Backup and restore prerequisites
 

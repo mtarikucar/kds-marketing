@@ -1,0 +1,13 @@
+# The voice bridge's turn traces (numbers and call ids only), read by `jeeta-voice-bridge report`,
+# which reads the current file only. The bridge opens the file by its path on every append, so a
+# rename needs no signal, and it creates the next file itself (0600, its UMask).
+/var/lib/jeeta-voice/traces.jsonl {
+    su jeeta-voice-bridge jeeta-voice-bridge
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    nocreate
+}

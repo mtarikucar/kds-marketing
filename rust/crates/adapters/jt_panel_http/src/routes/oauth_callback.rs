@@ -3,12 +3,12 @@
 //! browser session).
 //!
 //! The provider sends the owner's browser back to the panel's page
-//! (`/oauth/callback/{meta|instagram|x}`, `connector::OAUTH_CALLBACK_PATH`), not here: that
+//! (`/oauth/callback/{meta|instagram|x|tiktok|linkedin}`, `connector::OAUTH_CALLBACK_PATH`), not here: that
 //! cross-site redirect carries no `SameSite=Strict` session cookie. The page reads `state` and
 //! `code` from its address and calls this route itself, with the same last segment, a same-site
 //! request with the session. The segment names the app the flow signed in with
 //! (`connector::OAuthCallback`): `meta` (Facebook Login), `instagram` (Instagram Login, a Meta
-//! flow) or `x`. The route's gate needs that session (`401` without it) and an active current
+//! flow), `x`, `tiktok` or `linkedin`. The route's gate needs that session (`401` without it) and an active current
 //! workspace (`423` otherwise); the use case then needs the state to be signed for that workspace
 //! and that segment's provider, unexpired and unused, and the flow to be one of that segment's
 //! app (`403` otherwise, whatever the reason).

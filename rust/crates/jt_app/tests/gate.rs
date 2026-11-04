@@ -227,6 +227,55 @@ fn each_exemption_allows_exactly_its_statuses() {
     );
 }
 
+/// Owner decision of 2026-11-03: reading and answering customers never waits for a marketing
+/// strategy, which keeps gating the growth work (the Studio here), and the one inbox row that
+/// starts commercial contact. The workspace-status check is unchanged for every inbox row.
+#[test]
+fn the_inbox_runs_without_a_strategy_while_the_studio_and_outreach_do_not() {
+    let ws = WorkspaceId::new_v7();
+    let inbox: Vec<&UseCase> = CATALOG
+        .iter()
+        .filter(|uc| uc.id.starts_with("inbox."))
+        .collect();
+    assert_eq!(inbox.len(), 52);
+    for uc in &inbox {
+        let result = ready(check_gate(uc, WorkspaceStatus::Active, &NoStrategyYet, ws));
+        if uc.id == "inbox.send" {
+            assert_eq!(code(result), ErrorCode::StrategyRequired, "{}", uc.id);
+        } else {
+            assert!(result.is_ok(), "{}: {result:?}", uc.id);
+        }
+        // Erasure and suppressions included: an inactive workspace closes every inbox row,
+        // whatever the strategy.
+        for status in INACTIVE {
+            let result = ready(check_gate(uc, status, &ApprovedStrategy, ws));
+            assert_eq!(
+                code(result),
+                ErrorCode::WorkspaceInactive,
+                "{} {status:?}",
+                uc.id
+            );
+        }
+    }
+    for id in [
+        "inbox.conversations.list",
+        "inbox.messages.list",
+        "inbox.reply",
+        "inbox.people.erase",
+        "inbox.suppressions.add",
+    ] {
+        assert!(inbox.iter().any(|uc| uc.id == id), "{id}");
+    }
+    let studio = jt_app::catalog::find("studio.overview").unwrap();
+    let result = ready(check_gate(
+        studio,
+        WorkspaceStatus::Active,
+        &NoStrategyYet,
+        ws,
+    ));
+    assert_eq!(code(result), ErrorCode::StrategyRequired);
+}
+
 #[test]
 fn approved_strategy_lets_gated_pass_on_active() {
     let ws = WorkspaceId::new_v7();

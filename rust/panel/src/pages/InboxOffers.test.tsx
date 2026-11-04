@@ -26,14 +26,15 @@ it('sends a quote using the shared input and shows uncertain delivery separately
   await userEvent.click(await screen.findByRole('button', { name: /Teklifler/ }));
   const form = await screen.findByRole('form', { name: 'Teklif gönder' });
   const user = userEvent.setup();
-  await user.type(within(form).getByLabelText('Tutar (kuruş / alt birim)'), '12000');
+  // Typed in lira with Turkish grouping; sent in kuruş.
+  await user.type(within(form).getByLabelText('Tutar'), '1.200');
   fireEvent.change(within(form).getByLabelText('Geçerlilik sonu'), { target: { value: '2099-01-02T10:00' } });
   await user.type(within(form).getByLabelText('Dosya referansı (isteğe bağlı)'), 'asset:offer');
   await user.type(within(form).getByLabelText('Mesaj'), 'Teklifimiz');
   await user.selectOptions(within(form).getByLabelText('Gönderim amacı'), 'commercial');
   await user.click(within(form).getByRole('button', { name: 'Teklif gönder' }));
   await waitFor(() => expect(calls.find(c => c.method === 'POST' && c.path.endsWith('/quotes'))?.body).toEqual({
-    amount_minor: 12000, currency: 'TRY', valid_until: new Date('2099-01-02T10:00').toISOString(),
+    amount_minor: 120000, currency: 'TRY', valid_until: new Date('2099-01-02T10:00').toISOString(),
     file_ref: 'asset:offer', channel: 'email', text: 'Teklifimiz', intent: 'commercial', request_key: expect.any(String),
   }));
   expect(await within(form).findByText(/Teslim durumu: Belirsiz/)).toBeInTheDocument();

@@ -272,11 +272,15 @@ async fn an_approved_strategy_leaves_nothing_to_do_about_it() {
 async fn pending_lists_stale_devices() {
     let w = active_world().await;
     // Verified 40 days ago under the default 30-day policy: stale.
-    let phone = w.declare("phone", "Saha telefonu").await.capability.id;
+    let computer = w
+        .declare("computer", "Saha bilgisayarı")
+        .await
+        .capability
+        .id;
     capabilities::verify(
         &w.deps,
         &at(&w.owner_ctx, days_later(-40)),
-        phone,
+        computer,
         evidence("adb devices listed it"),
     )
     .await
@@ -298,13 +302,13 @@ async fn pending_lists_stale_devices() {
         .await
         .unwrap();
 
-    // The list agrees: the phone reads as stale, not verified.
+    // The list agrees: the computer reads as stale, not verified.
     let listed = capabilities::list(&w.deps, &w.owner_ctx, CapabilityQuery::default())
         .await
         .unwrap();
-    let phone_out = listed.iter().find(|c| c.capability.id == phone).unwrap();
-    assert_eq!(phone_out.effective_status, EffectiveStatus::Stale);
-    assert_eq!(phone_out.capability.status, StoredStatus::Verified);
+    let computer_out = listed.iter().find(|c| c.capability.id == computer).unwrap();
+    assert_eq!(computer_out.effective_status, EffectiveStatus::Stale);
+    assert_eq!(computer_out.capability.status, StoredStatus::Verified);
 
     let out = pending(&w, &w.owner_ctx).await;
     assert_eq!(
@@ -312,8 +316,8 @@ async fn pending_lists_stale_devices() {
         [
             WorkKind::ConsultStrategy,
             WorkKind::VerifyCapability {
-                capability_id: phone,
-                name: "Saha telefonu".into(),
+                capability_id: computer,
+                name: "Saha bilgisayarı".into(),
                 stale: true,
             },
             WorkKind::VerifyCapability {
@@ -337,23 +341,28 @@ async fn pending_lists_stale_devices() {
         wire["items"][1],
         json!({
             "kind": "verify_capability",
-            "capability_id": phone,
-            "name": "Saha telefonu",
+            "capability_id": computer,
+            "name": "Saha bilgisayarı",
             "stale": true,
             "priority": 2,
             "hint": out.items[1].hint,
         })
     );
 
-    // Verified again, the phone drops off the list.
-    capabilities::verify(&w.deps, &w.owner_ctx, phone, evidence("adb devices again"))
-        .await
-        .unwrap();
+    // Verified again, the computer drops off the list.
+    capabilities::verify(
+        &w.deps,
+        &w.owner_ctx,
+        computer,
+        evidence("adb devices again"),
+    )
+    .await
+    .unwrap();
     let out = pending(&w, &w.owner_ctx).await;
     assert!(
         out.items
             .iter()
-            .all(|i| !matches!(&i.kind, WorkKind::VerifyCapability { capability_id, .. } if *capability_id == phone)),
+            .all(|i| !matches!(&i.kind, WorkKind::VerifyCapability { capability_id, .. } if *capability_id == computer)),
         "{:?}",
         out.items
     );
@@ -834,7 +843,7 @@ async fn set_checkin_interval_takes_a_quarter_hour_to_a_week() {
 async fn capability_ids_in_items_are_the_capabilities() {
     // Guards the item's id field against a mix-up with another id.
     let w = active_world().await;
-    let phone = w.declare("phone", "Telefon").await.capability.id;
+    let computer = w.declare("computer", "Bilgisayar").await.capability.id;
     let out = pending(&w, &w.owner_ctx).await;
     let ids: Vec<CapabilityId> = out
         .items
@@ -845,7 +854,7 @@ async fn capability_ids_in_items_are_the_capabilities() {
             _ => None,
         })
         .collect();
-    assert_eq!(ids, [phone]);
+    assert_eq!(ids, [computer]);
 }
 
 #[tokio::test]

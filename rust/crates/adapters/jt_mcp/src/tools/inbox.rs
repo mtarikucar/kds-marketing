@@ -163,7 +163,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.messages.list",
-            description: "messages.list for workspace conversations. [risk: READ]",
+            description: "messages.list for workspace conversations. An outbound message that failed, or whose outcome is unknown, carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list\"); null otherwise. [risk: READ]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("messages.list")).expect("inbox schema"),
             run: messages_list,
@@ -344,6 +344,48 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                 Schema::try_from(schema::tool("journeys.assign_owner")).expect("inbox schema")
             },
             run: journeys_assign_owner,
+        },
+        ToolDef {
+            use_case: "inbox.public.hide",
+            description: "Hide a comment on its platform (hidden: true) or show it again (false); a hidden comment is not owed. The agent may. Refused on marketplace questions (hide_unsupported) and while comments are not enabled. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("public.hide")).expect("inbox schema"),
+            run: public_hide,
+        },
+        ToolDef {
+            use_case: "inbox.public.delete",
+            description: "Delete a comment on its platform. Humans only (agent_cannot_delete), requires confirm: true and inbox.manage. [risk: DESTRUCTIVE]",
+            permission: Permission::InboxManage,
+            schema: || Schema::try_from(schema::tool("public.delete")).expect("inbox schema"),
+            run: public_delete,
+        },
+        ToolDef {
+            use_case: "inbox.public.mark_handled",
+            description: "Mark 1 to 100 owed comments or questions handled (no_reply_needed, spam, duplicate, answered_elsewhere), all or none; tells no provider. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("public.mark_handled")).expect("inbox schema"),
+            run: public_mark_handled,
+        },
+        ToolDef {
+            use_case: "inbox.public.report",
+            description: "Report a marketplace question to its marketplace where it takes reports (report_unsupported elsewhere); a reported question is not owed. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("public.report")).expect("inbox schema"),
+            run: public_report,
+        },
+        ToolDef {
+            use_case: "inbox.public.approve",
+            description: "Approve a held reply (humans only: human_required), optionally with an edited text, which is checked first; the reply is fenced again and sent. Refused when its item can no longer take it. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("public.approve")).expect("inbox schema"),
+            run: public_approve,
+        },
+        ToolDef {
+            use_case: "inbox.public.discard",
+            description: "Discard a held reply: a human, or the agent connection that drafted it (not_the_drafter otherwise). [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("public.discard")).expect("inbox schema"),
+            run: public_discard,
         },
     ]
 }
@@ -640,5 +682,41 @@ fn people_erase<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<
     Box::pin(async move {
         let id: PersonId = take_id(&mut raw, "person_id")?;
         to_json(&jt_app::usecases::inbox::erasure::erase(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+use jt_app::usecases::inbox::{PublicItemId, public};
+fn public_hide<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PublicItemId = take_id(&mut raw, "item_id")?;
+        to_json(&public::hide(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn public_delete<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PublicItemId = take_id(&mut raw, "item_id")?;
+        to_json(&public::delete(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn public_mark_handled<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&public::mark_handled(deps, ctx, args(raw)?).await?) })
+}
+fn public_report<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PublicItemId = take_id(&mut raw, "item_id")?;
+        to_json(&public::report(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn public_approve<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "outbox_id")?;
+        to_json(&public::approve(deps, ctx, id, args(raw)?).await?)
+    })
+}
+fn public_discard<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: uuid::Uuid = take_id(&mut raw, "outbox_id")?;
+        let _: NoArgs = args(raw)?;
+        to_json(&public::discard(deps, ctx, id).await?)
     })
 }

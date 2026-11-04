@@ -4,7 +4,9 @@
 //!
 //! [`MetaConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`], [`InsightsReader`], [`MessagingSender`],
-//! [`LeadGenFetcher`], [`AdBudgetWriter`]); [`webhook`] parses Meta's webhook bodies, purely.
+//! [`LeadGenFetcher`], [`AdBudgetWriter`], and for comments [`PublicSurface`] and
+//! [`PublicPoller`]); [`webhook`] parses
+//! Meta's webhook bodies, purely.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("meta")`, so it can
@@ -14,8 +16,10 @@
 //!
 //! **Tokens.** A token travels in the `Authorization: Bearer` header, never in a URL (a paging
 //! link's `access_token` is taken out before it is followed), except where the provider takes it
-//! nowhere else: the code and token exchanges of Facebook Login and Instagram Login. Every call to
-//! `graph.facebook.com` that carries a user, Page or WhatsApp token also carries
+//! nowhere else: the code and token exchanges of Facebook Login and Instagram Login, and the
+//! business token `debug_token` inspects (`input_token`) after the WhatsApp Business app's
+//! sign-in, which the call itself makes with the Meta app's own token. Every call to
+//! `graph.facebook.com` that carries a user, Page, WhatsApp or app token also carries
 //! `appsecret_proof` = lowercase hex HMAC-SHA256 of the token under the Meta app's secret, paging
 //! links included (an existing proof is replaced); calls to `graph.instagram.com` never do (that
 //! host belongs to the Instagram app). The Meta app (its secret and Graph version) is read from
@@ -61,11 +65,14 @@
 //! [`MessagingSender`]: jt_app::ports::connectors::MessagingSender
 //! [`LeadGenFetcher`]: jt_app::ports::connectors::LeadGenFetcher
 //! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
+//! [`PublicSurface`]: jt_app::ports::connectors::PublicSurface
+//! [`PublicPoller`]: jt_app::ports::connectors::PublicPoller
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
 mod ads;
 mod assets;
+mod comments;
 mod credential;
 mod graph;
 mod insights;
@@ -86,7 +93,11 @@ use jt_outbound::Egress;
 use url::Url;
 
 pub use graph::DEFAULT_GRAPH_VERSION;
-pub use oauth::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, PAGE_SUBSCRIBED_FIELDS};
+pub use messaging::MAX_MESSENGER_TEXT;
+pub use oauth::{
+    FACEBOOK_SCOPES, INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES,
+    PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
+};
 pub use webhook::{
     InboundEventDraft, Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body,
     verify_and_parse,
@@ -107,6 +118,15 @@ pub const CONTAINER_POLL_ATTEMPTS: u32 = 30;
 
 /// The pause between two reads of an Instagram media container, by default.
 pub const CONTAINER_POLL_INTERVAL: Duration = Duration::from_secs(3);
+
+/// How many more times a video container is read, by default, after
+/// [`CONTAINER_POLL_ATTEMPTS`]: Meta suggests reading a container once a minute for up to five
+/// minutes, and a video (a reel, a story's video, a carousel's video item) takes longer to
+/// process than an image. 90 s of quick reads, then 7 reads 30 s apart: about five minutes.
+pub const CONTAINER_VIDEO_POLL_ATTEMPTS: u32 = 7;
+
+/// The pause between two of a video container's further reads, by default.
+pub const CONTAINER_VIDEO_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Where the adapter sends its calls and its users: the real hosts by default
 /// ([`MetaBases::production`]). Each is a base URL (scheme, host, port and an optional path
@@ -143,11 +163,16 @@ impl MetaBases {
 }
 
 /// How an Instagram media container is waited for: read up to `attempts` times, `interval` apart,
-/// until it is `FINISHED`.
+/// until it is `FINISHED`; a video container then up to `video_attempts` more times,
+/// `video_interval` apart. The publish job holds no tenant transaction or row lock while it waits
+/// (the attempt is committed as sending before the provider is called); its scheduler lock is
+/// held for the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContainerPoll {
     pub interval: Duration,
     pub attempts: u32,
+    pub video_interval: Duration,
+    pub video_attempts: u32,
 }
 
 impl Default for ContainerPoll {
@@ -155,6 +180,8 @@ impl Default for ContainerPoll {
         ContainerPoll {
             interval: CONTAINER_POLL_INTERVAL,
             attempts: CONTAINER_POLL_ATTEMPTS,
+            video_interval: CONTAINER_VIDEO_POLL_INTERVAL,
+            video_attempts: CONTAINER_VIDEO_POLL_ATTEMPTS,
         }
     }
 }

@@ -330,11 +330,12 @@ export function SectionsView({ sections, editable, groups }: SectionsViewProps) 
             removeLabel={t('strategy.remove')}
             renderRow={(item, update) => (
               <>
-                <Field label={t('strategy.fields.channel')} required>
+                <Field label={t('strategy.fields.channel')} hint={t('strategy.channelHint')} required>
                   {(ids) => (
                     <KindSelect
                       id={ids.id}
                       withAny
+                      showKeys={false}
                       value={item.channel}
                       placeholder={t('strategy.channelPlaceholder')}
                       onChange={(channel) => update({ channel })}
