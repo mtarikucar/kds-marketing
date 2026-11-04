@@ -235,8 +235,9 @@ pub static CATALOG: &[UseCase] = &[
     // The inbox: reading and answering the workspace's own customers never waits for a marketing
     // strategy (owner decision of 2026-11-03), so every row is exempt from the strategy gate but
     // `inbox.send`, which writes to a person with commercial intent and may open a conversation
-    // no customer started: outreach. None is exempt from the status check. A new row that reads or
-    // answers customer conversations is exempt too; one that starts contact is gated.
+    // no customer started: outreach. None is exempt from the status check. A new row is gated
+    // until it is named in the gate rule's EXEMPT_INBOX; the send fence still holds outreach and
+    // metered sends from exempt rows to the strategy.
     twin("inbox.pending", Exempt, "jeeta.inbox.pending", ("GET", "/api/inbox/pending"), Read),
     twin("inbox.context", Exempt, "jeeta.inbox.context", ("GET", "/api/inbox/conversations/{conversation_id}/context"), Read),
     twin("inbox.conversations.list", Exempt, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),

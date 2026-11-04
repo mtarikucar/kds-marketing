@@ -221,6 +221,24 @@ fn gate_of(use_case: Option<&str>) -> GateMode {
         .map_or(GateMode::Gated, |uc| uc.gate)
 }
 
+/// The strategy gate a send is held to: its use case's (`gate_of`), but always gated when the
+/// send opens a conversation, which is contact nobody asked for (a quote or a booking mailed on a
+/// channel the customer never wrote on included). Both facts are recorded in the send's intent.
+fn send_gate(use_case: Option<&str>, opens_conversation: bool) -> GateMode {
+    if opens_conversation {
+        GateMode::Gated
+    } else {
+        gate_of(use_case)
+    }
+}
+
+/// How long after the customer's last message a commercial message in a conversation that is not
+/// closed still answers them rather than reaching out to them: seven days, a working week of
+/// back-and-forth (a quote a few days after the question). Later, or once the conversation is
+/// closed, a commercial message is outreach and needs an approved strategy, on every channel.
+/// Meta's channels refuse one outside their 24-hour window anyway; email and SMS have none.
+pub const ANSWERING_WINDOW: Duration = Duration::days(7);
+
 /// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
 pub(super) async fn enqueue_in(
     deps: &Deps,
@@ -300,6 +318,7 @@ pub(super) async fn enqueue_in(
         }
     };
     let id = c.id;
+    let opens_conversation = r.conversations().get(id).await?.is_none();
     let j = lock_current_journey(r, c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
@@ -314,7 +333,11 @@ pub(super) async fn enqueue_in(
         j.as_ref(),
         &cap,
         c.executor_generation,
-        (author, input.intent, gate_of(Some(use_case))),
+        (
+            author,
+            input.intent,
+            send_gate(Some(use_case), opens_conversation),
+        ),
     )
     .await
     {
@@ -332,14 +355,19 @@ pub(super) async fn enqueue_in(
         return Err(error);
     }
     // Only an accepted send may create a conversation. No inbound time is manufactured.
-    if r.conversations().get(id).await?.is_none() {
+    if opens_conversation {
         r.conversations().insert_for_send(c.clone()).await?;
     }
     // Validate recipient ambiguity before creating any durable outbound intent.
     let recipient = recipient(r, &c, &cap).await?;
     let message_id = MessageId::from(deps.ids.uuid());
     let outbox_id = deps.ids.uuid();
-    let mut intent = json!({"kind":input.intent,"request_key":key,"use_case":use_case});
+    let mut intent = json!({
+        "kind": input.intent,
+        "request_key": key,
+        "use_case": use_case,
+        "opens_conversation": opens_conversation,
+    });
     match &purpose {
         Purpose::Reply => {}
         Purpose::Quote(quote, key) => {
@@ -598,13 +626,20 @@ async fn fence(
         }
     }
     // Recovery must honor the same workspace gate as the public surfaces: the status check for
-    // every send, the strategy for one queued by a gated use case. A metered send needs the
-    // strategy too, whatever queued it: its spend is reserved in the approved strategy's budget
-    // frame, so without one it is refused here instead of waiting queued to be sent late.
+    // every send, the strategy for one held to the gate (`send_gate`). Whatever queued it, two
+    // more sends need the strategy: a commercial message to a customer who is no longer talking
+    // (outreach, see ANSWERING_WINDOW), and a metered send, whose spend is reserved in the
+    // approved strategy's budget frame; without one each is refused here, never left queued to be
+    // sent late.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Err(refused("workspace_inactive"));
     }
-    if (gate == GateMode::Gated || is_metered(cap))
+    let answering = !matches!(c.state, ConvState::Closed)
+        && c.last_inbound_at.is_some_and(|at| {
+            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= ANSWERING_WINDOW
+        });
+    let outreach = intent == SendIntent::Commercial && !answering;
+    if (gate == GateMode::Gated || outreach || is_metered(cap))
         && r.strategy().current_approved().await?.is_none()
     {
         return Err(refused("strategy_required"));
@@ -716,7 +751,13 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         (
             message.author,
             serde_json::from_value(row.intent["kind"].clone())?,
-            gate_of(row.intent.get("use_case").and_then(Value::as_str)),
+            send_gate(
+                row.intent.get("use_case").and_then(Value::as_str),
+                row.intent
+                    .get("opens_conversation")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
         ),
     )
     .await
