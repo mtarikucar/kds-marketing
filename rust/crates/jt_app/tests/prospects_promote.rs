@@ -35,6 +35,25 @@ fn field(value: &str) -> Option<FieldInput<String>> {
     })
 }
 
+/// The Instagram handle a fixture business named `name` holds: its name folded to ASCII
+/// lowercase letters and digits, so two differently named businesses never share the hard key
+/// and "Örnek Kafe" stays `ornekkafe`.
+fn handle(name: &str) -> String {
+    name.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'ç' => 'c',
+            'ğ' => 'g',
+            'ı' => 'i',
+            'ö' => 'o',
+            'ş' => 's',
+            'ü' => 'u',
+            c => c,
+        })
+        .filter(char::is_ascii_alphanumeric)
+        .collect()
+}
+
 fn input(name: &str, phone: Option<&str>, email: Option<&str>) -> CreateInput {
     CreateInput {
         business_name: name.into(),
@@ -49,7 +68,7 @@ fn input(name: &str, phone: Option<&str>, email: Option<&str>) -> CreateInput {
         phone: phone.and_then(field),
         email: email.and_then(field),
         website: None,
-        instagram: field("https://www.instagram.com/ornekkafe"),
+        instagram: field(&format!("https://www.instagram.com/{}", handle(name))),
         tiktok: None,
         address: None,
         contact_person: None,
