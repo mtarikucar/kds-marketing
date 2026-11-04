@@ -65,7 +65,7 @@ pub struct MaterialAddInput {
     #[serde(default)]
     pub people: BTreeSet<Uuid>,
     /// The share permission: mandatory from an owner or manager; an agent gives one only for an
-    /// AI image that depicts nothing.
+    /// AI image that depicts nothing and names no person.
     #[serde(default)]
     pub share: Option<SharePermission>,
     /// When it was taken, if the file's bytes do not say.
@@ -116,8 +116,8 @@ pub enum MaterialState {
     #[default]
     Live,
     Erased,
-    /// Live, and waiting for a person: no share permission, a depicting AI image whose permission
-    /// an agent set, no quality, or tags no person reviewed.
+    /// Live, and waiting for a person: no share permission, an AI image that depicts something or
+    /// names a person and whose permission an agent set, no quality, or tags no person reviewed.
     NeedsReview,
     All,
 }
@@ -355,7 +355,7 @@ pub(crate) async fn detail(
 fn needs_review(m: &Material) -> bool {
     m.erased_at.is_none()
         && (m.share.is_none()
-            || (!m.tags.depicts.is_empty() && m.share.as_ref().is_some_and(|s| s.by.is_none()))
+            || (m.needs_human_permission() && m.share.as_ref().is_some_and(|s| s.by.is_none()))
             || m.tags.quality.is_none()
             || m.tags_reviewed_by.is_none())
 }
@@ -480,11 +480,14 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
                 "the share permission is the adding person's decision",
             ));
         }
-        (Some(permission), None) if ai && depicts.is_empty() => Some(ShareDecision {
-            permission,
-            by: None,
-            at: ctx.now,
-        }),
+        // A named person counts as a `depicts` flag (D38).
+        (Some(permission), None) if ai && depicts.is_empty() && i.people.is_empty() => {
+            Some(ShareDecision {
+                permission,
+                by: None,
+                at: ctx.now,
+            })
+        }
         (Some(_), None) => return Err(human_required()),
         (None, None) => None,
     };
@@ -503,8 +506,8 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
 /// The rules of who decides what (D4, D5, D17): an owner or manager in person gives the share
 /// permission (mandatory) and may add a real genel material, which that frees; an agent (or
 /// another person) adds a real material with no permission, and an AI image with a permission only
-/// while it depicts nothing. An AI image names its `depicts` (possibly empty). Replayed by
-/// `request_key`.
+/// while it depicts nothing and names no person (D38). An AI image names its `depicts` (possibly
+/// empty). Replayed by `request_key`.
 pub async fn material_add(
     d: &Deps,
     ctx: &Ctx,
@@ -611,8 +614,8 @@ pub async fn material_add(
 /// Changes a material's tags, quality, depicts and people at its expected revision. A person's
 /// edit marks the tags reviewed by them; an agent's is a suggestion again (no reviewer), and an
 /// agent never removes a `depicts` flag or a person (privacy markers only a person corrects). A
-/// `depicts` flag on an AI image whose permission an agent set clears that permission: a human
-/// decides now (D5, D17).
+/// `depicts` flag or a person on an AI image whose permission an agent set clears that permission:
+/// a human decides now (D5, D17, D38).
 pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Material, AppError> {
     let given = [
         ("product_groups", i.product_groups.is_some()),
@@ -668,7 +671,7 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     }
     m.tags_reviewed_by = reviewer;
     let share_cleared =
-        m.is_ai() && !m.tags.depicts.is_empty() && m.share.as_ref().is_some_and(|s| s.by.is_none());
+        m.is_ai() && m.needs_human_permission() && m.share.as_ref().is_some_and(|s| s.by.is_none());
     if share_cleared {
         m.share = None;
     }

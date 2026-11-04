@@ -101,7 +101,7 @@ pub fn check_use(
         Some(SharePermission::NotShareable) => return Err(Refusal::NotShareable),
         Some(SharePermission::Shareable | SharePermission::ProductOnly) => {}
     }
-    if !m.tags.depicts.is_empty() && m.share.as_ref().is_some_and(|s| s.by.is_none()) {
+    if m.needs_human_permission() && m.share.as_ref().is_some_and(|s| s.by.is_none()) {
         return Err(Refusal::SensitiveNeedsHuman);
     }
     if m.tags.quality != Some(Quality::Publishable) {

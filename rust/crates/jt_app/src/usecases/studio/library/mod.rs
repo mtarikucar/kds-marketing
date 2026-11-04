@@ -6,7 +6,8 @@
 //! The consent decisions are a human's (D4): confirming an olay, a material's share permission,
 //! freeing it, rebinding it, deleting it, the calendar and the policy are panel-only use cases for
 //! an owner or manager human (`control::human_approver`). One exception (D5, D17): an agent may
-//! set the permission of an AI image it adds while the image depicts nothing.
+//! set the permission of an AI image it adds while the image depicts nothing and names no person
+//! (D38).
 //!
 //! Every change to an olay, a material, the calendar or the policy holds the Studio control lock,
 //! the publisher's fence, so it never interleaves with a publish. Ledger entries name ids, codes,

@@ -144,7 +144,7 @@ pub enum SharePermission {
 }
 
 /// A share permission and who gave it: a human, or (`by: None`) the agent that added an AI image
-/// with no `depicts` flag (spec D5, D17).
+/// with no `depicts` flag and no person (spec D5, D17, D38).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareDecision {
     pub permission: SharePermission,
@@ -223,7 +223,7 @@ impl Material {
         }
         if let Some(share) = &self.share
             && share.by.is_none()
-            && (!self.is_ai() || !self.tags.depicts.is_empty())
+            && (!self.is_ai() || self.needs_human_permission())
         {
             return Err(invalid("share"));
         }
@@ -235,6 +235,12 @@ impl Material {
 
     pub fn is_ai(&self) -> bool {
         matches!(self.origin, Origin::AiGenerated { .. })
+    }
+
+    /// Whether only a human may give its share permission (spec D5, D17, D38): it has a `depicts`
+    /// flag, or names a person (`people`), which counts as one.
+    pub fn needs_human_permission(&self) -> bool {
+        !self.tags.depicts.is_empty() || !self.people.is_empty()
     }
 
     pub fn olay_id(&self) -> Option<OlayId> {

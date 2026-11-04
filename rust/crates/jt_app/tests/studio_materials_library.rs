@@ -615,6 +615,71 @@ async fn an_agent_suggests_tags_and_never_removes_a_privacy_marker() {
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
+/// A person named in `people` counts as a `depicts` flag (spec D38): an agent never gives such
+/// an AI image its own permission, and naming one on an image it permitted clears that permission.
+#[tokio::test]
+async fn a_named_person_needs_a_humans_permission_as_a_depicts_flag_does() {
+    let (w, _) = publishing_world().await;
+    let a = agent(&w);
+    let ada = people::create(
+        &w.d,
+        &w.ctx,
+        input(json!({"display_name":"Ada","source":"form",
+            "identities":[{"channel":"email","value":"ada@example.com"}]})),
+    )
+    .await
+    .unwrap()
+    .person
+    .id;
+    let ai = json!({"kind":"ai_generated","generator":"codex"});
+    let file = upload(&w, "named", "image/png", &png(1)).await;
+    let e = library::material_add(
+        &w.d,
+        &a,
+        add_input(
+            "named",
+            file,
+            json!({"genel":true,"origin":ai,"depicts":[],"people":[ada],"share":"shareable"}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Forbidden, "owner_or_manager_human")
+    );
+    let file = upload(&w, "poster", "image/png", &png(2)).await;
+    let poster = add(
+        &w,
+        &a,
+        "poster",
+        file,
+        json!({"genel":true,"origin":ai,"depicts":[],"share":"shareable","quality":"publishable"}),
+    )
+    .await;
+    assert_eq!(poster.share.as_ref().map(|s| s.by), Some(None));
+    let named = library::material_tag(
+        &w.d,
+        &a,
+        input(json!({"material_id":poster.id,"expected_revision":1,"people":[ada]})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(named.share, None);
+    let review = library::materials_list(&w.d, &w.ctx, input(json!({"state":"needs_review"})))
+        .await
+        .unwrap();
+    assert!(review.iter().any(|m| m.id == poster.id));
+    let entry = w
+        .uow
+        .snapshot()
+        .ledger
+        .into_iter()
+        .rfind(|r| r.entry.action.as_str() == "studio.material.tagged")
+        .unwrap();
+    assert_eq!(entry.entry.payload["share_cleared"], json!(true));
+}
+
 #[tokio::test]
 async fn the_panels_decisions_are_an_owners_or_a_managers_in_person() {
     let (w, _) = publishing_world().await;

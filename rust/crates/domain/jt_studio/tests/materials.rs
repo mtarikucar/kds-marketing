@@ -439,6 +439,50 @@ fn every_refusal_code() {
     );
 }
 
+/// A named person counts as a `depicts` flag (spec D38): an agent never gives such an image its
+/// permission, and one it gave is not a human's.
+#[test]
+fn a_named_person_needs_a_humans_permission_as_a_depicts_flag_does() {
+    let a = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 11 - 16),
+        date!(2026 - 11 - 16),
+    );
+    let olays = [a.clone()];
+    let day = date!(2026 - 11 - 10);
+    let mut ai = material(1, bound(&a));
+    ai.origin = Origin::AiGenerated {
+        generator: "codex".into(),
+    };
+    ai.share.as_mut().unwrap().by = None;
+    ai.validate().unwrap();
+    assert!(!ai.needs_human_permission());
+    ai.people.insert(Uuid::from_u128(77));
+    assert!(ai.needs_human_permission());
+    assert_eq!(ai.validate(), Err(StudioError::InvalidMaterial("share")));
+    for role in [UseRole::Anchor, UseRole::Support] {
+        assert_eq!(
+            check(&ai, role, Subject::Olay { olay_id: a.id }, &olays, day),
+            Err(Refusal::SensitiveNeedsHuman),
+            "{role:?}"
+        );
+    }
+    // A human's permission covers the person.
+    ai.share.as_mut().unwrap().by = Some(owner());
+    ai.validate().unwrap();
+    assert_eq!(
+        check(
+            &ai,
+            UseRole::Anchor,
+            Subject::Olay { olay_id: a.id },
+            &olays,
+            day
+        ),
+        Ok(())
+    );
+}
+
 #[test]
 fn a_piece_needs_an_anchor_and_every_material_to_pass() {
     let a = olay(
