@@ -6,7 +6,7 @@ use jt_app::{
     usecases::{
         jobs::Job,
         strategy,
-        studio::{measure, planner, publish, views},
+        studio::{measure, planner, posts, publish, views},
     },
 };
 use jt_testkit::fakes::{FIXED_NOW, FixedClock, InMemoryUow};
@@ -65,19 +65,8 @@ pub async fn run_acceptance() {
     .unwrap();
     w.current = approved.id;
     assert_eq!(approved.status, jt_strategy::VersionStatus::Approved);
-    let start = time::macros::datetime!(2026-10-25 21:00 UTC);
-    assert_eq!(planner::plan(&w.d, w.f.ws, start).await.unwrap(), 7);
-    assert_eq!(planner::plan(&w.d, w.f.ws, start).await.unwrap(), 0);
-    // Submit the planner's own first slot, not a manually inserted publication.
-    let planned = w
-        .uow
-        .snapshot()
-        .studio
-        .slots
-        .into_iter()
-        .find(|s| s.scheduled_at >= start)
-        .unwrap();
-    w.f.slot = planned.clone();
+    // The owner gives a material: a human makes an upload a material of a confirmed olay (spec
+    // 2026-11-03 D1). Everything else follows from it.
     let file = jt_app::usecases::studio::files::file_upload(
         &w.d,
         &w.ctx,
@@ -89,21 +78,69 @@ pub async fn run_acceptance() {
     )
     .await
     .unwrap();
-    // A human makes the upload a material of a confirmed olay (spec 2026-11-03 D1): the piece
-    // shows it and speaks about that olay.
     let olay = jt_testkit::studio_contract::confirmed_olay(w.f.ws);
+    let material = jt_testkit::studio_contract::eligible_material(&olay, file.id);
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     r.studio_materials()
         .insert_olay(olay.clone())
         .await
         .unwrap();
     r.studio_materials()
-        .insert_material(jt_testkit::studio_contract::eligible_material(
-            &olay, file.id,
-        ))
+        .insert_material(material.clone())
         .await
         .unwrap();
     r.commit().await.unwrap();
+    // The planner asks agents for a package once the olay's materials settle; it never creates
+    // a post, and it retires the weekly quotas' ready seed (D34).
+    let start = time::macros::datetime!(2026-10-25 21:00 UTC);
+    let seed = w.f.slot.id;
+    planner::plan(&w.d, w.f.ws, start).await.unwrap();
+    planner::plan(&w.d, w.f.ws, start + Duration::minutes(10))
+        .await
+        .unwrap();
+    let mut ctx = w.ctx.clone();
+    ctx.now = start;
+    let requests = posts::package_requests(&w.d, &ctx, Default::default())
+        .await
+        .unwrap();
+    // One request per olay: the new one's lists the new material.
+    let request = requests
+        .iter()
+        .find(|q| q.olay_id == Some(olay.id))
+        .unwrap()
+        .clone();
+    assert_eq!(request.material_ids, vec![material.id]);
+    let snapshot = w.uow.snapshot();
+    assert!(snapshot.posts.posts.is_empty());
+    assert_eq!(
+        snapshot
+            .studio
+            .slots
+            .iter()
+            .find(|s| s.id == seed)
+            .unwrap()
+            .state,
+        jt_studio::SlotState::Retired
+    );
+    // The agent answers with one post on the X account; it is materialized at once.
+    let package = posts::package_propose(
+        &w.d,
+        &ctx,
+        serde_json::from_value(json!({
+            "request_id": request.id, "request_key": "package",
+            "posts": [{"format":"feed_post","capability_id":w.f.slot.capability_id,
+                "publish_at":"2026-10-28T07:00:00Z","material_ids":[material.id],
+                "subject":{"kind":"olay","olay_id":olay.id},
+                "hypothesis_id":w.f.slot.chain.hypothesis_id}]
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let planned = package.posts[0].slot.clone();
+    w.f.slot = planned.clone();
+    // From its preparation start the agent submits the piece, about the post's subject.
+    ctx.now = package.posts[0].post.prep_start_at;
     let input = jt_app::usecases::studio::pieces::PieceInput {
         slot_id: planned.id,
         expected_revision: 0,
@@ -111,33 +148,14 @@ pub async fn run_acceptance() {
         text: "supplied by agent".into(),
         media: vec![jt_studio::MediaAsset::File { id: file.id }],
         adaptations: Default::default(),
-        subject: Some(jt_studio::Subject::Olay { olay_id: olay.id }),
+        subject: None,
     };
-    jt_app::usecases::studio::pieces::piece_submit(&w.d, &w.ctx, input.clone())
+    jt_app::usecases::studio::pieces::piece_submit(&w.d, &ctx, input.clone())
         .await
         .unwrap();
-    jt_app::usecases::studio::pieces::piece_submit(&w.d, &w.ctx, input)
+    jt_app::usecases::studio::pieces::piece_submit(&w.d, &ctx, input)
         .await
         .unwrap();
-    // Retire the unrelated Ready seed, so only the newly planned piece is due.
-    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
-    for slot in r
-        .studio()
-        .list_slots(jt_app::ports::studio::SlotQuery {
-            from: FIXED_NOW - Duration::days(1),
-            until: start,
-            hypothesis_id: None,
-            lane: None,
-        })
-        .await
-        .unwrap()
-    {
-        r.studio()
-            .retire_slot(slot.id, slot.revision, "cancelled")
-            .await
-            .unwrap();
-    }
-    r.commit().await.unwrap();
     let published_at = planned.scheduled_at;
     w.d.clock = Arc::new(FixedClock(published_at));
     x.push_publish(Ok(scenarios::receipt()));

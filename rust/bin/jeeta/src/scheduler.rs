@@ -109,7 +109,7 @@ impl Default for Intervals {
             snooze_wake: MINUTE,
             studio_control: MINUTE,
             studio_files_cleanup: DAY,
-            studio_plan: HOUR,
+            studio_plan: 10 * MINUTE,
             studio_publish: MINUTE,
             studio_publish_recover: MINUTE,
             studio_measure: HOUR * 6,
@@ -575,7 +575,7 @@ mod tests {
             Job::StudioFilesCleanup.lock_name(),
             "jeeta.jobs.studio_files_cleanup"
         );
-        assert_eq!(i.of(Job::StudioPlan), HOUR);
+        assert_eq!(i.of(Job::StudioPlan), 10 * MINUTE);
         assert_eq!(i.of(Job::StudioPublish), MINUTE);
         assert_eq!(i.of(Job::StudioPublishRecover), MINUTE);
         assert_eq!(i.of(Job::VoiceBridgeHealth), MINUTE);
