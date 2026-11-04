@@ -3,6 +3,9 @@
 > **For agentic workers:** use superpowers:executing-plans (or subagent-driven-development) to implement
 > this plan task by task. Steps use checkbox (`- [ ]`) syntax.
 
+**Status (2026-11-04):** Phases 0–6 are built (spec §16); Phases 1–4 merged with PR #394, Phase 5's
+posting views and Phase 6 in the follow-up PR. The checkboxes below are the plan as written.
+
 **Goal:** Studio builds content only from real, categorized materials in their real context and time
 (spec `docs/superpowers/specs/2026-11-03-studio-materials-design.md`, read it first).
 

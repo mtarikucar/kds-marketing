@@ -3241,5 +3241,110 @@
         "save": "Dayanağı kaydet"
       }
     }
+  },
+  "posts": {
+    "tab": "Paylaşımlar",
+    "views": {
+      "plan": "Plan",
+      "week": "Haftalık özet",
+      "settings": "Paylaşım ayarları"
+    },
+    "format": {
+      "story": "Hikâye",
+      "feed_post": "Gönderi",
+      "carousel": "Kaydırmalı gönderi",
+      "reel": "Reels",
+      "tiktok_video": "TikTok videosu"
+    },
+    "trigger": {
+      "olay": "Yeni olay materyalleri",
+      "calendar": "Yaklaşan özel gün",
+      "floor": "Uzun süredir gönderi yok"
+    },
+    "materials_one": "{{count}} materyal",
+    "materials_other": "{{count}} materyal",
+    "requests": {
+      "title": "Ajanın planlayacağı istekler",
+      "help": "Studio, yeni materyaller, yaklaşan özel günler ve uzun süredir gönderi olmayan kanallar için bağlı ajandan bir paylaşım planı ister. Ajan 7 gün içinde yanıtlamazsa istek kapanır ve materyaller yeniden istenir.",
+      "empty": "Bekleyen istek yok.",
+      "best": "Önerilen biçim: {{format}}",
+      "expires": "Son gün: {{at}}",
+      "oneChannel": "Tek gönderi: {{channel}}",
+      "window": "Dönem: {{range}}"
+    },
+    "plan": {
+      "title": "Planlanan paylaşımlar",
+      "empty": "Planlanmış paylaşım yok. Materyal yükledikçe Studio ajandan plan ister.",
+      "publishAt": "Yayın: {{at}}",
+      "prepFrom": "Hazırlık: {{at}}",
+      "graceUntil": "En geç: {{at}}",
+      "open": "Studio'da aç",
+      "tz": "Saatler {{tz}} saat dilimine göredir.",
+      "state": {
+        "waiting": "Hazırlık başlamadı",
+        "preparing": "Hazırlanıyor",
+        "ready": "Hazır"
+      },
+      "subject": {
+        "olay": "Olay hakkında",
+        "archive": "Geçen yılın olayı",
+        "generic": "Genel"
+      }
+    },
+    "week": {
+      "title": "{{from}} – {{until}}",
+      "prev": "Önceki hafta",
+      "next": "Sonraki hafta",
+      "current": "Bu hafta",
+      "published": "Yayınlananlar",
+      "planned": "Planlananlar",
+      "cancelled": "Yayınlanmayanlar",
+      "scores": "Ne işe yarıyor",
+      "none": "Yok.",
+      "view": "Gönderiyi aç",
+      "oldPlan": "Eski haftalık plan",
+      "reason": {
+        "cancelled": "İptal edildi",
+        "hypothesis_retired": "Hipotez kaldırıldı",
+        "strategy_archived": "Strateji arşivlendi",
+        "week_ended": "Hafta bitti",
+        "measurements_complete": "Ölçüm tamamlandı",
+        "replanned": "Yeni planlamaya geçildi",
+        "missed_grace": "Zamanında hazırlanamadı"
+      },
+      "scoreFormat": "Biçim",
+      "scoreKind": "Olay türü",
+      "scoreHypothesis": "Hipotez",
+      "scoreMean": "Etkileşim",
+      "scorePosts": "Paylaşım",
+      "generic": "Genel",
+      "noScores": "Henüz ölçülmüş paylaşım yok."
+    },
+    "settings": {
+      "title": "Paylaşım ayarları",
+      "help": "Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
+      "format": "Biçim",
+      "lead": "Hazırlık (saat önce)",
+      "grace": "Gecikme payı (saat)",
+      "feedCap": "Günlük gönderi sınırı (kanal başına)",
+      "feedSpacing": "Gönderiler arası en az (saat)",
+      "storyCap": "Günlük hikâye sınırı",
+      "storySpacing": "Hikâyeler arası en az (dakika)",
+      "tiktokCap": "Günlük TikTok videosu sınırı",
+      "quietFrom": "Sessiz saatler başlangıcı",
+      "quietUntil": "Sessiz saatler bitişi",
+      "floor": "Gönderisiz gün sınırı",
+      "floorHelp": "Bir kanalda bu kadar gün gönderi olmazsa Studio tek bir genel paylaşım ister.",
+      "debounce": "Yükleme bekleme süresi (dakika)",
+      "debounceHelp": "Bir olaya materyal eklemek bittikten bu kadar sonra plan istenir: 20 fotoğraf tek istek olur.",
+      "horizon": "Planlama ufku (gün)",
+      "tz": "Saat dilimi",
+      "storyNote": "Hikâyeler henüz hiçbir kanalda yayınlanmıyor.",
+      "save": "Ayarları kaydet",
+      "saved": "Kaydedildi.",
+      "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
+      "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
+      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
+    }
   }
 }

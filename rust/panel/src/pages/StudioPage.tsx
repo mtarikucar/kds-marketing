@@ -15,6 +15,7 @@ import { StudioLedger } from './StudioLedger';
 import { Field, StudioError, inputClass, useStudioKey } from './StudioShared';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
+import { StudioPosts } from './posts/StudioPosts';
 export function StudioPage() {
   const { t } = useTranslation();
   const session = useSession();
@@ -24,9 +25,10 @@ export function StudioPage() {
   const [hypothesis, setHypothesis] = useState('');
   const [lane, setLane] = useState<LaneKind>();
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  // Which tab is open lives in the address (`?tab=materials`), so links reach the library.
+  // Which tab is open lives in the address (`?tab=materials`, `?tab=posts`), so links reach it.
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') === 'materials' ? 'materials' : 'studio';
+  const raw = params.get('tab');
+  const tab = raw === 'materials' || raw === 'posts' ? raw : 'studio';
   const openSlot = (id: string) => {
     setParams({});
     setSelectedSlot(id);
@@ -66,7 +68,7 @@ export function StudioPage() {
       <h1 className="text-2xl font-semibold tracking-tight">{t('studio.title')}</h1>
       <Tabs
         value={tab}
-        onValueChange={(next) => setParams(next === 'materials' ? { tab: 'materials' } : {})}
+        onValueChange={(next) => setParams(next === 'studio' ? {} : { tab: next })}
       >
         <TabsList aria-label={t('studio.title')}>
           <TabsTrigger value="studio" className="min-h-11">
@@ -75,7 +77,17 @@ export function StudioPage() {
           <TabsTrigger value="materials" className="min-h-11">
             {t('materials.tab')}
           </TabsTrigger>
+          <TabsTrigger value="posts" className="min-h-11">
+            {t('posts.tab')}
+          </TabsTrigger>
         </TabsList>
+        <TabsContent value="posts">
+          {allowed ? (
+            <StudioPosts hypotheses={choices} onOpenSlot={openSlot} />
+          ) : (
+            <p role="alert">{t('studio.forbidden')}</p>
+          )}
+        </TabsContent>
         <TabsContent value="materials">
           {allowed ? (
             <StudioMaterials onOpenSlot={openSlot} />
