@@ -180,6 +180,16 @@ export function errorMessage(t: TFunction, err: unknown): string {
     case 'do_not_contact':
     case 'system_actor':
     case 'rubric_mismatch':
+    case 'outreach_disabled_on_platform':
+    case 'sender_identity_missing':
+    case 'approval_required':
+    case 'human_required':
+    case 'owner_required':
+    case 'not_yet':
+    case 'not_enrollable':
+    case 'enrollment_not_active':
+    case 'archived':
+    case 'campaign_not_running':
       return t(`leads.errors.${err.details.reason}`);
     default:
       break;

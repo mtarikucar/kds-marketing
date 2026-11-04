@@ -2228,7 +2228,32 @@
     },
     "outreach": {
       "title": "Kampanyalar",
-      "description": "Kendi posta kutunuzdan giden düz metin e-posta kampanyaları ve adımları."
+      "description": "Kendi posta kutunuzdan giden düz metin e-posta kampanyaları ve adımları.",
+      "templatesLink": "Şablonlar",
+      "settingsLink": "E-posta ayarları",
+      "newCampaign": "Yeni kampanya",
+      "statusFilter": "Durum",
+      "columns": {
+        "name": "Kampanya",
+        "status": "Durum",
+        "steps": "Adım",
+        "revision": "Sürüm",
+        "launched": "Başlatıldı"
+      },
+      "empty": "Kampanya yok",
+      "emptyBody": "Bir şablon yazın, sonra adımları ve kitlesiyle bir kampanya hazırlayın.",
+      "locked": {
+        "title": "Soğuk e-posta platformda kapalı",
+        "body": "Bu sunucuda JEETA_OUTREACH_ENABLED açılana kadar hiçbir kampanya başlatılamaz ve hiçbir kampanya e-postası gönderilmez. Kampanya hazırlayabilirsiniz."
+      },
+      "identityMissing": {
+        "title": "Gönderen bilgileri eksik",
+        "body": "Her e-postanın sonuna eklenen bilgiler (şirket adı, adres, aydınlatma metni bağlantısı) girilmeden kampanya başlatılamaz."
+      },
+      "blocked": {
+        "platform": "Soğuk e-posta platformda kapalı (JEETA_OUTREACH_ENABLED).",
+        "identity": "Gönderen bilgileri eksik: şirket adı, adres ve aydınlatma metni bağlantısı."
+      }
     },
     "bulk": {
       "label": "Seçilenler için işlemler",
@@ -2474,7 +2499,17 @@
       "previously_rejected": "Bu işletme daha önce reddedilmiş.",
       "do_not_contact": "İletişim yasağı listesinde.",
       "system_actor": "Sistem havuza kayıt yazamaz.",
-      "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın."
+      "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın.",
+      "outreach_disabled_on_platform": "Soğuk e-posta bu sunucuda kapalı (JEETA_OUTREACH_ENABLED); kampanya başlatılamaz.",
+      "sender_identity_missing": "Gönderen bilgileri eksik: E-posta ayarlarından şirket adı, adres ve aydınlatma metni bağlantısını girin.",
+      "approval_required": "Önce onay gerekiyor.",
+      "human_required": "Bunu yalnızca bir ekip üyesi yapabilir.",
+      "owner_required": "Bunu yalnızca çalışma alanının sahibi yapabilir.",
+      "not_yet": "Kampanyanın başlangıç zamanı gelmedi.",
+      "not_enrollable": "Bu durumdaki bir kampanyaya alıcı eklenemez.",
+      "enrollment_not_active": "Bu alıcı için kampanya zaten sürmüyor.",
+      "archived": "Şablon arşivde.",
+      "campaign_not_running": "Kampanya şu an gönderim yapmıyor."
     },
     "teamTabs": {
       "label": "Ekip bölümleri",
@@ -2582,6 +2617,247 @@
         "slaDue": "İlk temas için son: {{at}}",
         "acted": "{{at}} tarihinde ilgilenildi",
         "superseded": "Yerine başka bir karar geçti"
+      }
+    },
+    "basis": {
+      "consent": "İzin",
+      "business_recipient": "İşletme alıcısı"
+    },
+    "recipientKinds": {
+      "business": "İşletme",
+      "individual": "Bireysel",
+      "unknown": "Bilinmiyor"
+    },
+    "journeyStages": {
+      "new": "Yeni",
+      "contacted": "İletişime geçildi",
+      "unreachable": "Ulaşılamadı",
+      "appointment": "Randevu",
+      "met": "Görüşüldü",
+      "quoted": "Teklif verildi",
+      "pending": "Beklemede"
+    },
+    "campaignStatus": {
+      "draft": "Taslak",
+      "awaiting_approval": "Onay bekliyor",
+      "scheduled": "Zamanlandı",
+      "running": "Gönderiliyor",
+      "paused": "Duraklatıldı",
+      "completed": "Tamamlandı",
+      "canceled": "İptal edildi"
+    },
+    "pauseReasons": {
+      "manual": "elle duraklatıldı",
+      "bounce_rate": "geri dönen e-posta oranı yüksek",
+      "complaints": "şikâyet geldi",
+      "mailbox_down": "posta kutusuna ulaşılamıyor",
+      "strategy_changed": "strateji değişti"
+    },
+    "enrollmentStatus": {
+      "active": "Sürüyor",
+      "completed": "Bitti",
+      "stopped": "Durduruldu",
+      "skipped": "Atlandı"
+    },
+    "stop": {
+      "replied": "Yanıt verdi",
+      "bounced": "E-posta geri döndü",
+      "complained": "Şikâyet etti",
+      "unsubscribed": "Abonelikten çıktı",
+      "consent_withdrawn": "İznini geri çekti",
+      "meeting_booked": "Randevu alındı",
+      "journey_won": "Satış kazanıldı",
+      "journey_lost": "Satış kaybedildi",
+      "person_erased": "Kişi silindi",
+      "person_merged": "Kişi birleştirildi",
+      "human_holds_conversation": "Konuşmayı bir ekip üyesi yürütüyor",
+      "do_not_contact": "İletişim yasağı",
+      "campaign_canceled": "Kampanya iptal edildi",
+      "manual": "Elle durduruldu",
+      "refused": "Gönderim reddedildi ({{reason}})",
+      "missingVariable": "Kişiselleştirme eksik: {{name}}"
+    },
+    "skip": {
+      "no_deliverable_email": "Teslim edilebilir e-postası yok",
+      "suppressed": "E-posta almayı reddetmiş",
+      "no_basis": "Ticari ileti dayanağı yok",
+      "do_not_contact": "İletişim yasağı listesinde",
+      "active_elsewhere": "Başka bir kampanyada sürüyor",
+      "person_gone": "Kişi silinmiş ya da birleştirilmiş",
+      "journey_closed": "Yolculuğu kapanmış",
+      "promotion_cap": "Bugünkü aktarma sınırı doldu"
+    },
+    "campaign": {
+      "title": "Kampanya",
+      "newTitle": "Yeni kampanya",
+      "revision": "Sürüm {{revision}}",
+      "editor": "Kampanyayı düzenle",
+      "name": "Kampanya adı",
+      "mailbox": "Gönderen posta kutusu",
+      "chooseMailbox": "Bir posta kutusu seçin",
+      "senderName": "Gönderen adı",
+      "steps": "Adımlar",
+      "stepTemplate": "{{n}}. adımın şablonu",
+      "chooseTemplate": "Bir şablon seçin",
+      "delay": "Önceki adımdan sonra (gün)",
+      "sameThread": "Aynı yazışmada",
+      "removeStep": "Adımı kaldır",
+      "addStep": "Adım ekle",
+      "audience": "Kitle",
+      "fromPool": "Aday havuzundaki nitelikli adaylar (gönderimden önce gelen kutusuna aktarılır)",
+      "fromInbox": "Gelen kutusundaki kişiler",
+      "segments": "Segmentler (virgülle)",
+      "cities": "Şehirler (virgülle)",
+      "sectors": "Sektörler (virgülle)",
+      "minScore": "En düşük puan",
+      "stages": "Yolculuk aşamaları",
+      "recipientKind": "Alıcı türü",
+      "window": "Gönderim saatleri",
+      "startAt": "Başlangıç (isteğe bağlı)",
+      "perHour": "Saatte en fazla",
+      "perDay": "Günde en fazla",
+      "clickTracking": "Bağlantı tıklamalarını say",
+      "evergreen": "Kitleyi her gün yenile",
+      "saveVoidsApproval": "Kaydetmek yeni bir sürüm oluşturur; önceki onay geçersiz olur.",
+      "saveRevision": "Yeni sürümü kaydet",
+      "create": "Taslağı kaydet",
+      "saved": "Kampanya kaydedildi.",
+      "preview": {
+        "title": "Kitle önizlemesi",
+        "chooseMailbox": "Kitleyi görmek için bir posta kutusu seçin.",
+        "eligible": "Uygun alıcı: {{n}}",
+        "basis": "Dayanak: izinli {{consent}}, işletme alıcısı {{business}}",
+        "promotions": "Önce gelen kutusuna aktarılacak aday: {{n}}",
+        "noB2b": "İşletme alıcısı dayanağı kapalı: izni olmayan işletmeler atlanır.",
+        "skipped": "Atlananlar",
+        "skip": "{{reason}}: {{n}}",
+        "truncated": "Kitle üst sınırı aşıyor; ilk kısmı sayıldı."
+      },
+      "deliverability": {
+        "title": "Teslim edilebilirlik",
+        "body": "Gönderen alan adında SPF, DKIM ve DMARC kayıtları ayarlı olmalı. Kampanyayı başlatmadan önce bunları alan adı sağlayıcınızda kontrol edin."
+      },
+      "approval": {
+        "title": "Yönetici onayı",
+        "body": "Sürüm {{revision}} başlatılmak için onay bekliyor. Hazırlayan: {{drafter}}.",
+        "approve": "Onayla (sürüm {{revision}})",
+        "waiting": "Bir yöneticinin onayını bekliyor."
+      },
+      "approved": "Kampanya onaylandı.",
+      "run": "Gönderim",
+      "blockedTitle": "Başlatma engelleri",
+      "pausedFor": "Duraklatma nedeni: {{reason}}",
+      "launchApproves": "Bu kampanya onay gerektiriyor; sizin başlatmanız bu sürümü onaylar.",
+      "launchNeedsApproval": "Bu kampanya onay gerektiriyor; başlatınca bir yöneticinin onayını bekler.",
+      "launch": "Başlat",
+      "pause": "Duraklat",
+      "resume": "Sürdür",
+      "cancel": "İptal et",
+      "done": "Kaydedildi.",
+      "active": "Süren kayıt: {{n}}"
+    },
+    "enrollments": {
+      "title": "Alıcılar",
+      "empty": "Henüz alıcı yok",
+      "person": "Kişi",
+      "openPerson": "Kişiyi aç",
+      "prospect": "Aday",
+      "status": "Durum",
+      "step": "Sıradaki adım",
+      "next": "Sıradaki gönderim",
+      "basis": "Dayanak",
+      "stop": "Durdur",
+      "stopped": "Alıcı için kampanya durduruldu."
+    },
+    "templates": {
+      "title": "Şablonlar",
+      "description": "Düz metin e-posta şablonları. Değişkenler alıcıya göre doldurulur; altbilgiyi Jeeta ekler.",
+      "list": "Şablon listesi",
+      "new": "Yeni şablon",
+      "showArchived": "Arşivdekileri göster",
+      "empty": "Şablon yok",
+      "archivedBadge": "Arşivde",
+      "choose": "Düzenlemek için bir şablon seçin ya da yenisini açın.",
+      "editor": "Şablon düzenleyici",
+      "name": "Ad",
+      "language": "Dil",
+      "languages": {
+        "tr": "Türkçe",
+        "en": "İngilizce"
+      },
+      "subject": "Konu",
+      "body": "Metin",
+      "vars": "Değişkenler",
+      "customHint": "Ajanın alıcıya göre yazacağı değerler için {{custom}} biçimini, değer yoksa kullanılacak yedek için {{fallback}} biçimini kullanın.",
+      "problems": {
+        "unbalanced_braces": "{{where}} içinde süslü parantezler eşleşmiyor.",
+        "unknown_variable": "{{where}} içinde bilinmeyen değişken: {{name}}",
+        "custom_key": "{{where}} içinde özel değişken adı yalnızca küçük harf, rakam ve alt çizgi olabilir.",
+        "fallback_invalid": "{{where}} içinde bir yedek değer boş, çok uzun ya da süslü parantez içeriyor.",
+        "literal_invalid": "{{where}} içinde geçersiz bir süslü parantez yazımı var."
+      },
+      "create": "Şablonu kaydet",
+      "saveRevision": "Yeni sürümü kaydet",
+      "saved": "Şablon kaydedildi.",
+      "archive": "Arşive kaldır",
+      "archived": "Şablon arşive kaldırıldı.",
+      "preview": "Örnek değerlerle önizleme",
+      "recipient": "Alıcı",
+      "recipients": {
+        "business": "İşletme (herkese açık bilgi)",
+        "consent": "İzin vermiş kişi"
+      },
+      "identityHint": "Gönderen bilgileri eksik; altbilgi E-posta ayarlarından gelir.",
+      "footerFixed": "Altbilgi her e-postaya şablonun dilinde eklenir ve değiştirilemez.",
+      "links": "Bağlantılar",
+      "noLinks": "Metinde bağlantı yok.",
+      "unsubscribeSample": "(abonelikten çıkma bağlantısı)",
+      "samples": {
+        "first_name": "Ayşe",
+        "contact_name": "Ayşe Yılmaz",
+        "company": "Örnek Kafe",
+        "city": "İzmir",
+        "district": "Alsancak",
+        "sector": "kafe"
+      },
+      "missing": {
+        "company": "[şirket adı]",
+        "address": "[adres]",
+        "privacy": "[aydınlatma metni bağlantısı]"
+      }
+    },
+    "settings": {
+      "title": "E-posta ayarları",
+      "description": "Kampanyaların gönderen bilgileri, onay, ısınma ve sıklık sınırları.",
+      "general": "Genel ayarlar",
+      "readOnly": "Bu ayarları yalnızca yöneticiler değiştirebilir.",
+      "identity": "Gönderen bilgileri (her e-postanın altbilgisi)",
+      "company": "Şirket adı",
+      "address": "Adres",
+      "privacy": "Aydınlatma metni bağlantısı",
+      "sending": "Gönderim",
+      "requiresApproval": "Her kampanya başlamadan önce bir yöneticinin onayını beklesin",
+      "clickTracking": "Yeni kampanyalarda bağlantı tıklamalarını say",
+      "warmup": "Isınma (yeni posta kutusu için günlük sınır)",
+      "warmupOn": "Isınma açık",
+      "warmupStart": "İlk gün",
+      "warmupStep": "Günlük artış",
+      "warmupMax": "En fazla",
+      "frequency": "Sıklık (bir kişiye)",
+      "minGap": "İki e-posta arasında en az (gün)",
+      "per30": "30 günde en fazla",
+      "saved": "Ayarlar kaydedildi.",
+      "b2b": {
+        "title": "İşletme alıcısı dayanağı",
+        "description": "İzni olmayan işletmelere, herkese açık iletişim bilgileri üzerinden e-posta gönderme dayanağı. Varsayılan olarak kapalıdır.",
+        "legal": "Bunu yalnızca avukatınız bu kullanımı yazılı olarak teyit ettikten sonra açın. Açarken teyidi ve notunuzu kayda geçiririz.",
+        "recorded": "Kayıtlı teyit: {{at}}",
+        "email": "E-posta için işletme alıcısı dayanağını aç",
+        "iys": "Göndermeden önce İYS'de sorgula",
+        "counsel": "Avukatım bu kullanımı yazılı olarak teyit etti",
+        "note": "Teyidin notu (kim, ne zaman, neyi teyit etti)",
+        "notInForce": "Dayanak kayıtlı, ancak platformda soğuk e-posta kapalı olduğu için şu an geçerli değil.",
+        "save": "Dayanağı kaydet"
       }
     }
   }

@@ -20,6 +20,9 @@ import { ProspectsPage } from '@/pages/ProspectsPage';
 import { ProspectDetail } from '@/pages/ProspectDetail';
 import { ResearchTasksPage } from '@/pages/ResearchTasksPage';
 import { OutreachPage } from '@/pages/OutreachPage';
+import { OutreachCampaign } from '@/pages/OutreachCampaign';
+import { OutreachSettings } from '@/pages/OutreachSettings';
+import { OutreachTemplates } from '@/pages/OutreachTemplates';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
@@ -89,6 +92,10 @@ export const routes: RouteObject[] = [
           { path: 'prospects/tasks', element: <ResearchTasksPage /> },
           { path: 'prospects/:prospectId', element: <ProspectDetail /> },
           { path: 'outreach', element: <OutreachPage /> },
+          { path: 'outreach/templates', element: <OutreachTemplates /> },
+          { path: 'outreach/settings', element: <OutreachSettings /> },
+          { path: 'outreach/new', element: <OutreachCampaign /> },
+          { path: 'outreach/:campaignId', element: <OutreachCampaign /> },
           { path: 'calls', element: <CallsPage /> },
           { path: 'calls/:callId', element: <CallDetail /> },
           { path: 'strategy', element: <StrategyPage /> },
