@@ -2193,11 +2193,288 @@
   "leads": {
     "prospects": {
       "title": "Aday havuzu",
-      "description": "Ajanlarınızın kendi araçlarıyla bulup kanıtıyla kaydettiği işletmeler. Gelen kutusuna aktarılana kadar burada ayrı durur."
+      "description": "Ajanlarınızın kendi araçlarıyla bulup kanıtıyla kaydettiği işletmeler. Gelen kutusuna aktarılana kadar burada ayrı durur.",
+      "tasksLink": "Araştırma görevleri",
+      "playbook": "Ajan talimatları",
+      "playbookFacts": "Sürüm {{version}} · bugün kaydedilen {{recorded}} / {{cap}}",
+      "filters": {
+        "status": "Durum",
+        "bucket": "Puan aralığı",
+        "task": "Araştırma görevi",
+        "city": "Şehir",
+        "segment": "Segment",
+        "all": "Tümü",
+        "thisTask": "Seçili görev"
+      },
+      "columns": {
+        "business": "İşletme",
+        "sector": "Sektör",
+        "city": "Şehir",
+        "score": "Puan",
+        "status": "Durum",
+        "origin": "Kaynak",
+        "created": "Kaydedildi"
+      },
+      "origin": {
+        "task": "Araştırma görevi",
+        "direct": "Doğrudan"
+      },
+      "selectPage": "Bu sayfadakilerin hepsini seç",
+      "selectRow": "{{name}} seç",
+      "empty": "Havuzda aday yok",
+      "emptyBody": "Ajanlarınız araştırma görevlerine göre aday kaydettikçe burada görünür.",
+      "previous": "Önceki",
+      "next": "Sonraki"
     },
     "outreach": {
       "title": "Kampanyalar",
       "description": "Kendi posta kutunuzdan giden düz metin e-posta kampanyaları ve adımları."
+    },
+    "bulk": {
+      "label": "Seçilenler için işlemler",
+      "selected": "Seçili: {{n}}",
+      "promote": "Seçilenleri aktar",
+      "reject": "Seçilenleri reddet",
+      "dnc": "Seçilenlere iletişim yasağı",
+      "clear": "Seçimi temizle",
+      "results": "Toplu işlemin sonucu",
+      "dismiss": "Kapat"
+    },
+    "actions": {
+      "promote": "Gelen kutusuna aktar",
+      "reject": "Reddet",
+      "dnc": "İletişim yasağı",
+      "qualify": "Nitelikli say",
+      "reopen": "Yeniden aç",
+      "erase": "Sil"
+    },
+    "outcome": {
+      "promoted": "Gelen kutusuna aktarıldı.",
+      "alreadyPromoted": "Daha önce aktarılmış.",
+      "rejected": "Reddedildi.",
+      "blocked": "İletişim yasağı kaydedildi."
+    },
+    "promoteRefused": {
+      "not_found": "Aday bulunamadı.",
+      "not_qualified": "Ajanlar yalnızca nitelikli adayları aktarabilir.",
+      "daily_cap": "Bugünkü aktarma sınırı doldu.",
+      "no_contact_identity": "Ulaşılabilir bir telefon ya da e-posta yok.",
+      "do_not_contact": "İletişim yasağı listesinde.",
+      "erased_identity": "Silinmiş bir kişinin bilgisini taşıyor.",
+      "identity_split": "Bilgileri iki ayrı kişiye uyuyor; birleştirme önerisi oluşturuldu.",
+      "lost_journey_exists": "Bu kişinin kaybedilmiş bir yolculuğu var.",
+      "person_already_linked": "Kişi zaten başka bir adaya bağlı.",
+      "already_promoted": "Daha önce aktarılmış.",
+      "other": "Aktarılamadı."
+    },
+    "status": {
+      "new": "Yeni",
+      "qualified": "Nitelikli",
+      "rejected": "Reddedildi",
+      "promoted": "Aktarıldı",
+      "do_not_contact": "İletişim yasağı"
+    },
+    "reject": {
+      "title": "Adayı reddet",
+      "many": "{{n}} aday",
+      "reason": "Neden",
+      "choose": "Bir neden seçin",
+      "note": "Not (isteğe bağlı)",
+      "noteRequired": "Not (\"Diğer\" için gerekli)",
+      "submit": "Reddet"
+    },
+    "rejectReasons": {
+      "not_icp": "Hedef müşteri profiline uymuyor",
+      "closed_business": "İşletme kapanmış",
+      "no_contact_data": "İletişim bilgisi yok",
+      "competitor": "Rakip",
+      "already_customer": "Zaten müşteri",
+      "duplicate": "Mükerrer kayıt",
+      "other": "Diğer"
+    },
+    "dnc": {
+      "title": "İletişim yasağı",
+      "description": "Adayın iletişim bilgileri silinir ve telefonu, e-postası ile sosyal hesapları bir daha kaydedilemez. Geri almak yalnızca yöneticinin elindedir.",
+      "many": "{{n}} aday",
+      "reason": "Neden",
+      "choose": "Bir neden seçin",
+      "note": "Not (isteğe bağlı)",
+      "confirm": "Onaylamak için {{phrase}} yazın",
+      "phrase": "ENGELLE",
+      "submit": "İletişim yasağı koy"
+    },
+    "dncReasons": {
+      "objected": "İşletme itiraz etti",
+      "legal": "Hukuki neden",
+      "other": "Diğer"
+    },
+    "erase": {
+      "title": "Adayı kalıcı olarak sil",
+      "description": "Kayıt hemen silinir; telefonu, e-postası ve sosyal hesapları bir daha kaydedilemez. Bu işlem geri alınamaz.",
+      "confirm": "Onaylamak için {{phrase}} yazın",
+      "phrase": "SİL",
+      "submit": "Kalıcı olarak sil",
+      "done": "Aday silindi."
+    },
+    "source": {
+      "manual": "Ekip notu: {{note}}",
+      "import": "{{system}} içe aktarımı"
+    },
+    "recorder": {
+      "agent": "Ajan",
+      "agentNamed": "{{name}} (ajan, {{member}} adına)",
+      "member": "Ekip üyesi",
+      "import": "{{system}} içe aktarımı",
+      "system": "Jeeta ({{job}})"
+    },
+    "entityKinds": {
+      "legal_entity": "Şirket",
+      "sole_trader": "Şahıs işletmesi",
+      "unknown_business": "Türü bilinmiyor"
+    },
+    "originVia": {
+      "research_task": "Araştırma görevi",
+      "manual": "Elle kayıt",
+      "agent": "Ajan kaydı",
+      "v1_import": "Eski sistemden aktarım",
+      "system": "Jeeta"
+    },
+    "fields": {
+      "phone": "Telefon",
+      "email": "E-posta",
+      "website": "Web sitesi",
+      "instagram": "Instagram",
+      "tiktok": "TikTok",
+      "address": "Adres",
+      "contact_person": "İlgili kişi",
+      "size": "Büyüklük"
+    },
+    "matched": {
+      "domain": "aynı web alan adı",
+      "name_city": "aynı ad ve şehir"
+    },
+    "prospect": {
+      "title": "Aday",
+      "back": "Aday havuzu",
+      "entity": "Tür",
+      "sector": "Sektör",
+      "place": "Yer",
+      "segment": "Segment",
+      "language": "Dil",
+      "labels": "Etiketler",
+      "origin": "Nereden",
+      "recordedBy": "Kaydeden",
+      "created": "Kaydedildi",
+      "purgeAfter": "Silineceği tarih",
+      "score": "Puan {{score}}",
+      "rejectedFor": "Reddedildi: {{reason}}",
+      "blockedFor": "İletişim yasağı: {{reason}}",
+      "fields": "Bilgiler ve kanıtları",
+      "sourcesOf": "{{field}} kaynakları",
+      "evidence": "{{at}} · {{by}}",
+      "undeliverable": "Ulaşılamıyor",
+      "branches": "Şube: {{n}}",
+      "employees": "{{band}} çalışan",
+      "signals": "İşaretler",
+      "scores": "Puan geçmişi",
+      "noScores": "Henüz puanlanmadı.",
+      "scoredBy": "{{at}} · {{by}}",
+      "digest": "Ölçüt sürümü {{digest}}",
+      "criterion": "Ölçüt",
+      "points": "Puan",
+      "why": "Gerekçe",
+      "duplicates": "Olası mükerrerler",
+      "noDuplicates": "Benzer aday yok.",
+      "history": "Karar geçmişi",
+      "noHistory": "Kayıt yok.",
+      "saved": "Kaydedildi.",
+      "openInInbox": "Gelen kutusunda aç"
+    },
+    "tasks": {
+      "title": "Araştırma görevleri",
+      "description": "Stratejinin hedef müşteri profilinden gelen görevler ve sizin açtığınız tek seferlik görevler. Ajanlar bunlara göre araştırıp havuza aday ekler.",
+      "poolLink": "Aday havuzu",
+      "statusFilter": "Durum",
+      "statuses": {
+        "open": "Açık",
+        "done": "Tamamlandı",
+        "canceled": "İptal edildi",
+        "superseded": "Yeni strateji sürümüyle değişti"
+      },
+      "kind": {
+        "standing": "Strateji görevi · {{key}}",
+        "ad_hoc": "Tek seferlik · {{sectors}}"
+      },
+      "target": "Hedef {{n}}",
+      "remaining": "Bugün kalan: {{remaining}} (günlük üst sınır {{cap}})",
+      "claim": "Üstlen",
+      "claimed": "Görev iki saatliğine sizde.",
+      "heldByOther": "Görev şu an başka biri üzerinde.",
+      "claimedByYou": "Sizde, {{until}} tarihine kadar",
+      "claimedBy": "{{name}} üzerinde, {{until}} tarihine kadar",
+      "close": "Görevi kapat",
+      "outcome": "Sonuç",
+      "outcomes": {
+        "done": "Tamamlandı",
+        "canceled": "İptal"
+      },
+      "closeNote": "Not (isteğe bağlı)",
+      "closeSubmit": "Kapat",
+      "closed": "Görev kapatıldı.",
+      "progress": "İlerleme",
+      "found": "Bulunan: {{found}}",
+      "foundOf": "Bulunan: {{found}} / {{target}}",
+      "newest": "Son kaydedilen adaylar",
+      "prospectsLink": "Bu görevin adaylarını gör",
+      "empty": "Görev yok",
+      "emptyBody": "Onaylı stratejinin hedef müşteri profili her girdi için bir görev açar; aşağıdan tek seferlik bir görev de açabilirsiniz.",
+      "brief": {
+        "segment": "Segment",
+        "sectors": "Sektörler",
+        "areas": "Bölgeler",
+        "signals": "Aranan işaretler",
+        "exclusions": "Hariç tutulanlar",
+        "size": "Büyüklük",
+        "language": "Dil",
+        "note": "Not"
+      },
+      "create": {
+        "title": "Tek seferlik görev aç",
+        "description": "Ajanlara ne aramaları, nerede ve neyi hariç tutmaları gerektiğini anlatın.",
+        "sectors": "Sektörler (her satıra bir tane)",
+        "sectorsHint": "kafe",
+        "areas": "Bölgeler (her satıra bir tane: şehir ya da şehir / ilçe)",
+        "areasHint": "İzmir / Alsancak",
+        "signals": "Aranan işaretler (her satıra bir tane)",
+        "exclusions": "Hariç tutulanlar (her satıra bir tane)",
+        "segment": "Segment anahtarı (isteğe bağlı)",
+        "size": "Büyüklük ipucu",
+        "language": "Dil (ör. tr)",
+        "target": "Bulunacak aday sayısı",
+        "dailyCap": "Günlük üst sınır",
+        "note": "Not",
+        "submit": "Görevi aç",
+        "created": "Görev açıldı."
+      }
+    },
+    "errors": {
+      "not_editable": "Aktarılmış ya da iletişim yasağı konmuş bir aday değiştirilemez.",
+      "stale_revision": "Bu kayıt siz bakarken değişti. Sayfayı yenileyip yeniden deneyin.",
+      "promoted": "Aday gelen kutusuna aktarılmış: itirazı kişinin kaydına işleyin.",
+      "erase_the_person": "Aday gelen kutusuna aktarılmış: silme kişinin kaydından yapılır.",
+      "human_only": "Bu işlemi yalnızca bir ekip üyesi yapabilir.",
+      "prospecting_off": "Onaylı stratejide hedef müşteri profili yok; önce stratejiye ekleyin.",
+      "task_closed": "Görev kapanmış.",
+      "standing_task": "Strateji görevi buradan kapatılamaz; stratejideki profili değiştirin.",
+      "not_scorable": "Bu aday puanlanamaz.",
+      "invalid_transition": "Bu durumdaki bir kayıt için bu işlem yapılamaz.",
+      "daily_cap": "Bugünkü sınır doldu.",
+      "duplicate": "Bu işletme havuzda zaten var.",
+      "in_inbox": "Bu kişi gelen kutusunda zaten var.",
+      "previously_rejected": "Bu işletme daha önce reddedilmiş.",
+      "do_not_contact": "İletişim yasağı listesinde.",
+      "system_actor": "Sistem havuza kayıt yazamaz.",
+      "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın."
     }
   }
 }

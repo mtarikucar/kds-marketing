@@ -2193,11 +2193,288 @@
   "leads": {
     "prospects": {
       "title": "Prospects",
-      "description": "Businesses your agents found with their own tools and recorded with evidence. They stay here, apart, until promoted into the inbox."
+      "description": "Businesses your agents found with their own tools and recorded with evidence. They stay here, apart, until promoted into the inbox.",
+      "tasksLink": "Research tasks",
+      "playbook": "Agent playbook",
+      "playbookFacts": "Version {{version}} · recorded today {{recorded}} / {{cap}}",
+      "filters": {
+        "status": "Status",
+        "bucket": "Score range",
+        "task": "Research task",
+        "city": "City",
+        "segment": "Segment",
+        "all": "All",
+        "thisTask": "Selected task"
+      },
+      "columns": {
+        "business": "Business",
+        "sector": "Sector",
+        "city": "City",
+        "score": "Score",
+        "status": "Status",
+        "origin": "Source",
+        "created": "Recorded"
+      },
+      "origin": {
+        "task": "Research task",
+        "direct": "Direct"
+      },
+      "selectPage": "Select everything on this page",
+      "selectRow": "Select {{name}}",
+      "empty": "No prospects in the pool",
+      "emptyBody": "They appear here as your agents record prospects for the research tasks.",
+      "previous": "Previous",
+      "next": "Next"
     },
     "outreach": {
       "title": "Campaigns",
       "description": "Plain-text email campaigns and their steps, sent from your own mailbox."
+    },
+    "bulk": {
+      "label": "Actions for the selection",
+      "selected": "Selected: {{n}}",
+      "promote": "Promote selected",
+      "reject": "Reject selected",
+      "dnc": "Do not contact selected",
+      "clear": "Clear selection",
+      "results": "Bulk action results",
+      "dismiss": "Close"
+    },
+    "actions": {
+      "promote": "Promote to inbox",
+      "reject": "Reject",
+      "dnc": "Do not contact",
+      "qualify": "Qualify",
+      "reopen": "Reopen",
+      "erase": "Erase"
+    },
+    "outcome": {
+      "promoted": "Promoted into the inbox.",
+      "alreadyPromoted": "Promoted before.",
+      "rejected": "Rejected.",
+      "blocked": "Do-not-contact recorded."
+    },
+    "promoteRefused": {
+      "not_found": "Prospect not found.",
+      "not_qualified": "Agents may promote qualified prospects only.",
+      "daily_cap": "Today's promotion limit is reached.",
+      "no_contact_identity": "No reachable phone or email.",
+      "do_not_contact": "On the do-not-contact list.",
+      "erased_identity": "Holds details of an erased person.",
+      "identity_split": "Its details match two different people; a merge suggestion was made.",
+      "lost_journey_exists": "This person has a lost journey.",
+      "person_already_linked": "The person is already linked to another prospect.",
+      "already_promoted": "Promoted before.",
+      "other": "Not promoted."
+    },
+    "status": {
+      "new": "New",
+      "qualified": "Qualified",
+      "rejected": "Rejected",
+      "promoted": "Promoted",
+      "do_not_contact": "Do not contact"
+    },
+    "reject": {
+      "title": "Reject the prospect",
+      "many": "{{n}} prospects",
+      "reason": "Reason",
+      "choose": "Choose a reason",
+      "note": "Note (optional)",
+      "noteRequired": "Note (required for \"Other\")",
+      "submit": "Reject"
+    },
+    "rejectReasons": {
+      "not_icp": "Not our ideal customer",
+      "closed_business": "Business closed",
+      "no_contact_data": "No contact details",
+      "competitor": "Competitor",
+      "already_customer": "Already a customer",
+      "duplicate": "Duplicate",
+      "other": "Other"
+    },
+    "dnc": {
+      "title": "Do not contact",
+      "description": "The prospect's contact details are deleted and its phone, email and social accounts can never be recorded again. Only a manager can undo it.",
+      "many": "{{n}} prospects",
+      "reason": "Reason",
+      "choose": "Choose a reason",
+      "note": "Note (optional)",
+      "confirm": "Type {{phrase}} to confirm",
+      "phrase": "BLOCK",
+      "submit": "Mark do not contact"
+    },
+    "dncReasons": {
+      "objected": "The business objected",
+      "legal": "Legal reason",
+      "other": "Other"
+    },
+    "erase": {
+      "title": "Erase the prospect for good",
+      "description": "The record is deleted now; its phone, email and social accounts can never be recorded again. This cannot be undone.",
+      "confirm": "Type {{phrase}} to confirm",
+      "phrase": "ERASE",
+      "submit": "Erase for good",
+      "done": "Prospect erased."
+    },
+    "source": {
+      "manual": "Team note: {{note}}",
+      "import": "{{system}} import"
+    },
+    "recorder": {
+      "agent": "Agent",
+      "agentNamed": "{{name}} (agent, for {{member}})",
+      "member": "Team member",
+      "import": "{{system}} import",
+      "system": "Jeeta ({{job}})"
+    },
+    "entityKinds": {
+      "legal_entity": "Company",
+      "sole_trader": "Sole trader",
+      "unknown_business": "Kind unknown"
+    },
+    "originVia": {
+      "research_task": "Research task",
+      "manual": "Recorded by hand",
+      "agent": "Recorded by an agent",
+      "v1_import": "Imported from the old system",
+      "system": "Jeeta"
+    },
+    "fields": {
+      "phone": "Phone",
+      "email": "Email",
+      "website": "Website",
+      "instagram": "Instagram",
+      "tiktok": "TikTok",
+      "address": "Address",
+      "contact_person": "Contact person",
+      "size": "Size"
+    },
+    "matched": {
+      "domain": "same web domain",
+      "name_city": "same name and city"
+    },
+    "prospect": {
+      "title": "Prospect",
+      "back": "Prospects",
+      "entity": "Kind",
+      "sector": "Sector",
+      "place": "Place",
+      "segment": "Segment",
+      "language": "Language",
+      "labels": "Labels",
+      "origin": "From",
+      "recordedBy": "Recorded by",
+      "created": "Recorded",
+      "purgeAfter": "Deleted on",
+      "score": "Score {{score}}",
+      "rejectedFor": "Rejected: {{reason}}",
+      "blockedFor": "Do not contact: {{reason}}",
+      "fields": "Details and their evidence",
+      "sourcesOf": "Sources of {{field}}",
+      "evidence": "{{at}} · {{by}}",
+      "undeliverable": "Unreachable",
+      "branches": "Branches: {{n}}",
+      "employees": "{{band}} employees",
+      "signals": "Signals",
+      "scores": "Score history",
+      "noScores": "Not scored yet.",
+      "scoredBy": "{{at}} · {{by}}",
+      "digest": "Rubric version {{digest}}",
+      "criterion": "Criterion",
+      "points": "Points",
+      "why": "Why",
+      "duplicates": "Possible duplicates",
+      "noDuplicates": "No similar prospect.",
+      "history": "Decision history",
+      "noHistory": "No entries.",
+      "saved": "Saved.",
+      "openInInbox": "Open in the inbox"
+    },
+    "tasks": {
+      "title": "Research tasks",
+      "description": "Tasks from the strategy's ideal customer profile and one-off tasks you open. Agents research by them and add prospects to the pool.",
+      "poolLink": "Prospects",
+      "statusFilter": "Status",
+      "statuses": {
+        "open": "Open",
+        "done": "Done",
+        "canceled": "Canceled",
+        "superseded": "Replaced by a new strategy version"
+      },
+      "kind": {
+        "standing": "Strategy task · {{key}}",
+        "ad_hoc": "One-off · {{sectors}}"
+      },
+      "target": "Target {{n}}",
+      "remaining": "Left today: {{remaining}} (daily cap {{cap}})",
+      "claim": "Claim",
+      "claimed": "The task is yours for two hours.",
+      "heldByOther": "Someone else holds the task right now.",
+      "claimedByYou": "Yours until {{until}}",
+      "claimedBy": "Held by {{name}} until {{until}}",
+      "close": "Close the task",
+      "outcome": "Outcome",
+      "outcomes": {
+        "done": "Done",
+        "canceled": "Canceled"
+      },
+      "closeNote": "Note (optional)",
+      "closeSubmit": "Close",
+      "closed": "Task closed.",
+      "progress": "Progress",
+      "found": "Found: {{found}}",
+      "foundOf": "Found: {{found}} / {{target}}",
+      "newest": "Latest prospects recorded",
+      "prospectsLink": "See this task's prospects",
+      "empty": "No tasks",
+      "emptyBody": "The approved strategy's ideal customer profile opens a task per entry; you can open a one-off task below.",
+      "brief": {
+        "segment": "Segment",
+        "sectors": "Sectors",
+        "areas": "Areas",
+        "signals": "Signals to look for",
+        "exclusions": "Excluded",
+        "size": "Size",
+        "language": "Language",
+        "note": "Note"
+      },
+      "create": {
+        "title": "Open a one-off task",
+        "description": "Tell agents what to look for, where, and what to leave out.",
+        "sectors": "Sectors (one a line)",
+        "sectorsHint": "cafe",
+        "areas": "Areas (one a line: city, or city / district)",
+        "areasHint": "Izmir / Alsancak",
+        "signals": "Signals to look for (one a line)",
+        "exclusions": "Excluded (one a line)",
+        "segment": "Segment key (optional)",
+        "size": "Size hint",
+        "language": "Language (e.g. tr)",
+        "target": "Prospects to find",
+        "dailyCap": "Daily cap",
+        "note": "Note",
+        "submit": "Open the task",
+        "created": "Task opened."
+      }
+    },
+    "errors": {
+      "not_editable": "A promoted or do-not-contact prospect cannot be changed.",
+      "stale_revision": "This record changed while you were looking at it. Reload and try again.",
+      "promoted": "The prospect is in the inbox: record the objection on the person.",
+      "erase_the_person": "The prospect is in the inbox: erase the person instead.",
+      "human_only": "Only a team member can do this.",
+      "prospecting_off": "The approved strategy has no ideal customer profile; add one first.",
+      "task_closed": "The task is closed.",
+      "standing_task": "A strategy task cannot be closed here; change the profile in the strategy.",
+      "not_scorable": "This prospect cannot be scored.",
+      "invalid_transition": "This cannot be done to a record in this state.",
+      "daily_cap": "Today's limit is reached.",
+      "duplicate": "This business is already in the pool.",
+      "in_inbox": "This person is already in the inbox.",
+      "previously_rejected": "This business was rejected before.",
+      "do_not_contact": "On the do-not-contact list.",
+      "system_actor": "The system records nothing in the pool.",
+      "rubric_mismatch": "The scoring rubric changed; score again."
     }
   }
 }
