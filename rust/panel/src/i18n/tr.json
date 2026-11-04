@@ -1556,6 +1556,88 @@
         "held": "Yapıldı",
         "cancelled": "İptal edildi"
       }
+    },
+    "public": {
+      "surface": {
+        "private": "DM",
+        "comment": "Yorum",
+        "question": "Soru",
+        "relay": "Amazon"
+      },
+      "owed": "{{count}} bekleyen",
+      "heldCount": "{{count}} onay bekliyor",
+      "deadlineLeft": "{{time}} kaldı",
+      "deadlinePassed": "Süre doldu",
+      "time": {
+        "days": "{{days}} gün {{hours}} sa",
+        "hours": "{{hours}} sa {{minutes}} dk",
+        "minutes": "{{minutes}} dk"
+      },
+      "approvals": "Onay bekleyenler",
+      "approvalFor": "Onay bekleyen yanıt",
+      "noApprovals": "Onay bekleyen yanıt yok.",
+      "items": "Yorumlar ve sorular",
+      "subject": {
+        "post": "Gönderi",
+        "product": "Ürün"
+      },
+      "author": {
+        "us": "Biz",
+        "them": "Müşteri",
+        "other": "Başka biri"
+      },
+      "answer": {
+        "awaiting": "Bekliyor",
+        "pending": "Platform incelemesinde",
+        "answered": "Yanıtlandı",
+        "answeredElsewhere": "Başka yerden yanıtlandı",
+        "rejected": "Reddedildi: {{reason}}",
+        "handled": "Yanıt gerekmiyor",
+        "expired": "Süresi doldu"
+      },
+      "moderation": {
+        "hidden": "Gizli",
+        "deleted": "Silindi",
+        "removed": "Kaldırıldı",
+        "reported": "Bildirildi"
+      },
+      "actions": {
+        "reply": "Yanıtla",
+        "hide": "Gizle",
+        "unhide": "Göster",
+        "handled": "Yanıt gerekmiyor",
+        "report": "Bildir",
+        "delete": "Sil"
+      },
+      "delete": {
+        "title": "Yorumu sil",
+        "description": "Yorum platformda kalıcı olarak silinir.",
+        "confirm": "Onaylamak için “{{phrase}}” yazın.",
+        "phrase": "SİL",
+        "submit": "Kalıcı olarak sil"
+      },
+      "held": {
+        "title": "Onay bekleyen taslak",
+        "text": "Taslak metni",
+        "approve": "Onayla",
+        "edit": "Düzenle ve onayla",
+        "save": "Onayla ve gönder",
+        "cancel": "İptal",
+        "discard": "Vazgeç"
+      },
+      "composer": {
+        "target": "Yanıtlanan",
+        "visibility": "Yanıtın görünürlüğü",
+        "public": "Herkese açık",
+        "private": "Özel (DM)",
+        "privateLeft": "Özel yanıt hakkı: {{time}}, bir kez",
+        "label": "Yanıtınız",
+        "count": "{{count}} / {{max}}",
+        "send": "Yanıtı gönder",
+        "noOwed": "Yanıt bekleyen yorum ya da soru yok."
+      },
+      "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
+      "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
     }
   },
   "studio": {

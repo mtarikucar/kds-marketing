@@ -9,12 +9,19 @@ import { kindLabel } from '@/lib/capabilities';
 import { personName } from '@/lib/people';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
-import { Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
+import { Badge, Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
-import { columnClass, useInboxKey } from './InboxShared';
+import { Deadline, columnClass, useInboxKey } from './InboxShared';
+
+/** The surface badge of a row (spec §9): a direct message, a comment, a question, relayed mail. */
+function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'question' | 'relay' {
+  if (row.surface === 'relay') return 'relay';
+  if (row.surface === 'public') return row.channel?.endsWith('_question') ? 'question' : 'comment';
+  return 'private';
+}
 
 function ConversationLink({ row }: { row: InboxConversationRow }) {
   const { t } = useTranslation();
@@ -34,6 +41,24 @@ function ConversationLink({ row }: { row: InboxConversationRow }) {
       <span className="text-xs text-muted-foreground">
         {kindLabel(t, row.kind_key)} · {t(`inbox.state.${typeof row.state === 'string' ? row.state : 'snoozed'}`)}
       </span>
+      {row.surface && (
+        <span className="mt-1 flex flex-wrap items-center gap-1">
+          <Badge size="sm" tone={row.surface === 'private' ? 'neutral' : 'primary'}>
+            {t(`inbox.public.surface.${surfaceKey(row)}`)}
+          </Badge>
+          {!!row.owed_items && (
+            <Badge size="sm" tone="warning">
+              {t('inbox.public.owed', { count: row.owed_items })}
+            </Badge>
+          )}
+          {!!row.held_replies && (
+            <Badge size="sm" tone="info">
+              {t('inbox.public.heldCount', { count: row.held_replies })}
+            </Badge>
+          )}
+          {row.next_deadline && <Deadline at={row.next_deadline} />}
+        </span>
+      )}
     </Link>
   );
 }
@@ -46,14 +71,20 @@ export function InboxPage() {
   const key = useInboxKey();
   const { conversationId } = useParams();
   const [params] = useSearchParams();
-  const [queue, setQueue] = useState<InboxQueue>('ours');
+  const [queue, setQueue] = useState<InboxQueue | 'approvals'>('ours');
   const [search, setSearch] = useState('');
   const rows = useInfiniteQuery({
     queryKey: [...key, 'conversations', queue],
-    queryFn: ({ pageParam }) => api.listConversations(queue, pageParam),
+    queryFn: ({ pageParam }) => api.listConversations(queue as InboxQueue, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
-    enabled: allowed,
+    enabled: allowed && queue !== 'approvals',
+  });
+  // The held replies waiting for a human (spec §3.7), from inbox.pending.
+  const pending = useQuery({
+    queryKey: [...key, 'pending'],
+    queryFn: api.getInboxPending,
+    enabled: allowed && queue === 'approvals',
   });
   const people = useQuery({
     queryKey: [...key, 'search', search.trim()],
@@ -113,12 +144,38 @@ export function InboxPage() {
                 {t(`inbox.queue.${value}`)}
               </Button>
             ))}
+            <Button
+              size="sm"
+              className="col-span-2"
+              variant={queue === 'approvals' ? 'primary' : 'outline'}
+              aria-pressed={queue === 'approvals'}
+              onClick={() => setQueue('approvals')}
+            >
+              {t('inbox.public.approvals')}
+            </Button>
           </div>
           <label className="text-sm">
             {t('inbox.search')}
             <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
-          {search.trim() ? (
+          {queue === 'approvals' && !search.trim() ? (
+            <QueryState query={pending}>
+              {pending.data?.approvals?.map((held) => (
+                <Link
+                  key={held.outbox_id}
+                  data-testid="approval"
+                  className="flex flex-col gap-1 rounded-lg border p-3 text-sm hover:bg-muted"
+                  to={`/inbox/${encodeURIComponent(held.conversation_id)}`}
+                >
+                  <span className="font-medium">{t('inbox.public.approvalFor')}</span>
+                  {held.deadline && <Deadline at={held.deadline} />}
+                </Link>
+              ))}
+              {pending.data && !pending.data.approvals?.length && (
+                <p className="text-sm text-muted-foreground">{t('inbox.public.noApprovals')}</p>
+              )}
+            </QueryState>
+          ) : search.trim() ? (
             <QueryState query={people}>
               {people.data?.map((person) => (
                 <Link
