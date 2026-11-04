@@ -2551,5 +2551,110 @@
       "refused_other": "{{count}} materials not usable",
       "pick": "Choose what the content is about and at least one material."
     }
+  },
+  "posts": {
+    "tab": "Posts",
+    "views": {
+      "plan": "Plan",
+      "week": "Weekly summary",
+      "settings": "Posting settings"
+    },
+    "format": {
+      "story": "Story",
+      "feed_post": "Post",
+      "carousel": "Carousel",
+      "reel": "Reel",
+      "tiktok_video": "TikTok video"
+    },
+    "trigger": {
+      "olay": "New olay materials",
+      "calendar": "Upcoming special day",
+      "floor": "No post for a while"
+    },
+    "materials_one": "{{count}} material",
+    "materials_other": "{{count}} materials",
+    "requests": {
+      "title": "Requests for the agent to plan",
+      "help": "Studio asks the connected agent for a posting plan for new materials, upcoming special days and channels that have gone without a post. A request nobody answers within 7 days closes and its materials are asked for again.",
+      "empty": "No request is waiting.",
+      "best": "Suggested format: {{format}}",
+      "expires": "Last day: {{at}}",
+      "oneChannel": "One post: {{channel}}",
+      "window": "Period: {{range}}"
+    },
+    "plan": {
+      "title": "Planned posts",
+      "empty": "No planned post. As you upload materials, Studio asks the agent for a plan.",
+      "publishAt": "Goes out: {{at}}",
+      "prepFrom": "Preparation: {{at}}",
+      "graceUntil": "At the latest: {{at}}",
+      "open": "Open in Studio",
+      "tz": "Times are in the {{tz}} time zone.",
+      "state": {
+        "waiting": "Preparation not started",
+        "preparing": "Being prepared",
+        "ready": "Ready"
+      },
+      "subject": {
+        "olay": "About an olay",
+        "archive": "Last year's olay",
+        "generic": "General"
+      }
+    },
+    "week": {
+      "title": "{{from}} – {{until}}",
+      "prev": "Previous week",
+      "next": "Next week",
+      "current": "This week",
+      "published": "Published",
+      "planned": "Planned",
+      "cancelled": "Not published",
+      "scores": "What works",
+      "none": "None.",
+      "view": "Open the post",
+      "oldPlan": "Old weekly plan",
+      "reason": {
+        "cancelled": "Cancelled",
+        "hypothesis_retired": "Hypothesis retired",
+        "strategy_archived": "Strategy archived",
+        "week_ended": "Week ended",
+        "measurements_complete": "Measurement complete",
+        "replanned": "Moved to the new planning",
+        "missed_grace": "Not prepared in time"
+      },
+      "scoreFormat": "Format",
+      "scoreKind": "Olay type",
+      "scoreHypothesis": "Hypothesis",
+      "scoreMean": "Engagement",
+      "scorePosts": "Posts",
+      "generic": "General",
+      "noScores": "No measured post yet."
+    },
+    "settings": {
+      "title": "Posting settings",
+      "help": "No approval needed: the material check, the truth check and these limits are the safety.",
+      "format": "Format",
+      "lead": "Preparation (hours before)",
+      "grace": "Grace (hours)",
+      "feedCap": "Daily post limit (per channel)",
+      "feedSpacing": "At least between posts (hours)",
+      "storyCap": "Daily story limit",
+      "storySpacing": "At least between stories (minutes)",
+      "tiktokCap": "Daily TikTok video limit",
+      "quietFrom": "Quiet hours start",
+      "quietUntil": "Quiet hours end",
+      "floor": "Days without a post",
+      "floorHelp": "When a channel goes this many days without a post, Studio asks for one general post.",
+      "debounce": "Upload settling time (minutes)",
+      "debounceHelp": "A plan is asked for this long after materials stop being added to an olay: 20 photos make one request.",
+      "horizon": "Planning horizon (days)",
+      "tz": "Time zone",
+      "storyNote": "Stories are not published on any channel yet.",
+      "save": "Save settings",
+      "saved": "Saved.",
+      "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
+      "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
+      "managerOnly": "Only an owner or manager changes these settings."
+    }
   }
 }
