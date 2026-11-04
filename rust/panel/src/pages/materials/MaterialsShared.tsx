@@ -338,7 +338,10 @@ function Chips<T extends string>({
               <input type="checkbox" checked={on} onChange={() => onToggle(o)} />
               {label(o)}
               {on && suggested && (
-                <span className="text-micro text-muted-foreground">{t('materials.suggested')}</span>
+                <>
+                  {' '}
+                  <span className="text-micro text-muted-foreground">{t('materials.suggested')}</span>
+                </>
               )}
             </label>
           );
@@ -419,7 +422,10 @@ export function TagsFields({
               />
               {q ? t(`materials.quality.${q}`) : t('materials.quality.none')}
               {q && value.quality === q && suggested && (
-                <span className="text-micro text-muted-foreground">{t('materials.suggested')}</span>
+                <>
+                  {' '}
+                  <span className="text-micro text-muted-foreground">{t('materials.suggested')}</span>
+                </>
               )}
             </label>
           ))}

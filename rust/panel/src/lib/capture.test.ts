@@ -7,7 +7,7 @@ const le32 = (n: number) => [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >>> 
 const be32 = (n: number) => [n >>> 24, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 
 /** A JPEG whose EXIF names `original` (and `offset` when given), little-endian. */
-function jpeg(original: string, offset?: string): Uint8Array {
+function jpeg(original: string, offset?: string): Uint8Array<ArrayBuffer> {
   const exifAt = 26;
   const entries = offset ? 2 : 1;
   const dataAt = exifAt + 2 + 12 * entries + 4;
@@ -27,7 +27,7 @@ function jpeg(original: string, offset?: string): Uint8Array {
 }
 
 /** An MP4 whose `moov/mvhd` (version 0) names `at` as its creation time. */
-function mp4(at: Date): Uint8Array {
+function mp4(at: Date): Uint8Array<ArrayBuffer> {
   const ftyp = [...be32(16), ...ascii('ftypisom'), ...be32(0)];
   const seconds = Math.floor(at.getTime() / 1000) + 2_082_844_800;
   const mvhd = [...be32(28), ...ascii('mvhd'), 0, 0, 0, 0, ...be32(seconds), ...be32(seconds), ...be32(1000), ...be32(5000)];
