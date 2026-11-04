@@ -79,7 +79,9 @@ impl FileStore for MemoryFiles {
             .get(&(ws, id))
             .ok_or_else(|| AppError::not_found("file"))?
             .bytes;
-        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(bytes.len());
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(bytes.len());
         let end = start.saturating_add(len).min(bytes.len());
         Ok(bytes[start..end].to_vec())
     }

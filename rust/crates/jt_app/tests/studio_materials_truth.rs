@@ -496,10 +496,7 @@ async fn a_submissions_replay_reads_its_piece_and_check_as_they_are_now() {
         .collect();
     assert_eq!(receipts.len(), 1);
     for kept in &receipts {
-        assert!(
-            !kept.contains("ayse") && !kept.contains("Ayşe"),
-            "{kept}"
-        );
+        assert!(!kept.contains("ayse") && !kept.contains("Ayşe"), "{kept}");
     }
     w.uow.edit(|s| {
         for p in s.inbox.people.iter_mut() {
