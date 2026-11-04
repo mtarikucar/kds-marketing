@@ -1587,7 +1587,7 @@ fn receipt(id: &str) -> Result<SendReceipt, jt_connector::ConnectorError> {
     })
 }
 
-fn commercial(key: &str) -> replies::ReplyInput {
+fn commercial_keyed(key: &str) -> replies::ReplyInput {
     serde_json::from_value(
         json!({"text":"Teklifimiz ektedir","intent":"commercial","request_key":key}),
     )
@@ -1643,7 +1643,7 @@ async fn business_basis_off_by_default_refuses_izin_yok() {
         let deps = w.deps.clone();
         let ctx = w.owner_ctx.clone();
         async move {
-            replies::reply(&deps, &ctx, id, commercial(key))
+            replies::reply(&deps, &ctx, id, commercial_keyed(key))
                 .await
                 .unwrap_err()
                 .message
@@ -1669,7 +1669,7 @@ async fn business_basis_on_allows_email_only() {
     platform(&mut w, true);
     b2b_basis(&w, &["email", "sms"], true).await;
     c.push_mail(accepted());
-    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial("b2b-mail"))
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("b2b-mail"))
         .await
         .unwrap();
     assert_eq!(out.state, "sent");
@@ -1677,7 +1677,7 @@ async fn business_basis_on_allows_email_only() {
     // An individual (or an unknown) recipient still needs consent.
     for kind in [RecipientKind::Individual, RecipientKind::Unknown] {
         recipient_kind(&w, kind).await;
-        let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial(kind.key()))
+        let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed(kind.key()))
             .await
             .unwrap_err();
         assert_eq!(e.message, "IZIN_YOK", "{kind:?}");
@@ -1687,7 +1687,7 @@ async fn business_basis_on_allows_email_only() {
     recipient_kind(&w, RecipientKind::Business).await;
     platform(&mut w, true);
     b2b_basis(&w, &["email", "sms"], true).await;
-    let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial("b2b-sms"))
+    let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("b2b-sms"))
         .await
         .unwrap_err();
     assert_eq!(e.message, "IZIN_YOK");
@@ -1701,7 +1701,7 @@ async fn basis_recorded_in_fence_snapshot() {
     platform(&mut w, true);
     b2b_basis(&w, &["email"], true).await;
     c.push_mail(receipt("basis-1"));
-    replies::reply(&w.deps, &w.owner_ctx, id, commercial("on-b2b"))
+    replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("on-b2b"))
         .await
         .unwrap();
     let person = w.uow.snapshot().inbox.people[0].id;
@@ -1716,7 +1716,7 @@ async fn basis_recorded_in_fence_snapshot() {
     .await
     .unwrap();
     c.push_mail(receipt("basis-2"));
-    replies::reply(&w.deps, &w.owner_ctx, id, commercial("on-consent"))
+    replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("on-consent"))
         .await
         .unwrap();
     c.push_mail(receipt("basis-3"));
