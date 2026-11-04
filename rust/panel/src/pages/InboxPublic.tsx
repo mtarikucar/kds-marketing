@@ -27,7 +27,7 @@ import {
   Input,
   Textarea,
 } from '@/components/ui';
-import { Deadline, InboxTime, durationText, selectClass, useInboxKey, useInboxMutation } from './InboxShared';
+import { Deadline, InboxActorLabel, InboxTime, durationText, selectClass, useInboxKey, useInboxMutation } from './InboxShared';
 
 /** An item's state as the panel shows it: its moderation when it is not visible, else its answer. */
 function ItemState({ item }: { item: PublicItem }) {
@@ -167,7 +167,10 @@ function HeldCard({ held, draft }: { held: HeldReply; draft: InboxMessage | unde
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-warning p-3" data-testid="held-reply">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">{t('inbox.public.held.title')}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="text-sm font-medium">{t('inbox.public.held.title')}</span>
+          {draft && <InboxActorLabel actor={draft.author} />}
+        </span>
         {held.deadline && <Deadline at={held.deadline} />}
       </div>
       {editing ? (

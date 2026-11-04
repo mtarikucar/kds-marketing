@@ -307,6 +307,8 @@ describe('A public conversation', () => {
     const user = userEvent.setup();
     const card = await screen.findByTestId('held-reply');
     expect(within(card).getByText('Merhaba, fiyatı DM ile ilettik.')).toBeInTheDocument();
+    // The drafter (spec §9).
+    expect(within(card).getByText('Ajan')).toBeInTheDocument();
     await user.click(within(card).getByRole('button', { name: 'Onayla' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path === '/api/inbox/replies/held-1/approve')?.body).toEqual({}),
