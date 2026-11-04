@@ -38,6 +38,16 @@ pub enum EventKind {
     /// A customer question on one of the seller's marketplace products, as a public-item
     /// envelope.
     Question,
+    /// A message, or a refusal, of the chat history a WhatsApp Business app shares once its
+    /// number is onboarded to the Cloud API beside the app (Meta's `history` webhook): the past,
+    /// never something to answer.
+    History,
+    /// A change of a WhatsApp Business app's contacts, shared once its number is onboarded beside
+    /// the app (Meta's `smb_app_state_sync` webhook).
+    ContactSync,
+    /// A change of the provider account itself (Meta's `account_update` webhook of a WhatsApp
+    /// Business Account: a disconnection, an offboarding).
+    AccountUpdate,
     /// Any other kind, by its original key.
     Unknown(String),
 }
@@ -54,6 +64,9 @@ impl EventKind {
             EventKind::Consent => "consent",
             EventKind::Comment => "comment",
             EventKind::Question => "question",
+            EventKind::History => "history",
+            EventKind::ContactSync => "contact_sync",
+            EventKind::AccountUpdate => "account_update",
             EventKind::Unknown(key) => key,
         }
     }
@@ -70,6 +83,9 @@ impl EventKind {
             "consent" => EventKind::Consent,
             "comment" => EventKind::Comment,
             "question" => EventKind::Question,
+            "history" => EventKind::History,
+            "contact_sync" => EventKind::ContactSync,
+            "account_update" => EventKind::AccountUpdate,
             other => EventKind::Unknown(other.to_owned()),
         }
     }

@@ -146,6 +146,10 @@ pub fn mask_personal(value: &mut Value) {
                             | "username"
                             | "userName"
                             | "customerName"
+                            | "thread"
+                            | "phone_number"
+                            | "full_name"
+                            | "first_name"
                     )
                 {
                     *value = json!("");
@@ -220,6 +224,16 @@ pub fn event_identities(
         ("/sender/id", namespace),
         ("/recipient/id", namespace),
         ("/status/recipient_id", Some(IdentityChannel::Phone)),
+        // A number onboarded beside the WhatsApp Business app: its shared history (the thread is
+        // the customer's number), what the business wrote from the app, and the app's contacts.
+        ("/thread", Some(IdentityChannel::Phone)),
+        ("/history_message/from", Some(IdentityChannel::Phone)),
+        ("/history_message/to", Some(IdentityChannel::Phone)),
+        ("/echo/to", Some(IdentityChannel::Phone)),
+        (
+            "/state_sync/contact/phone_number",
+            Some(IdentityChannel::Phone),
+        ),
     ] {
         let (Some(channel), Some(candidate)) =
             (channel, payload.pointer(path).and_then(Value::as_str))

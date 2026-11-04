@@ -337,9 +337,14 @@ fn serde_round_trips_preserve_variants_and_populated_records() {
         Author::Agent,
         Author::Human(user),
         Author::System,
+        Author::BusinessApp,
     ] {
         round_trip(author);
     }
+    assert_eq!(
+        serde_json::to_value(Author::BusinessApp).unwrap(),
+        serde_json::json!("business_app")
+    );
     for state in [
         ConvState::Open,
         ConvState::Ours,

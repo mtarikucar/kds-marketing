@@ -5,7 +5,9 @@ mod support;
 
 use hmac::{Hmac, KeyInit, Mac};
 use jt_connector::EventKind;
-use jt_meta::webhook::{KIND_HINT_INSTAGRAM, KIND_HINT_PAGE, KIND_HINT_WHATSAPP};
+use jt_meta::webhook::{
+    KIND_HINT_INSTAGRAM, KIND_HINT_PAGE, KIND_HINT_WHATSAPP, KIND_HINT_WHATSAPP_ACCOUNT,
+};
 use jt_meta::{
     Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body, verify_and_parse,
 };
@@ -307,11 +309,195 @@ fn each_hint_names_the_kinds_that_may_hold_its_account() {
         "messenger_messaging.json",
         "instagram_messaging.json",
         "page_leadgen.json",
+        "whatsapp_business_app.json",
+        "whatsapp_account_update.json",
     ] {
         for event in parsed(name) {
             assert!(!kinds_of_hint(event.kind_hint).is_empty(), "{name}");
         }
     }
+    // A WhatsApp Business Account's own events name the account, not a number: they route by
+    // the account a `whatsapp_cloud` capability's asset names (see the crate docs).
+    assert_eq!(
+        kinds_of_hint(KIND_HINT_WHATSAPP_ACCOUNT),
+        ["whatsapp_cloud"]
+    );
+}
+
+/// A number onboarded beside the WhatsApp Business app: what the business sends from the app
+/// (`smb_message_echoes`), the history it shares (`history`: each message, each chunk's
+/// progress, a refusal) and its contacts (`smb_app_state_sync`), each routed by its number. A
+/// history message is keyed apart from a live message of the same `wamid`; a media item sent
+/// after its placeholder, an item without its id and a non-contact state are left out.
+#[test]
+fn business_app_echoes_history_and_contacts_route_by_number() {
+    let events = parsed("whatsapp_business_app.json");
+    let w = |account: &str, id: &str, kind: EventKind| {
+        (account.to_owned(), KIND_HINT_WHATSAPP, id.to_owned(), kind)
+    };
+    assert_eq!(
+        keys(&events),
+        vec![
+            w("5555555555", "wamid.TEST-ECHO-1", EventKind::MessageEcho),
+            w(
+                "5555555555",
+                "history:wamid.TEST-HIST-1",
+                EventKind::History
+            ),
+            w(
+                "5555555555",
+                "history:wamid.TEST-HIST-2",
+                EventKind::History
+            ),
+            w(
+                "5555555555",
+                "history:wamid.TEST-HIST-3",
+                EventKind::History
+            ),
+            w(
+                "5555555555",
+                "history-chunk:5555555555:0:1",
+                EventKind::History
+            ),
+            w(
+                "5555555555",
+                "contact-sync:5555555555:905553333333:add:1790000200",
+                EventKind::ContactSync
+            ),
+            w(
+                "5555555555",
+                "contact-sync:5555555555:905554444444:remove:1790000201",
+                EventKind::ContactSync
+            ),
+            w(
+                "5555555556",
+                "history-error:5555555556:2593109",
+                EventKind::History
+            ),
+        ]
+    );
+    let echo = &events[0].event;
+    assert_eq!(echo.payload["echo"]["to"], "905551111111");
+    assert_eq!(
+        echo.payload["echo"]["text"]["body"],
+        "Siparişiniz yarın kargoda."
+    );
+    assert_eq!(echo.occurred_at, at(1_790_000_100));
+
+    let inbound = &events[1].event;
+    assert_eq!(inbound.payload["history_message"]["from"], "905551111111");
+    assert_eq!(inbound.payload["thread"], "905551111111");
+    assert_eq!(inbound.payload["business_number"], "905550000000");
+    assert_eq!(inbound.occurred_at, at(1_789_900_000));
+    let sent = &events[2].event;
+    assert_eq!(
+        sent.payload["history_message"]["text"]["body"],
+        "Evet, 450 TL."
+    );
+    assert_eq!(sent.payload["thread"], "905551111111");
+    let placeholder = &events[3].event;
+    assert_eq!(
+        placeholder.payload["history_message"]["type"],
+        "media_placeholder"
+    );
+    assert_eq!(placeholder.payload["thread"], "905552222222");
+
+    let chunk = &events[4].event;
+    assert_eq!(
+        chunk.payload["history_chunk"],
+        json!({ "phase": 0, "chunk_order": 1, "progress": 55 })
+    );
+    assert_eq!(chunk.payload["messages"], 3);
+    assert_eq!(chunk.occurred_at, None);
+
+    let added = &events[5].event;
+    assert_eq!(
+        added.payload["state_sync"]["contact"]["full_name"],
+        "Ayşe Yılmaz"
+    );
+    assert_eq!(added.occurred_at, at(1_790_000_200));
+    assert_eq!(events[6].event.payload["state_sync"]["action"], "remove");
+
+    let declined = &events[7].event;
+    assert_eq!(declined.payload["history_error"]["code"], 2_593_109);
+    // Every event of one change shares its origin; the media item made none.
+    assert_eq!(
+        events[0].origin,
+        Origin {
+            entry: 0,
+            change: Some(0)
+        }
+    );
+    assert!(events[1..5].iter().all(|e| e.origin
+        == Origin {
+            entry: 0,
+            change: Some(1)
+        }));
+    assert!(events[5..7].iter().all(|e| e.origin
+        == Origin {
+            entry: 0,
+            change: Some(3)
+        }));
+    assert_eq!(
+        events[7].origin,
+        Origin {
+            entry: 1,
+            change: Some(0)
+        }
+    );
+}
+
+/// `account_update` names the WhatsApp Business Account (`waba_info.waba_id`, else the entry's
+/// id), never a number; each event is keyed by the account, the event and the entry's time. A
+/// change naming no event is left out.
+#[test]
+fn account_updates_route_by_the_business_account() {
+    let events = parsed("whatsapp_account_update.json");
+    let a = |account: &str, id: &str| {
+        (
+            account.to_owned(),
+            KIND_HINT_WHATSAPP_ACCOUNT,
+            id.to_owned(),
+            EventKind::AccountUpdate,
+        )
+    };
+    assert_eq!(
+        keys(&events),
+        vec![
+            a(
+                "4444444444",
+                "account-update:4444444444:PARTNER_REMOVED:1790000300"
+            ),
+            a(
+                "4444444446",
+                "account-update:4444444446:ACCOUNT_OFFBOARDED:1790000301"
+            ),
+            a(
+                "4444444446",
+                "account-update:4444444446:ACCOUNT_RECONNECTED:1790000301"
+            ),
+        ]
+    );
+    let removed = &events[0].event;
+    assert_eq!(
+        removed.payload["account_update"]["disconnection_info"]["reason"],
+        "ACCOUNT_DISCONNECTED"
+    );
+    assert_eq!(removed.occurred_at, at(1_790_000_300));
+    assert_eq!(
+        events[1].origin,
+        Origin {
+            entry: 1,
+            change: Some(0)
+        }
+    );
+    assert_eq!(
+        events[2].origin,
+        Origin {
+            entry: 1,
+            change: Some(1)
+        }
+    );
 }
 
 /// Each event names where in the body it came from: its entry, and for WhatsApp its change.
@@ -332,7 +518,10 @@ fn a_scoped_body_keeps_only_the_items_its_events_came_from() {
     };
     let a = change("NUMBER-A", "wamid.A", "905551111111");
     let b = change("NUMBER-B", "wamid.B", "905552222222");
-    let other = json!({ "field": "account_update", "value": { "event": "VERIFIED" } });
+    let other = json!({
+        "field": "message_template_status_update",
+        "value": { "event": "VERIFIED" },
+    });
     let body = json!({
         "object": "whatsapp_business_account",
         "entry": [{ "id": "WABA-1", "changes": [a.clone(), b.clone(), other] }],

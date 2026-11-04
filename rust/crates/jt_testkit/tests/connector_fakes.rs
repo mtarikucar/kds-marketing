@@ -112,6 +112,7 @@ fn pending(
         provider: Provider::Meta,
         kind_key: "facebook_page".into(),
         app: OAuthCallback::Meta,
+        flow: None,
         state_hash: hash.into(),
         started_by: user,
         capability_id: None,

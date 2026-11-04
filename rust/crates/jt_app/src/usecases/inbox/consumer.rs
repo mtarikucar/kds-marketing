@@ -267,6 +267,19 @@ async fn route(
     if event.kind == EventKind::Consent {
         return consent_event(deps, ctx, r, event, &cap).await;
     }
+    // A number onboarded beside the WhatsApp Business app: its shared history and contacts, what
+    // the business sends from the app, and its account's own events.
+    if event.provider == Provider::Meta && cap.kind_key == "whatsapp_cloud" {
+        match event.kind {
+            EventKind::History => return history(deps, ctx, r, event, &cap).await,
+            EventKind::ContactSync => return app_contact(deps, ctx, r, event, &cap).await,
+            EventKind::AccountUpdate => return account_update(ctx, r, event, &cap).await,
+            EventKind::MessageEcho if event.payload.get("echo").is_some() => {
+                return app_echo(deps, ctx, r, event, &cap).await;
+            }
+            _ => {}
+        }
+    }
     let Some(channel) = channel_for_kind(&cap.kind_key) else {
         return Ok("deferred");
     };
@@ -1201,5 +1214,387 @@ async fn consent_event(
         json!({"person_id":person.id,"consent_id":row.id,"channel":channel,"kind":kind}),
     )
     .await?;
+    Ok("consumed")
+}
+
+// ---------------------------------------------------------------------------------------------
+// A WhatsApp number onboarded beside the WhatsApp Business app
+// ---------------------------------------------------------------------------------------------
+
+/// The person a WhatsApp Business app's item is about (its customer's number `number`), matched
+/// or created as a live message's sender is, under `source`; the erased are refused as for any
+/// inbound item.
+async fn app_person(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    number: &str,
+    name: &str,
+    source: Source,
+) -> Result<Person, AppError> {
+    let channel = Channel::WhatsApp;
+    super::erasure::check_identity(
+        r,
+        channel.identity_channel(),
+        &sender_key(cap, channel, number)?,
+    )
+    .await?;
+    Ok(people::match_or_create(
+        deps,
+        ctx,
+        r,
+        people::CreateInput {
+            display_name: clean_name(name),
+            identities: vec![people::IdentityInput {
+                channel: channel.identity_channel(),
+                value: number.to_owned(),
+                capability_id: Some(cap.id),
+            }],
+            source,
+        },
+        Some(0),
+    )
+    .await?
+    .person)
+}
+
+/// The person's conversation with `cap`, or a new one with nothing owed in it: open, with no
+/// inbound activity (so no reply is owed and no customer service window opens), as a send to a
+/// new person starts one.
+async fn quiet_conversation(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    person: PersonId,
+) -> Result<Conversation, AppError> {
+    if let Some(c) = r.conversations().find(person, cap.id).await? {
+        return Ok(c);
+    }
+    let c = Conversation {
+        id: ConversationId::from(deps.ids.uuid()),
+        workspace_id: ctx.workspace_id,
+        person_id: person,
+        capability_id: cap.id,
+        kind_key: cap.kind_key.clone(),
+        state: ConvState::Open,
+        executor: Executor::Agent,
+        executor_generation: 0,
+        last_inbound_at: None,
+        last_outbound_at: None,
+        created_at: ctx.now,
+        updated_at: ctx.now,
+    };
+    r.conversations().insert_for_send(c.clone()).await?;
+    Ok(c)
+}
+
+/// Whether two WhatsApp numbers are one: their digits match.
+fn same_number(a: &str, b: &str) -> bool {
+    let digits = |s: &str| s.chars().filter(char::is_ascii_digit).collect::<String>();
+    let (a, b) = (digits(a), digits(b));
+    !a.is_empty() && a == b
+}
+
+/// The text of a WhatsApp item (`text.body`, else a media item's caption); empty for anything
+/// else (a media placeholder of the history among them: the inbox keeps no media).
+fn whatsapp_text(item: &Value) -> String {
+    item["text"]["body"]
+        .as_str()
+        .or_else(|| {
+            item["type"]
+                .as_str()
+                .and_then(|kind| item[kind]["caption"].as_str())
+        })
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A message of a WhatsApp Business app's shared history (`EventKind::History`,
+/// `{history_message, thread, business_number}`): filed in the person's conversation at its own
+/// time, from the customer, or from the business (`business_app`) when the business sent it.
+/// The past is owed nothing: a conversation it creates is open with no inbound activity, no
+/// journey event is written, no window opens. A message already filed (its `wamid`, by a live
+/// webhook or an earlier delivery) is not filed again. A chunk's progress and a refusal to share
+/// are recorded (`inbox.whatsapp_history`), the refusal under its code.
+async fn history(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let p = &event.payload;
+    if let Some(chunk) = p.get("history_chunk") {
+        record(
+            r,
+            ctx,
+            "inbox.whatsapp_history",
+            "capability",
+            cap.id,
+            json!({
+                "phase": chunk["phase"],
+                "chunk_order": chunk["chunk_order"],
+                "progress": chunk["progress"],
+                "messages": p["messages"],
+            }),
+        )
+        .await?;
+        return Ok("consumed");
+    }
+    if let Some(error) = p.get("history_error") {
+        record(
+            r,
+            ctx,
+            "inbox.whatsapp_history",
+            "capability",
+            cap.id,
+            json!({ "declined": true, "code": error["code"] }),
+        )
+        .await?;
+        return Ok("consumed");
+    }
+    let m = &p["history_message"];
+    let (Some(wamid), Some(customer)) = (text(m, "id"), text(p, "thread")) else {
+        return Err(malformed());
+    };
+    if r.messages()
+        .find_by_external_id(cap.id, wamid)
+        .await?
+        .is_some()
+    {
+        return Ok("duplicate");
+    }
+    let from_business = text(m, "to").is_some()
+        || text(m, "from")
+            .zip(text(p, "business_number"))
+            .is_some_and(|(from, business)| same_number(from, business));
+    let source = Source::Channel(Channel::WhatsApp);
+    let person = app_person(deps, ctx, r, cap, customer, "", source).await?;
+    let conv = quiet_conversation(deps, ctx, r, cap, person.id).await?;
+    let (direction, author, status) = if from_business {
+        (Direction::Outbound, Author::BusinessApp, MsgStatus::Sent)
+    } else {
+        (Direction::Inbound, Author::Customer, MsgStatus::Received)
+    };
+    let inserted = r
+        .messages()
+        .insert_if_new(Message {
+            id: MessageId::from(deps.ids.uuid()),
+            workspace_id: ctx.workspace_id,
+            conversation_id: conv.id,
+            direction,
+            author,
+            body: whatsapp_text(m),
+            external_id: Some(wamid.to_owned()),
+            status,
+            cost_minor: None,
+            at: activity_at(event),
+        })
+        .await?;
+    let Some(message_id) = inserted else {
+        return Ok("duplicate");
+    };
+    if direction == Direction::Inbound {
+        // The consumer's contract for every new inbound message; an older one never becomes
+        // the conversation's latest sender.
+        let normalized = sender_key(cap, Channel::WhatsApp, customer)?;
+        let sender = r
+            .identities()
+            .list(person.id)
+            .await?
+            .into_iter()
+            .find(|i| i.channel == IdentityChannel::Phone && i.value_normalized == normalized)
+            .ok_or_else(|| AppError::internal("matched history identity missing"))?;
+        r.messages()
+            .record_inbound_sender(message_id, sender.id)
+            .await?;
+    }
+    Ok("consumed")
+}
+
+/// What the business sent from the WhatsApp Business app (`smb_message_echoes`,
+/// `EventKind::MessageEcho` with `{echo}`): an outbound message authored `business_app` in the
+/// person's conversation (one with nothing owed is started when there is none). Deduplicated by
+/// its `wamid` only, against every message filed (what Jeeta sent included, once its send
+/// recorded the `wamid`): the business typed it on the phone, so a send of Jeeta's in flight with
+/// the same text is not it. When it is newer than the conversation's last inbound message and
+/// the conversation was owed a reply, the business answered from the phone: the conversation
+/// turns `theirs` and the customer's messages it answered leave `events.pending`
+/// ([`settle_answered`]), so no agent answers again. Nothing else reacts to it.
+async fn app_echo(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let e = &event.payload["echo"];
+    let (Some(wamid), Some(customer)) = (text(e, "id"), text(e, "to")) else {
+        return Err(malformed());
+    };
+    if r.messages()
+        .find_by_external_id(cap.id, wamid)
+        .await?
+        .is_some()
+    {
+        return Ok("duplicate");
+    }
+    let body = whatsapp_text(e);
+    let source = Source::Channel(Channel::WhatsApp);
+    let person = app_person(deps, ctx, r, cap, customer, "", source).await?;
+    let conv = quiet_conversation(deps, ctx, r, cap, person.id).await?;
+    let at = activity_at(event);
+    let inserted = r
+        .messages()
+        .insert_if_new(Message {
+            id: MessageId::from(deps.ids.uuid()),
+            workspace_id: ctx.workspace_id,
+            conversation_id: conv.id,
+            direction: Direction::Outbound,
+            author: Author::BusinessApp,
+            body,
+            external_id: Some(wamid.to_owned()),
+            status: MsgStatus::Sent,
+            cost_minor: None,
+            at,
+        })
+        .await?;
+    if inserted.is_none() {
+        return Ok("duplicate");
+    }
+    let answered =
+        conv.state == ConvState::Ours && conv.last_inbound_at.is_some_and(|inbound| at >= inbound);
+    if answered {
+        r.conversations()
+            .update_state(conv.id, ConvState::Theirs, Some(at))
+            .await?;
+        settle_answered(ctx, r, cap, conv.id, at).await?;
+    }
+    Ok("consumed")
+}
+
+/// How many of a conversation's latest messages [`settle_answered`] looks through.
+const ANSWERED_SCAN: u32 = 50;
+
+/// The customer's messages of conversation `conv` that the business answered from the phone (at
+/// or before `answered_at`) and that still wait in `events.pending`, marked processed: the owner
+/// replied, so no agent is put to them afterwards (owner decision 2026-11-03: the conversation
+/// goes `theirs` and the agent stays out). Each is found by its `wamid`, among the latest
+/// [`ANSWERED_SCAN`] messages; one already processed keeps its time.
+async fn settle_answered(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Capability,
+    conv: ConversationId,
+    answered_at: OffsetDateTime,
+) -> Result<(), AppError> {
+    for m in r.messages().recent(conv, ANSWERED_SCAN).await? {
+        let Some(wamid) = m.external_id.as_deref() else {
+            continue;
+        };
+        if m.direction != Direction::Inbound || m.at > answered_at {
+            continue;
+        }
+        if let Some(e) = r
+            .inbound_events()
+            .find_external(Provider::Meta, wamid)
+            .await?
+            && e.processed_at.is_none()
+            && e.capability_id == Some(cap.id)
+        {
+            r.inbound_events().mark_processed(e.id, ctx.now).await?;
+        }
+    }
+    Ok(())
+}
+
+/// A contact of the WhatsApp Business app (`smb_app_state_sync`, `EventKind::ContactSync`,
+/// `{state_sync}`): an `add` becomes a person with that phone identity, named as the app names
+/// them, matched as any first contact is (an existing identity is reused, its person kept as it
+/// is); a `remove` changes nobody (an address book is not an erasure request) and is only
+/// recorded (`inbox.whatsapp_contact_removed`, without the number).
+async fn app_contact(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let item = &event.payload["state_sync"];
+    let Some(number) = text(&item["contact"], "phone_number") else {
+        return Err(malformed());
+    };
+    match text(item, "action") {
+        Some("add") => {
+            let name = text(&item["contact"], "full_name")
+                .or_else(|| text(&item["contact"], "first_name"))
+                .unwrap_or_default();
+            app_person(deps, ctx, r, cap, number, name, Source::Import).await?;
+            Ok("consumed")
+        }
+        Some("remove") => {
+            record(
+                r,
+                ctx,
+                "inbox.whatsapp_contact_removed",
+                "capability",
+                cap.id,
+                json!({}),
+            )
+            .await?;
+            Ok("consumed")
+        }
+        _ => Ok("deferred"),
+    }
+}
+
+/// A WhatsApp Business Account's own event (`account_update`, `{account_update}`): a
+/// disconnection (`PARTNER_REMOVED`, with Meta's `disconnection_info.reason`) or an offboarding
+/// (`ACCOUNT_OFFBOARDED`) turns every live `whatsapp_cloud` capability of the workspace whose asset
+/// names that account `unreachable`, asking for a reconnection with the reason
+/// (`super::super::connector::authorization_removed`: left alone when verified since the event).
+/// Any other account event is not the inbox's (kept for the agent).
+async fn account_update(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    cap: &Capability,
+) -> Result<&'static str, AppError> {
+    let value = &event.payload["account_update"];
+    let Some(what @ ("PARTNER_REMOVED" | "ACCOUNT_OFFBOARDED")) = text(value, "event") else {
+        return Ok("not_inbox");
+    };
+    let account = text(&value["waba_info"], "waba_id")
+        .or_else(|| cap.connector_public["asset"]["waba_id"].as_str())
+        .ok_or_else(malformed)?
+        .to_owned();
+    let reason = match text(&value["disconnection_info"], "reason") {
+        Some(why) => format!(
+            "WhatsApp {what}: {}",
+            why.chars().take(60).collect::<String>()
+        ),
+        None => format!("WhatsApp {what}"),
+    };
+    let held: Vec<_> = r
+        .capabilities()
+        .list(CapabilityFilter {
+            kind: Some("whatsapp_cloud"),
+            ..Default::default()
+        })
+        .await?
+        .into_iter()
+        .filter(|c| {
+            c.status != StoredStatus::Retired
+                && c.connector_public["asset"]["waba_id"].as_str() == Some(account.as_str())
+        })
+        .map(|c| c.id)
+        .collect();
+    let occurred_at =
+        text(&event.payload, "occurred_at").and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+    for id in held {
+        crate::usecases::connector::authorization_removed(r, ctx, id, &reason, occurred_at).await?;
+    }
     Ok("consumed")
 }

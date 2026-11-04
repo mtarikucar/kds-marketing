@@ -43,7 +43,14 @@
 //! kept for [`RAW_RETENTION`] and then removed by the daily purge ([`purge_raw`]). When the
 //! provider said when the event happened, the payload (an object) also carries `occurred_at`
 //! (RFC 3339), unless the provider's item already names that key. Inbound events are records of
-//! the outside world: no ledger entry.
+//! the outside world: no ledger entry. A WhatsApp Business app's shared history and contacts, and
+//! what the business sent from the app, are stored already processed ([`stored_processed`]):
+//! the past is filed by the inbox, never put to the agent as something to answer.
+//!
+//! **A WhatsApp Business Account's own events** (Meta's `account_update`) name the business
+//! account, not a number: they are routed to every workspace holding a connected
+//! `whatsapp_cloud` capability whose asset names it ([`AccountRoute::WhatsappBusinessAccount`]),
+//! stored once in each with the number found there, and the inbox takes their effect in each.
 //!
 //! **TikTok** ([`receive_tiktok`]). One event per delivery, routed by its open id to every
 //! workspace holding that `tiktok` account connected (an event naming a post: to the workspace
@@ -126,12 +133,48 @@ pub fn takes_routed_events(status: WorkspaceStatus) -> bool {
 pub type ScopedRaw<'a> = dyn Fn(&[usize]) -> Option<Vec<u8>> + Sync + 'a;
 
 /// One event of a provider that names its account: which capability kinds may hold the account
-/// (`kind_keys`), the provider's id of the account, and the event.
+/// (`kind_keys`), the provider's id of the account, how that id names a capability (`route`),
+/// and the event.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountEvent {
     pub kind_keys: &'static [&'static str],
     pub external_account_id: String,
+    pub route: AccountRoute,
     pub draft: InboundEventDraft,
+}
+
+/// How an event's account names the capability it is routed to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AccountRoute {
+    /// The account is the capability's external id (a page, an Instagram account, a WhatsApp
+    /// number): [`crate::ports::PlatformRepos::capability_by_external`].
+    #[default]
+    ExternalId,
+    /// The account is a WhatsApp Business Account, which a `whatsapp_cloud` capability names in
+    /// its asset (Meta's `account_update`, which names no number):
+    /// [`crate::ports::PlatformRepos::capabilities_by_business_account`]. The event is stored once
+    /// in every workspace holding such a number, with the capability found there; the inbox takes
+    /// its effect on every capability of that workspace naming the account.
+    WhatsappBusinessAccount,
+}
+
+/// Whether an event of `kind` is a record of the past or of the account's own state that nobody
+/// answers, stored already processed so it never waits in `events.pending`: a WhatsApp Business
+/// app's shared history and contacts, and what the business sent from the app itself (WhatsApp's
+/// echoes; Messenger's echoes are kept for the agent as before). The inbox files them all the
+/// same.
+pub fn stored_processed(
+    provider: Provider,
+    kind: &jt_connector::EventKind,
+    payload: &Value,
+) -> bool {
+    use jt_connector::EventKind;
+    provider == Provider::Meta
+        && match kind {
+            EventKind::History | EventKind::ContactSync => true,
+            EventKind::MessageEcho => payload.get("echo").is_some(),
+            _ => false,
+        }
 }
 
 /// What a TikTok webhook event asks of the system once stored (see the module docs).
@@ -421,8 +464,9 @@ pub fn spawn_resolve(deps: std::sync::Arc<Deps>, hooked: HookedPublication) {
     });
 }
 
-/// Stores each of `events` of `provider` in the workspace that holds its account connected (see
-/// the module docs), each workspace's with the raw body `raw` gives for its own events (asked
+/// Stores each of `events` of `provider` in the workspace that holds its account connected (a
+/// WhatsApp Business Account's event: in each workspace that does; see the module docs), each
+/// workspace's with the raw body `raw` gives for its own events (asked
 /// with exactly their indexes, never another workspace's nor a dropped event's), and answers what
 /// became of each, in order: an event whose workspace is suspended is [`Delivery::Inactive`] and
 /// written nowhere. Each workspace's events are written in one transaction of their own, so a
@@ -442,39 +486,52 @@ pub async fn receive_for_accounts(
         // Each workspace's status, read once per delivery.
         let mut open: BTreeMap<WorkspaceId, bool> = BTreeMap::new();
         for (i, event) in events.into_iter().enumerate() {
-            let routed = platform
-                .capability_by_external(event.kind_keys, &event.external_account_id)
-                .await?;
-            let Some(capability) = routed else {
-                continue;
-            };
-            // Comments stay out until the capability's comments are enabled (spec D11).
-            if provider == Provider::Meta
-                && event.draft.kind == EventKind::Comment
-                && !super::inbox::public::comments_enabled(deps.apps.as_ref(), &capability)
-            {
-                out[i] = Delivery::Disabled;
-                continue;
-            }
-            let ws = capability.workspace_id;
-            let takes = match open.get(&ws) {
-                Some(takes) => *takes,
-                None => {
-                    let takes = platform
-                        .workspace_get(ws)
+            let routed: Vec<jt_capability::Capability> = match event.route {
+                AccountRoute::ExternalId => platform
+                    .capability_by_external(event.kind_keys, &event.external_account_id)
+                    .await?
+                    .into_iter()
+                    .collect(),
+                AccountRoute::WhatsappBusinessAccount => {
+                    platform
+                        .capabilities_by_business_account(&event.external_account_id)
                         .await?
-                        .is_some_and(|w| takes_routed_events(w.status));
-                    open.insert(ws, takes);
-                    takes
                 }
             };
-            if takes {
-                by_workspace
-                    .entry(ws)
-                    .or_default()
-                    .push((i, capability.id, event.draft));
-            } else {
-                out[i] = Delivery::Inactive;
+            for capability in routed {
+                // Comments stay out until the capability's comments are enabled (spec D11).
+                if provider == Provider::Meta
+                    && event.draft.kind == EventKind::Comment
+                    && !super::inbox::public::comments_enabled(deps.apps.as_ref(), &capability)
+                {
+                    if out[i] == Delivery::Unrouted {
+                        out[i] = Delivery::Disabled;
+                    }
+                    continue;
+                }
+                let ws = capability.workspace_id;
+                let takes = match open.get(&ws) {
+                    Some(takes) => *takes,
+                    None => {
+                        let takes = platform
+                            .workspace_get(ws)
+                            .await?
+                            .is_some_and(|w| takes_routed_events(w.status));
+                        open.insert(ws, takes);
+                        takes
+                    }
+                };
+                if takes {
+                    by_workspace.entry(ws).or_default().push((
+                        i,
+                        capability.id,
+                        event.draft.clone(),
+                    ));
+                } else if out[i] == Delivery::Unrouted {
+                    // Inactive only where no workspace takes it: one that does says what became
+                    // of it.
+                    out[i] = Delivery::Inactive;
+                }
             }
         }
     }
@@ -763,6 +820,7 @@ async fn store(
     {
         fields.insert("occurred_at".to_owned(), Value::String(text));
     }
+    let processed_at = stored_processed(at.provider, &kind, &payload).then_some(at.received_at);
     let event = InboundEvent {
         id: InboundEventId(deps.ids.uuid()),
         workspace_id: at.ws,
@@ -772,7 +830,7 @@ async fn store(
         kind,
         payload,
         received_at: at.received_at,
-        processed_at: None,
+        processed_at,
     };
     Ok(
         match repos.inbound_events().insert_if_new(event, raw).await? {

@@ -897,6 +897,50 @@ async fn erasure_scrubs_netgsm_copied_rows_calls_and_recordings() {
         assert!(!p.to_string().contains("private"));
     }
 }
+/// A number onboarded beside the WhatsApp Business app brings the person's history (its thread
+/// is their number), what the business wrote them from the app, and the app's contact card:
+/// erasing the person scrubs each from the stored event.
+#[tokio::test]
+async fn erasure_scrubs_whatsapp_business_app_history_echoes_and_contacts() {
+    for payload in [
+        json!({"history_message":{"from":"905321234567","id":"wamid.H1","timestamp":"1789900000","type":"text","text":{"body":"private history"}},"thread":"905321234567","business_number":"905550000000"}),
+        json!({"history_message":{"from":"905550000000","to":"905321234567","id":"wamid.H2","type":"text","text":{"body":"private reply"}},"business_number":"905550000000"}),
+        json!({"echo":{"from":"905550000000","to":"905321234567","id":"wamid.E1","type":"text","text":{"body":"private echo"}}}),
+        json!({"state_sync":{"type":"contact","contact":{"full_name":"Private Person","first_name":"Private","phone_number":"905321234567"},"action":"add","metadata":{"timestamp":"1789900000"}}}),
+    ] {
+        let p = provider_erasure_payload("whatsapp_cloud", Provider::Meta, payload.clone()).await;
+        assert!(!p.to_string().contains("5321234567"), "{p}");
+        assert!(!p.to_string().to_lowercase().contains("private"), "{p}");
+    }
+}
+
+/// The database's mask and the use cases' mask are one: the same keys, at any depth.
+#[tokio::test]
+async fn the_sql_mask_masks_what_the_rust_mask_masks() {
+    let db = TestDb::new().await;
+    let sample = json!({
+        "thread": "905321234567", "phone_number": "905321234567", "full_name": "A B",
+        "first_name": "A", "business_number": "905550000000", "kind": "history",
+        "history_message": {"from": "905321234567", "to": "905550000000", "id": "wamid.1",
+            "text": {"body": "hi"}, "history_context": {"status": "read"}},
+        "state_sync": {"contact": {"phone_number": "905321234567"}, "action": "add"},
+        "items": [{"name": "n", "amount_minor": 5}],
+        "scenario": "cdr", "source": "05321234567",
+        // A public item's envelope (0019, joined with the app's keys in 0025).
+        "public": {"author": {"id": "5150", "name": "a"}, "external_id": "c-1", "text": "?"},
+        "provider_item": {"id": "c-1"}, "username": "a", "userName": "A", "customerName": "A",
+        "message": "string text", "entry": {"message": {"id": "m", "text": {"body": "hi"}}},
+    });
+    let in_sql: Value = sqlx::query_scalar("select inbox_mask_personal($1)")
+        .bind(&sample)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    let mut in_rust = sample.clone();
+    erasure::mask_personal(&mut in_rust);
+    assert_eq!(in_sql, in_rust);
+}
+
 #[tokio::test]
 async fn erasure_matches_iys_email_channel_on_sms_capability() {
     let p=provider_erasure_payload("sms_line",Provider::Netgsm,json!({"channel":"EPOSTA","recipient":"private@example.com","status":"RET","granted":false,"source":"iys","raw":{"recipient":"private@example.com","type":"EPOSTA"}})).await;

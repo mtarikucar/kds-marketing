@@ -1121,6 +1121,14 @@
       "reconnectSubmit": "Yeniden bağla",
       "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
     },
+    "whatsapp": {
+      "choice": "Hangi numarayı bağlıyorsunuz?",
+      "businessApp": "Telefonda WhatsApp Business uygulamasında kullandığım numara",
+      "businessAppHint": "Uygulama telefonda çalışmaya devam eder: telefondan yazdıklarınız da Jeeta'da görünür. İzin verirseniz kişileriniz ve son 180 güne kadarki birebir sohbetleriniz bağlantıdan sonraki 24 saat içinde bir kez aktarılır; geçmiş mesajlara yanıt beklenmez. Bağlanırken uygulamayı telefonda açık tutun. Meta bu bağlantıyı her ülke için sunmayabilir: reddederse nedeni burada görünür.",
+      "cloudApi": "Yeni bir Cloud API numarası",
+      "cloudApiHint": "Numara yalnızca Jeeta üzerinden kullanılır; telefondaki bir WhatsApp uygulamasıyla birlikte çalışmaz.",
+      "notEnabled": "Platformun WhatsApp Embedded Signup yapılandırması henüz ayarlanmadı; işletmen ayarlayınca bu bağlantı açılır."
+    },
     "credentials": {
       "title": "Kimlik bilgileri",
       "body": "Bilgiler mühürlenerek saklanır ve bir daha gösterilmez; kaydedilir kaydedilmez bağlantı yoklanır.",
@@ -1371,7 +1379,8 @@
       "human": "İnsan",
       "agent": "Ajan",
       "system": "Sistem",
-      "customer": "Müşteri"
+      "customer": "Müşteri",
+      "business_app": "İşletme · WhatsApp Business uygulaması"
     },
     "delivery": {
       "received": "Alındı",
@@ -1846,7 +1855,21 @@
     "help": "Bu dönüş adreslerini sağlayıcı uygulamasına kaydedin. Uygulama bilgilerini ve webhook doğrulamasını işletmen yapılandırır.",
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",
-    "expires": "Erişim bitiş zamanı"
+    "expires": "Erişim bitiş zamanı",
+    "businessApp": {
+      "title": "WhatsApp Business uygulamasından aktarım",
+      "contacts": "Kişiler",
+      "history": "Sohbet geçmişi",
+      "until": "Son istek zamanı: {{at}}",
+      "states": {
+        "due": "Henüz istenmedi",
+        "requesting": "İsteniyor",
+        "requested": "İstendi: izin verirseniz telefondan gelir",
+        "refused": "Meta reddetti",
+        "unknown": "İsteğin sonucu bilinmiyor; yeniden istenmez",
+        "expired": "24 saatlik süre doldu; aktarım için numarayı WhatsApp Business uygulamasından ayırıp burada yeniden bağlayın"
+      }
+    }
   },
   "gates": {
     "strategyBody": "Bu bölüm, onaylı bir strateji olunca açılır. Stratejiyi ajanınızla ya da strateji sayfasından hazırlayıp onaylayın.",

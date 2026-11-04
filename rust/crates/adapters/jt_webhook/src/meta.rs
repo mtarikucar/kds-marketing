@@ -8,9 +8,11 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use jt_app::usecases::webhook::{self, AccountEvent, Delivery};
+use jt_app::usecases::webhook::{self, AccountEvent, AccountRoute, Delivery};
 use jt_connector::{META_SIGNATURE_HEADER, Provider, meta_signature_ok, meta_verify_token_ok};
-use jt_meta::webhook::{Origin, ParseError, kinds_of_hint, parse, scoped_body};
+use jt_meta::webhook::{
+    KIND_HINT_WHATSAPP_ACCOUNT, Origin, ParseError, kinds_of_hint, parse, scoped_body,
+};
 
 use crate::{DISABLED_META, META_BODY_LIMIT, UNPARSEABLE_META, UNROUTED_META, WebhookState, raw};
 
@@ -144,6 +146,11 @@ pub(crate) async fn receive(
         .into_iter()
         .map(|p| AccountEvent {
             kind_keys: kinds_of_hint(p.kind_hint),
+            route: if p.kind_hint == KIND_HINT_WHATSAPP_ACCOUNT {
+                AccountRoute::WhatsappBusinessAccount
+            } else {
+                AccountRoute::ExternalId
+            },
             external_account_id: p.external_account_id,
             draft: p.event,
         })

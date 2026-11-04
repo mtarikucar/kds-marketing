@@ -1121,6 +1121,14 @@
       "reconnectSubmit": "Reconnect",
       "firstBindsNote": "This capability is not bound to an account yet: the first account you choose at the provider becomes this capability, and the others you choose are added as new capabilities."
     },
+    "whatsapp": {
+      "choice": "Which number are you connecting?",
+      "businessApp": "A number I already use in the WhatsApp Business app on my phone",
+      "businessAppHint": "The app keeps working on the phone: what you write there shows in Jeeta too. If you allow it, your contacts and up to 180 days of one-to-one chats are shared once within 24 hours of connecting; past messages are owed no reply. Keep the app open on the phone while connecting. Meta may not offer this connection in every country: if it refuses, the reason shows here.",
+      "cloudApi": "A new Cloud API number",
+      "cloudApiHint": "The number is used through Jeeta only; it does not work alongside a WhatsApp app on a phone.",
+      "notEnabled": "The platform's WhatsApp Embedded Signup configuration is not set yet; this connection opens once the operator sets it."
+    },
     "credentials": {
       "title": "Credentials",
       "body": "They are stored sealed and never shown again; the connection is probed as soon as they are saved.",
@@ -1371,7 +1379,8 @@
       "human": "Human",
       "agent": "Agent",
       "system": "System",
-      "customer": "Customer"
+      "customer": "Customer",
+      "business_app": "Business · WhatsApp Business app"
     },
     "delivery": {
       "received": "Received",
@@ -1846,7 +1855,21 @@
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
-    "expires": "Access expires at"
+    "expires": "Access expires at",
+    "businessApp": {
+      "title": "Sharing from the WhatsApp Business app",
+      "contacts": "Contacts",
+      "history": "Chat history",
+      "until": "Last time to ask: {{at}}",
+      "states": {
+        "due": "Not asked yet",
+        "requesting": "Being asked",
+        "requested": "Asked: it arrives from the phone if you allow it",
+        "refused": "Meta refused",
+        "unknown": "The request's outcome is unknown; it is not asked again",
+        "expired": "The 24-hour window closed; to share, disconnect the number in the WhatsApp Business app and connect it here again"
+      }
+    }
   },
   "gates": {
     "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",

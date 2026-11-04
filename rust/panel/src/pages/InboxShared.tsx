@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, MessageCircle, Settings, User } from 'lucide-react';
+import { Bot, MessageCircle, Settings, Smartphone, User } from 'lucide-react';
 import { useSession } from '@/auth/useSession';
 import { listTeam } from '@/api/team';
-import type { InboxActor } from '@/api/types';
+import type { InboxAuthor } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
@@ -60,12 +60,20 @@ export function useMemberName() {
     return member?.display_name || member?.email || t('inbox.teamMember');
   };
 }
-export function InboxActorLabel({ actor }: { actor: InboxActor | 'customer' }) {
+export function InboxActorLabel({ actor }: { actor: InboxAuthor }) {
   const { t } = useTranslation();
   const memberName = useMemberName();
   const kind = typeof actor === 'object' ? 'human' : actor;
   const Icon =
-    kind === 'human' ? User : kind === 'agent' ? Bot : kind === 'customer' ? MessageCircle : Settings;
+    kind === 'human'
+      ? User
+      : kind === 'agent'
+        ? Bot
+        : kind === 'customer'
+          ? MessageCircle
+          : kind === 'business_app'
+            ? Smartphone
+            : Settings;
   return (
     <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

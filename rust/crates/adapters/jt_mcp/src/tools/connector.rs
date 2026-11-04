@@ -57,6 +57,13 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           is approved for organizations) (review_facebook cannot be connected \
                           yet: no sign-in finds Facebook comments); NetGSM kinds (sms_line, \
                           netgsm_pbx) take credentials instead (jeeta.connector.set_credentials). \
+                          flow whatsapp_business_app (with whatsapp_cloud only) connects a number \
+                          the business already uses in the WhatsApp Business app on its phone, \
+                          which keeps working beside the inbox (Meta's coexistence onboarding; \
+                          CONFLICT provider_product_not_enabled until the platform's WhatsApp \
+                          Embedded Signup configuration is set); its contacts and chat history \
+                          are then asked for once and filed as past conversations. Leave flow \
+                          out for a new Cloud API number and every other kind. \
                           Returns {authorize_url, pending_id, expires_at, handoff}: hand the \
                           authorize_url to the owner, who signs in in their own browser within \
                           ten minutes; the panel completes the flow and the owner chooses the \
@@ -196,6 +203,13 @@ struct StartArgs {
     /// A Meta kind or x.
     #[schemars(schema_with = "oauth_kind_schema")]
     kind_key: String,
+    /// A variant of the sign-in: whatsapp_business_app (kind_key whatsapp_cloud only) connects
+    /// a number the business already uses in the WhatsApp Business app on its phone, which keeps
+    /// working beside the inbox; left out, the provider's own sign-in (a new Cloud API number,
+    /// every other kind).
+    #[serde(default)]
+    #[schemars(schema_with = "oauth_flow_schema")]
+    flow: Option<String>,
 }
 
 /// The schema of `jeeta.connector.confirm_assets`: a completed flow and the assets to connect. The
@@ -251,6 +265,14 @@ fn oauth_kind_schema(_: &mut SchemaGenerator) -> Schema {
     .flat_map(|p| p.kinds().iter().copied())
     .collect();
     json_schema!({ "type": "string", "enum": kinds })
+}
+
+fn oauth_flow_schema(_: &mut SchemaGenerator) -> Schema {
+    let flows: Vec<&str> = jt_app::ports::connectors::OAuthFlow::all()
+        .iter()
+        .map(|f| f.key())
+        .collect();
+    json_schema!({ "type": "string", "enum": flows })
 }
 
 fn set_credentials_schema() -> Schema {

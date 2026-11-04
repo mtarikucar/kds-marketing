@@ -20,13 +20,13 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
-    Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus,
-    InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord, LinkedinApp,
-    MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
-    ModerationAction, OAuthApp, OAuthProvider, PlatformAppConfig, PostMetrics, PrivateReceipt,
-    PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
-    RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url,
-    XApp,
+    AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
+    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord,
+    LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
+    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformAppConfig, PostMetrics,
+    PrivateReceipt, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution,
+    Publisher, RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp,
+    TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -356,6 +356,12 @@ pub struct ScriptedConnector {
     /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
     sender_name: Script<Result<Option<String>, ConnectorError>>,
     sender_name_calls: Mutex<Vec<String>>,
+    /// The WhatsApp Business app's one-time sharing answers from here, `Ok(None)` (the trait's
+    /// default) when nothing is queued; the requests (their `public`'s external id, and what was
+    /// asked) are kept apart from [`ScriptedConnector::calls`] (see
+    /// [`ScriptedConnector::app_sync_calls`]).
+    app_sync: Script<Result<Option<SendReceipt>, ConnectorError>>,
+    app_sync_calls: Mutex<Vec<(Value, AppSync)>>,
     set_status: Script<Result<(), ConnectorError>>,
     account_context: Script<Result<AdAccountContext, ConnectorError>>,
     adset_insights: Script<Result<Vec<AdSetInsights>, ConnectorError>>,
@@ -417,6 +423,8 @@ impl ScriptedConnector {
             send_text: Script::default(),
             sender_name: Script::default(),
             sender_name_calls: Mutex::default(),
+            app_sync: Script::default(),
+            app_sync_calls: Mutex::default(),
             set_status: Script::default(),
             account_context: Script::default(),
             adset_insights: Script::default(),
@@ -586,6 +594,16 @@ impl ScriptedConnector {
     /// The sender ids whose names were asked for, in order.
     pub fn sender_name_calls(&self) -> Vec<String> {
         lock(&self.sender_name_calls).clone()
+    }
+
+    pub fn push_app_sync(&self, result: Result<Option<SendReceipt>, ConnectorError>) {
+        self.app_sync.push(result);
+    }
+
+    /// The WhatsApp Business app's sharing requests so far: the account asked about
+    /// (`public["external_id"]`) and what was asked, in order.
+    pub fn app_sync_calls(&self) -> Vec<(Value, AppSync)> {
+        lock(&self.app_sync_calls).clone()
     }
 
     pub fn push_click_to_call(&self, result: Result<SendReceipt, ConnectorError>) {
@@ -832,6 +850,16 @@ impl MessagingSender for ScriptedConnector {
     ) -> Result<Option<String>, ConnectorError> {
         lock(&self.sender_name_calls).push(sender_id.to_owned());
         self.sender_name.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn request_app_sync(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+        sync: AppSync,
+    ) -> Result<Option<SendReceipt>, ConnectorError> {
+        lock(&self.app_sync_calls).push((public["external_id"].clone(), sync));
+        self.app_sync.try_next().unwrap_or(Ok(None))
     }
 }
 
@@ -1266,6 +1294,8 @@ pub struct ScriptedOAuth {
     authorize: Script<ConnectorError>,
     exchange: Script<Result<Credential, ConnectorError>>,
     assets: Script<Result<Vec<Asset>, ConnectorError>>,
+    /// The sign-in variant each call ran (see [`ScriptedOAuth::flows`]).
+    flows: Mutex<Vec<(&'static str, Option<OAuthFlow>)>>,
 }
 
 impl ScriptedOAuth {
@@ -1277,7 +1307,14 @@ impl ScriptedOAuth {
             authorize: Script::default(),
             exchange: Script::default(),
             assets: Script::default(),
+            flows: Mutex::default(),
         }
+    }
+
+    /// The sign-in variant each call ran, in order, by the call's name (`authorize_url`,
+    /// `exchange`, `list_assets`): what the use cases asked the `*_for` forms with.
+    pub fn flows(&self) -> Vec<(&'static str, Option<OAuthFlow>)> {
+        lock(&self.flows).clone()
     }
 
     /// The provider whose flow this is.
@@ -1375,6 +1412,45 @@ impl OAuthProvider for ScriptedOAuth {
         });
         self.assets
             .next("ScriptedOAuth", self.provider, "assets result")
+    }
+
+    /// As [`ScriptedOAuth::authorize_url`], the flow recorded ([`ScriptedOAuth::flows`]) and, when
+    /// there is one, named in the URL (`flow=<key>`).
+    fn authorize_url_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        state: &str,
+        pkce_challenge: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Url, ConnectorError> {
+        lock(&self.flows).push(("authorize_url", flow));
+        let mut url = self.authorize_url(app, redirect, state, pkce_challenge)?;
+        if let Some(flow) = flow {
+            url.query_pairs_mut().append_pair("flow", flow.key());
+        }
+        Ok(url)
+    }
+
+    async fn exchange_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        code: &str,
+        pkce_verifier: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Credential, ConnectorError> {
+        lock(&self.flows).push(("exchange", flow));
+        self.exchange(app, redirect, code, pkce_verifier).await
+    }
+
+    async fn list_assets_for(
+        &self,
+        cred: &Credential,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Vec<Asset>, ConnectorError> {
+        lock(&self.flows).push(("list_assets", flow));
+        self.list_assets(cred).await
     }
 }
 

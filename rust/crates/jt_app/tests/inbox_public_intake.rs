@@ -15,7 +15,7 @@ use jt_app::ports::connectors::{
 };
 use jt_app::ports::inbox::OutboxRow;
 use jt_app::usecases::inbox::{consumer, merge, people};
-use jt_app::usecases::webhook::{self, AccountEvent, Delivery};
+use jt_app::usecases::webhook::{self, AccountEvent, AccountRoute, Delivery};
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{Credential, EventKind, InboundEvent, InboundEventId, Provider};
 use jt_inbox::*;
@@ -560,6 +560,7 @@ fn comment_event(account: &str, id: &str) -> AccountEvent {
     AccountEvent {
         kind_keys: &["facebook_page", "messenger", "instagram", "instagram_dm"],
         external_account_id: account.into(),
+        route: AccountRoute::ExternalId,
         draft: InboundEventDraft {
             external_id: format!("comment:{id}"),
             kind: EventKind::Comment,
@@ -636,6 +637,7 @@ async fn comment_not_stored_when_comments_are_not_enabled() {
     let dm = AccountEvent {
         kind_keys: &["facebook_page", "messenger"],
         external_account_id: PAGE.into(),
+        route: AccountRoute::ExternalId,
         draft: InboundEventDraft {
             external_id: "m_1".into(),
             kind: EventKind::Message,
