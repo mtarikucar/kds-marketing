@@ -1,33 +1,53 @@
 //! Growth studio identity, lifecycle and evidence. Pure rules; no provider or database I/O.
 //! Stored records are validated before writes. Execution authorization must additionally read
 //! the current workspace, capability, policy, brake and spend gates in the application layer.
+mod calendar;
+mod capture;
 mod chain;
 mod control;
+mod eligibility;
 mod ids;
 mod learning;
+mod material;
 mod measurement;
 mod mp4;
+mod olay;
+mod package;
 mod paid;
 mod piece;
 mod planning;
+mod posts;
 mod publication;
+mod selection;
+mod shoot;
 mod slot;
 mod tiktok;
 pub mod time_compat;
 mod trend;
+mod truth;
 
+pub use calendar::*;
+pub use capture::*;
 pub use chain::*;
 pub use control::*;
+pub use eligibility::*;
 pub use ids::*;
 pub use learning::*;
+pub use material::*;
 pub use measurement::*;
+pub use olay::*;
+pub use package::*;
 pub use paid::*;
 pub use piece::*;
 pub use planning::*;
+pub use posts::*;
 pub use publication::*;
+pub use selection::*;
+pub use shoot::*;
 pub use slot::*;
 pub use tiktok::*;
 pub use trend::*;
+pub use truth::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StudioError {
@@ -59,6 +79,8 @@ pub enum StudioError {
     InvalidEvidence(&'static str),
     #[error("raw media must be normalized to a stored file before persistence")]
     UnstoredMedia,
+    #[error("invalid material or olay: {0}")]
+    InvalidMaterial(&'static str),
 }
 
 pub(crate) fn require_id(id: uuid::Uuid, field: &'static str) -> Result<(), StudioError> {

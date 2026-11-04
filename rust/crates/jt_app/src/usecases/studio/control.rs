@@ -199,7 +199,8 @@ pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<Approv
     r.commit().await?;
     Ok(out)
 }
-fn human_required() -> AppError {
+/// `FORBIDDEN` `owner_or_manager_human`: what only an owner or manager human decides.
+pub(crate) fn human_required() -> AppError {
     AppError {
         code: ErrorCode::Forbidden,
         message: "owner or manager human required".into(),

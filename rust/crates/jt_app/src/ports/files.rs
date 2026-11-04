@@ -72,6 +72,36 @@ pub trait FileStore: Send + Sync {
             bytes: Box::new(Whole(Some(upload.bytes))),
         })
     }
+    /// At most `len` bytes of file `id` from its byte `offset` (fewer where it ends, none past its
+    /// end), as [`FileStore::read`] would give them but unchecked: a part of a file cannot be
+    /// checked against its hash, so a part is for reading what a file says of itself (a photo's
+    /// capture time), never for serving or publishing it. A store that can reads that part alone
+    /// (the disk store seeks to it); this default streams the file ([`FileStore::read_stream`],
+    /// whose own default reads it whole) and keeps only the part. The caller bounds `len`.
+    async fn read_range(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        let mut file = self.read_stream(ws, id).await?;
+        let end = offset.saturating_add(len as u64);
+        let (mut at, mut part) = (0u64, Vec::new());
+        while at < end {
+            let Some(chunk) = file.bytes.next_chunk().await? else {
+                break;
+            };
+            let start = at;
+            at = at.saturating_add(chunk.len() as u64);
+            if at > offset {
+                let from = usize::try_from(offset.saturating_sub(start)).unwrap_or(usize::MAX);
+                let to = usize::try_from(end.min(at) - start).unwrap_or(usize::MAX);
+                part.extend_from_slice(chunk.get(from..to).unwrap_or_default());
+            }
+        }
+        Ok(part)
+    }
     /// Whether file `id` is stored: from what the store keeps of it alone where it can (the disk
     /// store reads its header); this default reads it ([`FileStore::read`], `NOT_FOUND` read as
     /// `false`). Another workspace's file is not this one's.

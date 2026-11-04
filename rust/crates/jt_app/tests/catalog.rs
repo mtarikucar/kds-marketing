@@ -104,6 +104,31 @@ fn panel_routes_are_unique() {
 
 // Beyond the brief: pins the details later crates rely on.
 
+/// The materials library and its uploads: exempt from the strategy gate (spec 2026-11-03 D35).
+const STUDIO_LIBRARY: &[&str] = &[
+    "studio.file_upload",
+    "studio.olays_list",
+    "studio.olay_get",
+    "studio.olay_create",
+    "studio.olay_update",
+    "studio.materials_list",
+    "studio.material_get",
+    "studio.material_add",
+    "studio.material_tag",
+    "studio.slot_materials",
+    "studio.calendar_list",
+    "studio.shoot_list",
+    "studio.shoot_request",
+    "studio.shoot_resolve",
+    "studio.olay_confirm",
+    "studio.material_permission",
+    "studio.material_free",
+    "studio.material_bind",
+    "studio.material_delete",
+    "studio.calendar_set",
+    "studio.material_policy_set",
+];
+
 #[test]
 #[rustfmt::skip]
 fn catalog_is_the_release_table() {
@@ -133,6 +158,32 @@ fn catalog_is_the_release_table() {
         ("studio.tiktok_posting", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Read),
         ("studio.tiktok_post", None, Some(("POST", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Write),
         ("studio.tiktok_metrics", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")), true, Risk::Read),
+        ("studio.olays_list", Some("jeeta.studio.olays_list"), Some(("GET", "/api/studio/olays")), false, Risk::Read),
+        ("studio.olay_get", Some("jeeta.studio.olay_get"), Some(("GET", "/api/studio/olays/{olay_id}")), false, Risk::Read),
+        ("studio.olay_create", Some("jeeta.studio.olay_create"), Some(("POST", "/api/studio/olays")), false, Risk::Write),
+        ("studio.olay_update", Some("jeeta.studio.olay_update"), Some(("PATCH", "/api/studio/olays/{olay_id}")), false, Risk::Write),
+        ("studio.materials_list", Some("jeeta.studio.materials_list"), Some(("GET", "/api/studio/materials")), false, Risk::Read),
+        ("studio.material_get", Some("jeeta.studio.material_get"), Some(("GET", "/api/studio/materials/{material_id}")), false, Risk::Read),
+        ("studio.material_add", Some("jeeta.studio.material_add"), Some(("POST", "/api/studio/materials")), false, Risk::Write),
+        ("studio.material_tag", Some("jeeta.studio.material_tag"), Some(("PATCH", "/api/studio/materials/{material_id}/tags")), false, Risk::Write),
+        ("studio.slot_materials", Some("jeeta.studio.slot_materials"), Some(("GET", "/api/studio/slots/{slot_id}/materials")), false, Risk::Read),
+        ("studio.calendar_list", Some("jeeta.studio.calendar_list"), Some(("GET", "/api/studio/calendar")), false, Risk::Read),
+        ("studio.shoot_list", Some("jeeta.studio.shoot_list"), Some(("GET", "/api/studio/shoot-requests")), false, Risk::Read),
+        ("studio.shoot_request", Some("jeeta.studio.shoot_request"), Some(("POST", "/api/studio/shoot-requests")), false, Risk::Write),
+        ("studio.shoot_resolve", Some("jeeta.studio.shoot_resolve"), Some(("POST", "/api/studio/shoot-requests/{request_id}/resolve")), false, Risk::Write),
+        ("studio.olay_confirm", None, Some(("POST", "/api/studio/olays/{olay_id}/confirm")), true, Risk::Write),
+        ("studio.material_permission", None, Some(("PUT", "/api/studio/materials/{material_id}/permission")), true, Risk::Write),
+        ("studio.material_free", None, Some(("POST", "/api/studio/materials/{material_id}/free")), true, Risk::Write),
+        ("studio.material_bind", None, Some(("POST", "/api/studio/materials/{material_id}/bind")), true, Risk::Write),
+        ("studio.material_delete", None, Some(("POST", "/api/studio/materials/{material_id}/delete")), true, Risk::Destructive),
+        ("studio.calendar_set", None, Some(("PUT", "/api/studio/calendar/{key}/{year}")), true, Risk::Write),
+        ("studio.material_policy_set", None, Some(("PUT", "/api/studio/materials/policy")), true, Risk::Write),
+        ("studio.material_check_release", None, Some(("POST", "/api/studio/slots/{slot_id}/material-check/release")), true, Risk::Write),
+        ("studio.post_requests", Some("jeeta.studio.post_requests"), Some(("GET", "/api/studio/post-requests")), false, Risk::Read),
+        ("studio.posts_propose", Some("jeeta.studio.posts_propose"), Some(("POST", "/api/studio/post-requests/{request_id}/proposal")), false, Risk::Write),
+        ("studio.posts_list", Some("jeeta.studio.posts_list"), Some(("GET", "/api/studio/posts")), false, Risk::Read),
+        ("studio.weekly_summary", Some("jeeta.studio.weekly_summary"), Some(("GET", "/api/studio/summary")), false, Risk::Read),
+        ("studio.posting_policy_set", None, Some(("PUT", "/api/studio/posting-policy")), true, Risk::Write),
         ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
         ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
         ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
@@ -314,9 +365,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 200);
+    assert_eq!(CATALOG.len(), 226);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

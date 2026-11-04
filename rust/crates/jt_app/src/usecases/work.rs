@@ -27,6 +27,12 @@
 //!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many),
 //!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
 //!   see an item they could never clear;
+//! - `StudioShootRequest` (3): each open request of the çekim listesi, for a caller with
+//!   `studio.work`, with or without an approved strategy (the materials library needs none);
+//! - `StudioPostRequest` (2): each open package request (olay-driven publishing), for a
+//!   caller with `studio.work` while a strategy is approved;
+//! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
+//!   only from its preparation start;
 //! - `DeclareFirstCapability` (3): no capability that is not retired;
 //! - `ResearchDue` (3): each open research task that may still record prospects today, and
 //!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, and
@@ -153,6 +159,16 @@ pub enum WorkKind {
     StudioBudgetMove {
         budget_move_id: jt_studio::BudgetMoveId,
     },
+    /// An open request of the çekim listesi: a material Studio needs and has not got (spec
+    /// 2026-11-03 §4.6). Listed with or without an approved strategy, as the library is.
+    StudioShootRequest {
+        shoot_request_id: jt_studio::ShootRequestId,
+    },
+    /// An open package request (spec 2026-11-03 D23): plan posts from its materials. Listed
+    /// with an approved strategy only, as `studio.posts_propose` needs one.
+    StudioPostRequest {
+        post_request_id: jt_studio::PackageRequestId,
+    },
     /// A visible conversation needs a reply.
     ReplyDue {
         conversation_id: jt_inbox::ConversationId,
@@ -254,6 +270,8 @@ impl WorkKind {
             WorkKind::StudioSlot { .. } => "studio.slot_get",
             WorkKind::StudioApproval { .. } => "studio.approve",
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
+            WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
+            WorkKind::StudioPostRequest { .. } => "studio.posts_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
             WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
@@ -381,6 +399,19 @@ async fn pending_as_seen(
     } else {
         None
     };
+    let shoots: Vec<jt_studio::ShootRequest> = if ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.shoot_list").allows(status)
+    {
+        repos
+            .studio_materials()
+            .list_shoot_requests()
+            .await?
+            .into_iter()
+            .filter(|q| q.status == jt_studio::ShootStatus::Open)
+            .collect()
+    } else {
+        Vec::new()
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -457,6 +488,18 @@ async fn pending_as_seen(
             },
             priority: if s.overdue { 1 } else { 2 },
             hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+        }));
+        items.extend(p.post_requests.into_iter().map(|q| {
+            WorkItem {
+                kind: WorkKind::StudioPostRequest {
+                    post_request_id: q.id,
+                },
+                priority: 2,
+                hint: "Plan posts from the request's materials (jeeta.studio.post_requests) and \
+                   answer it with jeeta.studio.posts_propose: each post's format, channel, \
+                   time, materials, subject and hypothesis, within the caps."
+                    .into(),
+            }
         }));
         items.extend(p.approvals.into_iter().map(|target| WorkItem {
             kind: WorkKind::StudioApproval { target },
@@ -542,6 +585,19 @@ async fn pending_as_seen(
             });
         }
     }
+    items.extend(shoots.into_iter().map(|q| {
+        WorkItem {
+            kind: WorkKind::StudioShootRequest {
+                shoot_request_id: q.id,
+            },
+            priority: 3,
+            hint:
+                "Studio needs this material (jeeta.studio.shoot_list). You cannot shoot it: tell \
+               the owner, or add an AI supporting visual (jeeta.studio.material_add); a real \
+               photo or video is the owner's."
+                    .into(),
+        }
+    }));
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
     items.retain(|item| actionable(&item.kind));

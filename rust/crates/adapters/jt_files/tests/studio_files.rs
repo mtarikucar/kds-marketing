@@ -233,6 +233,52 @@ async fn a_streamed_file_is_hashed_as_it_comes_and_linked_whole() {
     );
     std::fs::remove_dir_all(p).unwrap();
 }
+/// A part of a stored file is read alone (`FileStore::read_range`, spec 2026-11-03 D41): what
+/// the file says of itself is read without holding it.
+#[tokio::test]
+async fn a_part_of_a_file_is_read_alone() {
+    use jt_testkit::fakes::files::Chunks;
+    let p = root();
+    let ws = WorkspaceId::new_v7();
+    let d = disk(&p);
+    let bytes: Vec<u8> = (0..(512 * 1024 + 7)).map(|i| (i % 251) as u8).collect();
+    let id = FileId::new_v7();
+    let mut source = Chunks(bytes.chunks(64 * 1024).map(<[u8]>::to_vec).collect());
+    d.put_stream(ws, id, "application/octet-stream", "part.bin", &mut source)
+        .await
+        .unwrap();
+    assert_eq!(
+        d.read_range(ws, id, 0, 16).await.unwrap(),
+        bytes[..16].to_vec()
+    );
+    assert_eq!(
+        d.read_range(ws, id, 300_000, 1000).await.unwrap(),
+        bytes[300_000..301_000].to_vec()
+    );
+    // At its end, fewer; past it, none.
+    let len = bytes.len() as u64;
+    assert_eq!(
+        d.read_range(ws, id, len - 3, 16).await.unwrap(),
+        bytes[bytes.len() - 3..].to_vec()
+    );
+    assert!(d.read_range(ws, id, len + 10, 16).await.unwrap().is_empty());
+    // A PNG stored whole reads the same way; a file that is not there is NOT_FOUND, another
+    // workspace has none of it.
+    let png = FileId::new_v7();
+    d.put(ws, png, upload()).await.unwrap();
+    assert_eq!(
+        d.read_range(ws, png, 8, 7).await.unwrap(),
+        b"example".to_vec()
+    );
+    let e = d.read_range(ws, FileId::new_v7(), 0, 8).await.unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    let e = d
+        .read_range(WorkspaceId::new_v7(), id, 0, 8)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::NotFound);
+    std::fs::remove_dir_all(p).unwrap();
+}
 #[tokio::test]
 async fn a_large_file_is_served_a_chunk_at_a_time() {
     use futures_util::StreamExt;

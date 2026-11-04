@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as api from '@/api/studio';
 import { listCapabilities } from '@/api/capabilities';
@@ -19,6 +19,184 @@ import { kindLabel } from '@/lib/capabilities';
 import { failureText } from '@/lib/delivery';
 import { formatMoney } from '@/lib/format';
 import { TiktokPostCounters, TiktokPostStatus, TiktokPostingScreen } from './StudioTiktok';
+import { Link } from 'react-router-dom';
+import type { TFunction } from 'i18next';
+import * as lib from '@/api/materials';
+import { MaterialHold } from './materials/MaterialHold';
+import { materialsHref } from './materials/StudioMaterials';
+import { MaterialsError, findingText } from './materials/MaterialsShared';
+
+/** A blocker of the slot: the material check's hold with its findings, else its reason. */
+function Blocker({
+  slot,
+  blocker,
+  shootCount,
+}: {
+  slot: api.Slot;
+  blocker: api.Overview['today']['blockers'][number];
+  shootCount: number;
+}) {
+  if (blocker.reason === 'material_check_hold') {
+    return <MaterialHold slot={slot} details={blocker.details} shootCount={shootCount} />;
+  }
+  return <Reason reason={blocker.reason} />;
+}
+
+/** A subject as the owner reads it: an olay, last year's season, or nothing specific. */
+function subjectLabel(
+  t: TFunction,
+  subject: lib.Subject,
+  olays: lib.OlayListItem[] | undefined,
+): string {
+  if (subject.kind === 'generic') return t('materials.slot.subjectGeneric');
+  const title = olays?.find((o) => o.olay.id === subject.olay_id)?.olay.title ?? '—';
+  return subject.kind === 'olay'
+    ? t('materials.slot.subjectOlay', { title })
+    : t('materials.slot.subjectArchive', { title });
+}
+
+/** The subject in force: the one chosen, else that of the piece's own media, else the best. */
+function pickedSubject(
+  candidates: lib.SlotCandidate[],
+  pieceFiles: string[],
+  chosen: string | null,
+): string | null {
+  if (chosen) return chosen;
+  const own = candidates.find((c) => pieceFiles.includes(c.file_id));
+  const first = own ?? candidates[0];
+  return first ? JSON.stringify(first.subject) : null;
+}
+
+/** The materials in force: those chosen, else the piece's own media under the subject. */
+function pickedMaterials(
+  candidates: lib.SlotCandidate[],
+  pieceFiles: string[],
+  subject: string | null,
+  chosen: string[] | null,
+): string[] {
+  if (chosen) return chosen;
+  return candidates
+    .filter((c) => JSON.stringify(c.subject) === subject && pieceFiles.includes(c.file_id))
+    .map((c) => c.material_id);
+}
+
+/**
+ * What the piece shows (spec D2, D7): its subject and the library materials it may show at the
+ * slot's time (`studio.slot_materials`), each as an anchor or a supporting visual. A piece names
+ * one subject and shows at least one anchor; the server checks both again.
+ */
+function MaterialPicker({
+  id,
+  pieceFiles,
+  subject,
+  onSubject,
+  chosen,
+  onChosen,
+}: {
+  id: string;
+  pieceFiles: string[];
+  subject: string | null;
+  onSubject: (subject: string) => void;
+  chosen: string[] | null;
+  onChosen: (ids: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const key = useStudioKey();
+  const options = useQuery({
+    queryKey: [...key, 'materials', 'slot', id],
+    queryFn: () => lib.slotMaterials(id),
+  });
+  const materials = useQuery({
+    queryKey: [...key, 'materials', 'list', 'live'],
+    queryFn: () => lib.materialsList(),
+  });
+  const olays = useQuery({ queryKey: [...key, 'materials', 'olays'], queryFn: () => lib.olaysList() });
+  const candidates = options.data?.candidates ?? [];
+  const subjects: string[] = [];
+  for (const c of candidates) {
+    const k = JSON.stringify(c.subject);
+    if (!subjects.includes(k)) subjects.push(k);
+  }
+  const current = pickedSubject(candidates, pieceFiles, subject);
+  const shown = candidates.filter((c) => JSON.stringify(c.subject) === current);
+  const picked = pickedMaterials(candidates, pieceFiles, current, chosen);
+  const title = (materialId: string) => {
+    const x = materials.data?.find((y) => y.id === materialId);
+    if (x?.title.trim()) return x.title;
+    return x?.mime.startsWith('video/') ? t('materials.untitledVideo') : t('materials.untitledPhoto');
+  };
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">{t('materials.slot.title')}</legend>
+      <MaterialsError error={options.error} />
+      {options.data && candidates.length === 0 && (
+        <p className="text-sm">
+          {t('materials.slot.none')}{' '}
+          <Link className="underline" to={materialsHref('upload')}>
+            {t('materials.slot.upload')}
+          </Link>
+        </p>
+      )}
+      {subjects.length > 0 && (
+        <label className="flex flex-col gap-1 text-sm">
+          <span>{t('materials.slot.subject')}</span>
+          <select
+            className={inputClass}
+            value={current ?? ''}
+            onChange={(e) => {
+              onSubject(e.target.value);
+              onChosen([]);
+            }}
+          >
+            {subjects.map((k) => (
+              <option key={k} value={k}>
+                {subjectLabel(t, JSON.parse(k) as lib.Subject, olays.data)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <ul className="space-y-1">
+        {shown.map((c) => (
+          <li key={c.material_id}>
+            <label className="flex min-h-11 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={picked.includes(c.material_id)}
+                onChange={() =>
+                  onChosen(
+                    picked.includes(c.material_id)
+                      ? picked.filter((x) => x !== c.material_id)
+                      : [...picked, c.material_id],
+                  )
+                }
+              />
+              <span className="min-w-0 break-words">{title(c.material_id)}</span>
+              <span className="text-xs text-muted-foreground">
+                {t(`materials.role.${c.role}`)}
+                {c.matches_need ? ` · ${t('materials.slot.matchesNeed')}` : ''}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      {(options.data?.refused.length ?? 0) > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer">
+            {t('materials.slot.refused', { count: options.data!.refused.length })}
+          </summary>
+          <ul className="mt-1 space-y-1">
+            {options.data!.refused.map((r) => (
+              <li key={r.material_id}>
+                {title(r.material_id)}: {findingText(t, r.code)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </fieldset>
+  );
+}
 
 /** Why the latest attempt to publish this slot failed, in the owner's words, when it did. */
 function PublishFailure({ attempts }: { attempts: api.PublishAttempt[] }) {
@@ -204,34 +382,25 @@ function SlotEditor({
     if (back instanceof HTMLElement && back.isConnected) back.focus();
   };
   const detail = useQuery({ queryKey: [...key, 'slot', id], queryFn: () => api.slotGet(id) });
-  const [file, setFile] = useState<File>();
-  const [media, setMedia] = useState<api.Media[]>([]);
-  const upload = useStudioMutation(async () => {
-    if (!file) return;
-    const data = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    const out = await api.fileUpload({
-      filename: file.name,
-      mime: file.type,
-      content: { kind: 'bytes_base64', data },
-      request_key: crypto.randomUUID(),
-    });
-    setMedia((old) => [...old, { kind: 'file', id: out.id }]);
-  });
+  const pieceFiles = (detail.data?.piece?.media ?? []).flatMap((x) => (x.kind === 'file' ? [x.id] : []));
+  const [subject, setSubject] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<string[] | null>(null);
+  const [unpicked, setUnpicked] = useState(false);
+  const client = useQueryClient();
   const submit = useStudioMutation(
-    (form: FormData) =>
+    ({ form, about, files }: { form: FormData; about: lib.Subject; files: string[] }) =>
       api.pieceSubmit(id, {
         expected_revision: detail.data!.slot.revision,
         request_key: crypto.randomUUID(),
         text: String(form.get('text')),
-        media: [...(detail.data!.piece?.media ?? []), ...media],
+        media: files.map((f) => ({ kind: 'file' as const, id: f })),
         adaptations: detail.data!.piece?.adaptations ?? {},
+        subject: about,
       }),
-    () => setMedia([]),
+    () => {
+      setSubject(null);
+      setChosen(null);
+    },
   );
   const data = detail.data;
   return (
@@ -276,7 +445,26 @@ function SlotEditor({
               className="space-y-3"
               onSubmit={(e) => {
                 e.preventDefault();
-                submit.mutate(new FormData(e.currentTarget));
+                if (submit.isPending) return;
+                const options = client.getQueryData<lib.SlotMaterials>([
+                  ...key,
+                  'materials',
+                  'slot',
+                  id,
+                ]);
+                const candidates = options?.candidates ?? [];
+                const about = pickedSubject(candidates, pieceFiles, subject);
+                const ids = pickedMaterials(candidates, pieceFiles, about, chosen);
+                const files = candidates
+                  .filter((c) => JSON.stringify(c.subject) === about && ids.includes(c.material_id))
+                  .map((c) => c.file_id);
+                setUnpicked(!about || files.length === 0);
+                if (!about || files.length === 0) return;
+                submit.mutate({
+                  form: new FormData(e.currentTarget),
+                  about: JSON.parse(about) as lib.Subject,
+                  files,
+                });
               }}
             >
               <Field label="text">
@@ -288,31 +476,20 @@ function SlotEditor({
                   defaultValue={data.piece?.text ?? ''}
                 />
               </Field>
-              <Field label="upload">
-                <input
-                  className={inputClass}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
-                  onChange={(e) => setFile(e.target.files?.[0])}
-                />
-              </Field>
-              <button
-                type="button"
-                className={buttonClass}
-                disabled={!file || upload.isPending}
-                onClick={() => upload.mutate()}
-              >
-                {t('studio.upload')}
-              </button>
-              {media.length > 0 && (
-                <p role="status">
-                  {t('studio.uploaded')} ({media.length})
+              <MaterialPicker
+                id={id}
+                pieceFiles={pieceFiles}
+                subject={subject}
+                onSubject={setSubject}
+                chosen={chosen}
+                onChosen={setChosen}
+              />
+              {unpicked && (
+                <p role="alert" className="text-sm text-danger">
+                  {t('materials.slot.pick')}
                 </p>
               )}
-              <button
-                className={`${buttonClass} w-full`}
-                disabled={submit.isPending || upload.isPending}
-              >
+              <button className={`${buttonClass} w-full`} disabled={submit.isPending}>
                 {t('studio.submit')}
               </button>
             </form>
@@ -323,7 +500,7 @@ function SlotEditor({
           {data.slot.state === 'retired' && <p>{t('studio.retirement')}</p>}
         </>
       )}
-      <StudioError error={upload.error || submit.error} />
+      <MaterialsError error={submit.error} />
     </div>
   );
 }
@@ -421,6 +598,8 @@ export function StudioToday({
     api.brake(!data!.control.lanes[lane]?.brake_engaged, lane, data!.control.revision),
   );
   const refresh = useStudioMutation(() => api.pending());
+  // What waits to be shot or uploaded (the çekim listesi), from the same pending answer.
+  const shoots = data?.today.shoot_requests?.length ?? 0;
   return (
     <Region name="today">
       <div className="flex flex-wrap items-center gap-2">
@@ -435,6 +614,14 @@ export function StudioToday({
           {t('studio.refresh')}
         </button>
       </div>
+      {shoots > 0 && (
+        <p className="rounded-md bg-warning-subtle px-3 py-2 text-sm" data-testid="today-shoots">
+          {t('materials.hold.shoots', { count: shoots })}{' '}
+          <Link className="underline" to={materialsHref('shoots')}>
+            {t('materials.hold.openShoots')}
+          </Link>
+        </p>
+      )}
       <ul className="space-y-3">
         {data?.today.slots.map(({ slot, overdue }) => (
           <li
@@ -462,7 +649,7 @@ export function StudioToday({
             {data.today.blockers
               .filter((b) => 'slot' in b.target && b.target.slot === slot.id)
               .map((b, i) => (
-                <Reason key={i} reason={b.reason} />
+                <Blocker key={i} slot={slot} blocker={b} shootCount={shoots} />
               ))}
             {/* Its open editor offers the same cancellation. */}
             {stopped(slot.id) && selectedSlot !== slot.id && (
@@ -498,7 +685,7 @@ export function StudioToday({
             {data.today.blockers
               .filter((b) => 'slot' in b.target && b.target.slot === s.id)
               .map((b, i) => (
-                <Reason key={i} reason={b.reason} />
+                <Blocker key={i} slot={s} blocker={b} shootCount={shoots} />
               ))}
             {selectedSlot === s.id && editor(s.id)}
           </div>

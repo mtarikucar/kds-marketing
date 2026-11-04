@@ -93,6 +93,12 @@ mod erasure;
 mod studio;
 pub use studio::MemStudio;
 
+mod materials;
+pub use materials::MemMaterials;
+
+mod posts;
+pub use posts::MemPosts;
+
 pub mod files;
 
 mod billing;

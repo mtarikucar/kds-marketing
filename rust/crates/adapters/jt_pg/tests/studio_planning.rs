@@ -112,10 +112,22 @@ async fn pending_and_planning_read_all_stored_positions() {
         .unwrap();
     assert_eq!(out.slots.len(), 1);
     assert_eq!(out.slots[0].slot.id, f.slot.id);
+    // The first run retires the weekly quotas' ready slot, once (spec 2026-11-03 D34); the
+    // fixture's hypothesis has no organic cadence, so no trigger asks for anything.
+    assert_eq!(
+        jt_app::usecases::studio::planner::plan(&d, f.ws, FIXED_NOW)
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(
         jt_app::usecases::studio::planner::plan(&d, f.ws, FIXED_NOW)
             .await
             .unwrap(),
         0
     );
+    let out = jt_app::usecases::studio::work::pending(&d, &ctx)
+        .await
+        .unwrap();
+    assert!(out.slots.is_empty());
 }

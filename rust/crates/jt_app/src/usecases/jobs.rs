@@ -2410,7 +2410,8 @@ pub async fn run_studio_control(deps: &Deps) -> JobReport {
     report
 }
 
-/// Plan active workspaces hourly under `jeeta.jobs.studio_plan` (scheduler owns the lock).
+/// Plan active workspaces every 10 minutes under `jeeta.jobs.studio_plan` (scheduler owns the
+/// lock): olay-driven publishing's triggers and retirements (`studio::planner`).
 pub async fn run_studio_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let mut report = JobReport::default();
     let workspaces = match deps.uow.platform().await {

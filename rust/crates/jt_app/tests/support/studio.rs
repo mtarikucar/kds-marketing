@@ -140,6 +140,43 @@ pub async fn world() -> World {
     }
 }
 impl World {
+    /// The fixture's material: `studio_contract::ready` seeds it (no bytes) and records it for
+    /// the fixture piece, so the material gate lets the fixture slot publish.
+    pub fn material(&self) -> jt_studio::Material {
+        self.uow
+            .snapshot()
+            .materials
+            .materials
+            .into_iter()
+            .find(|m| m.workspace_id == self.f.ws)
+            .expect("the fixture's material")
+    }
+    /// Records that `piece`, saved directly for `slot`, shows the fixture's material, as
+    /// `studio.piece_submit` records it: the material gate passes it at publish time.
+    pub async fn record(&self, slot: SlotId, piece: &Piece) {
+        jt_testkit::studio_contract::record_material(
+            &self.uow,
+            self.f.ws,
+            slot,
+            piece,
+            &self.material(),
+        )
+        .await;
+    }
+    /// A material whose bytes are in `self.d.files` (a store that keeps them, set first), so a
+    /// piece may show it through `studio.piece_submit`, and the subject it is eligible for.
+    pub async fn stored(&self) -> (jt_studio::Material, jt_studio::Subject) {
+        let m = jt_testkit::studio_contract::stored_material(
+            &self.uow,
+            self.d.files.as_ref(),
+            self.f.ws,
+        )
+        .await;
+        let subject = jt_studio::Subject::Olay {
+            olay_id: m.olay_id().unwrap(),
+        };
+        (m, subject)
+    }
     pub fn execution(&self) -> ExecutionInput {
         ExecutionInput {
             chain: self.f.slot.chain.clone(),

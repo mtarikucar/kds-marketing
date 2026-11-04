@@ -236,7 +236,8 @@ pub static CATALOG: &[UseCase] = &[
 
     twin("studio.learned", GateMode::Gated, "jeeta.studio.learned", ("GET", "/api/studio/learned"), Read),
     twin("studio.judgment_record", GateMode::Gated, "jeeta.studio.judgment_record", ("POST", "/api/studio/judgments"), Write),
-    twin("studio.file_upload", GateMode::Gated, "jeeta.studio.file_upload", ("POST", "/api/studio/files"), Write),
+    // The materials library needs no approved strategy (spec 2026-11-03 D35), nor its uploads.
+    twin("studio.file_upload", Exempt, "jeeta.studio.file_upload", ("POST", "/api/studio/files"), Write),
     twin("studio.piece_submit", GateMode::Gated, "jeeta.studio.piece_submit", ("POST", "/api/studio/slots/{slot_id}/piece"), Write),
     twin("studio.pending", GateMode::Gated, "jeeta.studio.pending", ("GET", "/api/studio/pending"), Read),
     twin("studio.slot_get", GateMode::Gated, "jeeta.studio.slot_get", ("GET", "/api/studio/slots/{slot_id}"), Read),
@@ -251,6 +252,39 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("studio.tiktok_post", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/tiktok"), Write),
     // A published TikTok post's counters, beside the screen in the slot's detail.
     panel_only("studio.tiktok_metrics", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"), Read),
+    // The materials library (spec 2026-11-03 §5.2): exempt from the strategy gate (D35), never
+    // from the workspace-status check.
+    twin("studio.olays_list", Exempt, "jeeta.studio.olays_list", ("GET", "/api/studio/olays"), Read),
+    twin("studio.olay_get", Exempt, "jeeta.studio.olay_get", ("GET", "/api/studio/olays/{olay_id}"), Read),
+    twin("studio.olay_create", Exempt, "jeeta.studio.olay_create", ("POST", "/api/studio/olays"), Write),
+    twin("studio.olay_update", Exempt, "jeeta.studio.olay_update", ("PATCH", "/api/studio/olays/{olay_id}"), Write),
+    twin("studio.materials_list", Exempt, "jeeta.studio.materials_list", ("GET", "/api/studio/materials"), Read),
+    twin("studio.material_get", Exempt, "jeeta.studio.material_get", ("GET", "/api/studio/materials/{material_id}"), Read),
+    twin("studio.material_add", Exempt, "jeeta.studio.material_add", ("POST", "/api/studio/materials"), Write),
+    twin("studio.material_tag", Exempt, "jeeta.studio.material_tag", ("PATCH", "/api/studio/materials/{material_id}/tags"), Write),
+    twin("studio.slot_materials", Exempt, "jeeta.studio.slot_materials", ("GET", "/api/studio/slots/{slot_id}/materials"), Read),
+    twin("studio.calendar_list", Exempt, "jeeta.studio.calendar_list", ("GET", "/api/studio/calendar"), Read),
+    twin("studio.shoot_list", Exempt, "jeeta.studio.shoot_list", ("GET", "/api/studio/shoot-requests"), Read),
+    twin("studio.shoot_request", Exempt, "jeeta.studio.shoot_request", ("POST", "/api/studio/shoot-requests"), Write),
+    twin("studio.shoot_resolve", Exempt, "jeeta.studio.shoot_resolve", ("POST", "/api/studio/shoot-requests/{request_id}/resolve"), Write),
+    // A human's decisions (D4): an owner or manager in the panel, never an agent.
+    panel_only("studio.olay_confirm", Exempt, ("POST", "/api/studio/olays/{olay_id}/confirm"), Write),
+    panel_only("studio.material_permission", Exempt, ("PUT", "/api/studio/materials/{material_id}/permission"), Write),
+    panel_only("studio.material_free", Exempt, ("POST", "/api/studio/materials/{material_id}/free"), Write),
+    panel_only("studio.material_bind", Exempt, ("POST", "/api/studio/materials/{material_id}/bind"), Write),
+    panel_only("studio.material_delete", Exempt, ("POST", "/api/studio/materials/{material_id}/delete"), Destructive),
+    panel_only("studio.calendar_set", Exempt, ("PUT", "/api/studio/calendar/{key}/{year}"), Write),
+    panel_only("studio.material_policy_set", Exempt, ("PUT", "/api/studio/materials/policy"), Write),
+    // Releasing a slot's caption findings (spec 2026-11-03 §7, D19): a human's, behind the
+    // strategy gate as the slot's other writes are.
+    panel_only("studio.material_check_release", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/material-check/release"), Write),
+    // Olay-driven publishing (spec 2026-11-03 §14): they plan content, so behind the strategy
+    // gate; the posting policy is a human's.
+    twin("studio.post_requests", GateMode::Gated, "jeeta.studio.post_requests", ("GET", "/api/studio/post-requests"), Read),
+    twin("studio.posts_propose", GateMode::Gated, "jeeta.studio.posts_propose", ("POST", "/api/studio/post-requests/{request_id}/proposal"), Write),
+    twin("studio.posts_list", GateMode::Gated, "jeeta.studio.posts_list", ("GET", "/api/studio/posts"), Read),
+    twin("studio.weekly_summary", GateMode::Gated, "jeeta.studio.weekly_summary", ("GET", "/api/studio/summary"), Read),
+    panel_only("studio.posting_policy_set", GateMode::Gated, ("PUT", "/api/studio/posting-policy"), Write),
     // The inbox: reading and answering the workspace's own customers never waits for a marketing
     // strategy (owner decision of 2026-11-03), so every row is exempt from the strategy gate but
     // `inbox.send`, which writes to a person with commercial intent and may open a conversation

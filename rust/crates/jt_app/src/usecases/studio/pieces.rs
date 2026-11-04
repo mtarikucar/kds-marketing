@@ -54,6 +54,10 @@ pub struct WirePieceInput {
     pub text: String,
     pub media: Vec<MediaInput>,
     pub adaptations: BTreeMap<String, ChannelInput>,
+    /// What the piece speaks about (spec 2026-11-03 D7): an olay, an earlier season's olay as
+    /// last year's, or nothing specific. Required: every medium is a material checked against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<Subject>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "WirePieceInput", into = "WirePieceInput")]
@@ -64,6 +68,7 @@ pub struct PieceInput {
     pub text: String,
     pub media: Vec<MediaAsset>,
     pub adaptations: BTreeMap<String, ChannelContent>,
+    pub subject: Option<Subject>,
 }
 impl TryFrom<MediaInput> for MediaAsset {
     type Error = AppError;
@@ -149,6 +154,7 @@ impl TryFrom<WirePieceInput> for PieceInput {
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
             adaptations,
+            subject: i.subject,
         })
     }
 }
@@ -175,6 +181,7 @@ impl From<PieceInput> for WirePieceInput {
                     )
                 })
                 .collect(),
+            subject: i.subject,
         }
     }
 }
@@ -219,11 +226,16 @@ async fn normalize(
     }
     Ok(out)
 }
+/// Checks a submission under the control fence: the slot's chain, every medium a material, the
+/// subject named (a planned post's own by default, and no other: spec 2026-11-03 D28), the
+/// adaptations naming the slot's account, and for a planned post the media its format takes on
+/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force and
+/// the subject.
 async fn validate(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     i: &PieceInput,
-) -> Result<(Slot, jt_strategy::StrategyVersion), AppError> {
+) -> Result<(Slot, jt_strategy::StrategyVersion, Subject), AppError> {
     let frame = gated(r, ctx).await?;
     r.studio_control().lock_control().await?;
     let s = r
@@ -287,6 +299,28 @@ async fn validate(
         },
     )
     .map_err(|_| AppError::conflict("invalid content chain"))?;
+    // Every medium is a material (spec 2026-11-03 D2), and the piece names its subject.
+    super::materials::only_files(&super::materials::media(
+        &i.media,
+        i.adaptations.values().map(|a| a.media.as_slice()),
+    ))?;
+    let post = r.studio_posts().get_post(s.id).await?;
+    let subject = match (&post, i.subject) {
+        (Some(p), None) => p.subject,
+        (Some(p), Some(subject)) if subject != p.subject => {
+            return Err(AppError::validation(
+                "the piece speaks about its planned post's subject",
+                json!({"field":"subject","reason":"subject_mismatch"}),
+            ));
+        }
+        (_, Some(subject)) => subject,
+        (None, None) => {
+            return Err(AppError::validation(
+                "the piece must name its subject",
+                json!({"field":"subject","reason":"subject_required"}),
+            ));
+        }
+    };
     for account in i.adaptations.keys() {
         if c.external_id.as_deref() != Some(account.as_str()) {
             return Err(AppError::validation(
@@ -295,7 +329,66 @@ async fn validate(
             ));
         }
     }
-    Ok((s, frame))
+    if let Some(p) = &post {
+        // What goes out on the channel: the account's adaptation's media, else the piece's.
+        let shown = c
+            .external_id
+            .as_deref()
+            .and_then(|a| i.adaptations.get(a))
+            .map_or(i.media.as_slice(), |a| a.media.as_slice());
+        let files = super::materials::only_files(&shown.iter().collect::<Vec<_>>())?;
+        let materials = super::materials::materials_of(r, &files).await?;
+        let refused = |reason: &str, message: &str| {
+            AppError::validation(
+                message.to_owned(),
+                json!({"field":"media","reason":reason,"format":p.format}),
+            )
+        };
+        if files.len() != shown.len() || !media_count_ok(p.format, files.len()) {
+            return Err(refused(
+                "media_count",
+                "the post's format takes another number of media",
+            ));
+        }
+        let mimes: Vec<&str> = materials.iter().map(|m| m.mime.as_str()).collect();
+        if !media_types_ok(p.format, &c.kind_key, &mimes) {
+            return Err(refused(
+                "media_type",
+                "the post's format takes other media on this channel",
+            ));
+        }
+    }
+    Ok((s, frame, subject))
+}
+/// What `studio.piece_submit`'s request key keeps (spec 2026-11-03 D40): the answer without its
+/// piece and its material check, which hold the caption and what it matched (a client's name, an
+/// olay's place). The piece is stored on its own; a replay reads both as they are now.
+fn submission_receipt(out: &SlotOut) -> SlotOut {
+    SlotOut {
+        piece: None,
+        material_check: None,
+        ..out.clone()
+    }
+}
+/// The answer a replayed `studio.piece_submit` gives at `now`: the receipt's slot with its piece
+/// read again (a receipt kept before D40 holds it) and the material check as it is now.
+async fn replayed(
+    r: &mut dyn TenantRepos,
+    receipt: serde_json::Value,
+    now: time::OffsetDateTime,
+) -> Result<SlotOut, AppError> {
+    let mut out: SlotOut = decode(receipt)?;
+    if out.piece.is_none() {
+        out.piece = r.studio().get_piece(out.slot.id, out.slot.revision).await?;
+    }
+    if out.material_check.is_none()
+        && let Some(p) = &out.piece
+    {
+        out.material_check =
+            super::materials::material_check(r, out.slot.id, p, now.max(out.slot.scheduled_at))
+                .await?;
+    }
+    Ok(out)
 }
 pub async fn piece_submit(d: &Deps, ctx: &Ctx, i: PieceInput) -> Result<SlotOut, AppError> {
     let mut stage = files::Staging::new();
@@ -320,7 +413,7 @@ async fn submit(
             .request_replay("studio.piece_submit", &i.request_key, &payload)
             .await?
         {
-            return decode(v);
+            return replayed(r.as_mut(), v, ctx.now).await;
         }
         validate(r.as_mut(), ctx, &i).await?;
     }
@@ -344,9 +437,9 @@ async fn submit(
         .request_replay("studio.piece_submit", &i.request_key, &payload)
         .await?
     {
-        return decode(v);
+        return replayed(r.as_mut(), v, ctx.now).await;
     }
-    let (s, frame) = validate(r.as_mut(), ctx, &i).await?;
+    let (s, frame, subject) = validate(r.as_mut(), ctx, &i).await?;
     for f in &stored.files {
         r.studio().save_file(f.clone()).await?;
     }
@@ -381,17 +474,40 @@ async fn submit(
             files::available(d, ctx.workspace_id, &f).await?;
         }
     }
+    // The material gate (spec 2026-11-03 D1), at the slot's time, under the same fence.
+    let files = super::materials::only_files(&super::materials::media(
+        &p.media,
+        p.adaptations.values().map(|a| a.media.as_slice()),
+    ))?;
+    let materials = super::materials::materials_of(r.as_mut(), &files).await?;
+    let roles =
+        super::materials::check_piece(r.as_mut(), &materials, &subject, s.scheduled_at).await?;
     r.studio()
         .save_piece(s.id, i.expected_revision, p.clone(), &i.request_key)
         .await?;
-    r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id}))?).await?;
-    let out = slot_in(r.as_mut(), s.id, &frame).await?;
+    r.studio_materials()
+        .record_piece_materials(
+            subject,
+            roles
+                .iter()
+                .map(|(material_id, role)| PieceMaterial {
+                    piece_id: p.id,
+                    slot_id: s.id,
+                    revision: p.revision,
+                    material_id: *material_id,
+                    role: *role,
+                })
+                .collect(),
+        )
+        .await?;
+    r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id,"materials":roles.iter().map(|(id,_)|id).collect::<Vec<_>>(),"subject":subject}))?).await?;
+    let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
     r.studio()
         .request_receipt(
             "studio.piece_submit",
             &i.request_key,
             &payload,
-            &encode(&out)?,
+            &encode(&submission_receipt(&out))?,
         )
         .await?;
     stored.commit_started = true;

@@ -84,7 +84,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. On dokuz göç vardır (`0019` başka bir dalındır):
+döndürür. Yirmi yedi göç vardır (`0028` bu dalın ekleri için L6 ile gelir):
 
 | Göç | Ne yapar |
 |---|---|
@@ -108,11 +108,13 @@ döndürür. On dokuz göç vardır (`0019` başka bir dalındır):
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
 | `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
 | `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 82 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
-| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0019` to `0022` belong to parallel branches. |
+| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 89 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
+| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 92 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
+| `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0020` belongs to a parallel branch. |
 | `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
 | `0025_inbox_public_erasure` | Puts the erasure additions of `0019` and `0024` in one definition (each replaced 0008's functions on its own branch, so the later one dropped the other's: version order runs 0024 last, production ran 0019 last): the mask and the event matching cover public items and the WhatsApp Business app alike. No new table. Down puts back 0024's functions, and is refused once a comment or a question is stored. |
-| `0026_outreach` | E-posta kampanyaları (leads L4): `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` (bir kişinin aynı anda en fazla bir etkin kaydı), `outreach_sends` (forced RLS; 86 tables), and `outreach.work` and `outreach.manage` for the system owner/manager; `rep` holds neither. Nothing here sends: the platform switch `JEETA_OUTREACH_ENABLED` (off by default) is checked at launch, dispatch and claim. Down refuses nothing (an unsubscribe is the inbox's suppression). |
-| `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 89 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
+| `0026_outreach` | E-posta kampanyaları (leads L4): `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` (bir kişinin aynı anda en fazla bir etkin kaydı), `outreach_sends` (forced RLS; 96 tables), and `outreach.work` and `outreach.manage` for the system owner/manager; `rep` holds neither. Nothing here sends: the platform switch `JEETA_OUTREACH_ENABLED` (off by default) is checked at launch, dispatch and claim. Down refuses nothing (an unsubscribe is the inbox's suppression). |
+| `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 99 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -2435,7 +2437,14 @@ generation service was added.
 | `studio.hypothesis_propose` | `POST /api/studio/hypotheses/proposals` | `studio.work` + `team.manage` | Required |
 
 All five require an active workspace, including direct application calls.
-`studio_plan` runs hourly under `jeeta.jobs.studio_plan`. Weeks start Monday
+`studio_plan` runs every 10 minutes under `jeeta.jobs.studio_plan`. Organic posts
+are olay-driven (spec `2026-11-03-studio-materials-design.md` §14): the planner never
+creates one; its triggers (an olay's new eligible materials, a calendar occasion within
+its lead, a channel's floor) write package requests or çekim listesi items, an agent
+answers a request with `studio.posts_propose`, and a post enters the pending work at
+its preparation start and retires `missed_grace` after its grace. Once, it retires the
+weekly quotas' planned and ready organic slots (`replanned`). The paid lane keeps the
+weekly positions described next. Weeks start Monday
 00:00 Europe/Istanbul; cadence positions are spaced evenly across the week and
 only positions in the next seven days are materialized. Missed positions are not
 caught up. Stable workspace/hypothesis/lane/week/ordinal IDs survive overlapping

@@ -43,6 +43,11 @@ pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
     .await
     .unwrap();
     tx.commit().await.unwrap();
+    fixture_in(uow, ws, user).await
+}
+/// [`fixture`]'s approved strategy (approved by `user`), hypothesis, X capability, arm, slot and
+/// piece in the existing, active workspace `ws`; the arm, slot and piece are not stored.
+pub async fn fixture_in(uow: &dyn UnitOfWork, ws: WorkspaceId, user: UserId) -> Fixture {
     let v = StrategyVersion {
         id: StrategyVersionId::new_v7(),
         workspace_id: ws,
@@ -138,7 +143,10 @@ pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
     }
 }
 pub async fn seed(uow: &dyn UnitOfWork) -> Fixture {
-    let f = fixture(uow).await;
+    seeded(uow, fixture(uow).await).await
+}
+/// Stores `f`'s arm and its slot, Planned.
+async fn seeded(uow: &dyn UnitOfWork, f: Fixture) -> Fixture {
     let mut tx = uow.tenant(f.ws).await.unwrap();
     tx.studio().insert_arm(f.arm.clone()).await.unwrap();
     tx.studio()
@@ -149,14 +157,131 @@ pub async fn seed(uow: &dyn UnitOfWork) -> Fixture {
     f
 }
 pub async fn ready(uow: &dyn UnitOfWork) -> Fixture {
-    let f = seed(uow).await;
+    readied(uow, seed(uow).await).await
+}
+/// [`ready`] in the existing, active workspace `ws`, whose strategy `user` approved: its slot is
+/// Ready at revision 1, its piece showing a seeded material.
+pub async fn ready_in(uow: &dyn UnitOfWork, ws: WorkspaceId, user: UserId) -> Fixture {
+    readied(uow, seeded(uow, fixture_in(uow, ws, user).await).await).await
+}
+/// Stores `f`'s piece for its stored slot, and the material it shows.
+async fn readied(uow: &dyn UnitOfWork, f: Fixture) -> Fixture {
     let mut tx = uow.tenant(f.ws).await.unwrap();
     tx.studio()
         .save_piece(f.slot.id, 0, f.piece.clone(), "piece-1")
         .await
         .unwrap();
     tx.commit().await.unwrap();
+    let material = seed_material(uow, f.ws).await;
+    record_material(uow, f.ws, f.slot.id, &f.piece, &material).await;
     f
+}
+
+/// A confirmed workshop olay starting on [`FIXED_NOW`]'s day, as a human creates it.
+pub fn confirmed_olay(ws: WorkspaceId) -> jt_studio::Olay {
+    let by = UserId::new_v7();
+    jt_studio::Olay {
+        id: jt_studio::OlayId::new_v7(),
+        workspace_id: ws,
+        kind: jt_studio::OlayKind::Workshop,
+        title: "Atölye".into(),
+        starts_on: FIXED_NOW.date(),
+        ends_on: FIXED_NOW.date(),
+        place: None,
+        client: None,
+        notes: String::new(),
+        occasion: None,
+        status: jt_studio::OlayStatus::Confirmed,
+        confirmed: Some(jt_studio::HumanMark { by, at: FIXED_NOW }),
+        revision: 1,
+        created_at: FIXED_NOW,
+    }
+}
+
+/// A real, shareable, publishable material of `olay` for the Studio file `file`, as a human
+/// uploads it.
+pub fn eligible_material(olay: &jt_studio::Olay, file: FileId) -> jt_studio::Material {
+    let by = UserId::new_v7();
+    jt_studio::Material {
+        id: jt_studio::MaterialId::new_v7(),
+        workspace_id: olay.workspace_id,
+        file_id: file,
+        mime: "image/png".into(),
+        title: String::new(),
+        origin: jt_studio::Origin::Real,
+        binding: jt_studio::Binding::Olay { olay_id: olay.id },
+        freed: None,
+        share: Some(jt_studio::ShareDecision {
+            permission: jt_studio::SharePermission::Shareable,
+            by: Some(by),
+            at: FIXED_NOW,
+        }),
+        tags: jt_studio::Tags {
+            quality: Some(jt_studio::Quality::Publishable),
+            ..Default::default()
+        },
+        tags_reviewed_by: None,
+        people: Default::default(),
+        captured_at: None,
+        created_by: Actor::Human { user_id: by },
+        revision: 1,
+        created_at: FIXED_NOW,
+        erased_at: None,
+    }
+}
+
+/// Stores a confirmed olay and an eligible material of it for a fresh Studio file record (no bytes
+/// are stored): what the material gate needs before a piece may be published.
+pub async fn seed_material(uow: &dyn UnitOfWork, ws: WorkspaceId) -> jt_studio::Material {
+    let olay = confirmed_olay(ws);
+    let file = jt_app::ports::files::StoredFile {
+        id: FileId::new_v7(),
+        workspace_id: ws,
+        mime: "image/png".into(),
+        filename: "material.png".into(),
+        sha256: "0".repeat(64),
+        created_at: FIXED_NOW,
+        cleanup_due_at: None,
+        deleted_at: None,
+        size_bytes: 1,
+    };
+    let material = eligible_material(&olay, file.id);
+    let mut tx = uow.tenant(ws).await.unwrap();
+    tx.studio().save_file(file).await.unwrap();
+    tx.studio_materials().insert_olay(olay).await.unwrap();
+    tx.studio_materials()
+        .insert_material(material.clone())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    material
+}
+
+/// Records that `piece`, stored for `slot`, shows `material` as its anchor about the material's
+/// olay, as `studio.piece_submit` records it.
+pub async fn record_material(
+    uow: &dyn UnitOfWork,
+    ws: WorkspaceId,
+    slot: SlotId,
+    piece: &Piece,
+    material: &jt_studio::Material,
+) {
+    let olay_id = material.olay_id().expect("a bound material");
+    let mut tx = uow.tenant(ws).await.unwrap();
+    tx.studio_materials()
+        .record_piece_materials(
+            jt_studio::Subject::Olay { olay_id },
+            vec![jt_studio::PieceMaterial {
+                piece_id: piece.id,
+                slot_id: slot,
+                revision: piece.revision,
+                material_id: material.id,
+                role: jt_studio::UseRole::Anchor,
+            }],
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
 }
 pub async fn request_key_payload_mismatch_conflicts(uow: &dyn UnitOfWork) {
     let f = seed(uow).await;
@@ -1543,4 +1668,165 @@ pub async fn receipt_upgrade_and_lookup(uow: &dyn UnitOfWork) {
             .await
             .is_err()
     );
+}
+
+/// [`seed_material`] with its bytes stored in `files` (a small PNG), so that a piece may show it
+/// through `studio.piece_submit`, which checks the bytes against the file's record.
+pub async fn stored_material(
+    uow: &dyn UnitOfWork,
+    files: &dyn jt_app::ports::files::FileStore,
+    ws: WorkspaceId,
+) -> jt_studio::Material {
+    let olay = confirmed_olay(ws);
+    let file = files
+        .put(
+            ws,
+            FileId::new_v7(),
+            jt_studio::MediaUpload {
+                bytes: b"\x89PNG\r\n\x1a\nmaterial".to_vec(),
+                mime: "image/png".into(),
+                filename: "material.png".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let material = eligible_material(&olay, file.id);
+    let mut tx = uow.tenant(ws).await.unwrap();
+    tx.studio().save_file(file).await.unwrap();
+    tx.studio_materials().insert_olay(olay).await.unwrap();
+    tx.studio_materials()
+        .insert_material(material.clone())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    material
+}
+
+/// Makes `f`'s workspace (from [`ready`] or [`ready_in`]) able to take planned posts (spec
+/// 2026-11-03 §14): a second strategy version, now in force, chooses the X channel and keeps the
+/// hypothesis, which posts organic `text` on any channel; the X capability is verified at
+/// `verified_at` with a write credential sealed by `seal`. Answers the version in force. The
+/// caller's connector registry needs an X publisher for the channel to take posts.
+pub async fn make_postable(
+    uow: &dyn UnitOfWork,
+    f: &Fixture,
+    seal: &dyn jt_app::ports::SecretBox,
+    verified_at: OffsetDateTime,
+) -> StrategyVersionId {
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let mut v = r
+        .strategy()
+        .find(f.slot.chain.born_version_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let user = v.approved_by.unwrap();
+    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    r.strategy()
+        .set_status(v.id, VersionStatus::Archived, FIXED_NOW, Some(user))
+        .await
+        .unwrap();
+    v.id = StrategyVersionId::new_v7();
+    v.number = 2;
+    v.sections.channels = vec![jt_strategy::ChannelChoice {
+        channel: "x".into(),
+        rationale: "test".into(),
+        group_id: None,
+    }];
+    h.channel = "any".into();
+    h.cadence.insert(
+        LaneKind::Organic,
+        jt_strategy::HypothesisCadence {
+            slots_per_week: 7,
+            exploration_bps: 0,
+            content_types: vec![jt_strategy::ContentTypeShare {
+                key: "text".into(),
+                min_bps: 0,
+                max_bps: 10000,
+            }],
+        },
+    );
+    r.strategy().insert(v.clone()).await.unwrap();
+    r.hypotheses().upsert(v.id, h).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.status = jt_capability::StoredStatus::Verified;
+    c.last_verified_at = Some(verified_at);
+    c.connector_public =
+        serde_json::json!({"access":{"scopes":["tweet.read","tweet.write"],"expires_at":null}});
+    r.capabilities().update(c.clone()).await.unwrap();
+    let credential = jt_connector::Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["tweet.read".into(), "tweet.write".into()],
+    };
+    let sealed = seal
+        .seal(f.ws, &serde_json::to_vec(&credential).unwrap())
+        .unwrap();
+    r.capabilities()
+        .set_sealed(c.id, Some(sealed), verified_at)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    v.id
+}
+
+/// Gives `f`'s stored slot a planned post (spec 2026-11-03 D20), as an answered package would: a
+/// feed post at the slot's time on its channel, about nothing specific, showing the workspace's
+/// first material, from an answered floor request. The planner then leaves the slot to its post's
+/// grace instead of retiring it as one of the weekly quotas' (D34).
+pub async fn attach_post(uow: &dyn UnitOfWork, f: &Fixture) -> jt_studio::PlannedPost {
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let material = r.studio_materials().list_materials().await.unwrap()[0].id;
+    let request = jt_studio::PackageRequest {
+        id: jt_studio::PackageRequestId::new_v7(),
+        workspace_id: f.ws,
+        key: jt_studio::floor_package_key(f.slot.capability_id, f.slot.scheduled_at.date()),
+        trigger: jt_studio::PackageTrigger::Floor,
+        status: jt_studio::PackageStatus::Answered,
+        olay_id: None,
+        occasion: None,
+        year: None,
+        capability_id: Some(f.slot.capability_id),
+        material_ids: vec![material],
+        best_formats: Vec::new(),
+        hints: jt_studio::PackageHints {
+            max_posts: Some(1),
+            ..Default::default()
+        },
+        created_at: FIXED_NOW,
+        answered_at: Some(FIXED_NOW),
+        closed_at: None,
+    };
+    assert!(
+        r.studio_posts()
+            .insert_package_request(request.clone())
+            .await
+            .unwrap()
+    );
+    let post = jt_studio::PlannedPost {
+        slot_id: f.slot.id,
+        workspace_id: f.ws,
+        format: jt_studio::PostFormat::FeedPost,
+        capability_id: f.slot.capability_id,
+        publish_at: f.slot.scheduled_at,
+        prep_start_at: f.slot.scheduled_at - Duration::hours(24),
+        grace_until: f.slot.scheduled_at + Duration::hours(6),
+        olay_id: None,
+        package_request_id: request.id,
+        material_ids: vec![material],
+        subject: jt_studio::Subject::Generic,
+        hypothesis_id: f.slot.chain.hypothesis_id,
+        content_type: "text".into(),
+        retired: None,
+        created_at: FIXED_NOW,
+    };
+    r.studio_posts().insert_post(post.clone()).await.unwrap();
+    r.commit().await.unwrap();
+    post
 }
