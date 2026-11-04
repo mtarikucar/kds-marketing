@@ -32,7 +32,28 @@ fn studio_routes_have_exact_catalog_twins() {
             ("POST", "/api/studio/approvals"),
             ("GET", "/api/studio/slots/{slot_id}/tiktok"),
             ("POST", "/api/studio/slots/{slot_id}/tiktok"),
-            ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")
+            ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"),
+            // The materials library (spec 2026-11-03 §5.2): its twins, then a human's decisions.
+            ("GET", "/api/studio/olays"),
+            ("GET", "/api/studio/olays/{olay_id}"),
+            ("POST", "/api/studio/olays"),
+            ("PATCH", "/api/studio/olays/{olay_id}"),
+            ("GET", "/api/studio/materials"),
+            ("GET", "/api/studio/materials/{material_id}"),
+            ("POST", "/api/studio/materials"),
+            ("PATCH", "/api/studio/materials/{material_id}/tags"),
+            ("GET", "/api/studio/slots/{slot_id}/materials"),
+            ("GET", "/api/studio/calendar"),
+            ("GET", "/api/studio/shoot-requests"),
+            ("POST", "/api/studio/shoot-requests"),
+            ("POST", "/api/studio/shoot-requests/{request_id}/resolve"),
+            ("POST", "/api/studio/olays/{olay_id}/confirm"),
+            ("PUT", "/api/studio/materials/{material_id}/permission"),
+            ("POST", "/api/studio/materials/{material_id}/free"),
+            ("POST", "/api/studio/materials/{material_id}/bind"),
+            ("POST", "/api/studio/materials/{material_id}/delete"),
+            ("PUT", "/api/studio/calendar/{key}/{year}"),
+            ("PUT", "/api/studio/materials/policy")
         ]
     );
     for route in routes {
