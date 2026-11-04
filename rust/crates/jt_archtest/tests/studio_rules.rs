@@ -165,12 +165,13 @@ async fn studio_exact_catalog_and_gate_set() {
         }
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
-    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, and the
-    // materials library's seven of 0021_studio_materials.
-    assert_eq!(all_tables.len(), 81);
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the
+    // materials library's seven of 0021_studio_materials, and the planned posts, package requests
+    // and posting policy of 0022_studio_posts.
+    assert_eq!(all_tables.len(), 84);
 
-    // All twenty-one Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
-    // 0021_studio_materials.
+    // All twenty-four Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
+    // 0021_studio_materials, three of 0022_studio_posts.
     assert_eq!(
         set(tables
             .iter()
@@ -197,7 +198,10 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_calendar_entries",
             "studio_shoot_requests",
             "studio_material_policy",
-            "studio_material_releases"
+            "studio_material_releases",
+            "studio_package_requests",
+            "studio_posts",
+            "studio_posting_policy"
         ])
     );
 }
