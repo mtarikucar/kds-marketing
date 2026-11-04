@@ -1638,3 +1638,46 @@ async fn a_held_reply_survives_a_change_of_hands() {
         assert_eq!(sends(&r.meta).len(), 1);
     }
 }
+
+#[tokio::test]
+async fn a_held_private_reply_the_item_can_no_longer_take_is_refused() {
+    for (closed, expected) in [
+        (true, "private_window_closed"),
+        (false, "private_reply_used"),
+    ] {
+        let r = rig().await;
+        edit_policy(&r, r.ig.id, |p| p.requires_human_approval = true);
+        let c1 = take(&r, &r.ig, comment("1", FAN)).await;
+        let agent = agent(&r).await;
+        let out = replies::reply(
+            &r.w.deps,
+            &agent,
+            c1.conversation_id,
+            input(Some(c1.id), Some("private"), "DM'den yazdık"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, "held");
+        let used = MessageId::new_v7();
+        edit_item(&r, c1.id, |i| {
+            if closed {
+                i.private_reply_until = Some(FIXED_NOW - Duration::minutes(1));
+            } else {
+                i.private_reply_message_id = Some(used);
+            }
+        });
+        let row = outbox(&r, out.message_id);
+        let e = public::approve(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            row.id,
+            public::ApproveInput::default(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(reason(&e), expected);
+        // The item can no longer take it: the draft is refused, and the panel shows why.
+        assert_eq!(outbox(&r, out.message_id).state, "refused", "{expected}");
+        assert!(sends(&r.meta).is_empty());
+    }
+}

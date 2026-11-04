@@ -1473,6 +1473,8 @@ const ITEM_STATE_REFUSALS: &[&str] = &[
     "already_answered",
     "item_not_in_conversation",
     "reply_in_flight",
+    "private_window_closed",
+    "private_reply_used",
 ];
 
 /// [`super::public::approve`] inside its transaction (the workspace lock held): the approver's
@@ -1585,14 +1587,14 @@ pub(super) async fn approve_in(
     r.messages()
         .revise_queued(row.message_id, author, &text)
         .await?;
-    row.state = "queued".into();
-    row.updated_at = ctx.now;
     if row.expected_generation != c.executor_generation {
         r.outbox()
             .set_expected_generation(row.id, c.executor_generation)
             .await?;
         row.expected_generation = c.executor_generation;
     }
+    row.state = "queued".into();
+    row.updated_at = ctx.now;
     r.outbox().update(row.clone()).await?;
     record(
         r,
