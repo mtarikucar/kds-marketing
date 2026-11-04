@@ -1,10 +1,10 @@
-use super::{ToolDef, args, to_json};
+use super::{ToolDef, args, listed, to_json};
 use crate::registry::ToolFuture;
 use jt_app::{
     ctx::Ctx,
     usecases::{
         Deps,
-        studio::{control, schema, trends, work},
+        studio::{control, library, schema, trends, work},
     },
 };
 use jt_tenancy::Permission;
@@ -70,7 +70,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.file_upload",
-            description: "Store validated tenant media with a replay key. [risk: WRITE]",
+            description: "Store validated tenant media with a replay key; needs no approved strategy. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
             permission: Permission::StudioWork,
             schema: || Schema::try_from(schema::input("file_upload")).expect("studio schema"),
             run: file_upload,
@@ -141,6 +141,203 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             run: approve,
         },
     ]
+    .into_iter()
+    .chain(library_definitions())
+    .collect()
+}
+
+/// The materials library's tools (spec 2026-11-03 §5.2, §8): none needs an approved strategy.
+/// What only a human decides (confirming an olay, a material's share permission, freeing,
+/// rebinding or deleting it, the calendar and the policy) has no tool.
+fn library_definitions() -> Vec<ToolDef> {
+    let def = |use_case: &'static str,
+               description: &'static str,
+               schema: fn() -> Schema,
+               run: crate::registry::ToolRun| ToolDef {
+        use_case,
+        description,
+        permission: Permission::StudioWork,
+        schema,
+        run,
+    };
+    vec![
+        def(
+            "studio.olays_list",
+            "List the workspace's olays (the real context of a material: a workshop, an order, \
+             a season collection, a special day, a product shoot), newest start first, each with \
+             its count of live materials; status filters proposed or confirmed. Only a confirmed \
+             olay makes its materials usable, and only an owner or manager confirms one, in the \
+             panel. Returns {olays: [{olay, materials}]}. Needs no approved strategy. \
+             [risk: READ]",
+            || library_schema("olays_list"),
+            olays_list,
+        ),
+        def(
+            "studio.olay_get",
+            "Read one olay (olay_id) with its materials, each with used_in (the piece revisions, \
+             slots and publications that showed it), and its open shoot requests. [risk: READ]",
+            || library_schema("olay_get"),
+            olay_get,
+        ),
+        def(
+            "studio.olay_create",
+            "Create an olay, with request_key (replayed): kind (workshop, order, season, \
+             special_day, product_shoot, other), title, starts_on and ends_on (Istanbul dates, \
+             less than 366 days apart), place, client {person_id: an inbox person, \
+             organization}, notes, and occasion (the calendar key, required exactly for season \
+             and special_day). An olay an agent creates is proposed: its materials are not usable \
+             until an owner or manager confirms it in the panel. Create one only for an event \
+             the owner told you about; never invent one. [risk: WRITE]",
+            || library_schema("olay_create"),
+            olay_create,
+        ),
+        def(
+            "studio.olay_update",
+            "Change an olay at expected_revision (olay_id): the fields given change; null clears \
+             place, client or occasion. An agent changes proposed olays only: a confirmed olay \
+             is changed by an owner or manager in the panel (FORBIDDEN owner_or_manager_human). \
+             [risk: WRITE]",
+            || library_schema("olay_update"),
+            olay_update,
+        ),
+        def(
+            "studio.materials_list",
+            "List the materials, newest first: state live (the default), erased, needs_review or \
+             all; olay_id filters. Each names its file_id, origin, binding (olay or genel), \
+             freed, share permission, tags and people. needs_review: no share permission, a \
+             depicting AI image whose permission an agent set, no quality, or tags no person \
+             reviewed. Returns {materials: [...]}. [risk: READ]",
+            || library_schema("materials_list"),
+            materials_list,
+        ),
+        def(
+            "studio.material_get",
+            "Read one material (material_id) with used_in: each piece revision that showed it, \
+             its slot and the posts it was published as (posts stay on their provider when a \
+             material is deleted). [risk: READ]",
+            || library_schema("material_get"),
+            material_get,
+        ),
+        def(
+            "studio.material_add",
+            "Add a file stored by jeeta.studio.file_upload (file_id) to the library as a \
+             material, with request_key (replayed). Name its olay (olay_id) or set genel true; \
+             an agent adds no real genel material (a human frees one). origin is {kind: real} or \
+             {kind: ai_generated, generator: e.g. codex}, fixed for ever. An AI image requires \
+             depicts: which of face, name, child, client_logo, corporate_ref it shows, [] when \
+             none. Tags: product_groups, doors, content_types, quality (publishable, needs_crop, \
+             unusable); people: the inbox persons it shows. share (shareable, not_shareable, \
+             product_only) is a human's decision: leave it out for a real material; set it for \
+             an AI image only while its depicts is []. The capture time is read from the file \
+             (JPEG EXIF, MP4) or taken from captured_at. Returns {material, olay_suggestions}: \
+             the olays whose dates contain its capture day, for a human to choose from; nothing \
+             is bound by them. [risk: WRITE]",
+            || library_schema("material_add"),
+            material_add,
+        ),
+        def(
+            "studio.material_tag",
+            "Change a material's tags at expected_revision (material_id): product_groups, doors, \
+             content_types, quality (null clears it), depicts, people; each list given replaces \
+             the old one. Your edit is a suggestion until a person reviews the tags. You may add \
+             depicts flags and people, never remove them (FORBIDDEN human_required). Adding a \
+             depicts flag to an AI image whose permission you set clears that permission: a \
+             human decides it then. [risk: WRITE]",
+            || library_schema("material_tag"),
+            material_tag,
+        ),
+        def(
+            "studio.slot_materials",
+            "Read what a slot's piece may show at its scheduled time (slot_id): need (the tags \
+             its anchor needs, from its hypothesis's segment and content type), candidates best \
+             first (material_id, file_id, mime, subject {kind: olay, archive or generic, \
+             olay_id}, role anchor or support, matches_need) and refused (material_id, code). \
+             Submit the piece with jeeta.studio.piece_submit naming candidates' file ids and one \
+             subject they all take, at least one as an anchor; the caption speaks about that \
+             subject only. [risk: READ]",
+            || library_schema("slot_materials"),
+            slot_materials,
+        ),
+        def(
+            "studio.calendar_list",
+            "Read a year's calendar (year; this year when left out): the Turkish special days \
+             and seasons with their windows, overlaid by the owner's edits. An entry with no \
+             window is inactive (the lunar holidays wait for the owner's dates). Also rows (the \
+             owner's own entries of that year) and policy (lead_days, reuse_days, recap_days). \
+             Only an owner or manager edits the calendar and the policy, in the panel. \
+             [risk: READ]",
+            || library_schema("calendar_list"),
+            calendar_list,
+        ),
+        def(
+            "studio.shoot_list",
+            "Read the shoot list (cekim listesi): what Studio needs shot or uploaded. status open \
+             (the default), done, dismissed or all; newest week first. Returns {requests: \
+             [...]}. [risk: READ]",
+            || library_schema("shoot_list"),
+            shoot_list,
+        ),
+        def(
+            "studio.shoot_request",
+            "Add a request to the shoot list, with request_key (replayed): text (what to shoot \
+             or upload, in Turkish, for the owner) and week_start (a Monday; this week when left \
+             out). You cannot shoot: the owner reads it. [risk: WRITE]",
+            || library_schema("shoot_request"),
+            shoot_request,
+        ),
+        def(
+            "studio.shoot_resolve",
+            "Mark a shoot request (request_id) done or dismissed. The requests Studio adds by \
+             itself close themselves (CONFLICT closes_itself): resolve those you or a person \
+             added. [risk: WRITE]",
+            || library_schema("shoot_resolve"),
+            shoot_resolve,
+        ),
+    ]
+}
+
+fn library_schema(action: &str) -> Schema {
+    Schema::try_from(schema::input(action)).expect("studio schema")
+}
+
+fn olays_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { listed("olays", &library::olays_list(d, c, args(v)?).await?) })
+}
+fn olay_get<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::olay_get(d, c, args(v)?).await?) })
+}
+fn olay_create<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::olay_create(d, c, args(v)?).await?) })
+}
+fn olay_update<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::olay_update(d, c, args(v)?).await?) })
+}
+fn materials_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { listed("materials", &library::materials_list(d, c, args(v)?).await?) })
+}
+fn material_get<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::material_get(d, c, args(v)?).await?) })
+}
+fn material_add<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::material_add(d, c, args(v)?).await?) })
+}
+fn material_tag<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::material_tag(d, c, args(v)?).await?) })
+}
+fn slot_materials<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::slot_materials(d, c, args(v)?).await?) })
+}
+fn calendar_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::calendar_list(d, c, args(v)?).await?) })
+}
+fn shoot_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { listed("requests", &library::shoot_list(d, c, args(v)?).await?) })
+}
+fn shoot_request<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::shoot_request(d, c, args(v)?).await?) })
+}
+fn shoot_resolve<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&library::shoot_resolve(d, c, args(v)?).await?) })
 }
 fn brake<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&control::brake(d, c, args(v)?).await?) })

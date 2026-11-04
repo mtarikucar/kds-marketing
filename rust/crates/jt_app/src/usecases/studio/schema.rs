@@ -14,6 +14,9 @@ pub fn input(action: &str) -> Value {
     if action == "hypothesis_propose" {
         return crate::usecases::strategy::hypotheses_schema()["items"].clone();
     }
+    if let Some((properties, required)) = library(action) {
+        return object(properties, required);
+    }
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
     let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
@@ -127,6 +130,118 @@ fn subject() -> Value {
         )
     };
     json!({"oneOf":[olay("olay"), olay("archive"), object(json!({"kind":{"const":"generic"}}),&["kind"])]})
+}
+
+fn uuid() -> Value {
+    json!({"type":"string","format":"uuid"})
+}
+fn keys<T: jt_studio::TagKey>() -> Vec<&'static str> {
+    T::ALL.iter().map(|t| t.key()).collect()
+}
+/// A set of tag keys of one vocabulary.
+fn tag_set<T: jt_studio::TagKey>() -> Value {
+    json!({"type":"array","uniqueItems":true,"items":{"type":"string","enum":keys::<T>()}})
+}
+fn quality() -> Value {
+    let mut values: Vec<Value> = keys::<jt_studio::Quality>()
+        .into_iter()
+        .map(Value::from)
+        .collect();
+    values.push(Value::Null);
+    json!({ "enum": values })
+}
+fn people() -> Value {
+    json!({"type":"array","uniqueItems":true,"maxItems":jt_studio::MAX_MATERIAL_PEOPLE,"items":uuid()})
+}
+fn label(min: u64) -> Value {
+    json!({"type":"string","minLength":min,"maxLength":jt_studio::MAX_LABEL_CHARS})
+}
+fn nullable_label() -> Value {
+    json!({"type":["string","null"],"minLength":1,"maxLength":jt_studio::MAX_LABEL_CHARS})
+}
+fn date() -> Value {
+    json!({"type":"string","format":"date"})
+}
+/// The materials library's tools (spec 2026-11-03 §5.2): their properties and required fields.
+fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
+    let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
+    let request_key = json!({"type":"string","minLength":1,"maxLength":200});
+    let kind = json!({"type":"string","enum":["workshop","order","season","special_day","product_shoot","other"]});
+    let client = json!({"type":["object","null"],"additionalProperties":false,"properties":{
+        "person_id":{"type":["string","null"],"format":"uuid"},"organization":nullable_label()}});
+    let occasion = json!({"type":["string","null"],"pattern":"^[a-z0-9_]{1,40}$"});
+    let notes = json!({"type":"string","maxLength":jt_studio::MAX_NOTES_CHARS});
+    Some(match action {
+        "olays_list" => (
+            json!({"status":{"type":"string","enum":["proposed","confirmed"]}}),
+            &[],
+        ),
+        "olay_get" => (json!({"olay_id":uuid()}), &["olay_id"]),
+        "olay_create" => (
+            json!({"request_key":request_key,"kind":kind,"title":label(1),"starts_on":date(),
+                "ends_on":date(),"place":nullable_label(),"client":client,"notes":notes,
+                "occasion":occasion}),
+            &["request_key", "kind", "title", "starts_on", "ends_on"],
+        ),
+        "olay_update" => (
+            json!({"olay_id":uuid(),"expected_revision":revision,"kind":kind,"title":label(1),
+                "starts_on":date(),"ends_on":date(),"place":nullable_label(),"client":client,
+                "notes":notes,"occasion":occasion}),
+            &["olay_id", "expected_revision"],
+        ),
+        "materials_list" => (
+            json!({"olay_id":uuid(),"state":{"type":"string","enum":["live","erased","needs_review","all"]}}),
+            &[],
+        ),
+        "material_get" => (json!({"material_id":uuid()}), &["material_id"]),
+        "material_add" => (
+            json!({"request_key":request_key,"file_id":uuid(),
+                "olay_id":{"type":["string","null"],"format":"uuid"},"genel":{"type":"boolean"},
+                "origin":{"oneOf":[
+                    object(json!({"kind":{"const":"real"}}), &["kind"]),
+                    object(json!({"kind":{"const":"ai_generated"},
+                        "generator":{"type":"string","pattern":"^[a-z0-9_.-]{1,40}$"}}), &["kind","generator"]),
+                ]},
+                "title":{"type":"string","maxLength":jt_studio::MAX_MATERIAL_TITLE_CHARS},
+                "product_groups":tag_set::<jt_studio::ProductGroup>(),
+                "doors":tag_set::<jt_studio::Door>(),
+                "content_types":tag_set::<jt_studio::ContentType>(),
+                "quality":quality(),
+                "depicts":{"type":["array","null"],"uniqueItems":true,"items":{"type":"string","enum":keys::<jt_studio::Depicts>()}},
+                "people":people(),
+                "share":{"enum":["shareable","not_shareable","product_only",null]},
+                "captured_at":{"type":["string","null"],"format":"date-time"}}),
+            &["request_key", "file_id", "origin"],
+        ),
+        "material_tag" => (
+            json!({"material_id":uuid(),"expected_revision":revision,
+                "product_groups":tag_set::<jt_studio::ProductGroup>(),
+                "doors":tag_set::<jt_studio::Door>(),
+                "content_types":tag_set::<jt_studio::ContentType>(),
+                "quality":quality(),"depicts":tag_set::<jt_studio::Depicts>(),"people":people()}),
+            &["material_id", "expected_revision"],
+        ),
+        "slot_materials" => (json!({"slot_id":uuid()}), &["slot_id"]),
+        "calendar_list" => (
+            json!({"year":{"type":"integer","minimum":2000,"maximum":2100}}),
+            &[],
+        ),
+        "shoot_list" => (
+            json!({"status":{"type":"string","enum":["open","done","dismissed","all"]}}),
+            &[],
+        ),
+        "shoot_request" => (
+            json!({"request_key":request_key,
+                "text":{"type":"string","minLength":1,"maxLength":jt_studio::MAX_SHOOT_TEXT_CHARS},
+                "week_start":{"type":["string","null"],"format":"date"}}),
+            &["request_key", "text"],
+        ),
+        "shoot_resolve" => (
+            json!({"request_id":uuid(),"status":{"type":"string","enum":["done","dismissed"]}}),
+            &["request_id", "status"],
+        ),
+        _ => return None,
+    })
 }
 
 fn object(properties: Value, required: &[&str]) -> Value {

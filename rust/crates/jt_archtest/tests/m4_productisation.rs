@@ -21,8 +21,8 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6).
-const POST_M4_ADDED: [(&str, &str); 15] = [
+/// device bridge's agent tools, D1-T6; the materials library's twins).
+const POST_M4_ADDED: [(&str, &str); 28] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -38,13 +38,27 @@ const POST_M4_ADDED: [(&str, &str); 15] = [
     ("devices.act", "jeeta.devices.act"),
     ("devices.command_get", "jeeta.devices.command_get"),
     ("devices.commands", "jeeta.devices.commands"),
+    // The Growth Studio materials library (spec 2026-11-03 §5.2).
+    ("studio.olays_list", "jeeta.studio.olays_list"),
+    ("studio.olay_get", "jeeta.studio.olay_get"),
+    ("studio.olay_create", "jeeta.studio.olay_create"),
+    ("studio.olay_update", "jeeta.studio.olay_update"),
+    ("studio.materials_list", "jeeta.studio.materials_list"),
+    ("studio.material_get", "jeeta.studio.material_get"),
+    ("studio.material_add", "jeeta.studio.material_add"),
+    ("studio.material_tag", "jeeta.studio.material_tag"),
+    ("studio.slot_materials", "jeeta.studio.slot_materials"),
+    ("studio.calendar_list", "jeeta.studio.calendar_list"),
+    ("studio.shoot_list", "jeeta.studio.shoot_list"),
+    ("studio.shoot_request", "jeeta.studio.shoot_request"),
+    ("studio.shoot_resolve", "jeeta.studio.shoot_resolve"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
 /// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
-/// never as an MCP tool.
-const POST_M4_PANEL_ONLY: [&str; 10] = [
+/// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4).
+const POST_M4_PANEL_ONLY: [&str; 17] = [
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
@@ -55,6 +69,13 @@ const POST_M4_PANEL_ONLY: [&str; 10] = [
     "devices.bridge.commands",
     "devices.bridge.results",
     "devices.bridge.files",
+    "studio.olay_confirm",
+    "studio.material_permission",
+    "studio.material_free",
+    "studio.material_bind",
+    "studio.material_delete",
+    "studio.calendar_set",
+    "studio.material_policy_set",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

@@ -37,11 +37,62 @@ const ACTIONS: &[&str] = &[
     "overview",
     "ledger",
     "ledger_export",
+    "olays_list",
+    "olay_get",
+    "olay_create",
+    "olay_update",
+    "materials_list",
+    "material_get",
+    "material_add",
+    "material_tag",
+    "slot_materials",
+    "calendar_list",
+    "shoot_list",
+    "shoot_request",
+    "shoot_resolve",
 ];
-const EXEMPT: &[&str] = &["brake", "ledger", "ledger_export"];
+/// The materials library and its uploads need no approved strategy (spec 2026-11-03 D35).
+const EXEMPT: &[&str] = &[
+    "brake",
+    "ledger",
+    "ledger_export",
+    "file_upload",
+    "olays_list",
+    "olay_get",
+    "olay_create",
+    "olay_update",
+    "materials_list",
+    "material_get",
+    "material_add",
+    "material_tag",
+    "slot_materials",
+    "calendar_list",
+    "shoot_list",
+    "shoot_request",
+    "shoot_resolve",
+    "olay_confirm",
+    "material_permission",
+    "material_free",
+    "material_bind",
+    "material_delete",
+    "calendar_set",
+    "material_policy_set",
+];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
 /// (TikTok's Content Sharing Guidelines), and its published post's counters.
-const PANEL_ONLY: &[&str] = &["tiktok_posting", "tiktok_post", "tiktok_metrics"];
+/// The materials library's human decisions (D4) are panel routes without a tool too.
+const PANEL_ONLY: &[&str] = &[
+    "tiktok_posting",
+    "tiktok_post",
+    "tiktok_metrics",
+    "olay_confirm",
+    "material_permission",
+    "material_free",
+    "material_bind",
+    "material_delete",
+    "calendar_set",
+    "material_policy_set",
+];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
 }
@@ -52,7 +103,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 21);
+    assert_eq!(rows.len(), 41);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -93,7 +144,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 140);
+    assert_eq!(jt_mcp::registry().len(), 153);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -289,6 +340,30 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
             "budget_move",
             json!({"binding_id":jt_studio::AdSetBindingId::new_v7(),"daily_budget_minor":1,"currency":"TRY","request_key":"budget"}),
         ),
+        (
+            "olay_create",
+            json!({"request_key":"olay","kind":"workshop","title":"Atölye","starts_on":"2026-11-16","ends_on":"2026-11-16"}),
+        ),
+        (
+            "olay_update",
+            json!({"olay_id":w.material().olay_id(),"expected_revision":1,"title":"Atölye"}),
+        ),
+        (
+            "material_add",
+            json!({"request_key":"material","file_id":w.material().file_id,"origin":{"kind":"real"},"genel":true}),
+        ),
+        (
+            "material_tag",
+            json!({"material_id":w.material().id,"expected_revision":1,"doors":[]}),
+        ),
+        (
+            "shoot_request",
+            json!({"request_key":"shoot","text":"Ürün fotoğrafı yükle"}),
+        ),
+        (
+            "shoot_resolve",
+            json!({"request_id":jt_studio::ShootRequestId::new_v7(),"status":"done"}),
+        ),
     ]
 }
 #[tokio::test]
@@ -321,7 +396,8 @@ async fn every_studio_write_reaches_shared_execution_gate() {
             .map(|t| t.use_case.strip_prefix("studio.").unwrap()));
         assert_eq!(actual, expected, "exercise every write, including new rows");
         for (action, args) in args {
-            if !inactive && action == "brake" {
+            // An exempt write runs without a strategy: only the status check refuses it.
+            if !inactive && EXEMPT.contains(&action) {
                 continue;
             }
             let tool = registry
@@ -371,6 +447,63 @@ async fn every_studio_write_reaches_shared_execution_gate() {
             },
             "tiktok_post: {e:?}"
         );
+        // The library's panel-only writes, a human's decisions, meet the status check alone.
+        if inactive {
+            use jt_app::usecases::studio::library;
+            let m = w.material();
+            let at = |extra: Value| {
+                let mut v = json!({"material_id":m.id,"expected_revision":1});
+                v.as_object_mut()
+                    .unwrap()
+                    .extend(extra.as_object().unwrap().clone());
+                v
+            };
+            fn parse<T: serde::de::DeserializeOwned>(v: Value) -> T {
+                serde_json::from_value(v).unwrap()
+            }
+            let refusals = [
+                library::olay_confirm(
+                    &w.d,
+                    &w.ctx,
+                    parse(json!({"olay_id":m.olay_id(),"expected_revision":1})),
+                )
+                .await
+                .map(|_| ()),
+                library::material_permission(
+                    &w.d,
+                    &w.ctx,
+                    parse(at(json!({"permission":"shareable"}))),
+                )
+                .await
+                .map(|_| ()),
+                library::material_free(&w.d, &w.ctx, parse(at(json!({"free":true}))))
+                    .await
+                    .map(|_| ()),
+                library::material_bind(
+                    &w.d,
+                    &w.ctx,
+                    parse(at(json!({"binding":{"kind":"genel"}}))),
+                )
+                .await
+                .map(|_| ()),
+                library::material_delete(&w.d, &w.ctx, parse(at(json!({"confirm":true}))))
+                    .await
+                    .map(|_| ()),
+                library::calendar_set(
+                    &w.d,
+                    &w.ctx,
+                    parse(json!({"key":"yilbasi","year":2026,"name":"Yılbaşı","kind":"season","enabled":false})),
+                )
+                .await
+                .map(|_| ()),
+                library::material_policy_set(&w.d, &w.ctx, Default::default())
+                    .await
+                    .map(|_| ()),
+            ];
+            for e in refusals {
+                assert_eq!(e.unwrap_err().code, ErrorCode::WorkspaceInactive);
+            }
+        }
         let after = w.uow.snapshot();
         assert_eq!(after.ledger.len(), before.ledger.len());
         assert_eq!(after.studio.slots, before.studio.slots);
@@ -585,7 +718,7 @@ fn no_paid_creation_api() {
         .map(str::to_owned)
         .collect()
     );
-    // Product catalog's exhaustive 21-name assertion above precludes creation/commission/setup tools.
+    // Product catalog's exhaustive 41-name assertion above precludes creation/commission/setup tools.
 }
 #[tokio::test]
 async fn only_learning_updates_derived_confidence() {
