@@ -1354,3 +1354,76 @@ async fn a_settled_post_is_upgraded_only_by_a_public_id() {
     );
     assert_eq!(t.w.uow.snapshot().studio.publications[0].url, None);
 }
+
+/// The title a human leaves on the posting screen replaces the drafted text, so the truth check
+/// reads it (spec 2026-11-03 §7): one naming another olay holds the post until an owner or
+/// manager releases that finding.
+#[tokio::test]
+async fn a_screen_title_naming_another_olay_holds_until_released() {
+    use jt_app::usecases::studio::materials::material_check_release;
+    let t = tiktok_world(vec![mp4(30)]).await;
+    let other = jt_studio::Olay {
+        place: Some("Moda Sahnesi".into()),
+        ..jt_testkit::studio_contract::confirmed_olay(t.w.f.ws)
+    };
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    r.studio_materials()
+        .insert_olay(other.clone())
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let before = work::slot_get(&t.w.d, &t.w.ctx, t.slot.id)
+        .await
+        .unwrap()
+        .material_check
+        .unwrap();
+    assert!(before.findings.is_empty(), "the drafted text names nothing");
+    t.tt.push_creator_info(Ok(Some(creator())));
+    let chosen = TiktokPost {
+        title: "Moda Sahnesi'nde bu akşam #menu".into(),
+        ..choice("SELF_ONLY")
+    };
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, chosen))
+        .await
+        .unwrap();
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 0);
+    assert!(publishes(&t.tt).is_empty());
+    let pending = work::pending(&t.w.d, &t.w.ctx).await.unwrap();
+    let hold = pending
+        .blockers
+        .iter()
+        .find(|b| b.target == ApprovalTarget::Slot(t.slot.id) && b.reason == "material_check_hold")
+        .expect("held for the title");
+    assert_eq!(hold.next_action.as_deref(), Some("fix_piece_or_release"));
+    let finding = &hold.details.as_ref().unwrap()[0];
+    assert_eq!(
+        (
+            finding["kind"].clone(),
+            finding["code"].clone(),
+            finding["olay_id"].clone()
+        ),
+        (json!("caption"), json!("names_other_olay"), json!(other.id))
+    );
+    let check = work::slot_get(&t.w.d, &t.w.ctx, t.slot.id)
+        .await
+        .unwrap()
+        .material_check
+        .unwrap();
+    assert_eq!(check.findings[0].matched, "moda sahnesi");
+    material_check_release(
+        &t.w.d,
+        &t.w.ctx,
+        serde_json::from_value(json!({
+            "slot_id": t.slot.id, "expected_revision": 1, "digest": check.digest,
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    t.tt.push_publish(Ok(PublishReceipt {
+        external_id: "v_pub_file~v2-1.8".into(),
+        url: None,
+    }));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    assert_eq!(publishes(&t.tt).len(), 1);
+}
