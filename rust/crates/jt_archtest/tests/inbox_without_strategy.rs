@@ -202,7 +202,7 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     // The person writes: create a customer, read the conversation and its messages, answer it.
     let (status, created) = answer(
         send(
-            &app,
+            app,
             panel(
                 Method::POST,
                 "/api/inbox/people",
@@ -215,10 +215,10 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     .await;
     assert!(status.is_success(), "{status}: {created}");
     let ada = person_of(&created);
-    let theirs = conversation(&deps, ws, line, ada).await;
+    let theirs = conversation(deps, ws, line, ada).await;
     let (status, listed) = answer(
         send(
-            &app,
+            app,
             panel(
                 Method::GET,
                 "/api/inbox/conversations?queue=all",
@@ -233,13 +233,13 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     assert!(listed.to_string().contains(&theirs.to_string()), "{listed}");
     let path = format!("/api/inbox/conversations/{theirs}/messages");
     let (status, messages) =
-        answer(send(&app, panel(Method::GET, &path, cookie, None)).await).await;
+        answer(send(app, panel(Method::GET, &path, cookie, None)).await).await;
     assert_eq!(status, StatusCode::OK, "{messages}");
     connector.push_send_text(accepted());
     let path = format!("/api/inbox/conversations/{theirs}/reply");
     let (status, replied) = answer(
         send(
-            &app,
+            app,
             panel(
                 Method::POST,
                 &path,
@@ -255,37 +255,37 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
 
     // The agent does the same over MCP.
     let created = mcp::call_tool(
-        &app,
+        app,
         key,
-        &session,
+        session,
         "jeeta.inbox.people_create",
         json!({"display_name":"Bo","identities":[{"channel":"phone","value":"05327654321"}],"source":"form"}),
     )
     .await;
     let bo = person_of(&created);
-    let ours = conversation(&deps, ws, line, bo).await;
+    let ours = conversation(deps, ws, line, bo).await;
     let listed = mcp::call_tool(
-        &app,
+        app,
         key,
-        &session,
+        session,
         "jeeta.inbox.conversations_list",
         json!({"queue":"all"}),
     )
     .await;
     assert!(listed.to_string().contains(&ours.to_string()), "{listed}");
     mcp::call_tool(
-        &app,
+        app,
         key,
-        &session,
+        session,
         "jeeta.inbox.messages_list",
         json!({"conversation_id":ours}),
     )
     .await;
     connector.push_send_text(accepted());
     let replied = mcp::call_tool(
-        &app,
+        app,
         key,
-        &session,
+        session,
         "jeeta.inbox.reply",
         json!({"conversation_id":ours,"text":"Hello Bo","intent":"reply"}),
     )
@@ -296,7 +296,7 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     // Growth work still waits for the strategy, and so does starting commercial contact.
     let (status, refused) = answer(
         send(
-            &app,
+            app,
             panel(
                 Method::GET,
                 "/api/studio/overview?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z",
@@ -312,9 +312,9 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
         (StatusCode::CONFLICT, &json!("STRATEGY_REQUIRED"))
     );
     let refused = mcp::tool_result(
-        &app,
+        app,
         key,
-        &session,
+        session,
         "jeeta.studio.overview",
         json!({"from":"2020-01-01T00:00:00Z","until":"2099-01-01T00:00:00Z"}),
     )
@@ -324,7 +324,7 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     let path = format!("/api/inbox/people/{ada}/send");
     let (status, refused) = answer(
         send(
-            &app,
+            app,
             panel(Method::POST, &path, cookie, Some(outreach.clone())),
         )
         .await,
@@ -336,7 +336,7 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     );
     let mut arguments = outreach;
     arguments["person_id"] = json!(bo);
-    let refused = mcp::tool_result(&app, key, &session, "jeeta.inbox.send", arguments).await;
+    let refused = mcp::tool_result(app, key, session, "jeeta.inbox.send", arguments).await;
     assert_eq!(refused["structuredContent"]["code"], "STRATEGY_REQUIRED");
     assert_eq!(connector.calls().len(), 2, "nothing more was sent");
 }
