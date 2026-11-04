@@ -1,4 +1,4 @@
--- Reverts 0021_distribution: drops the assignment log (its trigger with it) and its guard, the
+-- Reverts 0025_distribution: drops the assignment log (its trigger with it) and its guard, the
 -- rules and the rep profiles, and drops `people.recipient_kind` only while every person reads
 -- `unknown` (else the column stays, so a kind promotion or a person set survives; run this again
 -- once every row is `unknown`). A no-op when already reverted.

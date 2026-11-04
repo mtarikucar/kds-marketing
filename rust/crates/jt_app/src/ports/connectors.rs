@@ -284,6 +284,69 @@ impl OAuthApp {
     }
 }
 
+/// A variant of a provider's sign-in, chosen when a flow starts and kept with it to its
+/// completion (`OAuthPendingRow::flow`): the authorize URL, the code exchange and the asset
+/// listing each follow it ([`OAuthProvider::authorize_url_for`],
+/// [`OAuthProvider::exchange_for`], [`OAuthProvider::list_assets_for`]). A flow without one is the
+/// provider's own sign-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthFlow {
+    /// Meta's WhatsApp Embedded Signup for a number the business already uses in the WhatsApp
+    /// Business app, which keeps working beside the Cloud API ("coexistence",
+    /// <https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>):
+    /// signed in with the Meta app's WhatsApp configuration (`MetaApp::whatsapp_config_id`), it
+    /// connects `whatsapp_cloud` only.
+    WhatsappBusinessApp,
+}
+
+impl OAuthFlow {
+    /// Every flow, in a fixed order.
+    pub fn all() -> &'static [OAuthFlow] {
+        &[OAuthFlow::WhatsappBusinessApp]
+    }
+
+    /// Its key, also what is stored: `whatsapp_business_app`.
+    pub fn key(self) -> &'static str {
+        match self {
+            OAuthFlow::WhatsappBusinessApp => "whatsapp_business_app",
+        }
+    }
+
+    /// The flow whose key is `key`, if one is.
+    pub fn parse(key: &str) -> Option<OAuthFlow> {
+        OAuthFlow::all().iter().copied().find(|f| f.key() == key)
+    }
+
+    /// The one capability kind the flow connects.
+    pub fn kind_key(self) -> &'static str {
+        match self {
+            OAuthFlow::WhatsappBusinessApp => "whatsapp_cloud",
+        }
+    }
+}
+
+/// What a WhatsApp Business app shares once, when its number has been onboarded beside it
+/// ([`MessagingSender::request_app_sync`]): its contacts, or its chat history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppSync {
+    /// The app's contacts (Meta's `sync_type: smb_app_state_sync`).
+    Contacts,
+    /// The app's one-to-one chat history (Meta's `sync_type: history`).
+    History,
+}
+
+impl AppSync {
+    /// Its key, as stored: `contacts` or `history`.
+    pub fn key(self) -> &'static str {
+        match self {
+            AppSync::Contacts => "contacts",
+            AppSync::History => "history",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Requests and results
 // ---------------------------------------------------------------------------------------------
@@ -805,6 +868,20 @@ pub trait MessagingSender: Send + Sync {
         let _ = (cred, public, sender_id);
         Ok(None)
     }
+    /// Asks the provider to share, once, what the WhatsApp Business app behind the capability
+    /// holds (`sync`): its contacts or its chat history, which then arrive by webhook. The
+    /// receipt's `provider_id` is the provider's request id. A provider takes each request once
+    /// per onboarding: a request whose answer was lost is `Unknown` and must not be asked again
+    /// blindly. `None`, the default, for a provider or a capability without such an app.
+    async fn request_app_sync(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        sync: AppSync,
+    ) -> Result<Option<SendReceipt>, ConnectorError> {
+        let _ = (cred, public, sync);
+        Ok(None)
+    }
 }
 
 /// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.
@@ -990,6 +1067,55 @@ pub trait OAuthProvider: Send + Sync {
     ) -> Result<Credential, ConnectorError>;
     /// What the account behind `cred` can reach, each with the credential to reach it with.
     async fn list_assets(&self, cred: &Credential) -> Result<Vec<Asset>, ConnectorError>;
+    /// [`OAuthProvider::authorize_url`] for the sign-in variant `flow` ([`OAuthFlow`]); without
+    /// one, exactly `authorize_url`. The default refuses every variant (`Permanent`): a provider
+    /// that has one overrides it.
+    fn authorize_url_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        state: &str,
+        pkce_challenge: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Url, ConnectorError> {
+        match flow {
+            None => self.authorize_url(app, redirect, state, pkce_challenge),
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
+    /// [`OAuthProvider::exchange`] for the sign-in variant `flow`; without one, exactly
+    /// `exchange`. The default refuses every variant.
+    async fn exchange_for(
+        &self,
+        app: &OAuthApp,
+        redirect: &Url,
+        code: &str,
+        pkce_verifier: Option<&str>,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Credential, ConnectorError> {
+        match flow {
+            None => self.exchange(app, redirect, code, pkce_verifier).await,
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
+    /// [`OAuthProvider::list_assets`] for a credential the sign-in variant `flow` issued; without
+    /// one, exactly `list_assets`. The default refuses every variant.
+    async fn list_assets_for(
+        &self,
+        cred: &Credential,
+        flow: Option<OAuthFlow>,
+    ) -> Result<Vec<Asset>, ConnectorError> {
+        match flow {
+            None => self.list_assets(cred).await,
+            Some(_) => Err(ConnectorError::permanent(
+                "this provider has no such sign-in flow",
+            )),
+        }
+    }
 }
 
 /// The provider adapters this process has. Every getter answers `None` for a provider without

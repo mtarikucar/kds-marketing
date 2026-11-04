@@ -1,4 +1,4 @@
--- Reverts 0022_outreach: takes outreach.work and outreach.manage off the system roles (they did
+-- Reverts 0026_outreach: takes outreach.work and outreach.manage off the system roles (they did
 -- not exist before; custom roles keep what their workspaces gave them) and drops the four tables,
 -- their indexes with them. Nothing here holds an objection: an unsubscribe is the inbox's
 -- suppression and withdrawn consent, which stay. A no-op when already reverted.

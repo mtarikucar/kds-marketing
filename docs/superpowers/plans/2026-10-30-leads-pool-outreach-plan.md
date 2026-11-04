@@ -41,6 +41,8 @@ marketplace) are taken by parallel branches; if either lands after a task here, 
 merge in number order: a phase that merges out of order (L6 may be built in parallel with L1) takes the next free
 number when it merges, and the later ones shift with their pins.
 
+**Renumbered (2026-11-04, spec D61).** `0021`/`0022` were renamed `0025_distribution`/`0026_outreach` (and L6's file is `0027_mail_files`) when the base merged `0023_oauth_flow` and `0024_whatsapp_erasure` and #394 took `0021`; the pins count versions 1..=18, 20, 23, 24, 25, 26. Text below written before that keeps the old numbers in places; the file names are the truth.
+
 **Deploy hazards (L1 review, 2026-11-03).** (1) 0019 is `feat/inbox-comments-marketplace`'s. `jt_pg::recovery::
 check_schema` refuses any applied migration the build does not embed, so a database that ran a build with 0020
 refuses a build without it, and one that ran 0019 refuses a build without 0019: deploy this branch only from a
@@ -66,7 +68,7 @@ do-not-contact or erased entries) and apply it again, or recreate that database.
 | `rust/crates/jt_app/src/catalog.rs` | changed | 46 rows (spec §7.1) |
 | `rust/crates/adapters/jt_pg/src/repos/{prospects,research,distribution}.rs`, `repos/outreach/*.rs`, `repos/inbox/mail_files.rs` | new | Postgres impls |
 | `rust/crates/jt_testkit/src/fakes/{prospects,distribution,outreach,mail_files}.rs`, `src/{prospects,distribution,outreach,mail_files}_contract.rs` | new | fakes and contract tests |
-| `rust/migrations/0020_prospects.{up,down}.sql` … `0023_mail_files.{up,down}.sql` | new | spec §4 |
+| `rust/migrations/0020_prospects.{up,down}.sql` … `0027_mail_files.{up,down}.sql` | new | spec §4 |
 | `rust/crates/adapters/jt_mcp/src/tools/{prospects,research,distribution,outreach}.rs`, `tools/{inbox,mod}.rs` | new/changed | MCP tools |
 | `rust/crates/adapters/jt_panel_http/src/routes/{prospects,research,distribution,outreach}.rs`, `routes/{inbox,mod}.rs` | new/changed | panel routes |
 | `rust/crates/adapters/jt_webhook/src/{lib,links}.rs` | changed/new | public unsubscribe and click routes |
@@ -766,7 +768,7 @@ ProspectsToPromote}` with `cleared_by`), `jt_mcp/src/tools/work.rs` description 
 
 ### Task L3-T2: migration 0021, ports, repos, fakes; `leads_policy`
 
-**Files:** `rust/migrations/0021_distribution.{up,down}.sql` (spec §4.2, the assignment immutability trigger),
+**Files:** `rust/migrations/0025_distribution.{up,down}.sql` (spec §4.2, the assignment immutability trigger),
 `jt_app/src/ports/{distribution,mod}.rs` (`RepProfileRepo`, `RuleRepo`, `AssignmentRepo`; `PersonRepo`
 reads/writes `recipient_kind` and gains `set_recipient_kind`), `jt_pg/src/repos/{distribution,inbox/people}.rs`,
 fakes, `jt_testkit/src/distribution_contract.rs`, pins (tables 79 → 82, migrations 18 → 19).
@@ -999,7 +1001,7 @@ L1 review note (2026-11-03): every outreach request key (campaign saves, launche
 the ids it recorded only, and a replay reads the rows again (rule "request keys store ids"); an erasure, an
 unsubscribe or a do-not-contact mark forgets the matching keys.
 
-**Files:** `jt_tenancy/src/role.rs` (`OutreachWork`, `OutreachManage`), `rust/migrations/0022_outreach.{up,down}.sql`
+**Files:** `jt_tenancy/src/role.rs` (`OutreachWork`, `OutreachManage`), `rust/migrations/0026_outreach.{up,down}.sql`
 (spec §4.3, role backfill), `jt_app/src/ports/outreach.rs`, `jt_pg/src/repos/outreach/{mod,templates,campaigns,
 enrollments,sends}.rs`, fakes, `jt_testkit/src/outreach_contract.rs`, pins (tables 82 → 86, migrations 19 → 20,
 permissions).
@@ -1230,7 +1232,7 @@ production only after spec §15 Q1 is answered.
 
 ### Task L6-T1: migration 0023, `MailFileRepo`, the `attachment` file purpose
 
-**Files:** `rust/migrations/0023_mail_files.{up,down}.sql`, `jt_app/src/ports/mail_files.rs`,
+**Files:** `rust/migrations/0027_mail_files.{up,down}.sql`, `jt_app/src/ports/mail_files.rs`,
 `jt_pg/src/repos/inbox/mail_files.rs`, fake, `jt_testkit/src/mail_files_contract.rs`, `jt_files/src/{lib,serve}.rs`
 (purpose `attachment`: signature v2 with the purpose; response headers of spec §3.15), pins (tables 86 → 87,
 migrations 20 → 21).

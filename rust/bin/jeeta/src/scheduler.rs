@@ -78,6 +78,7 @@ pub struct Intervals {
     pub prospects_purge: Duration,
     pub research_plan: Duration,
     pub lead_distribution: Duration,
+    pub whatsapp_app_sync: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -125,6 +126,7 @@ impl Default for Intervals {
             prospects_purge: DAY,
             research_plan: HOUR,
             lead_distribution: MINUTE,
+            whatsapp_app_sync: 5 * MINUTE,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -165,6 +167,7 @@ impl Intervals {
             Job::ProspectsPurge => self.prospects_purge,
             Job::ResearchPlan => self.research_plan,
             Job::LeadDistribution => self.lead_distribution,
+            Job::WhatsappAppSync => self.whatsapp_app_sync,
         }
     }
 }
@@ -484,6 +487,7 @@ mod tests {
             prospects_purge: every,
             research_plan: every,
             lead_distribution: every,
+            whatsapp_app_sync: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -604,6 +608,7 @@ mod tests {
             Job::ProspectsPurge.lock_name(),
             "jeeta.jobs.prospects_purge"
         );
+        assert_eq!(i.of(Job::WhatsappAppSync), 5 * MINUTE);
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),
             "jeeta.jobs.device_bridge_health"

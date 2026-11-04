@@ -56,7 +56,9 @@ use super::connector::{
 use super::webhook::{self, Delivery};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::connectors::{Connector, DeliveryReports, DeliveryStatus, Telephony};
+use crate::ports::connectors::{
+    AppSync, Connector, DeliveryReports, DeliveryStatus, MessagingSender, OAuthFlow, Telephony,
+};
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
 /// A token is renewed once it expires within this time (or has expired).
@@ -142,11 +144,12 @@ pub enum Job {
     ProspectsPurge,
     ResearchPlan,
     LeadDistribution,
+    WhatsappAppSync,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 31] = [
+    pub const ALL: [Job; 32] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -178,6 +181,7 @@ impl Job {
         Job::ProspectsPurge,
         Job::ResearchPlan,
         Job::LeadDistribution,
+        Job::WhatsappAppSync,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -215,6 +219,7 @@ impl Job {
             Job::ProspectsPurge => "prospects_purge",
             Job::ResearchPlan => "research_plan",
             Job::LeadDistribution => "lead_distribution",
+            Job::WhatsappAppSync => "whatsapp_app_sync",
         }
     }
 
@@ -257,6 +262,7 @@ impl Job {
             Job::ProspectsPurge => run_prospects_purge(deps, now).await,
             Job::ResearchPlan => run_research_plan(deps, now).await,
             Job::LeadDistribution => run_lead_distribution(deps, now).await,
+            Job::WhatsappAppSync => run_whatsapp_app_sync(deps, now).await,
         }
     }
 }
@@ -278,7 +284,9 @@ impl Job {
 /// while) flags the capability although its refresh token still holds; renewing is what brings
 /// it back. A LinkedIn credential has a refresh token only when LinkedIn grants the app
 /// programmatic refresh; without one the adapter has nothing to renew, and the capability lapses
-/// into a reconnection when its 60 days are up.
+/// into a reconnection when its 60 days are up. A WhatsApp number connected through the WhatsApp
+/// Business app's sign-in (its asset says so, [`super::connector::flow_of`]) is never renewed: its
+/// token is the business's own, kept as it is.
 ///
 /// **Compare and swap.** The sealed credential is read in a transaction of its own, the provider
 /// is asked with no transaction open, and the answer is written in a second transaction that
@@ -364,6 +372,12 @@ fn due_for_refresh(capability: &Capability, now: OffsetDateTime) -> bool {
         return true;
     }
     if reconnect_required(capability) {
+        return false;
+    }
+    // The business's own token from the WhatsApp Business app's sign-in is kept as it is (spec
+    // D4): never exchanged as a user token. Its lapse shows as a failed probe, asking for a
+    // reconnection through the same sign-in.
+    if super::connector::flow_of(capability) == Some(OAuthFlow::WhatsappBusinessApp) {
         return false;
     }
     public_time(&capability.connector_public["access"]["expires_at"])
@@ -2170,4 +2184,217 @@ async fn run_studio_learning(deps: &Deps, job: Job, now: OffsetDateTime) -> JobR
         }
     }
     finish(job, report)
+}
+
+// ---------------------------------------------------------------------------------------------
+// whatsapp_app_sync
+// ---------------------------------------------------------------------------------------------
+
+/// Asks, once each, for the contacts and then the chat history of every WhatsApp number
+/// onboarded beside the WhatsApp Business app (`connector_public.business_app`, see
+/// [`super::whatsapp_app`]), in every `active` or `pending_payment` workspace: each live
+/// `whatsapp_cloud` capability whose request is `due`, asked only while the capability is
+/// verified (an unreachable one waits, but its window still closes). Meta takes each request
+/// once, within 24 hours of the onboarding, so each step is one compare-and-swap around one call:
+///
+/// 1. under the capability's lock: a request found `requesting` (a run whose answer was never
+///    written) becomes `unknown`, and one whose window has closed `expired`, each without asking,
+///    whatever the capability's status; a `due` one of a verified capability is marked
+///    `requesting` and committed before anything is asked;
+/// 2. the provider is asked with no transaction open (`MessagingSender::request_app_sync`);
+/// 3. under the lock again, only while the same onboarding (`onboarded_at`) still has the
+///    request `requesting` (else `skipped`: a new onboarding started over meanwhile): an answer
+///    is `requested` with the provider's `request_id` (`null` when it named none); a throttled
+///    provider, or one the request never reached (`Transient`), puts it back to `due` (asked
+///    again on the next run while the window is open; `failed`); an answer that may have been
+///    lost after the request reached the provider, or one that neither took nor refused it (an
+///    HTTP 5xx: the adapter says `Unknown`), is `unknown`, never asked again; any refusal is
+///    `refused`, with the redacted failure line as its `reason`.
+///
+/// Each move to `requested`, `refused`, `unknown` or `expired` writes `connector.app_sync`
+/// (`{kind_key, sync, state}`) and counts as `changed`.
+pub async fn run_whatsapp_app_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::whatsapp_app::{BUSINESS_APP, SYNCS};
+    let job = Job::WhatsappAppSync;
+    let mut report = JobReport::default();
+    let Some(messaging) = deps.connectors.messaging(Provider::Meta) else {
+        return finish(job, report);
+    };
+    for (ws, capabilities) in connected_capabilities(deps, job, RECEIVING, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        let sharing = capabilities.iter().filter(|c| {
+            c.kind_key == "whatsapp_cloud" && c.connector_public.get(BUSINESS_APP).is_some()
+        });
+        for capability in sharing {
+            for sync in SYNCS {
+                match app_sync_step(deps, &ctx, capability.id, sync, messaging.as_ref()).await {
+                    Ok(AppSyncStep::Idle) => {}
+                    Ok(AppSyncStep::Moved) => {
+                        report.touched += 1;
+                        report.changed += 1;
+                    }
+                    Ok(AppSyncStep::Superseded) => {
+                        report.touched += 1;
+                        report.skipped += 1;
+                    }
+                    Ok(AppSyncStep::Retry(e)) => {
+                        report.touched += 1;
+                        report.failed += 1;
+                        step_failed(job, ws, Some(capability.id), &Failure::Provider(e));
+                    }
+                    Err(e) => {
+                        report.failed += 1;
+                        step_failed(job, ws, Some(capability.id), &Failure::App(e));
+                    }
+                }
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// What one step of [`run_whatsapp_app_sync`] did.
+enum AppSyncStep {
+    /// Nothing to do: not due (any more), not verified, or no credential.
+    Idle,
+    /// The request moved to a settled state.
+    Moved,
+    /// Someone started the sharing over meanwhile: the answer was not written.
+    Superseded,
+    /// The provider was busy or unreachable: due again.
+    Retry(ConnectorError),
+}
+
+/// One request of one capability (see [`run_whatsapp_app_sync`]).
+async fn app_sync_step(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    sync: AppSync,
+    messaging: &dyn MessagingSender,
+) -> Result<AppSyncStep, AppError> {
+    use super::whatsapp_app::{
+        BUSINESS_APP, DUE, EXPIRED, REFUSED, REQUESTED, REQUESTING, UNKNOWN, state_of, sync_until,
+        with_entry,
+    };
+    let now = ctx.now;
+    let at = now
+        .format(&Rfc3339)
+        .map_err(|_| AppError::internal("a time cannot be written"))?;
+    let (capability, sealed, onboarded) = {
+        let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        let capability = locked(repos.as_mut(), id).await?;
+        if capability.status == StoredStatus::Retired {
+            return Ok(AppSyncStep::Idle);
+        }
+        let settled = match state_of(&capability.connector_public, sync) {
+            Some(DUE) if sync_until(&capability.connector_public).is_none_or(|end| now >= end) => {
+                json!({ "state": EXPIRED, "at": at })
+            }
+            // Only a verified number is asked; any other waits for its next probe.
+            Some(DUE) if capability.status != StoredStatus::Verified => {
+                return Ok(AppSyncStep::Idle);
+            }
+            Some(DUE) => Value::Null,
+            Some(REQUESTING) => json!({
+                "state": UNKNOWN,
+                "at": at,
+                "reason": "the answer to the request was never recorded",
+            }),
+            _ => return Ok(AppSyncStep::Idle),
+        };
+        if !settled.is_null() {
+            write_app_sync(repos.as_mut(), ctx, capability, sync, settled).await?;
+            repos.commit().await?;
+            return Ok(AppSyncStep::Moved);
+        }
+        let Some(sealed) = repos.capabilities().read_sealed(id).await? else {
+            return Ok(AppSyncStep::Idle);
+        };
+        let onboarded = capability.connector_public[BUSINESS_APP]["onboarded_at"].clone();
+        let mut marked = capability;
+        marked.connector_public = with_entry(
+            &marked.connector_public,
+            sync,
+            json!({ "state": REQUESTING, "at": at }),
+        );
+        marked.updated_at = now;
+        repos.capabilities().update(marked.clone()).await?;
+        repos.commit().await?;
+        (marked, sealed, onboarded)
+    };
+
+    let answer = {
+        let credential = open_credential(deps, ctx.workspace_id, &sealed)?;
+        let public = super::connector::adapter_public(&capability);
+        messaging.request_app_sync(&credential, &public, sync).await
+    };
+
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let current = locked(repos.as_mut(), id).await?;
+    if current.connector_public[BUSINESS_APP]["onboarded_at"] != onboarded
+        || state_of(&current.connector_public, sync) != Some(REQUESTING)
+    {
+        return Ok(AppSyncStep::Superseded);
+    }
+    let line = |e: &ConnectorError| super::failure::failure_reason(Some(Provider::Meta), e);
+    let (entry, step) = match answer {
+        // Meta's request id when it named one (kept for its support), else `null`.
+        Ok(Some(receipt)) => (
+            json!({
+                "state": REQUESTED,
+                "at": at,
+                "request_id": Some(receipt.provider_id).filter(|id| !id.is_empty()),
+            }),
+            AppSyncStep::Moved,
+        ),
+        Ok(None) => (json!({ "state": DUE }), AppSyncStep::Idle),
+        Err(e @ (ConnectorError::Throttle { .. } | ConnectorError::Transient { .. })) => (
+            json!({ "state": DUE, "at": at, "retry_reason": line(&e) }),
+            AppSyncStep::Retry(e),
+        ),
+        Err(e @ ConnectorError::Unknown { .. }) => (
+            json!({ "state": UNKNOWN, "at": at, "reason": line(&e) }),
+            AppSyncStep::Moved,
+        ),
+        Err(e) => (
+            json!({ "state": REFUSED, "at": at, "reason": line(&e) }),
+            AppSyncStep::Moved,
+        ),
+    };
+    write_app_sync(repos.as_mut(), ctx, current, sync, entry).await?;
+    repos.commit().await?;
+    Ok(step)
+}
+
+/// Writes `entry` as request `sync` of `capability` (locked in `repos`), and
+/// `connector.app_sync` when it settles the request (`requested`, `refused`, `unknown`,
+/// `expired`).
+async fn write_app_sync(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    mut capability: Capability,
+    sync: AppSync,
+    entry: Value,
+) -> Result<(), AppError> {
+    use super::whatsapp_app::{DUE, with_entry};
+    let state = entry["state"].as_str().unwrap_or(DUE).to_owned();
+    capability.connector_public = with_entry(&capability.connector_public, sync, entry);
+    capability.updated_at = ctx.now;
+    let (id, kind_key) = (capability.id, capability.kind_key.clone());
+    repos.capabilities().update(capability).await?;
+    if state != DUE {
+        let in_force = version_in_force(repos).await?;
+        append(
+            repos,
+            ctx,
+            "connector.app_sync",
+            "capability",
+            id,
+            in_force,
+            json!({ "kind_key": kind_key, "sync": sync.key(), "state": state }),
+        )
+        .await?;
+    }
+    Ok(())
 }

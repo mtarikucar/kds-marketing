@@ -522,6 +522,12 @@ fn start_oauth_offers_every_kind_an_oauth_provider_serves() {
         assert!(start.description.contains(kind), "{kind}");
     }
     assert!(!kinds.contains("sms_line") && !kinds.contains("mailbox"));
+    // The one sign-in variant: a number already in the WhatsApp Business app.
+    assert_eq!(
+        schema["properties"]["flow"]["enum"],
+        serde_json::json!(["whatsapp_business_app"])
+    );
+    assert!(start.description.contains("whatsapp_business_app"));
 }
 
 fn required(schema: &Value) -> BTreeSet<&str> {

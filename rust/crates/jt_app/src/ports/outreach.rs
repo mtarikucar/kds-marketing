@@ -1,5 +1,5 @@
 //! Outreach's persistence (spec 2026-10-30-leads-pool-outreach-design.md §3.10–§3.14, §4.3,
-//! §6.1): templates, campaigns, enrollments and one row per outreach email (`0022_outreach`).
+//! §6.1): templates, campaigns, enrollments and one row per outreach email (`0026_outreach`).
 //! The records' rules are `jt_outreach`'s; nothing here sends (the platform switch and the
 //! fences are the use cases').
 //!
@@ -103,7 +103,7 @@ pub struct CampaignRow {
     pub completed_at: Option<OffsetDateTime>,
 }
 
-/// Whether a campaign row keeps `0022_outreach`'s checks: a pause reason exactly when paused, a
+/// Whether a campaign row keeps `0026_outreach`'s checks: a pause reason exactly when paused, a
 /// completion time exactly when completed, no launch time on a draft, a revision of at least 1.
 pub fn campaign_row_valid(c: &CampaignRow) -> bool {
     let name = c.name.chars().count();
@@ -168,7 +168,7 @@ pub struct EnrollmentRow {
     pub last_sent_at: Option<OffsetDateTime>,
 }
 
-/// Whether an enrollment row keeps `0022_outreach`'s checks: a stop reason exactly when stopped,
+/// Whether an enrollment row keeps `0026_outreach`'s checks: a stop reason exactly when stopped,
 /// a skip reason exactly when skipped, a next send time while active, `next_step` in `1..=7`.
 pub fn enrollment_row_valid(e: &EnrollmentRow) -> bool {
     (e.status == EnrollmentStatus::Stopped) == e.stop.is_some()

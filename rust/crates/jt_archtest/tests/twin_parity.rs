@@ -1356,6 +1356,9 @@ async fn connector_hooks_answer_the_same_over_the_panel_and_mcp() {
     assert!(!human.to_string().contains("meta-verify-token"));
 }
 
+/// Approves a minimal strategy through the panel. Since 2026-11-03 only `inbox.send` among the
+/// inbox rows needs one (and metered sends, which reserve spend in its budget frame); the other
+/// inbox tests that call this keep it as part of their fixture.
 async fn approve_inbox_strategy(app: &Router, cookie: &str) {
     async fn ok(response: Response) -> Value {
         let status = response.status();
@@ -1438,8 +1441,8 @@ async fn inbox_people_get_and_events_report_have_http_mcp_parity() {
         panel(Method::GET, "/api/inbox/people", Some(&cookie), None),
     )
     .await;
-    assert_eq!(json_body(resp).await["code"], "STRATEGY_REQUIRED");
-    approve_inbox_strategy(&app, &cookie).await;
+    // No strategy is approved: the inbox answers anyway (owner decision of 2026-11-03).
+    assert_eq!(resp.status(), StatusCode::OK);
     let resp=send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Ada","identities":[{"channel":"phone","value":"05321234567"}],"source":"form"})))).await;
     let status = resp.status();
     let created = json_body(resp).await;
@@ -1619,17 +1622,17 @@ async fn inbox_merges_apply_and_tasks_list_have_http_mcp_parity() {
     let cookie = sign_in(&app, user).await;
     let key = issue_key(&app, &cookie).await;
     let session = mcp_session(&app, &key).await;
-    // Both surfaces enforce the strategy gate for the new operations.
+    // No strategy is approved: neither surface holds the inbox back for one (owner decision of
+    // 2026-11-03).
     let response = send(
         &app,
         panel(Method::GET, "/api/inbox/tasks", Some(&cookie), None),
     )
     .await;
+    assert_eq!(response.status(), StatusCode::OK);
     let human = json_body(response).await;
-    let agent = tool_result(&app, &key, &session, "jeeta.inbox.tasks_list", json!({})).await;
-    assert_eq!(human["code"], "STRATEGY_REQUIRED");
-    assert_eq!(human["code"], agent["structuredContent"]["code"]);
-    approve_inbox_strategy(&app, &cookie).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.inbox.tasks_list", json!({})).await;
+    assert_eq!(human, agent);
     call_tool(
         &app,
         &key,

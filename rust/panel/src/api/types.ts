@@ -941,6 +941,10 @@ export interface ConnectorHealth {
 export type InboxQueue = 'ours' | 'unassigned' | 'snoozed' | 'all';
 export type InboxSource = { channel: string } | 'meta_ads' | 'import' | 'form' | 'repeat';
 export type InboxActor = 'system' | 'agent' | { human: Uuid };
+/** Who wrote a message: an actor of the workspace, the customer, or the business itself from the WhatsApp Business app on its phone. */
+export type InboxAuthor = InboxActor | 'customer' | 'business_app';
+/** A variant of a provider's sign-in: `whatsapp_business_app` connects a number already in the WhatsApp Business app. */
+export type OAuthFlow = 'whatsapp_business_app';
 export interface InboxPerson {
   id: Uuid;
   workspace_id: Uuid;
@@ -971,7 +975,7 @@ export interface InboxMessage {
   workspace_id: Uuid;
   conversation_id: Uuid;
   direction: 'inbound' | 'outbound';
-  author: InboxActor | 'customer';
+  author: InboxAuthor;
   body: string;
   external_id: string | null;
   status:

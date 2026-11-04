@@ -8,9 +8,9 @@ Conventions follow `2026-10-22-jeeta-rust-yeniden-yazim-design.md` (§4.2 three 
 §10 data) and stay consistent with the parallel design `2026-10-30-inbox-comments-marketplace-design.md`
 (branch `feat/inbox-comments-marketplace`).
 
-Branch: `feat/leads-pool-outreach`. Migrations: **`0020_prospects`, `0021_distribution`, `0022_outreach`,
-`0023_mail_files`**. `0018` is taken by the TikTok webhooks work and `0019` by the inbox comments/marketplace
-work; this program starts at 0020 and touches neither of their objects (§4.6). Every count in this document is
+Branch: `feat/leads-pool-outreach`. Migrations: **`0020_prospects`, `0025_distribution`, `0026_outreach`,
+`0027_mail_files`**. `0018` is taken by the TikTok webhooks work and `0019` by the inbox comments/marketplace
+work; this program starts at 0020 and touches neither of their objects (§4.6). `0021`–`0024` are other branches' (D61), hence the gap. Every count in this document is
 relative to `958fcfe3`; a rebase over another branch adds that branch's increments (§7.3).
 
 Markers: **VERIFY (V-xx)** is an external technical fact to check before code depends on it (§13);
@@ -118,7 +118,7 @@ D43–D52 while building L3 (promotion and distribution).
 | D49 | **Promotion changes a matched person only to make them a business** (L3): `recipient_kind` becomes `business` while it is `unknown`; a person's company is written only when promotion creates the person. | A matched person is the inbox's record; L-02 keeps a person's `individual`. |
 | D50 | **`distribution.rep_set` replaces a profile whole; `distribution.rules_set` also sets the mode and `max_reassignments`** (L3, patched into the leads policy key by key). Rules may name only active members who hold `inbox.work`. | Whole replacement cannot leave a cleared field behind (bug class "clear doesn't persist"); the panel's distribution tab edits mode and rules together. |
 | D51 | **Only the assigned member's own act counts** (L3): a reply (when a person enqueues it), a reported journey event, a note, a completed task or a placed call marks the live assignment acted on when the actor is the person it names; an agent's act and a manager's do not. | The SLA asks whether the owner took the lead up. |
-| D52 | **`inbox.people.set_kind` is gated like the other inbox rows of this base** (L3); when `feat/inbox-ungated` lands it follows the inbox rows. The distribution rows stay gated (§7.1). | The ungating is its own change; distribution is neither a customer conversation nor research. |
+| D52 | **`inbox.people.set_kind` follows the inbox rows** (L3): exempt from the strategy gate and listed in the gate rule's `EXEMPT_INBOX` since `feat/inbox-ungated` merged (owner decision of 2026-11-03: the inbox answers customers without a strategy). The distribution rows and every outreach row stay gated (§7.1). | Setting whom a message reaches is part of handling a person; distribution and outreach are not customer conversations. |
 
 Decisions D53–D60 were taken while building L4-T1..T3 (the outreach domain, the commercial basis and the
 outreach tables).
@@ -133,6 +133,7 @@ outreach tables).
 | D58 | **The footer's source line follows the send's basis** (L4-T1/T2, `FooterSource: From<CommercialBasis>`), not the person's first touch: a consent gives the consent line, the business basis the public-data line. The EN copy is the TR copy's meaning; both are for the lawyer (L-07). | The line says why the recipient gets this email; a promoted prospect who consented gets the consent line. |
 | D59 | **`0022` keeps an enrolled prospect without a delete action** (L4-T3): `outreach_enrollments.prospect_id` has no `on delete set null` (a composite key's `set null` would null `workspace_id` too, and the column-list form needs PostgreSQL 15); an enrolled prospect is promoted, and the pool never deletes a promoted prospect (purge, erasure and do-not-contact refuse it). Beyond §4.3 the tables check a pause reason exactly when paused, a completion time exactly when completed, no launch time on a draft, a reason exactly when stopped or skipped, a next send while active, `replied_threaded` with `replied_at`; sends reference their campaign. `0022` down refuses nothing: an unsubscribe is the inbox's suppression and withdrawn consent, which stay. | Constraints the rows' rules already state; a rollback keeps every objection. |
 | D60 | **An outreach receipt after closure changes nothing** (L4-T2): a system `OutreachSent` on a won or lost journey is a no-op like a system `Replied`; anyone else's is `Terminal`. | A late receipt must neither reopen nor refuse. |
+| D61 | **Migration numbers follow the base** (merge of 2026-11-04): `0023_oauth_flow` and `0024_whatsapp_erasure` merged into the base and `feat/studio-materials` (#394) holds `0021` (and `0022`), so this program's migrations are `0020_prospects`, **`0025_distribution`**, **`0026_outreach`** and, for L6, **`0027_mail_files`** (renamed before any of them merged). A database that ran this branch's earlier `0021`/`0022` (a local or staging run only) fails `check_schema`: revert them with their downs, or recreate it. | Migrations merge in number order (plan, "Base and branches"); a lower number taken after a higher one applied would never run. |
 
 ---
 
@@ -860,7 +861,7 @@ in ('new', 'qualified')` (D35). `prospect_blocklist.kind` holds hard kinds only 
 `instagram`, `tiktok`; D28) and every entry has `key_fingerprint text not null check (key_fingerprint ~
 '^[0-9a-f]{16}$')` (D36).
 
-### 4.2 `0021_distribution`
+### 4.2 `0025_distribution`
 
 ```sql
 alter table people add column if not exists recipient_kind text not null default 'unknown'
@@ -900,7 +901,7 @@ truth for ownership (commission, queues); the assignment log is the decision his
 same transaction by `distribution::assign`. Down: drops the three tables, and the `recipient_kind` column only
 when every row is `unknown` (the 0014 pattern), else keeps it.
 
-### 4.3 `0022_outreach`
+### 4.3 `0026_outreach`
 
 ```sql
 create table if not exists outreach_templates (
@@ -960,7 +961,7 @@ create index if not exists outreach_sends_domain on outreach_sends (workspace_id
 `outreach_sends.outcome` is written only by the outreach hooks inside the transaction that records the outbox
 result (`record_result_in`) or the evidence (`mail_evidence`), so it cannot drift from the outbox.
 
-### 4.4 `0023_mail_files`
+### 4.4 `0027_mail_files`
 
 ```sql
 create table if not exists mail_files (

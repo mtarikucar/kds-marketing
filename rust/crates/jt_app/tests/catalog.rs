@@ -310,7 +310,7 @@ fn catalog_is_the_release_table() {
     assert_eq!(rows, expected);
     assert_eq!(CATALOG.len(), 194);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if (uc.id.starts_with("inbox.") && !["inbox.pending", "inbox.context"].contains(&uc.id)) || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

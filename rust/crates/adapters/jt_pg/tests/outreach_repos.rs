@@ -1,5 +1,5 @@
 //! Outreach's repository contracts (`jt_testkit::outreach_contract`) against PostgreSQL
-//! (migration `0022_outreach`), row-level security binding; and what only PostgreSQL shows: two
+//! (migration `0026_outreach`), row-level security binding; and what only PostgreSQL shows: two
 //! dispatchers never pick one enrollment (`for update skip locked`).
 
 use std::collections::BTreeSet;

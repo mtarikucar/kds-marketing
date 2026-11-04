@@ -1,5 +1,5 @@
 //! `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` and `outreach_sends`
-//! (migration `0022_outreach`). A campaign's definition and approval, a template's and a
+//! (migration `0026_outreach`). A campaign's definition and approval, a template's and a
 //! campaign's `created_by` and an enrollment's personalization keep the domain's encoding as
 //! JSON. One active enrollment per person is the partial unique index
 //! `outreach_enrollments_one_active`; `due` takes its rows `for update skip locked`.

@@ -1,5 +1,5 @@
 //! The in-memory rep profiles, distribution rules and assignment log, with the constraints
-//! migration `0021_distribution` enforces: a profile and a rule cursor name an existing user, a
+//! migration `0025_distribution` enforces: a profile and a rule cursor name an existing user, a
 //! decision a journey of the bundle's workspace; at most one live decision per journey; rule
 //! positions unique (the whole set is replaced); a decision's member as its cause allows, a due
 //! time only with a member; a decision changes only by being acted on or superseded, once each.

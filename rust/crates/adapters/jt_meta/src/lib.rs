@@ -14,8 +14,10 @@
 //!
 //! **Tokens.** A token travels in the `Authorization: Bearer` header, never in a URL (a paging
 //! link's `access_token` is taken out before it is followed), except where the provider takes it
-//! nowhere else: the code and token exchanges of Facebook Login and Instagram Login. Every call to
-//! `graph.facebook.com` that carries a user, Page or WhatsApp token also carries
+//! nowhere else: the code and token exchanges of Facebook Login and Instagram Login, and the
+//! business token `debug_token` inspects (`input_token`) after the WhatsApp Business app's
+//! sign-in, which the call itself makes with the Meta app's own token. Every call to
+//! `graph.facebook.com` that carries a user, Page, WhatsApp or app token also carries
 //! `appsecret_proof` = lowercase hex HMAC-SHA256 of the token under the Meta app's secret, paging
 //! links included (an existing proof is replaced); calls to `graph.instagram.com` never do (that
 //! host belongs to the Instagram app). The Meta app (its secret and Graph version) is read from

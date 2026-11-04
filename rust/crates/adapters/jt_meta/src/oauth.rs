@@ -1,7 +1,21 @@
 //! Facebook Login and Instagram Login: authorize URLs, code exchanges (long-lived tokens) and
-//! token refresh.
+//! token refresh; and the WhatsApp Embedded Signup of a number already in the WhatsApp Business
+//! app ([`OAuthFlow::WhatsappBusinessApp`]).
+//!
+//! **The WhatsApp Business app's sign-in** (coexistence, Meta's page
+//! <https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users>):
+//! Facebook Login's dialog with the Meta app's WhatsApp configuration
+//! (`MetaApp::whatsapp_config_id`) as `config_id`, `response_type=code`,
+//! `override_default_response_type=true` and the `extras` that page gives ([`BUSINESS_APP_EXTRAS`]).
+//! Meta documents Embedded Signup launched by its JavaScript SDK (`FB.login`); that the dialog
+//! honours `extras` when the browser is sent to it is unverified. Its code is exchanged for the
+//! business's token at `oauth/access_token` (with the flow's redirect URI, as every redirect
+//! flow's), and that token is kept as it is: Meta's Tech Provider onboarding page
+//! (<https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider/>)
+//! calls it a business integration system user access token, not a user token, so it is not put
+//! through `fb_exchange_token` (whether Meta would take it there is unverified).
 
-use jt_app::ports::connectors::{InstagramApp, MetaApp, OAuthApp};
+use jt_app::ports::connectors::{InstagramApp, MetaApp, OAuthApp, OAuthFlow};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::Value;
@@ -123,6 +137,107 @@ pub(crate) fn authorize_url(
             "only a Meta or Instagram app signs in to Meta",
         )),
     }
+}
+
+/// The `extras` of the WhatsApp Business app's sign-in, as Meta's onboarding page gives them:
+/// Embedded Signup's onboarding of a number already in the WhatsApp Business app, reporting
+/// session info version 3.
+pub const BUSINESS_APP_EXTRAS: &str =
+    r#"{"setup":{},"featureType":"whatsapp_business_app_onboarding","sessionInfoVersion":"3"}"#;
+
+/// [`authorize_url`] for the sign-in variant `flow`: without one, exactly `authorize_url`; the
+/// WhatsApp Business app's sign-in (see the module docs) needs the Meta app and its WhatsApp
+/// configuration, else `Permanent`.
+pub(crate) fn authorize_url_for(
+    connector: &MetaConnector,
+    app: &OAuthApp,
+    redirect: &Url,
+    state: &str,
+    pkce_challenge: Option<&str>,
+    flow: Option<OAuthFlow>,
+) -> Result<Url, ConnectorError> {
+    let Some(OAuthFlow::WhatsappBusinessApp) = flow else {
+        return authorize_url(connector, app, redirect, state, pkce_challenge);
+    };
+    let OAuthApp::Meta(meta) = app else {
+        return Err(ConnectorError::permanent(
+            "the WhatsApp Business app sign-in runs under the Meta app",
+        ));
+    };
+    let config = whatsapp_config(meta)?;
+    let version = graph_version(meta).unwrap_or_else(|_| crate::DEFAULT_GRAPH_VERSION.to_owned());
+    let mut url = join(
+        &connector.bases().facebook_dialog,
+        &[&version, "dialog", "oauth"],
+        &[],
+    );
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("client_id", &meta.app_id)
+            .append_pair("redirect_uri", redirect.as_str())
+            .append_pair("state", state)
+            .append_pair("response_type", "code")
+            .append_pair("config_id", config)
+            .append_pair("override_default_response_type", "true")
+            .append_pair("extras", BUSINESS_APP_EXTRAS);
+        if let Some(challenge) = pkce_challenge {
+            q.append_pair("code_challenge", challenge)
+                .append_pair("code_challenge_method", "S256");
+        }
+    }
+    Ok(url)
+}
+
+/// The Meta app's WhatsApp Embedded Signup configuration, else `Permanent`.
+fn whatsapp_config(meta: &MetaApp) -> Result<&str, ConnectorError> {
+    meta.whatsapp_config_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .ok_or_else(|| {
+            ConnectorError::permanent("the Meta app has no WhatsApp Embedded Signup configuration")
+        })
+}
+
+/// [`exchange`] for the sign-in variant `flow`: without one, exactly `exchange`; the WhatsApp
+/// Business app's sign-in exchanges the code for the business's token, kept as it is (see the
+/// module docs), its expiry the answer's `expires_in` when it names one.
+pub(crate) async fn exchange_for(
+    connector: &MetaConnector,
+    app: &OAuthApp,
+    redirect: &Url,
+    code: &str,
+    pkce_verifier: Option<&str>,
+    flow: Option<OAuthFlow>,
+) -> Result<Credential, ConnectorError> {
+    let Some(OAuthFlow::WhatsappBusinessApp) = flow else {
+        return exchange(connector, app, redirect, code, pkce_verifier).await;
+    };
+    let OAuthApp::Meta(meta) = app else {
+        return Err(ConnectorError::permanent(
+            "the WhatsApp Business app sign-in runs under the Meta app",
+        ));
+    };
+    let graph = GraphApp::of(meta)?;
+    let mut query = vec![
+        ("client_id", meta.app_id.as_str()),
+        ("client_secret", meta.app_secret.as_str()),
+        ("redirect_uri", redirect.as_str()),
+        ("code", code),
+    ];
+    if let Some(verifier) = pkce_verifier {
+        query.push(("code_verifier", verifier));
+    }
+    let url = connector.graph_url(&graph.version, &["oauth", "access_token"], &query);
+    let answer = connector
+        .call(Method::GET, url, Auth::None, Body::Empty)
+        .await?;
+    Ok(Credential::OAuth {
+        expires_at: expiry(&answer, OffsetDateTime::now_utc()),
+        access_token: token_of(&answer)?,
+        refresh_token: None,
+        scopes: Vec::new(),
+    })
 }
 
 /// The long-lived credential the code is exchanged for under `app`.

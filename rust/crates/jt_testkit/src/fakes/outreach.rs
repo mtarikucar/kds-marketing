@@ -1,5 +1,5 @@
 //! The in-memory outreach templates, campaigns, enrollments and sends, with the constraints
-//! migration `0022_outreach` enforces: ids unique; a campaign names a capability and a strategy
+//! migration `0026_outreach` enforces: ids unique; a campaign names a capability and a strategy
 //! version of the bundle's workspace and keeps its checks (`campaign_row_valid`); an enrollment
 //! names a campaign, a person, and optionally a journey and a prospect of the workspace, keeps its
 //! checks (`enrollment_row_valid`), is one per campaign and person and, while active, one per

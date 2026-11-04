@@ -32,21 +32,21 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
 /// device commands and device files of `0017_device_bridge`, the five pool tables of
-/// `0020_prospects`, the rep profiles, rules and assignment log of `0021_distribution`, and the
-/// templates, campaigns, enrollments and sends of `0022_outreach`.
+/// `0020_prospects`, the rep profiles, rules and assignment log of `0025_distribution`, and the
+/// templates, campaigns, enrollments and sends of `0026_outreach`.
 const TABLES_AFTER_ALL: i64 = 86;
 
-/// The tables before `0022_outreach` adds its four.
+/// The tables before `0026_outreach` adds its four.
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_AFTER_ALL - 4;
 
 /// Migrations `0001_foundation` through `0018_tiktok_webhooks`, `0020_prospects`,
-/// `0021_distribution` and `0022_outreach`.
-const MIGRATIONS: i64 = 21;
+/// `0023_oauth_flow`, `0024_whatsapp_erasure`, `0025_distribution` and `0026_outreach`.
+const MIGRATIONS: i64 = 23;
 
-/// The migration versions. `0019` (inbox comments and marketplace) belongs to a parallel branch:
-/// when it merges it adds its version here.
+/// The migration versions. `0019`, `0021` and `0022` belong to parallel branches (inbox comments
+/// and marketplace, the studio materials): each adds its version here when it merges.
 fn versions() -> Vec<i64> {
-    (1..=18).chain([20, 21, 22]).collect()
+    (1..=18).chain([20, 23, 24, 25, 26]).collect()
 }
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
@@ -225,8 +225,10 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
-        "0022_outreach",
-        "0021_distribution",
+        "0026_outreach",
+        "0025_distribution",
+        "0024_whatsapp_erasure",
+        "0023_oauth_flow",
         "0020_prospects",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
@@ -493,6 +495,234 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
     }
 }
 
+/// `0023_oauth_flow` keeps a flow's sign-in variant: its up and its down are repeatable, the check
+/// takes only a known variant (or none), and its down forgets the flows that ran a variant (each
+/// would otherwise be completed as the app's own sign-in) and keeps the others.
+#[tokio::test]
+async fn oauth_flow_migration_is_repeatable_and_its_down_drops_the_variant_flows() {
+    let db = TestDb::new().await; // already migrated up, 0023 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0023_oauth_flow.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0023_oauth_flow.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let (ws, owner) = db.seed_workspace("oauth-flow").await;
+    let insert = |flow: Option<&'static str>| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,flow,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,'meta','whatsapp_cloud','meta',$3,$4,$5,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(flow)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let flows = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from oauth_pending")
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            n
+        }
+    };
+
+    for _ in 0..2 {
+        run(&up).await;
+    }
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    assert_eq!(insert(None).await, None);
+    assert_eq!(insert(Some("whatsapp_business_app")).await, None);
+    assert_eq!(insert(Some("another")).await.as_deref(), Some("23514"));
+    assert_eq!(flows().await, 2);
+
+    for _ in 0..2 {
+        run(&down).await;
+        assert!(!column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    }
+    // The variant's flow went with the column; the app's own sign-in stays.
+    assert_eq!(flows().await, 1);
+    run(&up).await;
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+}
+
+/// `0023_oauth_flow` is the WhatsApp Business app coexistence's migration, and the code before it
+/// cannot read what the feature leaves: once a message the business wrote from the app, or a
+/// capability's sharing of the app's data, is stored, its down is refused and changes nothing.
+#[tokio::test]
+async fn oauth_flow_down_is_refused_once_the_business_app_left_data() {
+    use jt_app::ports::UnitOfWork;
+    let down = std::fs::read_to_string(migrations_dir().join("0023_oauth_flow.down.sql")).unwrap();
+    for case in ["message", "capability"] {
+        let db = TestDb::new().await;
+        let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+        let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+        let cap = f.capability().await;
+        let person = f.insert_person("App").await;
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        if case == "message" {
+            let c = t
+                .conversations()
+                .upsert_on_inbound(f.conversation(person.id, cap))
+                .await
+                .unwrap();
+            let mut m = f.message(c.id);
+            m.direction = jt_inbox::Direction::Outbound;
+            m.author = jt_inbox::Author::BusinessApp;
+            t.messages().insert_if_new(m).await.unwrap();
+        } else {
+            let mut c = t.capabilities().find(cap).await.unwrap().unwrap();
+            c.connector_public =
+                serde_json::json!({ "business_app": { "contacts": { "state": "due" } } });
+            t.capabilities().update(c).await.unwrap();
+        }
+        t.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("oauth flow rollback refused"),
+            "{case}: {refused}"
+        );
+        assert!(
+            column_exists(&db.pool, ("oauth_pending", "flow")).await,
+            "{case}"
+        );
+    }
+}
+
+/// `0024_whatsapp_erasure` lets erasure find a person in the WhatsApp Business app's events:
+/// its up and its down are repeatable, and its down is refused, changing nothing, once such an
+/// event is stored (events are never deleted, and the older functions could not find the person
+/// in it).
+#[tokio::test]
+async fn whatsapp_erasure_migration_is_repeatable_and_its_down_refuses_stored_app_events() {
+    let db = TestDb::new().await; // already migrated up, 0024 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await }
+    };
+    // Whether the erasure functions are this migration's: the mask takes a thread.
+    let current = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "select inbox_mask_personal('{\"thread\":\"905321234567\"}')",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+                == serde_json::json!({ "thread": "" })
+        }
+    };
+    let (ws, _) = db.seed_workspace("whatsapp-erasure").await;
+    let insert = |kind: &'static str, payload: serde_json::Value| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query(
+                "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)                  values($1,$2,'meta',$3,$4,$5,now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(Uuid::now_v7().to_string())
+            .bind(kind)
+            .bind(payload)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+
+    assert!(current().await);
+    // A Messenger echo is not the app's: the down still runs, twice over, and the up again.
+    insert(
+        "message_echo",
+        serde_json::json!({ "messaging": { "mid": "m" } }),
+    )
+    .await;
+    for _ in 0..2 {
+        run(&down).await.unwrap();
+        assert!(!current().await);
+    }
+    for _ in 0..2 {
+        run(&up).await.unwrap();
+        assert!(current().await);
+    }
+    // Each of the app's events refuses the down, which then changes nothing.
+    for (kind, payload) in [
+        ("history", serde_json::json!({ "thread": "905321234567" })),
+        ("contact_sync", serde_json::json!({ "state_sync": {} })),
+        (
+            "message_echo",
+            serde_json::json!({ "echo": { "to": "905321234567" } }),
+        ),
+    ] {
+        let fresh = TestDb::new().await;
+        let (ws, _) = fresh.seed_workspace("app-event").await;
+        let mut tx = TenantTx::begin(&fresh.pool, ws).await.unwrap();
+        sqlx::query(
+            "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)              values($1,$2,'meta','app-event',$3,$4,now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(ws.as_uuid())
+        .bind(kind)
+        .bind(payload)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&fresh.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("whatsapp erasure rollback refused"),
+            "{kind}: {refused}"
+        );
+        let still: serde_json::Value =
+            sqlx::query_scalar("select inbox_mask_personal('{\"thread\":\"x\"}')")
+                .fetch_one(&fresh.pool)
+                .await
+                .unwrap();
+        assert_eq!(still, serde_json::json!({ "thread": "" }), "{kind}");
+    }
+}
+
 /// `0018_tiktok_webhooks` lets inbound events be TikTok's; its up and its down are repeatable,
 /// and its down is refused, changing nothing, once a TikTok event is stored (events are never
 /// deleted, so the narrower check could not hold it).
@@ -738,13 +968,13 @@ async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
     // Newest first: the pool and the call tables reference the inbox tables.
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0022_outreach.down.sql"
+        "../../../../migrations/0026_outreach.down.sql"
     ))
     .execute(&db.pool)
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0021_distribution.down.sql"
+        "../../../../migrations/0025_distribution.down.sql"
     ))
     .execute(&db.pool)
     .await
@@ -896,13 +1126,13 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0022_outreach.down.sql"
+        "../../../../migrations/0026_outreach.down.sql"
     ))
     .execute(&db.pool)
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
-        "../../../../migrations/0021_distribution.down.sql"
+        "../../../../migrations/0025_distribution.down.sql"
     ))
     .execute(&db.pool)
     .await
@@ -1005,10 +1235,10 @@ async fn studio_migration_up_down_up() {
 }
 
 /// Runs `sql` as one simple query (a transaction of its own), answering the server's error.
-/// Reverts `0022_outreach`, whose enrollments reference the pool's prospects: every test that runs
+/// Reverts `0026_outreach`, whose enrollments reference the pool's prospects: every test that runs
 /// an older down runs this one first.
 async fn outreach_down(pool: &PgPool) {
-    let down = std::fs::read_to_string(migrations_dir().join("0022_outreach.down.sql")).unwrap();
+    let down = std::fs::read_to_string(migrations_dir().join("0026_outreach.down.sql")).unwrap();
     try_run(pool, &down).await.unwrap();
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
 }
@@ -1419,14 +1649,14 @@ async fn blocklist_reason_and_expiry_agree() {
     }
 }
 
-/// The tables of `0021_distribution`, each with its one row-level policy.
+/// The tables of `0025_distribution`, each with its one row-level policy.
 const DISTRIBUTION_TABLES: [(&str, &str); 3] = [
     ("rep_profiles", "rep_profiles_ws"),
     ("distribution_rules", "distribution_rules_ws"),
     ("journey_assignments", "journey_assignments_ws"),
 ];
 
-/// The indexes of `0021_distribution` beyond its primary keys and unique constraints.
+/// The indexes of `0025_distribution` beyond its primary keys and unique constraints.
 const DISTRIBUTION_INDEXES: [&str; 4] = [
     "journey_assignments_live",
     "journey_assignments_sla",
@@ -1439,8 +1669,8 @@ async fn distribution_up_and_down_are_repeatable() {
     let db = TestDb::new().await; // already migrated up, 0021 included
     outreach_down(&db.pool).await;
     let dir = migrations_dir();
-    let up = std::fs::read_to_string(dir.join("0021_distribution.up.sql")).unwrap();
-    let down = std::fs::read_to_string(dir.join("0021_distribution.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0025_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0025_distribution.down.sql")).unwrap();
     for _ in 0..2 {
         try_run(&db.pool, &up).await.unwrap();
         assert_eq!(table_count(&db.pool).await, TABLES_BEFORE_OUTREACH);
@@ -1487,8 +1717,8 @@ async fn distribution_down_keeps_a_recipient_kind_a_person_holds() {
     let db = TestDb::new().await;
     outreach_down(&db.pool).await;
     let dir = migrations_dir();
-    let up = std::fs::read_to_string(dir.join("0021_distribution.up.sql")).unwrap();
-    let down = std::fs::read_to_string(dir.join("0021_distribution.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0025_distribution.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0025_distribution.down.sql")).unwrap();
     let (ws, _) = db.seed_workspace("distribution-kind-kept").await;
     let person = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
@@ -1520,7 +1750,7 @@ async fn distribution_down_keeps_a_recipient_kind_a_person_holds() {
     assert_eq!(kept, "business");
 }
 
-/// The tables of `0022_outreach`, each with its one row-level policy.
+/// The tables of `0026_outreach`, each with its one row-level policy.
 const OUTREACH_TABLES: [(&str, &str); 4] = [
     ("outreach_templates", "outreach_templates_ws"),
     ("outreach_campaigns", "outreach_campaigns_ws"),
@@ -1528,7 +1758,7 @@ const OUTREACH_TABLES: [(&str, &str); 4] = [
     ("outreach_sends", "outreach_sends_ws"),
 ];
 
-/// The indexes of `0022_outreach` beyond its primary keys and unique constraints.
+/// The indexes of `0026_outreach` beyond its primary keys and unique constraints.
 const OUTREACH_INDEXES: [&str; 9] = [
     "outreach_templates_list",
     "outreach_campaigns_running",
@@ -1545,8 +1775,8 @@ const OUTREACH_INDEXES: [&str; 9] = [
 async fn outreach_migration_is_repeatable_and_grants_only_the_system_owner_and_manager() {
     let db = TestDb::new().await; // already migrated up, 0022 included
     let dir = migrations_dir();
-    let up = std::fs::read_to_string(dir.join("0022_outreach.up.sql")).unwrap();
-    let down = std::fs::read_to_string(dir.join("0022_outreach.down.sql")).unwrap();
+    let up = std::fs::read_to_string(dir.join("0026_outreach.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0026_outreach.down.sql")).unwrap();
     let as_strings =
         |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
     let keys = ["outreach.work", "outreach.manage"];

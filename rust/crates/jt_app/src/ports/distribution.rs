@@ -1,6 +1,6 @@
 //! Lead distribution's persistence (spec 2026-10-30-leads-pool-outreach-design.md §3.9, §4.2,
 //! §6.1): each member's distribution settings, the workspace's ordered rules, and the log of every
-//! decision about a journey's owner (`0021_distribution`). The decision itself is
+//! decision about a journey's owner (`0025_distribution`). The decision itself is
 //! `jt_inbox::choose`'s; the journey's `owner_id` stays the truth for ownership.
 //!
 //! Contracts every adapter keeps beyond the module's:

@@ -1,5 +1,5 @@
 //! Lead distribution's repository contracts (`jt_testkit::distribution_contract`) against
-//! PostgreSQL (migration `0021_distribution`), row-level security binding; and what only
+//! PostgreSQL (migration `0025_distribution`), row-level security binding; and what only
 //! PostgreSQL shows: the assignment log's trigger.
 
 use std::sync::Arc;

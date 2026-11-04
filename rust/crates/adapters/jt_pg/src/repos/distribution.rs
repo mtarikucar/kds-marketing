@@ -1,5 +1,5 @@
 //! `rep_profiles`, `distribution_rules` and `journey_assignments` (migration
-//! `0021_distribution`). A rule's `match` and `pool` and an assignment's `by_actor` keep the
+//! `0025_distribution`). A rule's `match` and `pool` and an assignment's `by_actor` keep the
 //! domain's encoding as JSON; one live decision per journey is the partial unique index
 //! `journey_assignments_live`, and the trigger `journey_assignments_append_only` keeps the log
 //! append-only.
