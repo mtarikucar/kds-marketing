@@ -243,12 +243,14 @@ async fn ad_account_facts(
 /// The connection step (see [`jt_app::ports::connectors::Connector::on_connected`]):
 /// - `facebook_page`, `messenger`, `instagram_dm` (a Page token, or a pasted one): subscribes the
 ///   page (`POST /{page}/subscribed_apps`; Instagram messages arrive through the linked page's
-///   subscription) to [`PAGE_MESSAGING_FIELDS`], and to [`PAGE_LEADGEN_FIELD`] too when the
-///   grant holds [`LEADS_RETRIEVAL`] ([`grants_leads`]), and reports
-///   `{"subscribed": true, "leadgen": bool}`. Meta refuses the whole subscription when one field
-///   lacks its permission, so a refusal of the lead-gen field ([`refuses_leadgen`]) is asked
-///   again once without it (`"leadgen": false`): the messages arrive whatever becomes of the
-///   leads. Any other failure is the error;
+///   subscription) to [`PAGE_MESSAGING_FIELDS`], to [`PAGE_LEADGEN_FIELD`] too when the grant
+///   holds [`LEADS_RETRIEVAL`] ([`grants_leads`]) and to [`PAGE_FEED_FIELD`] when it enables
+///   comments: one union, whatever kind asks ([`subscribe_page`]). Meta refuses the whole
+///   subscription when one field lacks its permission, so a refusal naming an optional field
+///   ([`refuses_field`]) is asked again without it: the messages arrive whatever becomes of the
+///   leads and comments. Any other failure is the error;
+/// - `instagram` with an Instagram Login token whose grant enables comments: subscribes the
+///   account to its comments ([`subscribe_instagram`]), best effort;
 /// - `whatsapp_cloud`: subscribes the WhatsApp Business Account when its id is known
 ///   (`POST /{waba}/subscribed_apps`); once subscribed, sends that account's webhooks to this
 ///   instance ([`override_callback`]: Meta's webhook override,
