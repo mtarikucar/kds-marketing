@@ -1768,6 +1768,78 @@ pub async fn outbox_rebinds_its_generation(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
+/// A capability's uncertain public replies: its own `unknown` rows naming a public item, newest
+/// first, within the limit; not another capability's, not one naming no item, not another
+/// state's, not another workspace's.
+pub async fn outbox_lists_uncertain_public_replies(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let elsewhere = f.account("instagram", "ig-2").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let d = f.public_conversation(p.id, elsewhere).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let (old, _) = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "unknown", "public", &agent, 1)
+        .await;
+    let (new, _) = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "unknown", "private", &agent, 3)
+        .await;
+    f.public_outbox_for(&c, PublicItemId::new_v7(), "sent", "public", &agent, 2)
+        .await;
+    f.public_outbox_for(&d, PublicItemId::new_v7(), "unknown", "public", &agent, 4)
+        .await;
+    // An uncertain direct message of the same capability: it names no public item.
+    let mut m = f.message(c.id);
+    m.direction = Direction::Outbound;
+    m.author = Author::Agent;
+    m.external_id = None;
+    m.status = MsgStatus::Unknown;
+    let at = FIXED_NOW + Duration::minutes(5);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.messages().insert_if_new(m.clone()).await.unwrap();
+    t.outbox()
+        .insert(OutboxRow {
+            id: Uuid::now_v7(),
+            workspace_id: f.ws,
+            conversation_id: c.id,
+            message_id: m.id,
+            capability_id: cap,
+            intent: json!({"kind": "reply"}),
+            expected_generation: c.executor_generation,
+            fence_snapshot: None,
+            conversation_merged: false,
+            state: "unknown".into(),
+            attempts: 0,
+            last_error: None,
+            created_at: at,
+            updated_at: at,
+        })
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let ids = |rows: Vec<OutboxRow>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(t.outbox().uncertain_public_replies(cap, 10).await.unwrap()),
+        [new, old]
+    );
+    assert_eq!(
+        ids(t.outbox().uncertain_public_replies(cap, 1).await.unwrap()),
+        [new]
+    );
+    drop(t);
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert!(
+        other
+            .outbox()
+            .uncertain_public_replies(cap, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// The outbox row of an outbound message, in its own workspace only.
 pub async fn outbox_row_of_a_message(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow.clone()).await;

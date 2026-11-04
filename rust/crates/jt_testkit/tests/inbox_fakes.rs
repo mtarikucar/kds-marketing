@@ -107,6 +107,12 @@ async fn outbox_row_of_a_message() {
 }
 
 #[tokio::test]
+async fn outbox_lists_uncertain_public_replies() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::outbox_lists_uncertain_public_replies(uow).await;
+}
+
+#[tokio::test]
 async fn outbox_rebinds_its_generation() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::outbox_rebinds_its_generation(uow).await;

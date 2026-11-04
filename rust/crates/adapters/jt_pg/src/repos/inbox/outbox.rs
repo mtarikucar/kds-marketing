@@ -134,6 +134,24 @@ impl OutboxRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "read public replies in flight"))
     }
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError> {
+        many!(
+            sqlx::query_scalar(
+                "select to_jsonb(o) from outbox o where workspace_id=$1 and capability_id=$2 \
+                 and state='unknown' and intent#>>'{public,item_id}' is not null \
+                 order by updated_at desc, id desc limit $3"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(capability.as_uuid())
+            .bind(i64::from(limit.clamp(1, MAX_INBOX_PAGE))),
+            self,
+            OutboxRow
+        )
+    }
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
         one!(
             sqlx::query_scalar(

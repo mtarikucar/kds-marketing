@@ -303,6 +303,44 @@ async fn comments_poll_binds_unknown_replies_by_reconciliation() {
     ));
 }
 
+#[tokio::test]
+async fn comments_poll_reconciles_past_other_uncertain_rows() {
+    let r = rig().await;
+    capability(&r.w, IG, IG_COMMENTS).await;
+    r.poller.push_poll(Ok((
+        vec![draft(envelope("c-1", None, "Fiyatı nedir?", false))],
+        json!({}),
+    )));
+    jobs::run_comments_poll(&r.w.deps, FIXED_NOW).await;
+    uncertain_reply(&r, "c-1", "DM attık.");
+    // Older uncertain sends that will never settle (direct messages): more than one run reconciles.
+    let template = r.w.uow.snapshot().inbox.outbox[0].clone();
+    r.w.uow.edit(move |s| {
+        for n in 0..60 {
+            s.inbox.outbox.push(OutboxRow {
+                id: uuid::Uuid::now_v7(),
+                intent: json!({"kind": "reply"}),
+                created_at: FIXED_NOW - Duration::days(2) + Duration::minutes(n),
+                updated_at: FIXED_NOW - Duration::days(2) + Duration::minutes(n),
+                ..template.clone()
+            });
+        }
+    });
+    jobs::run_comments_poll(&r.w.deps, FIXED_NOW + Duration::minutes(5)).await;
+    let targets: Vec<Vec<String>> = r
+        .poller
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            PollCall::Reconcile { targets, .. } => {
+                Some(targets.into_iter().map(|t| t.external_id).collect())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(targets, [vec!["c-1".to_owned()]]);
+}
+
 /// The provider is asked between two transactions: what another writer commits while it answers
 /// (here, another run's cursor) is seen afterwards, and this run's drafts and cursor are then
 /// dropped rather than written over it.

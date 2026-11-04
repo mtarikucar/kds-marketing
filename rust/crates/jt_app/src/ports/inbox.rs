@@ -564,6 +564,15 @@ pub trait OutboxRepo: Send + Sync {
     /// The outbox row that sends outbound message `message`, if any (the oldest, should there be
     /// more than one).
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError>;
+    /// Capability `capability`'s uncertain public replies: its outbox rows in state `unknown` whose
+    /// intent names a public item (`intent.public.item_id`), the most recently updated first, at
+    /// most `limit`. Only that capability's: uncertain rows of other capabilities or channels,
+    /// which may never settle, never take their places.
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError>;
 }
 
 impl MergeSnapshot {

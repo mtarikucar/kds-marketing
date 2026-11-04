@@ -1843,6 +1843,28 @@ impl OutboxRepo for MemTenant {
             .map(|r| r.state.clone())
             .collect())
     }
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError> {
+        let mut rows: Vec<OutboxRow> = self
+            .state()
+            .inbox
+            .outbox
+            .iter()
+            .filter(|r| {
+                r.workspace_id == self.ws
+                    && r.capability_id == capability
+                    && r.state == "unknown"
+                    && r.intent["public"]["item_id"].is_string()
+            })
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| (b.updated_at, b.id).cmp(&(a.updated_at, a.id)));
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
         Ok(self
             .state()

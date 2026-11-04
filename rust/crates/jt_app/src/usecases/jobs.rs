@@ -1822,7 +1822,7 @@ pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
                     let mut r = deps.uow.tenant(ws).await?;
                     let sealed = r.capabilities().read_sealed(cap.id).await?;
                     let cursor = r.public_cursors().get(cap.id).await?;
-                    let targets = uncertain_targets(r.as_mut(), cap.id, now).await?;
+                    let targets = uncertain_targets(r.as_mut(), cap.id).await?;
                     (sealed, cursor, targets)
                 };
                 let Some(sealed) = sealed else {
@@ -1898,17 +1898,18 @@ pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
 }
 
 /// The items of capability `cap` whose public reply of ours is uncertain (an outbox row in state
-/// `unknown` naming the item), as the provider's targets, at most [`MAX_RECONCILED`].
+/// `unknown` naming the item), as the provider's targets: the most recent [`MAX_RECONCILED`] of
+/// the capability's own (`OutboxRepo::uncertain_public_replies`), so that rows of other
+/// capabilities or channels which never settle cannot crowd them out.
 async fn uncertain_targets(
     r: &mut dyn TenantRepos,
     cap: CapabilityId,
-    now: OffsetDateTime,
 ) -> Result<Vec<crate::ports::connectors::PublicTarget>, AppError> {
     let mut targets = Vec::new();
     let mut seen = BTreeSet::new();
     for row in r
         .outbox()
-        .list_pending("unknown", now, MAX_RECONCILED)
+        .uncertain_public_replies(cap, MAX_RECONCILED)
         .await?
     {
         let Some(item) = row.intent["public"]["item_id"]
@@ -1917,7 +1918,7 @@ async fn uncertain_targets(
         else {
             continue;
         };
-        if row.capability_id != cap || !seen.insert(item) {
+        if !seen.insert(item) {
             continue;
         }
         let Some(item) = r
