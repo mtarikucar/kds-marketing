@@ -3,6 +3,7 @@
 mod control;
 mod materials;
 mod paid;
+mod posts;
 mod queue;
 mod records;
 use crate::{

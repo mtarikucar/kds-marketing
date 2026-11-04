@@ -303,6 +303,9 @@ impl TenantRepos for FailingTenant {
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self.0.studio_materials()
     }
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self.0.studio_posts()
+    }
     fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
         self.0.calls()
     }

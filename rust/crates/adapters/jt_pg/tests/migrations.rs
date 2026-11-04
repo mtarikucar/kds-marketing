@@ -32,18 +32,18 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
 /// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge` and the
 /// device commands and device files of `0017_device_bridge`; then the materials library's seven of
-/// `0021_studio_materials`.
-const TABLES_AFTER_ALL: i64 = 81;
+/// `0021_studio_materials` and the planned posts, package requests and posting policy of
+/// `0022_studio_posts`.
+const TABLES_AFTER_ALL: i64 = 84;
 
 /// Migrations `0001_foundation` through `0018_tiktok_webhooks`, `0021_studio_materials`,
-/// `0023_oauth_flow` and `0024_whatsapp_erasure`.
-const MIGRATIONS: i64 = 21;
+/// `0022_studio_posts`, `0023_oauth_flow` and `0024_whatsapp_erasure`.
+const MIGRATIONS: i64 = 22;
 
-/// The migration versions. `0019`, `0020` and `0022` belong to parallel branches (inbox comments
-/// and marketplace, the prospect pool, the studio materials' posts): each adds its version here
-/// when it merges.
+/// The migration versions. `0019` and `0020` belong to parallel branches (inbox comments and
+/// marketplace, the prospect pool): each adds its version here when it merges.
 fn versions() -> Vec<i64> {
-    (1..=18).chain([21, 23, 24]).collect()
+    (1..=18).chain([21, 22, 23, 24]).collect()
 }
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
@@ -200,6 +200,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     for name in [
         "0024_whatsapp_erasure",
         "0023_oauth_flow",
+        "0022_studio_posts",
         "0021_studio_materials",
         "0018_tiktok_webhooks",
         "0017_device_bridge",
@@ -937,8 +938,14 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
-    // Newest first: the call tables reference the inbox tables, the materials library the Studio
-    // tables.
+    // Newest first: the call tables reference the inbox tables, the planned posts the materials
+    // library and the Studio tables, the materials library the Studio tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0022_studio_posts.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0021_studio_materials.down.sql"
     ))
@@ -1085,7 +1092,14 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
-    // Newest first: the materials library references the Studio tables.
+    // Newest first: the planned posts reference the materials library and the Studio tables, the
+    // materials library the Studio tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0022_studio_posts.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0021_studio_materials.down.sql"
     ))
@@ -1159,16 +1173,29 @@ async fn studio_migration_up_down_up() {
     let (ws, _) = db.seed_workspace("studio-roundtrip").await;
     let up = include_str!("../../../../migrations/0009_studio.up.sql");
     let down = include_str!("../../../../migrations/0009_studio.down.sql");
-    // The materials library references the Studio tables: reverted first, applied again last.
+    // The materials library references the Studio tables, the planned posts both: reverted first,
+    // newest first, and applied again last.
     let materials_up = include_str!("../../../../migrations/0021_studio_materials.up.sql");
     let materials_down = include_str!("../../../../migrations/0021_studio_materials.down.sql");
+    let posts_up = include_str!("../../../../migrations/0022_studio_posts.up.sql");
+    let posts_down = include_str!("../../../../migrations/0022_studio_posts.down.sql");
     let id = Uuid::now_v7();
     let h = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
-    for sql in [materials_down, up, down, down, up, up, materials_up] {
+    for sql in [
+        posts_down,
+        materials_down,
+        up,
+        down,
+        down,
+        up,
+        up,
+        materials_up,
+        posts_up,
+    ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);

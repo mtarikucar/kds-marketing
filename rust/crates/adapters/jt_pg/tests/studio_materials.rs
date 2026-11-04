@@ -31,6 +31,37 @@ async fn olays_and_materials_round_trip_and_one_file_is_one_material() {
             .unwrap(),
         Some(material.clone())
     );
+    // The same bytes under any file: found by the file's hash, erased or deleted ones too.
+    let file = tx
+        .studio()
+        .get_file(material.file_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let same = tx
+        .studio_materials()
+        .material_by_sha256(&file.sha256)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(same.workspace_id, f.ws);
+    let mut deleted = file.clone();
+    deleted.deleted_at = Some(FIXED_NOW);
+    tx.studio().save_file(deleted).await.unwrap();
+    assert!(
+        tx.studio_materials()
+            .material_by_sha256(&file.sha256)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        tx.studio_materials()
+            .material_by_sha256(&"f".repeat(64))
+            .await
+            .unwrap(),
+        None
+    );
     let olay_id = material.olay_id().unwrap();
     let mut olay = tx
         .studio_materials()
@@ -117,6 +148,14 @@ async fn another_workspace_sees_none_of_it() {
             .await
             .unwrap(),
         None
+    );
+    // Its own file's hash finds only its own materials.
+    assert!(
+        tx.studio_materials()
+            .material_by_sha256(&"0".repeat(64))
+            .await
+            .unwrap()
+            .is_none_or(|m| m.workspace_id == other.ws)
     );
     assert!(
         tx.studio_materials()
@@ -300,6 +339,10 @@ async fn the_down_refuses_while_the_library_holds_anything() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations");
     let up = std::fs::read_to_string(dir.join("0021_studio_materials.up.sql")).unwrap();
     let down = std::fs::read_to_string(dir.join("0021_studio_materials.down.sql")).unwrap();
+    // The planned posts reference the olays: reverted before, applied again after.
+    let posts_up = std::fs::read_to_string(dir.join("0022_studio_posts.up.sql")).unwrap();
+    let posts_down = std::fs::read_to_string(dir.join("0022_studio_posts.down.sql")).unwrap();
+    sqlx::raw_sql(&posts_down).execute(&db.pool).await.unwrap();
     // Empty: down and up again, each twice.
     for _ in 0..2 {
         sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
@@ -307,6 +350,7 @@ async fn the_down_refuses_while_the_library_holds_anything() {
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
     }
+    sqlx::raw_sql(&posts_up).execute(&db.pool).await.unwrap();
     let mut tx = uow.tenant(ws).await.unwrap();
     tx.studio_materials()
         .insert_olay(confirmed_olay(ws))
