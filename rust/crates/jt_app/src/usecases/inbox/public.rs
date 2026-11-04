@@ -1194,10 +1194,10 @@ pub struct ApproveInput {
 /// held for another try. Then the full fence runs again with the approver as the author; a
 /// refusal is the error, and only one saying the item can no longer take the reply
 /// (`item_removed`, `deadline_passed`, `already_answered`, `item_not_in_conversation`,
-/// `reply_in_flight`) also refuses the reply (the panel shows why); any other (`capability_down`,
-/// `workspace_inactive`, …) leaves it held. Once fenced, the message's author becomes the approver
-/// (the drafter stays in `intent.public.drafted_by`), the row is queued and sent. Ledger
-/// `inbox.public.approved {edited}`.
+/// `reply_in_flight`, `private_window_closed`, `private_reply_used`) also refuses the reply (the
+/// panel shows why); any other (`capability_down`, `workspace_inactive`, …) leaves it held. Once
+/// fenced, the message's author becomes the approver (the drafter stays in
+/// `intent.public.drafted_by`), the row is queued and sent. Ledger `inbox.public.approved {edited}`.
 pub async fn approve(
     deps: &Deps,
     ctx: &Ctx,
