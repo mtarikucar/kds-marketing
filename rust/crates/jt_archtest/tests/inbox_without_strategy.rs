@@ -232,8 +232,7 @@ async fn a_workspace_without_a_strategy_reads_and_answers_its_customers_on_both_
     assert_eq!(status, StatusCode::OK, "{listed}");
     assert!(listed.to_string().contains(&theirs.to_string()), "{listed}");
     let path = format!("/api/inbox/conversations/{theirs}/messages");
-    let (status, messages) =
-        answer(send(app, panel(Method::GET, &path, cookie, None)).await).await;
+    let (status, messages) = answer(send(app, panel(Method::GET, &path, cookie, None)).await).await;
     assert_eq!(status, StatusCode::OK, "{messages}");
     connector.push_send_text(accepted());
     let path = format!("/api/inbox/conversations/{theirs}/reply");
