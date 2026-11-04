@@ -7,11 +7,13 @@
 //! row-level security does not bind ([`check_database_role`]), apply pending migrations, build the
 //! shared ports once and refill the egress tenant tier from the capability records ([`boot`]),
 //! log which provider apps are configured and the public address ([`log_providers`]), create the
-//! first platform operator when configured, bind the listener, start the scheduled jobs
-//! ([`crate::scheduler`], unless `JEETA_JOBS_ENABLED=false`), then serve until SIGINT or SIGTERM.
-//! On the signal no new job run starts; open connections drain for at most [`DRAIN_TIMEOUT`], then
-//! the job runs still going get up to [`scheduler::SHUTDOWN_GRACE`] to finish before they are
-//! aborted.
+//! first platform operator when configured, listen for SIGINT and SIGTERM ([`Signals`]), bind the
+//! listener and log `jeeta is listening`, start the scheduled jobs ([`crate::scheduler`], unless
+//! `JEETA_JOBS_ENABLED=false`), then serve until one of the signals. A signal before the handlers
+//! are in place ends the start at once (the signal's default action), with nothing served yet;
+//! one from the `listening` line on shuts the server down: no new job run starts, open
+//! connections drain for at most [`DRAIN_TIMEOUT`], then the job runs still going get up to
+//! [`scheduler::SHUTDOWN_GRACE`] to finish before they are aborted.
 
 use std::future::IntoFuture;
 use std::path::Path;
@@ -82,6 +84,9 @@ pub async fn run(config: Config) -> Result<()> {
     let gate = strategy_gate(pool.clone());
 
     let app = app_with_probes(deps.clone(), gate, &config, Some(runtime_ops.clone()));
+    // Before the listener is announced: whoever stops the process once it is listening (a
+    // supervisor, a deploy) gets the drain, never the default action that kills it outright.
+    let signals = Signals::install()?;
     let listener = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("cannot listen on {} ({})", config.bind, config::BIND))?;
@@ -95,7 +100,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     let wal_probe = runtime_ops.start_wal_probe(config.wal_archive_dir.clone());
     let jobs = scheduler::start(&config, Arc::new(deps));
-    let served = serve(listener, app, jobs.stopper()).await;
+    let served = serve(listener, app, signals, jobs.stopper()).await;
     if let Some(probe) = wal_probe {
         probe.abort();
         let _ = probe.await;
@@ -427,17 +432,17 @@ fn panel_status(dir: Option<&Path>) -> String {
     }
 }
 
-/// Serves until SIGINT or SIGTERM, then calls `on_signal` (which stops the scheduled jobs from
-/// starting new runs), stops accepting and lets open connections finish for at most
-/// [`DRAIN_TIMEOUT`]. Every connection gives up a write its client has not taken for
-/// [`net::WRITE_TIMEOUT`] ([`net::TimedListener`]): a client that stopped reading does not keep
-/// its socket.
+/// Serves until SIGINT or SIGTERM (one received since `signals` were installed counts), then
+/// calls `on_signal` (which stops the scheduled jobs from starting new runs), stops accepting and
+/// lets open connections finish for at most [`DRAIN_TIMEOUT`]. Every connection gives up a write
+/// its client has not taken for [`net::WRITE_TIMEOUT`] ([`net::TimedListener`]): a client that
+/// stopped reading does not keep its socket.
 async fn serve(
     listener: TcpListener,
     app: Router,
+    mut signals: Signals,
     on_signal: impl FnOnce() + Send + 'static,
 ) -> Result<()> {
-    let mut signals = Signals::install()?;
     let (stop, stopped) = oneshot::channel::<()>();
     let server = axum::serve(net::TimedListener::new(listener, net::WRITE_TIMEOUT), app)
         .with_graceful_shutdown(async move {
@@ -474,7 +479,9 @@ async fn serve(
     Ok(())
 }
 
-/// SIGINT and SIGTERM, installed before serving so a failure stops the start.
+/// SIGINT and SIGTERM, installed before the listener is announced: a signal from then on is
+/// caught (and kept until [`serve`] waits for it) instead of ending the process, and a failure to
+/// install stops the start.
 #[cfg(unix)]
 struct Signals {
     interrupt: tokio::signal::unix::Signal,
