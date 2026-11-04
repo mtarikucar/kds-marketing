@@ -20,6 +20,7 @@ mod olays;
 mod shoots;
 
 pub use calendar::*;
+pub(crate) use capture::video_ms_of;
 pub use items::*;
 pub(crate) use kvkk::erase_person;
 pub use olays::*;

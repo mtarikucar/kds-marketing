@@ -229,13 +229,21 @@ async fn normalize(
 /// Checks a submission under the control fence: the slot's chain, every medium a material, the
 /// subject named (a planned post's own by default, and no other: spec 2026-11-03 D28), the
 /// adaptations naming the slot's account, and for a planned post the media its format takes on
-/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force and
-/// the subject.
+/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force, the
+/// subject and, for a story, its one medium's material (its file is checked by the caller).
 async fn validate(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     i: &PieceInput,
-) -> Result<(Slot, jt_strategy::StrategyVersion, Subject), AppError> {
+) -> Result<
+    (
+        Slot,
+        jt_strategy::StrategyVersion,
+        Subject,
+        Option<jt_studio::Material>,
+    ),
+    AppError,
+> {
     let frame = gated(r, ctx).await?;
     r.studio_control().lock_control().await?;
     let s = r
@@ -357,8 +365,11 @@ async fn validate(
                 "the post's format takes other media on this channel",
             ));
         }
+        if p.format == PostFormat::Story {
+            return Ok((s, frame, subject, materials.into_iter().next()));
+        }
     }
-    Ok((s, frame, subject))
+    Ok((s, frame, subject, None))
 }
 /// What `studio.piece_submit`'s request key keeps (spec 2026-11-03 D40): the answer without its
 /// piece and its material check, which hold the caption and what it matched (a client's name, an
@@ -439,7 +450,17 @@ async fn submit(
     {
         return replayed(r.as_mut(), v, ctx.now).await;
     }
-    let (s, frame, subject) = validate(r.as_mut(), ctx, &i).await?;
+    let (s, frame, subject, story) = validate(r.as_mut(), ctx, &i).await?;
+    // A story's one medium: what Instagram takes (a JPEG up to 8 MB, an MP4 of 3 to 60 s), the
+    // refusal saying what to fix.
+    if let Some(m) = &story
+        && let Some(refusal) = super::posts::story_refusal(d, r.as_mut(), m).await?
+    {
+        return Err(AppError::validation(
+            "the story's medium is not one Instagram takes",
+            json!({"field":"media","reason":refusal.code(),"format":PostFormat::Story}),
+        ));
+    }
     for f in &stored.files {
         r.studio().save_file(f.clone()).await?;
     }

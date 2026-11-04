@@ -3,7 +3,7 @@
 //! header at a time to `moov/mvhd`, the boxes in between skipped unread. Other types name none.
 //! What is read is a suggestion of the material's olay, never a check of the file.
 use crate::{error::AppError, ports::files::StoredFile, usecases::Deps};
-use jt_studio::{capture_time, mp4_box_header, mp4_mvhd_capture_time};
+use jt_studio::{capture_time, mp4_box_header, mp4_moov_duration_ms, mp4_mvhd_capture_time};
 use time::OffsetDateTime;
 
 /// The bytes of a JPEG read for its capture time: its EXIF `APP1` segment is at most 64 KiB and
@@ -15,6 +15,9 @@ const MAX_BOXES: usize = 64;
 const BOX_HEAD: usize = 16;
 /// The largest `mvhd` box read (version 1: 120 bytes).
 const MAX_MVHD: u64 = 256;
+/// The largest `moov` box read for a video's length: a story's video (at most a minute) has a
+/// small one; a larger one names no length the server reads.
+const MAX_MOOV: u64 = 4 * 1024 * 1024;
 
 /// A box found in the walk: where its payload starts and where it ends, in the file.
 struct Found {
@@ -54,6 +57,24 @@ pub(crate) async fn capture_time_of(
         }
         _ => Ok(None),
     }
+}
+
+/// How long the video `f` lasts, in milliseconds, as its `moov` box says (`mvhd`, or a
+/// fragmented video's `mvex/mehd`): its box headers walked to `moov`, then that box alone, never
+/// the media data. `None` when it says nothing the server reads.
+pub(crate) async fn video_ms_of(d: &Deps, f: &StoredFile) -> Result<Option<u64>, AppError> {
+    let Some(moov) = find(d, f, 0, f.size_bytes, b"moov").await? else {
+        return Ok(None);
+    };
+    let len = moov.end - moov.payload;
+    if len > MAX_MOOV {
+        return Ok(None);
+    }
+    let payload = d
+        .files
+        .read_range(f.workspace_id, f.id, moov.payload, len as usize)
+        .await?;
+    Ok(mp4_moov_duration_ms(&payload))
 }
 
 /// The first box of type `kind` among the boxes from byte `at` to byte `end` of `f`, reading
