@@ -794,7 +794,7 @@ async fn three_thousand_marker_lookups_are_bounded_and_chunked() {
         .map(|i| lead(&format!("scale-{i}")))
         .collect::<Vec<_>>();
     let rows=(0..1500).map(|i| json!({"id":entity_id(ws,&format!("scale-{}",2*i),"person"),"workspace_id":ws,
-        "display_name":"synthetic","company":"","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z",
+        "display_name":"synthetic","company":"","recipient_kind":"unknown","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z",
         "first_touch":{"source":"import","kind":"import","system":"v1","v1_leads":[{"v1_lead_id":format!("scale-{}",2*i)},{"v1_lead_id":format!("scale-{}",2*i+1)}]}})).collect::<Vec<_>>();
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     sqlx::query("insert into people select * from jsonb_populate_recordset(null::people,$1)")
