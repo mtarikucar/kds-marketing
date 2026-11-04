@@ -532,3 +532,30 @@ Decisions taken while building (2026-11-04):
 
 The owner left Q1–Q6 of the first draft to the coordinator, who answered them the same day: Q1 → D13,
 Q2 → D16, Q3 → D17, Q4–Q5 → D18, Q6 → D19. No question is open.
+
+## 16. What is built (2026-11-04)
+
+Merged with PR #394 into `feat/rust-panel-money-inputs` (072a57da); the panel's posting views
+and these documents follow in their own PR.
+
+- **Gate (§5.5, §5.6, D1, D2):** submission refuses a piece with no eligible anchor; publish
+  re-checks and holds (`material_check_hold`); pieces from before hold with `no_material`.
+- **Library (§4, §5.2, §9):** olays, materials (capture time from the file's head, D41; one
+  material per byte-identical file, D36), tags, permissions, calendar and materials policy,
+  çekim listesi, KVKK erasure and 24-month retention, receipts with ids only (D40), MCP twins
+  and the human decisions panel-only.
+- **Truth check (§7):** caption findings at submission and publish, released by a human for one
+  revision and digest; TikTok's posting-screen title scanned.
+- **Olay-driven publishing (§14, D20–D34, D46–D59):** migration `0022`; the three triggers
+  every 10 minutes; `studio.posts_propose` all-or-nothing; preparation from `prep_start_at`;
+  grace, then `missed_grace`; caps, spacing and quiet hours in the policy's zone; learning per
+  format × olay kind × hypothesis; the weekly summary; the one-time retirement of the weekly
+  quotas' slots.
+- **Panel (§10):** the Materyaller tab (Yükle, Olaylar, Materyal, Takvim, Çekim listesi) and
+  Today's material check; the Paylaşımlar tab (Plan: the requests waiting for the agent and the
+  planned posts; Haftalık özet; Paylaşım ayarları, an owner's or manager's).
+
+Not built, by decision: auto-ingest from WhatsApp or the mailbox (§13); slot briefs
+(`studio_slot_briefs`, §5.4, superseded by planned posts); the calendar's "dates missing"
+items (D49); stories on any channel (D30: Instagram Stories is its own follow-up, Facebook Page
+stories later); hiding faces for `product_only` (D39).
