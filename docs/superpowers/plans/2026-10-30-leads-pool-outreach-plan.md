@@ -1411,6 +1411,22 @@ comment; `Permission` union + four keys; `WorkKind` + nine kinds), `App.tsx` rou
 ("Aday havuzu", "Kampanyalar"), `i18n/{tr,en}.json` (`nav.*`, `permissions.*`), `layout/Shell.test.tsx`.
 - [ ] Tests: `nav_lists_new_pages_for_permitted_users`, `permissions_copy_parity`; **commit** `feat(panel): leads
   plumbing`.
+- As built (`f695cb31`, branch `feat/leads-panel`): `api/{prospects,research,distribution,outreach}.ts` wrap every
+  §7.1 row of those four domains (the inbox rows are L8-T5's); `api/types.ts` holds their shapes, each naming its Rust
+  source; `jt_prospects::Evidence` is `FieldEvidence` there (the capabilities' `Evidence` holds the name). The
+  `Permission` union already had the pool's two keys (L1) and gains `outreach.work`/`outreach.manage` with their copy.
+  `WorkKind` gains the nine kinds; the four outreach ones (`promoted_not_contacted`, `campaign_approval {campaign_id,
+  revision}`, `campaign_blocked {campaign_id, reason}`, `personalization_due {campaign_id, count}`) follow spec
+  §3.17 until L4-T7 builds them. Home gets a line of copy per new kind (without counts, through `itemText`'s default);
+  their `itemLink`s and `home_renders_every_new_kind` stay L8-T5's. The menu's first permission-gated entries:
+  "Aday havuzu" needs `prospects.work`, "Kampanyalar" `outreach.work`. Shapes assumed while the outreach use cases
+  are missing (marked in `api/outreach.ts`): `GET .../campaigns/{id}/enrollments?status&limit&after` →
+  `{items: EnrollmentRow[], next: EnrollmentId | null}` (the repository's `EnrollmentQuery`/`EnrollmentPage`);
+  `POST /api/outreach/enrollments/{id}/stop` with `{}` (the panel reads the list again, never the answer);
+  `POST .../campaigns/{id}/test` with `{}` (a wrapper only, no button); `GET /api/outreach/report?campaign_id&from&to&
+  group_by` → `{group_by, rows: [{key, enrolled, skipped{}, sent, failed, bounced, complained, replied,
+  replied_threaded, unsubscribed, clicked, automated_clicks, meetings, won, stopped{}}]}` (spec §3.16; no page until
+  L8-T6). The outreach routes being added at §7.1's paths over `usecases::outreach` types need no change here.
 
 ### Task L8-T2: prospect pool and research tasks
 **Files:** `pages/ProspectsPage.tsx` (pattern `PeoplePage` + `DataTable` from `TeamPage`), `pages/ProspectDetail.tsx`
@@ -1418,17 +1434,56 @@ comment; `Permission` union + four keys; `WorkKind` + nine kinds), `App.tsx` rou
 - [ ] Tests: `filters_and_paging`, `bulk_promote_shows_per_item_outcomes`, `reject_requires_reason`,
   `dnc_requires_typed_confirmation`, `erase_requires_SIL`, `evidence_links_open_safely`, `score_history_shows_reasons`,
   `task_progress_and_create_form`; **commit** `feat(panel): the prospect pool`.
+- As built (`2f7c26b9`): `pages/{ProspectsPage,ProspectDetail,ResearchTasksPage,LeadsShared}.tsx`, `lib/leads.ts`
+  (`useDraftKey`: one request key per draft, kept across a retry, dropped on an answer; `useInFlight`: the Enter guard;
+  `webUrl`), `test/leads.ts` fixtures. The pool's filters are the five `prospects.list` takes (status, score bucket,
+  research task, city, segment; it refuses unknown keys): spec §9's sector, label and text filters wait for
+  `usecases::prospects::ListInput` to gain them. List rows carry no `origin.via`, so the "Kaynak" column says research task or direct.
+  Bulk promote is one call (outcomes per item); bulk reject and do-not-contact run one call per prospect in turn and
+  list each outcome (one prospect's refusal keeps its dialog open with the reason). Do-not-contact is confirmed by
+  typing `ENGELLE`/`BLOCK`, erasure by `SİL`/`ERASE`; reopen and erase show only with `prospects.manage`, promote
+  only with `inbox.work`. Recorders are named from `GET /api/agents` (connection `client_name`) and `GET /api/team`.
+  A task's found count and newest prospects are read (`tasks_get`) when its progress disclosure opens.
+  `lib/errors.ts` gives the pool's and research's refusal reasons panel copy (`leads.errors.*`). Tests beyond the
+  plan's: `each_row_promote_has_its_own_pending_state`, `a_retried_promotion_reuses_its_request_key`,
+  `reject_from_a_row_needs_a_reason`, `reject_enter_cannot_double_submit`,
+  `the_reject_draft_resets_when_the_prospect_changes`, `erase_and_reopen_need_prospects_manage`,
+  `create_enter_cannot_double_submit`, `each_claim_has_its_own_pending_state`, `names_the_leads_refusals`.
 
 ### Task L8-T3: distribution
 **Files:** `pages/DistributionPage.tsx` (a tab on Team), tests.
 - [ ] Tests: `rules_reorder_and_save`, `rep_can_edit_only_own_row`, `ownerless_count_and_backfill`, `assignment_log`;
   **commit** `feat(panel): lead distribution`.
+- As built (`fab4da29`): `pages/DistributionPage.tsx` at `/team/distribution`; Team and it share `TeamTabs` (shown with
+  `inbox.work`). Rules move with up/down buttons (no drag); match lists are typed comma separated (`ListInput` keeps
+  the text as typed); rules, mode and reassignment limit save whole with `inbox.manage`, everyone else sees them
+  read-only; the draft is rebuilt only when the stored rules change, never on a refetch. The rep table's edit button
+  is on one's own row with `inbox.work` and on every row with `inbox.manage`; the editor is keyed by the member and
+  sends the whole profile (`RepSetInput` replaces it, so hours and away time go back as they are unless changed).
+  Backfill is `inbox.manage`'s and shows the `Distributed` counts; the log filters by member and pages by its cursor.
+  The inbox's "Sahipsiz" queue link waits for L8-T5. Tests beyond the plan's:
+  `rules_save_enter_cannot_double_submit`, `rep_editor_resets_when_another_member_is_chosen`.
 
 ### Task L8-T4: outreach
 **Files:** `pages/{OutreachPage,OutreachCampaign,OutreachTemplates,OutreachSettings}.tsx`, tests.
 - [ ] Tests: `template_editor_renders_sample_and_footer`, `unknown_variable_error_shown`, `audience_preview_skip_reasons`,
   `launch_blocked_reasons_shown`, `approval_card_for_managers_only`, `b2b_section_owner_only_with_ack`,
   `enrollment_stop_per_row`, `deliverability_warning_shown`; **commit** `feat(panel): outreach campaigns`.
+- As built (`039c80bc`): `pages/{OutreachPage,OutreachCampaign,OutreachTemplates,OutreachSettings,OutreachShared}.tsx`,
+  `lib/outreach.ts`; routes `/outreach`, `/outreach/new`, `/outreach/:id`, `/outreach/templates`, `/outreach/settings`.
+  The lock is said on every outreach page while `platform_enabled` is false; launch and resume are disabled with
+  their blockers listed (platform switch, sender identity) and a server refusal is shown in the panel's words. The
+  campaign list has no progress counts (`CampaignRow` carries none): enrolled/sent/replied/unsubscribed wait for
+  `outreach.report` (L4-T6, L8-T6). The template preview runs a TypeScript copy of `jt_outreach`'s grammar and of
+  `Footer::render`'s TR/EN lines (`lib/outreach.ts`, preview only; footer.rs and it change together); unknown
+  variables are named before a save and from a refused one. The audience preview asks `audience_preview` 400 ms
+  after the last edit once a mailbox is chosen. The approval card's button is for `outreach.manage` (the panel's
+  caller is always a person); the B2B section shows for role `owner` with `outreach.manage` and sends `legal_ack`
+  whenever the save opens the basis or turns the İYS lookup off. Enrollment rows carry ids only, so they link to the
+  person and the prospect; each row's stop is its own mutation. Not built here: test send (no button), personalization
+  editing, the report tab (L8-T6). Tests beyond the plan's: `template_editor_resets_on_template_change`,
+  `a_new_template_is_saved_once_with_its_request_key`, `a_new_campaign_is_saved_with_its_steps_and_one_request_key`,
+  `the_lock_is_said_while_the_platform_switch_is_off`, `general_settings_save_once`, `campaigns_with_status_and_the_lock`.
 
 ### Task L8-T5: inbox and home
 **Files:** `pages/InboxJourneyPanel.tsx` (prospect facts, sequence, recipient kind, assignment history),
