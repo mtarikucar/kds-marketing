@@ -1257,3 +1257,44 @@ async fn a_post_with_a_lead_beyond_a_week_is_pending_from_its_prep_start() {
     let pending = work::pending(&w.d, &w.ctx).await.unwrap();
     assert!(pending.slots.iter().any(|s| s.slot.id == w.f.slot.id));
 }
+
+/// Quiet hours (and a day's cap) are read at each post's own time in the policy's zone: a post
+/// after a change of the clocks takes the offset of its day, not that of the proposal's
+/// (review LOW 7, D51).
+#[tokio::test]
+async fn quiet_hours_take_each_posts_own_offset() {
+    let (w, o, ms, q) = requested().await;
+    posts::posting_policy_set(
+        &w.d,
+        &w.ctx,
+        PostingSettings {
+            policy: PostingPolicy::default(),
+            tz: "Europe/Berlin".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let s = Subject::Olay { olay_id: o.id };
+    // 22 October, summer time (UTC+2); 27 October 06:30 UTC is 07:30 in winter time (UTC+1),
+    // inside the quiet hours, though 08:30 at the proposal's offset.
+    let e = propose(
+        &w,
+        NOW,
+        q,
+        "berlin",
+        vec![post(datetime!(2026-10-27 06:30 UTC), &[&ms[0]], s, &w)],
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["items"][0]["reason"], "quiet_hours");
+    let out = propose(
+        &w,
+        NOW,
+        q,
+        "berlin-2",
+        vec![post(datetime!(2026-10-27 07:30 UTC), &[&ms[0]], s, &w)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.posts.len(), 1);
+}

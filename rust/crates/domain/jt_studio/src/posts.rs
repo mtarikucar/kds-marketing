@@ -409,9 +409,19 @@ pub fn grace_until(
     publish_at + policy.grace(format)
 }
 
+/// The workspace's zone as the rules read it: its UTC offset at an instant (the application
+/// passes the posting policy's IANA zone). Each post's hour and day are read at its own time, so
+/// a post after a change of the clocks takes its own day's offset (spec D51).
+pub type LocalOffset<'a> = &'a dyn Fn(OffsetDateTime) -> UtcOffset;
+
+/// `at` in its local time.
+fn local(at: OffsetDateTime, local_offset: LocalOffset) -> OffsetDateTime {
+    at.checked_to_offset(local_offset(at)).unwrap_or(at)
+}
+
 /// The local calendar day of `at`.
-fn local_day(at: OffsetDateTime, local_offset: UtcOffset) -> Date {
-    at.checked_to_offset(local_offset).unwrap_or(at).date()
+fn local_day(at: OffsetDateTime, local_offset: LocalOffset) -> Date {
+    local(at, local_offset).date()
 }
 
 /// The first rule post `item` breaks on its own, in this order: format, media count, lead,
@@ -419,15 +429,11 @@ fn local_day(at: OffsetDateTime, local_offset: UtcOffset) -> Date {
 fn own_refusal(
     item: &PlannedPostInput,
     now: OffsetDateTime,
-    local_offset: UtcOffset,
+    local_offset: LocalOffset,
     policy: &PostingPolicy,
 ) -> Option<PostRefusal> {
     let distinct: BTreeSet<&MaterialId> = item.material_ids.iter().collect();
-    let local_hour = item
-        .publish_at
-        .checked_to_offset(local_offset)
-        .unwrap_or(item.publish_at)
-        .hour();
+    let local_hour = local(item.publish_at, local_offset).hour();
     if !supported_formats(&item.kind_key).contains(&item.format) {
         Some(PostRefusal::FormatUnsupported)
     } else if distinct.len() != item.material_ids.len()
@@ -451,7 +457,7 @@ fn own_refusal(
 fn schedule_refusals<'a>(
     items: impl IntoIterator<Item = (usize, &'a PlannedPostInput)>,
     existing: &[ExistingPost],
-    local_offset: UtcOffset,
+    local_offset: LocalOffset,
     policy: &PostingPolicy,
 ) -> Vec<(usize, PostRefusal)> {
     let mut items: Vec<(usize, &PlannedPostInput)> = items.into_iter().collect();
@@ -495,7 +501,7 @@ fn schedule_refusals<'a>(
 pub fn check_schedule(
     items: &[PlannedPostInput],
     existing: &[ExistingPost],
-    local_offset: UtcOffset,
+    local_offset: LocalOffset,
     policy: &PostingPolicy,
 ) -> Result<(), Vec<(usize, PostRefusal)>> {
     let mut refusals = schedule_refusals(items.iter().enumerate(), existing, local_offset, policy);
@@ -509,7 +515,7 @@ pub fn check_schedule(
 
 /// Validates a proposed package all-or-nothing (spec D27, D29, D30): `Err` lists, by index, the
 /// one reason each failing item is refused. An item's own rules come first (format, media
-/// count, lead from `now`, horizon, quiet hours at `local_offset`); then the items that pass
+/// count, lead from `now`, horizon, quiet hours at each post's own `local_offset`); then the items that pass
 /// them are checked for the daily caps (per channel and local day: the feed formats together,
 /// stories, TikTok videos) and spacing, against `existing` (every post planned or published on
 /// those channels) and the package's earlier posts. Material eligibility is not checked here.
@@ -517,7 +523,7 @@ pub fn validate_package(
     items: &[PlannedPostInput],
     existing: &[ExistingPost],
     now: OffsetDateTime,
-    local_offset: UtcOffset,
+    local_offset: LocalOffset,
     policy: &PostingPolicy,
 ) -> Result<(), Vec<(usize, PostRefusal)>> {
     let mut refusals = Vec::new();
