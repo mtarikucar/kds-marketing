@@ -261,6 +261,7 @@ async fn promote_in(
             company: p.business_name.clone(),
             recipient_kind: RecipientKind::Business,
         }),
+        true,
     )
     .await;
     let matched = match matched {

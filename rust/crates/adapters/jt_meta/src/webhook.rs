@@ -38,6 +38,17 @@
 //! | Messenger / Instagram `messaging[].postback` | `Message` | its `mid`, else `postback:<sender>:<timestamp>` | `{messaging}` |
 //! | Messenger / Instagram `messaging[].delivery.mids[]` | `Status` | `<mid>:delivered` | `{mid, watermark, sender, recipient}` |
 //! | Page `changes[field = leadgen]` | `LeadGen` | `leadgen:<leadgen_id>` | `{leadgen}` (the change's `value`) |
+//! | Page `changes[field = feed]` about a comment (`value.item = comment`), `verb` `add`, `edit`/`edited`, `remove`/`delete` | `Comment` | `comment:<comment_id>:open`, `comment:<comment_id>:edited:<entry's time>`, `comment:<comment_id>:removed` ([`comment_event_id`]) | `{public, provider_item}`: the comment's [`PublicEnvelope`] (`open`, `edited`, `removed`) and the change's `value` |
+//! | Instagram `changes[field = comments]` and `changes[field = live_comments]` (`live`) | `Comment` | `comment:<id>:open` | `{public, provider_item}`, as above |
+//!
+//! A comment's envelope: its author ours when `from.id` is the entry's id (the Page's, the
+//! Instagram account's); a reply's parent and root the comment it answers (a Page's top-level
+//! comment names its post as its `parent_id`); its post (the Page's `post_id`, the Instagram
+//! `media.id`) its subject; its time the change's `created_time`, else (always for Instagram,
+//! whose change carries none) the entry's. The fields are those of Meta's references
+//! <https://developers.facebook.com/docs/graph-api/webhooks/reference/page/> (`feed`) and
+//! <https://developers.facebook.com/docs/graph-api/webhooks/reference/instagram/> (`comments`,
+//! `live_comments`).
 //!
 //! The WhatsApp Business app's fields (`smb_message_echoes`, `history`, `smb_app_state_sync`) and
 //! `account_update` are those of a number onboarded beside the app, as Meta's page
@@ -48,11 +59,16 @@
 //!
 //! Anything else in a known object (read watermarks, reactions, standby messages, other change
 //! fields, other WhatsApp fields, the media of a history placeholder sent after it under
-//! `history`'s `value.messages[]`: the inbox keeps no media) is left out, and so is an item
-//! missing its id. `occurred_at` comes from the item's own time (WhatsApp's seconds, Messenger's
+//! `history`'s `value.messages[]`: the inbox keeps no media; a `feed` change about anything but a
+//! comment, such as a post, a visitor's post, a reaction or a share; a comment hidden, unhidden or
+//! blocked, which the business did and records where it did it; Instagram's `mentions`) is left
+//! out, and so is an item missing its id. `occurred_at` comes from the item's own time (WhatsApp's seconds, Messenger's
 //! milliseconds, a lead's `created_time`, an `account_update` entry's `time`), when it has one.
 
 pub use jt_app::ports::connectors::InboundEventDraft;
+use jt_app::ports::connectors::{
+    EnvelopeAuthor, EnvelopeStatus, EnvelopeSubject, PublicEnvelope, PublicKind, SubjectKind,
+};
 use std::collections::BTreeSet;
 
 use jt_connector::{EventKind, meta_signature_ok};
@@ -533,20 +549,179 @@ fn messaging_entry(index: usize, mut entry: Value, hint: &'static str, out: &mut
             }
         }
     }
+    let entry_time = take(&mut entry, "time");
     for mut change in take_array(&mut entry, "changes") {
-        if change["field"] != "leadgen" {
-            continue;
-        }
+        let field = change["field"].as_str().unwrap_or_default().to_owned();
         let value = take(&mut change, "value");
-        let Some(leadgen) = id(&value["leadgen_id"]) else {
-            continue;
+        let comment = match (hint, field.as_str()) {
+            (KIND_HINT_PAGE, "feed") => feed_comment(&account, &entry_time, value),
+            (KIND_HINT_INSTAGRAM, "comments") => {
+                instagram_comment(&account, &entry_time, value, false)
+            }
+            (KIND_HINT_INSTAGRAM, "live_comments") => {
+                instagram_comment(&account, &entry_time, value, true)
+            }
+            (_, "leadgen") => {
+                let Some(leadgen) = id(&value["leadgen_id"]) else {
+                    continue;
+                };
+                let at = from_seconds(&value["created_time"]);
+                push(
+                    format!("leadgen:{leadgen}"),
+                    EventKind::LeadGen,
+                    object([("leadgen", value)]),
+                    at,
+                );
+                continue;
+            }
+            _ => continue,
         };
-        let at = from_seconds(&value["created_time"]);
-        push(
-            format!("leadgen:{leadgen}"),
-            EventKind::LeadGen,
-            object([("leadgen", value)]),
-            at,
-        );
+        if let Some(draft) = comment {
+            push(
+                draft.external_id,
+                draft.kind,
+                draft.payload,
+                draft.occurred_at,
+            );
+        }
     }
+}
+
+/// The dedupe key of a comment's event in state `status` (see the module docs): `comment:<id>:
+/// <status>`, an edit's also naming `stamp`, the time of that revision (the entry's), so each
+/// revision is an event of its own. A poller keys what it finds the same way, so a comment seen
+/// by both is stored once.
+pub fn comment_event_id(comment_id: &str, status: EnvelopeStatus, stamp: Option<&str>) -> String {
+    let state = serde_json::to_value(status)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    match status {
+        EnvelopeStatus::Edited => {
+            format!("comment:{comment_id}:{state}:{}", stamp.unwrap_or_default())
+        }
+        _ => format!("comment:{comment_id}:{state}"),
+    }
+}
+
+/// Who wrote a comment, from its `from` (`name_key`: Facebook's `name`, Instagram's
+/// `username`): ours when its id is the account's own.
+fn comment_author(from: &Value, name_key: &str, account: &str) -> EnvelopeAuthor {
+    let author_id = id(&from["id"]);
+    EnvelopeAuthor {
+        is_self: author_id.as_deref() == Some(account),
+        id: author_id,
+        name: from[name_key]
+            .as_str()
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_owned),
+    }
+}
+
+/// The event of a Page's `feed` change about a comment (`item: comment`) of a verb the inbox
+/// follows (`add`, `edit`/`edited`, `remove`/`delete`); `None` for any other item or verb (posts,
+/// visitor posts, reactions, shares; a hide, unhide or block: what the business does to a comment
+/// is recorded where it does it), or a comment without its id or any time.
+fn feed_comment(account: &str, entry_time: &Value, value: Value) -> Option<InboundEventDraft> {
+    if value["item"] != "comment" {
+        return None;
+    }
+    let status = match value["verb"].as_str()? {
+        "add" => EnvelopeStatus::Open,
+        "edit" | "edited" => EnvelopeStatus::Edited,
+        "remove" | "delete" => EnvelopeStatus::Removed,
+        _ => return None,
+    };
+    let comment_id = id(&value["comment_id"])?;
+    let created_at = from_seconds(&value["created_time"]).or_else(|| from_seconds(entry_time))?;
+    let post_id = id(&value["post_id"]);
+    // A top-level comment's `parent_id` is its post; a reply's, the comment it answers, which is
+    // taken as its thread's root.
+    let parent = id(&value["parent_id"]).filter(|parent| Some(parent) != post_id.as_ref());
+    let subject = post_id.map(|post| EnvelopeSubject {
+        kind: SubjectKind::Post,
+        external_id: post,
+        title: String::new(),
+        url: value["post"]["permalink_url"].as_str().map(str::to_owned),
+        image_url: None,
+        facts: match value["post"]["status_type"].as_str() {
+            Some(status_type) => json!({ "status_type": status_type }),
+            None => Value::Null,
+        },
+    });
+    let envelope = PublicEnvelope {
+        kind: PublicKind::Comment,
+        account_id: account.to_owned(),
+        root_external_id: parent.clone().unwrap_or_else(|| comment_id.clone()),
+        parent_external_id: parent,
+        external_id: comment_id.clone(),
+        status,
+        author: comment_author(&value["from"], "name", account),
+        text: value["message"].as_str().unwrap_or_default().to_owned(),
+        created_at,
+        deadline: None,
+        live: false,
+        subject,
+        answer: None,
+        rejection: None,
+    };
+    let occurred_at = match status {
+        EnvelopeStatus::Open => Some(created_at),
+        _ => from_seconds(entry_time).or(Some(created_at)),
+    };
+    Some(InboundEventDraft {
+        external_id: comment_event_id(&comment_id, status, id(entry_time).as_deref()),
+        kind: EventKind::Comment,
+        payload: envelope.into_payload(value),
+        occurred_at,
+    })
+}
+
+/// The event of an Instagram account's `comments` or `live_comments` change (`live`): a new
+/// comment on its media. Instagram's change carries no time of its own: the entry's is used, and
+/// a change without one is left out, as is one without its id.
+fn instagram_comment(
+    account: &str,
+    entry_time: &Value,
+    value: Value,
+    live: bool,
+) -> Option<InboundEventDraft> {
+    let comment_id = id(&value["id"])?;
+    let created_at = from_seconds(entry_time)?;
+    // Replies are one level deep ("replies to a reply will be added to the top-level comment",
+    // the reference of `/{ig-comment-id}/replies`): a reply's parent is its thread's root.
+    let parent = id(&value["parent_id"]);
+    let subject = id(&value["media"]["id"]).map(|media| EnvelopeSubject {
+        kind: SubjectKind::Post,
+        external_id: media,
+        title: String::new(),
+        url: None,
+        image_url: None,
+        facts: match value["media"]["media_product_type"].as_str() {
+            Some(product) => json!({ "media_product_type": product }),
+            None => Value::Null,
+        },
+    });
+    let envelope = PublicEnvelope {
+        kind: PublicKind::Comment,
+        account_id: account.to_owned(),
+        root_external_id: parent.clone().unwrap_or_else(|| comment_id.clone()),
+        parent_external_id: parent,
+        external_id: comment_id.clone(),
+        status: EnvelopeStatus::Open,
+        author: comment_author(&value["from"], "username", account),
+        text: value["text"].as_str().unwrap_or_default().to_owned(),
+        created_at,
+        deadline: None,
+        live,
+        subject,
+        answer: None,
+        rejection: None,
+    };
+    Some(InboundEventDraft {
+        external_id: comment_event_id(&comment_id, EnvelopeStatus::Open, None),
+        kind: EventKind::Comment,
+        payload: envelope.into_payload(value),
+        occurred_at: Some(created_at),
+    })
 }

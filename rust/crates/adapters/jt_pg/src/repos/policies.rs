@@ -36,8 +36,10 @@ impl PgTenantRepos {
         match row {
             None => Ok(WorkspacePolicy::default()),
             Some((minutes, labels, inbox, leads)) => {
-                let mut inbox: jt_app::ports::InboxPolicy = serde_json::from_value(inbox)
-                    .map_err(|_| AppError::internal("invalid stored inbox policy"))?;
+                // A policy stored before a default was added reads with it (key by key).
+                let mut inbox = serde_json::from_value::<jt_app::ports::InboxPolicy>(inbox)
+                    .map_err(|_| AppError::internal("invalid stored inbox policy"))?
+                    .with_default_response_times();
                 inbox.status_labels = serde_json::from_value(labels)
                     .map_err(|_| AppError::internal("invalid stored inbox status labels"))?;
                 Ok(WorkspacePolicy {

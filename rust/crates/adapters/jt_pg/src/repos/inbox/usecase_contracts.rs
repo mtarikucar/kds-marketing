@@ -241,7 +241,13 @@ async fn status_labels_policy_contract_fake_and_pg() {
             inbox: jt_app::ports::InboxPolicy {
                 status_labels: [("new".into(), "Yeni".into())].into(),
                 unreachable_threshold: 5,
-                max_response_s: [("sms".into(), 42)].into(),
+                // A stored policy reads with every default response time it lacks: the whole
+                // map round-trips as stored.
+                max_response_s: {
+                    let mut times = jt_app::ports::InboxPolicy::default().max_response_s;
+                    times.insert("sms".into(), 42);
+                    times
+                },
             },
             leads: jt_app::ports::LeadsPolicy::default(),
         };

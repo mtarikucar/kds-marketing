@@ -143,6 +143,9 @@ fn tenant_tables_are_read_from_the_migrations() {
         "outreach_campaigns",
         "outreach_enrollments",
         "outreach_sends",
+        "public_subjects",
+        "public_items",
+        "public_cursors",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

@@ -21,9 +21,10 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the prospect pool, leads L1-T6; the playbook and the
-/// research tasks, leads L2; promotion, distribution and the recipient kind, leads L3).
-const POST_M4_ADDED: [(&str, &str); 40] = [
+/// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the prospect
+/// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
+/// the recipient kind, leads L3).
+const POST_M4_ADDED: [(&str, &str); 46] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -67,6 +68,15 @@ const POST_M4_ADDED: [(&str, &str); 40] = [
     ),
     ("distribution.backfill", "jeeta.distribution.backfill"),
     ("inbox.people.set_kind", "jeeta.inbox.people_set_kind"),
+    ("inbox.public.hide", "jeeta.inbox.public_hide"),
+    ("inbox.public.delete", "jeeta.inbox.public_delete"),
+    (
+        "inbox.public.mark_handled",
+        "jeeta.inbox.public_mark_handled",
+    ),
+    ("inbox.public.report", "jeeta.inbox.public_report"),
+    ("inbox.public.approve", "jeeta.inbox.public_approve"),
+    ("inbox.public.discard", "jeeta.inbox.public_discard"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

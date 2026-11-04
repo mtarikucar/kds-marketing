@@ -21,6 +21,8 @@ const PROSPECTS_DOWN: &str = concat!(
     "\n",
     include_str!("../../../../migrations/0020_prospects.down.sql"),
 );
+/// Public items reference the inbox tables: their migration goes first.
+const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
 const TABLES: &[&str] = &[
     "people",
     "identities",
@@ -203,6 +205,7 @@ async fn schema_down_drops_lost_reasons() {
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
         .execute(&db.pool)
@@ -264,6 +267,7 @@ async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
         .execute(&db.pool)
         .await
         .unwrap();
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
         .execute(&db.pool)
@@ -331,6 +335,7 @@ async fn call_lookup_index_round_trip_is_idempotent() {
             .await
             .unwrap()
     );
+    sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     for _ in 0..2 {
         sqlx::raw_sql(PROSPECTS_DOWN)
             .execute(&db.pool)

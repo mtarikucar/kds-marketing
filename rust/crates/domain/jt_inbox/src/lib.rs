@@ -8,6 +8,10 @@
 //! appointments export escaped/folded UTC ICS, commissions use integer half-even rounding,
 //! and scoped identity hashes prevent erased identities from reappearing. `sms_segments`
 //! counts GSM-7 septets or UTF-16 units; send boundaries must validate body size first.
+//!
+//! Public surfaces ([`public`]): comments and marketplace questions are items of a public
+//! conversation, each with its own reply rules, fence and lifecycle; [`relay`] recognises
+//! marketplace buyer messages relayed through the seller's mailbox.
 
 mod appointment;
 mod commission;
@@ -23,10 +27,13 @@ mod merge;
 mod message;
 mod note;
 mod person;
+pub mod public;
 mod quote;
+pub mod relay;
 mod sms;
 mod suppression;
 mod task;
+mod text;
 
 pub use appointment::{Appointment, AppointmentError, AppointmentState, ics};
 pub use commission::{Commission, CommissionState, commission_for};
@@ -42,11 +49,12 @@ pub use distribution::{
 pub use erasure::identity_hash;
 pub use fence::{FenceCtx, FenceRefusal, SendIntent, may_send};
 pub use identity::{
-    Channel, Identity, IdentityChannel, IdentityError, channel_for_kind, normalise, scope_opaque,
+    Channel, Identity, IdentityChannel, IdentityError, channel_for_kind, conversation_channel,
+    normalise, public_channel_for_kind, scope_opaque,
 };
 pub use ids::{
     AssignmentId, ConsentId, ConversationId, IdentityId, JourneyEventId, JourneyId, MergeId,
-    MessageId, NoteId, PersonId, RuleId, TaskId,
+    MessageId, NoteId, PersonId, PublicItemId, PublicSubjectId, RuleId, TaskId,
 };
 pub use journey::{
     ImportedJourney, InitialJourney, Journey, JourneyEffect, JourneyEvent, JourneyEventKind,
@@ -57,7 +65,13 @@ pub use merge::{MergeConflict, MergeDecision, PersonView, decide_merge};
 pub use message::{Author, Direction, Message, MsgStatus};
 pub use note::Note;
 pub use person::{EventSource, FirstTouch, Person, RecipientKind, Source};
+pub use public::{
+    AnswerState, AnsweredBy, HandledReason, ItemEvent, ItemTransitionError, Moderation,
+    PrivateRule, PublicItem, PublicKind, PublicRefusal, PublicRules, PublicSubject, SubjectKind,
+    TextBounds, Visibility,
+};
 pub use quote::{Quote, QuoteError, QuoteState};
+pub use relay::{Relay, RelayRefusal};
 pub use sms::sms_segments;
 pub use suppression::{Suppression, SuppressionReason};
 pub use task::{Task, TaskStatus};

@@ -10,10 +10,12 @@ use jt_app::ports::connectors::{
     AdBudgetWriter, AppSync, Connector, InsightsReader, InstagramApp, LeadGenFetcher,
     MessagingSender, OAuthApp, OAuthFlow, OAuthProvider, PublishRequest, Publisher,
 };
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{
+    ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, Provider,
+};
 use jt_meta::{
-    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_SCOPES, META_HOSTS, MetaBases, MetaConnector,
-    PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
+    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES, META_HOSTS,
+    MetaBases, MetaConnector, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
 use jt_outbound::FIXED_HOSTS;
 use serde_json::{Value, json};
@@ -216,7 +218,8 @@ async fn authorize_urls_carry_scopes_or_config_id() {
             ("response_type".into(), "code".into()),
             (
                 "scope".into(),
-                "instagram_business_basic,instagram_business_content_publish".into()
+                "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights"
+                    .into()
             ),
             ("state".into(), "state-2".into()),
         ]
@@ -985,7 +988,7 @@ async fn probe_returns_account_id_per_kind() {
         .await;
     assert_eq!(
         p.facts,
-        json!({ "account_id": "17841400000000009", "username": "test.studio" })
+        json!({ "account_id": "17841400000000009", "username": "test.studio", "insights": true })
     );
 
     // WhatsApp: the number as Graph names it, read with its token.
@@ -3048,6 +3051,7 @@ async fn the_business_app_sign_in_opens_embedded_signup_with_its_extras() {
     let instagram = OAuthApp::Instagram(InstagramApp {
         app_id: "ig".into(),
         app_secret: "ig-secret".into(),
+        comment_scopes: false,
     });
     let refused = r.meta.authorize_url_for(
         &instagram,
@@ -3404,4 +3408,447 @@ async fn app_sync_asks_smb_app_data_once_per_request() {
             .await;
         assert_eq!(kind_of(out), kind);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comment scopes behind the platform flags (plan 2026-10-30-inbox-comments-marketplace-plan.md,
+// task M3; spec §8.1)
+// ---------------------------------------------------------------------------------------------
+
+fn scope_of(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(k, _)| k == "scope")
+        .map(|(_, v)| v.into_owned())
+}
+
+#[tokio::test]
+async fn authorize_url_omits_comment_scopes_when_flag_off() {
+    let r = rig().await;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Meta(meta_app()), &redirect(), "state-1", None)
+        .unwrap();
+    // Byte for byte the URL of before the flag.
+    assert_eq!(
+        url.as_str(),
+        format!(
+            "https://www.facebook.com/v19.0/dialog/oauth?client_id={META_APP_ID}&redirect_uri={}&state=state-1&response_type=code&scope={}",
+            url::form_urlencoded::byte_serialize(redirect().as_str().as_bytes())
+                .collect::<String>(),
+            url::form_urlencoded::byte_serialize(FACEBOOK_SCOPES.join(",").as_bytes())
+                .collect::<String>(),
+        )
+    );
+    let ig = r
+        .meta
+        .authorize_url(
+            &OAuthApp::Instagram(instagram_app()),
+            &redirect(),
+            "s",
+            None,
+        )
+        .unwrap();
+    assert_eq!(scope_of(&ig), Some(INSTAGRAM_SCOPES.join(",")));
+}
+
+#[tokio::test]
+async fn authorize_url_appends_comment_scopes_when_flag_on() {
+    let r = rig().await;
+    let mut meta = meta_app();
+    meta.comment_scopes = true;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Meta(meta), &redirect(), "state-1", None)
+        .unwrap();
+    let expected: Vec<&str> = FACEBOOK_SCOPES
+        .iter()
+        .chain(FACEBOOK_COMMENT_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url), Some(expected.join(",")));
+}
+
+#[tokio::test]
+async fn login_config_url_unchanged_by_the_flag() {
+    let r = rig().await;
+    let mut off = meta_app();
+    off.login_config_id = Some("cfg-test".into());
+    let mut on = off.clone();
+    on.comment_scopes = true;
+    let url = |app: jt_app::ports::connectors::MetaApp| {
+        r.meta
+            .authorize_url(&OAuthApp::Meta(app), &redirect(), "s", None)
+            .unwrap()
+    };
+    // The login configuration in Meta's dashboard is what grants them.
+    assert_eq!(url(off).as_str(), url(on).as_str());
+}
+
+#[tokio::test]
+async fn instagram_authorize_appends_its_comment_scopes_when_flag_on() {
+    let r = rig().await;
+    let mut instagram = instagram_app();
+    instagram.comment_scopes = true;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Instagram(instagram), &redirect(), "s", None)
+        .unwrap();
+    let expected: Vec<&str> = INSTAGRAM_SCOPES
+        .iter()
+        .chain(INSTAGRAM_COMMENT_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url), Some(expected.join(",")));
+}
+
+/// Facebook Login's scopes with the comment ones, as a grant holding them records them.
+fn comment_grant_scopes() -> Vec<&'static str> {
+    FACEBOOK_SCOPES
+        .iter()
+        .chain(FACEBOOK_COMMENT_SCOPES)
+        .copied()
+        .collect()
+}
+
+#[tokio::test]
+async fn page_subscription_without_grant_is_exactly_todays_fields() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, ok(json!({ "success": true })));
+    // Today's scopes: messages and leads, no comments.
+    let p = granted("facebook_page", FACEBOOK_SCOPES);
+    let facts = r.meta.on_connected(&page_cred(), &p).await.unwrap();
+    assert_eq!(facts, json!({ "subscribed": true, "leadgen": true }));
+    let with_leadgen = fields_with_leadgen();
+    assert_eq!(
+        m.request("POST", path).param("subscribed_fields"),
+        Some(with_leadgen.as_str())
+    );
+}
+
+#[tokio::test]
+async fn page_subscription_with_grant_adds_feed() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, ok(json!({ "success": true })));
+    // Every kind on the page asks for the same union: Meta replaces the fields on each call.
+    for kind in ["facebook_page", "messenger", "instagram_dm"] {
+        m.clear();
+        let facts = r
+            .meta
+            .on_connected(&page_cred(), &granted(kind, &comment_grant_scopes()))
+            .await
+            .unwrap();
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": true, "feed": true }),
+            "{kind}"
+        );
+        let fields = format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen());
+        assert_eq!(
+            m.request("POST", path).param("subscribed_fields"),
+            Some(fields.as_str()),
+            "{kind}"
+        );
+    }
+    assert_eq!(PAGE_FEED_FIELD, "feed");
+}
+
+/// Graph refusing the subscription for want of the permission of `field`.
+fn refuses_field(field: &str) -> Reply {
+    status(
+        403,
+        json!({ "error": {
+            "message": format!("(#200) To subscribe to the {field} field, one of these permissions is needed: pages_read_user_content"),
+            "type": "OAuthException",
+            "code": 200,
+        }}),
+    )
+}
+
+#[tokio::test]
+async fn refused_feed_is_dropped_and_retried() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, refuses_field("feed"));
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r
+        .meta
+        .on_connected(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({ "subscribed": true, "leadgen": true, "feed": false })
+    );
+    let asked: Vec<Option<String>> = m
+        .requests("POST", path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some(format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen())),
+            Some(fields_with_leadgen()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn refused_leadgen_and_feed_both_dropped() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, refuses_field("leadgen"));
+    m.on("POST", path, refuses_field("feed"));
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r
+        .meta
+        .on_connected(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({ "subscribed": true, "leadgen": false, "feed": false })
+    );
+    let asked: Vec<Option<String>> = m
+        .requests("POST", path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some(format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen())),
+            Some(format!("{PAGE_MESSAGING_FIELDS},{PAGE_FEED_FIELD}")),
+            Some(PAGE_MESSAGING_FIELDS.to_owned()),
+        ]
+    );
+}
+
+/// An Instagram Login token granted its scopes and `extra`.
+fn ig_login_granted(extra: &[&str]) -> Credential {
+    Credential::OAuth {
+        access_token: IG_LOGIN_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: INSTAGRAM_SCOPES
+            .iter()
+            .chain(extra)
+            .map(|s| (*s).to_owned())
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn instagram_login_subscribes_comment_fields_with_grant() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = format!("/ig/{IG}/subscribed_apps");
+    m.on("POST", &path, ok(json!({ "success": true })));
+    // Comments only.
+    let facts = r
+        .meta
+        .on_connected(
+            &ig_login_granted(&["instagram_business_manage_comments"]),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts, json!({ "subscribed": true }));
+    let call = m.request("POST", &path);
+    assert_eq!(
+        call.param("subscribed_fields"),
+        Some("comments,live_comments")
+    );
+    assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN));
+    // With the messages scope, its messages too.
+    m.clear();
+    r.meta
+        .on_connected(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("POST", &path).param("subscribed_fields"),
+        Some("comments,live_comments,messages")
+    );
+    // Best effort: a refusal is a fact, not the error.
+    m.set(
+        "POST",
+        &path,
+        status(403, graph_fixture(m, "error_permission")),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts, json!({ "subscribed": false }));
+}
+
+#[tokio::test]
+async fn probe_reports_comment_grant_facts() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/me",
+        ok(json!({ "id": PAGE, "name": "Kahve" })),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/me/subscribed_apps",
+        ok(json!({ "data": [] })),
+    );
+    let p = r
+        .meta
+        .probe(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(
+        p.facts["comments"],
+        json!({ "read": true, "reply": true, "hide": true, "delete_others": true, "private_reply": true })
+    );
+    // Without the grant the facts are today's: no comments.
+    let p = r
+        .meta
+        .probe(&page_cred(), &granted("facebook_page", FACEBOOK_SCOPES))
+        .await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(p.facts.get("comments"), None);
+}
+
+#[tokio::test]
+async fn instagram_login_assets_add_instagram_dm_with_messages_scope() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/ig/me",
+        ok(json!({ "user_id": IG, "username": "kahve" })),
+    );
+    let kinds = |assets: Vec<jt_app::ports::connectors::Asset>| -> Vec<String> {
+        assets.into_iter().map(|a| a.kind_key).collect()
+    };
+    assert_eq!(
+        kinds(r.meta.list_assets(&ig_login_cred()).await.unwrap()),
+        ["instagram"]
+    );
+    assert_eq!(
+        kinds(
+            r.meta
+                .list_assets(&ig_login_granted(INSTAGRAM_COMMENT_SCOPES))
+                .await
+                .unwrap()
+        ),
+        ["instagram", "instagram_dm"]
+    );
+}
+
+#[tokio::test]
+async fn instagram_login_dm_send_goes_to_graph_instagram() {
+    let r = rig().await;
+    let path = format!("/ig/{IG}/messages");
+    r.mock.on(
+        "POST",
+        &path,
+        ok(json!({ "recipient_id": "9990001", "message_id": "m_ig" })),
+    );
+    let receipt = r
+        .meta
+        .send_text(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram_dm", Some(IG)),
+            "9990001",
+            "Merhaba",
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.provider_id, "m_ig");
+    let call = r.mock.request("POST", &path);
+    assert_eq!(
+        call.json(),
+        json!({ "recipient": { "id": "9990001" }, "message": { "text": "Merhaba" } })
+    );
+    assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN));
+    // Without the messages scope: refused, nothing sent.
+    r.mock.clear();
+    let e = r
+        .meta
+        .send_text(
+            &ig_login_granted(&["instagram_business_manage_comments"]),
+            &public("instagram_dm", Some(IG)),
+            "9990001",
+            "Merhaba",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert!(r.mock.recorded().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Insights through Instagram Login (spec D29)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn instagram_login_asks_for_insights_whatever_the_flags() {
+    assert!(INSTAGRAM_SCOPES.contains(&INSTAGRAM_INSIGHTS_SCOPE));
+    assert_eq!(
+        INSTAGRAM_INSIGHTS_SCOPE,
+        "instagram_business_manage_insights"
+    );
+    // Still no comment permission among the scopes asked for without the flags.
+    for kind in ["facebook_page", "instagram"] {
+        assert!(
+            !jt_connector::comment_grant(kind, FACEBOOK_SCOPES).enabled(),
+            "{kind}"
+        );
+        assert!(
+            !jt_connector::comment_grant(kind, INSTAGRAM_SCOPES).enabled(),
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn instagram_login_probe_says_whether_insights_are_granted() {
+    let r = rig().await;
+    r.mock
+        .on("GET", "/ig/me", ok(graph_fixture(&r.mock, "ig_me")));
+    // A grant of before the insights scope: the probe says so, the account is still reached.
+    let earlier = Credential::OAuth {
+        access_token: IG_LOGIN_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: vec![
+            "instagram_business_basic".into(),
+            "instagram_business_content_publish".into(),
+        ],
+    };
+    let p = r.meta.probe(&earlier, &public("instagram", None)).await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(p.facts["insights"], json!(false));
+    let p = r
+        .meta
+        .probe(&ig_login_cred(), &public("instagram", None))
+        .await;
+    assert_eq!(p.facts["insights"], json!(true));
 }

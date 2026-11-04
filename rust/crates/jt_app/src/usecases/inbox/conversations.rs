@@ -3,10 +3,16 @@ use super::record;
 use crate::{
     ctx::Ctx,
     error::AppError,
-    ports::inbox::ConversationQueue,
+    ports::{
+        TenantRepos,
+        inbox::{ConversationQueue, OutboxRow},
+    },
     usecases::{Deps, invalid},
 };
-use jt_inbox::{ConvState, Conversation, ConversationId, Direction, Executor, Message, MsgStatus};
+use jt_inbox::{
+    Channel, ConvState, Conversation, ConversationId, Direction, Executor, Message, MsgStatus,
+    PublicItemId, PublicKind, Visibility, conversation_channel, public_channel_for_kind,
+};
 use jt_ledger::Actor;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
@@ -36,11 +42,85 @@ pub struct Page<T> {
 /// A message as the inbox lists it: the stored message and, for an outbound one that failed or
 /// whose outcome is unknown, the failure line its send recorded (`kind: provider: reason`,
 /// [`crate::usecases::failure`]), else `null`.
+///
+/// On a public conversation, `item` names the comment or question the message is (an inbound
+/// one) or answers (ours, with its visibility); absent on a direct conversation.
 #[derive(Debug, Serialize)]
 pub struct MessageView {
     #[serde(flatten)]
     pub message: Message,
     pub failure_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<MessageItem>,
+}
+
+/// The public item a message is or answers.
+#[derive(Debug, Serialize)]
+pub struct MessageItem {
+    pub item_id: PublicItemId,
+    pub kind: PublicKind,
+    /// The item's answer state key (`awaiting`, `pending`, `answered`, …).
+    pub answer_state: &'static str,
+    /// For our reply, in front of everyone or privately; `None` for the item's own message.
+    pub visibility: Option<Visibility>,
+}
+
+/// A conversation as the inbox lists it (spec §6.8): the stored conversation and what its
+/// items and replies say, computed (nothing of it is stored). `surface` is `public` for a
+/// comment or question conversation, `relay` for mail relayed by a marketplace (Amazon), else
+/// `private`; `owed_items` and `next_deadline` count the owed items of a public one; and
+/// `held_replies` the replies waiting for a human.
+#[derive(Debug, Serialize)]
+pub struct ConversationView {
+    #[serde(flatten)]
+    pub conversation: Conversation,
+    pub surface: &'static str,
+    pub channel: Option<Channel>,
+    pub owed_items: u32,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub next_deadline: Option<OffsetDateTime>,
+    pub held_replies: u32,
+}
+
+impl std::ops::Deref for ConversationView {
+    type Target = Conversation;
+    fn deref(&self) -> &Conversation {
+        &self.conversation
+    }
+}
+
+/// `conversation`'s view, its held replies among `held`.
+pub(crate) async fn view(
+    r: &mut dyn TenantRepos,
+    conversation: Conversation,
+    held: &[OutboxRow],
+) -> Result<ConversationView, AppError> {
+    let (surface, owed_items, next_deadline) =
+        if public_channel_for_kind(&conversation.kind_key).is_some() {
+            let items = r.public_items().for_conversation(conversation.id).await?;
+            let owed: Vec<_> = items.iter().filter(|i| i.awaiting()).collect();
+            (
+                "public",
+                u32::try_from(owed.len()).unwrap_or(u32::MAX),
+                owed.iter().filter_map(|i| i.deadline).min(),
+            )
+        } else if super::public::relay_of(r, &conversation).await?.is_some() {
+            ("relay", 0, None)
+        } else {
+            ("private", 0, None)
+        };
+    let held_replies = held
+        .iter()
+        .filter(|row| row.conversation_id == conversation.id)
+        .count();
+    Ok(ConversationView {
+        surface,
+        channel: conversation_channel(&conversation.kind_key),
+        owed_items,
+        next_deadline,
+        held_replies: u32::try_from(held_replies).unwrap_or(u32::MAX),
+        conversation,
+    })
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +153,7 @@ pub async fn list(
     deps: &Deps,
     ctx: &Ctx,
     input: ListInput,
-) -> Result<Page<Conversation>, AppError> {
+) -> Result<Page<ConversationView>, AppError> {
     ctx.require(Permission::InboxWork)?;
     let after = cursor(input.cursor.as_deref())?.map(|(t, id)| (t, id.into()));
     let limit = limit(input.limit);
@@ -89,17 +169,26 @@ pub async fn list(
     } else {
         None
     };
-    Ok(Page { items, next_cursor })
+    let held = super::context::held_replies(r.as_mut(), ctx.now).await?;
+    let mut views = Vec::with_capacity(items.len());
+    for c in items {
+        views.push(view(r.as_mut(), c, &held).await?);
+    }
+    Ok(Page {
+        items: views,
+        next_cursor,
+    })
 }
-pub async fn get(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conversation, AppError> {
+pub async fn get(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<ConversationView, AppError> {
     ctx.require(Permission::InboxWork)?;
-    deps.uow
-        .tenant(ctx.workspace_id)
-        .await?
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    let conversation = r
         .conversations()
         .get(id)
         .await?
-        .ok_or_else(|| AppError::not_found("no such conversation"))
+        .ok_or_else(|| AppError::not_found("no such conversation"))?;
+    let held = super::context::held_replies(r.as_mut(), ctx.now).await?;
+    view(r.as_mut(), conversation, &held).await
 }
 pub async fn messages(
     deps: &Deps,
@@ -111,10 +200,12 @@ pub async fn messages(
     let after = cursor(input.cursor.as_deref())?.map(|(t, id)| (t, id.into()));
     let limit = limit(input.limit);
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    r.conversations()
+    let conversation = r
+        .conversations()
         .get(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such conversation"))?;
+    let public = public_channel_for_kind(&conversation.kind_key).is_some();
     let mut items = r.messages().page(id, after, limit + 1).await?;
     let more = items.len() > limit as usize;
     items.truncate(limit as usize);
@@ -132,17 +223,26 @@ pub async fn messages(
         .map(|m| m.id)
         .collect();
     let reasons = r.outbox().failure_reasons(&failed).await?;
-    let items = items
-        .into_iter()
-        .map(|message| MessageView {
+    let mut views = Vec::with_capacity(items.len());
+    for message in items {
+        let item = if public {
+            message_item(r.as_mut(), &message).await?
+        } else {
+            None
+        };
+        views.push(MessageView {
             failure_reason: reasons
                 .iter()
                 .find(|(id, _)| *id == message.id)
                 .map(|(_, reason)| reason.clone()),
+            item,
             message,
-        })
-        .collect();
-    Ok(Page { items, next_cursor })
+        });
+    }
+    Ok(Page {
+        items: views,
+        next_cursor,
+    })
 }
 async fn mutate(
     deps: &Deps,
@@ -264,4 +364,33 @@ pub async fn close(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Convers
         "inbox.conversation.closed",
     )
     .await
+}
+
+/// The public item `message` is (an inbound one: `PublicItemRepo::item_for_message`) or answers
+/// (ours: its outbox intent's item, with the reply's visibility).
+async fn message_item(
+    r: &mut dyn TenantRepos,
+    message: &Message,
+) -> Result<Option<MessageItem>, AppError> {
+    let (item, visibility) = match message.direction {
+        Direction::Inbound => (r.public_items().item_for_message(message.id).await?, None),
+        Direction::Outbound => {
+            let Some(row) = r.outbox().for_message(message.id).await? else {
+                return Ok(None);
+            };
+            let Some(intent) = super::public::intent_of(&row.intent)? else {
+                return Ok(None);
+            };
+            (
+                r.public_items().get(intent.item_id).await?,
+                Some(intent.visibility),
+            )
+        }
+    };
+    Ok(item.map(|item| MessageItem {
+        item_id: item.id,
+        kind: item.kind,
+        answer_state: item.answer.key(),
+        visibility,
+    }))
 }

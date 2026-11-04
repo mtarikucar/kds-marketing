@@ -178,6 +178,8 @@ async fn enqueue_mail(
             subject: Some("Appointment confirmation".into()),
             in_reply_to: None,
             references: vec![],
+            item_id: None,
+            visibility: None,
         },
         replies::Purpose::Appointment(appointment),
     )

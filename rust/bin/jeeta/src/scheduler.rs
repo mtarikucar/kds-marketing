@@ -80,6 +80,7 @@ pub struct Intervals {
     pub lead_distribution: Duration,
     pub whatsapp_app_sync: Duration,
     pub outreach_dispatch: Duration,
+    pub comments_poll: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -92,8 +93,8 @@ impl Default for Intervals {
     /// Token renewal hourly, probes every 15 minutes, the delivery-report poll every minute, the
     /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
     /// purge hourly, the call timers every second, the bridges' health checks and the phones'
-    /// command expiry every minute, the device-file purge hourly; first runs within 30 seconds of
-    /// the start.
+    /// command expiry every minute, the device-file purge hourly, the comments backfill hourly;
+    /// first runs within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -129,6 +130,7 @@ impl Default for Intervals {
             lead_distribution: MINUTE,
             whatsapp_app_sync: 5 * MINUTE,
             outreach_dispatch: MINUTE,
+            comments_poll: HOUR,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -171,6 +173,7 @@ impl Intervals {
             Job::LeadDistribution => self.lead_distribution,
             Job::WhatsappAppSync => self.whatsapp_app_sync,
             Job::OutreachDispatch => self.outreach_dispatch,
+            Job::CommentsPoll => self.comments_poll,
         }
     }
 }
@@ -492,6 +495,7 @@ mod tests {
             lead_distribution: every,
             whatsapp_app_sync: every,
             outreach_dispatch: every,
+            comments_poll: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -618,6 +622,8 @@ mod tests {
             Job::OutreachDispatch.lock_name(),
             "jeeta.jobs.outreach_dispatch"
         );
+        assert_eq!(i.of(Job::CommentsPoll), HOUR);
+        assert_eq!(Job::CommentsPoll.lock_name(), "jeeta.jobs.comments_poll");
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),
             "jeeta.jobs.device_bridge_health"

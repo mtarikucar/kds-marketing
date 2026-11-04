@@ -4,9 +4,13 @@
 mod support;
 
 use hmac::{Hmac, KeyInit, Mac};
+use jt_app::ports::connectors::{
+    EnvelopeAuthor, EnvelopeStatus, PublicEnvelope, PublicKind, SubjectKind,
+};
 use jt_connector::EventKind;
 use jt_meta::webhook::{
     KIND_HINT_INSTAGRAM, KIND_HINT_PAGE, KIND_HINT_WHATSAPP, KIND_HINT_WHATSAPP_ACCOUNT,
+    comment_event_id,
 };
 use jt_meta::{
     Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body, verify_and_parse,
@@ -598,4 +602,219 @@ fn a_scoped_body_keeps_only_the_items_its_events_came_from() {
         None
     );
     assert_eq!(scoped_body(b"not json", &all), None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comments (plan 2026-10-30-inbox-comments-marketplace-plan.md, task M1; spec §8.1)
+// ---------------------------------------------------------------------------------------------
+
+/// The envelope of event `external_id` of `events`.
+fn envelope(events: &[ParsedEvent], external_id: &str) -> PublicEnvelope {
+    let event = events
+        .iter()
+        .find(|e| e.event.external_id == external_id)
+        .unwrap_or_else(|| panic!("no event {external_id} in {:?}", keys(events)));
+    assert_eq!(event.event.kind, EventKind::Comment);
+    PublicEnvelope::from_payload(&event.event.payload).expect("a public envelope")
+}
+
+#[test]
+fn feed_comment_add_is_a_comment_event() {
+    let events = parsed("comments/page_feed_comments.json");
+    let first = events
+        .iter()
+        .find(|e| e.event.external_id == "comment:111_901:open")
+        .unwrap();
+    assert_eq!(first.external_account_id, "1234567890");
+    assert_eq!(first.kind_hint, KIND_HINT_PAGE);
+    // Entry-level, as a lead: the whole entry is the Page's.
+    assert_eq!(
+        first.origin,
+        Origin {
+            entry: 0,
+            change: None
+        }
+    );
+    assert_eq!(first.event.occurred_at, at(1_790_000_100));
+    // The provider's item rides along as sent.
+    assert_eq!(
+        first.event.payload["provider_item"]["comment_id"],
+        "111_901"
+    );
+    let env = envelope(&events, "comment:111_901:open");
+    assert_eq!(env.kind, PublicKind::Comment);
+    assert_eq!(env.account_id, "1234567890");
+    assert_eq!(env.external_id, "111_901");
+    assert_eq!(env.parent_external_id, None);
+    assert_eq!(env.root_external_id, "111_901");
+    assert_eq!(env.status, EnvelopeStatus::Open);
+    assert_eq!(env.author.id.as_deref(), Some("5550001"));
+    assert_eq!(env.author.name.as_deref(), Some("Örnek Müşteri"));
+    assert!(!env.author.is_self);
+    assert_eq!(env.text, "Fiyatı nedir?");
+    assert_eq!(env.created_at, at(1_790_000_100).unwrap());
+    assert!(!env.live);
+    let subject = env.subject.unwrap();
+    assert_eq!(subject.kind, SubjectKind::Post);
+    assert_eq!(subject.external_id, "1234567890_111");
+    assert_eq!(
+        subject.url.as_deref(),
+        Some("https://www.facebook.example/1234567890/posts/111")
+    );
+}
+
+#[test]
+fn feed_comment_edit_and_remove() {
+    let events = parsed("comments/page_feed_comments.json");
+    // An edit is keyed by the entry's time: each revision is an event of its own.
+    let edited = envelope(&events, "comment:111_901:edited:1790000300");
+    assert_eq!(edited.status, EnvelopeStatus::Edited);
+    assert_eq!(edited.text, "Fiyatı ve kargosu nedir?");
+    assert_eq!(edited.created_at, at(1_790_000_100).unwrap());
+    let removed = envelope(&events, "comment:111_903:removed");
+    assert_eq!(removed.status, EnvelopeStatus::Removed);
+    assert_eq!(removed.text, "");
+}
+
+#[test]
+fn feed_reply_has_parent_and_root() {
+    let events = parsed("comments/page_feed_comments.json");
+    let reply = envelope(&events, "comment:111_902:open");
+    assert_eq!(reply.parent_external_id.as_deref(), Some("111_901"));
+    assert_eq!(reply.root_external_id, "111_901");
+}
+
+#[test]
+fn own_comment_is_self() {
+    let page = parsed("comments/page_feed_comments.json");
+    assert!(envelope(&page, "comment:111_902:open").author.is_self);
+    let ig = parsed("comments/instagram_comments.json");
+    assert!(
+        envelope(&ig, "comment:18000000000000002:open")
+            .author
+            .is_self
+    );
+    assert!(
+        !envelope(&ig, "comment:18000000000000001:open")
+            .author
+            .is_self
+    );
+}
+
+#[test]
+fn feed_comment_without_from_has_no_author_id() {
+    let events = parsed("comments/page_feed_comments.json");
+    let env = envelope(&events, "comment:111_904:open");
+    assert_eq!(env.author, EnvelopeAuthor::default());
+    assert_eq!(env.text, "Merhaba");
+}
+
+#[test]
+fn feed_posts_reactions_and_visitor_posts_are_left_out() {
+    // A post, a visitor's post, a reaction, a share, a hidden comment, a comment without its id.
+    assert_eq!(keys(&parsed("comments/page_feed_other.json")), vec![]);
+    // A lead beside a status update: only the lead.
+    assert_eq!(parsed("page_leadgen.json").len(), 1);
+}
+
+#[test]
+fn ig_comment_and_reply() {
+    let events = parsed("comments/instagram_comments.json");
+    let w = |id: &str| {
+        (
+            "17841400000000001".to_owned(),
+            KIND_HINT_INSTAGRAM,
+            format!("comment:{id}:open"),
+            EventKind::Comment,
+        )
+    };
+    // `mentions` is not a comment on the account's own media: left out.
+    assert_eq!(
+        keys(&events),
+        vec![
+            w("18000000000000001"),
+            w("18000000000000002"),
+            w("18000000000000003"),
+        ]
+    );
+    let top = envelope(&events, "comment:18000000000000001:open");
+    assert_eq!(top.account_id, "17841400000000001");
+    assert_eq!(top.parent_external_id, None);
+    assert_eq!(top.root_external_id, "18000000000000001");
+    assert_eq!(top.author.id.as_deref(), Some("9990001"));
+    assert_eq!(top.author.name.as_deref(), Some("a.customer"));
+    assert_eq!(top.text, "Bu set kaç parça?");
+    // An Instagram comment carries no time of its own: the entry's.
+    assert_eq!(top.created_at, at(1_790_000_500).unwrap());
+    assert_eq!(events[0].event.occurred_at, at(1_790_000_500));
+    let subject = top.subject.unwrap();
+    assert_eq!(subject.kind, SubjectKind::Post);
+    assert_eq!(subject.external_id, "17900000000000001");
+    assert_eq!(subject.facts["media_product_type"], "FEED");
+    let reply = envelope(&events, "comment:18000000000000002:open");
+    assert_eq!(
+        reply.parent_external_id.as_deref(),
+        Some("18000000000000001")
+    );
+    assert_eq!(reply.root_external_id, "18000000000000001");
+}
+
+#[test]
+fn ig_live_comment_is_flagged_live() {
+    let events = parsed("comments/instagram_comments.json");
+    assert!(envelope(&events, "comment:18000000000000003:open").live);
+    assert!(!envelope(&events, "comment:18000000000000001:open").live);
+}
+
+#[test]
+fn comment_external_ids_are_stable_per_state() {
+    let once = keys(&parsed("comments/page_feed_comments.json"));
+    let again = keys(&parsed("comments/page_feed_comments.json"));
+    assert_eq!(once, again);
+    let ids: Vec<&str> = once.iter().map(|(_, _, id, _)| id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "comment:111_901:open",
+            "comment:111_902:open",
+            "comment:111_901:edited:1790000300",
+            "comment:111_903:removed",
+            "comment:111_904:open",
+        ]
+    );
+    // A poller keys a comment it finds as the webhook does.
+    assert_eq!(
+        comment_event_id("111_901", EnvelopeStatus::Open, None),
+        "comment:111_901:open"
+    );
+}
+
+#[test]
+fn scoped_body_keeps_a_comment_entry() {
+    let raw = fixture_text("comments/page_feed_comments.json");
+    let events = parse(raw.as_bytes()).unwrap();
+    let keep: BTreeSet<Origin> = events.iter().map(|e| e.origin).collect();
+    // Every event is of the one entry: the body is kept byte for byte.
+    assert_eq!(
+        scoped_body(raw.as_bytes(), &keep).unwrap(),
+        raw.as_bytes().to_vec()
+    );
+}
+
+#[test]
+fn unknown_fields_ignored() {
+    // The first comment's value carries a field Meta might add later.
+    let events = parsed("comments/page_feed_comments.json");
+    assert_eq!(
+        envelope(&events, "comment:111_901:open").text,
+        "Fiyatı nedir?"
+    );
+    let event = events
+        .iter()
+        .find(|e| e.event.external_id == "comment:111_901:open")
+        .unwrap();
+    assert_eq!(
+        event.event.payload["provider_item"]["unexpected"]["added"],
+        "later by Meta"
+    );
 }

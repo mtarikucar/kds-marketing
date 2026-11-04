@@ -5,7 +5,8 @@ use jt_app::{
     error::AppError,
     ports::inbox::{MAX_INBOX_PAGE, OutboxRepo, OutboxRow},
 };
-use jt_inbox::MessageId;
+use jt_capability::CapabilityId;
+use jt_inbox::{MessageId, PublicItemId, Visibility};
 use time::OffsetDateTime;
 use uuid::Uuid;
 #[async_trait]
@@ -64,6 +65,17 @@ impl OutboxRepo for PgTenantRepos {
         changed(sqlx::query("update outbox set state=$3,attempts=$4,last_error=$5,fence_snapshot=$6,updated_at=$7 where workspace_id=$1 and id=$2")
             .bind(ws.as_uuid()).bind(row.id).bind(row.state).bind(i64::from(row.attempts)).bind(row.last_error).bind(row.fence_snapshot).bind(row.updated_at).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"save outbound result"))?)
     }
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
+        changed(
+            sqlx::query("update outbox set expected_generation=$3 where workspace_id=$1 and id=$2")
+                .bind(self.workspace_id().as_uuid())
+                .bind(id)
+                .bind(i64::from(generation))
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "rebind outbound generation"))?,
+        )
+    }
     async fn failure_reasons(
         &mut self,
         messages: &[MessageId],
@@ -78,5 +90,78 @@ impl OutboxRepo for PgTenantRepos {
             .into_iter()
             .map(|(id, reason)| (MessageId::from(id), reason))
             .collect())
+    }
+    async fn agent_public_replies_since(
+        &mut self,
+        capability: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from outbox where workspace_id=$1 and capability_id=$2 \
+             and created_at>=$3 and state<>'refused' \
+             and intent#>>'{public,visibility}'='public' \
+             and intent#>>'{public,drafted_by,kind}'='agent'",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(capability.as_uuid())
+        .bind(since)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count agent public replies"))?;
+        u32::try_from(n).map_err(|_| AppError::internal("agent public reply count overflows"))
+    }
+    async fn public_replies_in_flight(
+        &mut self,
+        item: PublicItemId,
+        visibility: Visibility,
+        except: Option<Uuid>,
+    ) -> Result<Vec<String>, AppError> {
+        let visibility = match visibility {
+            Visibility::Public => "public",
+            Visibility::Private => "private",
+        };
+        sqlx::query_scalar(
+            "select state from outbox where workspace_id=$1 \
+             and state in ('held','queued','sending','unknown') \
+             and intent#>>'{public,item_id}'=$2 and intent#>>'{public,visibility}'=$3 \
+             and ($4::uuid is null or id<>$4)",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(item.as_uuid().to_string())
+        .bind(visibility)
+        .bind(except)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read public replies in flight"))
+    }
+    async fn uncertain_public_replies(
+        &mut self,
+        capability: CapabilityId,
+        limit: u32,
+    ) -> Result<Vec<OutboxRow>, AppError> {
+        many!(
+            sqlx::query_scalar(
+                "select to_jsonb(o) from outbox o where workspace_id=$1 and capability_id=$2 \
+                 and state='unknown' and intent#>>'{public,item_id}' is not null \
+                 order by updated_at desc, id desc limit $3"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(capability.as_uuid())
+            .bind(i64::from(limit.clamp(1, MAX_INBOX_PAGE))),
+            self,
+            OutboxRow
+        )
+    }
+    async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
+        one!(
+            sqlx::query_scalar(
+                "select to_jsonb(o) from outbox o where workspace_id=$1 and message_id=$2 \
+                 order by created_at, id limit 1"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(message.as_uuid()),
+            self,
+            OutboxRow
+        )
     }
 }

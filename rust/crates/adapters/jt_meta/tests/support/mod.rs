@@ -337,6 +337,7 @@ pub fn meta_app() -> MetaApp {
         login_config_id: None,
         whatsapp_config_id: None,
         graph_version: None,
+        comment_scopes: false,
     }
 }
 
@@ -344,6 +345,7 @@ pub fn instagram_app() -> InstagramApp {
     InstagramApp {
         app_id: INSTAGRAM_APP_ID.into(),
         app_secret: INSTAGRAM_APP_SECRET.into(),
+        comment_scopes: false,
     }
 }
 

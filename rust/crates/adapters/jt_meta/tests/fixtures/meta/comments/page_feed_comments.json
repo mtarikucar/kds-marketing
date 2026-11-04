@@ -1,0 +1,85 @@
+{
+  "object": "page",
+  "entry": [
+    {
+      "id": "1234567890",
+      "time": 1790000300,
+      "changes": [
+        {
+          "field": "feed",
+          "value": {
+            "from": { "id": "5550001", "name": "Örnek Müşteri" },
+            "post": {
+              "status_type": "added_photos",
+              "is_published": true,
+              "updated_time": "2026-09-21T12:00:00+0000",
+              "permalink_url": "https://www.facebook.example/1234567890/posts/111",
+              "promotion_status": "inactive",
+              "id": "1234567890_111"
+            },
+            "message": "Fiyatı nedir?",
+            "post_id": "1234567890_111",
+            "comment_id": "111_901",
+            "created_time": 1790000100,
+            "item": "comment",
+            "parent_id": "1234567890_111",
+            "verb": "add",
+            "unexpected": { "added": "later by Meta" }
+          }
+        },
+        {
+          "field": "feed",
+          "value": {
+            "from": { "id": "1234567890", "name": "Atölye" },
+            "post": { "id": "1234567890_111", "permalink_url": "https://www.facebook.example/1234567890/posts/111" },
+            "message": "DM ile ilettik.",
+            "post_id": "1234567890_111",
+            "comment_id": "111_902",
+            "created_time": 1790000150,
+            "item": "comment",
+            "parent_id": "111_901",
+            "verb": "add"
+          }
+        },
+        {
+          "field": "feed",
+          "value": {
+            "from": { "id": "5550001", "name": "Örnek Müşteri" },
+            "post": { "id": "1234567890_111" },
+            "message": "Fiyatı ve kargosu nedir?",
+            "post_id": "1234567890_111",
+            "comment_id": "111_901",
+            "created_time": 1790000100,
+            "item": "comment",
+            "parent_id": "1234567890_111",
+            "verb": "edited"
+          }
+        },
+        {
+          "field": "feed",
+          "value": {
+            "from": { "id": "5550002", "name": "Başka Biri" },
+            "post_id": "1234567890_111",
+            "comment_id": "111_903",
+            "created_time": 1790000250,
+            "item": "comment",
+            "parent_id": "1234567890_111",
+            "verb": "remove"
+          }
+        },
+        {
+          "field": "feed",
+          "value": {
+            "post_id": "1234567890_111",
+            "comment_id": "111_904",
+            "created_time": 1790000260,
+            "item": "comment",
+            "parent_id": "1234567890_111",
+            "message": "Merhaba",
+            "verb": "add"
+          }
+        }
+      ]
+    }
+  ]
+}

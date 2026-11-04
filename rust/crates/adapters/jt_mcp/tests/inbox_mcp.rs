@@ -5,7 +5,7 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 47);
+    assert_eq!(tools.len(), 53);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
@@ -23,6 +23,7 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
                 | "inbox.merges.apply"
                 | "inbox.merges.undo"
                 | "inbox.merges.refuse"
+                | "inbox.public.delete"
         );
         assert_eq!(
             tool.permission,

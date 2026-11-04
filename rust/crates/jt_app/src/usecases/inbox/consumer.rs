@@ -116,6 +116,7 @@ pub async fn consume_event(
 ) -> Result<&'static str, AppError> {
     let lead = super::leadgen::fetch(deps, event).await?;
     let name = sender_name(deps, event).await;
+    let subject = super::public::subject_fetch(deps, event, now).await;
     let mut r = deps.uow.tenant(event.workspace_id).await?;
     r.people().lock_workspace().await?;
     if !matches!(
@@ -149,6 +150,7 @@ pub async fn consume_event(
         event,
         lead.as_ref(),
         name.as_deref(),
+        subject.as_ref(),
     )
     .await
     {
@@ -184,6 +186,7 @@ async fn route(
     event: &InboundEvent,
     lead: Option<&super::leadgen::Fetched>,
     sender_name: Option<&str>,
+    subject: Option<&crate::ports::connectors::SubjectFacts>,
 ) -> Result<&'static str, AppError> {
     // TikTok's webhooks are about the account and its posts, never a conversation: the intake
     // takes their effect (`webhook::receive_tiktok`); here they are done with, never deferred.
@@ -243,6 +246,17 @@ async fn route(
             return Ok("deferred");
         };
         cap = sibling;
+    }
+    // A Page's or an account's comment may be routed to its direct-message sibling: comments
+    // live on the surface capability holding the same account.
+    if event.provider == Provider::Meta && event.kind == EventKind::Comment {
+        cap = match super::public::surface_capability(r, &cap).await? {
+            Some(surface) => surface,
+            None => return Ok("no_surface"),
+        };
+    }
+    if matches!(event.kind, EventKind::Comment | EventKind::Question) {
+        return super::public::intake(deps, ctx, r, event, &cap, subject).await;
     }
     if event.kind == EventKind::LeadGen {
         return match lead {
@@ -425,7 +439,7 @@ async fn sender_name(deps: &Deps, event: &InboundEvent) -> Option<String> {
 }
 /// A sender's name as a person's display name: trimmed, without control characters, at most
 /// [`MAX_SENDER_NAME`] characters.
-fn clean_name(name: &str) -> String {
+pub(super) fn clean_name(name: &str) -> String {
     let name: String = name
         .trim()
         .chars()
@@ -753,6 +767,14 @@ async fn echo(
     if outbound(r, cap, &content.external_id).await?.is_some() {
         return Ok("duplicate");
     }
+    // A private reply to a comment is sent from the comment's conversation, on the surface
+    // capability of the same account: its echo is ours, never an orphan to defer.
+    if let Some(surface) = super::public::surface_capability(r, cap).await?
+        && surface.id != cap.id
+        && outbound(r, &surface, &content.external_id).await?.is_some()
+    {
+        return Ok("duplicate");
+    }
     let identity = sender_key(cap, channel, &content.sender)?;
     // An echo cannot establish an inbound reply window. Keep orphan echoes for a later consumer.
     let Some(person) = r
@@ -767,7 +789,7 @@ async fn echo(
     };
     let candidates = r
         .messages()
-        .echo_candidates(conv.id, &content.body, event.received_at)
+        .echo_candidates(conv.id, &content.body, event.received_at, false)
         .await?;
     match candidates.as_slice() {
         [sent] => {

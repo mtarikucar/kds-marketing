@@ -114,10 +114,12 @@ fn mcp_registry_matches_catalog() {
 /// the PBX call policy (`jeeta.connector.set_pbx_policy`, connector +1) gives 126; the six
 /// `calls` tools of voice V0 give 132; the agent's turns on a call of voice V1 (`listen`, `say`,
 /// `transfer`) give 135; the five `devices` tools of the device bridge (D1-T6: `list`, `observe`,
-/// `act`, `command_get`, `commands`) give 140; the 12 `prospects` tools of the pool (leads L1-T6)
-/// give 152; the playbook (`prospects` +1) and the five `research` tools of leads L2 give 158;
-/// promotion (`prospects` +1), the five `distribution` tools and `jeeta.inbox.people_set_kind`
-/// (`inbox` +1) of leads L3 give 165.
+/// `act`, `command_get`, `commands`) give 140; the six `inbox.public` tools of comments and
+/// marketplace questions (F7: `public_hide`, `public_delete`, `public_mark_handled`,
+/// `public_report`, `public_approve`, `public_discard`, inbox +6) give 146; the 12 `prospects`
+/// tools of the pool (leads L1-T6) give 158; the playbook (`prospects` +1) and the five `research`
+/// tools of leads L2 give 164; promotion (`prospects` +1), the five `distribution` tools and
+/// `jeeta.inbox.people_set_kind` (`inbox` +1) of leads L3 give 171.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -140,16 +142,16 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("research", 5),
     ("distribution", 5),
     ("events", 3),
-    ("inbox", 47),
+    ("inbox", 53),
     ("studio", 18),
 ];
 
 #[test]
-fn the_registry_holds_165_tools() {
+fn the_registry_holds_171_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 165);
+    assert_eq!(specs.len(), 171);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 165);
+    assert_eq!(total, 171);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -158,7 +160,7 @@ fn the_registry_holds_165_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 165);
+    assert_eq!(catalog, 171);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
@@ -207,6 +209,7 @@ fn destructive_confirmation_tools_are_explicitly_listed() {
             "jeeta.inbox.people_erase",
             "jeeta.prospects.do_not_contact",
             "jeeta.prospects.erase",
+            "jeeta.inbox.public_delete",
         ])
     );
 }
@@ -283,7 +286,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 194);
+    assert_eq!(CATALOG.len(), 200);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

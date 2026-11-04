@@ -394,3 +394,51 @@ pub async fn people_erase(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&jt_app::usecases::inbox::erasure::erase(&state.deps, &ctx, id, input).await?)
 }
+
+use jt_app::usecases::inbox::{PublicItemId, public};
+pub async fn public_hide(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PublicItemId>,
+    ApiJson(input): ApiJson<public::HideInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::hide(&state.deps, &ctx, id, input).await?)
+}
+pub async fn public_delete(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PublicItemId>,
+    ApiJson(input): ApiJson<public::DeleteInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::delete(&state.deps, &ctx, id, input).await?)
+}
+pub async fn public_mark_handled(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<public::MarkHandledInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::mark_handled(&state.deps, &ctx, input).await?)
+}
+pub async fn public_report(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<PublicItemId>,
+    ApiJson(input): ApiJson<public::ReportInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::report(&state.deps, &ctx, id, input).await?)
+}
+pub async fn public_approve(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(input): ApiJson<public::ApproveInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::approve(&state.deps, &ctx, id, input).await?)
+}
+pub async fn public_discard(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&public::discard(&state.deps, &ctx, id).await?)
+}

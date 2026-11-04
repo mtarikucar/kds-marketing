@@ -106,11 +106,13 @@ döndürür. On dokuz göç vardır (`0019` başka bir dalındır):
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
-| `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 79 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
+| `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
+| `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 82 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
 | `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0019` to `0022` belong to parallel branches. |
 | `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
-| `0026_outreach` | E-posta kampanyaları (leads L4): `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` (bir kişinin aynı anda en fazla bir etkin kaydı), `outreach_sends` (forced RLS; 83 tables), and `outreach.work` and `outreach.manage` for the system owner/manager; `rep` holds neither. Nothing here sends: the platform switch `JEETA_OUTREACH_ENABLED` (off by default) is checked at launch, dispatch and claim. Down refuses nothing (an unsubscribe is the inbox's suppression). |
-| `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 86 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
+| `0025_inbox_public_erasure` | Puts the erasure additions of `0019` and `0024` in one definition (each replaced 0008's functions on its own branch, so the later one dropped the other's: version order runs 0024 last, production ran 0019 last): the mask and the event matching cover public items and the WhatsApp Business app alike. No new table. Down puts back 0024's functions, and is refused once a comment or a question is stored. |
+| `0026_outreach` | E-posta kampanyaları (leads L4): `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` (bir kişinin aynı anda en fazla bir etkin kaydı), `outreach_sends` (forced RLS; 86 tables), and `outreach.work` and `outreach.manage` for the system owner/manager; `rep` holds neither. Nothing here sends: the platform switch `JEETA_OUTREACH_ENABLED` (off by default) is checked at launch, dispatch and claim. Down refuses nothing (an unsubscribe is the inbox's suppression). |
+| `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 89 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -178,6 +180,9 @@ hiçbir günlük satırında görünmez.
 | `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
 | `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
+| `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
+| `JEETA_INSTAGRAM_COMMENT_SCOPES` | kapalı | `1`/`true`: Instagram Login akışları yorum izinlerini de ister (onaydan sonra). Instagram uygulaması olmadan verilemez |
+| `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
@@ -1846,6 +1851,25 @@ ordered by acquisition time and journey ID. The historical Task 9 migration-test
 0007; the compliance schema lives in unreleased **0008**, whose reversible round trip retains
 unrelated inbox rows.
 
+
+## Comments and marketplace questions: the six `inbox.public` rows
+
+Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. They bring the
+inbox to 52 tools (146 in all). None needs an approved strategy: answering customers is not
+planned growth work (owner decision 2026-11-03). Each still needs an `active` workspace.
+
+| Row | Panel route | MCP tool | Risk / permission |
+|---|---|---|---|
+| `inbox.public.hide` | POST `/api/inbox/items/{item_id}/hide` `{hidden}` | `jeeta.inbox.public_hide` | WRITE / `inbox.work` |
+| `inbox.public.delete` | POST `/api/inbox/items/{item_id}/delete` `{confirm}` | `jeeta.inbox.public_delete` | DESTRUCTIVE / `inbox.manage`, humans only |
+| `inbox.public.mark_handled` | POST `/api/inbox/items/handled` `{item_ids, reason}` | `jeeta.inbox.public_mark_handled` | WRITE / `inbox.work` |
+| `inbox.public.report` | POST `/api/inbox/items/{item_id}/report` `{reason}` | `jeeta.inbox.public_report` | WRITE / `inbox.work` |
+| `inbox.public.approve` | POST `/api/inbox/replies/{outbox_id}/approve` `{text?}` | `jeeta.inbox.public_approve` | WRITE / `inbox.work`, humans only |
+| `inbox.public.discard` | POST `/api/inbox/replies/{outbox_id}/discard` | `jeeta.inbox.public_discard` | WRITE / `inbox.work`, the drafter or a human |
+
+Moderation calls the provider with no transaction open: the item is checked, the call made, and
+the result written on the item as it then is; a moderation another one beat is `skipped`, an
+item already so is `unchanged`. Marking handled (1 to 100 items, all or none) tells no provider.
 
 ## M2b panel and architecture completion
 

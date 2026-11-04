@@ -708,8 +708,9 @@ impl BudgetRepo for MemTenant {
 }
 
 impl MemTenant {
-    /// The stored policies with the leads policy read from its stored object. Locks are not
-    /// modelled, so `get` and `read` are one read.
+    /// The stored policies with the leads policy read from its stored object and, as PostgreSQL
+    /// reads it, every default response time the inbox policy lacks. Locks are not modelled, so
+    /// `get` and `read` are one read.
     fn policies(&self) -> Result<WorkspacePolicy, AppError> {
         match self
             .state()
@@ -718,10 +719,14 @@ impl MemTenant {
             .find(|p| p.workspace_id == self.ws)
         {
             None => Ok(WorkspacePolicy::default()),
-            Some(p) => Ok(WorkspacePolicy {
-                leads: jt_app::ports::leads_policy_of(&p.leads)?,
-                ..p.policy.clone()
-            }),
+            Some(p) => {
+                let mut policy = WorkspacePolicy {
+                    leads: jt_app::ports::leads_policy_of(&p.leads)?,
+                    ..p.policy.clone()
+                };
+                policy.inbox = policy.inbox.with_default_response_times();
+                Ok(policy)
+            }
         }
     }
 }

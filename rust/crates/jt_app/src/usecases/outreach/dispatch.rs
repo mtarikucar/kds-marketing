@@ -868,6 +868,8 @@ async fn one(
             subject: Some(rendered.subject),
             in_reply_to,
             references,
+            item_id: None,
+            visibility: None,
         },
         Purpose::Outreach(&send),
     )

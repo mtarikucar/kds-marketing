@@ -208,6 +208,21 @@ export function CapabilityCard({
               {health && <ConnectorHealthBadge health={health} />}
             </div>
             {health && <ConnectorHealthReason health={health} />}
+            {health?.comments && (
+              <p
+                data-testid="comment-status"
+                className={`text-caption ${health.comments === 'reconnect' ? 'text-warning' : 'text-muted-foreground'}`}
+              >
+                {t('capabilities.connector.commentsLine', {
+                  status: t(`capabilities.connector.comments.${health.comments}`),
+                })}
+              </p>
+            )}
+            {health?.measure === 'reconnect' && (
+              <p data-testid="measure-status" className="text-caption text-warning">
+                {t('capabilities.connector.measureReconnect')}
+              </p>
+            )}
             {connecting.length > 0 && onConnector && (
               <div role="group" aria-label={t('capabilities.connector.actionsLabel')} className="flex flex-wrap gap-2">
                 {connecting.map((action) => (

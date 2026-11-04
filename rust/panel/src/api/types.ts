@@ -462,6 +462,7 @@ export const KIND_GROUPS = [
   'community',
   'ads',
   'calendar',
+  'marketplace',
   'device',
   'agent_connection',
   'computer_access',
@@ -498,6 +499,8 @@ export const KINDS = [
   { group: 'ads', key: 'google_ads' },
   { group: 'calendar', key: 'google_calendar' },
   { group: 'calendar', key: 'outlook_calendar' },
+  { group: 'marketplace', key: 'trendyol' },
+  { group: 'marketplace', key: 'hepsiburada' },
   { group: 'device', key: 'phone' },
   { group: 'device', key: 'computer' },
   { group: 'device', key: 'printer' },
@@ -935,7 +938,20 @@ export interface ConnectorHealth {
   reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
+  /**
+   * Whether it takes its comments or questions (`jt_app::usecases::inbox::public::CommentStatus`):
+   * `off` until Meta approved them, `reconnect` when this account's grant lacks them; `null` for a
+   * kind without comments. Absent from a server older than it.
+   */
+  comments?: CommentStatus | null;
+  /**
+   * Whether Studio can read its counters with its grant (`MeasureStatus`), for a kind Studio
+   * publishes to: `reconnect` when the grant lacks the read scope; `null` for another kind.
+   */
+  measure?: 'on' | 'reconnect' | null;
 }
+
+export type CommentStatus = 'off' | 'reconnect' | 'on';
 
 // Inbox: Rust domain serde enums are externally tagged, not `{ kind: … }` objects.
 export type InboxQueue = 'ours' | 'unassigned' | 'snoozed' | 'all';
@@ -956,6 +972,8 @@ export interface InboxPerson {
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }
+/** Where a conversation happens: a direct one, comments or questions in public, or mail a marketplace relays. */
+export type InboxSurface = 'private' | 'public' | 'relay';
 export interface InboxConversationRow {
   id: Uuid;
   workspace_id: Uuid;
@@ -969,6 +987,12 @@ export interface InboxConversationRow {
   last_outbound_at: Rfc3339 | null;
   created_at: Rfc3339;
   updated_at: Rfc3339;
+  /** The view's computed fields (inbox.conversations.list/get); absent on rows read elsewhere. */
+  surface?: InboxSurface;
+  channel?: string | null;
+  owed_items?: number;
+  next_deadline?: Rfc3339 | null;
+  held_replies?: number;
 }
 export interface InboxMessage {
   id: Uuid;
@@ -990,6 +1014,104 @@ export interface InboxMessage {
   at: Rfc3339;
   /** For a failed or uncertain outbound message, the recorded `kind: provider reason`. */
   failure_reason?: string | null;
+  /** On a public conversation: the comment or question the message is, or our reply answers. */
+  item?: { item_id: Uuid; kind: PublicKind; answer_state: PublicAnswerKey; visibility: Visibility | null };
+}
+export type PublicKind = 'comment' | 'question';
+export type Visibility = 'public' | 'private';
+export type PublicAnswerKey = 'awaiting' | 'pending' | 'answered' | 'rejected' | 'handled' | 'expired';
+export type PublicModeration = 'visible' | 'hidden' | 'deleted' | 'removed' | 'reported';
+export type HandledReason = 'no_reply_needed' | 'spam' | 'duplicate' | 'answered_elsewhere';
+export type ReportReason = 'spam' | 'offensive' | 'personal_data' | 'irrelevant' | 'other';
+export type PublicAnswer =
+  | { state: 'awaiting' }
+  | { state: 'pending'; message_id: Uuid }
+  | { state: 'answered'; by: 'us' | 'elsewhere'; message_id: Uuid | null; at: Rfc3339 }
+  | { state: 'rejected'; reason: string; message_id: Uuid | null; at: Rfc3339 }
+  | { state: 'handled'; by: unknown; reason: HandledReason; at: Rfc3339 }
+  | { state: 'expired'; at: Rfc3339 };
+/** One comment or question of a public conversation: ids, states and times only (its text is its message's). */
+export interface PublicItem {
+  id: Uuid;
+  workspace_id: Uuid;
+  capability_id: Uuid;
+  conversation_id: Uuid;
+  message_id: Uuid;
+  subject_id: Uuid | null;
+  kind: PublicKind;
+  external_id: string;
+  parent_external_id: string | null;
+  root_external_id: string;
+  created_at: Rfc3339;
+  taken_at?: Rfc3339 | null;
+  deadline: Rfc3339 | null;
+  private_reply_until: Rfc3339 | null;
+  live: boolean;
+  answer: PublicAnswer;
+  moderation: PublicModeration;
+  private_reply_message_id: Uuid | null;
+  agent_answers: number;
+  checked_at: Rfc3339 | null;
+  updated_at: Rfc3339;
+}
+/** The post or product an item is on. */
+export interface PublicSubject {
+  id: Uuid;
+  kind: 'post' | 'product';
+  external_id: string;
+  title: string;
+  url: string | null;
+  image_url: string | null;
+  facts: Record<string, unknown>;
+  publication_id: Uuid | null;
+}
+export interface PublicRules {
+  public: { min: number; max: number };
+  private: { window_s: number; max_chars: number } | null;
+  one_answer: boolean;
+  moderated: boolean;
+  hide: boolean;
+  delete: boolean;
+  report: boolean;
+  marketplace: boolean;
+}
+export interface PublicThreadEntry {
+  author: 'us' | 'them' | 'other';
+  text: string;
+  at: Rfc3339;
+  external_id: string | null;
+}
+/** What `inbox.context` adds for a comment or question conversation. */
+export interface PublicContext {
+  channel: string;
+  rules: PublicRules;
+  approval_required: boolean;
+  hint: string;
+  items: {
+    item: PublicItem;
+    subject: PublicSubject | null;
+    thread: PublicThreadEntry[];
+    private_reply_until: Rfc3339 | null;
+    owed: boolean;
+  }[];
+}
+export interface PublicDue {
+  conversation_id: Uuid;
+  item_id: Uuid;
+  channel: string;
+  awaiting_since: Rfc3339;
+  deadline: Rfc3339 | null;
+}
+/** A held reply waiting for a human's approval. */
+export interface HeldReply {
+  outbox_id: Uuid;
+  conversation_id: Uuid;
+  item_id: Uuid | null;
+  deadline: Rfc3339 | null;
+}
+export interface ModerationOut {
+  item: PublicItem;
+  outcome: 'applied' | 'unchanged' | 'skipped';
 }
 export type JourneyStatus =
   | 'new'
@@ -1085,6 +1207,8 @@ export interface InboxContext {
   recent_conversations: { conversation: InboxConversationRow; messages: InboxMessage[] }[];
   strategy_guidance: { summary: Identity; segments: Segment[]; hypotheses: Hypothesis[] } | null;
   prohibitions: string[];
+  /** For a comment or question conversation only. */
+  public?: PublicContext;
 }
 export interface InboxPersonOut {
   person: InboxPerson;
@@ -1131,6 +1255,9 @@ export interface InboxPendingOut {
   reopen_questions: InboxConversationRow[];
   merges: InboxMerge[];
   tasks_due: InboxTask[];
+  public_due?: PublicDue[];
+  /** Held replies; listed to human callers only. */
+  approvals?: HeldReply[];
 }
 export interface InboxReplyOut {
   message_id: Uuid;

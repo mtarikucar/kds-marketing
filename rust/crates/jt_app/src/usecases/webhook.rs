@@ -16,7 +16,9 @@
 //! **dropped**: no tenant row is written anywhere ([`Delivery::Unrouted`]; the gate logs and
 //! counts it). So is an event whose workspace is **suspended** ([`Delivery::Inactive`]): a
 //! workspace that is active or awaits payment keeps receiving (its accounts stay connected while
-//! the payment is settled), a suspended one receives nothing. NetGSM signs nothing: each
+//! the payment is settled), a suspended one receives nothing. A Meta comment is dropped as well
+//! while its capability's comments are not enabled ([`Delivery::Disabled`],
+//! `inbox::public::comments_enabled`). NetGSM signs nothing: each
 //! workspace's callback URL carries a token of its own (HMAC under the workspace's MAC key for
 //! [`NETGSM_HOOK_PURPOSE`]), so a NetGSM event is stored in the workspace its URL names, and only
 //! once the token matched and while that workspace is active or awaits payment
@@ -68,7 +70,9 @@
 use std::collections::BTreeMap;
 
 use jt_capability::{CapabilityId, StoredStatus};
-use jt_connector::{InboundEvent, InboundEventId, NetgsmPurpose, Provider, netgsm_token_ok};
+use jt_connector::{
+    EventKind, InboundEvent, InboundEventId, NetgsmPurpose, Provider, netgsm_token_ok,
+};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
@@ -105,6 +109,10 @@ pub enum Delivery {
     Unrouted,
     /// The workspace that holds its account connected is suspended: dropped, nothing written.
     Inactive,
+    /// A Meta comment for a capability whose comments are not enabled
+    /// (`inbox::public::comments_enabled`: the platform's flag is off, or the grant lacks the
+    /// comment scopes): dropped, nothing written.
+    Disabled,
 }
 
 /// Whether a workspace in `status` takes provider events routed to it by account: while it is
@@ -491,6 +499,16 @@ pub async fn receive_for_accounts(
                 }
             };
             for capability in routed {
+                // Comments stay out until the capability's comments are enabled (spec D11).
+                if provider == Provider::Meta
+                    && event.draft.kind == EventKind::Comment
+                    && !super::inbox::public::comments_enabled(deps.apps.as_ref(), &capability)
+                {
+                    if out[i] == Delivery::Unrouted {
+                        out[i] = Delivery::Disabled;
+                    }
+                    continue;
+                }
                 let ws = capability.workspace_id;
                 let takes = match open.get(&ws) {
                     Some(takes) => *takes,
@@ -540,7 +558,9 @@ pub async fn receive_for_accounts(
     for delivery in &out {
         use crate::ports::ops::WebhookOutcome;
         deps.ops_signals.webhook(match delivery {
-            Delivery::Unrouted | Delivery::Inactive => WebhookOutcome::Unrouted,
+            Delivery::Unrouted | Delivery::Inactive | Delivery::Disabled => {
+                WebhookOutcome::Unrouted
+            }
             _ => WebhookOutcome::Accepted,
         });
     }

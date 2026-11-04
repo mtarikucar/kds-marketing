@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import * as api from '@/api/studio';
 import { listCapabilities } from '@/api/capabilities';
 import type { LaneKind } from '@/api/types';
@@ -258,9 +259,17 @@ export function StudioLearned({
           {t('studio.refresh')}
         </button>
       </div>
-      {data?.lane_support.organic.reason && (
-        <p className="text-sm">{t('studio.connectorUnavailable')}</p>
-      )}
+      {data?.lane_support.organic.reason &&
+        (data.lane_support.organic.reason === 'connector_reconnect_required' ? (
+          <p className="text-sm">
+            {t('studio.connectorReconnect')}{' '}
+            <Link className="underline" to="/capabilities">
+              {t('studio.reconnect')}
+            </Link>
+          </p>
+        ) : (
+          <p className="text-sm">{t('studio.connectorUnavailable')}</p>
+        ))}
       <ul className="space-y-3">
         {data?.learned.arms.map(({ arm, evidence: rows }) => (
           <li key={arm.id}>

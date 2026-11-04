@@ -93,7 +93,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 165);
+    assert_eq!(jt_mcp::registry().len(), 171);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -112,10 +112,11 @@ async fn studio_exact_catalog_and_gate_set() {
         }
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
-    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the five
-    // pool tables of 0020_prospects, the three distribution tables of 0027_distribution and the
-    // four outreach tables of 0026_outreach.
-    assert_eq!(all_tables.len(), 86);
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the public
+    // items, subjects and cursors of 0019_inbox_public, the five pool tables of 0020_prospects,
+    // the three distribution tables of 0027_distribution and the four outreach tables of
+    // 0026_outreach.
+    assert_eq!(all_tables.len(), 89);
 
     // All fourteen Studio tables are tenant-scoped.
     assert_eq!(
@@ -509,6 +510,10 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "AdBudgetWriter",
             "LeadGenFetcher",
             "OAuthProvider",
+            // Replies, moderation and polls on public items (comments, marketplace questions):
+            // plan 2026-10-30-inbox-comments-marketplace-plan.md, task F4.
+            "PublicSurface",
+            "PublicPoller",
             "ConnectorRegistry"
         ]
         .into_iter()

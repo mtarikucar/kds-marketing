@@ -85,6 +85,9 @@ pub const CHECKIN_LEDGER_RESOLUTION: Duration = Duration::hours(1);
 /// ("at least this many"), so asking what is pending never counts a whole backlog.
 pub const INBOUND_EVENTS_COUNT_CAP: u32 = 1_000;
 
+/// How soon an owed item's deadline makes it an `AnswerDeadline` item.
+pub const ANSWER_DEADLINE_WINDOW: Duration = Duration::hours(24);
+
 const CHECKIN: &str = CHECKIN_ACTION;
 
 // ---------------------------------------------------------------------------------------------
@@ -160,6 +163,27 @@ pub enum WorkKind {
     },
     /// A visible contact has a merge suggestion.
     MergeSuggested { merge_id: jt_inbox::MergeId },
+    /// An owed comment or question of a visible conversation is due within
+    /// [`ANSWER_DEADLINE_WINDOW`] (spec §3.11): the soonest first.
+    AnswerDeadline {
+        conversation_id: jt_inbox::ConversationId,
+        item_id: Option<jt_inbox::PublicItemId>,
+        #[serde(with = "time::serde::rfc3339")]
+        deadline: OffsetDateTime,
+    },
+    /// A held reply waits for a human's approval (human callers only).
+    ApproveReply {
+        outbox_id: uuid::Uuid,
+        conversation_id: jt_inbox::ConversationId,
+        #[serde(with = "time::serde::rfc3339::option")]
+        deadline: Option<OffsetDateTime>,
+    },
+    /// The platform takes comments, but this Meta capability's grant lacks the comment
+    /// permissions: reconnect it.
+    EnableComments {
+        capability_id: CapabilityId,
+        name: String,
+    },
     /// An open task has reached its due time.
     TaskDue { task_id: jt_inbox::TaskId },
     /// Start the consultation, or continue the open draft's.
@@ -233,6 +257,9 @@ impl WorkKind {
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
             WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
+            WorkKind::AnswerDeadline { .. } => "inbox.reply",
+            WorkKind::ApproveReply { .. } => "inbox.public.approve",
+            WorkKind::EnableComments { .. } => "connector.reconnect",
             WorkKind::TaskDue { .. } => "inbox.tasks.complete",
             WorkKind::ConsultStrategy => "strategy.start_consultation",
             WorkKind::ApproveStrategy => "strategy.approve",
@@ -383,7 +410,45 @@ async fn pending_as_seen(
             priority: 3,
             hint: "Complete the due journey task.".into(),
         }));
+        // `public_due` is soonest deadline first.
+        items.extend(p.public_due.into_iter().filter_map(|d| {
+            let deadline = d
+                .deadline
+                .filter(|at| *at - ctx.now <= ANSWER_DEADLINE_WINDOW)?;
+            Some(WorkItem {
+                kind: WorkKind::AnswerDeadline {
+                    conversation_id: d.conversation_id,
+                    item_id: Some(d.item_id),
+                    deadline,
+                },
+                priority: 1,
+                hint: "Answer the item with jeeta.inbox.reply before its deadline; after it the \
+                       platform takes no answer."
+                    .into(),
+            })
+        }));
+        items.extend(p.approvals.into_iter().map(|a| {
+            WorkItem {
+                priority: if a
+                    .deadline
+                    .is_some_and(|at| at - ctx.now <= ANSWER_DEADLINE_WINDOW)
+                {
+                    1
+                } else {
+                    2
+                },
+                kind: WorkKind::ApproveReply {
+                    outbox_id: a.outbox_id,
+                    conversation_id: a.conversation_id,
+                    deadline: a.deadline,
+                },
+                hint:
+                    "Read the held reply, then approve it (an edit is fenced again) or discard it."
+                        .into(),
+            }
+        }));
     }
+    items.extend(enable_comment_items(deps, &capabilities));
     if let Some(p) = studio {
         items.extend(p.slots.into_iter().map(|s| WorkItem {
             kind: WorkKind::StudioSlot {
@@ -803,4 +868,33 @@ async fn version_in_force(
     repos: &mut dyn TenantRepos,
 ) -> Result<Option<StrategyVersionId>, AppError> {
     Ok(repos.strategy().current_approved().await?.map(|v| v.id))
+}
+
+/// The Meta surface capabilities (Facebook Pages, Instagram accounts) not retired whose platform
+/// comment flag is on for their login but whose grant lacks the comment permissions
+/// ([`super::inbox::public::CommentStatus::Reconnect`]): an `EnableComments` item each. With the
+/// flags off, none.
+fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
+    capabilities
+        .iter()
+        .map(|out| &out.capability)
+        .filter(|c| {
+            matches!(c.kind_key.as_str(), "facebook_page" | "instagram")
+                && c.status != jt_capability::StoredStatus::Retired
+        })
+        .filter(|c| {
+            super::inbox::public::comment_status(deps.apps.as_ref(), c)
+                == Some(super::inbox::public::CommentStatus::Reconnect)
+        })
+        .map(|c| WorkItem {
+            kind: WorkKind::EnableComments {
+                capability_id: c.id,
+                name: c.name.clone(),
+            },
+            priority: 3,
+            hint: "Comments are on for this platform, but this account's grant lacks the comment \
+                   permissions: ask a human to reconnect it (jeeta.connector.reconnect)."
+                .into(),
+        })
+        .collect()
 }

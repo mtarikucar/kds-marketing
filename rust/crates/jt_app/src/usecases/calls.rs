@@ -492,7 +492,7 @@ pub(crate) fn within_hours(c: &Capability, now: OffsetDateTime) -> Result<bool, 
 }
 
 /// The local day holding `now` in the capability's working-hours time zone (else Istanbul).
-fn local_day(c: &Capability, now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
+pub(crate) fn local_day(c: &Capability, now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
     let name = c
         .policy
         .active_hours

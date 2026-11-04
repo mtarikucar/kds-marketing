@@ -53,6 +53,12 @@ const TOOLS: &[&str] = &[
     "jeeta.inbox.commissions_approve",
     "jeeta.inbox.commissions_pay",
     "jeeta.inbox.commission_rates_set",
+    "jeeta.inbox.public_hide",
+    "jeeta.inbox.public_delete",
+    "jeeta.inbox.public_mark_handled",
+    "jeeta.inbox.public_report",
+    "jeeta.inbox.public_approve",
+    "jeeta.inbox.public_discard",
     "jeeta.inbox.people_search",
     "jeeta.inbox.people_get",
     "jeeta.inbox.people_create",
@@ -181,7 +187,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 165);
+    assert_eq!(TOOLS.len(), 171);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -679,7 +685,9 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
             "netgsm_sms",
             "netgsm_iys",
             "netgsm_pbx",
-            "meta_token"
+            "meta_token",
+            "trendyol_seller",
+            "hepsiburada_merchant"
         ])
     );
     assert_eq!(

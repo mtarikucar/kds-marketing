@@ -511,3 +511,86 @@ async fn business_account_and_business_app_events_reach_the_number() {
             .all(|e| e.processed_at.is_some() && e.capability_id == Some(number))
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Comments through the gate (plan 2026-10-30-inbox-comments-marketplace-plan.md, task M5)
+// ---------------------------------------------------------------------------------------------
+
+/// The Page of the comment fixtures.
+const COMMENT_PAGE: &str = "1234567890";
+
+/// A Page token's grant with the comment scopes.
+const PAGE_COMMENT_SCOPES: &[&str] = &[
+    "pages_messaging",
+    "pages_read_engagement",
+    "pages_manage_engagement",
+    "pages_read_user_content",
+];
+
+/// The platform's apps with both comment flags on.
+fn comment_apps() -> FakeAppConfig {
+    let mut apps = FakeAppConfig::with_all_apps();
+    apps.meta.as_mut().unwrap().comment_scopes = true;
+    apps.instagram.as_mut().unwrap().comment_scopes = true;
+    apps
+}
+
+#[tokio::test]
+async fn signed_comment_delivery_is_stored_when_granted() {
+    let w = World::new().await.with_apps(comment_apps());
+    let page = w
+        .granted(w.ws, "facebook_page", COMMENT_PAGE, PAGE_COMMENT_SCOPES)
+        .await;
+    let body = fixture("meta/page_feed_comments.json");
+    let (status, text) = answer(&w.app(), signed(&body)).await;
+    assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+    let events = w.events_of(w.ws);
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|e| e.kind == EventKind::Comment));
+    assert!(events.iter().all(|e| e.capability_id == Some(page)));
+    let ids: Vec<&str> = events.iter().map(|e| e.external_id.as_str()).collect();
+    assert_eq!(ids, ["comment:111_901:open", "comment:111_902:open"]);
+}
+
+#[tokio::test]
+async fn signed_comment_delivery_is_dropped_and_counted_when_not_granted() {
+    let body = fixture("meta/page_feed_comments.json");
+    // The flag is off; and, with the flag on, a grant without the comment scopes.
+    for (apps, scopes) in [
+        (FakeAppConfig::with_all_apps(), PAGE_COMMENT_SCOPES),
+        (comment_apps(), &["pages_messaging"][..]),
+    ] {
+        let w = World::new().await.with_apps(apps);
+        w.granted(w.ws, "facebook_page", COMMENT_PAGE, scopes).await;
+        let before = counters().disabled_meta;
+        let logs = Logs::capture();
+        let (status, text) = answer(&w.app(), signed(&body)).await;
+        assert_eq!((status, text.as_str()), (StatusCode::OK, "EVENT_RECEIVED"));
+        // No tenant row: nothing stored at all.
+        assert!(w.stored().is_empty());
+        assert!(counters().disabled_meta >= before + 2);
+        let logs = logs.text();
+        assert!(logs.contains("WARN"), "{logs}");
+        assert!(logs.contains("reason=\"comments_not_enabled\""), "{logs}");
+        for private in [COMMENT_PAGE, "111_901", "5550001", "Fiyatı", "Örnek"] {
+            assert!(!logs.contains(private), "the log names {private}: {logs}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn mixed_delivery_keeps_messages_and_drops_comments() {
+    let w = World::new().await.with_apps(comment_apps());
+    w.granted(w.ws, "facebook_page", COMMENT_PAGE, &["pages_messaging"])
+        .await;
+    let body = fixture("meta/page_comment_and_message.json");
+    let before = counters().disabled_meta;
+    let (status, _) = answer(&w.app(), signed(&body)).await;
+    assert_eq!(status, StatusCode::OK);
+    let events = w.events_of(w.ws);
+    // The message is kept; the comment beside it is not.
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, EventKind::Message);
+    assert_eq!(events[0].external_id, "m_mixed_1");
+    assert!(counters().disabled_meta > before);
+}
