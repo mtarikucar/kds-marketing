@@ -461,6 +461,11 @@ impl MailboxCursor {
 /// caption (then `text`, with no `link`), the privacy (then also `privacy`), the interactions and
 /// the commercial content disclosure. The TikTok adapter posts nothing without it and never
 /// picks a privacy itself; every other adapter ignores it.
+///
+/// `format` is the planned post's (`jt_studio::PostFormat`, spec 2026-11-03 D20), `None` for a
+/// slot of the weekly quotas. Instagram publishes a `story` as a `STORIES` container (one medium,
+/// no caption) and refuses a story it cannot post as one; every other format, and every other
+/// adapter, goes by the media as before.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -475,12 +480,15 @@ pub struct PublishRequest {
     /// The TikTok posting screen's choice (see above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiktok: Option<TiktokPost>,
+    /// The planned post's format, when the slot carries one (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<PostFormat>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
 pub use jt_studio::{
-    MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostFlags,
-    TiktokPostMode, TiktokPostRefusal,
+    MediaUpload, PostFormat, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost,
+    TiktokPostFlags, TiktokPostMode, TiktokPostRefusal,
 };
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
@@ -1727,6 +1735,7 @@ mod tests {
             }],
             privacy: None,
             tiktok: None,
+            format: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

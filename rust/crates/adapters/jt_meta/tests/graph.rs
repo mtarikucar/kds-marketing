@@ -672,6 +672,7 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 media: vec![],
                 privacy: None,
                 tiktok: None,
+                format: None,
             },
         )
         .await
@@ -1569,6 +1570,7 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         media: vec![],
         privacy: None,
         tiktok: None,
+        format: None,
     }
 }
 
@@ -1722,6 +1724,141 @@ async fn facebook_publish_feed_photos_and_video() {
             "permanent"
         );
     }
+    assert!(m.recorded().is_empty());
+}
+
+/// `request` as an Instagram story (its planned post's format).
+fn story(mut request: PublishRequest) -> PublishRequest {
+    request.format = Some(jt_app::ports::connectors::PostFormat::Story);
+    request
+}
+
+/// A story is one `STORIES` container of one image or one video, without a caption (the Content
+/// Publishing API documents none for stories), read until FINISHED, then published; with a Page
+/// token on the Graph API.
+#[tokio::test]
+async fn ig_story_is_one_stories_container_without_a_caption_on_the_graph_api() {
+    let r = rig().await;
+    let m = &r.mock;
+    let p = public("instagram", Some(IG));
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "700" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "701" })),
+    );
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    let receipt = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(post(
+                "Hikâyede metin gitmez",
+                &["https://cdn.test/yeni.jpg"],
+                Some("https://kahve.test"),
+            )),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "701");
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "image_url": "https://cdn.test/yeni.jpg" })
+    );
+    assert_eq!(m.requests("GET", "/fb/v19.0/700").len(), 2);
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .json(),
+        json!({ "creation_id": "700" })
+    );
+}
+
+/// With an Instagram Login token a story goes to graph.instagram.com the same way; a video is
+/// its `video_url`.
+#[tokio::test]
+async fn ig_story_video_goes_through_instagram_login() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media",
+        ok(json!({ "id": "9300000000" })),
+    );
+    m.on(
+        "GET",
+        "/ig/9300000000",
+        ok(json!({ "status_code": "FINISHED", "id": "9300000000" })),
+    );
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media_publish",
+        ok(json!({ "id": "9400000000" })),
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    let p = public("instagram", Some("17841400000000009"));
+    let receipt = r
+        .meta
+        .publish(
+            &ig_login_cred(),
+            &p,
+            &story(post("", &["https://cdn.test/yeni.mp4"], None)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "9400000000");
+    assert_eq!(
+        m.request("POST", "/ig/17841400000000009/media").json(),
+        json!({ "media_type": "STORIES", "video_url": "https://cdn.test/yeni.mp4" })
+    );
+    for call in m.recorded() {
+        assert!(call.path.starts_with("/ig/"), "{}", call.line());
+        assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN), "{}", call.line());
+    }
+}
+
+/// A story is one medium; a Facebook Page's stories are not built: both refused, nothing sent.
+#[tokio::test]
+async fn a_story_of_two_media_or_on_a_page_is_refused_before_anything_is_sent() {
+    let r = rig().await;
+    let m = &r.mock;
+    let two = story(post(
+        "",
+        &["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"],
+        None,
+    ));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("instagram", Some(IG)), &two)
+                .await
+        ),
+        "permanent"
+    );
+    let page = story(post("", &["https://cdn.test/a.jpg"], None));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("facebook_page", Some(PAGE)), &page)
+                .await
+        ),
+        "permanent"
+    );
     assert!(m.recorded().is_empty());
 }
 

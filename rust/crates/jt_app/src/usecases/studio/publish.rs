@@ -78,8 +78,9 @@ pub(crate) fn content<'a>(
         None => (&p.text, &p.media, None, None),
     }
 }
-/// The request publishing `p` on `c`. A TikTok post (`tiktok`, the posting screen's choice) goes
-/// out as the human left it there: its caption in place of the drafted text and link, its
+/// The request publishing `p` on `c`, as a post of `format` when the slot carries a planned post
+/// (an Instagram story goes out as one). A TikTok post (`tiktok`, the posting screen's choice)
+/// goes out as the human left it there: its caption in place of the drafted text and link, its
 /// privacy in place of the adaptation's.
 async fn request(
     d: &Deps,
@@ -87,6 +88,7 @@ async fn request(
     p: &Piece,
     c: &Capability,
     tiktok: Option<&TiktokPost>,
+    format: Option<jt_studio::PostFormat>,
 ) -> Result<PublishRequest, AppError> {
     p.validate_persisted()
         .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
@@ -101,6 +103,7 @@ async fn request(
             media,
             privacy: (!post.is_draft()).then(|| post.privacy_level.clone()),
             tiktok: Some(post.clone()),
+            format,
         },
         None => PublishRequest {
             text: text.to_owned(),
@@ -109,6 +112,7 @@ async fn request(
             media,
             privacy: privacy.map(str::to_owned),
             tiktok: None,
+            format,
         },
     };
     Ok(out)
@@ -198,7 +202,8 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     .await?
                     .ok_or_else(|| AppError::not_found("piece"))?;
                 let choice = screen_choice(r.as_mut(), &s, &c).await?;
-                found = Some((s, p, c, choice));
+                let format = r.studio_posts().get_post(s.id).await?.map(|x| x.format);
+                found = Some((s, p, c, choice, format));
                 break;
             }
             if found.is_none()
@@ -209,7 +214,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             }
             found
         };
-        let Some((slot, piece, cap, choice)) = candidate else {
+        let Some((slot, piece, cap, choice, format)) = candidate else {
             break;
         };
         let provider = provider_for_kind(&cap.kind_key)
@@ -218,7 +223,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             .connectors
             .publisher(provider)
             .ok_or_else(|| chain::refuse("connector_unavailable"))?;
-        let req = request(d, ws, &piece, &cap, choice.as_ref()).await;
+        let req = request(d, ws, &piece, &cap, choice.as_ref(), format).await;
         if let Err(e) = &req
             && !matches!(
                 e.code,

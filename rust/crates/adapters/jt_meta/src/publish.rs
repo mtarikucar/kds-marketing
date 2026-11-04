@@ -11,6 +11,11 @@
 //!   10 items as a carousel of child containers), read until its `status_code` is `FINISHED`
 //!   ([`crate::ContainerPoll`], by default 30 reads 3 s apart; `ERROR` or `EXPIRED` is
 //!   `Permanent`, never finishing `Transient`), then `POST /{ig}/media_publish {creation_id}`.
+//!   A story (the request's `format` is `story`) is one `STORIES` container of one image or one
+//!   video, `{media_type: STORIES, image_url | video_url}` without a caption (the Content
+//!   Publishing API documents none for stories: <https://developers.facebook.com/docs/instagram-platform/content-publishing>,
+//!   <https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media>),
+//!   read until `FINISHED` and published the same way, on either login path.
 //!   With a Page token on the Graph API (the Instagram account is `public["external_id"]`, else
 //!   the page's linked account); with an Instagram Login token on `graph.instagram.com`, without
 //!   `appsecret_proof` (the account is `public["external_id"]`, else `me`). A link is appended to
@@ -27,7 +32,7 @@
 
 use std::fmt;
 
-use jt_app::ports::connectors::{PublishReceipt, PublishRequest};
+use jt_app::ports::connectors::{PostFormat, PublishReceipt, PublishRequest};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
 use url::Url;
@@ -119,13 +124,18 @@ async fn linked_instagram(
 // Facebook
 // ---------------------------------------------------------------------------------------------
 
-/// A post on `page` (an id, or `me`).
+/// A post on `page` (an id, or `me`). A Page's stories are not built: a story is refused.
 async fn facebook(
     connector: &MetaConnector,
     page: &str,
     token: &str,
     request: &PublishRequest,
 ) -> Result<PublishReceipt, ConnectorError> {
+    if request.format == Some(PostFormat::Story) {
+        return Err(ConnectorError::permanent(
+            "a Facebook Page story is not published",
+        ));
+    }
     let app = connector.graph_app()?;
     let media = &request.media_urls;
     let videos = media.iter().filter(|m| is_video(m)).count();
@@ -264,6 +274,21 @@ async fn instagram(
     request: &PublishRequest,
 ) -> Result<PublishReceipt, ConnectorError> {
     let media = &request.media_urls;
+    if request.format == Some(PostFormat::Story) {
+        // One medium and no caption: the text and the link of a story never go out.
+        let [only] = media.as_slice() else {
+            return Err(ConnectorError::permanent(
+                "an Instagram story is one image or one video",
+            ));
+        };
+        let body = if is_video(only) {
+            json!({ "media_type": "STORIES", "video_url": only.as_str() })
+        } else {
+            json!({ "media_type": "STORIES", "image_url": only.as_str() })
+        };
+        let container = create(connector, ig, account, body).await?;
+        return published(connector, ig, account, &container).await;
+    }
     let caption = with_link(&request.text, request.link.as_ref());
     let container = match media.as_slice() {
         [] => {
@@ -299,7 +324,18 @@ async fn instagram(
             create(connector, ig, account, body).await?
         }
     };
-    wait_finished(connector, ig, &container).await?;
+    published(connector, ig, account, &container).await
+}
+
+/// Reads `container` until it is `FINISHED`, publishes it on `account` and answers the media's
+/// id and, best effort, its permalink.
+async fn published(
+    connector: &MetaConnector,
+    ig: &Ig<'_>,
+    account: &str,
+    container: &str,
+) -> Result<PublishReceipt, ConnectorError> {
+    wait_finished(connector, ig, container).await?;
     let published = ig
         .post(
             connector,
