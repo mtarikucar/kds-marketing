@@ -56,6 +56,7 @@ const HUMAN_ONLY: &[&str] = &[
     "material_delete",
     "calendar_set",
     "material_policy_set",
+    "material_check_release",
 ];
 
 fn tools() -> BTreeMap<&'static str, jt_mcp::ToolSpec> {

@@ -80,7 +80,8 @@ const EXEMPT: &[&str] = &[
 ];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
 /// (TikTok's Content Sharing Guidelines), and its published post's counters.
-/// The materials library's human decisions (D4) are panel routes without a tool too.
+/// The materials library's human decisions (D4), releasing a slot's caption findings (§7) among
+/// them, are panel routes without a tool too.
 const PANEL_ONLY: &[&str] = &[
     "tiktok_posting",
     "tiktok_post",
@@ -92,6 +93,7 @@ const PANEL_ONLY: &[&str] = &[
     "material_delete",
     "calendar_set",
     "material_policy_set",
+    "material_check_release",
 ];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
@@ -103,7 +105,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 41);
+    assert_eq!(rows.len(), 42);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -446,6 +448,26 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 ErrorCode::StrategyRequired
             },
             "tiktok_post: {e:?}"
+        );
+        // So does releasing a slot's caption findings, a human's decision on the slot.
+        let e = jt_app::usecases::studio::materials::material_check_release(
+            &w.d,
+            &w.ctx,
+            serde_json::from_value(json!({
+                "slot_id": w.f.slot.id, "expected_revision": 1, "digest": "0".repeat(64),
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            e.code,
+            if inactive {
+                ErrorCode::WorkspaceInactive
+            } else {
+                ErrorCode::StrategyRequired
+            },
+            "material_check_release: {e:?}"
         );
         // The library's panel-only writes, a human's decisions, meet the status check alone.
         if inactive {

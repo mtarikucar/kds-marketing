@@ -57,8 +57,9 @@ const POST_M4_ADDED: [(&str, &str); 28] = [
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
 /// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
-/// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4).
-const POST_M4_PANEL_ONLY: [&str; 17] = [
+/// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4),
+/// releasing a slot's caption findings among them (§7).
+const POST_M4_PANEL_ONLY: [&str; 18] = [
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
@@ -76,6 +77,7 @@ const POST_M4_PANEL_ONLY: [&str; 17] = [
     "studio.material_delete",
     "studio.calendar_set",
     "studio.material_policy_set",
+    "studio.material_check_release",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {
