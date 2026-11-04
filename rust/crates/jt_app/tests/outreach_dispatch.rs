@@ -1500,3 +1500,16 @@ async fn promoted_not_contacted_counts_prospects_nobody_wrote_to() {
     running(&o, definition(t, json!({"explicit": [person]}))).await;
     assert_eq!(count(pending(&w.deps, &later).await.unwrap()), None);
 }
+
+/// Every job's run, the dispatcher's among them, is driven on the scheduler's threads, so its
+/// future must be `Send`: nothing that is not (a `&dyn Fn`, say) may live across an await. Only
+/// `jeeta`'s build would catch it otherwise, and it does not build on every platform.
+#[test]
+fn every_job_run_can_move_between_threads() {
+    fn movable<T: Send>(_: &T) {}
+    let deps = jt_testkit::fakes::deps(std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new()));
+    for job in jt_app::usecases::jobs::Job::ALL {
+        let run = job.run(&deps, FIXED_NOW);
+        movable(&run);
+    }
+}

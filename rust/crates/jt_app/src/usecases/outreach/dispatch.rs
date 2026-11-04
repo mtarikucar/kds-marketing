@@ -789,8 +789,10 @@ async fn one(
             })
             .unwrap_or_default()
     };
-    let link_url: Option<&dyn Fn(usize) -> String> =
-        (c.definition.click_tracking && base.is_some()).then_some(&click);
+    // A plain flag for what follows: the `&dyn Fn` is not `Send`, so it must not live across
+    // the awaits below (the dispatcher's future runs on the scheduler's threads).
+    let tracked = c.definition.click_tracking && base.is_some();
+    let link_url: Option<&dyn Fn(usize) -> String> = tracked.then_some(&click);
     let rendered = match render_body(&snapshot, &render_vars, link_url) {
         Ok(r) => r,
         Err(RenderError::MissingVariable(key)) => {
@@ -828,7 +830,7 @@ async fn one(
         language: snapshot.language,
         // What a click redirect of this email leads to: the snapshot it was rendered from (a
         // later edit of the campaign re-snapshots its steps, spec D65).
-        links: if link_url.is_some() {
+        links: if tracked {
             snapshot.links.clone()
         } else {
             Vec::new()
