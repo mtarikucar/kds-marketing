@@ -1,7 +1,7 @@
 //! Olay-driven publishing's use cases (spec `2026-11-03-studio-materials-design.md` §14): the
-//! package requests the planner's triggers write (`studio.package_requests`), an agent's answer
+//! package requests the planner's triggers write (`studio.post_requests`), an agent's answer
 //! with planned posts, validated all-or-nothing and materialized at once
-//! (`studio.package_propose`), the planned posts (`studio.posts_list`), the owner's weekly summary
+//! (`studio.posts_propose`), the planned posts (`studio.posts_list`), the owner's weekly summary
 //! (`studio.weekly_summary`) and the posting policy, a human's (`studio.posting_policy_set`).
 //!
 //! Each needs an approved strategy (they plan content) and `studio.work`. Nothing is published
@@ -443,10 +443,10 @@ pub(crate) async fn retire_posts_after(
 }
 
 // ---------------------------------------------------------------------------------------------
-// studio.package_requests
+// studio.post_requests
 // ---------------------------------------------------------------------------------------------
 
-/// Which requests `studio.package_requests` answers.
+/// Which requests `studio.post_requests` answers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageFilter {
@@ -465,7 +465,7 @@ pub struct PackageQuery {
 }
 
 /// The package requests, open ones unless `status` says otherwise, newest first.
-pub async fn package_requests(
+pub async fn post_requests(
     d: &Deps,
     ctx: &Ctx,
     q: PackageQuery,
@@ -486,7 +486,7 @@ pub async fn package_requests(
 }
 
 // ---------------------------------------------------------------------------------------------
-// studio.package_propose
+// studio.posts_propose
 // ---------------------------------------------------------------------------------------------
 
 /// One post of an agent's package (spec D27).
@@ -508,7 +508,7 @@ pub struct ProposedPost {
     pub content_type: Option<String>,
 }
 
-/// `studio.package_propose`'s input: the request it answers and its posts.
+/// `studio.posts_propose`'s input: the request it answers and its posts.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageProposalInput {
@@ -596,7 +596,7 @@ struct Checked {
 /// exists), a planned slot per post (`scheduled_at = publish_at`), its post with its preparation
 /// start and grace, the request answered. `CONFLICT` `request_not_open` once it is answered or
 /// expired; replayed by `request_key`.
-pub async fn package_propose(
+pub async fn posts_propose(
     d: &Deps,
     ctx: &Ctx,
     i: PackageProposalInput,
@@ -614,7 +614,7 @@ pub async fn package_propose(
     r.studio_control().lock_control().await?;
     if let Some(v) = r
         .studio()
-        .request_replay("studio.package_propose", &i.request_key, &payload)
+        .request_replay("studio.posts_propose", &i.request_key, &payload)
         .await?
     {
         return decode(v);
@@ -801,7 +801,7 @@ pub async fn package_propose(
     };
     r.studio()
         .request_receipt(
-            "studio.package_propose",
+            "studio.posts_propose",
             &i.request_key,
             &payload,
             &encode(&out)?,

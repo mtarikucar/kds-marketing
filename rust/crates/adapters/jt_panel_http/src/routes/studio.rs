@@ -461,22 +461,22 @@ pub async fn shoot_resolve(
 
 use jt_app::ports::posts::{PackageRequest, PackageRequestId, PostingSettings};
 use jt_app::usecases::studio::posts;
-pub async fn package_requests(
+pub async fn post_requests(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiQuery(q): ApiQuery<posts::PackageQuery>,
 ) -> Result<Json<Vec<PackageRequest>>, ApiError> {
-    Ok(Json(posts::package_requests(&s.deps, &ctx, q).await?))
+    Ok(Json(posts::post_requests(&s.deps, &ctx, q).await?))
 }
 /// An answer to the package request of the path: `{request_key, posts}`.
-pub async fn package_propose(
+pub async fn posts_propose(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiPath(id): ApiPath<PackageRequestId>,
     ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Result<Json<posts::PackageProposalOut>, ApiError> {
     let input = path_body(body, &[("request_id", serde_json::json!(id))])?;
-    Ok(Json(posts::package_propose(&s.deps, &ctx, input).await?))
+    Ok(Json(posts::posts_propose(&s.deps, &ctx, input).await?))
 }
 pub async fn posts_list(
     State(s): State<AppState>,

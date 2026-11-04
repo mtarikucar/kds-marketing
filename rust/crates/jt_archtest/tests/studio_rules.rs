@@ -50,8 +50,8 @@ const ACTIONS: &[&str] = &[
     "shoot_list",
     "shoot_request",
     "shoot_resolve",
-    "package_requests",
-    "package_propose",
+    "post_requests",
+    "posts_propose",
     "posts_list",
     "weekly_summary",
 ];
@@ -377,7 +377,7 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
             json!({"request_id":jt_studio::ShootRequestId::new_v7(),"status":"done"}),
         ),
         (
-            "package_propose",
+            "posts_propose",
             json!({"request_id":jt_studio::PackageRequestId::new_v7(),"request_key":"package",
                 "posts":[{"format":"feed_post","capability_id":w.f.slot.capability_id,
                     "publish_at":"2026-11-01T09:00:00Z","material_ids":[w.material().id],

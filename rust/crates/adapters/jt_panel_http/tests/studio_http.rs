@@ -57,8 +57,8 @@ fn studio_routes_have_exact_catalog_twins() {
             // Releasing a slot's caption findings (§7): a human's, behind the strategy gate.
             ("POST", "/api/studio/slots/{slot_id}/material-check/release"),
             // Olay-driven publishing (§14.3): its twins, then the posting policy, a human's.
-            ("GET", "/api/studio/package-requests"),
-            ("POST", "/api/studio/package-requests/{request_id}/proposal"),
+            ("GET", "/api/studio/post-requests"),
+            ("POST", "/api/studio/post-requests/{request_id}/proposal"),
             ("GET", "/api/studio/posts"),
             ("GET", "/api/studio/summary"),
             ("PUT", "/api/studio/posting-policy")

@@ -100,7 +100,7 @@ pub async fn run_acceptance() {
         .unwrap();
     let mut ctx = w.ctx.clone();
     ctx.now = start;
-    let requests = posts::package_requests(&w.d, &ctx, Default::default())
+    let requests = posts::post_requests(&w.d, &ctx, Default::default())
         .await
         .unwrap();
     // One request per olay: the new one's lists the new material.
@@ -123,7 +123,7 @@ pub async fn run_acceptance() {
         jt_studio::SlotState::Retired
     );
     // The agent answers with one post on the X account; it is materialized at once.
-    let package = posts::package_propose(
+    let package = posts::posts_propose(
         &w.d,
         &ctx,
         serde_json::from_value(json!({

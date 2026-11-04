@@ -251,11 +251,11 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
 fn posting(action: &str) -> Option<(Value, &'static [&'static str])> {
     let instant = json!({"type":"string","format":"date-time"});
     Some(match action {
-        "package_requests" => (
+        "post_requests" => (
             json!({"status":{"type":"string","enum":["open","answered","expired","all"]}}),
             &[],
         ),
-        "package_propose" => {
+        "posts_propose" => {
             let formats: Vec<&str> = jt_studio::PostFormat::ALL.iter().map(|f| f.key()).collect();
             let post = object(
                 json!({"format":{"type":"string","enum":formats},"capability_id":uuid(),

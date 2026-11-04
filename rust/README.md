@@ -2344,7 +2344,7 @@ All five require an active workspace, including direct application calls.
 are olay-driven (spec `2026-11-03-studio-materials-design.md` §14): the planner never
 creates one; its triggers (an olay's new eligible materials, a calendar occasion within
 its lead, a channel's floor) write package requests or çekim listesi items, an agent
-answers a request with `studio.package_propose`, and a post enters the pending work at
+answers a request with `studio.posts_propose`, and a post enters the pending work at
 its preparation start and retires `missed_grace` after its grace. Once, it retires the
 weekly quotas' planned and ready organic slots (`replanned`). The paid lane keeps the
 weekly positions described next. Weeks start Monday

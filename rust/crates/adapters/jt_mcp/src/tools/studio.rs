@@ -162,7 +162,7 @@ fn posting_definitions() -> Vec<ToolDef> {
     };
     vec![
         def(
-            "studio.package_requests",
+            "studio.post_requests",
             "Read the package requests: work Studio's triggers wrote for you, never posts. An \
              olay request lists an olay's new eligible materials (after they stop changing for \
              30 minutes), a calendar request an occasion's olay as its window nears, a floor \
@@ -171,11 +171,11 @@ fn posting_definitions() -> Vec<ToolDef> {
              kind) and hints (subject, max_posts, the floor's hypothesis and content_type, a \
              season's window). status open (the default), answered, expired or all; an open \
              request expires after 7 days. Returns {requests: [...]}. [risk: READ]",
-            || posting_schema("package_requests"),
-            package_requests,
+            || posting_schema("post_requests"),
+            post_requests,
         ),
         def(
-            "studio.package_propose",
+            "studio.posts_propose",
             "Answer an open package request (request_id) with planned posts, with request_key \
              (replayed). Each post: format (feed_post, carousel, reel, tiktok_video; story is \
              not published anywhere yet), capability_id (an organic, connected channel taking \
@@ -192,8 +192,8 @@ fn posting_definitions() -> Vec<ToolDef> {
              once; each enters jeeta.studio.pending at its preparation start (publish_at minus \
              the format's lead), when you submit its piece with jeeta.studio.piece_submit. \
              [risk: WRITE]",
-            || posting_schema("package_propose"),
-            package_propose,
+            || posting_schema("posts_propose"),
+            posts_propose,
         ),
         def(
             "studio.posts_list",
@@ -220,11 +220,11 @@ fn posting_schema(action: &str) -> Schema {
     Schema::try_from(schema::input(action)).expect("studio schema")
 }
 
-fn package_requests<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
-    Box::pin(async move { listed("requests", &posts::package_requests(d, c, args(v)?).await?) })
+fn post_requests<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { listed("requests", &posts::post_requests(d, c, args(v)?).await?) })
 }
-fn package_propose<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
-    Box::pin(async move { to_json(&posts::package_propose(d, c, args(v)?).await?) })
+fn posts_propose<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move { to_json(&posts::posts_propose(d, c, args(v)?).await?) })
 }
 fn posts_list<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&posts::posts_list(d, c, args(v)?).await?) })

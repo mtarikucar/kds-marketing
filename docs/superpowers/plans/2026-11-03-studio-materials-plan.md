@@ -130,7 +130,7 @@ Migration `0022_studio_posts` (posts, package requests, posting policy; down ref
   publication.
 
 ### P3-T4 Package proposal and just-in-time work
-- [ ] `studio.package_requests`, `studio.package_propose`, `studio.posts_list`, `studio.weekly_summary`
+- [ ] `studio.post_requests`, `studio.posts_propose`, `studio.posts_list`, `studio.weekly_summary`
   (twins); `studio.posting_policy_set` (panel only); catalog, MCP, routes, archtest pins.
 - [ ] Pending lists a post only from `prep_start_at`; missed past grace → retired `missed_grace`.
 

@@ -16,9 +16,9 @@ use serde_json::{Value, json};
 
 /// Every twin, with its risk and required arguments.
 const TWINS: &[(&str, Risk, &[&str])] = &[
-    ("package_requests", Risk::Read, &[]),
+    ("post_requests", Risk::Read, &[]),
     (
-        "package_propose",
+        "posts_propose",
         Risk::Write,
         &["request_id", "request_key", "posts"],
     ),
@@ -68,9 +68,7 @@ async fn posting_tools_are_gated_twins_and_the_policy_has_no_tool() {
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert!(!tools.contains_key("jeeta.studio.posting_policy_set"));
     // A package's schema names the formats and needs each post's essentials.
-    let propose = tools["jeeta.studio.package_propose"]
-        .input_schema
-        .as_value();
+    let propose = tools["jeeta.studio.posts_propose"].input_schema.as_value();
     let post = &propose["properties"]["posts"]["items"];
     assert_eq!(
         post["properties"]["format"]["enum"],
@@ -93,7 +91,7 @@ async fn posting_tools_are_gated_twins_and_the_policy_has_no_tool() {
         "jeeta.studio.piece_submit",
     ] {
         assert!(
-            tools["jeeta.studio.package_propose"]
+            tools["jeeta.studio.posts_propose"]
                 .description
                 .contains(word),
             "{word}"
@@ -135,9 +133,7 @@ async fn an_agent_answers_a_request_and_reads_its_posts_and_the_week() {
         let tool = &tools[name];
         (tool.run)(&deps, &agent, args)
     };
-    let requests = run("jeeta.studio.package_requests", json!({}))
-        .await
-        .unwrap();
+    let requests = run("jeeta.studio.post_requests", json!({})).await.unwrap();
     let request = &requests["requests"][0];
     assert_eq!(request["trigger"], "olay");
     let material = request["material_ids"][0].clone();
@@ -150,7 +146,7 @@ async fn an_agent_answers_a_request_and_reads_its_posts_and_the_week() {
     let mut carousel = post("2026-10-25T07:00:00Z");
     carousel["format"] = json!("carousel");
     let e = run(
-        "jeeta.studio.package_propose",
+        "jeeta.studio.posts_propose",
         json!({"request_id":request["id"],"request_key":"refused",
             "posts":[post("2026-10-24T07:00:00Z"), carousel]}),
     )
@@ -162,7 +158,7 @@ async fn an_agent_answers_a_request_and_reads_its_posts_and_the_week() {
         json!([{"index":1,"reason":"format_unsupported"}])
     );
     let out = run(
-        "jeeta.studio.package_propose",
+        "jeeta.studio.posts_propose",
         json!({"request_id":request["id"],"request_key":"package",
             "posts":[post("2026-10-24T07:00:00Z")]}),
     )
@@ -190,7 +186,7 @@ async fn an_agent_answers_a_request_and_reads_its_posts_and_the_week() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Validation);
     let e = run(
-        "jeeta.studio.package_propose",
+        "jeeta.studio.posts_propose",
         json!({"request_id":request["id"],"request_key":"empty","posts":[]}),
     )
     .await

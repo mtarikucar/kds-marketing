@@ -56,7 +56,7 @@ impl PackageTrigger {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageStatus {
-    /// Waiting for an agent's package (`studio.package_propose`).
+    /// Waiting for an agent's package (`studio.posts_propose`).
     Open,
     /// A valid package was materialized for it.
     Answered,
@@ -113,7 +113,7 @@ pub struct PackageHints {
 }
 
 /// A work item for agents: plan posts from these materials (spec D23, `studio_package_requests`).
-/// It never creates a post; `studio.package_propose` answers it.
+/// It never creates a post; `studio.posts_propose` answers it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PackageRequest {
     pub id: PackageRequestId,

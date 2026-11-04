@@ -126,7 +126,7 @@ async fn propose(
     key: &str,
     items: Vec<Value>,
 ) -> Result<posts::PackageProposalOut, jt_app::error::AppError> {
-    posts::package_propose(
+    posts::posts_propose(
         &w.d,
         &at(w, now),
         serde_json::from_value(json!({"request_id":request,"request_key":key,"posts":items}))
@@ -207,14 +207,14 @@ async fn twenty_materials_in_minutes_make_one_request_thirty_minutes_after_the_l
     plan(&w, minutes(120)).await;
     assert_eq!(requests(&w).len(), 1);
     let pending = work::pending(&w.d, &at(&w, minutes(120))).await.unwrap();
-    assert_eq!(pending.package_requests.len(), 1);
+    assert_eq!(pending.post_requests.len(), 1);
     let items = agent_work::pending(&w.d, &at(&w, minutes(120)))
         .await
         .unwrap()
         .items;
     assert!(items.iter().any(|i| matches!(
         i.kind,
-        agent_work::WorkKind::StudioPackageRequest { package_request_id } if package_request_id == q.id
+        agent_work::WorkKind::StudioPostRequest { post_request_id } if post_request_id == q.id
     )));
     // A material added afterwards makes a new request of its own once it settles.
     let late = material(&w, Some(&o), minutes(130), "image/png").await;

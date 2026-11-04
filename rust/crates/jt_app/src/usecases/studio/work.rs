@@ -66,9 +66,9 @@ pub struct PendingStudioOut {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shoot_requests: Vec<jt_studio::ShootRequest>,
     /// The open package requests (spec 2026-11-03 D23): materials to plan posts from, answered
-    /// with `studio.package_propose`.
+    /// with `studio.posts_propose`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub package_requests: Vec<jt_studio::PackageRequest>,
+    pub post_requests: Vec<jt_studio::PackageRequest>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -272,7 +272,7 @@ pub(crate) async fn pending_in(
         .into_iter()
         .filter(|q| q.status == jt_studio::ShootStatus::Open)
         .collect();
-    out.package_requests = r
+    out.post_requests = r
         .studio_posts()
         .list_package_requests()
         .await?

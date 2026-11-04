@@ -24,7 +24,7 @@ async fn a_package_answers_a_request_and_the_week_shows_its_posts() {
     .await;
     let (owner, me) = p.register("owner@posts.example", "Posts").await;
     expect_error(
-        p.get("/api/studio/package-requests", &owner).await,
+        p.get("/api/studio/post-requests", &owner).await,
         StatusCode::CONFLICT,
         "STRATEGY_REQUIRED",
     )
@@ -40,11 +40,11 @@ async fn a_package_answers_a_request_and_the_week_shows_its_posts() {
     jt_app::usecases::studio::planner::plan(&p.deps, ws, now + Duration::minutes(31))
         .await
         .unwrap();
-    let requests = ok_json(p.get("/api/studio/package-requests", &owner).await).await;
+    let requests = ok_json(p.get("/api/studio/post-requests", &owner).await).await;
     let request = &requests[0];
     assert_eq!(request["trigger"], "olay");
     let id = request["id"].as_str().unwrap().to_owned();
-    let proposal = format!("/api/studio/package-requests/{id}/proposal");
+    let proposal = format!("/api/studio/post-requests/{id}/proposal");
 
     // Noon in Istanbul three days ahead: past the feed post's lead, outside the quiet hours.
     let istanbul = UtcOffset::from_hms(3, 0, 0).unwrap();

@@ -1,5 +1,5 @@
 //! The planner, `studio_plan` (every 10 minutes; spec 2026-11-03 §14). It never creates a post:
-//! agents propose packages and `studio.package_propose` materializes them.
+//! agents propose packages and `studio.posts_propose` materializes them.
 //!
 //! Each run, in one tenant transaction under the execution frame and the Studio control lock:
 //! - once per workspace, retires every organic slot of the weekly quotas still planned or ready

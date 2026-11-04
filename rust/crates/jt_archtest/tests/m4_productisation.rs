@@ -63,8 +63,8 @@ const POST_M4_ADDED: [(&str, &str); 38] = [
     ("studio.shoot_request", "jeeta.studio.shoot_request"),
     ("studio.shoot_resolve", "jeeta.studio.shoot_resolve"),
     // Olay-driven publishing (spec 2026-11-03 §14.3).
-    ("studio.package_requests", "jeeta.studio.package_requests"),
-    ("studio.package_propose", "jeeta.studio.package_propose"),
+    ("studio.post_requests", "jeeta.studio.post_requests"),
+    ("studio.posts_propose", "jeeta.studio.posts_propose"),
     ("studio.posts_list", "jeeta.studio.posts_list"),
     ("studio.weekly_summary", "jeeta.studio.weekly_summary"),
 ];

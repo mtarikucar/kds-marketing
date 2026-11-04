@@ -261,8 +261,8 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("studio.material_check_release", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/material-check/release"), Write),
     // Olay-driven publishing (spec 2026-11-03 §14): they plan content, so behind the strategy
     // gate; the posting policy is a human's.
-    twin("studio.package_requests", GateMode::Gated, "jeeta.studio.package_requests", ("GET", "/api/studio/package-requests"), Read),
-    twin("studio.package_propose", GateMode::Gated, "jeeta.studio.package_propose", ("POST", "/api/studio/package-requests/{request_id}/proposal"), Write),
+    twin("studio.post_requests", GateMode::Gated, "jeeta.studio.post_requests", ("GET", "/api/studio/post-requests"), Read),
+    twin("studio.posts_propose", GateMode::Gated, "jeeta.studio.posts_propose", ("POST", "/api/studio/post-requests/{request_id}/proposal"), Write),
     twin("studio.posts_list", GateMode::Gated, "jeeta.studio.posts_list", ("GET", "/api/studio/posts"), Read),
     twin("studio.weekly_summary", GateMode::Gated, "jeeta.studio.weekly_summary", ("GET", "/api/studio/summary"), Read),
     panel_only("studio.posting_policy_set", GateMode::Gated, ("PUT", "/api/studio/posting-policy"), Write),
