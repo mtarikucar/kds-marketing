@@ -24,8 +24,8 @@ const ADDED: [&str; 11] = [
 /// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the prospect
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
-/// pool's report, leads L4-T6).
-const POST_M4_ADDED: [(&str, &str); 64] = [
+/// pool's report, leads L4-T6; outreach, leads L4-T7).
+const POST_M4_ADDED: [(&str, &str); 82] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -99,6 +99,46 @@ const POST_M4_ADDED: [(&str, &str); 64] = [
     ("studio.weekly_summary", "jeeta.studio.weekly_summary"),
     // The pool's report (leads L4-T6).
     ("prospects.report", "jeeta.prospects.report"),
+    // Email outreach (leads L4-T7).
+    ("outreach.templates_list", "jeeta.outreach.templates_list"),
+    ("outreach.templates_save", "jeeta.outreach.templates_save"),
+    (
+        "outreach.templates_archive",
+        "jeeta.outreach.templates_archive",
+    ),
+    ("outreach.campaigns_list", "jeeta.outreach.campaigns_list"),
+    ("outreach.campaigns_get", "jeeta.outreach.campaigns_get"),
+    ("outreach.campaigns_save", "jeeta.outreach.campaigns_save"),
+    (
+        "outreach.audience_preview",
+        "jeeta.outreach.audience_preview",
+    ),
+    (
+        "outreach.campaigns_launch",
+        "jeeta.outreach.campaigns_launch",
+    ),
+    (
+        "outreach.campaigns_approve",
+        "jeeta.outreach.campaigns_approve",
+    ),
+    (
+        "outreach.campaigns_control",
+        "jeeta.outreach.campaigns_control",
+    ),
+    ("outreach.enroll", "jeeta.outreach.enroll"),
+    (
+        "outreach.enrollments_list",
+        "jeeta.outreach.enrollments_list",
+    ),
+    (
+        "outreach.enrollments_stop",
+        "jeeta.outreach.enrollments_stop",
+    ),
+    ("outreach.personalize", "jeeta.outreach.personalize"),
+    ("outreach.test_send", "jeeta.outreach.test_send"),
+    ("outreach.report", "jeeta.outreach.report"),
+    ("outreach.settings_get", "jeeta.outreach.settings_get"),
+    ("outreach.settings_set", "jeeta.outreach.settings_set"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

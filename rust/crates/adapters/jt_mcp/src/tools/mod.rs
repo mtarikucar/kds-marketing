@@ -17,6 +17,7 @@ mod distribution;
 mod events;
 mod inbox;
 mod ledger;
+mod outreach;
 mod prospects;
 mod research;
 mod roles;
@@ -64,6 +65,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         prospects::definitions(),
         research::definitions(),
         distribution::definitions(),
+        outreach::definitions(),
         events::definitions(),
         inbox::definitions(),
         work::definitions(),

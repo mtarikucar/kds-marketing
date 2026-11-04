@@ -563,3 +563,54 @@ async fn a_business_recipient_without_consent_is_skipped_while_the_b2b_basis_is_
     dispatch(w, w.owner_ctx.now).await;
     assert!(sent_mail(&o.mail).is_empty());
 }
+
+#[tokio::test]
+async fn a_test_email_is_refused_while_locked() {
+    let mut o = outreach_world().await;
+    let ada = consented(&o.w).await;
+    let t = template(&o.w, &o.w.owner_ctx, "Merhaba", "Selam").await;
+    let c = campaign(
+        &o.w,
+        &o.w.owner_ctx,
+        o.mailbox,
+        definition(t, json!({"explicit": [ada]})),
+    )
+    .await
+    .campaign
+    .id;
+    // Sent while the switch is on, then queued again as a crash before its claim leaves it.
+    o.mail.push_mail(accepted("test-1"));
+    let sent = outreach::test_send(&o.w.deps, &o.w.owner_ctx, c, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(sent.state, "sent");
+    let mut id = None;
+    o.w.uow.edit(|s| {
+        let row = s.inbox.outbox.last_mut().unwrap();
+        row.state = "queued".into();
+        row.fence_snapshot = None;
+        id = Some(row.id);
+    });
+    platform(&mut o.w, false);
+    let w = &o.w;
+    // Whoever asks, a test email is refused while locked: nothing queued.
+    for ctx in [
+        w.owner_ctx.clone(),
+        w.agent(&["outreach.work", "inbox.work"]).await,
+    ] {
+        let e = err(outreach::test_send(&w.deps, &ctx, c, Default::default()).await);
+        assert_eq!(e.code, ErrorCode::Forbidden);
+        assert_eq!(e.details["reason"], "outreach_disabled_on_platform");
+    }
+    assert_eq!(w.uow.snapshot().inbox.outbox.len(), 1);
+    // The one queued while it was on is refused at claim.
+    let out = replies::send_step(&w.deps, &w.owner_ctx, id.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(out.state, "refused");
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some("outreach_disabled_on_platform")
+    );
+    assert_eq!(sent_mail(&o.mail).len(), 1, "nothing more left");
+}

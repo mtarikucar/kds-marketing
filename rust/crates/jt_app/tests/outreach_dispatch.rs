@@ -1153,3 +1153,350 @@ async fn iys_budget_8_per_minute() {
     dispatch(w, minutes(1)).await;
     assert_eq!(sent_mail(&o.mail).len(), 10);
 }
+
+/// The owner's login address in the outreach world.
+const OWNER_LOGIN: &str = "owner@acme.example";
+
+#[tokio::test]
+async fn test_send_only_to_a_members_login_address() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let ada = consented(w).await;
+    let t = template(
+        w,
+        &w.owner_ctx,
+        "Merhaba {{company}}",
+        "Merhaba {{first_name}}, {{custom.opener}}",
+    )
+    .await;
+    let c = campaign(
+        w,
+        &w.owner_ctx,
+        o.mailbox,
+        definition(t, json!({"explicit": [ada]})),
+    )
+    .await
+    .campaign
+    .id;
+    // Any other address is refused, nothing queued.
+    for to in ["ada@example.invalid", "baska@acme.example"] {
+        let e = err(outreach::test_send(
+            &w.deps,
+            &w.owner_ctx,
+            c,
+            outreach::TestSendInput {
+                step: None,
+                to: Some(to.into()),
+            },
+        )
+        .await);
+        assert_eq!(e.code, ErrorCode::Forbidden);
+        assert_eq!(e.details["reason"], "not_a_members_login_address");
+    }
+    assert!(w.uow.snapshot().inbox.outbox.is_empty());
+    // To the caller's own login address (named or not), through the outbox, with the footer
+    // and the one-click unsubscribe; missing values read as their variable.
+    o.mail.push_mail(accepted("test-1"));
+    let out = outreach::test_send(
+        &w.deps,
+        &w.owner_ctx,
+        c,
+        outreach::TestSendInput {
+            step: Some(1),
+            to: Some("Owner@Acme.Example".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (out.to.as_str(), out.step, out.state.as_str()),
+        (OWNER_LOGIN, 1, "sent")
+    );
+    let m = sent_mail(&o.mail).pop().unwrap();
+    assert_eq!(m.to, OWNER_LOGIN);
+    assert_eq!(m.subject, "Merhaba [company]");
+    assert!(
+        m.text.starts_with("Merhaba Owner, [custom.opener]\n\n--\n"),
+        "{}",
+        m.text
+    );
+    assert!(m.text.contains(CONSENT_LINE));
+    assert!(m.list_unsubscribe.is_some());
+    assert_eq!(m.from_name.as_deref(), Some("Acme Satış"));
+    let outbox = w.uow.snapshot().inbox.outbox;
+    assert_eq!(outbox[0].intent["use_case"], "outreach.test_send");
+    assert!(
+        outbox[0].intent.get("outreach").is_none(),
+        "no send row, no enrollment"
+    );
+    assert!(sends(w).is_empty());
+    // The member's inbox person has no journey and no consent row: nothing counts it.
+    let s = w.uow.snapshot();
+    let me = s
+        .inbox
+        .identities
+        .iter()
+        .find(|i| i.value_normalized == OWNER_LOGIN)
+        .unwrap()
+        .person_id;
+    assert!(s.inbox.journeys.iter().all(|j| j.person_id != me));
+    assert!(s.inbox.consents.iter().all(|(_, c)| c.person_id != me));
+    assert_eq!(w.entries("outreach.test_sent").len(), 1);
+    // An agent's goes to the member who issued its key; a second one reuses the person.
+    let agent = w.agent(&["outreach.work"]).await;
+    o.mail.push_mail(accepted("test-2"));
+    let out = outreach::test_send(&w.deps, &agent, c, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(out.to, OWNER_LOGIN);
+    assert_eq!(sent_mail(&o.mail).len(), 2);
+    assert_eq!(w.uow.snapshot().inbox.people.len(), s.inbox.people.len());
+    // A step the campaign does not have is refused; a rep without outreach.work is refused.
+    let e = err(outreach::test_send(
+        &w.deps,
+        &w.owner_ctx,
+        c,
+        outreach::TestSendInput {
+            step: Some(2),
+            to: None,
+        },
+    )
+    .await);
+    assert_eq!(e.details["field"], "step");
+    let rep = w.member("rep").await;
+    let e = err(outreach::test_send(&w.deps, &rep, c, Default::default()).await);
+    assert_forbidden(&e, "outreach.work");
+    // An address the member unsubscribed from is refused like any other suppression.
+    jt_app::usecases::inbox::consent::add_suppression(
+        &w.deps,
+        &w.owner_ctx,
+        me,
+        serde_json::from_value(json!({"channel": "email", "reason": "manual"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let e = err(outreach::test_send(&w.deps, &w.owner_ctx, c, Default::default()).await);
+    assert_eq!(e.details["reason"], "IZIN_YOK");
+}
+
+#[tokio::test]
+async fn an_outreach_email_on_a_mailbox_requiring_approval_is_never_held() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let gated = add_mailbox(w, "Onaylı", "onay@acme.example.invalid", true).await;
+    let ada = consented(w).await;
+    let t = hello(w).await;
+    let c = campaign(
+        w,
+        &w.owner_ctx,
+        gated,
+        definition(t, json!({"explicit": [ada]})),
+    )
+    .await;
+    // The owner's launch approves the revision it launches (the mailbox requires approval).
+    let launched = launch(w, &w.owner_ctx, c.campaign.id, 1).await.unwrap();
+    assert!(launched.approval_required);
+    assert_eq!(launched.campaign.status, CampaignStatus::Running);
+    o.mail.push_mail(accepted("not-held"));
+    dispatch(w, FIXED_NOW).await;
+    let outbox = w.uow.snapshot().inbox.outbox;
+    assert_eq!(outbox.len(), 1);
+    assert_eq!(
+        outbox[0].state, "sent",
+        "the campaign's approval is the approval"
+    );
+    assert!(w.entries("inbox.public.held").is_empty());
+    assert_eq!(sent_mail(&o.mail).len(), 1);
+}
+
+#[tokio::test]
+async fn personalization_due_raised_within_24h() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    no_frequency_cap(w).await;
+    let ada = consented(w).await;
+    let bora = consented_as(w, "Bora").await;
+    let t = template(w, &w.owner_ctx, "Merhaba", "{{custom.opener}}, tanışalım.").await;
+    let c = running(&o, definition(t, json!({"explicit": [ada, bora]})))
+        .await
+        .campaign
+        .id;
+    // Bora's step is three days away.
+    w.uow.edit(|s| {
+        for (_, e) in &mut s.outreach.enrollments {
+            if e.person_id == bora {
+                e.next_send_at = Some(FIXED_NOW + Duration::days(3));
+            }
+        }
+    });
+    let agent = w.agent(&["workspace.read", "outreach.work"]).await;
+    let due = |out: &jt_app::usecases::work::PendingOut| {
+        out.items.iter().find_map(|i| match i.kind {
+            jt_app::usecases::work::WorkKind::PersonalizationDue { campaign_id, count }
+                if campaign_id == c =>
+            {
+                Some((count, i.priority))
+            }
+            _ => None,
+        })
+    };
+    let out = jt_app::usecases::work::pending(&w.deps, &agent)
+        .await
+        .unwrap();
+    assert_eq!(
+        due(&out),
+        Some((1, 2)),
+        "Ada's step is due, Bora's is days away"
+    );
+    let e = enrollment_of(w, c, ada);
+    outreach::personalize(
+        &w.deps,
+        &agent,
+        PersonalizeInput {
+            items: vec![PersonalizeItem {
+                enrollment_id: e.id,
+                values: [("opener".to_owned(), "Merhaba".to_owned())].into(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let out = jt_app::usecases::work::pending(&w.deps, &agent)
+        .await
+        .unwrap();
+    assert_eq!(due(&out), None);
+    // A day before Bora's step it is due.
+    let later = at(&agent, FIXED_NOW + Duration::days(2) + Duration::hours(1));
+    let out = jt_app::usecases::work::pending(&w.deps, &later)
+        .await
+        .unwrap();
+    assert_eq!(due(&out), Some((1, 2)));
+}
+
+#[tokio::test]
+async fn the_outreach_work_items_name_who_clears_them() {
+    use jt_app::usecases::work::{PendingOut, WorkKind, pending};
+    let o = outreach_world().await;
+    let w = &o.w;
+    outreach::settings_set(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({"requires_approval": true})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let ada = consented(w).await;
+    let t = hello(w).await;
+    // An agent's launch waits for a person's approval.
+    let agent = w
+        .agent(&["workspace.read", "outreach.work", "inbox.work"])
+        .await;
+    let c = campaign(
+        w,
+        &agent,
+        o.mailbox,
+        definition(t, json!({"explicit": [ada]})),
+    )
+    .await;
+    let waiting = launch(w, &agent, c.campaign.id, 1).await.unwrap();
+    assert_eq!(waiting.campaign.status, CampaignStatus::AwaitingApproval);
+    let approval = WorkKind::CampaignApproval {
+        campaign_id: c.campaign.id,
+        revision: 1,
+    };
+    let kinds = |out: PendingOut| out.items.into_iter().map(|i| i.kind).collect::<Vec<_>>();
+    assert!(kinds(pending(&w.deps, &w.owner_ctx).await.unwrap()).contains(&approval));
+    assert!(
+        !kinds(pending(&w.deps, &agent).await.unwrap()).contains(&approval),
+        "an agent cannot approve"
+    );
+    outreach::campaigns_approve(
+        &w.deps,
+        &w.owner_ctx,
+        c.campaign.id,
+        outreach::ApproveInput {
+            expected_revision: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!kinds(pending(&w.deps, &w.owner_ctx).await.unwrap()).contains(&approval));
+    // Paused for its bounces: blocked, for whoever works outreach, until resumed or canceled.
+    outreach::campaigns_control(
+        &w.deps,
+        &w.owner_ctx,
+        c.campaign.id,
+        outreach::ControlInput {
+            action: outreach::ControlAction::Pause,
+        },
+    )
+    .await
+    .unwrap();
+    // A manual pause is nobody's work item.
+    let blocked = |out: PendingOut| {
+        out.items
+            .into_iter()
+            .filter_map(|i| match i.kind {
+                WorkKind::CampaignBlocked {
+                    campaign_id,
+                    reason,
+                } => Some((campaign_id, reason)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(blocked(pending(&w.deps, &agent).await.unwrap()).is_empty());
+    w.uow.edit(|s| {
+        for (_, row) in &mut s.outreach.campaigns {
+            row.pause_reason = Some(PauseReason::BounceRate);
+        }
+    });
+    assert_eq!(
+        blocked(pending(&w.deps, &agent).await.unwrap()),
+        [(c.campaign.id, PauseReason::BounceRate)]
+    );
+}
+
+#[tokio::test]
+async fn promoted_not_contacted_counts_prospects_nobody_wrote_to() {
+    use jt_app::usecases::work::{WorkKind, pending};
+    let o = outreach_world().await;
+    let w = &o.w;
+    let id = qualified_prospect(w, "Örnek Kafe", "info@ornek-kafe.example.invalid").await;
+    prospects::promote(
+        &w.deps,
+        &w.owner_ctx,
+        prospects::PromoteInput {
+            prospect_ids: vec![id],
+            request_key: None,
+        },
+    )
+    .await
+    .unwrap();
+    let count = |out: jt_app::usecases::work::PendingOut| {
+        out.items.into_iter().find_map(|i| match i.kind {
+            WorkKind::PromotedNotContacted { count } => Some((count, i.priority)),
+            _ => None,
+        })
+    };
+    let agent = w.agent(&["workspace.read", "outreach.work"]).await;
+    // Not yet two days old.
+    assert_eq!(count(pending(&w.deps, &agent).await.unwrap()), None);
+    let later = at(&agent, FIXED_NOW + Duration::days(3));
+    assert_eq!(count(pending(&w.deps, &later).await.unwrap()), Some((1, 3)));
+    // Enrolling clears it (a skipped enrollment too: the attempt was made).
+    let person = w
+        .uow
+        .snapshot()
+        .prospects
+        .prospects
+        .into_iter()
+        .find(|p| p.id == id)
+        .unwrap()
+        .promoted
+        .unwrap()
+        .person_id;
+    let t = hello(w).await;
+    running(&o, definition(t, json!({"explicit": [person]}))).await;
+    assert_eq!(count(pending(&w.deps, &later).await.unwrap()), None);
+}

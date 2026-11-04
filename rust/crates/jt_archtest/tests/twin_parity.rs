@@ -5088,6 +5088,149 @@ async fn the_pool_report_answers_the_same_over_the_panel_and_mcp() {
     assert_eq!(human["groups"][0]["promoted"], 1);
 }
 
+#[tokio::test]
+async fn outreach_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("outreach").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    // A template saved over the panel reads the same on both surfaces.
+    let template = json!({
+        "name": "Tanışma",
+        "language": "tr",
+        "subject": "Merhaba {{company|işletmeniz}}",
+        "body": "Tanışmak isteriz: https://acme.example.invalid/katalog",
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/outreach/templates",
+            Some(&cookie),
+            Some(template),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let saved = json_body(resp).await;
+    assert_eq!(saved["template"]["revision"], 1);
+    assert_eq!(
+        saved["facts"]["links"],
+        json!(["https://acme.example.invalid/katalog"])
+    );
+    let template_id = saved["template"]["id"].clone();
+    use time::format_description::well_known::Rfc3339;
+    let now = time::OffsetDateTime::now_utc();
+    let from = (now - time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let to = (now + time::Duration::days(1)).format(&Rfc3339).unwrap();
+    for (path, tool, args) in [
+        (
+            "/api/outreach/templates".to_owned(),
+            "jeeta.outreach.templates_list",
+            json!({}),
+        ),
+        (
+            "/api/outreach/campaigns".to_owned(),
+            "jeeta.outreach.campaigns_list",
+            json!({}),
+        ),
+        (
+            "/api/outreach/settings".to_owned(),
+            "jeeta.outreach.settings_get",
+            json!({}),
+        ),
+        (
+            format!("/api/outreach/report?from={from}&to={to}&group_by=step"),
+            "jeeta.outreach.report",
+            json!({ "from": from, "to": to, "group_by": "step" }),
+        ),
+    ] {
+        let resp = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        let human = json_body(resp).await;
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        assert_eq!(human, agent, "{path}");
+    }
+    // The switch is off here: the settings say so on both surfaces.
+    let settings = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.settings_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(settings["platform_enabled"], false);
+    assert_eq!(settings["b2b_channels_in_force"], json!([]));
+
+    // A campaign on a mailbox the workspace does not have is refused alike.
+    let definition = json!({
+        "sender_name": "Acme Satış",
+        "steps": [{ "template_id": template_id, "delay_days": 0 }],
+        "audience": { "people": {} },
+        "schedule": { "window": { "tz": "Europe/Istanbul", "from": 9, "to": 18, "days": [1, 2, 3, 4, 5] } },
+        "throttle": { "per_hour": 20, "per_day": 100 },
+    });
+    let campaign = json!({
+        "name": "Ekim tanışma",
+        "mailbox_id": jt_capability::CapabilityId::new_v7(),
+        "definition": definition,
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/outreach/campaigns",
+            Some(&cookie),
+            Some(campaign.clone()),
+        ),
+    )
+    .await;
+    assert!(resp.status().is_client_error(), "{}", resp.status());
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.campaigns_save",
+        campaign,
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+
+    // Stopping an enrollment that is not the workspace's is refused alike.
+    // Any id the workspace has no enrollment under.
+    let enrollment = jt_inbox::PersonId::new_v7();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/outreach/enrollments/{enrollment}/stop"),
+            Some(&cookie),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.enrollments_stop",
+        json!({ "enrollment_id": enrollment }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+}
+
 /// An owed public item `external_id` of `conversation` (`kind` a comment or a question), with
 /// its inbound message, written straight to the repos at `now`.
 async fn public_item(

@@ -195,6 +195,24 @@ const TOOLS: &[&str] = &[
     "jeeta.distribution.rep_set",
     "jeeta.distribution.assignments_list",
     "jeeta.distribution.backfill",
+    "jeeta.outreach.templates_list",
+    "jeeta.outreach.templates_save",
+    "jeeta.outreach.templates_archive",
+    "jeeta.outreach.campaigns_list",
+    "jeeta.outreach.campaigns_get",
+    "jeeta.outreach.campaigns_save",
+    "jeeta.outreach.audience_preview",
+    "jeeta.outreach.campaigns_launch",
+    "jeeta.outreach.campaigns_approve",
+    "jeeta.outreach.campaigns_control",
+    "jeeta.outreach.enroll",
+    "jeeta.outreach.enrollments_list",
+    "jeeta.outreach.enrollments_stop",
+    "jeeta.outreach.personalize",
+    "jeeta.outreach.test_send",
+    "jeeta.outreach.report",
+    "jeeta.outreach.settings_get",
+    "jeeta.outreach.settings_set",
     "jeeta.events.pending",
     "jeeta.events.ack",
     "jeeta.events.list",
@@ -205,7 +223,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 189);
+    assert_eq!(TOOLS.len(), 207);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)

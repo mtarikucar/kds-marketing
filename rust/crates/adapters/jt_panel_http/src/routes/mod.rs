@@ -24,6 +24,7 @@ pub mod inbox;
 pub mod ledger;
 pub mod oauth_callback;
 pub mod ops;
+pub mod outreach;
 pub mod platform;
 pub mod platform_payments;
 pub mod prospects;
@@ -268,6 +269,24 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/prospects/settings"),
     ("POST", "/api/prospects/promote"),
     ("GET", "/api/prospects/report"),
+    ("GET", "/api/outreach/templates"),
+    ("POST", "/api/outreach/templates"),
+    ("POST", "/api/outreach/templates/{template_id}/archive"),
+    ("GET", "/api/outreach/campaigns"),
+    ("GET", "/api/outreach/campaigns/{campaign_id}"),
+    ("POST", "/api/outreach/campaigns"),
+    ("POST", "/api/outreach/audience-preview"),
+    ("POST", "/api/outreach/campaigns/{campaign_id}/launch"),
+    ("POST", "/api/outreach/campaigns/{campaign_id}/approve"),
+    ("POST", "/api/outreach/campaigns/{campaign_id}/control"),
+    ("POST", "/api/outreach/campaigns/{campaign_id}/enrollments"),
+    ("GET", "/api/outreach/campaigns/{campaign_id}/enrollments"),
+    ("POST", "/api/outreach/enrollments/{enrollment_id}/stop"),
+    ("POST", "/api/outreach/enrollments/personalization"),
+    ("POST", "/api/outreach/campaigns/{campaign_id}/test"),
+    ("GET", "/api/outreach/report"),
+    ("GET", "/api/outreach/settings"),
+    ("PUT", "/api/outreach/settings"),
     ("GET", "/api/research/tasks"),
     ("GET", "/api/research/tasks/{task_id}"),
     ("POST", "/api/research/tasks"),
@@ -1416,6 +1435,114 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/prospects/report",
             "prospects.report",
             prospects::report,
+        ),
+        api_route(
+            "GET",
+            "/outreach/templates",
+            "outreach.templates_list",
+            outreach::templates_list,
+        ),
+        api_route(
+            "POST",
+            "/outreach/templates",
+            "outreach.templates_save",
+            outreach::templates_save,
+        ),
+        api_route(
+            "POST",
+            "/outreach/templates/{template_id}/archive",
+            "outreach.templates_archive",
+            outreach::templates_archive,
+        ),
+        api_route(
+            "GET",
+            "/outreach/campaigns",
+            "outreach.campaigns_list",
+            outreach::campaigns_list,
+        ),
+        api_route(
+            "GET",
+            "/outreach/campaigns/{campaign_id}",
+            "outreach.campaigns_get",
+            outreach::campaigns_get,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns",
+            "outreach.campaigns_save",
+            outreach::campaigns_save,
+        ),
+        api_route(
+            "POST",
+            "/outreach/audience-preview",
+            "outreach.audience_preview",
+            outreach::audience_preview,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns/{campaign_id}/launch",
+            "outreach.campaigns_launch",
+            outreach::campaigns_launch,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns/{campaign_id}/approve",
+            "outreach.campaigns_approve",
+            outreach::campaigns_approve,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns/{campaign_id}/control",
+            "outreach.campaigns_control",
+            outreach::campaigns_control,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns/{campaign_id}/enrollments",
+            "outreach.enroll",
+            outreach::enroll,
+        ),
+        api_route(
+            "GET",
+            "/outreach/campaigns/{campaign_id}/enrollments",
+            "outreach.enrollments_list",
+            outreach::enrollments_list,
+        ),
+        api_route(
+            "POST",
+            "/outreach/enrollments/{enrollment_id}/stop",
+            "outreach.enrollments_stop",
+            outreach::enrollments_stop,
+        ),
+        api_route(
+            "POST",
+            "/outreach/enrollments/personalization",
+            "outreach.personalize",
+            outreach::personalize,
+        ),
+        api_route(
+            "POST",
+            "/outreach/campaigns/{campaign_id}/test",
+            "outreach.test_send",
+            outreach::test_send,
+        ),
+        api_route(
+            "GET",
+            "/outreach/report",
+            "outreach.report",
+            outreach::report,
+        ),
+        api_route(
+            "GET",
+            "/outreach/settings",
+            "outreach.settings_get",
+            outreach::settings_get,
+        ),
+        api_route(
+            "PUT",
+            "/outreach/settings",
+            "outreach.settings_set",
+            outreach::settings_set,
         ),
         api_route(
             "GET",

@@ -23,11 +23,14 @@ pub mod audience;
 pub mod campaigns;
 pub mod dispatch;
 pub mod enroll;
+pub mod enrollments;
 pub(crate) mod hooks;
 pub mod links;
 pub mod report;
 pub mod settings;
 pub mod templates;
+pub mod test_send;
+pub(crate) mod work;
 
 pub use audience::{BasisCounts, PreviewInput, PreviewOut, audience_preview};
 pub use campaigns::{
@@ -39,11 +42,15 @@ pub use dispatch::Dispatched;
 pub use enroll::{
     EnrollInput, EnrollOut, PersonalizeInput, PersonalizeItem, PersonalizeOut, enroll, personalize,
 };
+pub use enrollments::{
+    EnrollmentListInput, EnrollmentListOut, StopInput, enrollments_list, enrollments_stop,
+};
 pub use settings::{LegalAckInput, SettingsInput, SettingsOut, settings_get, settings_set};
 pub use templates::{
     TemplateListInput, TemplateListOut, TemplateOut, TemplateSaveInput, templates_archive,
     templates_list, templates_save,
 };
+pub use test_send::{TestSendInput, TestSendOut, test_send};
 
 use jt_outreach::{CampaignError, OutreachPolicy, OutreachRefusal, TemplateError};
 use serde_json::{Value, json};

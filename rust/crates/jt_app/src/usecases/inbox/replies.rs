@@ -218,6 +218,25 @@ pub(crate) enum Purpose<'a> {
     Appointment(&'a crate::ports::compliance::AppointmentRow),
     /// One step of a campaign to one enrollment (the outreach dispatcher).
     Outreach(&'a OutreachSend),
+    /// A campaign step's test email to the requesting member's own login address
+    /// (`outreach.test_send`).
+    TestSend(&'a TestSend),
+}
+
+/// A test email's facts (spec 2026-10-30-leads-pool-outreach-design.md §7.1
+/// `outreach.test_send`): the member who asked for it and their login address, the only
+/// recipient it may have (checked when it is queued and when it is claimed), the campaign and
+/// step it shows, the `From` display name and the footer's language. It rests on the member's
+/// own request (basis `consent`) unless the address is suppressed; the intent records
+/// `outreach_test: {user_id, campaign_id, step}`, and its receipt records no journey event.
+#[derive(Clone, Debug)]
+pub(crate) struct TestSend {
+    pub to: String,
+    pub user_id: jt_tenancy::UserId,
+    pub campaign_id: jt_outreach::CampaignId,
+    pub step: u8,
+    pub from_name: String,
+    pub language: jt_outreach::Lang,
 }
 
 /// An outreach email's facts as the dispatcher queues it (spec §3.11): its outbox entry's id
@@ -242,6 +261,7 @@ fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
         (_, Purpose::Quote(..)) => "inbox.quotes.send",
         (_, Purpose::Appointment(_)) => "inbox.appointments.book",
         (_, Purpose::Outreach(_)) => "outreach.dispatch",
+        (_, Purpose::TestSend(_)) => "outreach.test_send",
         (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
         (Target::Person(..) | Target::PersonVia(..), Purpose::Reply) => "inbox.send",
     }
@@ -396,6 +416,10 @@ pub(crate) async fn enqueue_in(
         Purpose::Outreach(send) => Some(*send),
         _ => None,
     };
+    let test = match &purpose {
+        Purpose::TestSend(t) => Some(*t),
+        _ => None,
+    };
     let id = c.id;
     let opens_conversation = r.conversations().get(id).await?.is_none();
     // A comment or question is answered by naming it; a direct message never names one.
@@ -437,6 +461,7 @@ pub(crate) async fn enqueue_in(
             except: None,
             gate: send_gate(Some(use_case), opens_conversation),
             outreach: outreach.is_some(),
+            test: test.is_some(),
         },
     )
     .await
@@ -475,6 +500,10 @@ pub(crate) async fn enqueue_in(
     } else {
         recipient(r, &c, &cap).await?
     };
+    // A test email reaches the requesting member's login address, never anyone else.
+    if test.is_some_and(|t| !recipient.eq_ignore_ascii_case(&t.to)) {
+        return Err(refused("not_a_members_login_address"));
+    }
     let message_id = MessageId::from(deps.ids.uuid());
     // An outreach email's outbox id was chosen before its text: its click links name it.
     let outbox_id = outreach.map_or_else(|| deps.ids.uuid(), |s| s.outbox_id);
@@ -510,6 +539,13 @@ pub(crate) async fn enqueue_in(
                 "enrollment_id": send.enrollment_id,
                 "campaign_id": send.campaign_id,
                 "step": send.step,
+            });
+        }
+        Purpose::TestSend(t) => {
+            intent["outreach_test"] = json!({
+                "user_id": t.user_id,
+                "campaign_id": t.campaign_id,
+                "step": t.step,
             });
         }
     }
@@ -616,9 +652,12 @@ pub(crate) async fn enqueue_in(
                         basis,
                         outbox_id,
                         from_address: from_address.as_deref(),
-                        // An outreach email's footer follows its template's language; every
-                        // other commercial email's is Turkish.
-                        lang: outreach.map_or(jt_outreach::Lang::Tr, |s| s.language),
+                        // An outreach email's footer (a test's too) follows its template's
+                        // language; every other commercial email's is Turkish.
+                        lang: outreach
+                            .map(|s| s.language)
+                            .or(test.map(|t| t.language))
+                            .unwrap_or(jt_outreach::Lang::Tr),
                     },
                     &text,
                 )?;
@@ -641,7 +680,9 @@ pub(crate) async fn enqueue_in(
             in_reply_to,
             references,
             attachments,
-            from_name: outreach.map(|s| s.from_name.clone()),
+            from_name: outreach
+                .map(|s| s.from_name.clone())
+                .or(test.map(|t| t.from_name.clone())),
             list_unsubscribe,
             attachment_files: Vec::new(),
         })?;
@@ -739,6 +780,8 @@ struct Fencing<'a> {
     gate: GateMode,
     /// An outreach email (the dispatcher's, `Purpose::Outreach`): see [`Sending::outreach`].
     outreach: bool,
+    /// A test email to the requesting member (`Purpose::TestSend`): see [`Sending::test`].
+    test: bool,
 }
 
 /// What a reply's fences let through: the basis a commercial send rests on (`None` for a reply)
@@ -777,6 +820,7 @@ async fn fence_all(
             outreach_enabled: deps.apps.outreach_enabled(),
             gate: f.gate,
             outreach: f.outreach,
+            test: f.test,
         },
     )
     .await?;
@@ -842,6 +886,10 @@ struct Sending {
     /// An outreach email (the dispatcher's, `Purpose::Outreach`): a person's hold on the
     /// conversation stops it as it stops an agent's send, and a won journey refuses it.
     outreach: bool,
+    /// A test email to the requesting member's own login address (`Purpose::TestSend`, the
+    /// address checked by the caller): it rests on the member's request (basis `consent`) with
+    /// no consent row; a suppression of the address still refuses it.
+    test: bool,
 }
 
 /// The send fence. A commercial send needs an effective consent, or (spec
@@ -865,6 +913,7 @@ async fn fence(
         outreach_enabled,
         gate,
         outreach,
+        test,
     } = sending;
     let person = r
         .people()
@@ -904,13 +953,21 @@ async fn fence(
     } else {
         Vec::new()
     };
-    let basis = commercial_basis(
-        &consents,
-        &suppressions,
-        channel,
-        person.recipient_kind,
-        &b2b_channels,
-    );
+    let basis = if test {
+        if suppressions.iter().any(|s| s.channel == channel) {
+            Err(jt_inbox::IzinYok)
+        } else {
+            Ok(CommercialBasis::Consent)
+        }
+    } else {
+        commercial_basis(
+            &consents,
+            &suppressions,
+            channel,
+            person.recipient_kind,
+            &b2b_channels,
+        )
+    };
     may_send(
         &FenceCtx {
             journey_status: j.map(|j| j.status),
@@ -1174,11 +1231,21 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     // both branches, the dispatcher's and this one, are authoritative (D16). Then the whole fence
     // again, the public one included (an item may have been answered, removed or expired since
     // enqueue); the daily cap counted this row at enqueue.
-    let outreach_fence = match row.intent.get("outreach") {
-        Some(o) => {
+    let outreach_fence = match (row.intent.get("outreach"), row.intent.get("outreach_test")) {
+        (Some(o), _) => {
             crate::usecases::outreach::dispatch::claim_fence(deps, ctx, r.as_mut(), o).await?
         }
-        None => Ok(()),
+        // A test email: the platform switch, and the address still the member's login address.
+        (None, Some(t)) => {
+            crate::usecases::outreach::test_send::claim_check(
+                deps,
+                r.as_mut(),
+                t,
+                row.intent["mail"]["to"].as_str(),
+            )
+            .await?
+        }
+        (None, None) => Ok(()),
     };
     let public = super::public::intent_of(&row.intent)?;
     let fenced = match outreach_fence {
@@ -1200,6 +1267,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
                 except: Some(row.id),
                 gate: queued_gate(&row),
                 outreach: row.intent.get("outreach").is_some(),
+                test: row.intent.get("outreach_test").is_some(),
             },
         )
         .await
@@ -1615,7 +1683,11 @@ async fn record_result_with(
                 },
                 None => JourneyEventKind::Replied,
             };
-            if let Some(j) = &j {
+            // A test email to a member is no touch of any journey.
+            let j = j
+                .as_ref()
+                .filter(|_| row.intent.get("outreach_test").is_none());
+            if let Some(j) = j {
                 let key = format!("outbox:{id}");
                 if r.journeys().event_by_key(&key).await?.is_none() {
                     let event = JourneyEvent {
@@ -1861,6 +1933,7 @@ pub(super) async fn approve_in(
             except: Some(row.id),
             gate: queued_gate(&row),
             outreach: false,
+            test: false,
         },
     )
     .await;

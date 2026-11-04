@@ -2157,6 +2157,45 @@ it acted on; an agent's does not. `inbox.journeys.assign_owner` writes a `manual
 | `distribution.assignments_list` | `GET /api/distribution/assignments` | `jeeta.distribution.assignments_list` | READ | the log, newest first; `?journey_id&user_id&limit&before_at&before_id` |
 | `distribution.backfill` | `POST /api/distribution/backfill` | `jeeta.distribution.backfill` | WRITE | `inbox.manage`; up to 200 ownerless journeys, whatever their decision |
 
+#### Email outreach (`jeeta.outreach.*`, leads L4)
+
+Plain-text email campaigns from the workspace's own mailbox (spec §3.10–§3.17). **Cold email is
+locked**: campaigns can be prepared, but a launch, a resume, an approval that starts one, the
+dispatcher (`outreach_dispatch`, every minute) and a test email refuse while
+`JEETA_OUTREACH_ENABLED` is off (`403 outreach_disabled_on_platform`), and every send is fenced
+again at claim. Outreach reaches consented people only, unless a human owner turned on the
+business-recipient basis (email only) with the counsel's confirmation recorded, and it counts
+only while the switch is on. Every email carries the opt-out footer and an RFC 8058 one-click
+unsubscribe (one place, `replies::enqueue_in`). A campaign is 1 to 6 steps; its audience is
+frozen into enrollments at launch, one active enrollment per person; approval is revision-bound
+and needed when the outreach settings or the mailbox require it. A reply, a bounce, a
+complaint, withdrawn consent, a meeting, a won or lost journey, an erasure and a merge stop the
+person's enrollment at once (and the dispatcher checks each again). `work.pending` lists
+`personalization_due`, `campaign_blocked`, `campaign_approval` (people with `outreach.manage`)
+and `promoted_not_contacted` to keys with `outreach.work`. Gated by the strategy;
+`outreach.work` (`outreach.manage` where noted), which the rep role does not hold.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `outreach.templates_list` | `GET /api/outreach/templates` | `jeeta.outreach.templates_list` | READ | `?include_archived&limit&before_at&before_id`; each template with its variables and links |
+| `outreach.templates_save` | `POST /api/outreach/templates` | `jeeta.outreach.templates_save` | WRITE | new, or the next revision (`template_id`, `expected_revision`); fixed variables and `custom.<key>`; `http(s)` links only |
+| `outreach.templates_archive` | `POST /api/outreach/templates/{template_id}/archive` | `jeeta.outreach.templates_archive` | WRITE | hidden from new campaigns; snapshots keep sending |
+| `outreach.campaigns_list` | `GET /api/outreach/campaigns` | `jeeta.outreach.campaigns_list` | READ | `?status&limit&before_at&before_id`, newest first |
+| `outreach.campaigns_get` | `GET /api/outreach/campaigns/{campaign_id}` | `jeeta.outreach.campaigns_get` | READ | definition, status, revision, approval, active enrollments |
+| `outreach.campaigns_save` | `POST /api/outreach/campaigns` | `jeeta.outreach.campaigns_save` | WRITE | draft or paused only; each save the next revision, the approval voided |
+| `outreach.audience_preview` | `POST /api/outreach/audience-preview` | `jeeta.outreach.audience_preview` | READ | eligible, by skip reason, by basis, promotions needed; writes nothing |
+| `outreach.campaigns_launch` | `POST /api/outreach/campaigns/{campaign_id}/launch` | `jeeta.outreach.campaigns_launch` | WRITE | the switch, then the sender identity; awaits approval or runs; snapshots and enrolls |
+| `outreach.campaigns_approve` | `POST /api/outreach/campaigns/{campaign_id}/approve` | `jeeta.outreach.campaigns_approve` | WRITE | a person with `outreach.manage`; bound to `expected_revision` |
+| `outreach.campaigns_control` | `POST /api/outreach/campaigns/{campaign_id}/control` | `jeeta.outreach.campaigns_control` | WRITE | `pause`, `resume` (approval again), `cancel` (`outreach.manage`; stops every enrollment) |
+| `outreach.enroll` | `POST /api/outreach/campaigns/{campaign_id}/enrollments` | `jeeta.outreach.enroll` | WRITE | `audience: true`, `person_ids` or `prospect_ids` (promoted first); skips with reasons |
+| `outreach.enrollments_list` | `GET /api/outreach/campaigns/{campaign_id}/enrollments` | `jeeta.outreach.enrollments_list` | READ | `?status&limit&after`; `{items, next}` |
+| `outreach.enrollments_stop` | `POST /api/outreach/enrollments/{enrollment_id}/stop` | `jeeta.outreach.enrollments_stop` | WRITE | body `{}`; stops an active enrollment (`manual`), `409 not_active` otherwise |
+| `outreach.personalize` | `POST /api/outreach/enrollments/personalization` | `jeeta.outreach.personalize` | WRITE | 1 to 100 enrollments' `custom.*` values; the whole personalization replaced |
+| `outreach.test_send` | `POST /api/outreach/campaigns/{campaign_id}/test` | `jeeta.outreach.test_send` | WRITE | body `{}` (or `{step, to}`); one step to the caller's own login address only (`403 not_a_members_login_address` for any other), through the outbox with the footer; locked like every send |
+| `outreach.report` | `GET /api/outreach/report` | `jeeta.outreach.report` | READ | `?campaign_id&from&to&group_by` (`campaign`, `step`, `template`); computed at read time over `[from, to)` |
+| `outreach.settings_get` | `GET /api/outreach/settings` | `jeeta.outreach.settings_get` | READ | the policy, `sender_identity_complete`, `platform_enabled`, `b2b_channels_in_force` |
+| `outreach.settings_set` | `PUT /api/outreach/settings` | `jeeta.outreach.settings_set` | WRITE | `outreach.manage`; the business basis and the İYS lookup's waiver need a human owner and `legal_ack` |
+
 #### The voice bridge (voice V1)
 
 The voice bridge (`docs/operations/voice-bridge.md`) is the sidecar that is a workspace's phone

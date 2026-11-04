@@ -348,6 +348,24 @@ fn catalog_is_the_release_table() {
         ("distribution.rep_set", Some("jeeta.distribution.rep_set"), Some(("PUT", "/api/distribution/reps/{user_id}")), false, Risk::Write),
         ("distribution.assignments_list", Some("jeeta.distribution.assignments_list"), Some(("GET", "/api/distribution/assignments")), false, Risk::Read),
         ("distribution.backfill", Some("jeeta.distribution.backfill"), Some(("POST", "/api/distribution/backfill")), false, Risk::Write),
+        ("outreach.templates_list", Some("jeeta.outreach.templates_list"), Some(("GET", "/api/outreach/templates")), false, Risk::Read),
+        ("outreach.templates_save", Some("jeeta.outreach.templates_save"), Some(("POST", "/api/outreach/templates")), false, Risk::Write),
+        ("outreach.templates_archive", Some("jeeta.outreach.templates_archive"), Some(("POST", "/api/outreach/templates/{template_id}/archive")), false, Risk::Write),
+        ("outreach.campaigns_list", Some("jeeta.outreach.campaigns_list"), Some(("GET", "/api/outreach/campaigns")), false, Risk::Read),
+        ("outreach.campaigns_get", Some("jeeta.outreach.campaigns_get"), Some(("GET", "/api/outreach/campaigns/{campaign_id}")), false, Risk::Read),
+        ("outreach.campaigns_save", Some("jeeta.outreach.campaigns_save"), Some(("POST", "/api/outreach/campaigns")), false, Risk::Write),
+        ("outreach.audience_preview", Some("jeeta.outreach.audience_preview"), Some(("POST", "/api/outreach/audience-preview")), false, Risk::Read),
+        ("outreach.campaigns_launch", Some("jeeta.outreach.campaigns_launch"), Some(("POST", "/api/outreach/campaigns/{campaign_id}/launch")), false, Risk::Write),
+        ("outreach.campaigns_approve", Some("jeeta.outreach.campaigns_approve"), Some(("POST", "/api/outreach/campaigns/{campaign_id}/approve")), false, Risk::Write),
+        ("outreach.campaigns_control", Some("jeeta.outreach.campaigns_control"), Some(("POST", "/api/outreach/campaigns/{campaign_id}/control")), false, Risk::Write),
+        ("outreach.enroll", Some("jeeta.outreach.enroll"), Some(("POST", "/api/outreach/campaigns/{campaign_id}/enrollments")), false, Risk::Write),
+        ("outreach.enrollments_list", Some("jeeta.outreach.enrollments_list"), Some(("GET", "/api/outreach/campaigns/{campaign_id}/enrollments")), false, Risk::Read),
+        ("outreach.enrollments_stop", Some("jeeta.outreach.enrollments_stop"), Some(("POST", "/api/outreach/enrollments/{enrollment_id}/stop")), false, Risk::Write),
+        ("outreach.personalize", Some("jeeta.outreach.personalize"), Some(("POST", "/api/outreach/enrollments/personalization")), false, Risk::Write),
+        ("outreach.test_send", Some("jeeta.outreach.test_send"), Some(("POST", "/api/outreach/campaigns/{campaign_id}/test")), false, Risk::Write),
+        ("outreach.report", Some("jeeta.outreach.report"), Some(("GET", "/api/outreach/report")), false, Risk::Read),
+        ("outreach.settings_get", Some("jeeta.outreach.settings_get"), Some(("GET", "/api/outreach/settings")), false, Risk::Read),
+        ("outreach.settings_set", Some("jeeta.outreach.settings_set"), Some(("PUT", "/api/outreach/settings")), false, Risk::Write),
         ("events.pending", Some("jeeta.events.pending"), Some(("GET", "/api/events/pending")), false, Risk::Read),
         ("events.ack", Some("jeeta.events.ack"), Some(("POST", "/api/events/ack")), false, Risk::Write),
         ("events.list", Some("jeeta.events.list"), Some(("GET", "/api/events")), false, Risk::Read),
@@ -366,9 +384,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 227);
+    assert_eq!(CATALOG.len(), 245);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG

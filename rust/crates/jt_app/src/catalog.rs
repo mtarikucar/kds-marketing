@@ -498,6 +498,28 @@ pub static CATALOG: &[UseCase] = &[
     twin("distribution.rep_set", GateMode::Gated, "jeeta.distribution.rep_set", ("PUT", "/api/distribution/reps/{user_id}"), Write),
     twin("distribution.assignments_list", GateMode::Gated, "jeeta.distribution.assignments_list", ("GET", "/api/distribution/assignments"), Read),
     twin("distribution.backfill", GateMode::Gated, "jeeta.distribution.backfill", ("POST", "/api/distribution/backfill"), Write),
+    // Email outreach (leads spec §3.10-§3.16): templates, campaigns, enrollments, a test email,
+    // the report and the settings, for `outreach.work` (`outreach.manage` for an approval, a
+    // cancel and the settings). All gated; nothing is sent while the platform switch
+    // `JEETA_OUTREACH_ENABLED` is off. `audience-preview` is `POST`: its body carries filters.
+    twin("outreach.templates_list", GateMode::Gated, "jeeta.outreach.templates_list", ("GET", "/api/outreach/templates"), Read),
+    twin("outreach.templates_save", GateMode::Gated, "jeeta.outreach.templates_save", ("POST", "/api/outreach/templates"), Write),
+    twin("outreach.templates_archive", GateMode::Gated, "jeeta.outreach.templates_archive", ("POST", "/api/outreach/templates/{template_id}/archive"), Write),
+    twin("outreach.campaigns_list", GateMode::Gated, "jeeta.outreach.campaigns_list", ("GET", "/api/outreach/campaigns"), Read),
+    twin("outreach.campaigns_get", GateMode::Gated, "jeeta.outreach.campaigns_get", ("GET", "/api/outreach/campaigns/{campaign_id}"), Read),
+    twin("outreach.campaigns_save", GateMode::Gated, "jeeta.outreach.campaigns_save", ("POST", "/api/outreach/campaigns"), Write),
+    twin("outreach.audience_preview", GateMode::Gated, "jeeta.outreach.audience_preview", ("POST", "/api/outreach/audience-preview"), Read),
+    twin("outreach.campaigns_launch", GateMode::Gated, "jeeta.outreach.campaigns_launch", ("POST", "/api/outreach/campaigns/{campaign_id}/launch"), Write),
+    twin("outreach.campaigns_approve", GateMode::Gated, "jeeta.outreach.campaigns_approve", ("POST", "/api/outreach/campaigns/{campaign_id}/approve"), Write),
+    twin("outreach.campaigns_control", GateMode::Gated, "jeeta.outreach.campaigns_control", ("POST", "/api/outreach/campaigns/{campaign_id}/control"), Write),
+    twin("outreach.enroll", GateMode::Gated, "jeeta.outreach.enroll", ("POST", "/api/outreach/campaigns/{campaign_id}/enrollments"), Write),
+    twin("outreach.enrollments_list", GateMode::Gated, "jeeta.outreach.enrollments_list", ("GET", "/api/outreach/campaigns/{campaign_id}/enrollments"), Read),
+    twin("outreach.enrollments_stop", GateMode::Gated, "jeeta.outreach.enrollments_stop", ("POST", "/api/outreach/enrollments/{enrollment_id}/stop"), Write),
+    twin("outreach.personalize", GateMode::Gated, "jeeta.outreach.personalize", ("POST", "/api/outreach/enrollments/personalization"), Write),
+    twin("outreach.test_send", GateMode::Gated, "jeeta.outreach.test_send", ("POST", "/api/outreach/campaigns/{campaign_id}/test"), Write),
+    twin("outreach.report", GateMode::Gated, "jeeta.outreach.report", ("GET", "/api/outreach/report"), Read),
+    twin("outreach.settings_get", GateMode::Gated, "jeeta.outreach.settings_get", ("GET", "/api/outreach/settings"), Read),
+    twin("outreach.settings_set", GateMode::Gated, "jeeta.outreach.settings_set", ("PUT", "/api/outreach/settings"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),
