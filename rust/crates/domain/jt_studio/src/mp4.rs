@@ -7,7 +7,12 @@
 
 /// The duration in milliseconds, or `None` when it cannot be read.
 pub(crate) fn duration_ms(bytes: &[u8]) -> Option<u64> {
-    let moov = find(bytes, b"moov")?;
+    moov_duration_ms(find(bytes, b"moov")?)
+}
+
+/// The duration in milliseconds a `moov` box's payload (its header left out) names, as
+/// [`duration_ms`] reads it from the whole file.
+pub(crate) fn moov_duration_ms(moov: &[u8]) -> Option<u64> {
     let mvhd = find(moov, b"mvhd")?;
     let version = *mvhd.first()?;
     // version(1) flags(3), then creation and modification times (4 or 8 each).
