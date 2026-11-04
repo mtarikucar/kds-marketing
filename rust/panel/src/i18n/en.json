@@ -2303,7 +2303,12 @@
       "hard_findings_not_releasable": "Material problems cannot be released: change the material or the piece.",
       "no_caption_findings": "There is no text finding to release.",
       "findings_changed": "The findings changed while you looked; refresh and look again.",
-      "stale": "This record changed while you looked; refresh and try again."
+      "stale": "This record changed while you looked; refresh and try again.",
+      "story_image_jpeg_only": "A story image must be a JPEG: save the photo as JPEG and upload it again.",
+      "story_image_too_large": "A story image can be at most 8 MB: upload a smaller JPEG.",
+      "story_video_too_large": "A story video can be at most 100 MB: make the video smaller and upload it again.",
+      "story_video_length": "A story video must last 3 to 60 seconds: trim the video and upload it again.",
+      "story_video_length_unknown": "The video's length could not be read: export it again as MP4 and upload it."
     },
     "invalid": {
       "media": "The file was refused: it must be JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
@@ -2549,7 +2554,8 @@
       "upload": "Upload materials",
       "refused_one": "{{count}} material not usable",
       "refused_other": "{{count}} materials not usable",
-      "pick": "Choose what the content is about and at least one material."
+      "pick": "Choose what the content is about and at least one material.",
+      "story": "A story shares no text: only the picture goes out. Choose one JPEG (at most 8 MB) or one MP4 of 3–60 seconds."
     }
   },
   "posts": {
@@ -2649,7 +2655,7 @@
       "debounceHelp": "A plan is asked for this long after materials stop being added to an olay: 20 photos make one request.",
       "horizon": "Planning horizon (days)",
       "tz": "Time zone",
-      "storyNote": "Stories are not published on any channel yet.",
+      "storyNote": "Stories go out on Instagram only: one JPEG (at most 8 MB) or one MP4 of 3–60 seconds, without text. Facebook Page stories are not there yet.",
       "save": "Save settings",
       "saved": "Saved.",
       "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
