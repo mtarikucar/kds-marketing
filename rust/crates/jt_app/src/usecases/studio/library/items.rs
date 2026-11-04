@@ -626,8 +626,9 @@ pub async fn material_add(
 /// Changes a material's tags, quality, depicts and people at its expected revision. A person's
 /// edit marks the tags reviewed by them; an agent's is a suggestion again (no reviewer), and an
 /// agent never removes a `depicts` flag or a person (privacy markers only a person corrects). A
-/// `depicts` flag or a person on an AI image whose permission an agent set clears that permission:
-/// a human decides now (D5, D17, D38).
+/// new `depicts` flag or a new person clears the material's share permission, whether an agent or
+/// a human gave it: an owner or manager decides again, and meanwhile it is listed as needing
+/// review (D5, D17, D38, D45). Removing a marker keeps the permission.
 pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Material, AppError> {
     let given = [
         ("product_groups", i.product_groups.is_some()),
@@ -682,8 +683,14 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
         m.people = v;
     }
     m.tags_reviewed_by = reviewer;
-    let share_cleared =
-        m.is_ai() && m.needs_human_permission() && m.share.as_ref().is_some_and(|s| s.by.is_none());
+    // A new privacy marker reopens the permission, whoever gave it: it was given for what the
+    // material was known to show (D45). An agent's own permission never covers a marker (D38).
+    let marked =
+        !m.tags.depicts.is_subset(&current.tags.depicts) || !m.people.is_subset(&current.people);
+    let share_cleared = m
+        .share
+        .as_ref()
+        .is_some_and(|s| marked || (s.by.is_none() && m.is_ai() && m.needs_human_permission()));
     if share_cleared {
         m.share = None;
     }

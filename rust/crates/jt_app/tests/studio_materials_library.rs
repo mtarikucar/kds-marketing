@@ -781,6 +781,110 @@ async fn a_named_person_needs_a_humans_permission_as_a_depicts_flag_does() {
     assert_eq!(entry.entry.payload["share_cleared"], json!(true));
 }
 
+/// The materials listed as waiting for a person.
+async fn needs_review(w: &World) -> Vec<MaterialId> {
+    library::materials_list(&w.d, &w.ctx, input(json!({"state":"needs_review"})))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect()
+}
+
+/// A new privacy marker reopens a human's permission (spec D45): it was given for what the
+/// material was known to show. The material is listed for review until a human gives it again.
+#[tokio::test]
+async fn a_new_privacy_marker_reopens_a_humans_permission() {
+    let (w, _) = publishing_world().await;
+    let a = agent(&w);
+    let o = olay(&w, &w.ctx, "olay", json!({})).await;
+    let file = upload(&w, "photo", "image/png", &png(1)).await;
+    let m = add(
+        &w,
+        &w.ctx,
+        "photo",
+        file,
+        json!({"olay_id":o.id,"share":"shareable","quality":"publishable","depicts":["client_logo"]}),
+    )
+    .await;
+    // Other tags, or the flags it had: the permission stands.
+    let kept = library::material_tag(
+        &w.d,
+        &a,
+        input(
+            json!({"material_id":m.id,"expected_revision":1,"product_groups":["figur"],
+            "depicts":["client_logo"]}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        kept.share.as_ref().map(|s| (s.permission, s.by)),
+        Some((SharePermission::Shareable, Some(owner(&w))))
+    );
+    // A face the owner was not told of: an owner or manager decides again.
+    let flagged = library::material_tag(
+        &w.d,
+        &a,
+        input(json!({"material_id":m.id,"expected_revision":2,"depicts":["client_logo","face"]})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(flagged.share, None);
+    assert!(needs_review(&w).await.contains(&m.id));
+    let entry = w
+        .uow
+        .snapshot()
+        .ledger
+        .into_iter()
+        .rfind(|r| r.entry.action.as_str() == "studio.material.tagged")
+        .unwrap();
+    assert_eq!(entry.entry.payload["share_cleared"], json!(true));
+    // Given again; a person named later reopens it again, whoever names them.
+    library::material_permission(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":m.id,"expected_revision":3,"permission":"shareable"})),
+    )
+    .await
+    .unwrap();
+    let ada = people::create(
+        &w.d,
+        &w.ctx,
+        input(json!({"display_name":"Ada","source":"form",
+            "identities":[{"channel":"email","value":"ada@example.com"}]})),
+    )
+    .await
+    .unwrap()
+    .person
+    .id;
+    let named = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":m.id,"expected_revision":4,"people":[ada]})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(named.share, None);
+    assert!(needs_review(&w).await.contains(&m.id));
+    // A marker a person removes keeps a permission given since.
+    library::material_permission(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":m.id,"expected_revision":5,"permission":"shareable"})),
+    )
+    .await
+    .unwrap();
+    let corrected = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":m.id,"expected_revision":6,"depicts":["client_logo"]})),
+    )
+    .await
+    .unwrap();
+    assert!(corrected.share.is_some());
+}
+
 #[tokio::test]
 async fn the_panels_decisions_are_an_owners_or_a_managers_in_person() {
     let (w, _) = publishing_world().await;
