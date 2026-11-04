@@ -337,6 +337,7 @@ fn catalog_is_the_release_table() {
         ("prospects.settings_get", Some("jeeta.prospects.settings_get"), Some(("GET", "/api/prospects/settings")), false, Risk::Read),
         ("prospects.settings_set", Some("jeeta.prospects.settings_set"), Some(("PUT", "/api/prospects/settings")), false, Risk::Write),
         ("prospects.promote", Some("jeeta.prospects.promote"), Some(("POST", "/api/prospects/promote")), false, Risk::Write),
+        ("prospects.report", Some("jeeta.prospects.report"), Some(("GET", "/api/prospects/report")), false, Risk::Read),
         ("research.tasks_list", Some("jeeta.research.tasks_list"), Some(("GET", "/api/research/tasks")), false, Risk::Read),
         ("research.tasks_get", Some("jeeta.research.tasks_get"), Some(("GET", "/api/research/tasks/{task_id}")), false, Risk::Read),
         ("research.tasks_create", Some("jeeta.research.tasks_create"), Some(("POST", "/api/research/tasks")), false, Risk::Write),
@@ -365,7 +366,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 226);
+    assert_eq!(CATALOG.len(), 227);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

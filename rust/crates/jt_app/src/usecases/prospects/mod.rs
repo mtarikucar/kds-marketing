@@ -23,6 +23,7 @@ pub(crate) mod dedupe;
 pub mod playbook;
 pub mod pool;
 pub mod promote;
+pub mod report;
 mod score;
 mod settings;
 

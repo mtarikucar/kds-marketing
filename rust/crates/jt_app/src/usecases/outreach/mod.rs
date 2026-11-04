@@ -23,7 +23,9 @@ pub mod audience;
 pub mod campaigns;
 pub mod dispatch;
 pub mod enroll;
+pub(crate) mod hooks;
 pub mod links;
+pub mod report;
 pub mod settings;
 pub mod templates;
 

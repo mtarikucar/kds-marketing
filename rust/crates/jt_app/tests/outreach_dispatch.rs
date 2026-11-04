@@ -109,7 +109,8 @@ async fn an_outreach_email_goes_through_the_outbox_with_its_footer_and_sender_na
     let send = sends(&o.w).pop().unwrap();
     assert_eq!(send.step, 1);
     assert_eq!(send.recipient_domain, "example.invalid");
-    assert_eq!(send.outcome, SendOutcome::Queued);
+    // The receipt settles the send row (L4-T6).
+    assert_eq!(send.outcome, SendOutcome::Sent);
     // The unsubscribe link and the Message-ID name the outbox entry (spec D63).
     let token = send.outbox_id;
     assert_eq!(m.message_id, format!("<{token}@panel.test>"));
@@ -660,19 +661,23 @@ async fn refused_at_enqueue_stops_enrollment() {
     )
     .await
     .unwrap();
-    // Cem withdrew consent after enrolling.
-    jt_app::usecases::inbox::consent::record_consent(
-        &w.deps,
-        &w.owner_ctx,
-        cem,
-        serde_json::from_value(
-            json!({"channel": "email", "kind": "withdrawn", "source": "customer",
-            "at": FIXED_NOW.format(&time::format_description::well_known::Rfc3339).unwrap()}),
-        )
-        .unwrap(),
-    )
-    .await
-    .unwrap();
+    // Cem withdrew consent after enrolling, written straight to the repos: no hook stopped the
+    // enrollment (L4-T6's would), so the enqueue's fence refuses it.
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.consents()
+        .insert(jt_inbox::Consent {
+            id: jt_inbox::ConsentId::new_v7(),
+            person_id: cem,
+            channel: jt_inbox::Channel::Email,
+            kind: ConsentKind::Withdrawn,
+            source: ConsentSource::Customer,
+            at: FIXED_NOW,
+            sync_state: jt_inbox::SyncState::Pending,
+            attempts: 0,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     for m in 0..3 {
         dispatch(w, minutes(m)).await;
     }

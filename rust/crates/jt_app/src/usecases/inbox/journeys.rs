@@ -271,8 +271,12 @@ pub async fn report(
         transition: Some(transition.clone()),
         duplicate: false,
     };
+    let kind = event.kind.clone();
     r.journeys().apply_transition(id, transition, event).await?;
     apply_effects(deps, ctx, r.as_mut(), &journey, &out.effects).await?;
+    // A meeting, a win or a loss stops the person's outreach sequence (spec
+    // 2026-10-30-leads-pool-outreach-design.md D16).
+    crate::usecases::outreach::hooks::on_journey_event(r.as_mut(), ctx, id, &kind).await?;
     // Only status/effect metadata, never product, customer content or identity values.
     record(r.as_mut(), ctx, "inbox.event.reported", "journey", id, json!({"kind":input.kind,"from":journey.status,"to":out.transition.as_ref().map(Transition::to)})).await?;
     crate::usecases::distribution::touch(r.as_mut(), ctx, id).await?;

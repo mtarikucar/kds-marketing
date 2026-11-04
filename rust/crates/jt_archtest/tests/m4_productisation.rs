@@ -23,8 +23,9 @@ const ADDED: [&str; 11] = [
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
 /// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the prospect
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
-/// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's).
-const POST_M4_ADDED: [(&str, &str); 63] = [
+/// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
+/// pool's report, leads L4-T6).
+const POST_M4_ADDED: [(&str, &str); 64] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -96,6 +97,8 @@ const POST_M4_ADDED: [(&str, &str); 63] = [
     ("studio.posts_propose", "jeeta.studio.posts_propose"),
     ("studio.posts_list", "jeeta.studio.posts_list"),
     ("studio.weekly_summary", "jeeta.studio.weekly_summary"),
+    // The pool's report (leads L4-T6).
+    ("prospects.report", "jeeta.prospects.report"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

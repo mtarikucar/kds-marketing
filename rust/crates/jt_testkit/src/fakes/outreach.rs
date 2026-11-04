@@ -530,6 +530,16 @@ impl EnrollmentRepo for MemTenant {
             .cloned())
     }
 
+    async fn for_person(&mut self, person: PersonId) -> Result<Vec<EnrollmentRow>, AppError> {
+        let mut rows: Vec<EnrollmentRow> = self
+            .own(&self.outreach().enrollments)
+            .filter(|e| e.person_id == person)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|e| e.id);
+        Ok(rows)
+    }
+
     async fn personalize(
         &mut self,
         id: EnrollmentId,

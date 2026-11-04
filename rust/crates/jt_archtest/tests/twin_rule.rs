@@ -123,7 +123,7 @@ fn mcp_registry_matches_catalog() {
 /// summary) give 163; the 12 `prospects` tools of the pool (leads L1-T6) give 175; the playbook
 /// (`prospects` +1) and the five `research` tools of leads L2 give 181; promotion (`prospects`
 /// +1), the five `distribution` tools and `jeeta.inbox.people_set_kind` (`inbox` +1) of leads L3
-/// give 188.
+/// give 188; the pool's report (`prospects` +1, leads L4-T6) gives 189.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -142,7 +142,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("connector", 8),
     ("calls", 9),
     ("devices", 5),
-    ("prospects", 14),
+    ("prospects", 15),
     ("research", 5),
     ("distribution", 5),
     ("events", 3),
@@ -151,11 +151,11 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 ];
 
 #[test]
-fn the_registry_holds_188_tools() {
+fn the_registry_holds_189_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 188);
+    assert_eq!(specs.len(), 189);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 188);
+    assert_eq!(total, 189);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -164,7 +164,7 @@ fn the_registry_holds_188_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 188);
+    assert_eq!(catalog, 189);
 }
 
 /// An MCP-only use case has no human caller: only an agent's check-in is one.
@@ -290,7 +290,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 226);
+    assert_eq!(CATALOG.len(), 227);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

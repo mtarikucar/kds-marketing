@@ -368,6 +368,8 @@ pub trait EnrollmentRepo: Send + Sync {
     ) -> Result<u32, AppError>;
     /// The person's active enrollment.
     async fn active_for(&mut self, person: PersonId) -> Result<Option<EnrollmentRow>, AppError>;
+    /// Every enrollment of the person, in any campaign and state, by id.
+    async fn for_person(&mut self, person: PersonId) -> Result<Vec<EnrollmentRow>, AppError>;
     /// Replaces the enrollment's personalization; whether the enrollment exists.
     async fn personalize(
         &mut self,

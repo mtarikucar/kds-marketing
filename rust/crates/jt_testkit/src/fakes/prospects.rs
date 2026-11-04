@@ -537,6 +537,29 @@ impl ProspectRepo for MemTenant {
         }))
     }
 
+    async fn report_rows(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Prospect>, AppError> {
+        let ws = self.ws;
+        let within = |at: OffsetDateTime| at >= from && at < to;
+        let mut rows: Vec<Prospect> = self
+            .pool()
+            .prospects
+            .iter()
+            .filter(|p| {
+                p.workspace_id == ws
+                    && (within(p.created_at) || p.promoted.as_ref().is_some_and(|x| within(x.at)))
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|p| (p.created_at, p.id));
+        rows.truncate(limit.clamp(1, jt_app::ports::prospects::MAX_REPORT_ROWS) as usize);
+        Ok(rows)
+    }
+
     async fn count_unscored(&mut self, digest: &str) -> Result<u32, AppError> {
         Ok(self.count_where(|p| {
             p.status == ProspectStatus::New

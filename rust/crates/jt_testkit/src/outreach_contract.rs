@@ -724,6 +724,20 @@ pub async fn stop_all_for_stops_only_active(uow: Arc<dyn UnitOfWork>) {
         get_enrollment(&w, other.id).await.status,
         EnrollmentStatus::Active
     );
+    // Every enrollment of the person, whatever its campaign or state, by id; nobody else's.
+    let mut t = w.f.uow.tenant(w.f.ws).await.unwrap();
+    let mine: Vec<_> = t
+        .outreach_enrollments()
+        .for_person(p)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    let mut expected = vec![done.id, live.id];
+    expected.sort();
+    assert_eq!(mine, expected);
+    drop(t);
 
     let mut t = w.f.uow.tenant(w.f.ws).await.unwrap();
     assert_eq!(
@@ -1093,6 +1107,13 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(o.outreach_enrollments().get(e.id).await.unwrap(), None);
     assert_eq!(o.outreach_enrollments().active_for(p).await.unwrap(), None);
+    assert!(
+        o.outreach_enrollments()
+            .for_person(p)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         o.outreach_enrollments()
             .due(a.id, at(60), 10)

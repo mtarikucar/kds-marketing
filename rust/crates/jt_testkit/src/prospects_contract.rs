@@ -914,6 +914,35 @@ pub async fn status_promotion_and_counts(uow: Arc<dyn UnitOfWork>) {
         t.prospects().keys_of(q.id).await.unwrap(),
         "a promoted prospect keeps its keys"
     );
+    // A report reads the prospects created or promoted in its half-open range, oldest first.
+    let ids = |rows: Vec<Prospect>| rows.into_iter().map(|p| p.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(t.prospects().report_rows(at(0), at(6), 100).await.unwrap()),
+        [p.id, q.id]
+    );
+    assert_eq!(
+        ids(t.prospects().report_rows(at(0), at(5), 100).await.unwrap()),
+        [p.id]
+    );
+    assert_eq!(
+        ids(t
+            .prospects()
+            .report_rows(at(20), at(21), 100)
+            .await
+            .unwrap()),
+        [q.id]
+    );
+    assert!(
+        t.prospects()
+            .report_rows(at(6), at(20), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        ids(t.prospects().report_rows(at(0), at(21), 1).await.unwrap()),
+        [p.id]
+    );
     let err = t
         .prospects()
         .set_promoted(ProspectId::new_v7(), &back.promoted.clone().unwrap())

@@ -468,8 +468,8 @@ pub static CATALOG: &[UseCase] = &[
     // `check` and the do-not-contact lift are `POST`: their bodies carry contact values, which never
     // go into a URL. Do-not-contact and erasure record an objection, which must always be
     // recordable: they are `OBJECTION_USE_CASES`, exempt from the strategy gate and from the
-    // workspace status. `prospects.promote` comes with distribution and `prospects.report` with
-    // outreach.
+    // workspace status. `prospects.promote` came with distribution and `prospects.report` with
+    // outreach's stop hooks and reports (leads L4-T6).
     twin("prospects.playbook", GateMode::Gated, "jeeta.prospects.playbook", ("GET", "/api/prospects/playbook"), Read),
     twin("prospects.check", GateMode::Gated, "jeeta.prospects.check", ("POST", "/api/prospects/check"), Read),
     twin("prospects.create", GateMode::Gated, "jeeta.prospects.create", ("POST", "/api/prospects"), Write),
@@ -484,6 +484,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
     twin("prospects.promote", GateMode::Gated, "jeeta.prospects.promote", ("POST", "/api/prospects/promote"), Write),
+    twin("prospects.report", GateMode::Gated, "jeeta.prospects.report", ("GET", "/api/prospects/report"), Read),
     // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
     twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
     twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),

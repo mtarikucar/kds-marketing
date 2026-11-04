@@ -118,6 +118,15 @@ pub async fn enqueue(
         ctx.now,
     )
     .await?;
+    // A booked meeting stops the person's outreach sequence (spec
+    // 2026-10-30-leads-pool-outreach-design.md D16).
+    crate::usecases::outreach::hooks::on_journey_event(
+        r.as_mut(),
+        ctx,
+        journey,
+        &JourneyEventKind::AppointmentBooked,
+    )
+    .await?;
     record(r.as_mut(),ctx,"inbox.appointment.booked","appointment",appointment.id,json!({"journey_id":journey,"person_id":j.person_id,"notification":notification.state,"reminder_id":reminder.id})).await?;
     r.commit().await?;
     Ok(BookOut {

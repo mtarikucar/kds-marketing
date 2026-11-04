@@ -772,6 +772,14 @@ impl EnrollmentRepo for PgTenantRepos {
             .pop())
     }
 
+    async fn for_person(&mut self, person: PersonId) -> Result<Vec<EnrollmentRow>, AppError> {
+        let mut rows = self
+            .enrollments_where("person_id = $2", person.as_uuid())
+            .await?;
+        rows.sort_by_key(|e| e.id);
+        Ok(rows)
+    }
+
     async fn personalize(
         &mut self,
         id: EnrollmentId,

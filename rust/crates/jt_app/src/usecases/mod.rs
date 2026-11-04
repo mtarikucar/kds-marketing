@@ -212,6 +212,41 @@ pub(crate) fn keyset_cursor<I>(
     }
 }
 
+/// The longest range a report covers, in days.
+pub const MAX_REPORT_DAYS: i64 = 366;
+
+/// A report's range `[from, to)` from the two RFC 3339 instants a caller sends (the panel computes
+/// local-day bounds in the workspace's time zone): `VALIDATION {field, reason}` for a time that
+/// does not parse (`not_a_time`), a `to` not after `from` (`not_after_from`) or a range over
+/// [`MAX_REPORT_DAYS`] (`range_too_long`).
+pub(crate) fn report_range(
+    from: &str,
+    to: &str,
+) -> Result<(OffsetDateTime, OffsetDateTime), AppError> {
+    let parse = |field: &str, raw: &str| {
+        OffsetDateTime::parse(raw.trim(), &Rfc3339).map_err(|_| {
+            AppError::validation(
+                format!("{field} must be an RFC 3339 time"),
+                json!({ "field": field, "reason": "not_a_time" }),
+            )
+        })
+    };
+    let (from, to) = (parse("from", from)?, parse("to", to)?);
+    if to <= from {
+        return Err(AppError::validation(
+            "to must come after from",
+            json!({ "field": "to", "reason": "not_after_from" }),
+        ));
+    }
+    if to - from > time::Duration::days(MAX_REPORT_DAYS) {
+        return Err(AppError::validation(
+            format!("a report covers at most {MAX_REPORT_DAYS} days"),
+            json!({ "field": "to", "reason": "range_too_long" }),
+        ));
+    }
+    Ok((from, to))
+}
+
 /// `raw` trimmed, or `VALIDATION` when nothing is left.
 pub(crate) fn required(field: &str, raw: &str) -> Result<String, AppError> {
     match raw.trim() {

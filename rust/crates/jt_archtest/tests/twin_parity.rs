@@ -5014,6 +5014,80 @@ async fn promotion_distribution_and_the_recipient_kind_answer_the_same_over_the_
     assert_eq!(human, agent);
 }
 
+#[tokio::test]
+async fn the_pool_report_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("pool-report").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "sector": "kafe",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = json_body(resp).await["prospect"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(json!({ "prospect_ids": [id] })),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The range is instants around now (the panel computes local-day bounds).
+    use time::format_description::well_known::Rfc3339;
+    let now = time::OffsetDateTime::now_utc();
+    let from = (now - time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let to = (now + time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/prospects/report?from={from}&to={to}&group_by=sector"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.report",
+        json!({ "from": from, "to": to, "group_by": "sector" }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["groups"][0]["key"], "kafe");
+    assert_eq!(human["groups"][0]["created"], 1);
+    assert_eq!(human["groups"][0]["promoted"], 1);
+}
+
 /// An owed public item `external_id` of `conversation` (`kind` a comment or a question), with
 /// its inbound message, written straight to the repos at `now`.
 async fn public_item(

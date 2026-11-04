@@ -1605,6 +1605,16 @@ async fn record_result_with(
             let terminal = j
                 .as_ref()
                 .is_some_and(|j| matches!(j.status, JourneyStatus::Won | JourneyStatus::Lost));
+            // An outreach email records the touch without moving the stage (spec
+            // 2026-10-30-leads-pool-outreach-design.md D18): a cold send never marks a journey
+            // contacted; the person's answer and ours move it as usual.
+            let kind = match row.intent.get("outreach") {
+                Some(o) => JourneyEventKind::OutreachSent {
+                    campaign_id: serde_json::from_value(o["campaign_id"].clone())?,
+                    step: serde_json::from_value(o["step"].clone())?,
+                },
+                None => JourneyEventKind::Replied,
+            };
             if let Some(j) = &j {
                 let key = format!("outbox:{id}");
                 if r.journeys().event_by_key(&key).await?.is_none() {
@@ -1614,7 +1624,7 @@ async fn record_result_with(
                         journey_id: j.id,
                         source: EventSource::System,
                         idempotency_key: key,
-                        kind: JourneyEventKind::Replied,
+                        kind,
                         reason_label: None,
                         at: sent_at,
                     };
@@ -1974,12 +1984,16 @@ fn not_held() -> AppError {
         details: json!({"reason":"reply_not_held"}),
     }
 }
+/// Writes outbox entry `row`'s result: the entry, its request key's answer, the ledger entry, and
+/// (an outreach email) its send row's outcome, in the caller's transaction. Every result an
+/// entry takes goes through here.
 pub(super) async fn save_result(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     row: &OutboxRow,
 ) -> Result<(), AppError> {
     r.outbox().update(row.clone()).await?;
+    crate::usecases::outreach::hooks::on_receipt(r, ctx, row).await?;
     if let Some(key) = row.intent.get("request_key").and_then(Value::as_str) {
         let queued = ReplyOut {
             message_id: row.message_id,

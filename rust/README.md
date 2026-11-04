@@ -2109,6 +2109,7 @@ which the rep role does not hold.
 | `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
 | `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
 | `prospects.promote` | `POST /api/prospects/promote` | `jeeta.prospects.promote` | WRITE | 1 to 50, each in its own transaction; also `inbox.work`; a person, an identity per deliverable phone and email, a business recipient, a journey of source `prospect`, no consent; distributed at once; one outcome per prospect; `prospects_to_promote` in `work.pending` |
+| `prospects.report` | `GET /api/prospects/report` | `jeeta.prospects.report` | READ | `?from&to&group_by` (`[from, to)`, RFC 3339, at most 366 days); computed at read time; per group the prospects created in the range (created, scored, qualified, rejected by reason) and those promoted in it (contacted, replied, meetings, quoted, won, lost by reason, won revenue per currency, never summed across currencies, and the funnel's rates); grouped by the record at promotion (source, research task, segment, sector, city, score bucket, rubric digest) |
 
 #### Research tasks (`jeeta.research.*`, leads L2)
 

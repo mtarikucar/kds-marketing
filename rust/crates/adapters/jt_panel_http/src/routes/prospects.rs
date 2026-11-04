@@ -147,3 +147,14 @@ pub async fn promote(
 ) -> Result<Json<PromoteOut>, ApiError> {
     Ok(Json(prospects::promote(&state.deps, &ctx, body).await?))
 }
+
+/// `200` with the pool's report: `?from&to&group_by` (RFC 3339 instants; `[from, to)`).
+pub async fn report(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(query): ApiQuery<prospects::report::ReportInput>,
+) -> Result<Json<prospects::report::ReportOut>, ApiError> {
+    Ok(Json(
+        prospects::report::report(&state.deps, &ctx, query).await?,
+    ))
+}

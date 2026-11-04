@@ -641,10 +641,12 @@ pub(crate) async fn apply_from(
     let transition = reduce(&j, &event, &policy)
         .map_err(|_| AppError::conflict("inbound journey transition refused"))?;
     let effects = transition.effects().to_vec();
+    let kind = event.kind.clone();
     r.journeys()
         .apply_transition(j.id, transition, event)
         .await?;
     journeys::apply_effects(deps, ctx, r, &j, &effects).await?;
+    crate::usecases::outreach::hooks::on_journey_event(r, ctx, j.id, &kind).await?;
     record(
         r,
         ctx,
@@ -730,6 +732,20 @@ async fn message(
             .await?;
     }
     apply(deps, ctx, r, j, key, JourneyEventKind::MessageReceived).await?;
+    // A reply to an outreach email stops the person's sequence (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.14); the conversation is ours as for any
+    // inbound, so the agent answers.
+    let in_reply_to = (channel == Channel::Email)
+        .then(|| text(&event.payload, "in_reply_to"))
+        .flatten();
+    crate::usecases::outreach::hooks::on_inbound(
+        r,
+        ctx,
+        person.id,
+        in_reply_to,
+        activity_at(event),
+    )
+    .await?;
     Ok("consumed")
 }
 async fn outbound(
@@ -1080,6 +1096,11 @@ async fn mail_evidence(
     if row.state == "queued" {
         return Ok("deferred");
     }
+    // An outreach email's bounce or complaint is recorded on its send before the evidence
+    // settles the entry (an unknown send becomes bounced, not failed), and stops the sequence.
+    if let Some(status @ ("failed" | "complaint")) = text(&event.payload, "status") {
+        crate::usecases::outreach::hooks::on_bounce(r, ctx, &row, status == "complaint").await?;
+    }
     super::replies::record_result_in(deps, ctx, r, id, result, true).await?;
     if matches!(text(&event.payload, "status"), Some("failed" | "complaint")) {
         let conversation = r
@@ -1204,6 +1225,7 @@ async fn consent_event(
                 reason: SuppressionReason::Unsubscribe,
             })
             .await?;
+        crate::usecases::outreach::hooks::on_withdrawn(r, ctx, person.id, channel).await?;
     }
     record(
         r,

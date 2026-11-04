@@ -209,6 +209,13 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             run: promote,
         },
         ToolDef {
+            use_case: "prospects.report",
+            description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly: adapt targeting within the                           approved ICP, and propose rubric or ICP changes to the owner through                           the strategy consultation. [risk: READ]",
+            permission: Permission::ProspectsWork,
+            schema: report_schema,
+            run: report,
+        },
+        ToolDef {
             use_case: "prospects.settings_set",
             description: "Change the pool's settings (prospects.manage): any of timezone (IANA), \
                           rejected_retention_days and unpromoted_retention_days (1 to 730), \
@@ -516,6 +523,19 @@ fn erase_schema() -> Schema {
     })
 }
 
+fn report_schema() -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "from": { "type": "string", "format": "date-time", "description": "The range's start (included)." },
+            "to": { "type": "string", "format": "date-time", "description": "The range's end (excluded), at most 366 days after from." },
+            "group_by": { "type": "string", "enum": ["source", "research_task", "segment", "sector", "city", "score_bucket", "rubric_digest"] },
+        },
+        "required": ["from", "to"],
+        "additionalProperties": false,
+    })
+}
+
 fn settings_schema() -> Schema {
     json_schema!({
         "type": "object",
@@ -646,6 +666,13 @@ fn settings_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
     Box::pin(async move {
         let input: SettingsInput = args(raw)?;
         to_json(&prospects::settings_set(deps, ctx, input).await?)
+    })
+}
+
+fn report<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let input: prospects::report::ReportInput = args(raw)?;
+        to_json(&prospects::report::report(deps, ctx, input).await?)
     })
 }
 

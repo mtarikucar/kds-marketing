@@ -35,6 +35,10 @@ use crate::error::AppError;
 /// [`ResearchTaskRepo::list`] returns.
 pub const MAX_PROSPECT_PAGE: u32 = 200;
 
+/// The most prospects one [`ProspectRepo::report_rows`] reads (a report over more says it is
+/// truncated).
+pub const MAX_REPORT_ROWS: u32 = 10_000;
+
 /// What an insert did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Inserted {
@@ -291,6 +295,14 @@ pub trait ProspectRepo: Send + Sync {
         from: OffsetDateTime,
         to: OffsetDateTime,
     ) -> Result<u32, AppError>;
+    /// The prospects created or promoted in `[from, to)`, oldest created first (then by id), at
+    /// most `limit` (capped at [`MAX_REPORT_ROWS`]): the rows a pool report counts.
+    async fn report_rows(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Prospect>, AppError>;
     /// `new` prospects without a score under `digest`.
     async fn count_unscored(&mut self, digest: &str) -> Result<u32, AppError>;
     /// `qualified` prospects (none of which is promoted yet: promotion moves the status).

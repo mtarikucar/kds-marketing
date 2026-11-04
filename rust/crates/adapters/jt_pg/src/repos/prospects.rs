@@ -9,8 +9,9 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
-    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
-    ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, Updated, is_key_fingerprint, is_key_hash,
+    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, MAX_REPORT_ROWS, Page,
+    Promoted, ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, Updated, is_key_fingerprint,
+    is_key_hash,
 };
 use jt_inbox::{JourneyId, PersonId};
 use jt_prospects::{
@@ -806,6 +807,26 @@ impl ProspectRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "count prospects promoted"))?;
         Ok(u32::try_from(n).unwrap_or(u32::MAX))
+    }
+
+    async fn report_rows(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Prospect>, AppError> {
+        let sql = format!(
+            "select {COLUMNS} from prospects where workspace_id = $1              and ((created_at >= $2 and created_at < $3)                   or (promoted_at >= $2 and promoted_at < $3))              order by created_at, id limit $4"
+        );
+        let rows: Vec<Record> = sqlx::query_as(&sql)
+            .bind(self.workspace_id().as_uuid())
+            .bind(from)
+            .bind(to)
+            .bind(i64::from(limit.clamp(1, MAX_REPORT_ROWS)))
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "read the prospects of a report"))?;
+        rows.into_iter().map(Record::into_prospect).collect()
     }
 
     async fn count_unscored(&mut self, digest: &str) -> Result<u32, AppError> {

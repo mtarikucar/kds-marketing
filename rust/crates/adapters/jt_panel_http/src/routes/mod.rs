@@ -267,6 +267,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/prospects/settings"),
     ("PUT", "/api/prospects/settings"),
     ("POST", "/api/prospects/promote"),
+    ("GET", "/api/prospects/report"),
     ("GET", "/api/research/tasks"),
     ("GET", "/api/research/tasks/{task_id}"),
     ("POST", "/api/research/tasks"),
@@ -1409,6 +1410,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/prospects/promote",
             "prospects.promote",
             prospects::promote,
+        ),
+        api_route(
+            "GET",
+            "/prospects/report",
+            "prospects.report",
+            prospects::report,
         ),
         api_route(
             "GET",

@@ -103,6 +103,7 @@ fn tools_listed_with_risks() {
         ("settings_get", Risk::Read, Permission::ProspectsWork),
         ("settings_set", Risk::Write, Permission::ProspectsManage),
         ("promote", Risk::Write, Permission::ProspectsWork),
+        ("report", Risk::Read, Permission::ProspectsWork),
     ];
     assert_eq!(tools.len(), expected.len());
     for (action, risk, permission) in expected {

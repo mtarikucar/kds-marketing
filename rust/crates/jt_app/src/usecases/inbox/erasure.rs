@@ -50,6 +50,8 @@ pub async fn erase(
         &contact,
     )
     .await?;
+    // The person's outreach stops, their personalization goes (the rows and ids stay).
+    crate::usecases::outreach::hooks::on_erased(r.as_mut(), ctx, person).await?;
     if p.erased_at.is_some() {
         r.erasure().scrub(person).await?;
     } else {
