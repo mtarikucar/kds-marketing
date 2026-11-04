@@ -1105,6 +1105,27 @@ permissions).
   `resume_after_edit_needs_new_approval`, `snapshot_freezes_template_content`, `cancel_needs_manage`,
   `b2b_basis_only_by_human_owner_with_ack`, `preview_counts_match_enrollment`.
 - [ ] Green; **commit** `feat(outreach): templates, campaigns, approval and settings`.
+- As built (`1f7d78b9`, spec D64, D65): `usecases::outreach::{templates, campaigns, audience, settings}`
+  with `templates_save(TemplateSaveInput { template_id?, expected_revision?, name, language, subject, body,
+  request_key? }) -> TemplateOut { template, facts, updated_at }` (`TemplateFacts` serialises), `templates_archive`,
+  `templates_list(TemplateListInput { include_archived, limit, before_at, before_id })`; `campaigns_save
+  (CampaignSaveInput { campaign_id?, expected_revision?, name, mailbox_id, definition, request_key? }) ->
+  CampaignOut { campaign, approval_required, active_enrollments, enrollment? }`, `campaigns_get`, `campaigns_list
+  (CampaignListInput { status, limit, before_at, before_id })`, `campaigns_launch(id, LaunchInput {
+  expected_revision })`, `campaigns_approve(id, ApproveInput { expected_revision })`, `campaigns_control(id,
+  ControlInput { action: pause | resume | cancel })`; `audience_preview(PreviewInput { audience, mailbox_id }) ->
+  PreviewOut { eligible, by_skip_reason, basis { consent, business_recipient }, promotions_needed,
+  business_basis_in_force, truncated }`; `settings_get/set(SettingsInput)` -> `SettingsOut { ..OutreachPolicy,
+  sender_identity_complete, platform_enabled, b2b_channels_in_force }`. Request keys (creations only) store
+  `{template_id}`/`{campaign_id}`. A campaign needs an approved strategy version (`strategy_required`) and is made
+  under it. `campaigns_get`/`campaigns_list` are built here (the rows come in L4-T7). New: `JourneyRepo::list_open
+  (after, limit)` (both adapters) for the people filter; `jt_outreach::validate_audience` is public;
+  `bin/jeeta` reads `JEETA_OUTREACH_ENABLED` (`EnvPlatformApps.outreach_enabled`, a start log line, `.env.example`,
+  README table). The single lock test file is `jt_app/tests/outreach_lock.rs`; the campaign tests are in
+  `outreach_campaigns.rs` with the shared fixture `tests/support/outreach.rs`. `launch_refused_when_platform_disabled`
+  is in the lock file; `preview_counts_match_enrollment` lands with L4-T5 (`enroll_skips_with_reasons`); beyond
+  the plan: `resume_and_approval_refused_when_platform_disabled`, `settings_bounds_and_the_stored_warmup_are_checked`,
+  `preview_counts_by_skip_reason_and_basis`.
 
 ### Task L4-T5: enrollment, personalization and the dispatcher
 
@@ -1161,6 +1182,38 @@ for campaign in running_campaigns(&mut r).await? {
   `iys_lookup_caches_and_refuses_ret`, `iys_lookup_unavailable_without_capability`, `iys_budget_8_per_minute`,
   `no_provider_io_inside_a_transaction` (the fake connector asserts no open bundle when called).
 - [ ] Green; **commit** `feat(outreach): enrollment and the dispatcher on the outbox`.
+- As built (`62dc640c`, spec D66–D70; the footer rule D62/D63 first, `0e19fc2d`): `usecases::outreach::{enroll,
+  dispatch}`: `enroll(id, EnrollInput { audience | person_ids | prospect_ids }) -> EnrollOut { campaign_id,
+  enrolled, skipped, already_enrolled, promoted, waiting_for_promotion, truncated }` (a scheduled, running or
+  paused campaign, else `not_enrollable`; launch and the approval that starts a campaign enroll its audience
+  themselves, `CampaignOut.enrollment`), `personalize(PersonalizeInput { items: [{ enrollment_id, values }] })
+  -> PersonalizeOut { updated }` (1..=100; keys with or without `custom.`; `unused_key`; ledger
+  `outreach.personalized {count}`); `dispatch::run(deps, ctx) -> Dispatched { started, campaigns, queued, stopped,
+  postponed, paused, completed, iys_lookups }`, `dispatch::facts`, `dispatch::claim_fence`. `replies`:
+  `Target::PersonVia(person, capability)` (a verified, sealed mailbox, else `capability_down`), `Purpose::Outreach
+  (&OutreachSend { outbox_id, send_id, enrollment_id, campaign_id, step, from_name, language })` (the outbox id is
+  chosen first so click links can name it; intent `outreach {send_id, enrollment_id, campaign_id, step}`,
+  `use_case: "outreach.dispatch"`, gated), `Sending.outreach` (a human's hold stops it, `journey_won` refuses it),
+  `MailMessage.from_name` = the campaign's sender name; the claim runs `claim_fence` before the inbox fence.
+  `Target`, `Purpose` and `enqueue_in` are `pub(crate)`. `Job::OutreachDispatch` `"outreach_dispatch"` (1 min,
+  active workspaces, nothing while the switch is off; `Job::ALL` 32 -> 33, scheduler interval and its test,
+  `jt_app/tests/jobs.rs`). `ConsentSync::search(cred, recipient, channel) -> IysAnswer { Granted, Refused, Absent }`
+  (default `Permanent`; NetGSM over `iys_search`; `ScriptedConnector::push_consent_search`,
+  `ConnectorCall::ConsentSearch`); `jobs::iys_credentials`/`iys_credential` factored out of the İYS sync;
+  `OutreachSendRepo::mailbox_send_days(mailbox, tz, since)` (both adapters, contract
+  `mailbox_send_days_are_local_days`); `hours::local_date`. The four outreach work items move to L4-T7 (D69), with
+  `personalization_due_raised_within_24h`. Tests in `jt_app/tests/outreach_dispatch.rs` (23) and the lock file:
+  the plan's names, with `warmup_limits_a_new_mailbox` (the idle reset is `jt_outreach`'s
+  `warmup_day_index_counts_earlier_send_days_and_resets_after_idle`), `refused_at_claim_too` covering a paused
+  campaign, a reply and the blocklist (the other fences are the inbox fence's own tests), plus
+  `an_outreach_email_goes_through_the_outbox_with_its_footer_and_sender_name` and
+  `a_mailbox_that_is_down_pauses_the_campaign`; `no_provider_io_inside_a_transaction` is not built (the fakes model
+  no open bundle to assert on): the dispatcher commits before `send_step` and before the İYS lookup by
+  construction. Lock tests added: `the_dispatcher_sends_nothing_while_locked`,
+  `a_queued_outreach_intent_is_refused_at_claim_while_locked`,
+  `a_business_recipient_without_consent_is_skipped_while_the_b2b_basis_is_off`. Not here (L4-T6): the receipt
+  (`OutreachSent` instead of `Replied`, the send row's outcome; until then an outreach receipt applies `Replied`
+  and the send row stays `queued`), the hooks, the reports. `test_send` is L4-T7's.
 
 ### Task L4-T6: stop hooks and reports
 
@@ -1203,6 +1256,18 @@ pins (+18: catalog 195 → 213; `("outreach", 18)`), parity, gate, `outreach_mcp
   `from_display_name_is_encoded`, `header_injection_in_name_or_urls_is_refused`,
   `old_intents_without_new_fields_still_send`.
 - [ ] Green; **commit** `feat(mail): sender name and one-click unsubscribe headers`.
+- As built (`8a2c6df4`): `MailMessage.{from_name, list_unsubscribe: Option<ListUnsubscribe { https, mailto:
+  Option }>, attachment_files: Vec<Uuid>}`, each `#[serde(default, skip_serializing_if = ..)]` (a stored intent
+  reads and writes back unchanged). `smtp::wire` writes `From` with the name (lettre's `Mailbox::new`, RFC 2047
+  encoded), and `List-Unsubscribe`/`List-Unsubscribe-Post` as lettre 0.11 raw headers
+  (`HeaderValue::new(HeaderName::new_from_ascii_str(..), ..)`, which encodes and folds). Refused before any
+  connection: a name that is blank, over 80 characters or holds a control character; an unsubscribe address that is
+  not an `https` URL with a host (or, for the fallback, not `mailto:`), or holds spaces, controls, `<`, `>` or `,`,
+  or is over **900 bytes** (stricter than §8's 2,048: one header line holds it whole). Tests as named, in
+  `jt_mail/tests/mail.rs`. L5-T2 must honour D63 (see the spec): token = the outbox entry id; MAC purposes
+  `outreach.unsubscribe` and `outreach.click`; `usecases::outreach::links::verify`; a token's outbox entry leads to
+  the conversation and the person, and `outreach_sends.by_outbox(token)` to an outreach send (its campaign's
+  snapshot links for a click).
 
 ### Task L5-T2: unsubscribe and click routes
 
