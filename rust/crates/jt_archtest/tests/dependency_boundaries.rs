@@ -145,6 +145,55 @@ fn device_bridge_depends_on_no_server_crate() {
     }
 }
 
+/// The voice bridge (`bridge/voice`) is a program of its own beside the server, on the same host:
+/// it reaches Jeeta, Asterisk and the speech services over loopback only, and builds and tests on
+/// Windows. So no section of its manifest names a workspace crate but the calls domain (`jt_calls`,
+/// pure, whose wire it speaks): not `jt_pg`, not `jt_app`, no adapter.
+#[test]
+fn voice_bridge_depends_on_no_server_crate() {
+    const BRIDGE: &str = "jeeta-voice-bridge";
+    let metadata = metadata();
+    let bridge = metadata["packages"]
+        .as_array()
+        .expect("`cargo metadata` has no `packages` array")
+        .iter()
+        .find(|p| p["name"] == BRIDGE)
+        .expect("jeeta-voice-bridge is a workspace package");
+    let workspace = workspace_packages();
+    // Every kind: normal, dev and build dependencies.
+    let named: BTreeSet<&str> = bridge["dependencies"]
+        .as_array()
+        .expect("package has no `dependencies` array")
+        .iter()
+        .map(|d| d["name"].as_str().expect("dependency has no `name`"))
+        .collect();
+    for d in &named {
+        assert!(
+            !workspace.contains(*d) || *d == "jt_calls",
+            "{BRIDGE} depends on {d}: the bridge names no server crate"
+        );
+        assert_ne!(*d, "sqlx", "{BRIDGE} depends on sqlx");
+    }
+    // Not vacuous: it speaks the calls wire, over its own HTTP and WebSocket clients.
+    let deps = direct_deps(BRIDGE);
+    for needed in ["jt_calls", "reqwest", "tokio-tungstenite"] {
+        assert!(
+            deps.contains(needed),
+            "{BRIDGE} lost its {needed} dependency"
+        );
+    }
+    // And it alone names the WebSocket client (`deny.toml` bans it elsewhere in the normal graph).
+    let users: BTreeSet<String> = workspace_packages()
+        .into_iter()
+        .filter(|p| direct_deps(p).contains("tokio-tungstenite"))
+        .collect();
+    assert_eq!(
+        users,
+        BTreeSet::from([BRIDGE.to_owned()]),
+        "direct users of tokio-tungstenite"
+    );
+}
+
 /// Exact dependency sets: connector, inbox and studio use capability types; only connector
 /// and inbox hash bytes, while the other crypto crates remain connector-only (non-vacuous).
 #[test]
@@ -348,11 +397,12 @@ fn rust_files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// `2026-10-28-device-bridge-design.md` §2), which runs on the computer a phone is plugged into
 /// and calls Jeeta's bridge routes and the signed download addresses Jeeta hands it. The server's
 /// egress rules (provider hosts, connector scopes) are not its rules; it has its own HTTP client,
-/// as `deny.toml` allows.
+/// as `deny.toml` allows. And the voice bridge (`jeeta-voice-bridge`, design addendum
+/// 2026-10-29), whose HTTP peers are Jeeta's and Asterisk's loopback addresses.
 #[test]
 fn no_crate_but_outbound_names_reqwest() {
     /// The packages with an HTTP client of their own.
-    const OWN_CLIENT: &[&str] = &["jt_outbound", "jeeta-device-bridge"];
+    const OWN_CLIENT: &[&str] = &["jt_outbound", "jeeta-device-bridge", "jeeta-voice-bridge"];
     let metadata = metadata();
     let packages = metadata["packages"]
         .as_array()
@@ -401,10 +451,10 @@ fn no_crate_but_outbound_names_reqwest() {
         }
         checked += 1;
     }
-    // Every crate but the three: not vacuous.
-    assert_eq!(checked, workspace_packages().len() - 3);
+    // Every crate but the four: not vacuous.
+    assert_eq!(checked, workspace_packages().len() - 4);
     assert!(checked >= 15, "only {checked} packages checked");
-    // And the two do use it: the rule is about where, not whether.
+    // And the three do use it: the rule is about where, not whether.
     for name in OWN_CLIENT {
         assert!(direct_deps(name).contains("reqwest"), "{name}");
     }

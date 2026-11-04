@@ -5,7 +5,7 @@
 //! (at most [`super::MAX_WAIT_S`]) and answers `timed_out`; the agent listens again. A turn
 //! appended in this server wakes a waiting listen at once
 //! ([`crate::ports::bridges::BridgeSignals`]); one appended by another instance is seen within
-//! [`FALLBACK_TICK`].
+//! [`FALLBACK_TICK`]. `calls.say` with `wait_reply_s` waits the same way for the caller's reply.
 
 use jt_calls::{CallId, CallState, Turn};
 use jt_tenancy::Permission;
@@ -41,6 +41,45 @@ pub struct ListenOut {
     pub timed_out: bool,
 }
 
+/// Waits on call `id` for the turns after `after_seq`, until `enough` holds for what was read, the
+/// call ended, or `wait` passed: the call's state, the turns read, and whether the whole wait
+/// passed. Woken by the bridges' signals, read again at least every [`FALLBACK_TICK`]. An unknown
+/// call is `NOT_FOUND`.
+pub(crate) async fn wait_turns(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CallId,
+    after_seq: Option<u32>,
+    wait: std::time::Duration,
+    enough: fn(&[Turn]) -> bool,
+) -> Result<(CallState, Vec<Turn>, bool), AppError> {
+    let started = tokio::time::Instant::now();
+    loop {
+        // Watching before reading: a turn committed after the read still wakes the wait.
+        let watch = deps.bridge_signals.watch(signal_key(ctx.workspace_id));
+        let (state, events) = {
+            let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+            let session = r
+                .calls()
+                .get(id)
+                .await?
+                .ok_or_else(|| AppError::not_found("no such call"))?;
+            let events = r.calls().turns(id, after_seq, MAX_CALL_PAGE).await?;
+            r.commit().await?;
+            (session.state, events)
+        };
+        if enough(&events) || state == CallState::Ended {
+            return Ok((state, events, false));
+        }
+        let waited = started.elapsed();
+        if waited >= wait {
+            return Ok((state, events, true));
+        }
+        // Woken, or the fallback tick: read again either way.
+        let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
+    }
+}
+
 /// Listens on call `id` (see the module docs). An unknown call is `NOT_FOUND`. Needs
 /// `calls.work`.
 pub async fn listen(
@@ -53,39 +92,12 @@ pub async fn listen(
     let wait = std::time::Duration::from_secs(u64::from(
         query.wait_s.unwrap_or(MAX_WAIT_S).min(MAX_WAIT_S),
     ));
-    let started = tokio::time::Instant::now();
-    loop {
-        // Watching before reading: a turn committed after the read still wakes the wait.
-        let watch = deps.bridge_signals.watch(signal_key(ctx.workspace_id));
-        let (state, events) = {
-            let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-            let session = r
-                .calls()
-                .get(id)
-                .await?
-                .ok_or_else(|| AppError::not_found("no such call"))?;
-            let events = r.calls().turns(id, query.after_seq, MAX_CALL_PAGE).await?;
-            r.commit().await?;
-            (session.state, events)
-        };
-        if !events.is_empty() || state == CallState::Ended {
-            return Ok(ListenOut {
-                call_id: id,
-                state,
-                events,
-                timed_out: false,
-            });
-        }
-        let waited = started.elapsed();
-        if waited >= wait {
-            return Ok(ListenOut {
-                call_id: id,
-                state,
-                events,
-                timed_out: true,
-            });
-        }
-        // Woken, or the fallback tick: read again either way.
-        let _ = tokio::time::timeout(FALLBACK_TICK.min(wait - waited), watch).await;
-    }
+    let (state, events, timed_out) =
+        wait_turns(deps, ctx, id, query.after_seq, wait, |t| !t.is_empty()).await?;
+    Ok(ListenOut {
+        call_id: id,
+        state,
+        events,
+        timed_out,
+    })
 }

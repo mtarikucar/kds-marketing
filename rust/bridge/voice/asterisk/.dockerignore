@@ -1,0 +1,3 @@
+# The image downloads its sources and copies nothing from the build context; the configs are
+# mounted at run time, so neither they nor the tests are sent to the daemon.
+*

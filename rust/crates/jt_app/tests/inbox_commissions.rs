@@ -443,7 +443,8 @@ fn commissions_catalog_and_shared_schemas() {
             row.mcp_tool,
             Some(format!("jeeta.inbox.{}", action.replace('.', "_")).as_str())
         );
-        assert_eq!(row.gate, GateMode::Gated);
+        // Sales bookkeeping, not growth work: no strategy needed (owner decision of 2026-11-03).
+        assert_eq!(row.gate, GateMode::Exempt);
         assert_eq!(row.risk, risk);
         assert_eq!(schema::input(action)["additionalProperties"], false);
     }
