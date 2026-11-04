@@ -54,6 +54,8 @@ mod devices;
 pub use devices::MemDevices;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod public;
+pub use public::StoredCursor;
 mod platform;
 mod providers;
 mod services;
@@ -63,8 +65,9 @@ mod tenant;
 mod user;
 
 pub use providers::{
-    ConnectorCall, FakeAppConfig, OAuthCall, ScriptedConnector, ScriptedOAuth, ScriptedRegistry,
-    TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL,
+    ConnectorCall, FakeAppConfig, OAuthCall, PollCall, PublicCall, ScriptedConnector,
+    ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, TEST_OAUTH_HOST,
+    TEST_PUBLIC_BASE_URL,
 };
 pub use services::{
     DEPS_TOKENS, FIXED_NOW, FakeJobLock, FakeOpsSnapshot, FixedChannelCatalog, FixedClock,

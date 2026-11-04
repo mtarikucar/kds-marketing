@@ -145,6 +145,15 @@ impl TenantRepos for Tenant {
     fn outbox(&mut self) -> &mut dyn OutboxRepo {
         self.inner.outbox()
     }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.inner.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.inner.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.inner.public_cursors()
+    }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.inner.roles()
     }

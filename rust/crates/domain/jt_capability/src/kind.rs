@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use time::Duration;
 
+use crate::Policy;
+
 /// How the system reaches a capability (spec §6.1 "ulaşım yolu").
 ///
 /// A missing reach reads as `Connector`: the one an agent cannot mark verified by its own claim.
@@ -54,6 +56,9 @@ pub enum KindGroup {
     Community,
     Ads,
     Calendar,
+    /// A seller's marketplace store, whose customers ask questions on its products (spec
+    /// 2026-10-30-inbox-comments-marketplace-design.md §5.2).
+    Marketplace,
     Device,
     AgentConnection,
     ComputerAccess,
@@ -67,6 +72,7 @@ const ALL_GROUPS: &[KindGroup] = &[
     KindGroup::Community,
     KindGroup::Ads,
     KindGroup::Calendar,
+    KindGroup::Marketplace,
     KindGroup::Device,
     KindGroup::AgentConnection,
     KindGroup::ComputerAccess,
@@ -83,6 +89,7 @@ impl KindGroup {
             KindGroup::Community => "community",
             KindGroup::Ads => "ads",
             KindGroup::Calendar => "calendar",
+            KindGroup::Marketplace => "marketplace",
             KindGroup::Device => "device",
             KindGroup::AgentConnection => "agent_connection",
             KindGroup::ComputerAccess => "computer_access",
@@ -101,8 +108,9 @@ impl KindGroup {
     }
 
     /// How a capability of this group is reached unless said otherwise: accounts (social,
-    /// messaging, telephony, community, ads, calendar) through a connector, devices as devices,
-    /// and agent connections, computer access and third-party tools through the agent.
+    /// messaging, telephony, community, ads, calendar, marketplace) through a connector, devices
+    /// as devices, and agent connections, computer access and third-party tools through the
+    /// agent.
     pub fn default_reach(&self) -> Reach {
         match self {
             KindGroup::SocialAccount
@@ -110,7 +118,8 @@ impl KindGroup {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Marketplace => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
@@ -212,6 +221,10 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Ads, "google_ads"),
     k(KindGroup::Calendar, "google_calendar"),
     k(KindGroup::Calendar, "outlook_calendar"),
+    // A seller's store on a marketplace, connected with the seller's own API credentials; its
+    // external id is the seller (merchant) id they are bound to.
+    k(KindGroup::Marketplace, "trendyol"),
+    k(KindGroup::Marketplace, "hepsiburada"),
     // A phone (spec 2026-10-28-device-bridge-design.md §5.2): verified by its device bridge's
     // heartbeat ([`CapabilityKind::heartbeat`]).
     k(KindGroup::Device, PHONE),
@@ -263,6 +276,16 @@ impl CapabilityKind {
     /// `capability.verify` refuses them.
     pub fn heartbeat(&self) -> Option<Heartbeat> {
         matches!(self.key, VOICE_BRIDGE | PHONE).then_some(BRIDGE_HEARTBEAT)
+    }
+
+    /// The policy a capability of this kind starts with when it is first created: today
+    /// [`Policy::default`] for every kind. The marketplace kinds answer without a human's
+    /// approval like every other account (the owner's delegate, 2026-10-30: the AI completes
+    /// processes, and Hepsiburada's one-business-day deadline makes holding answers by default
+    /// risky); an owner turns "requires human approval" on per capability. The one place a
+    /// kind's own default would go.
+    pub fn default_policy(&self) -> Policy {
+        Policy::default()
     }
 
     /// Whether a capability of this kind needs a `key_detail` naming the tool: only the

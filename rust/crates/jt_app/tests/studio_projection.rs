@@ -76,6 +76,30 @@ async fn organic_visible_and_paid_four_case_visibility() {
     }
 }
 #[tokio::test]
+async fn organic_lane_asks_to_reconnect_when_only_the_read_scope_is_missing() {
+    let w = support::world().await;
+    let out = overview(&w.d, &w.ctx, query()).await.unwrap();
+    assert!(out.lane_support.organic.supported);
+    assert_eq!(out.lane_support.organic.reason, None);
+    // The grant publishes but cannot read the counters: reconnecting fixes it.
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let mut c = r
+        .capabilities()
+        .find(w.f.slot.capability_id)
+        .await
+        .unwrap()
+        .unwrap();
+    c.connector_public = json!({"access":{"scopes":["tweet.write"],"expires_at":null}});
+    r.capabilities().update(c).await.unwrap();
+    r.commit().await.unwrap();
+    let out = overview(&w.d, &w.ctx, query()).await.unwrap();
+    assert!(!out.lane_support.organic.supported);
+    assert_eq!(
+        out.lane_support.organic.reason.as_deref(),
+        Some("connector_reconnect_required")
+    );
+}
+#[tokio::test]
 async fn ledger_export_is_tenant_filtered_and_redacted() {
     let w = support::world().await;
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();

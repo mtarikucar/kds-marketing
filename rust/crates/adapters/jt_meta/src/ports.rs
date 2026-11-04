@@ -3,17 +3,21 @@
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector, InsightsReader,
-    LeadGenFetcher, LeadGenRecord, MessagingSender, OAuthApp, OAuthFlow, OAuthProvider,
-    PostMetrics, PublishReceipt, PublishRequest, Publisher, SendReceipt,
+    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector,
+    InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, MessagingSender,
+    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PostMetrics, PrivateReceipt,
+    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, Publisher,
+    SendReceipt, SubjectFacts,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
+use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use time::Date;
 use url::Url;
 
 use crate::{
-    META_HOSTS, MetaConnector, ads, assets, insights, leadgen, messaging, oauth, probe, publish,
+    META_HOSTS, MetaConnector, ads, assets, comments, insights, leadgen, messaging, oauth, probe,
+    publish,
 };
 
 #[async_trait]
@@ -160,6 +164,70 @@ impl MessagingSender for MetaConnector {
         sync: AppSync,
     ) -> Result<Option<SendReceipt>, ConnectorError> {
         messaging::request_app_sync(self, cred, public, sync).await
+    }
+}
+
+#[async_trait]
+impl PublicSurface for MetaConnector {
+    async fn reply_public(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<SendReceipt, ConnectorError> {
+        comments::reply_public(self, cred, public, target, text).await
+    }
+
+    async fn reply_private(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        text: &str,
+    ) -> Result<PrivateReceipt, ConnectorError> {
+        comments::reply_private(self, cred, public, target, text).await
+    }
+
+    async fn moderate(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        target: &PublicTarget,
+        action: ModerationAction,
+    ) -> Result<(), ConnectorError> {
+        comments::moderate(self, cred, public, target, action).await
+    }
+
+    async fn subject(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        subject_external_id: &str,
+    ) -> Result<Option<SubjectFacts>, ConnectorError> {
+        comments::subject(self, cred, public, subject_external_id).await
+    }
+}
+
+#[async_trait]
+impl PublicPoller for MetaConnector {
+    async fn poll(
+        &self,
+        _ws: WorkspaceId,
+        cred: &Credential,
+        public: &Value,
+        cursor: &Value,
+    ) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError> {
+        comments::poll(self, cred, public, cursor).await
+    }
+
+    async fn reconcile(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        targets: &[PublicTarget],
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        comments::reconcile(self, cred, public, targets).await
     }
 }
 

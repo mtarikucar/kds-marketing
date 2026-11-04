@@ -140,6 +140,15 @@ impl TenantRepos for MemTenant {
     fn outbox(&mut self) -> &mut dyn OutboxRepo {
         self
     }
+    fn public_items(&mut self) -> &mut dyn PublicItemRepo {
+        self
+    }
+    fn public_subjects(&mut self) -> &mut dyn PublicSubjectRepo {
+        self
+    }
+    fn public_cursors(&mut self) -> &mut dyn PublicCursorRepo {
+        self
+    }
 
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self

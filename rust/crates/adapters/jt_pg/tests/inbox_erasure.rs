@@ -926,6 +926,10 @@ async fn the_sql_mask_masks_what_the_rust_mask_masks() {
         "state_sync": {"contact": {"phone_number": "905321234567"}, "action": "add"},
         "items": [{"name": "n", "amount_minor": 5}],
         "scenario": "cdr", "source": "05321234567",
+        // A public item's envelope (0019, joined with the app's keys in 0025).
+        "public": {"author": {"id": "5150", "name": "a"}, "external_id": "c-1", "text": "?"},
+        "provider_item": {"id": "c-1"}, "username": "a", "userName": "A", "customerName": "A",
+        "message": "string text", "entry": {"message": {"id": "m", "text": {"body": "hi"}}},
     });
     let in_sql: Value = sqlx::query_scalar("select inbox_mask_personal($1)")
         .bind(&sample)

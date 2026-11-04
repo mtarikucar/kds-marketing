@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 /// A provider with an adapter inside the system (spec §13 M1: Meta, NetGSM, X; then mail,
-/// TikTok and LinkedIn).
+/// TikTok and LinkedIn; then the marketplaces, spec 2026-10-30-inbox-comments-marketplace-design
+/// §5.3, each its own egress scope).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -19,6 +20,10 @@ pub enum Provider {
     Tiktok,
     /// Posts on a LinkedIn member's own feed and on the organization pages they administer.
     Linkedin,
+    /// Customer questions on a Trendyol seller's products.
+    Trendyol,
+    /// Customer questions on a Hepsiburada merchant's products.
+    Hepsiburada,
 }
 
 const ALL: &[Provider] = &[
@@ -28,6 +33,8 @@ const ALL: &[Provider] = &[
     Provider::Mail,
     Provider::Tiktok,
     Provider::Linkedin,
+    Provider::Trendyol,
+    Provider::Hepsiburada,
 ];
 
 /// The capability kinds Meta serves.
@@ -82,6 +89,8 @@ impl Provider {
             Provider::Mail => "mail",
             Provider::Tiktok => "tiktok",
             Provider::Linkedin => "linkedin",
+            Provider::Trendyol => "trendyol",
+            Provider::Hepsiburada => "hepsiburada",
         }
     }
 
@@ -104,6 +113,8 @@ impl Provider {
             Provider::Mail => &["mailbox"],
             Provider::Tiktok => TIKTOK_KINDS,
             Provider::Linkedin => LINKEDIN_KINDS,
+            Provider::Trendyol => &["trendyol"],
+            Provider::Hepsiburada => &["hepsiburada"],
         }
     }
 }

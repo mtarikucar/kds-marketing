@@ -82,6 +82,14 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.commissions.approve",
     "inbox.commissions.pay",
     "inbox.commission_rates.set",
+    // Comments and marketplace questions: moderating, marking handled, reporting, and approving
+    // or discarding a held answer are answering customers too.
+    "inbox.public.hide",
+    "inbox.public.delete",
+    "inbox.public.mark_handled",
+    "inbox.public.report",
+    "inbox.public.approve",
+    "inbox.public.discard",
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
@@ -280,7 +288,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 46);
+    assert_eq!(rows.len(), 52);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

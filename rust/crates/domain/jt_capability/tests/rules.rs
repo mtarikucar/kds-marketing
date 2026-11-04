@@ -49,6 +49,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
         KindGroup::Calendar,
         &["google_calendar", "outlook_calendar"],
     ),
+    (KindGroup::Marketplace, &["trendyol", "hepsiburada"]),
     (
         KindGroup::Device,
         &[
@@ -119,7 +120,7 @@ fn every_kind_key_is_unique_and_parses() {
         .collect();
     let actual: Vec<(KindGroup, &str)> = KINDS.iter().map(|k| (k.group, k.key)).collect();
     assert_eq!(actual, expected);
-    assert_eq!(KINDS.len(), 51);
+    assert_eq!(KINDS.len(), 53);
 
     let keys: BTreeSet<&str> = KINDS.iter().map(|k| k.key).collect();
     assert_eq!(keys.len(), KINDS.len(), "kind keys must be unique");
@@ -169,6 +170,7 @@ fn every_kind_key_is_unique_and_parses() {
             "community",
             "ads",
             "calendar",
+            "marketplace",
             "device",
             "agent_connection",
             "computer_access",
@@ -200,7 +202,8 @@ fn default_reach_per_group() {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Marketplace => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
@@ -215,7 +218,7 @@ fn default_reach_per_group() {
     }
     assert_eq!(kind("voice_bridge").default_reach(), Reach::Device);
     let count = |r: Reach| KINDS.iter().filter(|k| k.default_reach() == r).count();
-    assert_eq!(count(Reach::Connector), 26);
+    assert_eq!(count(Reach::Connector), 28);
     assert_eq!(count(Reach::Device), 10);
     assert_eq!(count(Reach::Agent), 15);
 
@@ -248,6 +251,41 @@ fn default_reach_per_group() {
         assert_eq!(serde_json::to_value(r).unwrap(), json!(key));
     }
     assert_eq!(Reach::parse("Agent"), None);
+}
+
+/// A seller's marketplace account (spec 2026-10-30-inbox-comments-marketplace-design.md §5.2): an
+/// account reached through a connector, like the social and messaging accounts.
+#[test]
+fn marketplace_group_is_reached_by_connector() {
+    assert_eq!(
+        KindGroup::parse("marketplace"),
+        Some(KindGroup::Marketplace)
+    );
+    assert_eq!(KindGroup::Marketplace.default_reach(), Reach::Connector);
+    for key in ["trendyol", "hepsiburada"] {
+        let k = kind(key);
+        assert_eq!(k.group, KindGroup::Marketplace, "{key}");
+        assert_eq!(k.default_reach(), Reach::Connector, "{key}");
+        assert_eq!(k.heartbeat(), None, "{key}");
+        assert!(!k.requires_key_detail(), "{key}");
+        let c = declared(key);
+        assert_eq!(c.reach, Reach::Connector, "{key}");
+        assert_eq!(c.status, StoredStatus::Declared, "{key}");
+    }
+}
+
+/// The agent answers marketplace questions on its own, like comments (owner's delegate,
+/// 2026-10-30, spec §2 D7): no kind starts with "requires human approval" on; an owner turns it on
+/// per capability. The content checks of the inbox's public fence hold either way.
+#[test]
+fn marketplace_kinds_answer_without_approval_by_default() {
+    for key in ["trendyol", "hepsiburada", "instagram", "facebook_page"] {
+        let policy = kind(key).default_policy();
+        assert!(!policy.requires_human_approval, "{key}");
+    }
+    for k in KINDS {
+        assert_eq!(k.default_policy(), Policy::default(), "{}", k.key);
+    }
 }
 
 #[test]
@@ -577,13 +615,15 @@ fn budget_link_rules() {
         "adb",
         "notion",
         "other",
+        "trendyol",
+        "hepsiburada",
     ] {
         assert_eq!(linkable(key), [Cash], "{key}");
     }
 
     // Across the whole list: how many kinds each budget kind can feed.
     let feeds = |b: BudgetKind| -> usize { KINDS.iter().filter(|k| can_link_budget(k, b)).count() };
-    assert_eq!(feeds(Cash), 47, "every kind but the agent connections");
+    assert_eq!(feeds(Cash), 49, "every kind but the agent connections");
     assert_eq!(feeds(AdBudget), 4);
     assert_eq!(feeds(SmsBudget), 1);
     assert_eq!(feeds(AgentQuota), 4);

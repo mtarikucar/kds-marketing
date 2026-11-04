@@ -710,12 +710,17 @@ impl BudgetRepo for MemTenant {
 #[async_trait]
 impl WorkspacePolicyRepo for MemTenant {
     async fn get(&mut self) -> Result<WorkspacePolicy, AppError> {
+        // As PostgreSQL reads it: a stored policy with every default response time it lacks.
         Ok(self
             .state()
             .workspace_policies
             .iter()
             .find(|p| p.workspace_id == self.ws)
-            .map(|p| p.policy.clone())
+            .map(|p| {
+                let mut policy = p.policy.clone();
+                policy.inbox = policy.inbox.with_default_response_times();
+                policy
+            })
             .unwrap_or_default())
     }
 

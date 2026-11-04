@@ -131,6 +131,15 @@ fn validate_snapshot(
                 .any(|r| r.workspace_id == ws && r.id == n.id),
         )?;
     }
+    for i in &snap.public_items {
+        found(snap.conversations.iter().any(|c| c.id == i.conversation_id))?;
+        found(
+            s.inbox
+                .public_items
+                .iter()
+                .any(|r| r.workspace_id == ws && r.id == i.id),
+        )?;
+    }
     Ok(())
 }
 
@@ -315,6 +324,19 @@ impl MergeRepo for MemTenant {
                 })
                 .collect();
             outbox.sort_by_key(|r| r.id);
+            let mut public_items: Vec<_> = s
+                .public_items
+                .iter()
+                .filter(|r| {
+                    r.workspace_id == t.ws
+                        && conversations.iter().any(|c| c.id == r.conversation_id)
+                })
+                .map(|r| PublicItemParent {
+                    id: r.id,
+                    conversation_id: r.conversation_id,
+                })
+                .collect();
+            public_items.sort_by_key(|r| r.id);
             let latest_write_at = s
                 .people
                 .iter()
@@ -332,7 +354,7 @@ impl MergeRepo for MemTenant {
             Ok(MergeSnapshot {
                 latest_write_at,
                 people,
-                version: 1,
+                version: MERGE_SNAPSHOT_VERSION,
                 identities,
                 journeys,
                 conversations,
@@ -340,6 +362,7 @@ impl MergeRepo for MemTenant {
                 tasks,
                 notes,
                 outbox,
+                public_items,
             })
         })
     }
@@ -442,7 +465,10 @@ impl MergeRepo for MemTenant {
                         {
                             r.conversation_merged = true;
                         }
-                        if target != o.conversation_id && r.state == "queued" {
+                        // A reply waiting for approval is refused like a queued one.
+                        if target != o.conversation_id
+                            && matches!(r.state.as_str(), "queued" | "held")
+                        {
                             r.state = "refused".into();
                             r.last_error = Some("conversation_merged".into());
                             r.updated_at = at;
@@ -456,6 +482,18 @@ impl MergeRepo for MemTenant {
                                 reason: "conversation_merged".into(),
                             };
                         }
+                        r.conversation_id = target;
+                    }
+                }
+                // Items reference their conversation: they move before a coalesced one goes.
+                for i in &snap.public_items {
+                    let target = targets[&i.conversation_id];
+                    if let Some(r) = s
+                        .inbox
+                        .public_items
+                        .iter_mut()
+                        .find(|r| r.workspace_id == ws && r.id == i.id)
+                    {
                         r.conversation_id = target;
                     }
                 }
@@ -527,6 +565,16 @@ impl MergeRepo for MemTenant {
                         .find(|r| r.workspace_id == ws && r.id == o.id)
                     {
                         r.conversation_id = o.conversation_id;
+                    }
+                }
+                for i in &snap.public_items {
+                    if let Some(r) = s
+                        .inbox
+                        .public_items
+                        .iter_mut()
+                        .find(|r| r.workspace_id == ws && r.id == i.id)
+                    {
+                        r.conversation_id = i.conversation_id;
                     }
                 }
                 for i in &snap.identities {

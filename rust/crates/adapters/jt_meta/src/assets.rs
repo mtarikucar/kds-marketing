@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use crate::MetaConnector;
 use crate::credential::MetaCred;
 use crate::graph::{Body, GraphApp, missing, node, text};
+use crate::messaging::INSTAGRAM_MESSAGES_SCOPE;
 
 /// The `account_status` of an active ad account.
 const ACTIVE_AD_ACCOUNT: i64 = 1;
@@ -31,7 +32,9 @@ pub(crate) async fn list_assets(
 }
 
 /// An Instagram Login token reaches one Instagram professional account: `instagram`, with the
-/// token itself, its id being the account's `user_id` (the id webhooks name).
+/// token itself, its id being the account's `user_id` (the id webhooks name); and, when the grant
+/// holds `instagram_business_manage_messages`, its direct messages as `instagram_dm` (so a
+/// private reply's answer has a surface).
 async fn instagram_login_assets(
     connector: &MetaConnector,
     cred: &Credential,
@@ -44,13 +47,23 @@ async fn instagram_login_assets(
         .or_else(|| text(&me["id"]))
         .ok_or_else(|| missing("Instagram account id"))?;
     let username = me["username"].as_str().unwrap_or_default().to_owned();
-    Ok(vec![Asset {
-        kind_key: "instagram".into(),
-        external_id: id,
-        name: username.clone(),
-        credential: cred.clone(),
-        public: json!({ "username": username, "login": "instagram" }),
-    }])
+    let messages = matches!(cred, Credential::OAuth { scopes, .. }
+        if scopes.iter().any(|s| s == INSTAGRAM_MESSAGES_SCOPE));
+    let kinds: &[&str] = if messages {
+        &["instagram", "instagram_dm"]
+    } else {
+        &["instagram"]
+    };
+    Ok(kinds
+        .iter()
+        .map(|kind| Asset {
+            kind_key: (*kind).into(),
+            external_id: id.clone(),
+            name: username.clone(),
+            credential: cred.clone(),
+            public: json!({ "username": username, "login": "instagram" }),
+        })
+        .collect())
 }
 
 /// A Facebook Login user token: Pages, ad accounts, WhatsApp numbers.
