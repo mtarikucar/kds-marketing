@@ -5,7 +5,10 @@ use super::{check_people, conflict, decider, invalid, items::MaterialDetail, nul
 use crate::{
     ctx::Ctx,
     error::AppError,
-    ports::materials::{HumanMark, Olay, OlayClient, OlayId, OlayKind, OlayStatus, ShootRequest},
+    ports::{
+        TenantRepos,
+        materials::{HumanMark, Olay, OlayClient, OlayId, OlayKind, OlayStatus, ShootRequest},
+    },
     usecases::{
         Deps, ledger_entry,
         studio::{
@@ -103,6 +106,22 @@ pub struct OlayDetail {
     pub shoot_requests: Vec<ShootRequest>,
 }
 
+/// What `studio.olay_create`'s request key keeps (D40): the olay's id, never the olay. A replay
+/// reads the olay as it is now, so a receipt holds no title, place, notes or client person.
+#[derive(Serialize, Deserialize)]
+struct OlayReceipt {
+    olay_id: OlayId,
+}
+
+/// The olay a replayed `studio.olay_create` names, as it is now.
+async fn replayed(r: &mut dyn TenantRepos, receipt: Value) -> Result<Olay, AppError> {
+    let OlayReceipt { olay_id } = decode(receipt)?;
+    r.studio_materials()
+        .get_olay(olay_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("olay"))
+}
+
 /// The olay's client person, if any.
 fn client_person(client: Option<&OlayClient>) -> Option<uuid::Uuid> {
     client.and_then(|c| c.person_id)
@@ -164,7 +183,7 @@ fn summary(o: &Olay) -> Value {
 }
 
 /// Creates an olay: confirmed when an owner or manager creates it in person (D3), proposed when an
-/// agent or another person does. Replayed by `request_key`.
+/// agent or another person does. Replayed by `request_key`, answering the olay as it is now (D40).
 pub async fn olay_create(d: &Deps, ctx: &Ctx, i: OlayCreateInput) -> Result<Olay, AppError> {
     key(&i.request_key)?;
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
@@ -178,7 +197,7 @@ pub async fn olay_create(d: &Deps, ctx: &Ctx, i: OlayCreateInput) -> Result<Olay
         .request_replay("studio.olay_create", &i.request_key, &payload)
         .await?
     {
-        return decode(v);
+        return replayed(r.as_mut(), v).await;
     }
     r.studio_control().lock_control().await?;
     let by = decider(ctx);
@@ -219,7 +238,7 @@ pub async fn olay_create(d: &Deps, ctx: &Ctx, i: OlayCreateInput) -> Result<Olay
             "studio.olay_create",
             &i.request_key,
             &payload,
-            &encode(&olay)?,
+            &encode(&OlayReceipt { olay_id: olay.id })?,
         )
         .await?;
     r.commit().await?;

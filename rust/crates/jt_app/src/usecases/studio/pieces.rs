@@ -315,6 +315,36 @@ async fn validate(
     }
     Ok((s, frame))
 }
+/// What `studio.piece_submit`'s request key keeps (spec 2026-11-03 D40): the answer without its
+/// piece and its material check, which hold the caption and what it matched (a client's name, an
+/// olay's place). The piece is stored on its own; a replay reads both as they are now.
+fn submission_receipt(out: &SlotOut) -> SlotOut {
+    SlotOut {
+        piece: None,
+        material_check: None,
+        ..out.clone()
+    }
+}
+/// The answer a replayed `studio.piece_submit` gives at `now`: the receipt's slot with its piece
+/// read again (a receipt kept before D40 holds it) and the material check as it is now.
+async fn replayed(
+    r: &mut dyn TenantRepos,
+    receipt: serde_json::Value,
+    now: time::OffsetDateTime,
+) -> Result<SlotOut, AppError> {
+    let mut out: SlotOut = decode(receipt)?;
+    if out.piece.is_none() {
+        out.piece = r.studio().get_piece(out.slot.id, out.slot.revision).await?;
+    }
+    if out.material_check.is_none()
+        && let Some(p) = &out.piece
+    {
+        out.material_check =
+            super::materials::material_check(r, out.slot.id, p, now.max(out.slot.scheduled_at))
+                .await?;
+    }
+    Ok(out)
+}
 pub async fn piece_submit(d: &Deps, ctx: &Ctx, i: PieceInput) -> Result<SlotOut, AppError> {
     let mut stage = files::Staging::new();
     let result = submit(d, ctx, i, &mut stage).await;
@@ -338,7 +368,7 @@ async fn submit(
             .request_replay("studio.piece_submit", &i.request_key, &payload)
             .await?
         {
-            return decode(v);
+            return replayed(r.as_mut(), v, ctx.now).await;
         }
         validate(r.as_mut(), ctx, &i).await?;
     }
@@ -362,7 +392,7 @@ async fn submit(
         .request_replay("studio.piece_submit", &i.request_key, &payload)
         .await?
     {
-        return decode(v);
+        return replayed(r.as_mut(), v, ctx.now).await;
     }
     let (s, frame) = validate(r.as_mut(), ctx, &i).await?;
     for f in &stored.files {
@@ -435,7 +465,7 @@ async fn submit(
             "studio.piece_submit",
             &i.request_key,
             &payload,
-            &encode(&out)?,
+            &encode(&submission_receipt(&out))?,
         )
         .await?;
     stored.commit_started = true;

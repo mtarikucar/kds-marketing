@@ -62,6 +62,13 @@ pub struct ShootResolveInput {
     pub status: ShootResolution,
 }
 
+/// What `studio.shoot_request`'s request key keeps (D40): the request's id, never its text. A
+/// replay reads the request as it is now.
+#[derive(Serialize, Deserialize)]
+struct ShootReceipt {
+    shoot_request_id: ShootRequestId,
+}
+
 /// The Istanbul Monday of `day`'s week.
 fn monday(day: Date) -> Date {
     day - Duration::days(i64::from(day.weekday().number_days_from_monday()))
@@ -84,7 +91,8 @@ pub async fn shoot_list(d: &Deps, ctx: &Ctx, q: ShootQuery) -> Result<Vec<ShootR
 }
 
 /// Adds a request to the çekim listesi, keyed `agent:{request_key}` or `human:{request_key}`;
-/// replayed by that key (an agent's and a person's keys never meet).
+/// replayed by that key (an agent's and a person's keys never meet), answering the request as it is
+/// now (D40).
 pub async fn shoot_request(
     d: &Deps,
     ctx: &Ctx,
@@ -111,7 +119,12 @@ pub async fn shoot_request(
         .request_replay("studio.shoot_request", &shoot_key, &payload)
         .await?
     {
-        return decode(v);
+        let ShootReceipt { shoot_request_id } = decode(v)?;
+        return r
+            .studio_materials()
+            .get_shoot_request(shoot_request_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("shoot request"));
     }
     let request = ShootRequest {
         id: ShootRequestId(d.ids.uuid()),
@@ -150,7 +163,9 @@ pub async fn shoot_request(
             "studio.shoot_request",
             &shoot_key,
             &payload,
-            &encode(&request)?,
+            &encode(&ShootReceipt {
+                shoot_request_id: request.id,
+            })?,
         )
         .await?;
     r.commit().await?;

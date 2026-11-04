@@ -80,6 +80,43 @@ pub struct MaterialAddOut {
     pub olay_suggestions: Vec<Olay>,
 }
 
+/// What `studio.material_add`'s request key keeps (D40): the material's id and its suggested
+/// olays', never the records, which name people and hold the owner's words. A replay reads them as
+/// they are now: after an erasure, the redacted material.
+#[derive(Serialize, Deserialize)]
+struct AddReceipt {
+    material_id: MaterialId,
+    olay_suggestions: Vec<OlayId>,
+}
+
+impl AddReceipt {
+    fn of(out: &MaterialAddOut) -> Self {
+        Self {
+            material_id: out.material.id,
+            olay_suggestions: out.olay_suggestions.iter().map(|o| o.id).collect(),
+        }
+    }
+
+    /// The answer the receipt names, read again.
+    async fn read(r: &mut dyn TenantRepos, receipt: Value) -> Result<MaterialAddOut, AppError> {
+        let AddReceipt {
+            material_id,
+            olay_suggestions,
+        } = decode(receipt)?;
+        let material = load(r, material_id).await?;
+        let mut olays = Vec::new();
+        for id in olay_suggestions {
+            if let Some(o) = r.studio_materials().get_olay(id).await? {
+                olays.push(o);
+            }
+        }
+        Ok(MaterialAddOut {
+            material,
+            olay_suggestions: olays,
+        })
+    }
+}
+
 /// `studio.material_tag`'s input: each field given replaces that set (`[]` empties it; `null`
 /// clears the quality).
 #[derive(Clone, Debug, Deserialize)]
@@ -512,14 +549,16 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
 }
 
 /// Adds a stored file to the library as a material (spec §5.3). Its capture time is read from its
-/// bytes (outside any transaction), else taken from the input; the answer names the olays whose
-/// dates contain its Istanbul day. Nothing is bound by that suggestion.
+/// bytes (outside any transaction, a JPEG's first part or a video's boxes up to `mvhd`, never the
+/// whole file, D41), else taken from the input; the answer names the olays whose dates contain its
+/// Istanbul day. Nothing is bound by that suggestion.
 ///
 /// The rules of who decides what (D4, D5, D17): an owner or manager in person gives the share
 /// permission (mandatory) and may add a real genel material, which that frees; an agent (or
 /// another person) adds a real material with no permission, and an AI image with a permission only
 /// while it depicts nothing and names no person (D38). An AI image names its `depicts` (possibly
-/// empty). Replayed by `request_key`.
+/// empty). Replayed by `request_key`, answering the material and the suggested olays as they are
+/// now (D40).
 pub async fn material_add(
     d: &Deps,
     ctx: &Ctx,
@@ -533,7 +572,7 @@ pub async fn material_add(
         .request_replay("studio.material_add", &i.request_key, &payload)
         .await?
     {
-        return decode(v);
+        return AddReceipt::read(r.as_mut(), v).await;
     }
     let Decided {
         binding,
@@ -583,7 +622,7 @@ pub async fn material_add(
         .request_replay("studio.material_add", &i.request_key, &payload)
         .await?
     {
-        return decode(v);
+        return AddReceipt::read(r.as_mut(), v).await;
     }
     r.studio_control().lock_control().await?;
     add_checks(r.as_mut(), ctx, &i).await?;
@@ -617,7 +656,7 @@ pub async fn material_add(
             "studio.material_add",
             &i.request_key,
             &payload,
-            &encode(&out)?,
+            &encode(&AddReceipt::of(&out))?,
         )
         .await?;
     r.commit().await?;

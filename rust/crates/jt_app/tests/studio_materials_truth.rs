@@ -446,6 +446,79 @@ async fn a_product_only_materials_client_is_named_by_their_current_name() {
     assert!(check.findings.is_empty(), "{:?}", check.findings);
 }
 
+/// A submission's request key keeps neither the piece nor its material check, which hold the
+/// caption and what it matched (a client's name): a replay reads both as they are now, so after
+/// the person's erasure it names no one (spec D40).
+#[tokio::test]
+async fn a_submissions_replay_reads_its_piece_and_check_as_they_are_now() {
+    let (w, _) = publishing_world().await;
+    let (m, subject) = w.stored().await;
+    let ayse = people::create(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(json!({"display_name":"Ayşe Yılmaz","source":"form",
+            "identities":[{"channel":"email","value":"ayse@example.com"}]}))
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+    .person
+    .id;
+    w.uow.edit(|s| {
+        for o in s.materials.olays.iter_mut() {
+            if Some(o.id) == m.olay_id() {
+                o.client = Some(OlayClient {
+                    person_id: Some(ayse.0),
+                    organization: None,
+                });
+            }
+        }
+        for mm in s.materials.materials.iter_mut() {
+            if mm.id == m.id {
+                mm.share.as_mut().unwrap().permission = SharePermission::ProductOnly;
+            }
+        }
+    });
+    let i = piece(&w, "p", 1, &m, subject, "Ayşe Hanım'ın figürü hazır");
+    let first = piece_submit(&w.d, &w.ctx, i.clone()).await.unwrap();
+    assert_eq!(
+        first.material_check.as_ref().unwrap().findings[0].matched,
+        "ayse"
+    );
+    let receipts: Vec<String> = w
+        .uow
+        .snapshot()
+        .studio
+        .receipts
+        .iter()
+        .filter(|(_, action, ..)| action == "studio.piece_submit")
+        .map(|(.., v)| v.to_string())
+        .collect();
+    assert_eq!(receipts.len(), 1);
+    for kept in &receipts {
+        assert!(
+            !kept.contains("ayse") && !kept.contains("Ayşe"),
+            "{kept}"
+        );
+    }
+    w.uow.edit(|s| {
+        for p in s.inbox.people.iter_mut() {
+            if p.id == ayse {
+                p.erased_at = Some(jt_testkit::fakes::FIXED_NOW);
+            }
+        }
+    });
+    let again = piece_submit(&w.d, &w.ctx, i).await.unwrap();
+    assert_eq!(again.slot.id, first.slot.id);
+    assert_eq!(again.slot.revision, first.slot.revision);
+    assert_eq!(
+        again.piece.as_ref().map(|p| (p.id, p.revision)),
+        first.piece.as_ref().map(|p| (p.id, p.revision))
+    );
+    let check = again.material_check.unwrap();
+    assert!(check.findings.is_empty(), "{:?}", check.findings);
+}
+
 #[tokio::test]
 async fn a_piece_with_no_recorded_materials_shows_no_material_check() {
     let (w, _) = publishing_world().await;

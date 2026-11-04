@@ -35,7 +35,9 @@ pub struct MemStudio {
     pub controls: Vec<StudioControl>,
     pub binding_controls: Vec<BindingControl>,
     pub approvals: Vec<(WorkspaceId, ApprovalTarget, ApprovalReceipt)>,
-    receipts: Vec<(WorkspaceId, String, String, String, Value)>,
+    /// The replay receipts (`studio_request_keys`): workspace, action, key, payload digest and
+    /// the response kept, for tests of what a receipt holds.
+    pub receipts: Vec<(WorkspaceId, String, String, String, Value)>,
 }
 fn invalid(e: StudioError) -> AppError {
     AppError::conflict(e.to_string())

@@ -1602,6 +1602,84 @@ async fn a_persons_erasure_redacts_their_materials_and_unlinks_their_olays() {
     assert_eq!(w.uow.snapshot().ledger.len(), before);
 }
 
+/// The library's request keys keep ids, never the records (spec D40): a replay reads what is
+/// stored now, so after a person's erasure it answers the redacted records, and no receipt holds
+/// a title, a text or a person.
+#[tokio::test]
+async fn a_replay_after_an_erasure_answers_the_redacted_records() {
+    let (w, _) = publishing_world().await;
+    let ada = people::create(
+        &w.d,
+        &w.ctx,
+        input(json!({"display_name":"Ada","source":"form",
+            "identities":[{"channel":"email","value":"ada@example.com"}]})),
+    )
+    .await
+    .unwrap()
+    .person
+    .id;
+    let create = olay_input(
+        "olay",
+        json!({"title":"CANARY-OLAY","client":{"person_id":ada,"organization":"Kulüp"}}),
+    );
+    let o = library::olay_create(&w.d, &w.ctx, create.clone())
+        .await
+        .unwrap();
+    let file = upload(&w, "photo", "image/jpeg", &jpeg("2026:11:16 10:30:00")).await;
+    let photo = add_input(
+        "photo",
+        file,
+        json!({"olay_id":o.id,"share":"shareable","people":[ada],"title":"CANARY-MATERIAL"}),
+    );
+    let first = library::material_add(&w.d, &w.ctx, photo.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        first
+            .olay_suggestions
+            .iter()
+            .map(|o| o.id)
+            .collect::<Vec<_>>(),
+        vec![o.id]
+    );
+    let shoot = json!({"request_key":"shoot","text":"CANARY-SHOOT"});
+    let asked = library::shoot_request(&w.d, &w.ctx, input(shoot.clone()))
+        .await
+        .unwrap();
+    let receipts = format!("{:?}", w.uow.snapshot().studio.receipts);
+    assert!(!receipts.contains("CANARY"), "{receipts}");
+    assert!(!receipts.contains(&ada.to_string()), "{receipts}");
+    erasure::erase(&w.d, &w.ctx, ada, erasure::EraseInput { confirm: true })
+        .await
+        .unwrap();
+    // Replayed by their keys: the records as they are now.
+    let again = library::material_add(&w.d, &w.ctx, photo).await.unwrap();
+    assert_eq!(again.material.id, first.material.id);
+    assert!(again.material.erased_at.is_some());
+    assert!(again.material.people.is_empty() && again.material.title.is_empty());
+    assert_eq!(
+        again
+            .olay_suggestions
+            .iter()
+            .map(|o| (o.id, o.client.clone()))
+            .collect::<Vec<_>>(),
+        vec![(
+            o.id,
+            Some(OlayClient {
+                person_id: None,
+                organization: Some("Kulüp".into())
+            })
+        )]
+    );
+    let o_again = library::olay_create(&w.d, &w.ctx, create).await.unwrap();
+    assert_eq!(o_again.id, o.id);
+    assert_eq!(o_again.client.and_then(|c| c.person_id), None);
+    let asked_again = library::shoot_request(&w.d, &w.ctx, input(shoot))
+        .await
+        .unwrap();
+    assert_eq!(asked_again, asked);
+}
+
 /// The stored record of file `id`.
 fn file_record(w: &World, id: FileId) -> jt_app::ports::files::StoredFile {
     w.uow
