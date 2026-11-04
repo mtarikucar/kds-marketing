@@ -178,6 +178,7 @@ fn catalog_is_the_release_table() {
         ("studio.material_delete", None, Some(("POST", "/api/studio/materials/{material_id}/delete")), true, Risk::Destructive),
         ("studio.calendar_set", None, Some(("PUT", "/api/studio/calendar/{key}/{year}")), true, Risk::Write),
         ("studio.material_policy_set", None, Some(("PUT", "/api/studio/materials/policy")), true, Risk::Write),
+        ("studio.material_check_release", None, Some(("POST", "/api/studio/slots/{slot_id}/material-check/release")), true, Risk::Write),
         ("inbox.pending", Some("jeeta.inbox.pending"), Some(("GET", "/api/inbox/pending")), false, Risk::Read),
         ("inbox.context", Some("jeeta.inbox.context"), Some(("GET", "/api/inbox/conversations/{conversation_id}/context")), false, Risk::Read),
         ("inbox.conversations.list", Some("jeeta.inbox.conversations_list"), Some(("GET", "/api/inbox/conversations")), false, Risk::Read),
@@ -328,7 +329,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 189);
+    assert_eq!(CATALOG.len(), 190);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

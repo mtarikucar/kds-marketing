@@ -429,7 +429,7 @@ async fn submit(
         )
         .await?;
     r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id,"materials":roles.iter().map(|(id,_)|id).collect::<Vec<_>>(),"subject":subject}))?).await?;
-    let out = slot_in(r.as_mut(), s.id, &frame).await?;
+    let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
     r.studio()
         .request_receipt(
             "studio.piece_submit",

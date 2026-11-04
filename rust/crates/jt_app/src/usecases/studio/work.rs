@@ -14,7 +14,7 @@ use jt_studio::*;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use time::Duration;
+use time::{Duration, OffsetDateTime};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrandRules {
@@ -30,6 +30,11 @@ pub struct SlotOut {
     pub learned: Arm,
     pub attempts: Vec<PublishAttempt>,
     pub measurements: Vec<Measurement>,
+    /// The truth check of the piece shown (spec 2026-11-03 §5.5, §7): its caption findings, their
+    /// digest, whether a human released them, and its hard findings. Absent when the piece
+    /// records no materials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material_check: Option<super::materials::MaterialCheck>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingSlot {
@@ -219,19 +224,22 @@ pub(crate) async fn pending_in(
                 reason: "human_approval_required".into(),
             });
         }
-        // A ready piece the material gate holds now (spec 2026-11-03 §5.6).
+        // A ready piece the material gate would hold when it publishes: now, or at the slot's
+        // time when later (spec 2026-11-03 §5.6).
         if s.state == SlotState::Ready
             && attempts.is_empty()
-            && let Err(e) = super::materials::publish_check(r, &s, ctx.now).await
+            && let Err(e) =
+                super::materials::publish_check(r, &s, ctx.now.max(s.scheduled_at)).await
         {
             if e.code == crate::error::ErrorCode::Internal {
                 return Err(e);
             }
+            let findings = e.details["findings"].clone();
             out.blockers.push(Blocker {
-                details: Some(e.details["findings"].clone()),
+                next_action: Some(super::materials::hold_next_action(&findings).into()),
+                details: Some(findings),
                 target,
                 reason: super::materials::MATERIAL_HOLD.into(),
-                next_action: Some("fix_piece".into()),
             });
         }
         out.slots.push(PendingSlot {
@@ -311,12 +319,15 @@ pub async fn slot_get(d: &Deps, ctx: &Ctx, id: SlotId) -> Result<SlotOut, AppErr
     ctx.require(Permission::StudioWork)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = gated(r.as_mut(), ctx).await?;
-    slot_in(r.as_mut(), id, &frame).await
+    slot_in(r.as_mut(), id, &frame, ctx.now).await
 }
+/// The slot's detail at `now`: its piece shown with that piece's material check, at the time the
+/// piece would publish (`now`, or the slot's time when later).
 pub(crate) async fn slot_in(
     r: &mut dyn TenantRepos,
     id: SlotId,
     frame: &StrategyVersion,
+    now: OffsetDateTime,
 ) -> Result<SlotOut, AppError> {
     let slot = r
         .studio()
@@ -354,6 +365,10 @@ pub(crate) async fn slot_in(
     {
         piece = r.studio().get_piece(id, a.piece().revision).await?;
     }
+    let material_check = match &piece {
+        Some(p) => super::materials::material_check(r, id, p, now.max(slot.scheduled_at)).await?,
+        None => None,
+    };
     Ok(SlotOut {
         slot,
         piece,
@@ -365,6 +380,7 @@ pub(crate) async fn slot_in(
         learned,
         attempts,
         measurements,
+        material_check,
     })
 }
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {
@@ -391,7 +407,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
     )?;
     e.strategy_version_id = Some(frame.id.0);
     r.ledger().append(e).await?;
-    let out = slot_in(r.as_mut(), s.id, &frame).await?;
+    let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
     r.commit().await?;
     Ok(out)
 }

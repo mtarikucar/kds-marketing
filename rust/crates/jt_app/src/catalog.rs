@@ -256,6 +256,9 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("studio.material_delete", Exempt, ("POST", "/api/studio/materials/{material_id}/delete"), Destructive),
     panel_only("studio.calendar_set", Exempt, ("PUT", "/api/studio/calendar/{key}/{year}"), Write),
     panel_only("studio.material_policy_set", Exempt, ("PUT", "/api/studio/materials/policy"), Write),
+    // Releasing a slot's caption findings (spec 2026-11-03 §7, D19): a human's, behind the
+    // strategy gate as the slot's other writes are.
+    panel_only("studio.material_check_release", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/material-check/release"), Write),
     // The inbox: reading and answering the workspace's own customers never waits for a marketing
     // strategy (owner decision of 2026-11-03), so every row is exempt from the strategy gate but
     // `inbox.send`, which writes to a person with commercial intent and may open a conversation
