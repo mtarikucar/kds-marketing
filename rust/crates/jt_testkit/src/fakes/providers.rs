@@ -24,9 +24,9 @@ use jt_app::ports::connectors::{
     DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord,
     LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
     ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformAppConfig, PostMetrics,
-    PrivateReceipt, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution,
-    Publisher, RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp,
-    TiktokCreator, Url, XApp,
+    PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
+    PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony,
+    TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -1112,8 +1112,8 @@ pub enum PublicCall {
 /// nothing queued panics; [`PublicSurface::subject`] answers `Ok(None)` (the trait's default)
 /// when nothing is queued. A hook queued with [`ScriptedPublic::push_hook`] runs inside the next
 /// reply or moderation call, before its answer: a provider call during which the world changes.
-/// Registered in a [`ScriptedRegistry`] with [`ScriptedRegistry::with_public`] only: the binary
-/// offers no public surface until its adapters do.
+/// Registered in a [`ScriptedRegistry`] with [`ScriptedRegistry::with_public`] only, as the
+/// binary offers one only for a provider whose adapter has one.
 pub struct ScriptedPublic {
     provider: Provider,
     calls: Mutex<Vec<PublicCall>>,
@@ -1252,6 +1252,111 @@ impl PublicSurface for ScriptedPublic {
             subject_external_id: subject_external_id.to_owned(),
         });
         self.subject.try_next().unwrap_or(Ok(None))
+    }
+}
+
+/// One call a [`ScriptedPoller`] answered.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PollCall {
+    Poll {
+        ws: WorkspaceId,
+        public: Value,
+        cursor: Value,
+    },
+    Reconcile {
+        public: Value,
+        targets: Vec<PublicTarget>,
+    },
+}
+
+/// A provider's poll of public items ([`PublicPoller`]), answering from the queues its `push_*`
+/// methods fill and recording every call: a poll with nothing queued finds nothing and keeps its
+/// cursor; a reconciliation with nothing queued finds nothing. A hook queued with
+/// [`ScriptedPoller::push_hook`] runs inside the next call, before its answer. Registered in a
+/// [`ScriptedRegistry`] with [`ScriptedRegistry::with_poller`].
+pub struct ScriptedPoller {
+    provider: Provider,
+    calls: Mutex<Vec<PollCall>>,
+    hooks: Script<SendHook>,
+    poll: Script<Result<(Vec<InboundEventDraft>, Value), ConnectorError>>,
+    reconcile: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
+}
+
+impl ScriptedPoller {
+    /// A poller of `provider` with nothing queued.
+    pub fn new(provider: Provider) -> Self {
+        ScriptedPoller {
+            provider,
+            calls: Mutex::new(Vec::new()),
+            hooks: Script::default(),
+            poll: Script::default(),
+            reconcile: Script::default(),
+        }
+    }
+
+    /// Every call so far, in order.
+    pub fn calls(&self) -> Vec<PollCall> {
+        lock(&self.calls).clone()
+    }
+
+    /// Queues what the next poll answers: its drafts and the next cursor.
+    pub fn push_poll(&self, result: Result<(Vec<InboundEventDraft>, Value), ConnectorError>) {
+        self.poll.push(result);
+    }
+
+    /// Queues what the next reconciliation answers.
+    pub fn push_reconcile(&self, result: Result<Vec<InboundEventDraft>, ConnectorError>) {
+        self.reconcile.push(result);
+    }
+
+    /// Runs `hook` inside the next call, before it answers.
+    pub fn push_hook<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.hooks.push(Box::new(move || Box::pin(hook())));
+    }
+
+    async fn during_call(&self) {
+        if let Some(hook) = self.hooks.try_next() {
+            hook().await;
+        }
+    }
+}
+
+#[async_trait]
+impl PublicPoller for ScriptedPoller {
+    async fn poll(
+        &self,
+        ws: WorkspaceId,
+        _cred: &Credential,
+        public: &Value,
+        cursor: &Value,
+    ) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError> {
+        lock(&self.calls).push(PollCall::Poll {
+            ws,
+            public: public.clone(),
+            cursor: cursor.clone(),
+        });
+        self.during_call().await;
+        self.poll
+            .try_next()
+            .unwrap_or_else(|| Ok((Vec::new(), cursor.clone())))
+    }
+
+    async fn reconcile(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+        targets: &[PublicTarget],
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        lock(&self.calls).push(PollCall::Reconcile {
+            public: public.clone(),
+            targets: targets.to_vec(),
+        });
+        self.during_call().await;
+        self.reconcile.try_next().unwrap_or_else(|| Ok(Vec::new()))
     }
 }
 
@@ -1488,6 +1593,7 @@ pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,
     oauth: BTreeMap<Provider, Arc<ScriptedOAuth>>,
     public: BTreeMap<Provider, Arc<ScriptedPublic>>,
+    pollers: BTreeMap<Provider, Arc<ScriptedPoller>>,
 }
 
 impl ScriptedRegistry {
@@ -1512,6 +1618,13 @@ impl ScriptedRegistry {
     /// replacing any registered before. Only explicitly: no production adapter offers one yet.
     pub fn with_public(mut self, public: Arc<ScriptedPublic>) -> Self {
         self.public.insert(public.provider, public);
+        self
+    }
+
+    /// Registers `poller` as its provider's public poll ([`ConnectorRegistry::public_poller`]),
+    /// replacing any registered before.
+    pub fn with_poller(mut self, poller: Arc<ScriptedPoller>) -> Self {
+        self.pollers.insert(poller.provider, poller);
         self
     }
 
@@ -1599,5 +1712,12 @@ impl ConnectorRegistry for ScriptedRegistry {
             .get(&provider)
             .cloned()
             .map(|p| p as Arc<dyn PublicSurface>)
+    }
+
+    fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> {
+        self.pollers
+            .get(&provider)
+            .cloned()
+            .map(|p| p as Arc<dyn PublicPoller>)
     }
 }

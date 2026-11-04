@@ -4,7 +4,8 @@
 //!
 //! [`MetaConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`], [`InsightsReader`], [`MessagingSender`],
-//! [`LeadGenFetcher`], [`AdBudgetWriter`], and for comments [`PublicSurface`]); [`webhook`] parses
+//! [`LeadGenFetcher`], [`AdBudgetWriter`], and for comments [`PublicSurface`] and
+//! [`PublicPoller`]); [`webhook`] parses
 //! Meta's webhook bodies, purely.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
@@ -65,6 +66,7 @@
 //! [`LeadGenFetcher`]: jt_app::ports::connectors::LeadGenFetcher
 //! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
 //! [`PublicSurface`]: jt_app::ports::connectors::PublicSurface
+//! [`PublicPoller`]: jt_app::ports::connectors::PublicPoller
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 

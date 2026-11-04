@@ -6,8 +6,8 @@
 mod support;
 
 use jt_app::ports::connectors::{
-    ModerationAction, PUBLIC_ITEM_GONE, PublicKind, PublicSurface, PublicTarget, ReportReason,
-    SubjectKind,
+    ModerationAction, PUBLIC_ITEM_GONE, PublicEnvelope, PublicKind, PublicPoller, PublicSurface,
+    PublicTarget, ReportReason, SubjectKind,
 };
 use jt_connector::{ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES};
 use jt_meta::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, MAX_MESSENGER_TEXT};
@@ -558,4 +558,191 @@ async fn refused_without_grant_before_any_call() {
 fn facebook_private_bound_is_messengers() {
     // The inbox's bound of a Facebook private reply is the Messenger text this adapter sends.
     assert_eq!(jt_inbox::public::FACEBOOK_PRIVATE_MAX, MAX_MESSENGER_TEXT);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The comments backfill poll (task M4)
+// ---------------------------------------------------------------------------------------------
+
+/// Graph's time `hours` ago, as Graph writes it (`+0000`).
+fn graph_ago(hours: i64) -> String {
+    let at = time::OffsetDateTime::now_utc() - time::Duration::hours(hours);
+    format!(
+        "{}+0000",
+        at.format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+            .split(['Z', '.'])
+            .next()
+            .unwrap()
+    )
+}
+
+fn envelope_of(draft: &jt_app::ports::connectors::InboundEventDraft) -> PublicEnvelope {
+    PublicEnvelope::from_payload(&draft.payload).expect("a public envelope")
+}
+
+#[tokio::test]
+async fn poll_reads_recent_media_with_changed_counts_only() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        &format!("/fb/v19.0/{IG}/media"),
+        ok(json!({ "data": [
+            { "id": "m-new", "timestamp": graph_ago(2), "comments_count": 2 },
+            { "id": "m-same", "timestamp": graph_ago(3), "comments_count": 4 },
+            { "id": "m-old", "timestamp": graph_ago(24 * 8), "comments_count": 9 },
+        ]})),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/m-new/comments",
+        ok(json!({ "data": [{
+            "id": "c-1",
+            "text": "Kaç parça?",
+            "timestamp": graph_ago(1),
+            "username": "a.customer",
+            "from": { "id": "9990001", "username": "a.customer" },
+            "replies": { "data": [{
+                "id": "c-2",
+                "text": "24 parça.",
+                "timestamp": graph_ago(1),
+                "from": { "id": IG, "username": "atolye" },
+                "parent_id": "c-1",
+            }]},
+        }]})),
+    );
+    let cursor = json!({ "counts": { "m-same": 4 } });
+    let (drafts, next) = r
+        .meta
+        .poll(
+            jt_tenancy::WorkspaceId::new_v7(),
+            &page_cred(),
+            &ig_public(),
+            &cursor,
+        )
+        .await
+        .unwrap();
+    // The media whose count changed is read; the one unchanged and the one too old are not.
+    assert_eq!(r.mock.requests("GET", "/fb/v19.0/m-new/comments").len(), 1);
+    assert!(
+        r.mock
+            .requests("GET", "/fb/v19.0/m-same/comments")
+            .is_empty()
+    );
+    assert!(
+        r.mock
+            .requests("GET", "/fb/v19.0/m-old/comments")
+            .is_empty()
+    );
+    let ids: Vec<&str> = drafts.iter().map(|d| d.external_id.as_str()).collect();
+    // As the webhook keys them, so a comment seen both ways is stored once.
+    assert_eq!(ids, ["comment:c-1:open", "comment:c-2:open"]);
+    let top = envelope_of(&drafts[0]);
+    assert_eq!(top.subject.unwrap().external_id, "m-new");
+    assert_eq!(top.author.name.as_deref(), Some("a.customer"));
+    let reply = envelope_of(&drafts[1]);
+    assert_eq!(reply.parent_external_id.as_deref(), Some("c-1"));
+    assert!(reply.author.is_self);
+    assert_eq!(next["counts"], json!({ "m-new": 2, "m-same": 4 }));
+}
+
+#[tokio::test]
+async fn poll_is_bounded_per_run_and_resumes_from_the_cursor() {
+    let r = rig().await;
+    // A post whose comments run over more pages than one run reads.
+    let posts: Vec<Value> = vec![json!({
+        "id": "p-1",
+        "created_time": graph_ago(1),
+        "comments": { "summary": { "total_count": 900 } },
+    })];
+    r.mock.on(
+        "GET",
+        &format!("/fb/v19.0/{PAGE}/posts"),
+        ok(json!({ "data": posts })),
+    );
+    let next_link = format!(
+        "{}/v19.0/p-1/comments?after=X",
+        r.mock.base("/fb").as_str().trim_end_matches('/')
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/p-1/comments",
+        ok(json!({
+            "data": [{ "id": "p-1_c", "message": "Merhaba", "created_time": graph_ago(1), "from": { "id": "5550001", "name": "Ö" } }],
+            "paging": { "next": next_link },
+        })),
+    );
+    let (drafts, next) = r
+        .meta
+        .poll(
+            jt_tenancy::WorkspaceId::new_v7(),
+            &page_cred(),
+            &fb_public(),
+            &json!({}),
+        )
+        .await
+        .unwrap();
+    // 25 pages at most, then it stops; the post's count is not taken, so the next poll reads it.
+    assert_eq!(r.mock.requests("GET", "/fb/v19.0/p-1/comments").len(), 25);
+    assert_eq!(drafts.len(), 25);
+    assert_eq!(next["counts"], json!({}));
+    let call = &r.mock.requests("GET", "/fb/v19.0/p-1/comments")[0];
+    assert_eq!(call.param("filter"), Some("stream"));
+    // The next run starts from that cursor and reads the post again.
+    r.mock.clear();
+    r.meta
+        .poll(
+            jt_tenancy::WorkspaceId::new_v7(),
+            &page_cred(),
+            &fb_public(),
+            &next,
+        )
+        .await
+        .unwrap();
+    assert!(!r.mock.requests("GET", "/fb/v19.0/p-1/comments").is_empty());
+}
+
+#[tokio::test]
+async fn reconcile_finds_our_reply_text() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        &format!("/fb/v19.0/{COMMENT}/replies"),
+        ok(json!({ "data": [
+            { "id": "r-1", "text": "Başka biri", "timestamp": graph_ago(1), "from": { "id": "9990009" } },
+            { "id": "r-2", "text": "24 parça.", "timestamp": graph_ago(1), "from": { "id": IG, "username": "atolye" } },
+        ]})),
+    );
+    let drafts = r
+        .meta
+        .reconcile(&page_cred(), &ig_public(), &[target(COMMENT)])
+        .await
+        .unwrap();
+    let ours: Vec<PublicEnvelope> = drafts
+        .iter()
+        .map(envelope_of)
+        .filter(|e| e.author.is_self)
+        .collect();
+    assert_eq!(ours.len(), 1);
+    assert_eq!(ours[0].text, "24 parça.");
+    assert_eq!(ours[0].parent_external_id.as_deref(), Some(COMMENT));
+    assert_eq!(drafts[1].external_id, "comment:r-2:open");
+}
+
+#[tokio::test]
+async fn poll_without_grant_calls_nothing() {
+    let r = rig().await;
+    let bare = public("instagram", IG, &facebook_scopes(false));
+    let e = r
+        .meta
+        .poll(
+            jt_tenancy::WorkspaceId::new_v7(),
+            &page_cred(),
+            &bare,
+            &json!({}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert!(r.mock.recorded().is_empty());
 }

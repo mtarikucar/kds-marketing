@@ -26,7 +26,7 @@ use std::sync::Arc;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
     LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider, PlatformAppConfig,
-    PublicSurface, Publisher, SmsSender, Telephony,
+    PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
@@ -165,6 +165,10 @@ impl ConnectorRegistry for ProviderRegistry {
     fn public(&self, provider: Provider) -> Option<Arc<dyn PublicSurface>> {
         (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn PublicSurface>)
     }
+
+    fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> {
+        (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn PublicPoller>)
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +237,7 @@ mod tests {
                     "ads",
                     "leadgen",
                     "public",
+                    "public_poller",
                 ],
             ),
             (

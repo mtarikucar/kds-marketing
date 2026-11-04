@@ -76,6 +76,7 @@ pub struct Intervals {
     pub device_command_expiry: Duration,
     pub device_file_purge: Duration,
     pub whatsapp_app_sync: Duration,
+    pub comments_poll: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -88,8 +89,8 @@ impl Default for Intervals {
     /// Token renewal hourly, probes every 15 minutes, the delivery-report poll every minute, the
     /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
     /// purge hourly, the call timers every second, the bridges' health checks and the phones'
-    /// command expiry every minute, the device-file purge hourly; first runs within 30 seconds of
-    /// the start.
+    /// command expiry every minute, the device-file purge hourly, the comments backfill hourly;
+    /// first runs within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -121,6 +122,7 @@ impl Default for Intervals {
             device_command_expiry: MINUTE,
             device_file_purge: HOUR,
             whatsapp_app_sync: 5 * MINUTE,
+            comments_poll: HOUR,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -159,6 +161,7 @@ impl Intervals {
             Job::DeviceCommandExpiry => self.device_command_expiry,
             Job::DeviceFilePurge => self.device_file_purge,
             Job::WhatsappAppSync => self.whatsapp_app_sync,
+            Job::CommentsPoll => self.comments_poll,
         }
     }
 }
@@ -476,6 +479,7 @@ mod tests {
             device_command_expiry: every,
             device_file_purge: every,
             whatsapp_app_sync: every,
+            comments_poll: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -585,6 +589,8 @@ mod tests {
         assert_eq!(i.of(Job::DeviceCommandExpiry), MINUTE);
         assert_eq!(i.of(Job::DeviceFilePurge), HOUR);
         assert_eq!(i.of(Job::WhatsappAppSync), 5 * MINUTE);
+        assert_eq!(i.of(Job::CommentsPoll), HOUR);
+        assert_eq!(Job::CommentsPoll.lock_name(), "jeeta.jobs.comments_poll");
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),
             "jeeta.jobs.device_bridge_health"

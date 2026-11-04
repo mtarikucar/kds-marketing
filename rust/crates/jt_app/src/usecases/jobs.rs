@@ -142,11 +142,12 @@ pub enum Job {
     DeviceCommandExpiry,
     DeviceFilePurge,
     WhatsappAppSync,
+    CommentsPoll,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 29] = [
+    pub const ALL: [Job; 30] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -176,6 +177,7 @@ impl Job {
         Job::DeviceCommandExpiry,
         Job::DeviceFilePurge,
         Job::WhatsappAppSync,
+        Job::CommentsPoll,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -211,6 +213,7 @@ impl Job {
             Job::DeviceCommandExpiry => "device_command_expiry",
             Job::DeviceFilePurge => "device_file_purge",
             Job::WhatsappAppSync => "whatsapp_app_sync",
+            Job::CommentsPoll => "comments_poll",
         }
     }
 
@@ -251,6 +254,7 @@ impl Job {
             Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
             Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
             Job::WhatsappAppSync => run_whatsapp_app_sync(deps, now).await,
+            Job::CommentsPoll => run_comments_poll(deps, now).await,
         }
     }
 }
@@ -1773,6 +1777,168 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
         report.failed += consumed.failed;
     }
     finish(job, report)
+}
+
+/// The most uncertain public replies of one capability a `comments_poll` run reconciles.
+const MAX_RECONCILED: u32 = 50;
+
+/// Backfills the public items each receiving workspace's capabilities take
+/// (`inbox::public::comments_enabled`: a Meta surface whose comments are on, a marketplace)
+/// through their provider's poll (spec §6.9, D17): the items new since the capability's cursor,
+/// and the current state of the items whose public reply of ours is uncertain (`unknown`), so
+/// that our own reply found there settles it (D25). The drafts are stored as a delivery's events
+/// (`webhook::store_polled`: what the webhook already stored is a duplicate) and consumed. The
+/// provider is called with no transaction open; the drafts and the next cursor commit together
+/// only if the capability, its credential and its cursor are as they were when it started. Counts:
+/// `touched` per capability polled, `changed` per event stored, `skipped` per duplicate.
+pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::CommentsPoll;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        let capabilities = match live_connector_capabilities(deps, ws).await {
+            Ok(caps) => caps,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        let mut polled = false;
+        for cap in capabilities.into_iter().filter(|c| {
+            c.status == StoredStatus::Verified
+                && super::inbox::public::comments_enabled(deps.apps.as_ref(), c)
+        }) {
+            let Some(provider) = provider_for_kind(&cap.kind_key) else {
+                continue;
+            };
+            let Some(poller) = deps.connectors.public_poller(provider) else {
+                continue;
+            };
+            report.touched += 1;
+            polled = true;
+            let outcome = async {
+                super::connector::refresh_tenant_hosts(deps, ws).await?;
+                let (sealed, cursor, targets) = {
+                    let mut r = deps.uow.tenant(ws).await?;
+                    let sealed = r.capabilities().read_sealed(cap.id).await?;
+                    let cursor = r.public_cursors().get(cap.id).await?;
+                    let targets = uncertain_targets(r.as_mut(), cap.id, now).await?;
+                    (sealed, cursor, targets)
+                };
+                let Some(sealed) = sealed else {
+                    return Ok::<_, Failure>(vec![]);
+                };
+                let credential = open_credential(deps, ws, &sealed)?;
+                let public = super::connector::adapter_public(&cap);
+                let start = cursor.clone().unwrap_or_else(|| json!({}));
+                let (mut drafts, next) = poller
+                    .poll(ws, &credential, &public, &start)
+                    .await
+                    .map_err(Failure::Provider)?;
+                if !targets.is_empty() {
+                    drafts.extend(
+                        poller
+                            .reconcile(&credential, &public, &targets)
+                            .await
+                            .map_err(Failure::Provider)?,
+                    );
+                }
+                drop(credential);
+                let mut r = deps.uow.tenant(ws).await?;
+                r.people().lock_workspace().await?;
+                let current = r.capabilities().lock(cap.id).await?;
+                if !RECEIVING.contains(&r.workspace().get().await?.status)
+                    || !current.is_some_and(|c| {
+                        c.status == StoredStatus::Verified
+                            && c.external_id == cap.external_id
+                            && c.updated_at == cap.updated_at
+                    })
+                    || r.capabilities().read_sealed(cap.id).await?.as_ref() != Some(&sealed)
+                    || r.public_cursors().get(cap.id).await? != cursor
+                {
+                    return Ok(vec![]);
+                }
+                let stored = webhook::store_polled(
+                    deps,
+                    r.as_mut(),
+                    ws,
+                    provider,
+                    Some(cap.id),
+                    drafts,
+                    now,
+                )
+                .await?;
+                r.public_cursors().store(cap.id, next, now).await?;
+                r.commit().await?;
+                Ok(stored)
+            }
+            .await;
+            match outcome {
+                Ok(stored) => {
+                    for delivery in stored {
+                        if matches!(delivery, Delivery::Stored(_)) {
+                            report.changed += 1;
+                        } else {
+                            report.skipped += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, Some(cap.id), &e);
+                }
+            }
+        }
+        if polled {
+            let consumed = super::inbox::consumer::consume_workspace(deps, ws, now).await;
+            report.failed += consumed.failed;
+        }
+    }
+    finish(job, report)
+}
+
+/// The items of capability `cap` whose public reply of ours is uncertain (an outbox row in state
+/// `unknown` naming the item), as the provider's targets, at most [`MAX_RECONCILED`].
+async fn uncertain_targets(
+    r: &mut dyn TenantRepos,
+    cap: CapabilityId,
+    now: OffsetDateTime,
+) -> Result<Vec<crate::ports::connectors::PublicTarget>, AppError> {
+    let mut targets = Vec::new();
+    let mut seen = BTreeSet::new();
+    for row in r
+        .outbox()
+        .list_pending("unknown", now, MAX_RECONCILED)
+        .await?
+    {
+        let Some(item) = row.intent["public"]["item_id"]
+            .as_str()
+            .and_then(|id| id.parse::<uuid::Uuid>().ok())
+        else {
+            continue;
+        };
+        if row.capability_id != cap || !seen.insert(item) {
+            continue;
+        }
+        let Some(item) = r
+            .public_items()
+            .get(jt_inbox::PublicItemId::from(item))
+            .await?
+        else {
+            continue;
+        };
+        let subject_external_id = match item.subject_id {
+            Some(id) => r.public_subjects().get(id).await?.map(|s| s.external_id),
+            None => None,
+        };
+        targets.push(crate::ports::connectors::PublicTarget {
+            kind: item.kind,
+            external_id: item.external_id.clone(),
+            parent_external_id: item.parent_external_id.clone(),
+            subject_external_id,
+        });
+    }
+    Ok(targets)
 }
 
 /// Hourly retry, serialized by the scheduler's iys_sync advisory lock. A lost acknowledgement

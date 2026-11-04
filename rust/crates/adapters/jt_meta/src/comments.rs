@@ -35,18 +35,34 @@
 //! neither took nor refused one is `Unknown`, never sent again blindly. A Graph answer saying the
 //! comment does not exist is `Permanent` with [`PUBLIC_ITEM_GONE`] (`gone`). Meta has no report
 //! call: a report is refused.
+//!
+//! **The backfill poll** ([`jt_app::ports::connectors::PublicPoller`]; spec D17, D28): the
+//! account's last 50 posts or media (`GET /{ig-id}/media?fields=id,timestamp,comments_count`,
+//! `GET /{page-id}/posts?fields=id,created_time,comments.summary(true).limit(0)`), those of the last
+//! 7 days whose comment count changed since the cursor's, read through
+//! (`GET /{media-id}/comments?fields=...,replies{...}`, `GET /{post-id}/comments?filter=stream`),
+//! at most 25 comment pages a run; a post left unread keeps its old count, so the next run reads
+//! it. Each comment is the event its webhook gives (the same `comment:<id>:open` key), so what
+//! both see is stored once. A reconciliation lists the replies under each target
+//! (`/{comment-id}/replies`, `/{comment-id}/comments`): our own reply found there settles an
+//! uncertain one (D25). These read fields are spec V-M1 still.
 
 use jt_app::ports::connectors::{
-    ModerationAction, PUBLIC_ITEM_GONE, PrivateReceipt, PublicTarget, SendReceipt, SubjectFacts,
-    SubjectKind,
+    EnvelopeAuthor, EnvelopeStatus, EnvelopeSubject, InboundEventDraft, ModerationAction,
+    PUBLIC_ITEM_GONE, PrivateReceipt, PublicEnvelope, PublicKind, PublicTarget, SendReceipt,
+    SubjectFacts, SubjectKind,
 };
-use jt_connector::{CommentGrant, ConnectorError, Credential, comment_grant};
+use jt_connector::{CommentGrant, ConnectorError, Credential, EventKind, comment_grant};
 use jt_outbound::Method;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use time::format_description::well_known::Rfc3339;
+use time::{Duration, OffsetDateTime};
+use url::Url;
 
 use crate::MetaConnector;
 use crate::credential::{MetaCred, account_of, granted_scopes, kind_of};
-use crate::graph::{Auth, Body, missing, node, text};
+use crate::graph::{Auth, Body, GraphApp, integer, missing, node, text};
+use crate::webhook::comment_event_id;
 
 /// The longest caption excerpt a subject keeps, in characters.
 const MAX_TITLE_CHARS: usize = 200;
@@ -358,4 +374,319 @@ pub(crate) async fn subject(
         image_url,
         facts,
     }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The comments backfill poll (task M4)
+// ---------------------------------------------------------------------------------------------
+
+/// How far back a poll looks for posts and media.
+const POLL_WINDOW: Duration = Duration::days(7);
+/// The most posts or media one poll reads the comment counts of.
+const MAX_POLL_MEDIA: usize = 50;
+/// The most comment pages one poll reads, over all its posts or media.
+const MAX_POLL_COMMENT_PAGES: usize = 25;
+
+/// A Graph time: RFC 3339, or Graph's `2026-10-20T10:00:00+0000` (no colon in the offset).
+fn graph_time(value: &Value) -> Option<OffsetDateTime> {
+    let text = value.as_str().filter(|t| t.is_ascii())?;
+    if let Ok(at) = OffsetDateTime::parse(text, &Rfc3339) {
+        return Some(at);
+    }
+    let (head, offset) = text.split_at(text.len().checked_sub(5)?);
+    let sign = offset.chars().next()?;
+    if !matches!(sign, '+' | '-') {
+        return None;
+    }
+    OffsetDateTime::parse(
+        &format!("{head}{}:{}", &offset[..3], &offset[3..]),
+        &Rfc3339,
+    )
+    .ok()
+}
+
+/// How one poll reads a capability: through the Page (or user) token on `graph.facebook.com`, or
+/// an Instagram Login token on `graph.instagram.com`.
+enum Reader<'a> {
+    Graph { app: GraphApp, token: &'a str },
+    Instagram { token: &'a str },
+}
+
+impl Reader<'_> {
+    fn of<'a>(
+        connector: &MetaConnector,
+        cred: &'a Credential,
+        kind: &str,
+    ) -> Result<Reader<'a>, ConnectorError> {
+        match MetaCred::of(cred, "read comments")? {
+            MetaCred::Instagram { token } if kind == "instagram" => Ok(Reader::Instagram { token }),
+            MetaCred::Page { token, .. } | MetaCred::User { token } => Ok(Reader::Graph {
+                app: connector.graph_app()?,
+                token,
+            }),
+            _ => Err(ConnectorError::permanent(
+                "this credential cannot read comments",
+            )),
+        }
+    }
+
+    /// One page of `segments`: its `data` and the link to the next, if any.
+    async fn page(
+        &self,
+        connector: &MetaConnector,
+        url: Option<Url>,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<(Vec<Value>, Option<Url>), ConnectorError> {
+        let (url, auth) = match self {
+            Reader::Graph { app, token } => (
+                url.unwrap_or_else(|| connector.graph_url(&app.version, segments, query)),
+                app.auth(token),
+            ),
+            Reader::Instagram { token } => (
+                url.unwrap_or_else(|| connector.instagram_url(segments, query)),
+                Auth::Bearer(token),
+            ),
+        };
+        let origin = url.origin();
+        let answer = connector.call(Method::GET, url, auth, Body::Empty).await?;
+        let data = answer["data"].as_array().cloned().unwrap_or_default();
+        let next = match answer["paging"]["next"].as_str() {
+            Some(next) => {
+                let next = Url::parse(next)
+                    .map_err(|_| ConnectorError::permanent("the paging link is not a URL"))?;
+                if next.origin() != origin {
+                    return Err(ConnectorError::permanent(
+                        "the paging link leads away from the API",
+                    ));
+                }
+                Some(next)
+            }
+            None => None,
+        };
+        Ok((data, next))
+    }
+}
+
+/// A comment `item` Graph listed (Instagram's or Facebook's fields), on post or media `subject`
+/// (when known) of `account`, as the event its webhook gives the same comment: `None` without an
+/// id or a time.
+fn polled_comment(
+    instagram: bool,
+    account: &str,
+    subject: Option<&str>,
+    item: &Value,
+) -> Option<InboundEventDraft> {
+    let id = text(&item["id"])?;
+    let (created_at, body, name_key) = if instagram {
+        (graph_time(&item["timestamp"])?, &item["text"], "username")
+    } else {
+        (graph_time(&item["created_time"])?, &item["message"], "name")
+    };
+    let parent = if instagram {
+        text(&item["parent_id"])
+    } else {
+        text(&item["parent"]["id"])
+    };
+    let from_id = text(&item["from"]["id"]);
+    let name = item["from"][name_key]
+        .as_str()
+        .or_else(|| item["username"].as_str())
+        .filter(|n| !n.trim().is_empty())
+        .map(str::to_owned);
+    let envelope = PublicEnvelope {
+        kind: PublicKind::Comment,
+        account_id: account.to_owned(),
+        root_external_id: parent.clone().unwrap_or_else(|| id.clone()),
+        parent_external_id: parent,
+        external_id: id.clone(),
+        status: EnvelopeStatus::Open,
+        author: EnvelopeAuthor {
+            is_self: from_id.as_deref() == Some(account),
+            id: from_id,
+            name,
+        },
+        text: body.as_str().unwrap_or_default().to_owned(),
+        created_at,
+        deadline: None,
+        live: false,
+        subject: subject
+            .filter(|s| !s.trim().is_empty())
+            .map(|subject| EnvelopeSubject {
+                kind: SubjectKind::Post,
+                external_id: subject.to_owned(),
+                title: String::new(),
+                url: None,
+                image_url: None,
+                facts: Value::Null,
+            }),
+        answer: None,
+        rejection: None,
+    };
+    let mut provider_item = item.clone();
+    if let Value::Object(fields) = &mut provider_item {
+        // A polled item's replies come as their own events.
+        fields.remove("replies");
+    }
+    Some(InboundEventDraft {
+        external_id: comment_event_id(&id, EnvelopeStatus::Open, None),
+        kind: EventKind::Comment,
+        payload: envelope.into_payload(provider_item),
+        occurred_at: Some(created_at),
+    })
+}
+
+/// The comment fields a poll reads.
+const IG_COMMENT_FIELDS: &str = "id,text,timestamp,username,from,parent_id";
+const FB_COMMENT_FIELDS: &str = "id,message,from,created_time,parent";
+
+/// The comments new since `cursor` on the capability's posts or media of the last
+/// [`POLL_WINDOW`] (see the module docs): those whose comment count changed since the last poll,
+/// at most [`MAX_POLL_MEDIA`] of them and [`MAX_POLL_COMMENT_PAGES`] comment pages in all; a post
+/// left unread keeps its old count, so the next poll reads it. The next cursor is
+/// `{"since", "counts": {post or media id: count}}`, the counts of the window's posts only.
+pub(crate) async fn poll(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    cursor: &Value,
+) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError> {
+    let kind = surface(public)?;
+    if !grant(kind, cred, public).read {
+        return Err(not_granted("reading comments"));
+    }
+    let account = account_of(public).ok_or_else(|| missing("account id"))?;
+    let reader = Reader::of(connector, cred, kind)?;
+    let instagram = kind == "instagram";
+    let since = OffsetDateTime::now_utc() - POLL_WINDOW;
+    let limit = MAX_POLL_MEDIA.to_string();
+    let (edge, fields) = if instagram {
+        ("media", "id,timestamp,comments_count")
+    } else {
+        ("posts", "id,created_time,comments.summary(true).limit(0)")
+    };
+    let (media, _) = reader
+        .page(
+            connector,
+            None,
+            &[node(account)?, edge],
+            &[("fields", fields), ("limit", &limit)],
+        )
+        .await?;
+    let old = &cursor["counts"];
+    let mut counts = Map::new();
+    let mut drafts = Vec::new();
+    let mut pages_left = MAX_POLL_COMMENT_PAGES;
+    for item in media.iter().take(MAX_POLL_MEDIA) {
+        let Some(id) = text(&item["id"]) else {
+            continue;
+        };
+        let at = if instagram {
+            graph_time(&item["timestamp"])
+        } else {
+            graph_time(&item["created_time"])
+        };
+        if at.is_some_and(|at| at < since) {
+            continue;
+        }
+        let count = if instagram {
+            integer(&item["comments_count"])
+        } else {
+            integer(&item["comments"]["summary"]["total_count"])
+        }
+        .unwrap_or(0);
+        let seen = integer(&old[id.as_str()]);
+        if seen == Some(count) || count == 0 {
+            counts.insert(id, json!(count));
+            continue;
+        }
+        let mut next = None;
+        let mut complete = false;
+        while pages_left > 0 {
+            pages_left -= 1;
+            let query: &[(&str, &str)] = if instagram {
+                &[(
+                    "fields",
+                    "id,text,timestamp,username,from,parent_id,replies{id,text,timestamp,username,from,parent_id}",
+                )]
+            } else {
+                &[("filter", "stream"), ("fields", FB_COMMENT_FIELDS)]
+            };
+            let (comments, more) = reader
+                .page(connector, next.take(), &[node(&id)?, "comments"], query)
+                .await?;
+            for comment in &comments {
+                drafts.extend(polled_comment(instagram, account, Some(&id), comment));
+                for reply in comment["replies"]["data"].as_array().into_iter().flatten() {
+                    drafts.extend(polled_comment(instagram, account, Some(&id), reply));
+                }
+            }
+            match more {
+                Some(more) => next = Some(more),
+                None => {
+                    complete = true;
+                    break;
+                }
+            }
+        }
+        // Read through: its count is the cursor's; else it stays as it was, to be read again.
+        match (complete, seen) {
+            (true, _) => {
+                counts.insert(id, json!(count));
+            }
+            (false, Some(seen)) => {
+                counts.insert(id, json!(seen));
+            }
+            (false, None) => {}
+        }
+    }
+    let next_cursor = json!({
+        "since": since.format(&Rfc3339).unwrap_or_default(),
+        "counts": counts,
+    });
+    Ok((drafts, next_cursor))
+}
+
+/// The replies Graph lists under each of `targets` (comments the inbox answered without knowing
+/// whether its answer was taken), as their events: our own reply among them settles the
+/// uncertain answer (spec D25).
+pub(crate) async fn reconcile(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    targets: &[PublicTarget],
+) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+    let kind = surface(public)?;
+    if !grant(kind, cred, public).read {
+        return Err(not_granted("reading comments"));
+    }
+    let account = account_of(public).ok_or_else(|| missing("account id"))?;
+    let reader = Reader::of(connector, cred, kind)?;
+    let instagram = kind == "instagram";
+    let mut drafts = Vec::new();
+    for target in targets {
+        let comment = node(&target.external_id)?;
+        let (edge, fields) = if instagram {
+            ("replies", IG_COMMENT_FIELDS)
+        } else {
+            ("comments", FB_COMMENT_FIELDS)
+        };
+        let (replies, _) = reader
+            .page(connector, None, &[comment, edge], &[("fields", fields)])
+            .await
+            .map_err(gone)?;
+        let subject = target.subject_external_id.as_deref();
+        for reply in &replies {
+            let mut reply = reply.clone();
+            // Facebook lists a reply's parent only when asked for it; its parent is the target.
+            if !instagram && reply["parent"].is_null() {
+                reply["parent"] = json!({ "id": target.external_id });
+            }
+            if instagram && reply["parent_id"].is_null() {
+                reply["parent_id"] = json!(target.external_id);
+            }
+            drafts.extend(polled_comment(instagram, account, subject, &reply));
+        }
+    }
+    Ok(drafts)
 }

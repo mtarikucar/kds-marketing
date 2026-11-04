@@ -298,6 +298,7 @@ fn every_job_has_a_lock_named_after_it() {
             "device_command_expiry",
             "device_file_purge",
             "whatsapp_app_sync",
+            "comments_poll",
         ]
     );
     for job in Job::ALL {

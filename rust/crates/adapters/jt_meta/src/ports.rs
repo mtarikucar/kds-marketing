@@ -3,12 +3,14 @@
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector, InsightsReader,
-    LeadGenFetcher, LeadGenRecord, MessagingSender, ModerationAction, OAuthApp, OAuthFlow,
-    OAuthProvider, PostMetrics, PrivateReceipt, PublicSurface, PublicTarget, PublishReceipt,
-    PublishRequest, Publisher, SendReceipt, SubjectFacts,
+    AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector,
+    InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, MessagingSender,
+    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PostMetrics, PrivateReceipt,
+    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, Publisher,
+    SendReceipt, SubjectFacts,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
+use jt_tenancy::WorkspaceId;
 use serde_json::Value;
 use time::Date;
 use url::Url;
@@ -204,6 +206,28 @@ impl PublicSurface for MetaConnector {
         subject_external_id: &str,
     ) -> Result<Option<SubjectFacts>, ConnectorError> {
         comments::subject(self, cred, public, subject_external_id).await
+    }
+}
+
+#[async_trait]
+impl PublicPoller for MetaConnector {
+    async fn poll(
+        &self,
+        _ws: WorkspaceId,
+        cred: &Credential,
+        public: &Value,
+        cursor: &Value,
+    ) -> Result<(Vec<InboundEventDraft>, Value), ConnectorError> {
+        comments::poll(self, cred, public, cursor).await
+    }
+
+    async fn reconcile(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        targets: &[PublicTarget],
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        comments::reconcile(self, cred, public, targets).await
     }
 }
 
