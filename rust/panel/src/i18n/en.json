@@ -2033,12 +2033,34 @@
       "outcome": "Outcome",
       "endTitle": "Close the call",
       "end": "Record the outcome",
-      "ended": "The call was closed."
+      "ended": "The call was closed.",
+      "latencyTitle": "Latency (p50 / p95)",
+      "latency_perceived": "First sound",
+      "latency_content": "First sound of the reply",
+      "latency_agent": "Agent's reply time",
+      "latency_barge_in_stop": "Stopping on barge-in",
+      "latencyValue": "{{p50}} / {{p95}} ms",
+      "alerts": {
+        "perceived_p95_over_1s": "First sound p95 above 1 second",
+        "content_p95_over_3s": "Reply p95 above 3 seconds",
+        "barge_in_p95_over_300ms": "Stopping on barge-in p95 above 300 ms"
+      }
     },
     "policy": {
       "title": "Call policy",
       "saved": "Call policy saved.",
       "holdingHint": "One holding phrase per line (at most 5).",
+      "openingHint": "Played as soon as the call is answered; left empty, nothing is played.",
+      "closingHint": "Played before the call is hung up when the plan brings no closing; left empty, every plan must bring its own.",
+      "phrasesHint": "One sentence per line (at most 5). The bridge plays these on its own while the agent thinks.",
+      "phrases": {
+        "acknowledgements": "Acknowledgements (≈0.6 s)",
+        "fillers": "Fillers (≈2.7 s)",
+        "long_wait": "Long wait (≈8 s)",
+        "not_heard": "When not heard",
+        "still_there": "When the other side stays silent",
+        "fault": "Technical problem"
+      },
       "fields": {
         "greeting_inbound": "Inbound greeting",
         "voicemail_text": "Voicemail sentence",
@@ -2053,7 +2075,10 @@
         "caller_silence_s": "Other side's silence reported after (s)",
         "caller_silence_close_s": "Other side's silence closes after (s)",
         "estimated_minor_per_minute": "Estimated tariff per minute (minor units)",
-        "handoff_extension": "Transfer extension"
+        "handoff_extension": "Transfer extension",
+        "opening_outbound": "Business opening on outbound calls",
+        "transcript_notice": "Transcription notice",
+        "closing": "Closing when the plan brings none"
       }
     }
   }

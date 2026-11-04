@@ -61,12 +61,15 @@ fn stamp(seconds: i64) -> String {
         .unwrap()
 }
 
-/// The policy of these calls: the disclosure sentence, no tariff unless a test sets one.
+/// The policy of these calls: the disclosure sentence, no tariff unless a test sets one, and no
+/// workspace opening or transcript notice, so the answer plays the plan's opening alone.
 fn policy() -> CallPolicy {
     CallPolicy {
         disclosure_sentence: DISCLOSURE.into(),
         holding_default: vec!["Bir dakika lütfen.".into()],
         recording_announcement: "Bu görüşme kalite amacıyla kaydedilmektedir.".into(),
+        opening_outbound: Some(String::new()),
+        transcript_notice: Some(String::new()),
         ..CallPolicy::default()
     }
 }
@@ -88,6 +91,7 @@ fn plan() -> CallPlan {
         max_duration_s: 300,
         language: "tr".into(),
         disclose_assistant: true,
+        hotwords: Vec::new(),
     }
 }
 
@@ -138,7 +142,7 @@ async fn rig_with(max_calls: u8, policy: CallPolicy) -> Rig {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput(policy))
+    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput::from(policy))
         .await
         .unwrap();
     let key = api_keys::create(
@@ -326,6 +330,7 @@ impl Rig {
                 text: text.into(),
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await
@@ -588,6 +593,7 @@ async fn say_enqueues_tts_command_and_turn() {
             text: "Alo?".into(),
             expect_reply: true,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await;
@@ -625,6 +631,7 @@ async fn say_enqueues_tts_command_and_turn() {
                 text: bad,
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await);
@@ -640,6 +647,7 @@ async fn say_enqueues_tts_command_and_turn() {
             text: "Alo?".into(),
             expect_reply: true,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await);
@@ -654,6 +662,7 @@ async fn say_enqueues_tts_command_and_turn() {
                 text: "Alo?".into(),
                 expect_reply: true,
                 allow_barge_in: true,
+                wait_reply_s: None,
             },
         )
         .await),
@@ -907,6 +916,7 @@ async fn caller_hangup_ends_session_with_call_made() {
                     text: "Alo?".into(),
                     expect_reply: true,
                     allow_barge_in: true,
+                    wait_reply_s: None,
                 },
             )
             .await
@@ -1050,6 +1060,7 @@ async fn transfer_ends_agent_part() {
                     text: "Alo?".into(),
                     expect_reply: true,
                     allow_barge_in: true,
+                    wait_reply_s: None,
                 },
             )
             .await
@@ -1218,6 +1229,7 @@ async fn every_played_text_is_authored() {
             text: agent_lines[1].into(),
             expect_reply: false,
             allow_barge_in: true,
+            wait_reply_s: None,
         },
     )
     .await
@@ -1373,6 +1385,7 @@ async fn replay(name: &str) {
                             text: step["text"].as_str().unwrap().into(),
                             expect_reply: step["expect_reply"].as_bool().unwrap_or(true),
                             allow_barge_in: true,
+                            wait_reply_s: None,
                         },
                     )
                     .await
@@ -1484,4 +1497,331 @@ async fn replay_agent_silent() {
 #[tokio::test]
 async fn replay_caller_hangup() {
     replay("caller_hangup").await;
+}
+
+#[tokio::test]
+async fn the_workspace_opening_and_the_notice_precede_the_plans_opening() {
+    // No disclosure sentence of the owner's: the workspace's own opening discloses.
+    let r = rig_with(
+        1,
+        CallPolicy {
+            disclosure_sentence: String::new(),
+            ..CallPolicy::default()
+        },
+    )
+    .await;
+    let mut asks = plan();
+    asks.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    let call = r.place_at(0, asks).await;
+    assert_eq!(kinds(&r.poll(1).await), ["dial"]);
+    r.report(5, call, json!([{ "kind": "answered" }])).await;
+    let play = r.poll(5).await;
+    assert_eq!(kinds(&play), ["play"]);
+    assert_eq!(
+        play[0].payload["text"],
+        format!(
+            "Merhaba, ben Acme'nin dijital asistanıyım. {} Ada Hanım ile mi görüşüyorum?",
+            jt_calls::TRANSCRIPT_NOTICE
+        )
+    );
+}
+
+#[tokio::test]
+async fn policy_get_shows_the_workspaces_own_sentences() {
+    let w = world().await;
+    let p = calls::policy_get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(
+        p.opening_outbound.as_deref(),
+        Some("Merhaba, ben Acme'nin dijital asistanıyım.")
+    );
+    assert_eq!(p.closing.as_deref(), Some(jt_calls::CLOSING));
+    assert_eq!(p.disclosure_sentence, "ben Acme'nin dijital asistanıyım");
+    assert_eq!(p.phrases, jt_calls::BridgePhrases::default());
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_ends_with_the_policys_closing() {
+    let mut brief = plan();
+    brief.closing = String::new();
+    brief.max_duration_s = 60;
+    let r = rig().await;
+    let call = r.place_at(0, brief).await;
+    r.answer(call).await;
+    r.timers(65).await;
+    let queued = r.poll(65).await;
+    let closing = queued
+        .iter()
+        .find(|c| c.payload["clip"] == "closing")
+        .expect("a closing");
+    assert_eq!(closing.payload["text"], jt_calls::CLOSING);
+}
+
+#[tokio::test]
+async fn a_plan_without_a_closing_is_refused_when_the_policy_has_none() {
+    let r = rig_with(
+        1,
+        CallPolicy {
+            closing: Some(String::new()),
+            ..policy()
+        },
+    )
+    .await;
+    let mut brief = plan();
+    brief.closing = String::new();
+    let e = calls::place(&r.w.deps, &r.agent_at(0), place_input(&r, brief))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation);
+    assert_eq!(e.details["field"], "plan.closing");
+}
+
+#[tokio::test]
+async fn the_dial_carries_the_policys_lines_its_phrases_and_the_hotwords() {
+    let r = rig_with(
+        1,
+        CallPolicy {
+            disclosure_sentence: String::new(),
+            ..CallPolicy::default()
+        },
+    )
+    .await;
+    let mut p = plan();
+    p.opening = "Ada Hanım ile mi görüşüyorum?".into();
+    p.hotwords = vec!["Ada".into(), "perşembe".into()];
+    r.place_at(0, p).await;
+    let dial = r.poll(1).await;
+    let script = &dial[0].payload["script"];
+    assert_eq!(
+        script["lines"],
+        json!([
+            "Merhaba, ben Acme'nin dijital asistanıyım.",
+            jt_calls::TRANSCRIPT_NOTICE
+        ])
+    );
+    assert_eq!(
+        script["phrases"],
+        serde_json::to_value(jt_calls::BridgePhrases::default()).unwrap()
+    );
+    assert_eq!(script["hotwords"], json!(["Ada", "perşembe", "Acme"]));
+}
+
+#[tokio::test]
+async fn a_bridge_filler_is_logged_with_the_dialled_text_and_the_core_plays_no_holding_over_it() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "filler", "index": 0 }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    let last = shown.turns.last().unwrap();
+    assert_eq!(last.kind, jt_calls::TurnKind::Holding);
+    assert_eq!(last.text, "Bir saniye, hemen bakıyorum.");
+    r.timers(14).await;
+    assert!(r.poll(14).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_phrase_is_logged_with_the_text_dialled_even_after_the_owner_edits_the_policy() {
+    let dialled = jt_calls::BridgePhrases {
+        fillers: vec!["Hemen bakıyorum.".into()],
+        ..jt_calls::BridgePhrases::default()
+    };
+    let r = rig_with(
+        1,
+        CallPolicy {
+            phrases: dialled,
+            ..policy()
+        },
+    )
+    .await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    // The owner rewrites the fillers while the call is live.
+    let mut edited = policy();
+    edited.phrases.fillers = vec!["Biraz bekleyin.".into()];
+    calls::policy_set(&r.w.deps, &r.w.owner_ctx, PolicyInput::from(edited))
+        .await
+        .unwrap();
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "filler", "index": 0 }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    // The caller heard the dialled filler; the log says so.
+    assert_eq!(shown.turns.last().unwrap().text, "Hemen bakıyorum.");
+}
+
+#[tokio::test]
+async fn a_turns_trace_is_kept_and_summarised_in_the_call_view() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.report(
+        20,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "endpoint_by": "smart_turn", "stt_final_ms": 310, "delivered_ms": 340,
+            "say_ms": 4340, "first_audio_ms": 4760, "ack_ms": 620 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    assert_eq!(shown.call["metrics"]["traces"].as_array().unwrap().len(), 1);
+    assert_eq!(shown.call["latency"]["perceived"]["p50"], 620);
+    assert_eq!(shown.call["latency"]["content"]["p95"], 4760);
+    assert_eq!(
+        shown.call["latency"]["alerts"],
+        json!(["content_p95_over_3s"])
+    );
+    // No agent sentence was ever said, so nothing pairs.
+    assert_eq!(shown.call["latency"]["transport"]["n"], 0);
+}
+
+#[tokio::test]
+async fn the_transport_overhead_pairs_a_trace_with_its_reply_by_seq() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Perşembe uygun mu?").await;
+    r.say_at(12, call, "Uygun.").await;
+    let seq = r.shown(call).await.turns.last().unwrap().seq;
+    // The bridge's trace names the say it timed: 2.06 s from the answered POST to the say.
+    r.report(
+        14,
+        call,
+        json!([{ "kind": "trace", "trace": {
+            "endpoint_ms": 260, "stt_final_ms": 310, "delivered_ms": 340, "say_ms": 2400, "reply_seq": seq } }]),
+    )
+    .await;
+    // A last turn nobody answered: a trace with no reply, which pairs with nothing.
+    r.report(
+        16,
+        call,
+        json!([{ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300, "delivered_ms": 320 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    let latency = shown.call["metrics"]["agent_latency_ms"][0]
+        .as_u64()
+        .unwrap();
+    assert_eq!(shown.call["metrics"]["agent_replies"][0]["seq"], seq);
+    assert_eq!(shown.call["latency"]["turns"], 2);
+    assert_eq!(shown.call["latency"]["transport"]["n"], 1);
+    assert_eq!(shown.call["latency"]["transport"]["p95"], 2_060 - latency);
+}
+
+#[tokio::test]
+async fn a_calls_view_carries_neither_its_clock_nor_its_dialled_phrases() {
+    // The phrases are the reducer's source for the turn log (about ten sentences a call), not
+    // something `calls.get` or `calls.list` should repeat on every call.
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.report(
+        20,
+        call,
+        json!([{ "kind": "trace", "trace": { "endpoint_ms": 250, "stt_final_ms": 300, "ack_ms": 600 } }]),
+    )
+    .await;
+    let shown = r.shown(call).await;
+    for key in ["clock", "phrases"] {
+        assert!(shown.call.get(key).is_none(), "calls.get shows {key}");
+    }
+    let listed = calls::list(&r.w.deps, &r.agent_at(25), calls::ListQuery::default())
+        .await
+        .unwrap();
+    assert!(!listed.is_empty());
+    for item in &listed {
+        for key in ["clock", "phrases"] {
+            assert!(item.get(key).is_none(), "calls.list shows {key}");
+        }
+        // A list needs the summary, not a call's up to 200 traces; `calls.get` keeps them.
+        assert!(
+            item["metrics"].get("traces").is_none(),
+            "calls.list shows metrics.traces"
+        );
+        assert_eq!(item["latency"]["perceived"]["p50"], 600);
+    }
+}
+
+#[tokio::test]
+async fn say_with_wait_reply_returns_the_callers_next_words() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    r.utterance(10, call, "Merhaba?").await;
+    let deps = r.w.deps.clone();
+    let ctx = r.agent_at(11);
+    let speaking = tokio::spawn(async move {
+        say::say(
+            &deps,
+            &ctx,
+            call,
+            SayInput {
+                text: "Perşembe uygun mu?".into(),
+                expect_reply: true,
+                allow_barge_in: true,
+                wait_reply_s: Some(10),
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // The sentence was queued before the wait began.
+    assert_eq!(kinds(&r.poll(11).await), ["say"]);
+    // A phrase of the bridge is not the reply.
+    r.report(
+        12,
+        call,
+        json!([{ "kind": "phrase", "set": "acknowledgement", "index": 0 }]),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!speaking.is_finished());
+    r.utterance(13, call, "Evet, uygun.").await;
+    let out = speaking.await.unwrap().unwrap();
+    assert_eq!(out.timed_out, Some(false));
+    let events = out.events.unwrap();
+    assert_eq!(events.last().unwrap().text, "Evet, uygun.");
+    assert!(events.iter().all(|t| t.seq > out.seq));
+}
+
+#[tokio::test]
+async fn say_without_wait_reply_answers_at_once_as_before() {
+    let r = rig().await;
+    let call = r.place_at(0, plan()).await;
+    r.answer(call).await;
+    let out = r.say_at(10, call, "Merhaba.").await;
+    let shown = serde_json::to_value(&out).unwrap();
+    assert!(
+        shown.get("events").is_none() && shown.get("timed_out").is_none(),
+        "{shown}"
+    );
+}
+
+#[tokio::test]
+async fn a_plan_longer_than_the_policy_allows_is_dialled_with_the_policys_longest() {
+    // The bridge closes a call itself a minute past its plan's longest duration (D2): it must read
+    // the longest the core allows, not the plan's ask.
+    let r = rig_with(
+        1,
+        CallPolicy {
+            max_duration_s: 120,
+            ..policy()
+        },
+    )
+    .await;
+    let mut asks = plan();
+    asks.max_duration_s = 300;
+    let call = r.place_at(0, asks).await;
+    let dial = r.poll(1).await;
+    assert_eq!(dial[0].payload["plan"]["max_duration_s"], 120);
+    assert_eq!(r.shown(call).await.call["plan"]["max_duration_s"], 120);
 }

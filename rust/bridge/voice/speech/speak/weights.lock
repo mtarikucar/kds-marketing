@@ -1,0 +1,14 @@
+{
+  "files": {
+    "decoder.pt": {
+      "sha256": "9595819b173f411340f63d11332695121a97f8bf1f6d8b6fef0b21cf99c7ad67",
+      "size": 12103269
+    },
+    "ema.pt": {
+      "sha256": "95aec03dafbe0e1d69bca774ab597c779464729a14bc99bfcb52480090c7dfe6",
+      "size": 22285878
+    }
+  },
+  "note": "LFS sha256 of main at e7c96f2fc0ba843cd0f86e02786655bb56f50df8 (last modified 2026-10-21), read from the Hugging Face API on 2026-10-29; B2 Step 7 checks them against jeeta-ttstest:tmp, the image the owner's blind test ran on.",
+  "repo": "canberkkkkkk/ema-lightning"
+}

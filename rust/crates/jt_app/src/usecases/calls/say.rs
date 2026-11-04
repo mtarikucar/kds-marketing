@@ -1,14 +1,15 @@
 //! The agent's turns on its call (spec §7): `calls.say` queues a sentence for the voice bridge to
-//! speak, `calls.transfer` hands the caller over to a rep's extension and ends the agent's part.
-//! The sentence is the agent's own, played as it is: the server neither writes nor rewrites it.
+//! speak, and with `wait_reply_s` then waits for the caller's reply (say and listen merged);
+//! `calls.transfer` hands the caller over to a rep's extension and ends the agent's part. The
+//! sentence is the agent's own, played as it is: the server neither writes nor rewrites it.
 
-use jt_calls::{CallError, CallId, CallState};
+use jt_calls::{CallError, CallId, CallState, Turn, TurnKind};
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::session::Pending;
-use super::{CallOut, extension_is_valid, ledger, reveals, signal_key, view};
+use super::{CallOut, MAX_WAIT_S, extension_is_valid, ledger, reveals, signal_key, view};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::calls::MAX_CALL_PAGE;
@@ -16,7 +17,8 @@ use crate::usecases::{Deps, invalid};
 
 /// `calls.say`: the sentence (1 to 600 characters), whether the caller is expected to answer it
 /// (by default; without, the agent says it will go on and its silence is covered from the
-/// sentence's end), and whether the caller may cut it by speaking (by default).
+/// sentence's end), whether the caller may cut it by speaking (by default), and how long to wait
+/// for the caller's reply after queuing it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SayInput {
@@ -25,18 +27,40 @@ pub struct SayInput {
     pub expect_reply: bool,
     #[serde(default = "yes")]
     pub allow_barge_in: bool,
+    /// After queuing, wait up to this many seconds (at most 25) for the caller's reply and return
+    /// it; absent or 0: answer at once, as before.
+    #[serde(default)]
+    pub wait_reply_s: Option<u32>,
 }
 
 fn yes() -> bool {
     true
 }
 
-/// What a sentence queued answers: its turn's number and the call's state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// What a sentence queued answers: its turn's number and the call's state; with `wait_reply_s`,
+/// also the turns after the sentence and whether the whole wait passed without a reply.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SayOut {
     pub call_id: CallId,
     pub seq: u32,
     pub state: CallState,
+    /// With `wait_reply_s`: the turns after the sentence, up to the caller's reply.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<Turn>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out: Option<bool>,
+}
+
+/// Whether `turns` hold the caller's reply: words, a key, or the line reporting the caller's
+/// silence, a hang-up or a transfer (a phrase the bridge played is not a reply).
+fn holds_reply(turns: &[Turn]) -> bool {
+    turns.iter().any(|t| match &t.kind {
+        TurnKind::Utterance | TurnKind::Dtmf => true,
+        TurnKind::Event { name } => {
+            matches!(name.as_str(), "caller_silence" | "hangup" | "transferred")
+        }
+        _ => false,
+    })
 }
 
 /// `calls.transfer`: the rep's PBX extension (1 to 16 digits); the policy's `handoff_extension`
@@ -70,7 +94,9 @@ fn refused(e: CallError, state: CallState) -> AppError {
 /// command and the agent's turn, which records how long the agent took since the caller's words.
 /// Refused while the call is not live (`CONFLICT`, `details.reason = "not_live"`): before the
 /// answer and once it ended (the caller hung up, the script closed it). An unknown call is
-/// `NOT_FOUND`. Writes no ledger entry (spec §12: never per turn). Needs `calls.work`.
+/// `NOT_FOUND`. With `wait_reply_s` it then waits for the caller's reply, as `calls.listen` after
+/// the sentence's turn would (at most 25 s; a phrase the bridge played is not a reply), and returns
+/// it. Writes no ledger entry (spec §12: never per turn). Needs `calls.work`.
 pub async fn say(deps: &Deps, ctx: &Ctx, id: CallId, input: SayInput) -> Result<SayOut, AppError> {
     ctx.require(Permission::CallsWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
@@ -100,10 +126,24 @@ pub async fn say(deps: &Deps, ctx: &Ctx, id: CallId, input: SayInput) -> Result<
     r.calls().update(session, ctx.now).await?;
     r.commit().await?;
     deps.bridge_signals.notify(signal_key(ctx.workspace_id));
+    let Some(wait_s) = input.wait_reply_s.filter(|s| *s > 0) else {
+        return Ok(SayOut {
+            call_id: id,
+            seq,
+            state,
+            events: None,
+            timed_out: None,
+        });
+    };
+    let wait = std::time::Duration::from_secs(u64::from(wait_s.min(MAX_WAIT_S)));
+    let (state, events, timed_out) =
+        super::listen::wait_turns(deps, ctx, id, Some(seq), wait, holds_reply).await?;
     Ok(SayOut {
         call_id: id,
         seq,
         state,
+        events: Some(events),
+        timed_out: Some(timed_out),
     })
 }
 

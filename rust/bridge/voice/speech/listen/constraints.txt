@@ -1,0 +1,15 @@
+# pip freeze of requirements.txt resolved in python:3.12-slim-bookworm@sha256:e697c818... (the image's
+# base) on 2026-10-29, wheels only from PyPI (B3 bootstrap; plan Step 8 says how to redo it).
+flatbuffers==25.12.19
+iniconfig==2.3.1
+numpy==2.5.4
+onnxruntime==1.31.1
+packaging==26.3
+pluggy==1.7.0
+protobuf==7.36.2
+Pygments==2.21.0
+pytest==8.4.2
+sherpa-onnx-core==2.0.1
+sherpa_onnx==2.0.1
+soxr==1.1.0
+websockets==17.3

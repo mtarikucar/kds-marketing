@@ -112,7 +112,7 @@ async fn answered_call() -> (Rig, CallId) {
         estimated_minor_per_minute: 150,
         ..CallPolicy::default()
     };
-    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput(policy))
+    calls::policy_set(&w.deps, &w.owner_ctx, PolicyInput::from(policy))
         .await
         .unwrap();
     netgsm.push_click_to_call(Ok(SendReceipt {

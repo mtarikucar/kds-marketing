@@ -2033,12 +2033,34 @@
       "outcome": "Sonuç",
       "endTitle": "Görüşmeyi kapat",
       "end": "Sonucu kaydet",
-      "ended": "Görüşme kapatıldı."
+      "ended": "Görüşme kapatıldı.",
+      "latencyTitle": "Gecikme (p50 / p95)",
+      "latency_perceived": "İlk ses",
+      "latency_content": "Cevabın ilk sesi",
+      "latency_agent": "Ajanın cevap süresi",
+      "latency_barge_in_stop": "Söz kesmede susma",
+      "latencyValue": "{{p50}} / {{p95}} ms",
+      "alerts": {
+        "perceived_p95_over_1s": "İlk ses p95 1 saniyenin üstünde",
+        "content_p95_over_3s": "Cevap p95 3 saniyenin üstünde",
+        "barge_in_p95_over_300ms": "Söz kesmede susma p95 300 ms'nin üstünde"
+      }
     },
     "policy": {
       "title": "Arama politikası",
       "saved": "Arama politikası kaydedildi.",
       "holdingHint": "Her satır bir bekleme cümlesi (en çok 5).",
+      "openingHint": "Arama açılınca hemen çalınır; boş bırakılırsa çalınmaz.",
+      "closingHint": "Plan bir kapanış cümlesi getirmediğinde arama kapatılmadan önce çalınır; boş bırakılırsa her plan kendi kapanışını getirmek zorundadır.",
+      "phrasesHint": "Her satıra bir cümle (en çok 5). Köprü bunları ajan düşünürken kendi başına çalar.",
+      "phrases": {
+        "acknowledgements": "Onay sesleri (≈0,6 sn)",
+        "fillers": "Bekleme cümleleri (≈2,7 sn)",
+        "long_wait": "Uzun bekleme cümlesi (≈8 sn)",
+        "not_heard": "Duyulamadığında",
+        "still_there": "Karşı taraf sessiz kaldığında",
+        "fault": "Teknik sorun cümlesi"
+      },
       "fields": {
         "greeting_inbound": "Gelen arama karşılama cümlesi",
         "voicemail_text": "Sesli mesaj cümlesi",
@@ -2053,7 +2075,10 @@
         "caller_silence_s": "Karşı taraf sessizliği bildirimi (sn)",
         "caller_silence_close_s": "Karşı taraf sessizliğinde kapanış (sn)",
         "estimated_minor_per_minute": "Dakika başı tahmini ücret (kuruş)",
-        "handoff_extension": "Aktarma dahilisi"
+        "handoff_extension": "Aktarma dahilisi",
+        "opening_outbound": "Giden aramada işletmenin açılış cümlesi",
+        "transcript_notice": "Yazıya dökme bildirimi",
+        "closing": "Planda kapanış yoksa kapanış cümlesi"
       }
     }
   }

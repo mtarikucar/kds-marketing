@@ -110,7 +110,7 @@ pub async fn tick(deps: &Deps, ctx: &Ctx, id: CallId) -> Result<bool, AppError> 
         .find(session.capability_id)
         .await?
         .is_some_and(|c| effective_status(&c, now) == EffectiveStatus::Verified);
-    let policy = r.calls().policy().await?;
+    let policy = super::policy_of(r.as_mut()).await?;
     let action = if !online && session.state != CallState::Ending {
         TimerAction::Close(EndCause::BridgeOffline)
     } else {

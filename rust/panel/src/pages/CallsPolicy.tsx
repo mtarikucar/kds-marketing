@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { getCallPolicy, setCallPolicy, type CallPolicy } from '@/api/calls';
+import { getCallPolicy, setCallPolicy, type CallPhrases, type CallPolicy } from '@/api/calls';
 import { QueryState } from '@/components/QueryState';
 import { Button, Card, CardContent, CardHeader, CardTitle, Field, Input, Switch, Label, Textarea, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -27,29 +27,50 @@ const NUMBERS: NumberKey[] = [
   'caller_silence_close_s',
   'estimated_minor_per_minute',
 ];
+type OpeningKey = 'opening_outbound' | 'transcript_notice' | 'closing';
+const OPENINGS: OpeningKey[] = ['opening_outbound', 'transcript_notice', 'closing'];
+type PhraseKey = keyof CallPhrases;
+const PHRASE_SETS: PhraseKey[] = ['acknowledgements', 'fillers', 'long_wait', 'not_heard', 'still_there', 'fault'];
+/** One sentence per non-empty line, trimmed. */
+const lines = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+const joined = (p: CallPhrases) =>
+  Object.fromEntries(PHRASE_SETS.map((k) => [k, p[k].join('\n')])) as Record<PhraseKey, string>;
+/** The six lists of phrases from their textareas, one sentence per line. */
+const split = (texts: Record<PhraseKey, string>): CallPhrases => {
+  const phrases = {} as CallPhrases;
+  for (const k of PHRASE_SETS) phrases[k] = lines(texts[k]);
+  return phrases;
+};
 
 function PolicyForm({ stored }: { stored: CallPolicy }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [policy, setPolicy] = useState<CallPolicy>(stored);
   const [holding, setHolding] = useState(stored.holding_default.join('\n'));
+  const [phrases, setPhrases] = useState(joined(stored.phrases));
   useEffect(() => {
     setPolicy(stored);
     setHolding(stored.holding_default.join('\n'));
+    setPhrases(joined(stored.phrases));
   }, [stored]);
   const save = useMutation({
     mutationFn: () =>
       setCallPolicy({
         ...policy,
-        holding_default: holding
-          .split('\n')
-          .map((l) => l.trim())
-          .filter(Boolean),
+        holding_default: lines(holding),
+        phrases: split(phrases),
         handoff_extension: policy.handoff_extension?.trim() ? policy.handoff_extension.trim() : null,
       }),
-    onSuccess: async (saved) => {
+    onSuccess: async () => {
       toast.success(t('calls.policy.saved'));
-      queryClient.setQueryData(POLICY_KEY, saved);
+      // Read again: the save answers the stored policy, where a template the owner left unwritten
+      // is null or empty; the read shows it with the workspace's name, as the calls play it, and a
+      // text saved exactly as shown keeps following that name.
+      await queryClient.invalidateQueries({ queryKey: POLICY_KEY });
     },
     onError: (err) => toast.error(errorMessage(t, err)),
   });
@@ -71,6 +92,23 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       ))}
+      {OPENINGS.map((key) => (
+        <Field
+          key={key}
+          label={t(`calls.policy.fields.${key}`)}
+          hint={t(key === 'closing' ? 'calls.policy.closingHint' : 'calls.policy.openingHint')}
+        >
+          {(ids) => (
+            <Textarea
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              value={policy[key] ?? ''}
+              maxLength={600}
+              onChange={(e) => setPolicy({ ...policy, [key]: e.target.value })}
+            />
+          )}
+        </Field>
+      ))}
       <div className="flex items-center gap-3">
         <Switch
           id="calls-disclose"
@@ -86,6 +124,18 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           <Textarea id={ids.id} aria-describedby={ids.describedBy} value={holding} onChange={(e) => setHolding(e.target.value)} />
         )}
       </Field>
+      {PHRASE_SETS.map((key) => (
+        <Field key={key} label={t(`calls.policy.phrases.${key}`)} hint={t('calls.policy.phrasesHint')}>
+          {(ids) => (
+            <Textarea
+              id={ids.id}
+              aria-describedby={ids.describedBy}
+              value={phrases[key]}
+              onChange={(e) => setPhrases({ ...phrases, [key]: e.target.value })}
+            />
+          )}
+        </Field>
+      ))}
       <div className="grid gap-3 sm:grid-cols-2">
         {NUMBERS.map((key) => (
           <Field key={key} label={t(`calls.policy.fields.${key}`)}>
@@ -120,7 +170,10 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
   );
 }
 
-/** The call policy editor (calls.manage): sentences, timers, limits and the tariff estimate. */
+/**
+ * The call policy editor (calls.manage): sentences (an agent call's opening, notice and closing, and
+ * the phrases the voice bridge plays on its own), timers, limits and the tariff estimate.
+ */
 export function CallsPolicy() {
   const { t } = useTranslation();
   const policy = useQuery({ queryKey: POLICY_KEY, queryFn: getCallPolicy });
