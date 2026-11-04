@@ -39,8 +39,9 @@ const TABLES_AFTER_ALL: i64 = 77;
 /// `0024_whatsapp_erasure` and `0025_inbox_public_erasure`.
 const MIGRATIONS: i64 = 22;
 
-/// The migration versions. `0020` to `0022` belong to parallel branches (the prospect pool, the
-/// studio materials): each adds its version here when it merges.
+/// The migration versions. `0020` to `0022` and `0026` to `0028` belong to parallel branches (the
+/// prospect pool, its outreach, distribution and mail files, the studio materials): each adds its
+/// version here when it merges.
 fn versions() -> Vec<i64> {
     (1..=19).chain([23, 24, 25]).collect()
 }
@@ -1534,5 +1535,46 @@ async fn inbox_public_erasure_joins_both_additions_and_repeats() {
     for _ in 0..2 {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
         assert_eq!(mask().await, joined);
+    }
+}
+
+/// `0025_inbox_public_erasure`'s down is refused, changing nothing, once a comment or a question
+/// is stored: the older functions it would put back could not find its author.
+#[tokio::test]
+async fn inbox_public_erasure_down_refuses_stored_public_items() {
+    for kind in ["comment", "question"] {
+        let db = TestDb::new().await;
+        let down =
+            std::fs::read_to_string(migrations_dir().join("0025_inbox_public_erasure.down.sql"))
+                .unwrap();
+        let (ws, _) = db.seed_workspace("public-event").await;
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        sqlx::query(
+            "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)              values($1,$2,'meta','public-event',$3,$4,now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(ws.as_uuid())
+        .bind(kind)
+        .bind(serde_json::json!({"public": {"kind": kind, "author": {"id": "5150"}}}))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("inbox public erasure rollback refused"),
+            "{refused}"
+        );
+        // Nothing changed: the joined mask still blanks a public item's author.
+        let masked: serde_json::Value =
+            sqlx::query_scalar("select inbox_mask_personal('{\"author\":{\"id\":\"5150\"}}')")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(masked, serde_json::json!({"author": ""}), "{kind}");
     }
 }

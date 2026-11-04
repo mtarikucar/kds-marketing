@@ -1,5 +1,19 @@
--- Reverts 0025_inbox_public_erasure: puts back 0024_whatsapp_erasure's erasure functions, the
--- definitions in force before this migration on a database that ran 0019 first. Repeatable.
+-- Reverts 0025_inbox_public_erasure: puts back 0024_whatsapp_erasure's erasure functions, which
+-- cannot find a person in a comment's or a question's envelope (its author). Once such an event
+-- is stored (inbound events are never deleted), erasing its author after the rollback would leave
+-- them in it: the rollback is then refused, before anything changes, and this migration stays.
+-- The table is locked while it is checked. Repeatable.
+do $$ declare previous text; has_rows boolean; begin
+    previous := current_setting('app.platform', true);
+    perform set_config('app.platform', 'on', true);
+    lock table inbound_events in share row exclusive mode;
+    select exists(select 1 from inbound_events where kind in ('comment', 'question'))
+        into has_rows;
+    if has_rows then
+        raise exception 'inbox public erasure rollback refused: inbound_events holds comments or questions that the older erasure functions cannot find a person in';
+    end if;
+    perform set_config('app.platform', coalesce(previous, ''), true);
+end $$;
 create or replace function inbox_mask_personal(v jsonb) returns jsonb language plpgsql immutable as $$
 declare result jsonb; k text; item jsonb;
 begin

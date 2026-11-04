@@ -1,13 +1,14 @@
 -- Comments and marketplace questions beside the WhatsApp Business app: 0019_inbox_public and
 -- 0024_whatsapp_erasure each replaced 0008's erasure functions with additions of their own,
--- written on parallel branches, so whichever ran last took the other's away (in version order
--- 0024 runs after 0019 and drops 0019's additions). This puts both sets of
--- additions in one definition: `inbox_mask_personal` also masks a public item envelope's
--- `author` and `provider_item`, the providers' `username`, `userName`, `customerName`, a
--- string-valued `message`, and the app's `thread`, `phone_number`, `full_name`, `first_name`;
--- `inbox_event_person` also matches a public item's author in its surface's namespace and the
--- app's history, echoes and contacts (`jt_app::usecases::inbox::erasure` holds the same paths
--- and keys). No new table; repeatable.
+-- written on parallel branches, so whichever ran last took the other's away. A fresh database
+-- runs them in version order (0024 after 0019, dropping 0019's additions); production ran 0024
+-- first, before 0019 was merged, so there 0019 runs after it and drops 0024's. This migration
+-- runs after both either way and puts both sets of additions in one definition:
+-- `inbox_mask_personal` also masks a public item envelope's `author` and `provider_item`, the
+-- providers' `username`, `userName`, `customerName`, a string-valued `message`, and the app's
+-- `thread`, `phone_number`, `full_name`, `first_name`; `inbox_event_person` also matches a public
+-- item's author in its surface's namespace and the app's history, echoes and contacts
+-- (`jt_app::usecases::inbox::erasure` holds the same paths and keys). No new table; repeatable.
 create or replace function inbox_mask_personal(v jsonb) returns jsonb language plpgsql immutable as $$
 declare result jsonb; k text; item jsonb;
 begin
