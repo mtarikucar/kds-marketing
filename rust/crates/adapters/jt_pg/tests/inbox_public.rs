@@ -58,6 +58,12 @@ async fn outbox_row_of_a_message() {
 }
 
 #[tokio::test]
+async fn outbox_rebinds_its_generation() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::outbox_rebinds_its_generation(uow(&db)).await;
+}
+
+#[tokio::test]
 async fn erasure_refuses_held_replies() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::erasure_refuses_held_replies(uow(&db)).await;

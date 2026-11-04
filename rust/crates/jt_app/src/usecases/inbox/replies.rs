@@ -1537,7 +1537,9 @@ pub(super) async fn approve_in(
             c: &c,
             j: j.as_ref(),
             cap: &cap,
-            generation: row.expected_generation,
+            // The approver decides for the conversation as it now is: a hand-over since the
+            // draft (a take-over, the response SLA) does not strand it (spec D22).
+            generation: c.executor_generation,
             author,
             intent: serde_json::from_value(row.intent["kind"].clone())?,
             text: &text,
@@ -1585,6 +1587,12 @@ pub(super) async fn approve_in(
         .await?;
     row.state = "queued".into();
     row.updated_at = ctx.now;
+    if row.expected_generation != c.executor_generation {
+        r.outbox()
+            .set_expected_generation(row.id, c.executor_generation)
+            .await?;
+        row.expected_generation = c.executor_generation;
+    }
     r.outbox().update(row.clone()).await?;
     record(
         r,

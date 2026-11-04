@@ -1507,8 +1507,15 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
             r.people().set_write_time(now).await?;
             let policy = r.workspace_policy().get().await?.inbox;
             let mut changed = 0;
+            // The items whose answer waits for a human's approval: not the agent's to answer.
+            let mut held = std::collections::BTreeSet::new();
             if job == Job::ResponseSla {
                 changed += expire_public_items(r.as_mut(), &ctx, now).await?;
+                for row in super::inbox::context::held_replies(r.as_mut(), now).await? {
+                    if let Some(item) = row.intent["public"]["item_id"].as_str() {
+                        held.insert(item.to_owned());
+                    }
+                }
             }
             for c in super::inbox::context::all_conversations(r.as_mut()).await? {
                 if job == Job::SnoozeWake {
@@ -1533,7 +1540,10 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     let mut due = None;
                     if jt_inbox::public_channel_for_kind(&c.kind_key).is_some() {
                         let items = r.public_items().for_conversation(c.id).await?;
-                        let owed: Vec<_> = items.iter().filter(|i| i.awaiting()).collect();
+                        let owed: Vec<_> = items
+                            .iter()
+                            .filter(|i| i.awaiting() && !held.contains(&i.id.to_string()))
+                            .collect();
                         // From when each was taken in (spec D23), not when it was written.
                         let Some(oldest) = owed
                             .iter()

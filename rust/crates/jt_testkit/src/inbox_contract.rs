@@ -1727,6 +1727,47 @@ pub async fn outbox_row_of_a_message(uow: Arc<dyn UnitOfWork>) {
     );
     assert!(
         t.outbox()
+/// A held row is bound to a new executor generation (an approval after the conversation changed
+/// hands), and nothing else of it changes; an unknown row is `NOT_FOUND`, as in another workspace.
+pub async fn outbox_rebinds_its_generation(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let agent = json!({"kind": "agent", "connection_id": Uuid::now_v7(), "user_id": f.user});
+    let (row, _) = f
+        .public_outbox_for(&c, PublicItemId::new_v7(), "held", "public", &agent, 0)
+        .await;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let before = t.outbox().get(row).await.unwrap().unwrap();
+    t.outbox().set_expected_generation(row, 3).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let after = t.outbox().get(row).await.unwrap().unwrap();
+    assert_eq!(after.expected_generation, 3);
+    assert_eq!(
+        OutboxRow {
+            expected_generation: before.expected_generation,
+            ..after
+        },
+        before
+    );
+    let e = t
+        .outbox()
+        .set_expected_generation(Uuid::now_v7(), 1)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    drop(t);
+    let mut other = uow.tenant(f.other).await.unwrap();
+    let e = other
+        .outbox()
+        .set_expected_generation(row, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+}
+
             .for_message(MessageId::new_v7())
             .await
             .unwrap()

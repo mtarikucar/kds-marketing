@@ -1760,6 +1760,29 @@ impl OutboxRepo for MemTenant {
     }
     async fn failure_reasons(
         &mut self,
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            found(
+                t.state()
+                    .inbox
+                    .outbox
+                    .iter()
+                    .any(|r| r.workspace_id == ws && r.id == id),
+            )?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .outbox
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.expected_generation = generation;
+                }
+            });
+            Ok(())
+        })
+    }
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError> {
         Ok(self

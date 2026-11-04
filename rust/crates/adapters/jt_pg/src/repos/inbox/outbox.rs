@@ -65,6 +65,17 @@ impl OutboxRepo for PgTenantRepos {
         changed(sqlx::query("update outbox set state=$3,attempts=$4,last_error=$5,fence_snapshot=$6,updated_at=$7 where workspace_id=$1 and id=$2")
             .bind(ws.as_uuid()).bind(row.id).bind(row.state).bind(i64::from(row.attempts)).bind(row.last_error).bind(row.fence_snapshot).bind(row.updated_at).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"save outbound result"))?)
     }
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError> {
+        changed(
+            sqlx::query("update outbox set expected_generation=$3 where workspace_id=$1 and id=$2")
+                .bind(self.workspace_id().as_uuid())
+                .bind(id)
+                .bind(i64::from(generation))
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "rebind outbound generation"))?,
+        )
+    }
     async fn failure_reasons(
         &mut self,
         messages: &[MessageId],

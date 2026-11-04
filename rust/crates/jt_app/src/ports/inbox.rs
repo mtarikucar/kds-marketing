@@ -528,6 +528,10 @@ pub trait OutboxRepo: Send + Sync {
     /// The recorded `last_error` of the failed or uncertain outbound intents of `messages`
     /// (state `failed` or `unknown`), one per message that has one, in no particular order.
     async fn failure_reasons(
+    /// Binds row `id` to executor generation `generation`: a held reply approved after its
+    /// conversation changed hands is fenced, and sent, for the conversation as it now is. Nothing
+    /// else of the row changes; `NOT_FOUND` when the workspace holds no such row.
+    async fn set_expected_generation(&mut self, id: Uuid, generation: u32) -> Result<(), AppError>;
         &mut self,
         messages: &[MessageId],
     ) -> Result<Vec<(MessageId, String)>, AppError>;

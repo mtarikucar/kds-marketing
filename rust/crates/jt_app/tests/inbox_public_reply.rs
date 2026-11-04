@@ -13,7 +13,7 @@ use jt_app::ports::connectors::{
     EnvelopeAuthor, EnvelopeStatus, EnvelopeSubject, PUBLIC_ITEM_GONE, PrivateReceipt,
     PublicEnvelope, SendReceipt,
 };
-use jt_app::usecases::inbox::{consumer, merge, public, replies};
+use jt_app::usecases::inbox::{consumer, conversations, merge, public, replies};
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{ConnectorError, Credential, EventKind, InboundEvent, InboundEventId, Provider};
 use jt_inbox::*;
@@ -1586,4 +1586,55 @@ async fn a_refused_approval_keeps_the_draft_unless_the_item_changed() {
         "sent"
     );
     let _ = c1;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Held replies across a change of hands, and private replies (review of ee65aef4..fcc09e1e)
+// ---------------------------------------------------------------------------------------------
+
+fn generation(r: &Rig, id: ConversationId) -> u32 {
+    r.w.uow
+        .snapshot()
+        .inbox
+        .conversations
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap()
+        .executor_generation
+}
+
+#[tokio::test]
+async fn a_held_reply_survives_a_change_of_hands() {
+    for hand_back in [false, true] {
+        let r = rig().await;
+        let (c1, out, _) = held(&r, "Merhaba").await;
+        let row = outbox(&r, out.message_id);
+        // A human takes the conversation over (as the response SLA does) while the draft waits,
+        // and may hand it back to the agent.
+        conversations::take_over(&r.w.deps, &r.w.owner_ctx, c1.conversation_id)
+            .await
+            .unwrap();
+        if hand_back {
+            conversations::hand_to_agent(&r.w.deps, &r.w.owner_ctx, c1.conversation_id)
+                .await
+                .unwrap();
+        }
+        assert_ne!(row.expected_generation, generation(&r, c1.conversation_id));
+        // The approver decides for the conversation as it now is.
+        r.meta.push_reply_public(accepted("r1"));
+        let approved = public::approve(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            row.id,
+            public::ApproveInput::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(approved.state, "sent", "hand back: {hand_back}");
+        assert_eq!(
+            outbox(&r, out.message_id).expected_generation,
+            generation(&r, c1.conversation_id)
+        );
+        assert_eq!(sends(&r.meta).len(), 1);
+    }
 }

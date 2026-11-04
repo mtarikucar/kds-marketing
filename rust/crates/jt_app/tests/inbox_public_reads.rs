@@ -870,3 +870,30 @@ async fn sla_clock_starts_when_the_item_is_taken_in() {
         1
     );
 }
+
+#[tokio::test]
+async fn sla_leaves_an_item_whose_answer_waits_for_approval() {
+    let r = rig().await;
+    require_approval(&r, r.store.id);
+    // Overdue and due within two hours, but the agent's answer only waits for a human now.
+    let two_hours_ago = FIXED_NOW - Duration::hours(2);
+    let mut old = question("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(90)));
+    old.created_at = two_hours_ago;
+    let q = take_at(&r, &r.store, old, two_hours_ago).await;
+    let agent = r.w.agent(&["inbox.work"]).await;
+    let held = replies::reply(
+        &r.w.deps,
+        &agent,
+        q.conversation_id,
+        reply_to(&q, "Evet, S bedeni stokta var."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(held.state, "held");
+    assert_eq!(
+        jobs::run_response_sla(&r.w.deps, FIXED_NOW).await.changed,
+        0
+    );
+    assert_eq!(executor(&r, q.conversation_id), Executor::Agent);
+    assert!(r.w.entries("inbox.public.deadline_handover").is_empty());
+}
