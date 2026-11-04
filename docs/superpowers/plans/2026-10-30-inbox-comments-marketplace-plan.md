@@ -291,6 +291,13 @@ impl PublicEnvelope {
 // humans only, whoever holds the conversation); WorkKind::{AnswerDeadline, ApproveReply,
 // EnableComments}; public::{DEADLINE_HANDOVER, relay_of}; held rows are read with
 // OutboxRepo::list_pending("held", ..). The relay part of the context is A1's.
+// Review of F7-F9 (spec D22-D25): OutboxRepo::set_expected_generation(id, generation) (an
+// approval binds the conversation's current generation); MessageRepo::echo_candidates gains
+// `uncertain: bool` (public own comments pass true; DMs false); PublicItem.taken_at:
+// Option<OffsetDateTime> (0019 column; the SLA clock); PublicItemRepo::due_before takes owed
+// items only (awaiting, rejected), never one in review; ITEM_STATE_REFUSALS adds
+// private_window_closed and private_reply_used; the erasure join, migration 0025, has a down
+// that refuses once a comment or question is stored.
 // As built in F9: erasure::event_identities also yields the envelope author (public/author/id,
 // or the item's one-off key when unnamed) in its surface's namespace; mask_personal also masks
 // author, provider_item, username, userName, customerName and a string message (as 0019's SQL).
@@ -329,8 +336,9 @@ impl PublicEnvelope {
 // outside 1..=512, is INTERNAL (0019's composite foreign keys and checks; the fake mirrors them, and a
 // subject's title/url/image_url/facts bounds too); update writes message_id, subject_id, deadline,
 // private_reply_until, answer, moderation, private_reply_message_id, agent_answers, checked_at,
-// updated_at (never the conversation, which merges move, nor live); due_before/to_reconcile take answers
-// awaiting|rejected|pending (callers keep awaiting() ones); mark_checked leaves updated_at (the
+// updated_at (never the conversation, which merges move, nor live, nor taken_at); due_before takes
+// answers awaiting|rejected (review of F7-F9), to_reconcile awaiting|rejected|pending (callers keep
+// awaiting() ones); mark_checked leaves updated_at (the
 // compare-and-swap version); item_for_message finds an item by its inbound message; subject upsert keeps
 // id, first_seen_at and a publication_id the write leaves None; a cursor is a JSON object (INTERNAL else).
 // A held outbox row is refused like a queued one at merge (conversation_merged) and erasure.
