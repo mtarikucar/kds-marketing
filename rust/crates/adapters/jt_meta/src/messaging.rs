@@ -15,8 +15,9 @@ use crate::graph::{missing, node, text};
 
 /// The longest WhatsApp text body, in characters.
 const MAX_WHATSAPP_TEXT: usize = 4096;
-/// The longest Messenger text, in characters.
-const MAX_MESSENGER_TEXT: usize = 2000;
+/// The longest Messenger text, in characters (a Facebook private reply's bound too:
+/// `jt_inbox::public::FACEBOOK_PRIVATE_MAX`, pinned equal by a test).
+pub const MAX_MESSENGER_TEXT: usize = 2000;
 
 /// Sends `text` to `recipient` (see the module docs), by the capability's kind: `whatsapp_cloud`
 /// through its number (a WhatsApp credential), `messenger`, `instagram_dm` and `facebook_page`

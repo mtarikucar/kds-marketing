@@ -111,6 +111,20 @@ pub(crate) fn kind_of(public: &Value) -> Result<&str, ConnectorError> {
         .ok_or_else(|| ConnectorError::permanent(KIND_MISSING))
 }
 
+/// The scopes of the grant behind `cred`: a Facebook or Instagram Login token's own; a Page
+/// token's, those the use cases recorded with it (`public["access"]["scopes"]`, written anew with
+/// every credential sealed). A pasted token's grant is not known: none. An earlier connection's
+/// scopes kept in `public["asset"]` outlive the token they came with, so they are not its grant.
+pub(crate) fn granted_scopes<'a>(cred: &'a Credential, public: &'a Value) -> Vec<&'a str> {
+    match cred {
+        Credential::OAuth { scopes, .. } => scopes.iter().map(String::as_str).collect(),
+        _ => public["access"]["scopes"]
+            .as_array()
+            .map(|scopes| scopes.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default(),
+    }
+}
+
 /// The capability's account, as the use cases hand it in `public["external_id"]`.
 pub(crate) fn account_of(public: &Value) -> Option<&str> {
     public["external_id"]

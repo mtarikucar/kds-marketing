@@ -1671,6 +1671,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_outbound",
  "jt_testkit",
  "serde_json",

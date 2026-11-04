@@ -4,7 +4,8 @@
 //!
 //! [`MetaConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`], [`InsightsReader`], [`MessagingSender`],
-//! [`LeadGenFetcher`], [`AdBudgetWriter`]); [`webhook`] parses Meta's webhook bodies, purely.
+//! [`LeadGenFetcher`], [`AdBudgetWriter`], and for comments [`PublicSurface`]); [`webhook`] parses
+//! Meta's webhook bodies, purely.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("meta")`, so it can
@@ -63,11 +64,13 @@
 //! [`MessagingSender`]: jt_app::ports::connectors::MessagingSender
 //! [`LeadGenFetcher`]: jt_app::ports::connectors::LeadGenFetcher
 //! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
+//! [`PublicSurface`]: jt_app::ports::connectors::PublicSurface
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
 mod ads;
 mod assets;
+mod comments;
 mod credential;
 mod graph;
 mod insights;
@@ -88,6 +91,7 @@ use jt_outbound::Egress;
 use url::Url;
 
 pub use graph::DEFAULT_GRAPH_VERSION;
+pub use messaging::MAX_MESSENGER_TEXT;
 pub use oauth::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS};
 pub use webhook::{
     InboundEventDraft, Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body,

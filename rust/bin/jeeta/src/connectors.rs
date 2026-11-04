@@ -26,7 +26,7 @@ use std::sync::Arc;
 use jt_app::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
     LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider, PlatformAppConfig,
-    Publisher, SmsSender, Telephony,
+    PublicSurface, Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
@@ -161,6 +161,10 @@ impl ConnectorRegistry for ProviderRegistry {
     fn delivery_reports(&self, provider: Provider) -> Option<Arc<dyn DeliveryReports>> {
         (provider == Provider::Netgsm).then(|| self.netgsm.clone() as Arc<dyn DeliveryReports>)
     }
+
+    fn public(&self, provider: Provider) -> Option<Arc<dyn PublicSurface>> {
+        (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn PublicSurface>)
+    }
 }
 
 #[cfg(test)]
@@ -195,8 +199,8 @@ mod tests {
                 "delivery_reports",
                 registry.delivery_reports(provider).is_some(),
             ),
-            // Replies on public items and their polls: no adapter offers them yet (tasks M2,
-            // M4, T2 and H1 of plan 2026-10-30-inbox-comments-marketplace-plan.md).
+            // Replies on public items (Meta's, task M2) and their polls (tasks M4, T2 and H1 of
+            // plan 2026-10-30-inbox-comments-marketplace-plan.md).
             ("public", registry.public(provider).is_some()),
             ("public_poller", registry.public_poller(provider).is_some()),
         ]
@@ -228,6 +232,7 @@ mod tests {
                     "messaging",
                     "ads",
                     "leadgen",
+                    "public",
                 ],
             ),
             (

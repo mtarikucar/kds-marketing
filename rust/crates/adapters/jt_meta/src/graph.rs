@@ -423,6 +423,25 @@ impl MetaConnector {
             .await
     }
 
+    /// [`MetaConnector::instagram_post`] for a write Meta takes once only (see
+    /// [`MetaConnector::graph_post_once`]).
+    pub(crate) async fn instagram_post_once(
+        &self,
+        token: &str,
+        segments: &[&str],
+        body: Value,
+    ) -> Result<Value, ConnectorError> {
+        let url = self.instagram_url(segments, &[]);
+        self.send(
+            Method::POST,
+            url,
+            Auth::Bearer(token),
+            Body::Json(body),
+            true,
+        )
+        .await
+    }
+
     /// Sends one call and reads its answer: the parsed JSON of a success, else the error it maps
     /// to. With a token, the token goes in the `Authorization` header and any `access_token` in
     /// `url` is taken out; on the Graph API `appsecret_proof` is set too (replacing one already
