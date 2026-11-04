@@ -306,8 +306,8 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         }
     }
     // A material's file is the owner's library, not a publication's leftover (spec 2026-11-03
-    // D14): kept while the material lives; an erased material's file goes as soon as no queued or
-    // uncertain publication still needs it.
+    // D14): kept while the material lives; an erased (or deleted) material's file goes as soon as no
+    // queued, sending or uncertain publication still needs it, after this transaction (D43).
     let mut materials = r.studio_materials().list_materials().await?;
     // Retention (spec D16, §9.3): a material that shows people is erased 24 months after its
     // olay's last day (a genel one after it was added); its file goes below, as any erased one's.
@@ -344,6 +344,10 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             *m = erased;
         }
     }
+    // An erased material's file: its bytes go once this transaction is committed (D43), so a
+    // crash before leaves an erased material whose file the next run deletes, never a live one
+    // without bytes.
+    let mut after_commit = Vec::new();
     for mut f in usage.files {
         if f.deleted_at.is_some() {
             continue;
@@ -391,11 +395,35 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         // (`materials::publish_check`): only an attempt in flight still needs its bytes.
         let waits = unknown || (pending && erased.is_none());
         if !waits && f.cleanup_due_at.is_some_and(|at| now >= at) {
-            d.files.delete(ws, f.id).await?;
-            f.deleted_at = Some(now);
-            count += 1;
+            if erased.is_some() {
+                after_commit.push(f.id);
+            } else {
+                d.files.delete(ws, f.id).await?;
+                f.deleted_at = Some(now);
+                count += 1;
+            }
         }
         r.studio().save_file(f).await?;
+    }
+    r.commit().await?;
+    if after_commit.is_empty() {
+        return Ok(count);
+    }
+    for id in &after_commit {
+        d.files.delete(ws, *id).await?;
+    }
+    // Marked deleted once their bytes are gone; a crash between leaves them to the next run, whose
+    // delete finds nothing to remove.
+    let mut r = d.uow.tenant(ws).await?;
+    r.studio_control().lock_control().await?;
+    for id in after_commit {
+        if let Some(mut f) = r.studio().get_file(id).await?
+            && f.deleted_at.is_none()
+        {
+            f.deleted_at = Some(now);
+            r.studio().save_file(f).await?;
+            count += 1;
+        }
     }
     r.commit().await?;
     Ok(count)

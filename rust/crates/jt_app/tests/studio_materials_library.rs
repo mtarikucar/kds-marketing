@@ -1138,6 +1138,9 @@ async fn the_panels_decisions_are_an_owners_or_a_managers_in_person() {
         (gone.file_id, gone.origin.clone(), gone.binding),
         (file, Origin::Real, Binding::Genel)
     );
+    // Its bytes go at the next cleanup (D43).
+    assert!(w.d.files.read(w.f.ws, file).await.is_ok());
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
     assert!(w.d.files.read(w.f.ws, file).await.is_err());
     let e = library::material_tag(
         &w.d,
@@ -1597,6 +1600,187 @@ async fn a_persons_erasure_redacts_their_materials_and_unlinks_their_olays() {
         .await
         .unwrap();
     assert_eq!(w.uow.snapshot().ledger.len(), before);
+}
+
+/// The stored record of file `id`.
+fn file_record(w: &World, id: FileId) -> jt_app::ports::files::StoredFile {
+    w.uow
+        .snapshot()
+        .studio
+        .files
+        .into_iter()
+        .find(|f| f.id == id)
+        .unwrap()
+}
+
+/// Deleting a material redacts it at once; its bytes go at the next cleanup, once no publish
+/// attempt in flight shows it (spec D43): a provider may still be reading them.
+#[tokio::test]
+async fn a_deleted_materials_bytes_wait_for_the_attempt_in_flight() {
+    use jt_app::ports::{connectors::PublishReceipt, studio::PublishOutcome};
+    let (w, _) = publishing_world().await;
+    let o = olay(&w, &w.ctx, "olay", json!({})).await;
+    let file = upload(&w, "photo", "image/png", &png(1)).await;
+    let m = add(
+        &w,
+        &w.ctx,
+        "photo",
+        file,
+        json!({"olay_id":o.id,"share":"shareable","quality":"publishable"}),
+    )
+    .await;
+    // The fixture slot's piece shows it, and an attempt to publish that piece is sending.
+    let mut p = w.f.piece.clone();
+    p.id = PieceId::new_v7();
+    p.revision = 2;
+    p.media = vec![MediaAsset::File { id: file }];
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .save_piece(w.f.slot.id, 1, p, "piece")
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let attempt = r
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .unwrap();
+    r.commit().await.unwrap();
+    library::material_delete(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":m.id,"expected_revision":1,"confirm":true})),
+    )
+    .await
+    .unwrap();
+    assert!(w.d.files.read(w.f.ws, file).await.is_ok());
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
+    assert!(w.d.files.read(w.f.ws, file).await.is_ok());
+    assert!(file_record(&w, file).deleted_at.is_none());
+    // Once the attempt has finished, the next cleanup deletes them.
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .finish_publication(
+            attempt.id(),
+            PublishOutcome::Succeeded(PublishReceipt {
+                external_id: "post".into(),
+                url: None,
+            }),
+            FIXED_NOW,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
+    assert!(w.d.files.read(w.f.ws, file).await.is_err());
+    assert!(file_record(&w, file).deleted_at.is_some());
+}
+
+/// A file store whose deletes see what is committed: one of a material that is live there counts
+/// as early, and the first delete fails as a crash would, removing nothing.
+struct Committed {
+    inner: Arc<dyn jt_app::ports::files::FileStore>,
+    uow: jt_testkit::fakes::InMemoryUow,
+    early: Arc<std::sync::atomic::AtomicBool>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl jt_app::ports::files::FileStore for Committed {
+    async fn probe(&self) -> Result<(), AppError> {
+        self.inner.probe().await
+    }
+    async fn put(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+        id: FileId,
+        u: MediaUpload,
+    ) -> Result<jt_app::ports::files::StoredFile, AppError> {
+        self.inner.put(ws, id, u).await
+    }
+    async fn read(&self, ws: jt_tenancy::WorkspaceId, id: FileId) -> Result<MediaUpload, AppError> {
+        self.inner.read(ws, id).await
+    }
+    async fn provider_url(
+        &self,
+        ws: jt_tenancy::WorkspaceId,
+        id: FileId,
+        expires_at: OffsetDateTime,
+    ) -> Result<url::Url, AppError> {
+        self.inner.provider_url(ws, id, expires_at).await
+    }
+    async fn delete(&self, ws: jt_tenancy::WorkspaceId, id: FileId) -> Result<(), AppError> {
+        let live = self
+            .uow
+            .snapshot()
+            .materials
+            .materials
+            .iter()
+            .any(|m| m.file_id == id && m.erased_at.is_none());
+        if live {
+            self.early.store(true, SeqCst);
+        }
+        if self.fail.swap(false, SeqCst) {
+            return Err(AppError::internal("simulated crash"));
+        }
+        self.inner.delete(ws, id).await
+    }
+}
+
+/// The retention rule's erasure is committed before its file's bytes go (spec D43): a crash in
+/// between leaves an erased material whose file the next run deletes, never a live material
+/// without bytes.
+#[tokio::test]
+async fn retention_deletes_the_bytes_only_once_the_erasure_is_committed() {
+    let (mut w, _) = publishing_world().await;
+    let o = olay(
+        &w,
+        &w.ctx,
+        "olay",
+        json!({"starts_on":"2026-10-20","ends_on":"2026-10-22"}),
+    )
+    .await;
+    let file = upload(&w, "face", "image/png", &png(1)).await;
+    let face = add(
+        &w,
+        &w.ctx,
+        "face",
+        file,
+        json!({"olay_id":o.id,"share":"shareable","depicts":["face"]}),
+    )
+    .await;
+    w.d.clock = Arc::new(FixedClock(datetime!(2028-10-23 12:00 UTC)));
+    let early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    w.d.files = Arc::new(Committed {
+        inner: w.d.files.clone(),
+        uow: w.uow.clone(),
+        early: early.clone(),
+        fail: std::sync::atomic::AtomicBool::new(true),
+    });
+    assert!(files::cleanup_files(&w.d, w.f.ws).await.is_err());
+    let erased = |w: &World| {
+        w.uow
+            .snapshot()
+            .materials
+            .materials
+            .into_iter()
+            .find(|m| m.id == face.id)
+            .unwrap()
+            .erased_at
+    };
+    assert!(erased(&w).is_some(), "the erasure was committed first");
+    assert!(file_record(&w, file).deleted_at.is_none());
+    assert!(w.d.files.read(w.f.ws, file).await.is_ok());
+    // The next run deletes the erased material's file.
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
+    assert!(w.d.files.read(w.f.ws, file).await.is_err());
+    assert!(file_record(&w, file).deleted_at.is_some());
+    assert!(
+        !early.load(SeqCst),
+        "no bytes went while their material was live"
+    );
 }
 
 #[tokio::test]

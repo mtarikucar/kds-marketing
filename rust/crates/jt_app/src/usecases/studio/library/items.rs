@@ -817,9 +817,10 @@ pub async fn material_bind(
 }
 
 /// An owner or manager deletes a material (`confirm: true`): it is redacted, keeping its id, file
-/// id, origin and binding for what it was used in (spec §9.3), and its bytes are deleted once the
-/// redaction is committed (best effort; `StudioFilesCleanup` finishes what fails). Posts already
-/// published stay on their provider: `studio.material_get` names them.
+/// id, origin and binding for what it was used in (spec §9.3). Its bytes go at the next
+/// `StudioFilesCleanup` run once no publish attempt in flight (queued, sending, unknown) shows it
+/// (D43): a provider may still be reading them. Posts already published stay on their provider:
+/// `studio.material_get` names them.
 pub async fn material_delete(
     d: &Deps,
     ctx: &Ctx,
@@ -850,7 +851,6 @@ pub async fn material_delete(
         r.commit().await?;
         m
     };
-    let _ = d.files.delete(ctx.workspace_id, m.file_id).await;
     Ok(m)
 }
 
