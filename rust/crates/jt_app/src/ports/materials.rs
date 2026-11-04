@@ -60,8 +60,8 @@ pub trait MaterialRepo: Send + Sync {
     /// olays (`NOT_FOUND`).
     async fn insert_material(&mut self, material: Material) -> Result<(), AppError>;
     /// Replaces the material stored at `expected_revision` (`CONFLICT` otherwise) by `material`,
-    /// whose revision is one more. Its file, origin and generator never change (`INTERNAL`, as
-    /// the table's trigger answers).
+    /// whose revision is one more. Its file, origin and generator never change, and an erased
+    /// material never changes again (`INTERNAL`, as the table's trigger answers; spec D44).
     async fn update_material(
         &mut self,
         material: Material,

@@ -1,8 +1,9 @@
 //! The in-memory materials library, with the constraints migration `0021_studio_materials`
 //! enforces: one olay or material per id and one material per file across workspaces, a
 //! material's file a Studio file and its olay an olay of the same workspace, a material's file,
-//! origin and generator never changing, revision-checked replacements, piece uses recorded once
-//! and never changed, one shoot request per key, and one calendar row per key and year.
+//! origin and generator never changing, an erased material never changing again, revision-checked
+//! replacements, piece uses recorded once and never changed, one shoot request per key, and one
+//! calendar row per key and year.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -168,6 +169,11 @@ impl MaterialRepo for MemTenant {
             if current.file_id != material.file_id || current.origin != material.origin {
                 return Err(AppError::internal(
                     "studio_materials: file, origin and generator never change",
+                ));
+            }
+            if current.erased_at.is_some() {
+                return Err(AppError::internal(
+                    "studio_materials: an erased material never changes",
                 ));
             }
             if current.revision != expected_revision

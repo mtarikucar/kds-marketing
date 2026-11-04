@@ -57,11 +57,15 @@ create table if not exists studio_materials (
 create index if not exists studio_materials_olay on studio_materials (workspace_id, olay_id);
 
 -- A material's identity, file, origin and generator are fixed when it is created: an AI image is
--- never made real. Materials are redacted, never deleted, so what a post showed stays known.
+-- never made real. Materials are redacted, never deleted, so what a post showed stays known; an
+-- erased one never changes again (the redaction itself, which sets `erased_at`, passes).
 create or replace function studio_materials_fixed() returns trigger language plpgsql as $$
 begin
     if tg_op = 'DELETE' then
         raise exception 'studio_materials: a material is redacted, never deleted';
+    end if;
+    if old.erased_at is not null then
+        raise exception 'studio_materials: an erased material never changes';
     end if;
     if new.workspace_id <> old.workspace_id or new.id <> old.id or new.file_id <> old.file_id
        or new.origin <> old.origin or new.generator is distinct from old.generator then

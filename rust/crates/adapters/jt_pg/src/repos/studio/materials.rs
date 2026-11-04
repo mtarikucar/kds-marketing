@@ -232,6 +232,11 @@ impl MaterialRepo for PgTenantRepos {
                 "studio_materials: file, origin and generator never change",
             ));
         }
+        if current.erased_at.is_some() {
+            return Err(AppError::internal(
+                "studio_materials: an erased material never changes",
+            ));
+        }
         if current.revision != expected_revision
             || m.revision != expected_revision.saturating_add(1)
         {

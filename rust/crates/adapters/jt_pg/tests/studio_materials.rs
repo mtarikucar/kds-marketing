@@ -224,6 +224,53 @@ async fn origin_and_file_never_change_and_piece_uses_are_never_rewritten() {
     );
 }
 
+/// An erased material keeps its id, file, origin and binding for what it was used in, and never
+/// changes again (spec D44); the redaction itself, which sets `erased_at`, passes.
+#[tokio::test]
+async fn an_erased_material_never_changes_again() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = ready(&uow).await;
+    let material = seed_material(&uow, f.ws).await;
+    let erased = material.redacted(FIXED_NOW);
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio_materials()
+        .update_material(erased.clone(), 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    // Through the repo: refused before the database.
+    let mut again = erased.clone();
+    again.revision = 3;
+    again.title = "Geri".into();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let e = tx
+        .studio_materials()
+        .update_material(again, 2)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Internal);
+    drop(tx);
+    // In SQL: the trigger refuses any change, the stored revision's too.
+    let mut raw = TenantTx::begin(&db.pool, f.ws).await.unwrap();
+    let e = sqlx::query("update studio_materials set revision = revision + 1 where id = $1")
+        .bind(material.id.0)
+        .execute(raw.conn())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("an erased material never changes"), "{e}");
+    raw.rollback().await.unwrap();
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        tx.studio_materials()
+            .get_material(material.id)
+            .await
+            .unwrap(),
+        Some(erased)
+    );
+}
+
 #[tokio::test]
 async fn calendar_rows_shoot_requests_policy_and_releases() {
     let db = TestDb::new().await;
@@ -368,4 +415,44 @@ async fn the_down_refuses_while_the_library_holds_anything() {
     );
     let mut tx = uow.tenant(ws).await.unwrap();
     assert_eq!(tx.studio_materials().list_olays().await.unwrap().len(), 1);
+}
+
+/// A human's caption release is the owner's decision, not recreated by a re-run of `up`: the down
+/// refuses while one is stored (spec D44).
+#[tokio::test]
+async fn the_down_refuses_while_a_caption_release_is_stored() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = ready(&uow).await;
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.studio_materials()
+        .save_release(MaterialRelease {
+            slot_id: f.slot.id,
+            revision: 1,
+            digest: "a".repeat(64),
+            by: jt_tenancy::UserId::new_v7(),
+            at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations");
+    let down = std::fs::read_to_string(dir.join("0021_studio_materials.down.sql")).unwrap();
+    let refused = sqlx::raw_sql(&down)
+        .execute(&db.pool)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("down refused: caption releases are stored"),
+        "{refused}"
+    );
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert!(
+        tx.studio_materials()
+            .get_release(f.slot.id, 1)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
