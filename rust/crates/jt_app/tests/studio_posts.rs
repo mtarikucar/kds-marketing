@@ -1000,6 +1000,37 @@ fn set_quality(w: &World, id: MaterialId, quality: Option<Quality>) {
     });
 }
 
+/// The fixture slot carries a planned feed post (grace until FIXED_NOW + 6 h), and a publish
+/// attempt for it was claimed at FIXED_NOW and ended with `outcome` (none: still sending).
+async fn attempted(w: &World, outcome: Option<jt_app::ports::studio::PublishOutcome>) {
+    jt_testkit::studio_contract::attach_post(&w.uow, &w.f).await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let a = r
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .expect("the fixture slot is due");
+    if let Some(outcome) = outcome {
+        r.studio()
+            .finish_publication(a.id(), outcome, FIXED_NOW)
+            .await
+            .unwrap();
+    }
+    r.commit().await.unwrap();
+}
+
+fn slot_state(w: &World, id: SlotId) -> SlotState {
+    w.uow
+        .snapshot()
+        .studio
+        .slots
+        .iter()
+        .find(|s| s.id == id)
+        .unwrap()
+        .state
+}
+
 /// Materials uploaded back to back share their second; tagging some of them later makes a
 /// second set, which gets its own request: an olay's request is named by its set, never by a
 /// clock two sets can share (review HIGH 1).
@@ -1065,4 +1096,116 @@ async fn an_expired_requests_materials_are_asked_for_again() {
         ms.iter().map(|m| m.id).collect::<Vec<_>>()
     );
     assert_ne!(again.key, first.key);
+}
+
+/// A post whose only attempt failed is never sent again: past its grace it retires
+/// `missed_grace`, and it no longer counts as pending on its channel, so the floor asks for a
+/// post there (review MEDIUM 2).
+#[tokio::test]
+async fn a_failed_post_past_its_grace_retires_and_the_floor_asks_again() {
+    let mut w = world().await;
+    w.d.files = Arc::new(MemoryFiles::default());
+    // The fixture's own material asks for nothing: no olay request covers the channel.
+    let own = w.uow.snapshot().materials.materials[0].id;
+    set_quality(&w, own, None);
+    let generic = material(&w, None, FIXED_NOW, "image/png").await;
+    attempted(
+        &w,
+        Some(jt_app::ports::studio::PublishOutcome::Failed(
+            jt_app::error::AppError::internal("refused for good"),
+        )),
+    )
+    .await;
+    plan(&w, FIXED_NOW + Duration::hours(6)).await;
+    assert_eq!(slot_state(&w, w.f.slot.id), SlotState::Ready);
+    plan(&w, FIXED_NOW + Duration::hours(6) + Duration::minutes(1)).await;
+    assert_eq!(slot_state(&w, w.f.slot.id), SlotState::Retired);
+    let post = w.uow.snapshot().posts.posts[0].clone();
+    assert_eq!(
+        post.retired.map(|r| r.reason),
+        Some(RetirementReason::MissedGrace)
+    );
+    // The next local day (the floor asks once a day; the fixture's post answered today's).
+    plan(&w, FIXED_NOW + Duration::days(1)).await;
+    let floor: Vec<PackageRequest> = requests(&w)
+        .into_iter()
+        // The fixture's post was planned from an answered floor request: a new one is open.
+        .filter(|q| q.trigger == PackageTrigger::Floor && q.status == PackageStatus::Open)
+        .collect();
+    assert_eq!(floor.len(), 1, "{floor:?}");
+    assert_eq!(floor[0].capability_id, Some(w.f.slot.capability_id));
+    assert_eq!(floor[0].material_ids, vec![generic.id]);
+}
+
+/// A post whose attempt may still be going out (`unknown`) is never retired (D46), but past its
+/// grace it is no longer pending work: the floor asks for another post on its channel.
+#[tokio::test]
+async fn a_post_in_flight_past_its_grace_stays_but_does_not_hold_the_floor() {
+    let mut w = world().await;
+    w.d.files = Arc::new(MemoryFiles::default());
+    // The fixture's own material asks for nothing: no olay request covers the channel.
+    let own = w.uow.snapshot().materials.materials[0].id;
+    set_quality(&w, own, None);
+    material(&w, None, FIXED_NOW, "image/png").await;
+    attempted(
+        &w,
+        Some(jt_app::ports::studio::PublishOutcome::Unknown(
+            jt_app::error::AppError::internal("lost"),
+        )),
+    )
+    .await;
+    // The next local day (the floor asks once a day; the fixture's post answered today's).
+    plan(&w, FIXED_NOW + Duration::days(1)).await;
+    assert_eq!(slot_state(&w, w.f.slot.id), SlotState::Ready);
+    assert!(w.uow.snapshot().posts.posts[0].retired.is_none());
+    let floor: Vec<PackageRequest> = requests(&w)
+        .into_iter()
+        // The fixture's post was planned from an answered floor request: a new one is open.
+        .filter(|q| q.trigger == PackageTrigger::Floor && q.status == PackageStatus::Open)
+        .collect();
+    assert_eq!(floor.len(), 1, "{floor:?}");
+    assert_eq!(floor[0].capability_id, Some(w.f.slot.capability_id));
+}
+
+/// The one-time retirement of the weekly quotas' slots never takes a slot whose publish is in
+/// flight; it retires it on a later run, once its attempt ended unsent (review LOW 4).
+#[tokio::test]
+async fn the_one_time_replan_waits_for_an_attempt_in_flight() {
+    let w = world().await;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let a = r
+        .studio()
+        .claim_publication(FIXED_NOW)
+        .await
+        .unwrap()
+        .expect("the fixture slot is due");
+    r.commit().await.unwrap();
+    plan(&w, minutes(10)).await;
+    assert_eq!(slot_state(&w, w.f.slot.id), SlotState::Ready);
+    let replanned = |w: &World| {
+        w.uow
+            .snapshot()
+            .ledger
+            .iter()
+            .filter(|e| e.entry.action.as_str() == "studio.slot.replanned")
+            .count()
+    };
+    assert_eq!(replanned(&w), 0);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .finish_publication(
+            a.id(),
+            jt_app::ports::studio::PublishOutcome::Failed(jt_app::error::AppError::internal(
+                "refused for good",
+            )),
+            minutes(11),
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    plan(&w, minutes(20)).await;
+    assert_eq!(slot_state(&w, w.f.slot.id), SlotState::Retired);
+    assert_eq!(replanned(&w), 1);
+    plan(&w, minutes(30)).await;
+    assert_eq!(replanned(&w), 1);
 }
