@@ -35,20 +35,22 @@ fn field(value: &str) -> Option<FieldInput<String>> {
     })
 }
 
-/// The business's Instagram handle, from its name (`"Örnek Kafe"` → `ornekkafe`): a hard key, so
-/// every business of a test has its own.
+/// The Instagram handle a fixture business named `name` holds: its name folded to ASCII
+/// lowercase letters and digits, so two differently named businesses never share the hard key
+/// and "Örnek Kafe" stays `ornekkafe`.
 fn handle(name: &str) -> String {
     name.chars()
-        .filter_map(|c| match c {
-            'ç' | 'Ç' => Some('c'),
-            'ğ' | 'Ğ' => Some('g'),
-            'ı' | 'İ' | 'I' => Some('i'),
-            'ö' | 'Ö' => Some('o'),
-            'ş' | 'Ş' => Some('s'),
-            'ü' | 'Ü' => Some('u'),
-            c if c.is_ascii_alphanumeric() => Some(c.to_ascii_lowercase()),
-            _ => None,
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'ç' => 'c',
+            'ğ' => 'g',
+            'ı' => 'i',
+            'ö' => 'o',
+            'ş' => 's',
+            'ü' => 'u',
+            c => c,
         })
+        .filter(char::is_ascii_alphanumeric)
         .collect()
 }
 
