@@ -47,5 +47,8 @@ jobs:
               if test -f "$release/REVISION"; then cat "$release/REVISION"; fi
             fi
           done
+          systemctl show jeeta-staging.service -p FragmentPath -p WorkingDirectory
+          echo 'Staging upgrade source (credential-related lines omitted)'
+          sed -E '/(PASSWORD|SECRET|TOKEN|PRIVATE_KEY|postgres(ql)?:\/\/)/I c\# credential-related line omitted' /root/staging-upgrade.sh
           curl --fail --silent --show-error http://127.0.0.1:8091/readyz
           REMOTE
