@@ -4,8 +4,8 @@ name: Jeeta staging operation
 # branch is isolated from the design PR and from all production deployment jobs.
 on:
   push:
-    branches: [ops/staging-01194c85]
-    paths: [.github/workflows/jeeta-staging.yml, ops/publish-staging-01194c85.sh]
+    branches: [ops/staging-d42b9e2a]
+    paths: [.github/workflows/jeeta-staging.yml, ops/publish-staging-d42b9e2a.sh]
 
 permissions:
   contents: read
@@ -27,11 +27,11 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 55); do
-            gh api repos/mtarikucar/kds-marketing/actions/runs/42028623426 > "$RUNNER_TEMP/candidate-run.json"
+            gh api repos/mtarikucar/kds-marketing/actions/runs/42111782176 > "$RUNNER_TEMP/candidate-run.json"
             python3 - "$RUNNER_TEMP/candidate-run.json" <<'PY'
           import json,sys
           r=json.load(open(sys.argv[1]))
-          assert r['head_sha']=='01194c8567db522d4fa9523b9b659a04023c58e5'
+          assert r['head_sha']=='d42b9e2aa1e719e9741ed5b2f055e0d47fca1952'
           assert r['event']=='push' and r['path']=='.github/workflows/rust.yml'
           print('Candidate CI:',r['status'],r['conclusion'])
           PY
@@ -53,21 +53,21 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: '13414952929'
-          run-id: '42028623426'
+          artifact-ids: '13454853462'
+          run-id: '42111782176'
           github-token: ${{ github.token }}
           path: candidate
           merge-multiple: true
       - name: Check exact archive digest
         run: |
-          printf '%s  %s\n' cc0f136d3f2661ee044692abcd107d3140f09fae72a0f75ba0ac6bc4fb5e8de7 candidate/jeeta-release.tar | sha256sum --check --status
+          printf '%s  %s\n' 78ceab792f7ff13a8eab11d9c890882856c1729fa710adf11e40c9c67c566a1f candidate/jeeta-release.tar | sha256sum --check --status
       - uses: ./.github/actions/setup-ssh
         with:
           ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
           ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
           server-host: '38.242.233.166'
       - name: Transfer the verified candidate
-        run: scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-01194c85.tar
+        run: scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-d42b9e2a.tar
       - name: Record installed staging schema metadata
         run: |
           ssh -o BatchMode=yes root@38.242.233.166 'bash -s' <<'REMOTE'
@@ -78,14 +78,14 @@ jobs:
           REMOTE
       - name: Verify, back up and publish staging only
         run: |
-          ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 'bash -s' < ops/publish-staging-01194c85.sh
+          ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 'bash -s' < ops/publish-staging-d42b9e2a.sh
       - name: Record successful staging publication
         run: |
           {
             echo 'Published https://staging.jeetagrowth.com'
-            echo 'Candidate: 01194c8567db522d4fa9523b9b659a04023c58e5'
-            echo 'Source CI: https://github.com/mtarikucar/kds-marketing/actions/runs/42028623426'
-            echo 'Archive SHA-256: cc0f136d3f2661ee044692abcd107d3140f09fae72a0f75ba0ac6bc4fb5e8de7'
+            echo 'Candidate: d42b9e2aa1e719e9741ed5b2f055e0d47fca1952'
+            echo 'Source CI: https://github.com/mtarikucar/kds-marketing/actions/runs/42111782176'
+            echo 'Archive SHA-256: 78ceab792f7ff13a8eab11d9c890882856c1729fa710adf11e40c9c67c566a1f'
             echo 'Staging database, files and configuration backed up and logical restore verified before swap.'
             echo 'Production release link unchanged.'
           } >> "$GITHUB_STEP_SUMMARY"
