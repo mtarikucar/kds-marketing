@@ -1,11 +1,11 @@
 name: Jeeta staging operation
 
-# Dedicated operational branch for the explicitly requested staging publication.
-# This first phase only inspects access and release paths; it does not deploy.
+# Explicitly authorized publication of one reviewed candidate. This operational
+# branch is isolated from the design PR and from all production deployment jobs.
 on:
   push:
     branches: [ops/staging-01194c85]
-    paths: [.github/workflows/jeeta-staging.yml]
+    paths: [.github/workflows/jeeta-staging.yml, ops/publish-staging-01194c85.sh]
 
 permissions:
   contents: read
@@ -16,39 +16,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  inspect:
+  candidate-checks:
     if: github.repository == 'mtarikucar/kds-marketing'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
+    steps:
+      - name: Require the exact candidate's complete Rust CI to pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 55); do
+            gh api repos/mtarikucar/kds-marketing/actions/runs/42028623426 > "$RUNNER_TEMP/candidate-run.json"
+            python3 - "$RUNNER_TEMP/candidate-run.json" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1]))
+          assert r['head_sha']=='01194c8567db522d4fa9523b9b659a04023c58e5'
+          assert r['event']=='push' and r['path']=='.github/workflows/rust.yml'
+          print('Candidate CI:',r['status'],r['conclusion'])
+          PY
+            status=$(jq -r '.status' "$RUNNER_TEMP/candidate-run.json")
+            if test "$status" = completed; then
+              test "$(jq -r '.conclusion' "$RUNNER_TEMP/candidate-run.json")" = success
+              exit
+            fi
+            sleep 30
+          done
+          echo '::error::Candidate CI did not complete; nothing deployed'
+          exit 1
+
+  publish-staging:
+    needs: candidate-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-      - name: Check deployment credential bindings
-        env:
-          DEPLOY_KEY: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
-          KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '13414952929'
+          run-id: '42028623426'
+          github-token: ${{ github.token }}
+          path: candidate
+          merge-multiple: true
+      - name: Check exact archive digest
         run: |
-          test -n "$DEPLOY_KEY" || { echo '::error::SSH_PRIVATE_KEY_BASE64 is unavailable'; exit 1; }
-          test -n "$KNOWN_HOSTS" || { echo '::error::SSH_KNOWN_HOSTS is unavailable'; exit 1; }
+          printf '%s  %s\n' cc0f136d3f2661ee044692abcd107d3140f09fae72a0f75ba0ac6bc4fb5e8de7 candidate/jeeta-release.tar | sha256sum --check --status
       - uses: ./.github/actions/setup-ssh
         with:
           ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
           ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
           server-host: '38.242.233.166'
-      - name: Inspect staging release paths without changing services
+      - name: Transfer the verified candidate
+        run: scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-01194c85.tar
+      - name: Verify, back up and publish staging only
         run: |
-          ssh -o BatchMode=yes -o ConnectTimeout=10 root@38.242.233.166 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          systemctl is-active jeeta-staging.service
-          test -x /root/staging-upgrade.sh
-          sha256sum /root/staging-upgrade.sh
-          for release in /opt/jeeta-staging/current /opt/jeeta/current; do
-            if test -d "$release"; then
-              readlink -f "$release"
-              if test -f "$release/REVISION"; then cat "$release/REVISION"; fi
-            fi
-          done
-          systemctl show jeeta-staging.service -p FragmentPath -p WorkingDirectory
-          echo 'Staging upgrade source (credential-related lines omitted)'
-          sed -E '/(PASSWORD|SECRET|TOKEN|PRIVATE_KEY|postgres(ql)?:\/\/)/I c\# credential-related line omitted' /root/staging-upgrade.sh
-          curl --fail --silent --show-error http://127.0.0.1:8091/readyz
-          REMOTE
+          ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 'bash -s' < ops/publish-staging-01194c85.sh
+      - name: Record successful staging publication
+        run: |
+          {
+            echo 'Published https://staging.jeetagrowth.com'
+            echo 'Candidate: 01194c8567db522d4fa9523b9b659a04023c58e5'
+            echo 'Source CI: https://github.com/mtarikucar/kds-marketing/actions/runs/42028623426'
+            echo 'Archive SHA-256: cc0f136d3f2661ee044692abcd107d3140f09fae72a0f75ba0ac6bc4fb5e8de7'
+            echo 'Staging database, files and configuration backed up and logical restore verified before swap.'
+            echo 'Production release link unchanged.'
+          } >> "$GITHUB_STEP_SUMMARY"
