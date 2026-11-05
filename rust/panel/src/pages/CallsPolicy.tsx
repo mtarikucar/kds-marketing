@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getCallPolicy, setCallPolicy, type CallPhrases, type CallPolicy } from '@/api/calls';
 import { QueryState } from '@/components/QueryState';
-import { Button, Card, CardContent, CardHeader, CardTitle, Field, Input, Switch, Label, Textarea, toast } from '@/components/ui';
+import { ErrorCallout } from '@/components/ErrorCallout';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, Switch, Label, Textarea, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 
 const POLICY_KEY = ['calls', 'policy'] as const;
@@ -79,7 +80,12 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
     if (!save.isPending) save.mutate();
   };
   return (
-    <form className="flex flex-col gap-3" onSubmit={submit} noValidate aria-label={t('calls.policy.title')}>
+    <form className="flex flex-col gap-7" onSubmit={submit} noValidate aria-label={t('calls.policy.title')}>
+      <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{t('calls.policy.ux.sectionHint', { defaultValue: 'Değiştirmek istediğiniz bölümü açın. Kapalı bölümlerdeki değerler ve taslak düzenlemeler korunur; Kaydet tüm ayarları birlikte uygular.' })}</p>
+      <details open>
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.scriptsTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 md:grid-cols-2">
+      <legend className="sr-only">{t('calls.policy.scriptsTitle')}</legend>
       {TEXTS.map((key) => (
         <Field key={key} label={t(`calls.policy.fields.${key}`)}>
           {(ids) => (
@@ -109,16 +115,22 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       ))}
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-surface-muted p-4 md:col-span-2">
         <Switch
           id="calls-disclose"
           checked={policy.disclose_assistant}
           onCheckedChange={(on) => setPolicy({ ...policy, disclose_assistant: on })}
         />
-        <Label htmlFor="calls-disclose" className="font-normal">
+        <Label htmlFor="calls-disclose" className="font-normal leading-6">
           {t('calls.policy.fields.disclose_assistant')}
         </Label>
       </div>
+      </fieldset>
+      </details>
+      <details className="border-t border-border pt-4">
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.phrasesTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 md:grid-cols-2">
+      <legend className="sr-only">{t('calls.policy.phrasesTitle')}</legend>
       <Field label={t('calls.policy.fields.holding_default')} hint={t('calls.policy.holdingHint')}>
         {(ids) => (
           <Textarea id={ids.id} aria-describedby={ids.describedBy} value={holding} onChange={(e) => setHolding(e.target.value)} />
@@ -136,7 +148,12 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       ))}
-      <div className="grid gap-3 sm:grid-cols-2">
+      </fieldset>
+      </details>
+      <details className="border-t border-border pt-4">
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.limitsTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 sm:grid-cols-2 xl:grid-cols-3">
+        <legend className="sr-only">{t('calls.policy.limitsTitle')}</legend>
         {NUMBERS.map((key) => (
           <Field key={key} label={t(`calls.policy.fields.${key}`)}>
             {(ids) => (
@@ -160,9 +177,11 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
             />
           )}
         </Field>
-      </div>
-      <div>
-        <Button type="submit" disabled={save.isPending}>
+      </fieldset>
+      </details>
+      <ErrorCallout error={save.error} />
+      <div className="flex justify-end border-t border-border pt-4">
+        <Button type="submit" loading={save.isPending}>
           {t('common.save')}
         </Button>
       </div>
@@ -178,11 +197,12 @@ export function CallsPolicy() {
   const { t } = useTranslation();
   const policy = useQuery({ queryKey: POLICY_KEY, queryFn: getCallPolicy });
   return (
-    <Card className="mt-6">
-      <CardHeader>
+    <Card className="mt-12 rounded-none border-x-0 border-b-0 bg-transparent">
+      <CardHeader className="mb-6 border-b border-border px-0 py-5">
         <CardTitle>{t('calls.policy.title')}</CardTitle>
+        <CardDescription className="max-w-2xl leading-6">{t('calls.policy.description')}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-0">
         <QueryState query={policy}>{policy.data && <PolicyForm stored={policy.data} />}</QueryState>
       </CardContent>
     </Card>

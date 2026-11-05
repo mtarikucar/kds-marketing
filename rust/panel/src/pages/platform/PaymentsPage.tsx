@@ -61,8 +61,8 @@ export function PaymentsPage() {
     <QueryState query={payments}>
       {payments.data?.length===0 && <p>{t('platform.payments.empty')}</p>}
       {payments.data?.map(row=><section key={row.payment_id} className="space-y-4 rounded-lg border border-border bg-surface p-5">
-        <h2 className="font-medium">{row.reference}</h2>
-        <dl className="grid gap-2 sm:grid-cols-2">
+        <h2 className="font-display text-h3">{row.reference}</h2>
+        <dl className="grid gap-x-8 gap-y-4 border-y border-border py-4 text-sm [&_dt]:text-muted-foreground [&_dd]:mt-1 sm:grid-cols-2">
           <div><dt>{t('platform.payments.workspace')}</dt><dd>{named(row.workspace_id) && <span className="block font-medium">{named(row.workspace_id)!.name}{named(row.workspace_id)!.owner_email && <span className="font-normal text-muted-foreground"> · {named(row.workspace_id)!.owner_email}</span>}</span>}<span className="font-mono text-caption text-muted-foreground">{row.workspace_id}</span></dd></div>
           <div><dt>{t('platform.payments.amount')}</dt><dd>{formatMoney(row.amount_minor,row.currency,i18n.language)}</dd></div>
           <div><dt>{t('platform.payments.paidAt')}</dt><dd>{formatDateTime(row.paid_at,i18n.language)}</dd></div>

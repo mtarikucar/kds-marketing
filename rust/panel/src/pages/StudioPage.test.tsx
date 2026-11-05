@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { screen, within, waitFor } from '@testing-library/react';
+import { fireEvent, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 import { inboxAnswers, inboxMe } from '@/test/inbox';
 import tr from '@/i18n/tr.json';
 import en from '@/i18n/en.json';
@@ -109,26 +109,34 @@ describe('Growth Studio', () => {
     const calls = mockFetch(answers);
     renderAt('/studio');
     const user = userEvent.setup();
-    await within(await screen.findByLabelText('Hipotez')).findByRole('option', {
+    await user.click(await screen.findByText('Filtreler'));
+    await within(await screen.findByLabelText(tr.studio.filters.hypothesis)).findByRole('option', {
       name: 'Kısa hikâyeler',
     });
-    expect(within(screen.getByTestId('studio')).getAllByRole('region')).toHaveLength(5);
-    await user.selectOptions(screen.getByLabelText('Hipotez'), 'h1');
+    expect(within(screen.getByTestId('studio')).getAllByRole('region')).toHaveLength(2);
+    await user.selectOptions(screen.getByLabelText(tr.studio.filters.hypothesis), 'h1');
     await waitFor(() =>
       expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).toContain(
         'hypothesis_id=h1',
       ),
     );
+    await user.click(screen.getByRole('tab', { name: 'Günlük' }));
     await waitFor(() =>
       expect(calls.filter((c) => c.path === '/api/studio/ledger').at(-1)?.search).toContain(
         'hypothesis_id=h1',
       ),
+    );
+    await user.click(screen.getByRole('button', { name: 'Filtreleri temizle' }));
+    expect(screen.getByLabelText(tr.studio.filters.hypothesis)).toHaveValue('');
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).not.toContain('hypothesis_id='),
     );
   });
   it('list_calendar_share_slot_ids', async () => {
     mockFetch(answers);
     renderAt('/studio');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Plan' }));
     const plan = await screen.findByRole('region', { name: 'Plan' });
     expect(await within(plan).findByTestId('slot-s1')).toBeInTheDocument();
     await user.click(within(plan).getByRole('button', { name: 'Takvim' }));
@@ -151,6 +159,7 @@ describe('Growth Studio', () => {
   it('organic_visible_and_paid_four_case_visibility', async () => {
     mockFetch(answers);
     renderAt('/studio');
+    await userEvent.click(await screen.findByRole('tab', { name: 'Öğrenilenler' }));
     expect(await screen.findByRole('button', { name: 'Organik' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ücretli' })).not.toBeInTheDocument();
     expect(screen.queryByText('Reklam seti bağla')).not.toBeInTheDocument();
@@ -184,7 +193,7 @@ describe('Growth Studio', () => {
       lane: null,
       expected_revision: 2,
     });
-    expect(within(screen.getByTestId('studio')).getAllByRole('region')).toHaveLength(5);
+    expect(within(screen.getByTestId('studio')).getAllByRole('region')).toHaveLength(2);
   });
   it('no_strategy_keeps_organic_and_ledger_with_actionable_copy', async () => {
     mockFetch({
@@ -197,7 +206,9 @@ describe('Growth Studio', () => {
     });
     renderAt('/studio');
     expect(await screen.findByText('Önce bir strateji onaylayın.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Günlük' }));
     expect(screen.getByRole('region', { name: 'Günlük' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Öğrenilenler' }));
     expect(screen.getByRole('button', { name: 'Organik' })).toBeInTheDocument();
   });
   it('TR_EN_key_parity', () => {
@@ -325,6 +336,7 @@ it("slot_detail_explains_a_failed_publication_in_the_owner's_words", async () =>
   });
   renderAt('/studio');
   const user = userEvent.setup();
+  await userEvent.click(await screen.findByRole('tab', { name: 'Plan' }));
   const plan = await screen.findByRole('region', { name: 'Plan' });
   await user.click(
     await within(plan)
@@ -417,6 +429,7 @@ it('slot_detail_submits_and_cancels_the_current_revision', async () => {
   });
   renderAt('/studio');
   const user = userEvent.setup();
+  await userEvent.click(await screen.findByRole('tab', { name: 'Plan' }));
   const plan = await screen.findByRole('region', { name: 'Plan' });
   await user.click(
     await within(plan)
@@ -470,6 +483,7 @@ it.each([
   });
   renderAt('/studio');
   await screen.findByRole('button', { name: 'Acil fren' });
+  await userEvent.click(screen.getByRole('tab', { name: 'Öğrenilenler' }));
   expect(screen.getByRole('button', { name: 'Organik' })).toBeInTheDocument();
   expect(Boolean(screen.queryByRole('button', { name: 'Ücretli' }))).toBe(visible);
   expect(Boolean(screen.queryByText('Reklam seti bağla', { selector: 'summary' }))).toBe(visible);
@@ -487,6 +501,7 @@ it('organic_lane_names_a_reconnect_when_only_the_read_permission_is_missing', as
     },
   });
   renderAt('/studio');
+  await userEvent.click(await screen.findByRole('tab', { name: 'Öğrenilenler' }));
   expect(await screen.findByText(tr.studio.connectorReconnect, { exact: false })).toBeInTheDocument();
   expect(screen.queryByText(tr.studio.connectorUnavailable)).not.toBeInTheDocument();
   const links = screen.getAllByRole('link', { name: tr.studio.reconnect });
@@ -497,14 +512,16 @@ it('strategy_hypothesis_click_filters_regions_and_plan_names_channel_and_type', 
   const calls = mockFetch(answers);
   renderAt('/studio');
   const strategy = await screen.findByRole('region', { name: 'Strateji' });
+  await userEvent.click(within(strategy).getByText('Hipotezleri göster'));
   await userEvent.click(await within(strategy).findByRole('button', { name: 'Kısa hikâyeler' }));
   await waitFor(() =>
     expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).toContain(
       'hypothesis_id=h1',
     ),
   );
+  await userEvent.click(screen.getByRole('tab', { name: 'Plan' }));
   const row = await within(screen.getByRole('region', { name: 'Plan' })).findByTestId('slot-s1');
-  expect(row).toHaveTextContent('text / x');
+  expect(row).toHaveTextContent(`${tr.studio.contentFormats.text} / ${tr.capabilities.kinds.x}`);
 });
 
 it('approval_card_previews_the_drafted_text_media_target_and_time', async () => {
@@ -585,3 +602,86 @@ it('clicking_an_approval_title_opens_its_editor_inside_that_card', async () => {
   expect(title).toHaveFocus();
   expect(title).toHaveAttribute('aria-expanded', 'false');
 });
+
+
+it('does not describe pending reads as empty work and offers recovery after a failed overview', async () => {
+  const user = userEvent.setup();
+  mockFetch({ ...answers, 'GET /api/studio/overview': delayed(200, overview) });
+  const first = renderAt('/studio');
+  await screen.findByRole('heading', { name: tr.studio.title });
+  expect(screen.queryByText(tr.studio.emptyToday)).not.toBeInTheDocument();
+  expect(screen.queryByText(tr.studio.emptyPlan)).not.toBeInTheDocument();
+  await screen.findByTestId('today-s1');
+  first.unmount();
+
+  mockFetch({ ...answers, 'GET /api/studio/overview': withStatus(503, { code: 'INTERNAL', message: 'unavailable', details: {} }) });
+  renderAt('/studio');
+  const retry = await screen.findByRole('button', { name: tr.common.retry });
+  mockFetch(answers);
+  await user.click(retry);
+  expect(await screen.findByTestId('today-s1')).toBeInTheDocument();
+});
+
+
+it('puts today and the plan before strategy and prevents a reversed date request', async () => {
+  const calls = mockFetch(answers);
+  renderAt('/studio');
+  await screen.findByTestId('today-s1');
+  const today = screen.getByRole('region', { name: 'Bugün' });
+  expect(today).toBeVisible();
+  expect(screen.queryByRole('region', { name: 'Plan' })).not.toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Strateji' })).toBeVisible();
+  await userEvent.click(screen.getByText('Filtreler'));
+  const count = calls.filter((c) => c.path === '/api/studio/overview').length;
+  fireEvent.change(screen.getByLabelText(tr.studio.filters.from), { target: { value: '2099-01-01' } });
+  expect(screen.getByRole('alert')).toHaveTextContent('Başlangıç tarihi bitiş tarihinden sonra olamaz');
+  expect(calls.filter((c) => c.path === '/api/studio/overview')).toHaveLength(count);
+});
+
+it('orders the next seven days by the scheduled instant', async () => {
+  const earlier = { ...slot, id: 'earlier', scheduled_at: new Date(Date.now() + 86400000).toISOString() };
+  const later = { ...slot, id: 'later', scheduled_at: new Date(Date.now() + 2 * 86400000).toISOString() };
+  mockFetch({ ...answers, 'GET /api/studio/overview': { ...overview, slots: [later, earlier] } });
+  renderAt('/studio');
+  await userEvent.click(await screen.findByRole('tab', { name: 'Plan' }));
+  const plan = await screen.findByRole('region', { name: 'Plan' });
+  const first = await within(plan).findByTestId('slot-earlier');
+  const second = within(plan).getByTestId('slot-later');
+  expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('links an empty today view to the weekly plan', async () => {
+  mockFetch({ ...answers, 'GET /api/studio/overview': { ...overview, slots: [], today: { ...overview.today, slots: [], approvals: [], blockers: [], budget_moves: [], paid_alerts: [] } } });
+  renderAt('/studio');
+  const today = await screen.findByRole('region', { name: 'Bugün' });
+  const button = await within(today).findByRole('button', { name: 'Haftalık planı gör' });
+  await userEvent.click(button);
+  expect(screen.getByRole('region', { name: 'Plan' })).toBeVisible();
+  expect(screen.queryByRole('region', { name: 'Bugün' })).not.toBeInTheDocument();
+});
+
+it('opens a linked plan and moves its selected slot to today with a keyboard return target', async () => {
+  mockFetch(answers);
+  const { router } = renderAt('/studio?section=plan');
+  const user = userEvent.setup();
+  const plan = await screen.findByRole('region', { name: 'Plan' });
+  expect(screen.getByRole('tab', { name: 'Plan' })).toHaveAttribute('aria-selected', 'true');
+  const row = await within(plan).findByTestId('slot-s1');
+  await user.click(within(row).getByRole('button'));
+  const editor = await screen.findByTestId('slot-detail');
+  expect(screen.getByRole('tab', { name: 'Bugün' })).toHaveAttribute('aria-selected', 'true');
+  expect(router.state.location.search).not.toContain('section=plan');
+  expect(within(editor).getByRole('heading', { name: 'Kısa hikâyeler' })).toHaveFocus();
+  await user.click(within(editor).getByRole('button', { name: 'Kapat' }));
+  expect(screen.getByRole('tab', { name: 'Bugün' })).toHaveFocus();
+});
+
+it.each([['plan', 'Plan'], ['learned', 'Öğrenilenler'], ['ledger', 'Günlük']])(
+  'restores the %s view from the address', async (section, label) => {
+    mockFetch(answers);
+    renderAt(`/studio?section=${section}`);
+    expect(await screen.findByRole('region', { name: label })).toBeVisible();
+    expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('region', { name: 'Bugün' })).not.toBeInTheDocument();
+  },
+);

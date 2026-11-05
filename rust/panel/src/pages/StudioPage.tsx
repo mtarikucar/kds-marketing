@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +13,7 @@ import { StudioPlan } from './StudioPlan';
 import { StudioToday } from './StudioToday';
 import { StudioLearned } from './StudioLearned';
 import { StudioLedger } from './StudioLedger';
-import { Field, StudioError, inputClass, useStudioKey } from './StudioShared';
+import { Field, StudioReadStatus, inputClass, useStudioKey } from './StudioShared';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
 import { StudioPosts } from './posts/StudioPosts';
@@ -29,16 +30,33 @@ export function StudioPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
   const tab = raw === 'materials' || raw === 'posts' ? raw : 'studio';
+  const rawSection = params.get('section');
+  const section = rawSection === 'plan' || rawSection === 'learned' || rawSection === 'ledger' ? rawSection : 'today';
+  const openSection = (next: string) => {
+    const updated = new URLSearchParams(params);
+    if (next === 'today') updated.delete('section');
+    else updated.set('section', next);
+    setParams(updated);
+  };
   const openSlot = (id: string) => {
     setParams({});
     setSelectedSlot(id);
   };
-  const [from, setFrom] = useState(() =>
-    new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
-  );
-  const [until, setUntil] = useState(() =>
-    new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10),
-  );
+  const [defaultDates] = useState(() => ({
+    from: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
+    until: new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10),
+  }));
+  const [from, setFrom] = useState(defaultDates.from);
+  const [until, setUntil] = useState(defaultDates.until);
+  const filtersActive = Boolean(hypothesis || lane || from !== defaultDates.from || until !== defaultDates.until);
+  const resetFilters = () => {
+    setHypothesis('');
+    setLane(undefined);
+    setFrom(defaultDates.from);
+    setUntil(defaultDates.until);
+    setSelectedSlot(null);
+  };
+  const validRange = Boolean(from && until && from <= until);
   const query: api.Query = {
     hypothesis_id: hypothesis || undefined,
     lane,
@@ -48,7 +66,7 @@ export function StudioPage() {
   const overview = useQuery({
     queryKey: [...key, 'overview', query],
     queryFn: () => api.overview(query),
-    enabled: allowed && Boolean(from && until),
+    enabled: allowed && validRange,
     refetchInterval: 60_000,
   });
   const work = useQuery({
@@ -64,8 +82,8 @@ export function StudioPage() {
   }, [overview.data, hypothesis]);
   const data = overview.data;
   return (
-    <div data-testid="studio" className="space-y-5">
-      <h1 className="text-2xl font-semibold tracking-tight">{t('studio.title')}</h1>
+    <div data-testid="studio" className="space-y-6">
+      <WorkspaceHeader scene={tab === 'materials' ? undefined : 'studio'} title={t('studio.title')} description={t('studio.description')} />
       <Tabs
         value={tab}
         onValueChange={(next) => setParams(next === 'studio' ? {} : { tab: next })}
@@ -96,8 +114,13 @@ export function StudioPage() {
           )}
         </TabsContent>
         <TabsContent value="studio" className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="hypothesis">
+          <details className="border-b border-border pb-4">
+            <summary className="cursor-pointer py-2 text-sm font-medium text-foreground">
+              {t('studio.workbench.filters', { defaultValue: 'Filtreler' })}
+              {filtersActive && <span className="ms-2 text-caption font-normal text-muted-foreground">{t('studio.workbench.filtersActive', { defaultValue: 'Etkin' })}</span>}
+            </summary>
+          <div className="mt-3 grid grid-cols-2 items-end gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(9rem,12rem)_minmax(9rem,12rem)_auto]">
+            <div className="col-span-2 sm:col-span-1"><Field label="filters.hypothesis">
               <select
                 className={inputClass}
                 value={hypothesis}
@@ -113,8 +136,8 @@ export function StudioPage() {
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="from">
+            </Field></div>
+            <Field label="filters.from">
               <input
                 className={inputClass}
                 type="date"
@@ -127,7 +150,7 @@ export function StudioPage() {
                 }}
               />
             </Field>
-            <Field label="until">
+            <Field label="filters.until">
               <input
                 className={inputClass}
                 type="date"
@@ -140,10 +163,62 @@ export function StudioPage() {
                 }}
               />
             </Field>
+            {filtersActive && (
+              <button type="button" className="min-h-10 text-start text-sm text-primary underline underline-offset-4" onClick={resetFilters}>
+                {t('studio.workbench.clearFilters', { defaultValue: 'Filtreleri temizle' })}
+              </button>
+            )}
           </div>
+          {!validRange && <p role="alert" className="mt-3 text-sm text-danger">{t('studio.workbench.invalidRange', { defaultValue: 'Başlangıç tarihi bitiş tarihinden sonra olamaz.' })}</p>}
+          </details>
           {!allowed && <p role="alert">{t('studio.forbidden')}</p>}
-          <StudioError error={overview.error} />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
+          {allowed && <StudioReadStatus query={overview} />}
+          <div className="grid grid-cols-1 items-start gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
+            <Tabs value={section} onValueChange={openSection} className="min-w-0">
+              <TabsList aria-label={t('studio.workbench.sections', { defaultValue: 'Stüdyo görünümü' })} className="overflow-x-auto">
+                <TabsTrigger value="today" data-studio-section className="min-h-11">{t('studio.today')}</TabsTrigger>
+                <TabsTrigger value="plan" data-studio-section className="min-h-11">{t('studio.plan')}</TabsTrigger>
+                <TabsTrigger value="learned" data-studio-section className="min-h-11">{t('studio.learned')}</TabsTrigger>
+                <TabsTrigger value="ledger" data-studio-section className="min-h-11">{t('studio.ledger')}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="today">
+                <StudioToday
+                  data={data}
+                  selectedSlot={selectedSlot}
+                  onSelect={setSelectedSlot}
+                  onViewPlan={() => openSection('plan')}
+                  manage={manage}
+                  overdue={work.data?.agent.overdue ?? false}
+                />
+              </TabsContent>
+              <TabsContent value="plan">
+                <StudioPlan
+                  available={Boolean(data)}
+                  slots={data?.slots ?? []}
+                  hypotheses={data?.hypotheses ?? []}
+                  arms={data?.learned.arms.map((a) => a.arm) ?? []}
+                  onSelect={(id) => {
+                    setSelectedSlot(id);
+                    openSection('today');
+                  }}
+                />
+              </TabsContent>
+              <TabsContent value="learned">
+                <StudioLearned
+                  data={data}
+                  query={query}
+                  lane={lane}
+                  onLane={(l) => {
+                    setLane(l);
+                    setSelectedSlot(null);
+                  }}
+                  manage={manage}
+                />
+              </TabsContent>
+              <TabsContent value="ledger">
+                <StudioLedger query={query} allowed={allowed && validRange} />
+              </TabsContent>
+            </Tabs>
             <StudioStrategyBar
               data={data}
               manage={manage}
@@ -151,32 +226,9 @@ export function StudioPage() {
               onHypothesis={(id) => {
                 setHypothesis(id);
                 setSelectedSlot(null);
+                openSection('today');
               }}
             />
-            <StudioPlan
-              slots={data?.slots ?? []}
-              hypotheses={data?.hypotheses ?? []}
-              arms={data?.learned.arms.map((a) => a.arm) ?? []}
-              onSelect={setSelectedSlot}
-            />
-            <StudioToday
-              data={data}
-              selectedSlot={selectedSlot}
-              onSelect={setSelectedSlot}
-              manage={manage}
-              overdue={work.data?.agent.overdue ?? false}
-            />
-            <StudioLearned
-              data={data}
-              query={query}
-              lane={lane}
-              onLane={(l) => {
-                setLane(l);
-                setSelectedSlot(null);
-              }}
-              manage={manage}
-            />
-            <StudioLedger query={query} allowed={allowed} />
           </div>
         </TabsContent>
       </Tabs>

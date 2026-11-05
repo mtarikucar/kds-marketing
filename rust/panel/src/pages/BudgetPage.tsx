@@ -567,7 +567,9 @@ export function BudgetPage() {
         {(items.data ?? []).length === 0 ? (
           <EmptyState title={t('budget.empty')} description={t('budget.emptyBody')} />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+          <div className="min-w-0 space-y-2">
+            <p className="text-caption text-muted-foreground md:hidden">{t('budget.workbench.scrollHint', { defaultValue: 'Diğer sütunları görmek için tabloyu yatay kaydırın.' })}</p>
+            <div role="region" aria-label={t('budget.title')} tabIndex={0} className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <Table>
               <THead>
                 <TR>
@@ -649,6 +651,7 @@ export function BudgetPage() {
                 })}
               </TBody>
             </Table>
+            </div>
           </div>
         )}
       </QueryState>

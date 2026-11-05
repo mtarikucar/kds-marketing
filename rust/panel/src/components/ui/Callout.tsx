@@ -34,7 +34,7 @@ export function Callout({ tone = 'info', icon, title, children, className, ...pr
     <div
       role={role}
       className={cn(
-        'flex gap-3 rounded-lg border-s-4 p-4',
+        'flex min-w-0 gap-3 rounded-lg border-s-4 p-4',
         toneClasses[tone],
         className,
       )}
@@ -45,7 +45,7 @@ export function Callout({ tone = 'info', icon, title, children, className, ...pr
           {icon}
         </span>
       )}
-      <div className="flex flex-col gap-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-1 break-words [overflow-wrap:anywhere]">
         {title && (
           <p className={cn('text-sm font-semibold', titleColorClasses[tone])}>{title}</p>
         )}

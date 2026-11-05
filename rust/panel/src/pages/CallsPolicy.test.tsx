@@ -43,6 +43,23 @@ const stored: CallPolicy = {
 };
 
 describe('CallsPolicy', () => {
+  it('opens only the first section initially and retains edits when an optional section is closed', async () => {
+    const calls = mockFetch({ 'GET /api/auth/me': manager, 'GET /api/calls': [], 'GET /api/calls/policy': stored });
+    renderAt('/calls');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
+    expect(await screen.findByLabelText(tr.calls.policy.fields.greeting_inbound)).toBeVisible();
+    expect(screen.getByLabelText(tr.calls.policy.fields.holding_default)).not.toBeVisible();
+    expect(screen.getByLabelText(tr.calls.policy.fields.max_duration_s)).not.toBeVisible();
+    const phrases = screen.getByText(tr.calls.policy.phrasesTitle, { selector: 'summary' });
+    await user.click(phrases);
+    await user.type(screen.getByLabelText(tr.calls.policy.fields.holding_default), 'Taslak bekletme metni');
+    await user.click(phrases);
+    expect(screen.getByLabelText(tr.calls.policy.fields.holding_default)).not.toBeVisible();
+    await user.click(phrases);
+    expect(screen.getByLabelText(tr.calls.policy.fields.holding_default)).toHaveValue('Taslak bekletme metni');
+    expect(calls.some(call => call.method === 'PUT')).toBe(false);
+  });
   it('saves_policy', async () => {
     const user = userEvent.setup();
     const calls = mockFetch({
@@ -52,8 +69,10 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': { ...stored, greeting_inbound: 'Merhaba' },
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const greeting = await screen.findByLabelText(tr.calls.policy.fields.greeting_inbound);
     await user.type(greeting, 'Merhaba');
+    await user.click(screen.getByText(tr.calls.policy.phrasesTitle, { selector: 'summary' }));
     await user.type(screen.getByLabelText(tr.calls.policy.fields.holding_default), 'Bir saniye{enter}Hemen bakıyorum');
     await user.click(screen.getByRole('button', { name: tr.common.save }));
     await waitFor(() =>
@@ -72,10 +91,12 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': stored,
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const notice = await screen.findByLabelText(tr.calls.policy.fields.transcript_notice);
     expect(screen.getByLabelText(tr.calls.policy.fields.closing)).toHaveValue(stored.closing);
     await user.clear(notice);
     await user.type(notice, 'Görüşme yazıya dökülür.');
+    await user.click(screen.getByText(tr.calls.policy.phrasesTitle, { selector: 'summary' }));
     await user.type(screen.getByLabelText(tr.calls.policy.phrases.fillers), '{enter}Hemen dönüyorum.');
     await user.click(screen.getByRole('button', { name: tr.common.save }));
     await waitFor(() =>
@@ -101,6 +122,7 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': { ...shown, opening_outbound: null, disclosure_sentence: '' },
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const opening = await screen.findByLabelText(tr.calls.policy.fields.opening_outbound);
     expect(opening).toHaveValue(stored.opening_outbound);
     const reads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/calls/policy').length;

@@ -153,6 +153,27 @@ describe('Paylaşımlar · Haftalık özet', () => {
 });
 
 describe('Paylaşımlar · Paylaşım ayarları', () => {
+  it.each([
+    ['Format süreleri', 'Reels · Hazırlık (saat önce)', '-1'],
+    ['Günlük sınırlar', 'Gönderiler arası en az (saat)', '25'],
+  ])('reveals an invalid field in %s even after leaving that group', async (group, label, value) => {
+    const calls = mockFetch(postsAnswers);
+    const user = userEvent.setup();
+    open('settings');
+    const form = await screen.findByTestId('posting-settings');
+    await user.click(within(form).getByRole('button', { name: group }));
+    const field = within(form).getByLabelText(label);
+    await user.clear(field);
+    await user.type(field, value);
+    await user.click(within(form).getByRole('button', { name: 'Takvim ve saat' }));
+    expect(field).not.toBeVisible();
+    await user.click(within(form).getByRole('button', { name: 'Ayarları kaydet' }));
+    expect(await within(form).findByRole('alert')).toBeVisible();
+    expect(field).toBeVisible();
+    expect(within(form).getByRole('button', { name: group })).toHaveAttribute('aria-pressed', 'true');
+    expect(calls.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
   it('an owner reads the policy in hours and saves it in minutes', async () => {
     const calls = mockFetch({
       ...postsAnswers,
@@ -164,13 +185,20 @@ describe('Paylaşımlar · Paylaşım ayarları', () => {
     expect(lead).toHaveValue('48');
     await userEvent.clear(lead);
     await userEvent.type(lead, '36');
+    await userEvent.click(within(form).getByRole('button', { name: 'Günlük sınırlar' }));
+    expect(lead).not.toBeVisible();
     const spacing = within(form).getByLabelText('Gönderiler arası en az (saat)');
     expect(spacing).toHaveValue('3');
     await userEvent.clear(spacing);
     await userEvent.type(spacing, '2,5');
+    await userEvent.click(within(form).getByRole('button', { name: 'Takvim ve saat' }));
     const tz = within(form).getByLabelText('Saat dilimi');
     await userEvent.clear(tz);
     await userEvent.type(tz, 'Europe/Berlin');
+    await userEvent.click(within(form).getByRole('button', { name: 'Format süreleri' }));
+    expect(lead).toBeVisible();
+    expect(lead).toHaveValue('36');
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
     await userEvent.click(within(form).getByRole('button', { name: 'Ayarları kaydet' }));
     await waitFor(() => expect(within(form).getByRole('status')).toHaveTextContent('Kaydedildi.'));
     const put = calls.find((c) => c.method === 'PUT');
@@ -196,19 +224,25 @@ describe('Paylaşımlar · Paylaşım ayarları', () => {
     });
     open('settings');
     const form = await screen.findByTestId('posting-settings');
+    await userEvent.click(within(form).getByRole('button', { name: 'Takvim ve saat' }));
     const quiet = within(form).getByLabelText('Sessiz saatler bitişi');
     await userEvent.clear(quiet);
     await userEvent.type(quiet, '25');
+    await userEvent.click(within(form).getByRole('button', { name: 'Format süreleri' }));
     await userEvent.click(within(form).getByRole('button', { name: 'Ayarları kaydet' }));
     expect(await within(form).findByRole('alert')).toHaveTextContent(/saatler 0–23/);
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+    expect(quiet).toBeVisible();
+    expect(within(form).getByRole('button', { name: 'Takvim ve saat' })).toHaveAttribute('aria-pressed', 'true');
     await userEvent.clear(quiet);
     await userEvent.type(quiet, '8');
     const tz = within(form).getByLabelText('Saat dilimi');
     await userEvent.clear(tz);
     await userEvent.type(tz, 'Mars/Olympus');
+    await userEvent.click(within(form).getByRole('button', { name: 'Günlük sınırlar' }));
     await userEvent.click(within(form).getByRole('button', { name: 'Ayarları kaydet' }));
     expect(await within(form).findByText('Saat dilimi tanınmadı (ör. Europe/Istanbul).')).toBeInTheDocument();
+    expect(tz).toBeVisible();
   });
 
   it('a member who is no owner or manager reads them only', async () => {
@@ -216,6 +250,10 @@ describe('Paylaşımlar · Paylaşım ayarları', () => {
     open('settings');
     const form = await screen.findByTestId('posting-settings');
     expect(within(form).getByLabelText('Reels · Hazırlık (saat önce)')).toBeDisabled();
+    await userEvent.click(within(form).getByRole('button', { name: 'Günlük sınırlar' }));
+    expect(within(form).getByLabelText('Gönderiler arası en az (saat)')).toBeDisabled();
+    await userEvent.click(within(form).getByRole('button', { name: 'Takvim ve saat' }));
+    expect(within(form).getByLabelText('Saat dilimi')).toBeDisabled();
     expect(within(form).queryByRole('button', { name: 'Ayarları kaydet' })).toBeNull();
     expect(
       within(form).getByText('Bu ayarları yalnız sahip veya yönetici değiştirir.'),

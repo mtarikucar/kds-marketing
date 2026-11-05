@@ -10,8 +10,9 @@ import type { AcceptOut, MeOut } from '@/api/types';
 import { SESSION_KEY, useOptionalSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
-import { Button, Callout, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { MIN_PASSWORD_CHARS } from './RegisterPage';
+import { useEntryCopy } from './entryCopy';
 
 /**
  * `/invite/:token`. A signed-in user accepts with one click (the invite must be for their
@@ -22,6 +23,7 @@ import { MIN_PASSWORD_CHARS } from './RegisterPage';
  */
 export function AcceptInvitePage() {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
   const { token = '' } = useParams();
   const queryClient = useQueryClient();
   const session = useOptionalSession();
@@ -75,6 +77,7 @@ export function AcceptInvitePage() {
         <Callout tone="success" icon={<CheckCircle2 className="h-4 w-4" />}>
           {t('invite.accepted')}
         </Callout>
+        <p className="text-sm leading-6 text-muted-foreground">{copy('inviteAcceptedHelp')}</p>
         <Button asChild>
           <Link to="/">{t('invite.goHome')}</Link>
         </Button>
@@ -100,7 +103,7 @@ export function AcceptInvitePage() {
             </Button>
           </div>
         ) : (
-          <form className="flex flex-col gap-4" onSubmit={onSubmitNew} noValidate>
+          <form className="flex flex-col gap-4" onSubmit={onSubmitNew}>
             <p className="text-sm text-muted-foreground">{t('invite.newUser')}</p>
             <Field label={t('fields.display_name')} required>
               {(ids) => (
@@ -119,10 +122,9 @@ export function AcceptInvitePage() {
               required
             >
               {(ids) => (
-                <Input
+                <PasswordInput
                   id={ids.id}
                   aria-describedby={ids.describedBy}
-                  type="password"
                   autoComplete="new-password"
                   minLength={MIN_PASSWORD_CHARS}
                   required
@@ -135,7 +137,7 @@ export function AcceptInvitePage() {
               {t('invite.submitNew')}
             </Button>
             <p className="text-sm text-muted-foreground">
-              {t('invite.haveAccount')} {loginLink}
+              {copy('inviteReturn')} {loginLink}
             </p>
           </form>
         )}

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { TFunction } from 'i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -10,9 +11,27 @@ export type StudioKey = {
   [K in keyof typeof tr.studio]: (typeof tr.studio)[K] extends string ? K : never;
 }[keyof typeof tr.studio];
 export const inputClass =
-  'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-base sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 export const buttonClass =
-  'rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
+  'min-h-10 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-muted aria-pressed:border-primary aria-pressed:bg-primary/10 aria-pressed:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
+/** Translate standard content formats while retaining names defined by the workspace. */
+export function contentTypeLabel(t: TFunction, value: string): string {
+  switch (value) {
+    case 'text':
+    case 'image':
+    case 'video':
+      return t(`studio.contentFormats.${value}`);
+    case 'story':
+    case 'feed_post':
+    case 'carousel':
+    case 'reel':
+    case 'tiktok_video':
+      return t(`posts.format.${value}`);
+    default:
+      return value;
+  }
+}
+
 export function useStudioKey() {
   const session = useSession();
   return ['studio', session.data?.current_workspace] as const;
@@ -48,16 +67,16 @@ export function Region({
   return (
     <section
       aria-labelledby={`studio-${name}`}
-      className={`min-w-0 space-y-4 rounded-lg border border-border bg-surface p-4 sm:p-5 ${className}`}
+      className={`min-w-0 space-y-4 ${name === 'today' ? 'border-t-2 border-foreground bg-surface px-4 py-6 sm:px-6' : name === 'strategy' ? 'border-y border-border py-4' : 'border-t border-border pt-6'} ${className}`}
     >
-      <h2 id={`studio-${name}`} className="text-lg font-semibold tracking-tight">
+      <h2 id={`studio-${name}`} className={name === 'today' ? 'text-2xl font-normal' : name === 'plan' ? 'text-xl font-normal' : 'text-sm font-medium text-muted-foreground'}>
         {t(`studio.${name}`)}
       </h2>
       {children}
     </section>
   );
 }
-export function Field({ label, children }: { label: StudioKey; children: ReactNode }) {
+export function Field({ label, children }: { label: StudioKey | 'filters.hypothesis' | 'filters.from' | 'filters.until'; children: ReactNode }) {
   const { t } = useTranslation();
   return (
     <label className="flex min-w-0 flex-col gap-1 text-sm">
@@ -66,7 +85,7 @@ export function Field({ label, children }: { label: StudioKey; children: ReactNo
     </label>
   );
 }
-export function StudioError({ error }: { error: unknown }) {
+export function StudioError({ error, onRetry }: { error: unknown; onRetry?: () => unknown }) {
   const { t } = useTranslation();
   if (!error) return null;
   const code = isApiError(error) ? error.code : '';
@@ -99,8 +118,16 @@ export function StudioError({ error }: { error: unknown }) {
           {t('studio.reconnect')}
         </Link>
       ) : null}
+      {onRetry && <button type="button" className={buttonClass} onClick={() => void onRetry()}>{t('common.retry')}</button>}
     </div>
   );
+}
+
+export function StudioReadStatus({ query }: { query: { isLoading: boolean; error: unknown; refetch: () => unknown } }) {
+  const { t } = useTranslation();
+  return query.isLoading
+    ? <p role="status" className="py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+    : <StudioError error={query.error} onRetry={query.refetch} />;
 }
 export function Reason({ reason }: { reason: string }) {
   const { t } = useTranslation();

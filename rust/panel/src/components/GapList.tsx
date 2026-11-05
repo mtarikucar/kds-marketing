@@ -37,9 +37,9 @@ export function GapList({ gaps }: { gaps: readonly Gap[] }) {
   const { t } = useTranslation();
   if (gaps.length === 0) return null;
   return (
-    <ul className="flex list-disc flex-col gap-1 ps-5">
+    <ul className="flex list-disc flex-col gap-2 ps-5">
       {gaps.map((gap, i) => (
-        <li key={`${gap.field}-${i}`} className="text-sm text-foreground" title={gap.field}>
+        <li key={`${gap.field}-${i}`} className="text-sm leading-relaxed text-foreground" title={gap.field}>
           {gapText(t, gap)}
         </li>
       ))}

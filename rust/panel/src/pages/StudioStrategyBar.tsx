@@ -37,7 +37,7 @@ export function StudioStrategyBar({
   );
   const [open, setOpen] = useState(false);
   return (
-    <Region name="strategy" className="lg:col-span-3 border-t-4 border-t-brand-navy">
+    <Region name="strategy" className="text-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           {data && (
@@ -45,7 +45,7 @@ export function StudioStrategyBar({
               <p className="text-sm text-muted-foreground">
                 {t('studio.version')} {data.strategy.number}
               </p>
-              <p className="text-xl font-semibold">{data.goals.objective}</p>
+              <p className="text-base font-medium">{data.goals.objective}</p>
               <ul className="mt-2 flex flex-wrap gap-3 text-sm">
                 {data.goals.kpis.map((k) => (
                   <li key={k.name}>
@@ -58,7 +58,7 @@ export function StudioStrategyBar({
         </div>
         {data && manage && (
           <button
-            className={`${buttonClass} border-danger text-danger`}
+            className={`${buttonClass} text-danger`}
             disabled={brake.isPending}
             onClick={() => brake.mutate()}
           >
@@ -67,9 +67,11 @@ export function StudioStrategyBar({
         )}
       </div>
       <StudioError error={brake.error} />
-      <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <details>
+      <summary className="cursor-pointer py-1 text-sm font-medium">{t('studio.workbench.hypotheses', { defaultValue: 'Hipotezleri göster' })}</summary>
+      <ul className="mt-4 grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-1">
         {data?.hypotheses.map((h) => (
-          <li key={h.id}>
+          <li key={h.id} className="min-w-0">
             <div className="flex justify-between gap-2 text-sm">
               <button
                 className="text-start underline decoration-primary/40 underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring"
@@ -79,12 +81,16 @@ export function StudioStrategyBar({
               </button>
               <span>{Math.round((h.derived_confidence ?? h.prior_confidence) * 100)}%</span>
             </div>
-            <progress
+            <div
+              role="meter"
               aria-label={`${h.title} ${t('studio.confidence')}`}
-              className="h-2 w-full accent-primary"
-              max={1}
-              value={h.derived_confidence ?? h.prior_confidence}
-            />
+              aria-valuemin={0}
+              aria-valuemax={1}
+              aria-valuenow={h.derived_confidence ?? h.prior_confidence}
+              className="my-2 h-px overflow-hidden bg-border"
+            >
+              <div className="h-full bg-foreground" style={{ width: `${Math.min(100, Math.max(0, (h.derived_confidence ?? h.prior_confidence) * 100))}%` }} />
+            </div>
             <p className="text-xs text-muted-foreground">
               {h.metric} ·{' '}
               {t(h.derived_confidence == null ? 'studio.priorLabel' : 'studio.derived')}
@@ -94,12 +100,12 @@ export function StudioStrategyBar({
       </ul>
       {data && propose && (
         <>
-          <button className={buttonClass} aria-expanded={open} onClick={() => setOpen(!open)}>
+          <button className={`${buttonClass} self-start justify-self-end`} aria-expanded={open} onClick={() => setOpen(!open)}>
             {t('studio.proposal')}
           </button>
           {open && (
             <form
-              className="grid gap-3 sm:grid-cols-2"
+              className="col-span-full grid gap-4 border-t border-border pt-4 sm:grid-cols-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 proposal.mutate(new FormData(e.currentTarget));
@@ -138,6 +144,7 @@ export function StudioStrategyBar({
           )}
         </>
       )}
+      </details>
     </Region>
   );
 }

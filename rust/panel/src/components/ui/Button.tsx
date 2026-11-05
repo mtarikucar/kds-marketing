@@ -5,11 +5,11 @@ import { cn } from './cn';
 import { Spinner } from './Spinner';
 
 const button = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg font-medium transition-colors duration-fast ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium transition-colors duration-fast ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50',
   {
     variants: {
       variant: {
-        primary: 'bg-primary text-primary-foreground hover:bg-primary-hover shadow-xs',
+        primary: 'bg-primary text-primary-foreground hover:bg-primary-hover',
         secondary: 'bg-surface-muted text-foreground hover:bg-border',
         outline: 'border border-border-strong bg-surface text-foreground hover:bg-surface-muted',
         ghost: 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',

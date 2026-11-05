@@ -1,0 +1,1416 @@
+{
+  "results": [
+    {
+      "run": "real",
+      "route": "/team",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/team",
+      "case": "dialog: Üye davet et",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/roles",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/roles",
+      "case": "dialog: Rol oluştur",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/agents",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/budget",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/budget",
+      "case": "dialog: Bütçe kalemi oluştur",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/ledger",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/billing",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/capabilities",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/capabilities",
+      "case": "dialog: Kabiliyet bildir",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/connect",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/team",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/team",
+      "case": "dialog: Üye davet et",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/roles",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/roles",
+      "case": "dialog: Rol oluştur",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/agents",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/budget",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/budget",
+      "case": "dialog: Bütçe kalemi oluştur",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/ledger",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/billing",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/capabilities",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/capabilities",
+      "case": "dialog: Kabiliyet bildir",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "real",
+      "route": "/connect",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Facebook sayfası",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Instagram",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Instagram mesajları",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Messenger",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: WhatsApp Business",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Meta reklamları",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: SMS hattı",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: NetGSM santrali",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: X",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: E-posta kutusu",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: TikTok",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: LinkedIn kişisel hesap",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: LinkedIn sayfası",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/workspaces",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/workspaces",
+      "case": "dialog: Etkinleştirmeyi geri al",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/payments",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/health",
+      "case": "page",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "dialog: Düzenle",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "dialog: Politika",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "dialog: Ulaşılamıyor işaretle",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "dialog: Bütçe bağla",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/capabilities",
+      "case": "dialog: Emekliye ayır",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Facebook sayfası",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Instagram",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Instagram mesajları",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Messenger",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: WhatsApp Business",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: Meta reklamları",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: SMS hattı",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: NetGSM santrali",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: X",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: E-posta kutusu",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: TikTok",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: LinkedIn kişisel hesap",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/connect",
+      "case": "provider: LinkedIn sayfası",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/workspaces",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/workspaces",
+      "case": "dialog: Etkinleştirmeyi geri al",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/payments",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/platform/health",
+      "case": "page",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "waiting",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "reported",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "activation",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "paid",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "revoked",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "missing",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "denied",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "unknown",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "assets",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "waiting",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "reported",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "activation",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "paid",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/billing",
+      "case": "revoked",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "missing",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "denied",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "unknown",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "fixture",
+      "route": "/oauth/callback",
+      "case": "assets",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "expired",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "missing",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "denied",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "unknown",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "assets",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "expired",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "missing",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "denied",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "unknown",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "oauth",
+      "route": "/oauth/callback",
+      "case": "assets",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "keys",
+      "route": "/api-keys",
+      "case": "revoke-confirmation",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "keys",
+      "route": "/api-keys",
+      "case": "revoke-confirmation",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "invite",
+      "route": "/team",
+      "case": "one-time-invite",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "invite",
+      "route": "/team",
+      "case": "one-time-invite",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "restricted",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/payments",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/payments",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/health",
+      "case": "loading",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/health",
+      "case": "error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/team",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/roles",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/api-keys",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/agents",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/budget",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/ledger",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/billing",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/capabilities",
+      "case": "restricted",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/payments",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/payments",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/health",
+      "case": "loading",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "states",
+      "route": "/platform/health",
+      "case": "error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Üye davet et",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Çıkar",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Daveti iptal et",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Rol oluştur",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Düzenle",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Sil",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/api-keys",
+      "case": "Anahtar oluştur",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/api-keys",
+      "case": "İptal et",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Bütçe kalemi oluştur",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Harcamalar",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Düzenle",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Emekliye ayır",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/platform/workspaces",
+      "case": "Askıya al",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/platform/workspaces",
+      "case": "Etkinleştirmeyi geri al",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Üye davet et",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Çıkar",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/team",
+      "case": "Daveti iptal et",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Rol oluştur",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Düzenle",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/roles",
+      "case": "Sil",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/api-keys",
+      "case": "Anahtar oluştur",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/api-keys",
+      "case": "İptal et",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Bütçe kalemi oluştur",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Harcamalar",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Düzenle",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/budget",
+      "case": "Emekliye ayır",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/platform/workspaces",
+      "case": "Askıya al",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "confirm",
+      "route": "/platform/workspaces",
+      "case": "Etkinleştirmeyi geri al",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/team",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/budget",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/capabilities",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/billing",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/platform/health",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/platform/payments",
+      "case": "request-error",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/team",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/budget",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/capabilities",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/billing",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/platform/health",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "errors",
+      "route": "/platform/payments",
+      "case": "request-error",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "keys",
+      "route": "/api-keys",
+      "case": "one-time-key",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "keys",
+      "route": "/api-keys",
+      "case": "one-time-key",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "operator",
+      "route": "/platform/payments",
+      "case": "confirmation-delivery",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "operator",
+      "route": "/platform/payments",
+      "case": "revoke-confirmation",
+      "width": 1440,
+      "outcome": "pass"
+    },
+    {
+      "run": "operator",
+      "route": "/platform/payments",
+      "case": "confirmation-delivery",
+      "width": 390,
+      "outcome": "pass"
+    },
+    {
+      "run": "operator",
+      "route": "/platform/payments",
+      "case": "revoke-confirmation",
+      "width": 390,
+      "outcome": "pass"
+    }
+  ],
+  "hardFailures": [],
+  "notes": [
+    "Real direct /api-keys navigation was excluded because the Vite proxy handled it; synthetic key captures use SPA navigation.",
+    "Runs executed without browser page-error instrumentation are not asserted page-error-free. Future runs can write instrumented ADMIN_RESULTS."
+  ]
+}

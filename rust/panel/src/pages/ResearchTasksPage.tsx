@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +19,6 @@ import {
   Disclosure,
   EmptyState,
   Input,
-  PageHeader,
   Progress,
   Textarea,
   toast,
@@ -44,11 +44,11 @@ function BriefView({ brief }: { brief: Brief }) {
     [t('leads.tasks.brief.note'), brief.note],
   ];
   return (
-    <dl className="grid gap-1 text-sm sm:grid-cols-2">
+    <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
       {rows
         .filter(([, v]) => v)
         .map(([k, v]) => (
-          <div key={k} className="flex gap-2">
+          <div key={k} className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-3">
             <dt className="text-muted-foreground">{k}</dt>
             <dd>{v}</dd>
           </div>
@@ -131,13 +131,13 @@ function TaskCard({ item }: { item: TaskOut }) {
     guard((release) => close.mutate(undefined, { onSettled: release }));
   };
   return (
-    <Card data-testid="research-task">
-      <CardHeader className="flex-row flex-wrap items-center gap-2">
-        <CardTitle className="text-base">{taskLabel(t, task)}</CardTitle>
+    <article data-testid="research-task" className="border-b border-border py-5">
+      <header className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="text-base font-medium">{taskLabel(t, task)}</h2>
         <Badge tone={task.status === 'open' ? 'success' : 'neutral'}>{t(`leads.tasks.statuses.${task.status}`)}</Badge>
         {task.kind.type === 'ad_hoc' && <Badge tone="info">{t('leads.tasks.target', { n: task.kind.target_count })}</Badge>}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      </header>
+      <div className="flex flex-col gap-3">
         <BriefView brief={task.brief} />
         <p className="text-sm">
           {t('leads.tasks.remaining', { remaining: item.remaining_today, cap: task.daily_cap })}
@@ -193,8 +193,8 @@ function TaskCard({ item }: { item: TaskOut }) {
         <Disclosure title={t('leads.tasks.progress')}>
           <TaskProgress id={task.id} />
         </Disclosure>
-      </CardContent>
-    </Card>
+      </div>
+    </article>
   );
 }
 
@@ -326,6 +326,7 @@ export function ResearchTasksPage() {
   const { t } = useTranslation();
   const key = useLeadsKey();
   const [status, setStatus] = useState<TaskStatus | ''>('open');
+  const [creating, setCreating] = useState(false);
   const tasks = useQuery({
     queryKey: [...key, 'research', 'list', status || 'all'],
     queryFn: () => listTasks({ status: status || undefined }),
@@ -333,7 +334,7 @@ export function ResearchTasksPage() {
   const items = tasks.data?.items ?? [];
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="research"
         title={t('leads.tasks.title')}
         description={t('leads.tasks.description')}
         actions={
@@ -355,16 +356,24 @@ export function ResearchTasksPage() {
       </label>
       <QueryState query={tasks}>
         {items.length === 0 ? (
+          status ? <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
+            action={<Button variant="outline" onClick={() => setStatus('')}>{t('leads.filteredEmpty.clear')}</Button>} /> :
           <EmptyState title={t('leads.tasks.empty')} description={t('leads.tasks.emptyBody')} />
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="border-t border-border">
             {items.map((item) => (
               <TaskCard key={item.task.id} item={item} />
             ))}
           </div>
         )}
       </QueryState>
-      <CreateTask />
+      <div className="border-t border-border pt-4">
+        <Button type="button" variant="outline" aria-expanded={creating} aria-controls="research-create"
+          onClick={() => setCreating((open) => !open)}>
+          {creating ? t('leads.ux.hideTaskForm', { defaultValue: 'Hide task form' }) : t('leads.tasks.create.title')}
+        </Button>
+        <div id="research-create" hidden={!creating} className="mt-4"><CreateTask /></div>
+      </div>
     </>
   );
 }

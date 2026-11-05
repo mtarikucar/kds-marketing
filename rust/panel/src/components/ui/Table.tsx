@@ -26,7 +26,7 @@ export const THead = forwardRef<
 >(({ className, ...props }, ref) => (
   <thead
     ref={ref}
-    className={cn('bg-surface-muted text-micro uppercase text-muted-foreground', className)}
+    className={cn('bg-surface-muted text-caption text-muted-foreground', className)}
     {...props}
   />
 ));
@@ -59,7 +59,7 @@ export const TH = forwardRef<HTMLTableCellElement, THProps>(
     <th
       ref={ref}
       className={cn(
-        'h-10 px-3 text-start align-middle font-medium',
+        'h-11 px-4 text-start align-middle font-medium',
         numeric && 'text-end tabular-nums',
         className,
       )}
@@ -78,7 +78,7 @@ export const TD = forwardRef<HTMLTableCellElement, TDProps>(
   ({ className, numeric, ...props }, ref) => (
     <td
       ref={ref}
-      className={cn('px-3 py-2.5 align-middle', numeric && 'text-end tabular-nums', className)}
+      className={cn('px-4 py-3 align-middle', numeric && 'text-end tabular-nums', className)}
       {...props}
     />
   ),

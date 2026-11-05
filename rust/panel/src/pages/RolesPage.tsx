@@ -215,7 +215,7 @@ export function RolesPage() {
         <DataTable
           columns={columns}
           data={roles.data ?? []}
-          emptyState={<EmptyState title={t('roles.empty')} />}
+          emptyState={<EmptyState className="rounded-none border-0" title={t('roles.empty')} />}
         />
       </QueryState>
       {canManage && (

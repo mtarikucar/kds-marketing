@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/ui';
 import {
   MaterialBadges,
   MaterialsError,
+  MaterialsReadStatus,
   MediaThumb,
   TagsFields,
   cardClass,
@@ -39,6 +40,7 @@ export function MaterialEditor({
 }) {
   const { t, i18n } = useTranslation();
   const key = useMaterialsKey();
+  const [group, setGroup] = useState<'review' | 'publishing' | 'history'>('review');
   const decider = useDecider();
   const detail = useQuery({ queryKey: [...key, 'material', id], queryFn: () => m.materialGet(id) });
   const olays = useQuery({ queryKey: [...key, 'olays'], queryFn: () => m.olaysList() });
@@ -52,13 +54,13 @@ export function MaterialEditor({
       <button type="button" className={tapClass} onClick={onBack}>
         {t('materials.back')}
       </button>
-      <MaterialsError error={detail.error} />
+      <MaterialsReadStatus query={detail} />
       {material && (
         <>
-          <div className={`${cardClass} grid grid-cols-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)]`}>
+          <div className={`${cardClass} grid grid-cols-1 gap-6 border-t-2 border-foreground bg-surface px-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6`}>
             <MediaThumb mime={material.mime} alt={materialLabel(t, material)} />
             <div className="min-w-0 space-y-2">
-              <h3 className="break-words text-lg font-semibold">{materialLabel(t, material)}</h3>
+              <h3 className="break-words text-xl font-normal">{materialLabel(t, material)}</h3>
               <MaterialBadges material={material} />
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">{t('materials.editor.origin')}</dt>
@@ -90,41 +92,75 @@ export function MaterialEditor({
               </dl>
             </div>
           </div>
+          {!material.erased_at && (
+            <nav aria-label={t('materials.editor.workbench.sections', { defaultValue: 'Materyal bölümleri' })} className="flex flex-wrap gap-2 border-b border-border pb-3">
+              {([
+                ['review', t('materials.editor.workbench.review', { defaultValue: 'Etiketler ve kişiler' })],
+                ['publishing', t('materials.editor.workbench.publishing', { defaultValue: 'İzin ve yerleşim' })],
+                ['history', t('materials.editor.workbench.history', { defaultValue: 'Kullanım geçmişi' })],
+              ] as const).map(([value, label]) => (
+                <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)} className={`${tapClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground`}>
+                  {label}
+                </button>
+              ))}
+            </nav>
+          )}
           {material.erased_at ? (
             <p role="status" className="rounded-md bg-surface-muted p-3 text-sm">
               {t('materials.editor.erasedHelp')}
             </p>
           ) : (
             <>
-              <TagsSection key={`tags-${material.revision}`} material={material} />
-              <PeopleSection key={`people-${material.revision}`} material={material} />
-              <PermissionSection key={`share-${material.revision}`} material={material} decider={decider} />
-              {decider && material.origin.kind === 'real' && <FreeSection material={material} />}
-              {decider && (
-                <BindSection
-                  key={`bind-${material.revision}`}
-                  material={material}
-                  olays={olays.data?.map((o) => o.olay) ?? []}
-                />
-              )}
-              {decider && <DeleteSection material={material} used={detail.data!.used_in.length > 0} />}
+              <div hidden={group !== 'review'} className="space-y-4">
+                <p className="max-w-2xl text-sm text-muted-foreground">{t('materials.editor.workbench.reviewHelp', { defaultValue: 'Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.' })}</p>
+                <TagsSection key={`tags-${material.id}`} material={material} />
+                <PeopleSection key={`people-${material.id}`} material={material} />
+              </div>
+              <div hidden={group !== 'publishing'} className="space-y-4">
+                <p className="max-w-2xl text-sm text-muted-foreground">{t('materials.editor.workbench.publishingHelp', { defaultValue: 'Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır.' })}</p>
+                <PermissionSection key={`share-${material.id}`} material={material} decider={decider} />
+                {decider && material.origin.kind === 'real' && <FreeSection material={material} />}
+                {decider && (
+                  <BindSection
+                    key={`bind-${material.id}`}
+                    material={material}
+                    olays={olays.data?.map((o) => o.olay) ?? []}
+                  />
+                )}
+              </div>
             </>
           )}
-          <section className={cardClass} aria-labelledby={`used-${id}`}>
-            <h4 id={`used-${id}`} className="font-semibold">
-              {t('materials.usedIn.title')}
-            </h4>
-            <UsedInList uses={detail.data!.used_in} onOpenSlot={onOpenSlot} />
-          </section>
+          <div hidden={!material.erased_at && group !== 'history'} className="space-y-4">
+            <section className={cardClass} aria-labelledby={`used-${id}`}>
+              <h4 id={`used-${id}`} className="font-semibold">
+                {t('materials.usedIn.title')}
+              </h4>
+              <UsedInList uses={detail.data!.used_in} onOpenSlot={onOpenSlot} />
+            </section>
+            {!material.erased_at && decider && <DeleteSection material={material} used={detail.data!.used_in.length > 0} />}
+          </div>
         </>
       )}
     </div>
   );
 }
 
+/** A different section's save refreshes the material revision. Follow server values only
+ * while this field is untouched; a hidden, unfinished draft must survive that refresh.
+ * Mutation closures still use the latest material.revision passed to each section. */
+function useMaterialDraft<T>(source: T) {
+  const [baseline, setBaseline] = useState(source);
+  const [draft, setDraft] = useState(source);
+  if (JSON.stringify(source) !== JSON.stringify(baseline)) {
+    setBaseline(source);
+    if (JSON.stringify(draft) === JSON.stringify(baseline)) setDraft(source);
+  }
+  return [draft, setDraft] as const;
+}
+
 function TagsSection({ material }: { material: m.Material }) {
   const { t } = useTranslation();
-  const [tags, setTags] = useState<m.Tags>(material.tags);
+  const [tags, setTags] = useMaterialDraft(material.tags);
   const suggested = !material.tags_reviewed_by;
   const save = useMaterialsMutation(() =>
     m.materialTag(material.id, material.revision, {
@@ -137,6 +173,7 @@ function TagsSection({ material }: { material: m.Material }) {
   );
   return (
     <form
+      aria-label={t('materials.editor.tags')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -171,7 +208,7 @@ function PersonName({ id }: { id: string }) {
 /** The inbox persons it shows (KVKK: erasing one of them erases this material). */
 function PeopleSection({ material }: { material: m.Material }) {
   const { t } = useTranslation();
-  const [people, setPeople] = useState<string[]>(material.people);
+  const [people, setPeople] = useMaterialDraft(material.people);
   const [q, setQ] = useState('');
   const found = useQuery({
     queryKey: ['inbox', 'people', 'search', q],
@@ -226,7 +263,7 @@ function PeopleSection({ material }: { material: m.Material }) {
             ))}
         </ul>
       )}
-      <MaterialsError error={found.error} />
+      <MaterialsReadStatus query={found} />
       {changed && (
         <button
           type="button"
@@ -246,7 +283,7 @@ function PeopleSection({ material }: { material: m.Material }) {
 
 function PermissionSection({ material, decider }: { material: m.Material; decider: boolean }) {
   const { t, i18n } = useTranslation();
-  const [permission, setPermission] = useState<m.SharePermission | ''>(
+  const [permission, setPermission] = useMaterialDraft<m.SharePermission | ''>(
     material.share?.permission ?? '',
   );
   const save = useMaterialsMutation(() =>
@@ -255,6 +292,7 @@ function PermissionSection({ material, decider }: { material: m.Material; decide
   const share = material.share;
   return (
     <form
+      aria-label={t('materials.editor.permission')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -356,7 +394,7 @@ function FreeSection({ material }: { material: m.Material }) {
 function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[] }) {
   const { t } = useTranslation();
   const current = material.binding.kind === 'olay' ? material.binding.olay_id : 'genel';
-  const [target, setTarget] = useState(current);
+  const [target, setTarget] = useMaterialDraft(current);
   const bind = useMaterialsMutation(() =>
     m.materialBind(
       material.id,
@@ -366,6 +404,7 @@ function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[
   );
   return (
     <form
+      aria-label={t('materials.editor.bind')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -404,7 +443,7 @@ function DeleteSection({ material, used }: { material: m.Material; used: boolean
     <section className={cardClass}>
       <h4 className="font-semibold">{t('materials.editor.delete')}</h4>
       <p className="text-sm text-muted-foreground">{t('materials.editor.deleteHelp')}</p>
-      <button type="button" className={tapClass} onClick={() => setOpen(true)}>
+      <button type="button" className={`${tapClass} border-danger/30 text-danger hover:bg-danger-subtle`} onClick={() => setOpen(true)}>
         {t('materials.editor.delete')}
       </button>
       <ConfirmDialog

@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -19,7 +20,7 @@ import {
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
-import { Button, Card, CardContent, DataTable, Disclosure, EmptyState, Input, PageHeader, toast } from '@/components/ui';
+import { Button, DataTable, Disclosure, EmptyState, Input, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { useDraftKey } from '@/lib/leads';
@@ -119,6 +120,7 @@ export function ProspectsPage() {
   const refresh = useLeadsRefresh();
   const canPromote = can(session.data, 'inbox.work');
   const [params] = useSearchParams();
+  const [moreFilters, setMoreFilters] = useState(() => Boolean(params.get('task')));
   const [filters, setFilters] = useState<Filters>(() => ({
     status: '',
     bucket: '',
@@ -195,6 +197,12 @@ export function ProspectsPage() {
     onError: (err) => toast.error(errorMessage(t, err)),
   });
 
+  const hasFilters = Object.values(filters).some(Boolean);
+  const clearFilters = () => {
+    setFilters({ status: '', bucket: '', city: '', segment: '', task: '' });
+    setCursors([]);
+    setSelected(new Set());
+  };
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const columns = useMemo<ColumnDef<ProspectRow, unknown>[]>(
     () => [
@@ -264,7 +272,7 @@ export function ProspectsPage() {
         cell: ({ row }) => {
           const p = row.original;
           return (
-            <div className="flex justify-end gap-1">
+            <div className="flex flex-wrap justify-end gap-1">
               {open(p) && canPromote && <PromoteButton prospect={p} />}
               {open(p) && (
                 <Button size="sm" variant="ghost" onClick={() => setRejecting(targets([p]))}>
@@ -287,7 +295,7 @@ export function ProspectsPage() {
   const taskItems = tasks.data?.items ?? [];
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="research"
         title={t('leads.prospects.title')}
         description={t('leads.prospects.description')}
         actions={
@@ -296,16 +304,14 @@ export function ProspectsPage() {
           </Button>
         }
       />
-      <Card>
-        <CardContent className="flex flex-col gap-3 pt-6">
-          <Disclosure title={t('leads.prospects.playbook')}>
-            <Playbook />
-          </Disclosure>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="border-y border-border py-2">
+        <Disclosure title={t('leads.prospects.playbook')}>
+          <Playbook />
+        </Disclosure>
+      </div>
+      <section className="flex min-w-0 flex-col gap-4" aria-label={t('leads.prospects.title')}>
+          <div className="border-b border-border pb-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.status')}
               <select
@@ -336,6 +342,14 @@ export function ProspectsPage() {
                 ))}
               </select>
             </label>
+          </div>
+          <button type="button" aria-expanded={moreFilters} aria-controls="prospect-more-filters"
+            className="mt-3 text-sm font-medium text-primary hover:underline"
+            onClick={() => setMoreFilters((open) => !open)}>
+            {moreFilters ? t('leads.ux.hideFilters', { defaultValue: 'Hide extra filters' }) : t('leads.ux.moreFilters', { defaultValue: 'More filters' })}
+            {[filters.task, filters.city, filters.segment].filter(Boolean).length > 0 && ` (${[filters.task, filters.city, filters.segment].filter(Boolean).length})`}
+          </button>
+          <div id="prospect-more-filters" hidden={!moreFilters} className={moreFilters ? "mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" : "hidden"}>
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.task')}
               <select className={selectClass} value={filters.task} onChange={(e) => setFilter('task', e.target.value)}>
@@ -358,6 +372,7 @@ export function ProspectsPage() {
               {t('leads.prospects.filters.segment')}
               <Input value={filters.segment} autoComplete="off" onChange={(e) => setFilter('segment', e.target.value)} />
             </label>
+          </div>
           </div>
 
           {chosen.length > 0 && (
@@ -401,7 +416,14 @@ export function ProspectsPage() {
             <DataTable
               columns={columns}
               data={rows}
-              emptyState={<EmptyState title={t('leads.prospects.empty')} description={t('leads.prospects.emptyBody')} />}
+              emptyState={hasFilters ? (
+                <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
+                  action={<Button variant="outline" onClick={clearFilters}>{t('leads.filteredEmpty.clear')}</Button>} />
+              ) : (
+                <EmptyState icon={<img src="/brand/scenes/prospects.svg" width="120" height="96" alt="" />}
+                  title={t('leads.prospects.empty')} description={t('leads.prospects.emptyBody')}
+                  action={<Button asChild variant="outline"><Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link></Button>} />
+              )}
             />
             <div className="flex items-center justify-end gap-2">
               <Button variant="outline" size="sm" disabled={cursors.length === 0} onClick={() => setCursors((c) => c.slice(0, -1))}>
@@ -423,8 +445,7 @@ export function ProspectsPage() {
               </Button>
             </div>
           </QueryState>
-        </CardContent>
-      </Card>
+      </section>
       {rejecting && rejecting.length > 0 && (
         <RejectDialog key={rejecting.map((x) => x.id).join()} targets={rejecting} onClose={() => setRejecting(null)} onDone={finished} />
       )}

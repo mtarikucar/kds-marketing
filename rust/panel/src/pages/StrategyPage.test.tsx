@@ -33,7 +33,7 @@ describe('StrategyPage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: tr.strategy.title })).toBeInTheDocument();
     expect(await screen.findByText('Atölye videoları öğrencileri çeker')).toBeInTheDocument();
     expect(screen.getByText(i18n.t('strategy.versionLabel', { number: 1 }))).toBeInTheDocument();
-    expect(screen.getByText('owner@alpha.example')).toBeInTheDocument();
+    expect(within(screen.getByRole('main')).getByText('owner@alpha.example')).toBeInTheDocument();
     expect(screen.getByText(tr.strategy.hypotheses.states.kept)).toBeInTheDocument();
   });
 
@@ -217,4 +217,90 @@ describe('StrategyPage across a workspace switch', () => {
     expect(screen.queryByDisplayValue('A ürünü')).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
+});
+
+describe('Strategy brief workbench', () => {
+  const fixtures = (extra: Record<string, unknown> = {}) => ({
+    'GET /api/auth/me': me,
+    'GET /api/strategy': strategyWithDraft,
+    [`GET /api/strategy/versions/${DRAFT_ID}/consultation`]: [],
+    'GET /api/capability-groups': [],
+    ...extra,
+  });
+
+  it('navigates the brief with keyboard focus without opening an editor or writing data', async () => {
+    const calls = mockFetch(fixtures());
+    renderAt('/strategy');
+    const navigation = await screen.findByRole('navigation', { name: 'Brief bölümleri' });
+    await userEvent.click(within(navigation).getByRole('button', { name: 'Hedefler ve plan' }));
+    const budget = within(navigation).getByRole('link', { name: tr.strategy.sections.budget_frame });
+    budget.focus();
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(document.getElementById('strategy-section-budget_frame')).toHaveFocus());
+    expect(screen.queryByRole('form', { name: tr.strategy.sections.budget_frame })).not.toBeInTheDocument();
+    expect(calls.some((call) => call.method !== 'GET')).toBe(false);
+  });
+
+  it('opens the first incomplete section, preserves typed work on repeated requests, and returns to reading after saving', async () => {
+    const calls = mockFetch(fixtures({
+      'PUT /api/strategy/draft/sections/identity': draftVersion,
+    }));
+    const user = userEvent.setup();
+    renderAt('/strategy');
+    const next = await screen.findByRole('button', { name: 'İlk eksiği tamamla' });
+    await user.click(next);
+    const form = await screen.findByRole('form', { name: tr.strategy.sections.identity });
+    const product = within(form).getByLabelText(tr.strategy.fields.product, { exact: false });
+    expect(product).toHaveFocus();
+    await user.clear(product);
+    await user.type(product, 'Yeni ürün briefi');
+    await user.click(next);
+    expect(product).toHaveValue('Yeni ürün briefi');
+    expect(calls.some((call) => call.method === 'PUT')).toBe(false);
+    await user.click(within(form).getByRole('button', { name: tr.common.save }));
+    await waitFor(() => expect(screen.queryByRole('form', { name: tr.strategy.sections.identity })).not.toBeInTheDocument());
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(1);
+    expect(document.getElementById('strategy-section-identity')?.querySelector('button')).toHaveFocus();
+  });
+
+  it('makes a missing hypothesis actionable while keeping representatives in read-only mode', async () => {
+    const user = userEvent.setup();
+    const data = { ...strategyWithDraft, gaps: [{ field: 'hypotheses[0].title', message: 'title required' }] };
+    mockFetch(fixtures({ 'GET /api/strategy': data }));
+    const first = renderAt('/strategy');
+    await user.click(await screen.findByRole('button', { name: 'İlk eksiği tamamla' }));
+    expect(await screen.findByRole('form', { name: tr.strategy.sections.hypotheses })).toBeInTheDocument();
+    first.unmount();
+    const calls = mockFetch(fixtures({ 'GET /api/auth/me': repMe, 'GET /api/strategy': data }));
+    renderAt('/strategy');
+    await user.click(await screen.findByRole('button', { name: 'İlk eksiğe git' }));
+    await waitFor(() => expect(document.getElementById('strategy-section-hypotheses')).toHaveFocus());
+    expect(screen.queryByRole('form', { name: tr.strategy.sections.hypotheses })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'İlk eksiği tamamla' })).not.toBeInTheDocument();
+    expect(calls.some((call) => call.method !== 'GET')).toBe(false);
+  });
+  it('shows one category at a time without losing an unfinished edit when moving between categories', async () => {
+    const calls = mockFetch(fixtures());
+    const user = userEvent.setup();
+    renderAt('/strategy');
+    const navigation = await screen.findByRole('navigation', { name: 'Brief bölümleri' });
+    expect(screen.getByRole('heading', { name: tr.strategy.sections.identity })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: tr.strategy.sections.budget_frame })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: tr.strategy.consultation.title })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'İlk eksiği tamamla' }));
+    const product = within(await screen.findByRole('form', { name: tr.strategy.sections.identity })).getByLabelText(tr.strategy.fields.product, { exact: false });
+    await user.clear(product);
+    await user.type(product, 'Kaydedilmemiş ürün');
+    await user.click(within(navigation).getByRole('button', { name: 'Hedefler ve plan' }));
+    expect(screen.getByRole('heading', { name: tr.strategy.sections.budget_frame })).toBeVisible();
+    expect(screen.queryByRole('form', { name: tr.strategy.sections.identity })).not.toBeInTheDocument();
+    await user.click(within(navigation).getByRole('button', { name: 'Marka ve kitle' }));
+    expect(product).toBeVisible();
+    expect(product).toHaveValue('Kaydedilmemiş ürün');
+    await user.click(within(navigation).getByRole('button', { name: tr.strategy.consultation.title }));
+    expect(screen.getByRole('heading', { name: tr.strategy.consultation.title })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: tr.strategy.sections.identity })).not.toBeInTheDocument();
+    expect(calls.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
 });

@@ -41,7 +41,10 @@ const withConnectors = {
 
 /** The card of the capability named `name`. */
 async function cardOf(name: string): Promise<HTMLElement> {
-  return (await screen.findByRole('heading', { name })).closest('[data-capability-id]') as HTMLElement;
+  const card = (await screen.findByRole('heading', { name })).closest('[data-capability-id]') as HTMLElement;
+  const expand = within(card).queryByRole('button', { name: tr.capabilities.workbench.showDetails });
+  if (expand) await userEvent.click(expand);
+  return card;
 }
 
 /** The connection actions of a card, if it has any. */
@@ -81,9 +84,7 @@ describe('CapabilitiesPage', () => {
       },
     });
     renderAt('/capabilities');
-    const card = (await screen.findByRole('heading', { name: 'Saha telefonu' })).closest(
-      '[data-capability-id]',
-    ) as HTMLElement;
+    const card = await cardOf('Saha telefonu');
     await user.click(within(card).getByRole('button', { name: tr.capabilities.actions.edit }));
     const dialog = await screen.findByRole('dialog');
     const name = within(dialog).getByLabelText(tr.fields.name, { exact: false });
@@ -123,9 +124,7 @@ describe('CapabilitiesPage', () => {
       },
     });
     renderAt('/capabilities');
-    const card = (await screen.findByRole('heading', { name: 'Destek kutusu' })).closest(
-      '[data-capability-id]',
-    ) as HTMLElement;
+    const card = await cardOf('Destek kutusu');
     await user.click(within(card).getByRole('button', { name: tr.capabilities.actions.edit }));
     const dialog = await screen.findByRole('dialog');
     // The warning lands when the account is changed, not before.
@@ -166,9 +165,7 @@ describe('CapabilitiesPage', () => {
       },
     });
     renderAt('/capabilities');
-    const card = (await screen.findByRole('heading', { name: 'Destek kutusu' })).closest(
-      '[data-capability-id]',
-    ) as HTMLElement;
+    const card = await cardOf('Destek kutusu');
     await user.click(within(card).getByRole('button', { name: tr.capabilities.actions.edit }));
     const dialog = await screen.findByRole('dialog');
     const name = within(dialog).getByLabelText(tr.fields.name, { exact: false });
@@ -183,9 +180,7 @@ describe('CapabilitiesPage', () => {
   it('offers no edit on a retired capability', async () => {
     mockFetch(routes);
     renderAt('/capabilities');
-    const card = (await screen.findByRole('heading', { name: 'Eski hat' })).closest(
-      '[data-capability-id]',
-    ) as HTMLElement;
+    const card = await cardOf('Eski hat');
     expect(within(card).queryByRole('button', { name: tr.capabilities.actions.edit })).not.toBeInTheDocument();
   });
 
@@ -193,6 +188,7 @@ describe('CapabilitiesPage', () => {
     const user = userEvent.setup();
     const calls = mockFetch(routes);
     renderAt('/capabilities');
+    await user.click(await screen.findByRole('button', { name: new RegExp(tr.capabilities.workbench.advanced) }));
     await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/api/capabilities' && c.search === '?group=device')).toBe(true),
@@ -380,6 +376,7 @@ describe('CapabilitiesPage', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     mockFetch(routes);
     renderAt('/capabilities');
+    await userEvent.click(await screen.findByRole('tab', { name: tr.capabilities.workbench.technicalTab }));
     const section = (await screen.findByRole('heading', { name: tr.capabilities.hooks.title })).closest(
       'section',
     ) as HTMLElement;
@@ -405,6 +402,7 @@ describe('CapabilitiesPage', () => {
   it('says so when the platform has no Meta app yet', async () => {
     mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, meta: null } });
     renderAt('/capabilities');
+    await userEvent.click(await screen.findByRole('tab', { name: tr.capabilities.workbench.technicalTab }));
     expect(await screen.findByText(tr.capabilities.hooks.metaMissing)).toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.metaUrl })).not.toBeInTheDocument();
   });
@@ -413,6 +411,7 @@ describe('CapabilitiesPage', () => {
     for (const tiktok of [null, undefined]) {
       mockFetch({ ...routes, 'GET /api/connectors/hooks': { ...hooks, tiktok } });
       const view = renderAt('/capabilities');
+    await userEvent.click(await screen.findByRole('tab', { name: tr.capabilities.workbench.technicalTab }));
       expect(await screen.findByText(tr.capabilities.hooks.netgsmHelp)).toBeInTheDocument();
       expect(screen.queryByRole('textbox', { name: tr.capabilities.hooks.tiktokUrl })).not.toBeInTheDocument();
       view.unmount();
@@ -430,6 +429,7 @@ describe('CapabilitiesPage', () => {
   it('drops the hook addresses from the query cache once they leave the screen', async () => {
     mockFetch(routes);
     const { router, client } = renderAt('/capabilities');
+    await userEvent.click(await screen.findByRole('tab', { name: tr.capabilities.workbench.technicalTab }));
     expect(
       await screen.findByRole('textbox', { name: i18n.t('capabilities.hooks.purposes.mo') }),
     ).toHaveValue(hooks.netgsm[0].url);

@@ -50,6 +50,7 @@ describe('ProspectDetail', () => {
 
   it('score_history_shows_reasons', async () => {
     await open();
+    await userEvent.setup().click(screen.getByText(tr.leads.prospect.scores));
     const history = within(screen.getByRole('list', { name: tr.leads.prospect.scores }));
     const [score] = history.getAllByTestId('score');
     expect(within(score).getByText('72')).toBeInTheDocument();

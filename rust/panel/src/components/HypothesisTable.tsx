@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { ANY_CHANNEL, type Hypothesis, type Segment } from '@/api/types';
 import { HypothesisStateBadge } from '@/components/StatusBadges';
-import { EmptyState, Progress, TBody, TD, TH, THead, TR, Table, cn } from '@/components/ui';
+import { Progress, TBody, TD, TH, THead, TR, Table, cn } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 
 /** A hypothesis's channel as shown: `any` in words, a kind by its name. */
@@ -21,11 +21,11 @@ export function HypothesisTable({
   const { t } = useTranslation();
   const channelLabel = useChannelLabel();
   if (hypotheses.length === 0) {
-    return <EmptyState title={t('strategy.hypotheses.empty')} />;
+    return <p className="py-4 text-sm text-muted-foreground">{t('strategy.hypotheses.empty')}</p>;
   }
   const segmentName = (key: string) => segments.find((s) => s.key === key)?.name || key;
   return (
-    <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+    <div className="overflow-x-auto rounded-lg border border-border bg-surface">
       <Table>
         <THead>
           <TR>

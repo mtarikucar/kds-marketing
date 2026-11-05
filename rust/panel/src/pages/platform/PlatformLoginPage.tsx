@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { isApiError } from '@/api/client';
 import { platformLogin } from '@/api/platform';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Button, Callout, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { returnTarget } from '@/lib/navigation';
 import { PLATFORM_WORKSPACES_KEY } from './WorkspacesPage';
 
@@ -36,7 +36,7 @@ export function PlatformLoginPage() {
   return (
     <div className="flex flex-col gap-6">
       <PageHeader title={t('platform.login.title')} description={t('platform.login.description')} />
-      <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+      <form className="flex flex-col gap-4" onSubmit={onSubmit}>
         {wrongCredentials ? (
           <Callout tone="danger">{t('platform.login.invalid')}</Callout>
         ) : (
@@ -56,9 +56,8 @@ export function PlatformLoginPage() {
         </Field>
         <Field label={t('fields.password')} required>
           {(ids) => (
-            <Input
+            <PasswordInput
               id={ids.id}
-              type="password"
               autoComplete="current-password"
               required
               value={password}

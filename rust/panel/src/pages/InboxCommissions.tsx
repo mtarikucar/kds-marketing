@@ -10,7 +10,7 @@ import { can, isOwnerOrManager } from '@/lib/roles';
 import { formatMoney } from '@/lib/format';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
-import { Badge, Button, Callout, Input, PageHeader } from '@/components/ui';
+import { Badge, Button, Callout, EmptyState, Input, PageHeader } from '@/components/ui';
 import { columnClass, selectClass, useInboxKey, useInboxMutation, useMemberName } from './InboxShared';
 
 export function InboxCommissions() {
@@ -47,46 +47,47 @@ export function InboxCommissions() {
       actions={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <section className={columnClass} aria-label={t('inbox.commissions.title')}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <label className="text-sm">{t('inbox.commissions.filterState')}
+        <div className="grid gap-4 border-b border-border pb-5 sm:grid-cols-2">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.commissions.filterState')}
             <select className={selectClass} value={state} onChange={e => setState(e.target.value as CommissionState | '')}>
               <option value="">{t('inbox.commissions.all')}</option>
               {(['no_payee', 'pending', 'approved', 'paid'] as const).map(s => <option key={s} value={s}>{t(`inbox.commissions.state.${s}`)}</option>)}
             </select>
           </label>
-          <label className="text-sm">{t('inbox.commissions.payee')}
+          <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.commissions.payee')}
             <select className={selectClass} value={payee} onChange={e => setPayee(e.target.value)}>
               <option value="">{t('inbox.commissions.all')}</option>
               {members.map(m => <option key={m.user_id} value={m.user_id!}>{m.display_name || m.email}</option>)}
             </select>
           </label>
         </div>
+        <QueryState query={team} />
         <ErrorCallout error={approve.error || pay.error} />
         <QueryState query={rows}>
-          {rows.data?.length === 0 && <p>{t('inbox.empty')}</p>}
-          {rows.data?.map(row => <article key={row.id} data-testid={`commission-${row.id}`} className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <strong>{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
-              <Badge>{t(`inbox.commissions.state.${row.state}`)}</Badge>
+          {rows.data?.length === 0 && <EmptyState className="border-0 py-8" title={t('inbox.commissions.empty')} description={t('inbox.commissions.emptyBody')} />}
+          {rows.data?.map(row => <article key={row.id} data-testid={`commission-${row.id}`} className="flex min-w-0 flex-col items-start gap-3 border-b border-border px-2 py-5 text-sm last:border-0">
+            <div className="flex w-full flex-wrap items-center justify-between gap-3">
+              <strong className="font-display text-2xl font-medium tabular-nums">{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
+              <Badge tone={row.state === 'paid' ? 'success' : row.state === 'approved' ? 'info' : row.state === 'no_payee' ? 'warning' : 'neutral'}>{t(`inbox.commissions.state.${row.state}`)}</Badge>
             </div>
             <p>{t('inbox.commissions.payee')}: {row.payee ? memberName(row.payee) : t('inbox.commissions.unassigned')}</p>
-            <p>{t('inbox.commissions.snapshotRate', { rate: row.rate_bp / 100 })}</p>
-            {row.state === 'no_payee' && <p>{t('inbox.commissions.noPayeeHelp')}</p>}
+            <p className="text-caption text-muted-foreground">{t('inbox.commissions.snapshotRate', { rate: row.rate_bp / 100 })}</p>
+            {row.state === 'no_payee' && <p className="rounded-md border-l-2 border-warning bg-warning-subtle px-3 py-2">{t('inbox.commissions.noPayeeHelp')}</p>}
             {decide && row.payee && row.state === 'pending' && <Button size="sm" loading={approve.isPending} disabled={pay.isPending} onClick={() => approve.mutate(row.id)}>{t('inbox.commissions.approve')}</Button>}
             {decide && row.payee && row.state === 'approved' && <Button size="sm" loading={pay.isPending} disabled={approve.isPending} onClick={() => pay.mutate(row.id)}>{t('inbox.commissions.pay')}</Button>}
           </article>)}
         </QueryState>
       </section>
-      {manage && <form className={columnClass} aria-label={t('inbox.commissions.rates')} onSubmit={e => { e.preventDefault(); if (validRate) save.mutate(); }}>
-        <h2 className="font-semibold">{t('inbox.commissions.rates')}</h2>
+      {manage && <form className={`${columnClass} lg:sticky lg:top-4`} aria-label={t('inbox.commissions.rates')} onSubmit={e => { e.preventDefault(); if (validRate) save.mutate(); }}>
+        <h2 className="font-display text-h3">{t('inbox.commissions.rates')}</h2>
         <p className="text-sm text-muted-foreground">{t('inbox.commissions.rateHelp')}</p>
-        <label className="text-sm">{t('inbox.commissions.rateTarget')}
+        <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.commissions.rateTarget')}
           <select className={selectClass} value={rateUser} onChange={e => setRateUser(e.target.value)}>
             <option value="">{t('inbox.commissions.defaultRate')}</option>
             {members.map(m => <option key={m.user_id} value={m.user_id!}>{m.display_name || m.email}</option>)}
           </select>
         </label>
-        <label className="text-sm">{t('inbox.commissions.rate')}
+        <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.commissions.rate')}
           <Input type="number" min={0} max={65535} step={1} value={rate} onChange={e => setRate(e.target.value)} />
         </label>
         <ErrorCallout error={save.error} />

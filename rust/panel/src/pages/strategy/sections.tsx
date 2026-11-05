@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +43,7 @@ import {
 import { gapsOf } from '@/lib/errors';
 import { formatMoney } from '@/lib/format';
 import { invalidateStrategy } from './queries';
+import { BriefGroupContext, groupForSection, sectionId, useRequestedEdit } from './BriefNavigation';
 
 const NO_GROUP = '__none__';
 
@@ -67,7 +68,7 @@ function Empty() {
 function Dl({ rows }: { rows: { label: string; value: string }[] }) {
   const { t } = useTranslation();
   return (
-    <dl className="grid gap-3 text-sm sm:grid-cols-2">
+    <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
       {rows.map((row) => (
         <div key={row.label} className="flex flex-col gap-0.5">
           <dt className="text-caption text-muted-foreground">{row.label}</dt>
@@ -99,6 +100,7 @@ function EditableSection<K extends EditableKey>({
   editor: (value: Sections[K], onChange: (next: Sections[K]) => void) => ReactNode;
 }) {
   const { t } = useTranslation();
+  const { group } = useContext(BriefGroupContext);
   const [editing, setEditing] = useState<Sections[K] | null>(null);
   const writer = useSectionWriter(sectionKey);
   const title = t(`strategy.sections.${sectionKey}`);
@@ -107,22 +109,36 @@ function EditableSection<K extends EditableKey>({
     writer.reset();
   };
   const gaps = gapsOf(writer.error);
+  const formRef = useRef<HTMLFormElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  const isEditing = editing !== null;
+  useRequestedEdit(sectionKey, () => {
+    if (editable) setEditing((current) => current ?? JSON.parse(JSON.stringify(value)) as Sections[K]);
+  });
+  useEffect(() => {
+    if (isEditing) formRef.current?.querySelector<HTMLElement>('input, textarea, button[role=combobox], button')?.focus();
+    else if (wasEditing.current) editButtonRef.current?.focus();
+    wasEditing.current = isEditing;
+  }, [isEditing]);
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle>{title}</CardTitle>
+    <div hidden={group !== groupForSection(sectionKey)}>
+    <Card id={sectionId(sectionKey)} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 p-0 md:flex-col md:justify-start md:content-start">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
         {editable && editing === null && (
-          <Button variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
+          <Button ref={editButtonRef} variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             {t('common.edit')}
           </Button>
         )}
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-w-0 flex-col gap-3 p-0">
         {editing === null ? (
           view(value)
         ) : (
           <form
+            ref={formRef}
             className="flex flex-col gap-3"
             aria-label={title}
             noValidate
@@ -146,6 +162,7 @@ function EditableSection<K extends EditableKey>({
         )}
       </CardContent>
     </Card>
+    </div>
   );
 }
 
@@ -222,7 +239,7 @@ export function SectionsView({ sections, editable, groups }: SectionsViewProps) 
   const channelKeys = sections.channels.map((c) => c.channel);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col">
       <EditableSection
         sectionKey="identity"
         value={sections.identity}
@@ -612,13 +629,15 @@ export function SectionsView({ sections, editable, groups }: SectionsViewProps) 
 function PaidSection({ value, editable }: { value: boolean; editable: boolean }) {
   const { t } = useTranslation();
   const writer = useSectionWriter('paid_enabled');
+  const { group } = useContext(BriefGroupContext);
   const label = t('strategy.fields.paidEnabled');
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('strategy.sections.paid_enabled')}</CardTitle>
+    <div hidden={group !== 'plan'}>
+    <Card id={sectionId('paid_enabled')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
+      <CardHeader className="p-0">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{t('strategy.sections.paid_enabled')}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+      <CardContent className="flex min-w-0 flex-col gap-2 p-0">
         <div className="flex items-center gap-3">
           {editable ? (
             <Switch
@@ -635,5 +654,6 @@ function PaidSection({ value, editable }: { value: boolean; editable: boolean })
         <ErrorCallout error={writer.error} />
       </CardContent>
     </Card>
+    </div>
   );
 }

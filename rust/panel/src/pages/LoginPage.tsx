@@ -6,11 +6,13 @@ import { login } from '@/api/auth';
 import { isApiError } from '@/api/client';
 import { SESSION_KEY } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Button, Callout, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { returnTarget } from '@/lib/navigation';
+import { useEntryCopy } from './entryCopy';
 
 export function LoginPage() {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -34,9 +36,10 @@ export function LoginPage() {
   const wrongCredentials = isApiError(signIn.error) && signIn.error.status === 401;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <PageHeader title={t('login.title')} description={t('login.description')} />
-      <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+      {returnTarget(location.state, '/').startsWith('/invite/') && <Callout tone="info">{copy('loginInviteHint')}</Callout>}
+      <form className="flex flex-col gap-5" onSubmit={onSubmit}>
         {wrongCredentials ? (
           <Callout tone="danger">{t('login.invalid')}</Callout>
         ) : (
@@ -56,9 +59,8 @@ export function LoginPage() {
         </Field>
         <Field label={t('fields.password')} required>
           {(ids) => (
-            <Input
+            <PasswordInput
               id={ids.id}
-              type="password"
               autoComplete="current-password"
               required
               value={password}
@@ -66,7 +68,7 @@ export function LoginPage() {
             />
           )}
         </Field>
-        <Button type="submit" loading={signIn.isPending}>
+        <Button type="submit" size="lg" loading={signIn.isPending}>
           {t('login.submit')}
         </Button>
       </form>

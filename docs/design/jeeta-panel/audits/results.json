@@ -1,0 +1,4505 @@
+{
+  "recorded_on": "2026-11-05",
+  "scope": "Modern Rust panel; route/state fixtures at 390px and 1440px",
+  "notes": [
+    "Admin includes repeated cases across runs; records are not distinct screens.",
+    "Earlier admin captures measure viewport overflow without collecting page errors; see admin.md.",
+    "Provider operations are simulated; these results do not establish live service integration."
+  ],
+  "counts": {
+    "foundation": 126,
+    "studio": 188,
+    "inbox": 126,
+    "leads": 52,
+    "admin": 201
+  },
+  "foundation_accessibility": {
+    "axeSnapshots": 82,
+    "axeViolations": 0,
+    "contrast": {
+      "light": {
+        "samples": 1290,
+        "minimum": 5.08
+      },
+      "dark": {
+        "samples": 361,
+        "minimum": 6.09
+      }
+    },
+    "incomplete": [
+      {
+        "case": "home-submitted-approval-dialog",
+        "width": 390,
+        "capture": "home-submitted-approval-dialog-390-dialog.png",
+        "id": "aria-hidden-focus",
+        "nodes": [
+          {
+            "target": [
+              "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"]:nth-child(1)"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<span data-radix-focus-guard=\"\" tabindex=\"0\" data-aria-hidden=\"true\" aria-hidden=\"true\" style=\"outline: none; opacity: 0; position: fixed; pointer-events: none;\"></span>"
+          },
+          {
+            "target": [
+              ".start-4"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<a href=\"#main-content\" class=\"fixed start-4 top-4 z-[100] -translate-y-24 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground focus-visible:translate-y-0\" data-aria-hidden=\"true\" aria-hidden=\"true\">İçeriğe geç</a>"
+          },
+          {
+            "target": [
+              ".min-h-screen"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<div class=\"flex min-h-screen bg-background\" data-aria-hidden=\"true\" aria-hidden=\"true\">"
+          },
+          {
+            "target": [
+              "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"]:nth-child(6)"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<span data-radix-focus-guard=\"\" tabindex=\"0\" data-aria-hidden=\"true\" aria-hidden=\"true\" style=\"outline: none; opacity: 0; position: fixed; pointer-events: none;\"></span>"
+          }
+        ]
+      },
+      {
+        "case": "home-submitted-approval-dialog",
+        "width": 390,
+        "capture": "home-submitted-approval-dialog-390-dialog.png",
+        "id": "color-contrast",
+        "nodes": [
+          {
+            "target": [
+              "#radix-\\:r9\\:"
+            ],
+            "summary": "Fix any of the following:\n  Element's background color could not be determined because it partially overlaps other elements",
+            "html": "<p id=\"radix-:r9:\" class=\"text-sm text-muted-foreground\">Onaylandığında bu sürüm yürürlükteki strateji olur ve öncekinin yerini alır. Önce neye dayandığını gözden geçirin.</p>"
+          }
+        ]
+      },
+      {
+        "case": "home-submitted-approval-dialog",
+        "width": 1440,
+        "capture": "home-submitted-approval-dialog-1440-dialog.png",
+        "id": "aria-hidden-focus",
+        "nodes": [
+          {
+            "target": [
+              "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"]:nth-child(1)"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<span data-radix-focus-guard=\"\" tabindex=\"0\" data-aria-hidden=\"true\" aria-hidden=\"true\" style=\"outline: none; opacity: 0; position: fixed; pointer-events: none;\"></span>"
+          },
+          {
+            "target": [
+              ".start-4"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<a href=\"#main-content\" class=\"fixed start-4 top-4 z-[100] -translate-y-24 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground focus-visible:translate-y-0\" data-aria-hidden=\"true\" aria-hidden=\"true\">İçeriğe geç</a>"
+          },
+          {
+            "target": [
+              ".min-h-screen"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<div class=\"flex min-h-screen bg-background\" data-aria-hidden=\"true\" aria-hidden=\"true\">"
+          },
+          {
+            "target": [
+              "span[data-radix-focus-guard=\"\"][data-aria-hidden=\"true\"]:nth-child(6)"
+            ],
+            "summary": "Fix all of the following:\n  Check that focusable elements are not tabbable in the current state",
+            "html": "<span data-radix-focus-guard=\"\" tabindex=\"0\" data-aria-hidden=\"true\" aria-hidden=\"true\" style=\"outline: none; opacity: 0; position: fixed; pointer-events: none;\"></span>"
+          }
+        ]
+      },
+      {
+        "case": "home-submitted-approval-dialog",
+        "width": 1440,
+        "capture": "home-submitted-approval-dialog-1440-dialog.png",
+        "id": "color-contrast",
+        "nodes": [
+          {
+            "target": [
+              "#radix-\\:r9\\:"
+            ],
+            "summary": "Fix any of the following:\n  Element's background color could not be determined because it partially overlaps other elements",
+            "html": "<p id=\"radix-:r9:\" class=\"text-sm text-muted-foreground\">Onaylandığında bu sürüm yürürlükteki strateji olur ve öncekinin yerini alır. Önce neye dayandığını gözden geçirin.</p>"
+          }
+        ]
+      }
+    ]
+  },
+  "records": [
+    {
+      "module": "foundation",
+      "case": "login-default-invalid-password",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-default-invalid-password",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-pending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-pending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-401-retry-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-401-retry-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-server-error-retry-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-server-error-retry-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-default-invalid-password",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-default-invalid-password",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-pending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-pending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-401-retry-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-401-retry-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-server-error-retry-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-server-error-retry-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-conflict-retry-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "register-conflict-retry-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-native-invalid-password",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-native-invalid-password",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-default",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-default",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-pending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-pending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-401-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-401-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-conflict-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-conflict-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-forbidden-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-forbidden-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-expired-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-expired-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-server-error-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-server-error-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-default",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-default",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-pending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-pending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-401-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-401-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-conflict-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-conflict-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-forbidden-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-forbidden-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-expired-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-expired-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-server-error-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-server-error-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-session-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-session-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-session-failure-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-session-failure-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-missing-populated",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-missing-populated",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-draft",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-draft",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-submitted-approval-dialog",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-submitted-approval-dialog",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-agent-interval-invalid-saveerror-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-agent-interval-invalid-saveerror-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-approved-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-approved-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-agent-never",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-agent-never",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-restricted-submitted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-restricted-submitted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-suspended",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-suspended",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-workspace-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-workspace-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-pending-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-pending-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-failure-retry-workspace",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-failure-retry-workspace",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-failure-retry-pending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-failure-retry-pending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-session-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-session-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-session-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-session-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-no-workspace",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-no-workspace",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-choose-workspace",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-choose-workspace",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-switch-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-switch-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-switch-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-switch-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-pending_payment",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-pending_payment",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-active",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-active",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-suspended",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-suspended",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-restricted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-restricted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "not-found",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "not-found",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-default-invalid-password-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-default-invalid-password-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-server-error-retry-success-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "login-server-error-retry-success-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-default-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-default-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-approved-empty-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-approved-empty-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-missing-populated-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "home-strategy-missing-populated-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-active-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "onboarding-active-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-no-workspace-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "shell-no-workspace-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "not-found-english-dark",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "not-found-english-dark",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-missing-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-missing-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-inactive-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-new-inactive-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-missing-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-missing-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-inactive-retry-accepted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "foundation",
+      "case": "invite-signed-inactive-retry-accepted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "queues-search-approvals",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "queues-search-approvals",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "approvals-populated",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "approvals-populated",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-controls",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-controls",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-lost",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-lost",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-erased",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-erased",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-merged",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-fence-merged",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-mailbox-refusal",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-mailbox-refusal",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-snoozed-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "thread-snoozed-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-history-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-history-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-empty-read-only",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-empty-read-only",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "erase-guard-and-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "erase-guard-and-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "quotes-forms-and-delivery",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "quotes-forms-and-delivery",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "appointments-forms-and-actions",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "appointments-forms-and-actions",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-event-forms",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-event-forms",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-terminal-empty-offers",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-terminal-empty-offers",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "commissions-transitions-and-rate",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "commissions-transitions-and-rate",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "commissions-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "commissions-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "merges-and-guarded-undo",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "merges-and-guarded-undo",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-states-and-reply",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-states-and-reply",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-moderation-and-delete",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-moderation-and-delete",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-edit-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-edit-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "calls-filter-and-place-refusal",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "calls-filter-and-place-refusal",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-policy-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-policy-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-outcome-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-outcome-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-search-and-recovery",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-search-and-recovery",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-records-owner-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-records-owner-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "task-person-and-pagination",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "task-person-and-pagination",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-marketplace-product-and-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-marketplace-product-and-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-approval-and-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-approval-and-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "calls-states-and-success",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "calls-states-and-success",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-detail-summary-latency-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-detail-summary-latency-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-pagination",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-pagination",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-queue",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-queue",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-thread",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-thread",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-messages",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-messages",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-context",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-context",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-person",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-person",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-journey",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-journey",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-consents",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-consents",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-quotes",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-quotes",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-approvals",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-approvals",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-tasks",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-tasks",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-commissions",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-commissions",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-merges",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-merges",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-calls",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-calls",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-policy",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-policy",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-call-detail",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-call-detail",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-people",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "read-boundary-people",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-inbox",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-inbox",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-commissions",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-commissions",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-merges",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-merges",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-calls",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "permission-calls",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-people",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-people",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-calls",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-calls",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-merges",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "empty-merges",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-won-and-empty-quote-forms",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "journey-won-and-empty-quote-forms",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "merge-person-read-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "merge-person-read-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-history-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "consent-history-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "quotes-forms-and-delivery",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "quotes-forms-and-delivery",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-edit-and-errors",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "public-held-edit-and-errors",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-policy-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "call-policy-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "remaining-queue-and-task-branches",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "remaining-queue-and-task-branches",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-empty-next-page",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "inbox",
+      "case": "people-empty-next-page",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-reject",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-dnc",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-detail",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "research",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-new",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-detail",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "templates",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "distribution",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-filtered",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns-filtered",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-approval",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-approval-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-running",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-stop-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-blocked",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-paused",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-refused",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings-locked",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-error",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "distribution-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-reject",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-dnc",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospect-detail",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "research",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-new",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-detail",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "templates",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "distribution",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-filtered",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaigns-filtered",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-approval",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-approval-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-running",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-stop-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-blocked",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-paused",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "campaign-refused",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "settings-locked",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "prospects-error",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "leads",
+      "case": "distribution-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "admin",
+      "case": "/team page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/team dialog: Üye davet et",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/roles page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/roles dialog: Rol oluştur",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/agents page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/budget page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/budget dialog: Bütçe kalemi oluştur",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/billing page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Kabiliyet bildir",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/connect page",
+      "width": 1440,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/team page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/team dialog: Üye davet et",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/roles page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/roles dialog: Rol oluştur",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/agents page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/budget page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/budget dialog: Bütçe kalemi oluştur",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/billing page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Kabiliyet bildir",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/connect page",
+      "width": 390,
+      "passed": true,
+      "run": "real"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities page",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect page",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Facebook sayfası",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Instagram",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Instagram mesajları",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Messenger",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: WhatsApp Business",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Meta reklamları",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: SMS hattı",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: NetGSM santrali",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: X",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: E-posta kutusu",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: TikTok",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: LinkedIn kişisel hesap",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: LinkedIn sayfası",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces page",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces dialog: Etkinleştirmeyi geri al",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments page",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health page",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities page",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Düzenle",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Politika",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Ulaşılamıyor işaretle",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Bütçe bağla",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities dialog: Emekliye ayır",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect page",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Facebook sayfası",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Instagram",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Instagram mesajları",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Messenger",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: WhatsApp Business",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: Meta reklamları",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: SMS hattı",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: NetGSM santrali",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: X",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: E-posta kutusu",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: TikTok",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: LinkedIn kişisel hesap",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/connect provider: LinkedIn sayfası",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces page",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces dialog: Etkinleştirmeyi geri al",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments page",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health page",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing waiting",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing reported",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing activation",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing paid",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing revoked",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback missing",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback denied",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback unknown",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback assets",
+      "width": 1440,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing waiting",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing reported",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing activation",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing paid",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/billing revoked",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback missing",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback denied",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback unknown",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback assets",
+      "width": 390,
+      "passed": true,
+      "run": "fixture"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback expired",
+      "width": 1440,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback missing",
+      "width": 1440,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback denied",
+      "width": 1440,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback unknown",
+      "width": 1440,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback assets",
+      "width": 1440,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback expired",
+      "width": 390,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback missing",
+      "width": 390,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback denied",
+      "width": 390,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback unknown",
+      "width": 390,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/oauth/callback assets",
+      "width": 390,
+      "passed": true,
+      "run": "oauth"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys revoke-confirmation",
+      "width": 1440,
+      "passed": true,
+      "run": "keys"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys revoke-confirmation",
+      "width": 390,
+      "passed": true,
+      "run": "keys"
+    },
+    {
+      "module": "admin",
+      "case": "/team one-time-invite",
+      "width": 1440,
+      "passed": true,
+      "run": "invite"
+    },
+    {
+      "module": "admin",
+      "case": "/team one-time-invite",
+      "width": 390,
+      "passed": true,
+      "run": "invite"
+    },
+    {
+      "module": "admin",
+      "case": "/team loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities restricted",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health loading",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health error",
+      "width": 1440,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/roles restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/agents restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/budget restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/ledger restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/billing restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities restricted",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health loading",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health error",
+      "width": 390,
+      "passed": true,
+      "run": "states"
+    },
+    {
+      "module": "admin",
+      "case": "/team Üye davet et",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team Çıkar",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team Daveti iptal et",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Rol oluştur",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Düzenle",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Sil",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys Anahtar oluştur",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys İptal et",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Bütçe kalemi oluştur",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Harcamalar",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Düzenle",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Emekliye ayır",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces Askıya al",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces Etkinleştirmeyi geri al",
+      "width": 1440,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team Üye davet et",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team Çıkar",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team Daveti iptal et",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Rol oluştur",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Düzenle",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/roles Sil",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys Anahtar oluştur",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys İptal et",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Bütçe kalemi oluştur",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Harcamalar",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Düzenle",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/budget Emekliye ayır",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces Askıya al",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/workspaces Etkinleştirmeyi geri al",
+      "width": 390,
+      "passed": true,
+      "run": "confirm"
+    },
+    {
+      "module": "admin",
+      "case": "/team request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/budget request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/billing request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments request-error",
+      "width": 1440,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/team request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/budget request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/capabilities request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/billing request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/health request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments request-error",
+      "width": 390,
+      "passed": true,
+      "run": "errors"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys one-time-key",
+      "width": 1440,
+      "passed": true,
+      "run": "keys"
+    },
+    {
+      "module": "admin",
+      "case": "/api-keys one-time-key",
+      "width": 390,
+      "passed": true,
+      "run": "keys"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments confirmation-delivery",
+      "width": 1440,
+      "passed": true,
+      "run": "operator"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments revoke-confirmation",
+      "width": 1440,
+      "passed": true,
+      "run": "operator"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments confirmation-delivery",
+      "width": 390,
+      "passed": true,
+      "run": "operator"
+    },
+    {
+      "module": "admin",
+      "case": "/platform/payments revoke-confirmation",
+      "width": 390,
+      "passed": true,
+      "run": "operator"
+    },
+    {
+      "module": "studio",
+      "case": "studio-loaded",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-loaded",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-calendar",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-calendar",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-filter",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-filter",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-proposal",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-proposal",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-policy",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-policy",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-hard-material-hold",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-hard-material-hold",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-direct",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-direct",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-draft",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-draft",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-disclosure",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-disclosure",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-unavailable",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-unavailable",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-no-draft-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-no-draft-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload-selected",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload-selected",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload-rejected",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-upload-rejected",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-events",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-events",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-events-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-events-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-create",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-create",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-detail",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-detail",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-edit",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-event-edit",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-general",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-general",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-review",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-review",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor-deleted",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-editor-deleted",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-shoots",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-shoots",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-shoots-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-shoots-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-populated",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-populated",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-permission",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-permission",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-draft",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-draft",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-approved",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-approved",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-empty",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-empty",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-rep",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-rep",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "material-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "material-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "material-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "material-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "events-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "events-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "events-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "events-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "calendar-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "calendar-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "calendar-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "calendar-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "shoots-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "shoots-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "shoots-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "shoots-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-week-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "posts-settings-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-error-retry",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-error-retry",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-scheduled",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-scheduled",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-no-approved",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-no-approved",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-photos",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-photos",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-sending",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-sending",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-processing",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-processing",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "tiktok-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-loading",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-loading",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-learning-forms",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-learning-forms",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-slot-editor",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-slot-editor",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-caption-release-dialog",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-caption-release-dialog",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-delete-dialog",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-delete-dialog",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-edit",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-edit",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-add",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "materials-calendar-add",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-versions-drawer",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-versions-drawer",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-approval-dialog",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-approval-dialog",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-archive-dialog",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-archive-dialog",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-identity",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-identity",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-audience",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-audience",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-channels",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-channels",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-goals",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-goals",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-budget_frame",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-budget_frame",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-prohibitions",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-prohibitions",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-cadence",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-cadence",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-hypotheses",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "strategy-edit-hypotheses",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-paid-controls",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-paid-controls",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-ledger-populated",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "studio-ledger-populated",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-consultation-paging",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-consultation-paging",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-ledger-paging",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-ledger-paging",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-ledger-export",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-ledger-export",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-failed-editor",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-failed-editor",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-unknown",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-unknown",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-missing-preview",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-missing-preview",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-failed",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-failed",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-published",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-published",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-failed-card",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-today-failed-card",
+      "width": 390,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-published-no-counters",
+      "width": 1440,
+      "passed": true
+    },
+    {
+      "module": "studio",
+      "case": "supplement-tiktok-published-no-counters",
+      "width": 390,
+      "passed": true
+    }
+  ],
+  "validation": {
+    "panel_suites": 64,
+    "panel_tests": 445,
+    "panel_tests_passed": 445,
+    "typecheck": "passed",
+    "production_build": "passed",
+    "packaged_browser_files": 22,
+    "local_api_route_viewport_checks": 54,
+    "local_api_failures": 0
+  }
+}

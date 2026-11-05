@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from '@/i18n/config';
 import tr from '@/i18n/tr.json';
+import type { WorkItem } from '@/api/types';
 import {
   DRAFT_ID,
   PAGE_ID,
@@ -315,4 +316,33 @@ it('links all four inbox work kinds to actionable destinations', async () => {
     expect(within(text.closest('li')!).getByRole('link')).toHaveAttribute('href', href);
   }
   expect(screen.queryByText('private hint')).not.toBeInTheDocument();
+});
+
+
+it('opens the relevant research, prospect, distribution and outreach work instead of capabilities', async () => {
+  const campaignId = 'campaign/with a space';
+  const cases: { item: WorkItem; href: string }[] = [
+    { item: { kind: 'research_due', task_id: 'research-1', remaining_today: 3, priority: 2, hint: '' }, href: '/prospects/tasks' },
+    { item: { kind: 'prospects_to_score', count: 2, priority: 2, hint: '' }, href: '/prospects' },
+    { item: { kind: 'prospects_to_promote', count: 2, priority: 2, hint: '' }, href: '/prospects' },
+    { item: { kind: 'ownerless_journeys', count: 2, oldest_journey_id: 'journey-1', priority: 2, hint: '' }, href: '/team/distribution' },
+    { item: { kind: 'assignment_stalled', count: 2, priority: 2, hint: '' }, href: '/team/distribution' },
+    { item: { kind: 'promoted_not_contacted', count: 2, priority: 2, hint: '' }, href: '/inbox' },
+    { item: { kind: 'campaign_approval', campaign_id: campaignId, revision: 1, priority: 1, hint: '' }, href: '/outreach/campaign%2Fwith%20a%20space' },
+    { item: { kind: 'campaign_blocked', campaign_id: campaignId, reason: 'daily_cap', priority: 1, hint: '' }, href: '/outreach/campaign%2Fwith%20a%20space' },
+    { item: { kind: 'personalization_due', campaign_id: campaignId, count: 2, priority: 2, hint: '' }, href: '/outreach/campaign%2Fwith%20a%20space' },
+    // Capability work continues to use the existing default destination.
+    { item: { kind: 'declare_first_capability', priority: 2, hint: '' }, href: '/capabilities' },
+  ];
+  mockFetch({
+    'GET /api/auth/me': me,
+    'GET /api/workspace': workspace,
+    'GET /api/work/pending': { ...pendingOverdue, items: cases.map(({ item }) => item) },
+  });
+  renderAt('/');
+  await userEvent.setup().click(await screen.findByRole('button',{name:'Tüm işleri göster (10)'}));
+  for (const { item, href } of cases) {
+    const text = await screen.findByText(i18n.t(`home.pending.${item.kind}`));
+    expect(within(text.closest('li')!).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', href);
+  }
 });

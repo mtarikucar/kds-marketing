@@ -18,7 +18,7 @@ export const tapClass =
   'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 export const primaryClass =
   'inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
-export const cardClass = 'min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4';
+export const cardClass = 'min-w-0 space-y-4 border-t border-border py-5';
 
 /** The query key of everything the library reads, under Studio's (so Studio refreshes it too). */
 export function useMaterialsKey() {
@@ -176,14 +176,23 @@ export function materialsErrorText(t: TFunction, error: unknown): string {
   return errorMessage(t, error);
 }
 
-export function MaterialsError({ error }: { error: unknown }) {
+export function MaterialsError({ error, onRetry }: { error: unknown; onRetry?: () => unknown }) {
   const { t } = useTranslation();
   if (!error) return null;
   return (
-    <p role="alert" className="rounded-md bg-danger-subtle p-3 text-sm">
-      {materialsErrorText(t, error)}
-    </p>
+    <div role="alert" className="space-y-3 rounded-md border-s-2 border-danger bg-danger-subtle p-3 text-sm">
+      <p>{materialsErrorText(t, error)}</p>
+      {onRetry && <button type="button" className={tapClass} onClick={() => void onRetry()}>{t('common.retry')}</button>}
+    </div>
   );
+}
+
+/** Read status stays outside the content so a refresh never discards an open editor. */
+export function MaterialsReadStatus({ query }: { query: { isLoading: boolean; error: unknown; refetch: () => unknown } }) {
+  const { t } = useTranslation();
+  return query.isLoading
+    ? <p role="status" className="py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+    : <MaterialsError error={query.error} onRetry={query.refetch} />;
 }
 
 /** `YYYY-MM-DD` as the reader's date (the day itself, whatever the browser's zone). */
@@ -294,7 +303,7 @@ export function MaterialTile({
       <button
         type="button"
         onClick={() => onOpen(material.id)}
-        className="flex w-full min-w-0 flex-col gap-2 rounded-md border border-border p-2 text-start hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 text-start hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <MediaThumb mime={material.mime} alt={label} />
         <span className="truncate text-sm font-medium">{label}</span>
@@ -333,7 +342,7 @@ function Chips<T extends string>({
           return (
             <label
               key={o}
-              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-3 text-sm ${
+              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm ${
                 on ? 'border-primary bg-primary/10' : 'border-border'
               }`}
             >
@@ -412,7 +421,7 @@ export function TagsFields({
           {[...m.QUALITIES, null].map((q) => (
             <label
               key={q ?? 'none'}
-              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-3 text-sm ${
+              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm ${
                 value.quality === q ? 'border-primary bg-primary/10' : 'border-border'
               }`}
             >

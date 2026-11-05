@@ -591,6 +591,7 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/studio');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Plan' }));
     const plan = await screen.findByRole('region', { name: 'Plan' });
     await user.click(
       await within(plan)
@@ -626,6 +627,7 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/studio');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Plan' }));
     const plan = await screen.findByRole('region', { name: 'Plan' });
     await user.click(
       await within(plan)
@@ -784,6 +786,7 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/studio');
     const user = userEvent.setup();
+    await user.click(await screen.findByRole('tab', { name: 'Plan' }));
     const plan = await screen.findByRole('region', { name: 'Plan' });
     await user.click(
       await within(plan)

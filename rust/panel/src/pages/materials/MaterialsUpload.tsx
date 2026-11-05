@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui';
 import { captureTime } from '@/lib/capture';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   MediaThumb,
   OlayFields,
   OlayLine,
@@ -16,6 +17,7 @@ import {
   cardClass,
   emptyOlay,
   emptyTags,
+  fieldClass,
   olayDraftProblem,
   olayInput,
   primaryClass,
@@ -92,6 +94,7 @@ export function MaterialsUpload({
   const decider = useDecider();
   const [items, setItems] = useState<Item[]>([]);
   const [choice, setChoice] = useState<Choice>(presetOlay ?? '');
+  const [eventSearch, setEventSearch] = useState('');
   const [draft, setDraft] = useState<OlayDraft>(() => emptyOlay());
   const [permission, setPermission] = useState<m.SharePermission | ''>('');
   const [tags, setTags] = useState<m.Tags>(emptyTags);
@@ -228,6 +231,7 @@ export function MaterialsUpload({
   const reset = () => {
     setItems([]);
     setChoice(presetOlay ?? '');
+    setEventSearch('');
     setDraft(emptyOlay());
     setPermission('');
     setTags(emptyTags());
@@ -241,6 +245,10 @@ export function MaterialsUpload({
     items.every((i) => i.status === 'added' || i.status === 'refused');
   const usable = items.some((i) => i.status !== 'refused');
   const addedTo = created?.id ?? (choice && choice !== 'new' && choice !== 'genel' ? choice : null);
+  const filteredOthers = others.filter((o) =>
+    `${o.title} ${o.place ?? ''}`.toLocaleLowerCase('tr').includes(eventSearch.trim().toLocaleLowerCase('tr')),
+  );
+  const selectedOther = others.find((o) => o.id === choice);
   const olayOption = (o: m.Olay) => (
     <label
       key={o.id}
@@ -267,14 +275,18 @@ export function MaterialsUpload({
 
   return (
     <div className="space-y-4" data-testid="materials-upload">
-      <div className={cardClass}>
-        <p className="text-sm text-muted-foreground">{t('materials.upload.intro')}</p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button type="button" className={`${primaryClass} min-h-14`} onClick={() => camera.current?.click()}>
+      <div className="flex flex-col items-start gap-6 border-t-2 border-foreground bg-surface p-6 sm:flex-row sm:items-center sm:gap-8">
+        {items.length === 0 && (
+          <img src="/brand/editorial/studio-320.webp" alt="" aria-hidden="true" width={160} height={104} className="h-24 w-36 shrink-0 rounded-md object-cover sm:h-28 sm:w-40" />
+        )}
+        <div className="min-w-0 flex-1 space-y-5">
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{t('materials.upload.intro')}</p>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" className={primaryClass} onClick={() => camera.current?.click()}>
             <Camera aria-hidden="true" className="h-5 w-5" />
             {t('materials.upload.camera')}
           </button>
-          <button type="button" className={`${tapClass} min-h-14`} onClick={() => gallery.current?.click()}>
+          <button type="button" className={tapClass} onClick={() => gallery.current?.click()}>
             <Upload aria-hidden="true" className="h-5 w-5" />
             {t('materials.upload.gallery')}
           </button>
@@ -303,6 +315,7 @@ export function MaterialsUpload({
             e.target.value = '';
           }}
         />
+        </div>
       </div>
 
       {items.length > 0 && (
@@ -365,7 +378,21 @@ export function MaterialsUpload({
                     {suggested.length > 0 && (
                       <p className="text-sm font-medium">{t('materials.upload.otherOlays')}</p>
                     )}
-                    {others.map(olayOption)}
+                    {others.length > 5 && (
+                      <label className="block space-y-1 text-sm">
+                        <span>{t('materials.upload.workbench.searchEvents', { defaultValue: 'Olay adı veya yer ara' })}</span>
+                        <input type="search" value={eventSearch} onChange={(event) => setEventSearch(event.target.value)} className={fieldClass} />
+                      </label>
+                    )}
+                    {selectedOther && !filteredOthers.includes(selectedOther) && (
+                      <p className="text-sm font-medium">{t('materials.upload.workbench.selectedEvent', { title: selectedOther.title, defaultValue: 'Seçili olay: {{title}}' })}</p>
+                    )}
+                    <div className={`space-y-2 ${others.length > 5 ? 'max-h-72 overflow-y-auto p-1' : ''}`}>
+                      {filteredOthers.map(olayOption)}
+                    </div>
+                    {filteredOthers.length === 0 && (
+                      <p role="status" className="text-sm text-muted-foreground">{t('materials.upload.workbench.noEvents', { defaultValue: 'Eşleşen olay yok. Aramayı değiştirin veya aşağıdan yeni olay oluşturun.' })}</p>
+                    )}
                   </div>
                 )}
                 <label
@@ -412,7 +439,7 @@ export function MaterialsUpload({
                 {t(`materials.upload.problem.${problem}`)}
               </p>
             )}
-            <MaterialsError error={olays.error} />
+            <MaterialsReadStatus query={olays} />
           </fieldset>
 
           <fieldset className="space-y-2">

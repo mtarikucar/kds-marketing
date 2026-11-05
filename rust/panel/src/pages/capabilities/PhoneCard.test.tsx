@@ -153,9 +153,21 @@ async function cardOf(name: string): Promise<HTMLElement> {
   return (await screen.findByRole('heading', { name })).closest('[data-capability-id]') as HTMLElement;
 }
 
-/** The device bridge's panel of the phone named `name`. */
-async function panelOf(name: string): Promise<HTMLElement> {
-  return within(await cardOf(name)).getByRole('group', { name: tr.capabilities.phone.title });
+/** Use the device purpose even before the first capability exists. */
+async function selectDevices(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: tr.capabilities.workbench.goals.devices.label }));
+  const add = screen.queryByRole('button', { name: new RegExp(`^${tr.capabilities.workbench.addForPurpose}`) });
+  if (add && add.getAttribute('aria-expanded') !== 'true') await user.click(add);
+  const pair = screen.queryByRole('button', { name: tr.capabilities.workbench.pairDevice });
+  if (pair) await user.click(pair);
+}
+
+/** Open the named capability's details without folding an already-open phone panel. */
+async function panelOf(name: string, user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  const card = await cardOf(name);
+  const details = within(card).queryByRole('button', { name: tr.capabilities.workbench.showDetails });
+  if (details) await user.click(details);
+  return within(card).getByRole('group', { name: tr.capabilities.phone.title });
 }
 
 /** The value of the row labelled `label` in `panel`. */
@@ -166,9 +178,10 @@ function row(panel: HTMLElement, label: string): string {
 
 describe('PhoneCard', () => {
   it('renders_phone_facts_and_status', async () => {
+    const user = userEvent.setup();
     mockFetch(answers());
     renderAt('/capabilities');
-    const panel = await panelOf('Galaxy A52 (R58M00000XX)');
+    const panel = await panelOf('Galaxy A52 (R58M00000XX)', user);
     expect(row(panel, tr.capabilities.phone.platform)).toBe(tr.capabilities.phone.platforms.android);
     expect(row(panel, tr.capabilities.phone.model)).toBe('Galaxy A52');
     expect(row(panel, tr.capabilities.phone.os)).toBe('13 (API 33)');
@@ -185,19 +198,19 @@ describe('PhoneCard', () => {
     expect(status.slice(shown.length)).toMatch(/^\d+ saniye önce$/);
 
     // Verified, but its bridge's latest registration leaves it out: not online.
-    const out = row(await panelOf('Pixel (R58M00000ZZ)'), tr.capabilities.phone.status);
+    const out = row(await panelOf('Pixel (R58M00000ZZ)', user), tr.capabilities.phone.status);
     expect(out.startsWith(`${tr.capabilities.phone.states.unlisted} · `)).toBe(true);
     // No registration listed it in the last minute: the card's badge and its panel say it alike.
-    const lapsed = row(await panelOf('Redmi Note (R58M00000YY)'), tr.capabilities.phone.status);
+    const lapsed = row(await panelOf('Redmi Note (R58M00000YY)', user), tr.capabilities.phone.status);
     expect(lapsed.startsWith(`${tr.capabilities.phone.states.stale} · `)).toBe(true);
     expect(tr.capabilities.phone.states.stale.startsWith(tr.status.capability.stale)).toBe(true);
     const badge = (await cardOf('Redmi Note (R58M00000YY)')).querySelector('[data-capability-status]');
     expect(badge).toHaveTextContent(tr.status.capability.stale);
     // Unreachable (by its silence, or marked so by hand), and how long ago it was last seen.
-    const gone = row(await panelOf('Tablet (R58M00000WW)'), tr.capabilities.phone.status);
+    const gone = row(await panelOf('Tablet (R58M00000WW)', user), tr.capabilities.phone.status);
     expect(gone).toBe(`${tr.status.capability.unreachable} · ${seen(formatRelative(seconds(2 * 3600), 'tr'))}`);
     // A phone declared by hand that no bridge registered yet says so.
-    const declared = await panelOf('Saha telefonu 2');
+    const declared = await panelOf('Saha telefonu 2', user);
     expect(within(declared).getByText(tr.capabilities.phone.never)).toBeInTheDocument();
     // Only its bridge's registrations verify a phone, and no verification age applies.
     const card = await cardOf('Galaxy A52 (R58M00000XX)');
@@ -205,21 +218,23 @@ describe('PhoneCard', () => {
     expect(within(card).queryByText(i18n.t('capabilities.policy.verifyAge', { days: 30 }))).toBeNull();
     // Another kind has no phone panel.
     const other = await cardOf('Atölye Instagram');
+    await user.click(within(other).getByRole('button', { name: tr.capabilities.workbench.showDetails }));
     expect(within(other).queryByRole('group', { name: tr.capabilities.phone.title })).toBeNull();
   });
 
   it('unicode_hint_when_feature_missing', async () => {
+    const user = userEvent.setup();
     mockFetch(answers());
     renderAt('/capabilities');
     const source = tr.capabilities.phone.unicodeHint;
-    const missing = await panelOf('Redmi Note (R58M00000YY)');
+    const missing = await panelOf('Redmi Note (R58M00000YY)', user);
     expect(row(missing, tr.capabilities.phone.unicode)).toBe(tr.capabilities.phone.no);
     const shown = missing.querySelector('[data-unicode-hint]');
     expect(shown?.textContent).toBe(source.replace(/<\/?b>/g, ''));
     // "and enable" is the half people miss: it stands out.
     expect(shown?.querySelector('strong')?.textContent).toBe(source.match(/<b>(.*)<\/b>/)?.[1]);
     // A phone whose bridge lists text.unicode has no hint.
-    const ready = await panelOf('Galaxy A52 (R58M00000XX)');
+    const ready = await panelOf('Galaxy A52 (R58M00000XX)', user);
     expect(ready.querySelector('[data-unicode-hint]')).toBeNull();
   });
 
@@ -244,7 +259,7 @@ describe('PhoneCard', () => {
     await screen.findByText(tr.capabilities.empty);
     // Pairing is offered on the Devices tab.
     expect(screen.queryByRole('button', { name: tr.capabilities.phone.pair.open })).toBeNull();
-    await user.click(screen.getByRole('button', { name: tr.capabilities.groups.device }));
+    await selectDevices(user);
     await user.click(await screen.findByRole('button', { name: tr.capabilities.phone.pair.open }));
     const dialog = await screen.findByRole('dialog');
     const name = within(dialog).getByRole('textbox', { name: new RegExp(`^${tr.fields.name}`) });
@@ -295,11 +310,21 @@ describe('PhoneCard', () => {
     for (const who of [me, bridgeOnlyMe, repMe]) {
       mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
       const { unmount } = renderAt('/capabilities');
-      await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+      await selectDevices(user);
       await screen.findByText(tr.capabilities.empty);
       expect(screen.queryByRole('button', { name: tr.capabilities.phone.pair.open })).toBeNull();
       unmount();
     }
+  });
+
+  it('keeps pairing available with its own permissions even without capability management', async () => {
+    const user = userEvent.setup();
+    const who = { ...deviceMe, memberships: deviceMe.memberships.map(m => ({ ...m, permissions: m.permissions.filter(p => p !== 'capabilities.manage') })) };
+    mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
+    renderAt('/capabilities');
+    await selectDevices(user);
+    expect(await screen.findByRole('button', { name: tr.capabilities.phone.pair.open })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: tr.capabilities.declare })).not.toBeInTheDocument();
   });
 
   it('command_log_expands_args', async () => {
@@ -341,7 +366,7 @@ describe('PhoneCard', () => {
       },
     });
     renderAt('/capabilities');
-    const panel = await panelOf('Galaxy A52 (R58M00000XX)');
+    const panel = await panelOf('Galaxy A52 (R58M00000XX)', user);
     const log = await within(panel).findByRole('list', { name: tr.capabilities.phone.log.title });
     const rows = within(log).getAllByRole('button', { expanded: false });
     expect(rows).toHaveLength(2);
@@ -375,9 +400,10 @@ describe('PhoneCard', () => {
   });
 
   it('shows the command log only to who holds devices.work', async () => {
+    const user = userEvent.setup();
     const calls = mockFetch({ ...answers(), 'GET /api/auth/me': me });
     renderAt('/capabilities');
-    const panel = await panelOf('Galaxy A52 (R58M00000XX)');
+    const panel = await panelOf('Galaxy A52 (R58M00000XX)', user);
     expect(within(panel).queryByRole('list', { name: tr.capabilities.phone.log.title })).toBeNull();
     expect(calls.some((c) => c.path.startsWith('/api/devices/'))).toBe(false);
   });
@@ -388,7 +414,7 @@ describe('PhoneCard', () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       const calls = mockFetch(answers());
       renderAt('/capabilities');
-      await panelOf('Galaxy A52 (R58M00000XX)');
+      await panelOf('Galaxy A52 (R58M00000XX)', user);
       const count = (path: string, search?: string) =>
         calls.filter((c) => c.method === 'GET' && c.path === path && (search === undefined || c.search === search))
           .length;
@@ -399,8 +425,8 @@ describe('PhoneCard', () => {
       expect([count('/api/capabilities'), count(LOG)]).toEqual([all, logs]);
 
       // The Devices tab: the phones and each log, every heartbeat (15 s).
-      await user.click(screen.getByRole('button', { name: tr.capabilities.groups.device }));
-      await panelOf('Galaxy A52 (R58M00000XX)');
+      await selectDevices(user);
+      await panelOf('Galaxy A52 (R58M00000XX)', user);
       const phones = count('/api/capabilities', '?group=device');
       const logged = count(LOG);
       await vi.advanceTimersByTimeAsync(15_000);
@@ -410,8 +436,8 @@ describe('PhoneCard', () => {
       await waitFor(() => expect(count('/api/capabilities', '?group=device')).toBe(phones + 2));
 
       // Back to every kind: the refresh stops.
-      await user.click(screen.getByRole('button', { name: tr.capabilities.filterAll }));
-      await panelOf('Galaxy A52 (R58M00000XX)');
+      await user.click(screen.getByRole('button', { name: tr.capabilities.workbench.goals.all.label }));
+      await panelOf('Galaxy A52 (R58M00000XX)', user);
       const [still, stillLogged] = [count('/api/capabilities', '?group=device'), count(LOG)];
       await vi.advanceTimersByTimeAsync(31_000);
       expect([count('/api/capabilities', '?group=device'), count(LOG)]).toEqual([still, stillLogged]);
@@ -444,7 +470,7 @@ describe('PhoneCard', () => {
       const base = { ...answers(), [`GET /api/devices/${ONLINE_ID}/commands`]: [pull] };
       mockFetch({ ...base, [`GET ${DETAIL}`]: { ...pull, result: null, file_url: null } });
       renderAt('/capabilities');
-      const panel = await panelOf('Galaxy A52 (R58M00000XX)');
+      const panel = await panelOf('Galaxy A52 (R58M00000XX)', user);
       const log = await within(panel).findByRole('list', { name: tr.capabilities.phone.log.title });
       await user.click(within(log).getByRole('button', { expanded: false }));
       expect(await within(log).findByText(tr.capabilities.phone.log.noResult)).toBeInTheDocument();
@@ -527,8 +553,8 @@ describe('PhoneCard', () => {
       };
       mockFetch(working);
       renderAt('/capabilities');
-      await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
-      const log = await within(await panelOf('Galaxy A52 (R58M00000XX)')).findByRole('list', {
+      await selectDevices(user);
+      const log = await within(await panelOf('Galaxy A52 (R58M00000XX)', user)).findByRole('list', {
         name: tr.capabilities.phone.log.title,
       });
       await user.click(within(log).getByRole('button', { expanded: false }));
@@ -548,7 +574,7 @@ describe('PhoneCard', () => {
         .queryAllByRole('alert')
         .filter((el) => within(el).queryByRole('button', { name: tr.common.retry }));
       expect(errorViews).toHaveLength(0);
-      expect(await panelOf('Galaxy A52 (R58M00000XX)')).toBeInTheDocument();
+      expect(await panelOf('Galaxy A52 (R58M00000XX)', user)).toBeInTheDocument();
       expect(within(log).getByRole('button', { expanded: true })).toBeInTheDocument();
       expect(within(log).getByText(/"x": 540/)).toBeInTheDocument();
 
@@ -573,9 +599,9 @@ describe('PhoneCard', () => {
       if (tablet) tablet.capability.last_verified_at = at;
       mockFetch(routes);
       renderAt('/capabilities');
-      await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+      await selectDevices(user);
       const ago = (s: number) => formatRelative(at, 'tr', new Date(Date.parse(at) + s * 1000));
-      const status = async () => row(await panelOf('Tablet (R58M00000WW)'), tr.capabilities.phone.status);
+      const status = async () => row(await panelOf('Tablet (R58M00000WW)', user), tr.capabilities.phone.status);
       await waitFor(async () => expect(await status()).toContain(ago(100)));
       await vi.advanceTimersByTimeAsync(120_000);
       await waitFor(async () => expect(await status()).toContain(ago(220)));
@@ -601,7 +627,7 @@ describe('PhoneCard', () => {
       }),
     });
     renderAt('/capabilities');
-    await user.click(await screen.findByRole('button', { name: tr.capabilities.groups.device }));
+    await selectDevices(user);
     await user.click(await screen.findByRole('button', { name: tr.capabilities.phone.pair.open }));
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: tr.apiKeys.dialog.submit }));

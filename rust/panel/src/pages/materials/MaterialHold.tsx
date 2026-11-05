@@ -9,6 +9,7 @@ import { useStudioKey } from '../StudioShared';
 import {
   CAPTION_CODES,
   MaterialsError,
+  MaterialsReadStatus,
   findingText,
   primaryClass,
   useDecider,
@@ -43,7 +44,8 @@ function CaptionRelease({ slot }: { slot: api.Slot }) {
     (c: m.MaterialCheck) => m.materialCheckRelease(slot.id, slot.revision, c.digest),
     () => setOpen(false),
   );
-  if (!check || check.released || check.hard.length > 0 || check.findings.length === 0) return null;
+  if (!check) return <MaterialsReadStatus query={detail} />;
+  if (check.released || check.hard.length > 0 || check.findings.length === 0) return null;
   return (
     <div className="space-y-2">
       <button type="button" className={primaryClass} onClick={() => setOpen(true)}>
@@ -88,7 +90,7 @@ export function MaterialHold({
     <div
       role="group"
       aria-label={t('materials.hold.title')}
-      className="space-y-2 rounded-md border border-warning bg-warning-subtle p-3 text-sm"
+      className="space-y-3 rounded-md border-s-2 border-warning bg-warning-subtle p-4 text-sm leading-relaxed"
       data-testid={`material-hold-${slot.id}`}
     >
       <p className="font-medium">{t('materials.hold.title')}</p>

@@ -33,11 +33,6 @@ import {
   Badge,
   Button,
   Callout,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   PageHeader,
@@ -103,7 +98,7 @@ function AudiencePreview({ audience, mailboxId }: { audience: Audience; mailboxI
   if (!mailboxId) return <p className="text-sm text-muted-foreground">{t('leads.campaign.preview.chooseMailbox')}</p>;
   const p = preview.data;
   return (
-    <section className="flex flex-col gap-2 rounded-lg bg-surface-muted p-3 text-sm" aria-label={t('leads.campaign.preview.title')}>
+    <section className="flex flex-col gap-2 rounded-lg border-s-4 border-primary bg-surface-muted p-4 text-sm" aria-label={t('leads.campaign.preview.title')}>
       <h3 className="font-medium">{t('leads.campaign.preview.title')}</h3>
       <QueryState query={preview}>
         {p && (
@@ -137,11 +132,11 @@ function StepsEditor({ steps, onChange }: { steps: CampaignStep[]; onChange: (st
   const options = (templates.data?.items ?? []).filter((x) => !x.template.archived);
   const set = (i: number, patch: Partial<CampaignStep>) => onChange(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-sm font-medium">{t('leads.campaign.steps')}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
+      <legend className="px-1 text-sm font-semibold">{t('leads.campaign.steps')}</legend>
       <ol className="flex flex-col gap-2" aria-label={t('leads.campaign.steps')}>
         {steps.map((s, i) => (
-          <li key={i} className="grid gap-2 rounded-lg border border-border p-2 sm:grid-cols-[1fr_8rem_auto_auto]">
+          <li key={i} className="grid gap-3 rounded-lg border border-border bg-surface-muted/40 p-3 sm:grid-cols-[1fr_8rem_auto_auto]">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.campaign.stepTemplate', { n: i + 1 })}
               <select className={selectClass} value={s.template_id} onChange={(e) => set(i, { template_id: e.target.value })}>
@@ -204,8 +199,8 @@ function AudienceEditor({ audience, onChange }: { audience: Audience; onChange: 
   const setPros = (patch: Partial<ProspectFilter>) => onChange({ ...audience, prospects: { ...(pros ?? {}), ...patch } });
   const setPeople = (patch: Partial<PeopleFilter>) => onChange({ ...audience, people: { ...(people ?? {}), ...patch } });
   return (
-    <fieldset className="flex flex-col gap-3">
-      <legend className="mb-1 text-sm font-medium">{t('leads.campaign.audience')}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-3 border-t border-border pt-4">
+      <legend className="px-1 text-sm font-semibold">{t('leads.campaign.audience')}</legend>
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -381,11 +376,13 @@ function CampaignEditor({ out }: { out: CampaignOut | null }) {
       <StepsEditor steps={def.steps} onChange={(steps) => set({ steps })} />
       <AudienceEditor audience={def.audience} onChange={(audience) => set({ audience })} />
       <AudiencePreview audience={def.audience} mailboxId={mailboxId} />
+      <div className="border-t border-border pt-4">
       <HoursFields
         label={t('leads.campaign.window')}
         value={def.schedule.window}
         onChange={(window) => window && set({ schedule: { ...def.schedule, window } })}
       />
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.campaign.startAt')}
@@ -461,14 +458,14 @@ function ApprovalCard({ out }: { out: CampaignOut }) {
         ? t('leads.recorder.agentNamed', { name: names.agent(c.created_by.connection_id), member: names.member(c.created_by.user_id) })
         : t('leads.recorder.system', { job: c.created_by.component });
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('leads.campaign.approval.title')}</CardTitle>
-        <CardDescription>
+    <section className="border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.campaign.approval.title')}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
           {t('leads.campaign.approval.body', { revision: c.revision, drafter })}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+        </p>
+      </header>
+      <div className="flex flex-col gap-2">
         {manager ? (
           <>
             <ErrorCallout error={approve.error} />
@@ -481,8 +478,8 @@ function ApprovalCard({ out }: { out: CampaignOut }) {
         ) : (
           <p className="text-sm text-muted-foreground">{t('leads.campaign.approval.waiting')}</p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -526,11 +523,11 @@ function RunControls({ out }: { out: CampaignOut }) {
   const control = (action: ControlAction) => () => controlCampaign(c.id, action);
   const final = c.status === 'completed' || c.status === 'canceled';
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('leads.campaign.run')}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <section className="border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.campaign.run')}</h2>
+      </header>
+      <div className="flex flex-col gap-3">
         {(c.status === 'draft' || c.status === 'paused') && blockers.length > 0 && (
           <section aria-label={t('leads.campaign.blockedTitle')}>
             <p className="text-sm font-medium">{t('leads.campaign.blockedTitle')}</p>
@@ -569,8 +566,8 @@ function RunControls({ out }: { out: CampaignOut }) {
         <p className="text-caption text-muted-foreground">
           {t('leads.campaign.active', { n: out.active_enrollments })}
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -588,7 +585,7 @@ function EnrollmentItem({ row }: { row: EnrollmentRow }) {
   });
   return (
     <tr className="border-t border-border align-top" data-testid="enrollment">
-      <td className="py-2 pe-3">
+      <td data-label={t('leads.enrollments.person')} className="py-2 pe-3">
         <Link className="text-primary hover:underline" to={`/inbox?person=${encodeURIComponent(row.person_id)}`}>
           {t('leads.enrollments.openPerson')}
         </Link>
@@ -598,14 +595,14 @@ function EnrollmentItem({ row }: { row: EnrollmentRow }) {
           </Link>
         )}
       </td>
-      <td className="py-2 pe-3">
+      <td data-label={t('leads.enrollments.status')} className="py-2 pe-3">
         <Badge tone={row.status === 'active' ? 'success' : 'neutral'}>{t(`leads.enrollmentStatus.${row.status}`)}</Badge>
         {row.stop && <span className="block text-caption">{stopText(t, row.stop)}</span>}
         {row.skip && <span className="block text-caption">{skipText(t, row.skip)}</span>}
       </td>
-      <td className="py-2 pe-3 tabular-nums">{Math.min(row.next_step, MAX_STEPS)}</td>
-      <td className="py-2 pe-3">{row.next_send_at ? formatDateTime(row.next_send_at, i18n.language) : '—'}</td>
-      <td className="py-2 pe-3">{row.basis ? t(`leads.basis.${row.basis}`) : '—'}</td>
+      <td data-label={t('leads.enrollments.step')} className="py-2 pe-3 tabular-nums">{Math.min(row.next_step, MAX_STEPS)}</td>
+      <td data-label={t('leads.enrollments.next')} className="py-2 pe-3">{row.next_send_at ? formatDateTime(row.next_send_at, i18n.language) : '—'}</td>
+      <td data-label={t('leads.enrollments.basis')} className="py-2 pe-3">{row.basis ? t(`leads.basis.${row.basis}`) : '—'}</td>
       <td className="py-2 text-end">
         {row.status === 'active' && (
           <Button size="sm" variant="ghost" loading={stop.isPending} onClick={() => !stop.isPending && stop.mutate()}>
@@ -623,17 +620,17 @@ function Enrollments({ campaignId }: { campaignId: string }) {
   const list = useQuery({ queryKey: [...key, 'outreach', 'enrollments', campaignId], queryFn: () => listEnrollments(campaignId) });
   const items = list.data?.items ?? [];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('leads.enrollments.title')}</CardTitle>
-      </CardHeader>
-      <CardContent>
+    <section className="min-w-0 border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.enrollments.title')}</h2>
+      </header>
+      <div className="min-w-0">
         <QueryState query={list}>
           {items.length === 0 ? (
             <EmptyState title={t('leads.enrollments.empty')} />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm" aria-label={t('leads.enrollments.title')}>
+            <div className="w-full overflow-x-auto">
+              <table className="dt-responsive w-full text-left text-sm" aria-label={t('leads.enrollments.title')}>
                 <thead className="text-caption text-muted-foreground">
                   <tr>
                     <th className="py-1 pe-3 font-normal">{t('leads.enrollments.person')}</th>
@@ -655,8 +652,8 @@ function Enrollments({ campaignId }: { campaignId: string }) {
             </div>
           )}
         </QueryState>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -691,31 +688,25 @@ export function OutreachCampaign() {
       </Callout>
       {isNew ? (
         settings.data !== undefined || settings.isError ? (
-          <Card>
-            <CardContent className="pt-6">
-              <CampaignEditor out={null} />
-            </CardContent>
-          </Card>
+          <section className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <CampaignEditor out={null} />
+          </section>
         ) : null
       ) : (
         <QueryState query={campaign}>
           {out && c && (
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-col rounded-lg border border-border bg-surface px-4 py-5 sm:px-6">
+              <div className="flex flex-wrap items-center gap-3 pb-4">
                 <CampaignStatusBadge status={c.status} />
                 <span className="text-sm text-muted-foreground">{t('leads.campaign.revision', { revision: c.revision })}</span>
               </div>
               {c.status === 'awaiting_approval' && <ApprovalCard out={out} />}
               <RunControls out={out} />
               {editable && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{t('leads.campaign.editor')}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <CampaignEditor key={`${c.id}:${c.revision}`} out={out} />
-                  </CardContent>
-                </Card>
+                <section className="border-t border-border py-5">
+                  <h2 className="mb-4 text-base font-medium">{t('leads.campaign.editor')}</h2>
+                  <CampaignEditor key={`${c.id}:${c.revision}`} out={out} />
+                </section>
               )}
               {c.status !== 'draft' && <Enrollments campaignId={c.id} />}
             </div>

@@ -5,7 +5,7 @@ import * as api from '@/api/inbox';
 import { isApiError } from '@/api/client';
 import { QueryState } from '@/components/QueryState';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Badge, Button, Callout, Disclosure, Input, Textarea } from '@/components/ui';
+import { Button, Callout, Disclosure, Input, Textarea } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { deliveryText } from '@/lib/delivery';
 import { personName } from '@/lib/people';
@@ -14,7 +14,8 @@ import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { InboxPublic } from './InboxPublic';
 import {
-  columnClass,
+  conversationClass,
+  journeyClass,
   Deadline,
   InboxActorLabel,
   InboxTime,
@@ -87,34 +88,30 @@ export function InboxConversation({ id }: { id: string }) {
   const disabled = !!reason || (!!refusal && refusal !== 'human_holds_conversation');
   return (
     <>
-      <section className={columnClass} aria-label={t('inbox.thread')}>
-        {ctx && !ctx.person.erased_at && !ctx.person.merged_into && <>
-          <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={ctx.person.id} /></Disclosure>
-          <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
-        </>}
+      <section className={conversationClass} aria-label={t('inbox.thread')}>
         <QueryState query={conversation}>
           {row && (
             <>
-              <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="font-semibold">
+                  <h2 className="font-display text-2xl font-normal leading-8">
                     {ctx ? personName(t, ctx.person, person.data?.identities) : t('inbox.thread')}
                   </h2>
-                  <p className="text-xs text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
                   {row.next_deadline && <Deadline at={row.next_deadline} />}
                 </div>
-                <Badge tone={row.executor === 'agent' ? 'neutral' : 'warning'}>
+                <span className="pt-1 text-caption text-muted-foreground">
                   {row.executor === 'agent'
                     ? t('inbox.agentExecutor')
                     : row.executor.human.user_id
                       ? t('inbox.humanExecutor', { user: memberName(row.executor.human.user_id) })
                       : t('inbox.unassignedExecutor')}
-                </Badge>
+                </span>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 border-b border-border pb-5" role="group" aria-label={t('inbox.thread')}>
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   loading={action.isPending}
                   onClick={() => action.mutate('take-over')}
                 >
@@ -122,7 +119,7 @@ export function InboxConversation({ id }: { id: string }) {
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   loading={action.isPending}
                   onClick={() => action.mutate('hand-to-agent')}
                 >
@@ -175,7 +172,7 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('inbox.moreMessages')}
                   </Button>
                 )}
-                <ol className="flex min-w-0 flex-col gap-3" aria-label={t('inbox.messages')}>
+                <ol className="flex max-h-[56dvh] min-h-48 min-w-0 scroll-py-4 flex-col gap-8 overflow-y-auto overscroll-contain py-4 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.messages')}>
                   {messages.data?.pages
                     .flatMap((page) => page.items)
                     .slice()
@@ -183,13 +180,13 @@ export function InboxConversation({ id }: { id: string }) {
                     .map((message) => (
                       <li
                         key={message.id}
-                        className={`max-w-full rounded-lg p-3 ${message.direction === 'outbound' ? 'ml-5 bg-primary/10' : 'mr-5 bg-surface-muted'}`}
+                        className={`max-w-[94%] ${message.direction === 'outbound' ? 'ml-auto rounded-md bg-surface-muted px-4 py-3' : 'mr-auto border-l-2 border-brand-accent pl-4 sm:pl-5'}`}
                       >
                         <div className="flex flex-wrap justify-between gap-2">
                           <InboxActorLabel actor={message.author} />
                           <InboxTime at={message.at} />
                         </div>
-                        <p className="my-2 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">
+                        <p className={`my-3 whitespace-pre-wrap [overflow-wrap:anywhere] ${message.direction === 'inbound' ? 'text-[17px] leading-7' : 'text-sm leading-6'}`}>
                           {message.body}
                         </p>
                         <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
@@ -205,20 +202,21 @@ export function InboxConversation({ id }: { id: string }) {
               <QueryState query={context} />
               {reason && <Callout tone="warning">{t(`inbox.fence.${reason}`)}</Callout>}
               <form
-                className="flex flex-col gap-2 border-t pt-4"
+                className="flex flex-col gap-3 border-t border-border pt-5"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (text.trim() && !disabled && ctx) send.mutate();
                 }}
               >
                   {row.kind_key === 'mailbox' && <Input aria-label={t('inbox.emailSubject')} placeholder={t('inbox.emailSubject')} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={998} />}
-                <label className="text-sm font-medium">
+                <label className="flex flex-col gap-2 text-sm font-medium">
                   {t('inbox.reply')}
                   <Textarea
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     disabled={disabled || send.isPending || !ctx}
                     rows={4}
+                    className="resize-y rounded-md bg-surface"
                   />
                 </label>
                 <ErrorCallout error={send.error} />
@@ -235,20 +233,20 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('common.retry')}
                   </Button>
                 )}
-                <Button type="submit" loading={send.isPending} disabled={disabled || !text.trim() || !ctx}>
+                <Button className="self-end" type="submit" loading={send.isPending} disabled={disabled || !text.trim() || !ctx}>
                   {t('inbox.send')}
                 </Button>
               </form>
                 </>
               )}
               <form
-                className="flex flex-col gap-2 border-t pt-4"
+                className="flex flex-wrap items-end gap-2 border-t border-border pt-4"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (until) snooze.mutate();
                 }}
               >
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm">
                   {t('inbox.snoozeUntil')}
                   <Input
                     required
@@ -267,6 +265,14 @@ export function InboxConversation({ id }: { id: string }) {
                 </Button>
                 <ErrorCallout error={snooze.error} />
               </form>
+              {ctx && !ctx.person.erased_at && !ctx.person.merged_into && (
+                <div className="space-y-4 pt-1">
+                  <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}>
+                    <InboxCompliance personId={ctx.person.id} />
+                  </Disclosure>
+                  <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
+                </div>
+              )}
             </>
           )}
         </QueryState>
@@ -279,8 +285,8 @@ export function InboxConversation({ id }: { id: string }) {
           reopenInbound={row?.state === 'ours' && !!row.last_inbound_at}
         />
       ) : (
-        <section className={columnClass}>
-          <h2 className="font-semibold">{t('inbox.journey')}</h2>
+        <section className={journeyClass}>
+          <h2 className="text-sm font-medium">{t('inbox.journey')}</h2>
           <QueryState query={context}>
             {ctx && <p className="text-sm text-muted-foreground">{t('inbox.noJourney')}</p>}
           </QueryState>

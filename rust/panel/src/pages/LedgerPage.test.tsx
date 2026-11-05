@@ -12,6 +12,7 @@ describe('LedgerPage', () => {
     expect(await screen.findByText('team.invite')).toBeInTheDocument();
     expect(screen.getByText(tr.actor.human)).toBeInTheDocument();
     expect(screen.getByLabelText(tr.ledger.filter)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: tr.ledger.title })).toHaveAttribute('tabindex', '0');
     const ledgerCall = calls.find((c) => c.path === '/api/ledger');
     expect(ledgerCall?.search).toBe('?limit=50');
   });

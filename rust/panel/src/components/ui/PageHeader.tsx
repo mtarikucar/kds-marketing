@@ -46,12 +46,12 @@ export function PageHeader({
         {description
           ? <p className="min-w-0 flex-1 text-sm text-muted-foreground">{description}</p>
           : <span className="flex-1" />}
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {actions && <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
       </div>
     );
   }
   return (
-    <div className={cn('flex flex-col gap-2', className)}>
+    <div className={cn('flex flex-col gap-3', className)}>
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs items={breadcrumbs} renderLink={renderBreadcrumbLink} />
       )}
@@ -71,10 +71,9 @@ export function PageHeader({
           header whose actions fit beside the title renders exactly as before. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div className="min-w-0 flex-1 sm:min-w-64">
-          {/* `title` so a name cut short by `truncate` can still be read whole. */}
-          <h1 className="font-display text-h1 text-foreground truncate" title={title}>{title}</h1>
+          <h1 className="break-words font-display text-h1 text-foreground [overflow-wrap:anywhere]">{title}</h1>
           {description && (
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && (

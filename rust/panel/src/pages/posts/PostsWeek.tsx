@@ -4,13 +4,13 @@ import type { ReactNode } from 'react';
 import * as p from '@/api/posts';
 import type { Hypothesis } from '@/api/types';
 import { Badge } from '@/components/ui';
-import { MaterialsError, cardClass, formatDay, tapClass } from '../materials/MaterialsShared';
+import { MaterialsReadStatus, cardClass, formatDay, tapClass } from '../materials/MaterialsShared';
 import { percent, useChannelName, usePostsKey } from './PostsShared';
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section className={cardClass} aria-labelledby={id}>
-      <h3 id={id} className="font-semibold">
+      <h3 id={id} className="text-sm font-medium text-muted-foreground">
         {title}
       </h3>
       {children}
@@ -68,7 +68,7 @@ export function PostsWeek({
           {t('posts.week.next')}
         </button>
         {s && (
-          <h3 className="text-lg font-semibold" data-testid="week-title">
+          <h3 className="text-lg font-medium" data-testid="week-title">
             {t('posts.week.title', {
               from: formatDay(s.week_start, lang),
               until: formatDay(p.addDays(s.week_start, 6), lang),
@@ -76,14 +76,14 @@ export function PostsWeek({
           </h3>
         )}
       </div>
-      <MaterialsError error={summary.error} />
+      <MaterialsReadStatus query={summary} />
       {s && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(16rem,1fr)]">
           <Section id="week-published" title={t('posts.week.published')}>
             {s.published.length === 0 && none}
             <ul className="space-y-2">
               {s.published.map((x) => (
-                <li key={x.publication_id} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={x.publication_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <span className="text-muted-foreground">{at(x.published_at)}</span>
@@ -100,7 +100,7 @@ export function PostsWeek({
             {s.planned.length === 0 && none}
             <ul className="space-y-2">
               {s.planned.map((x) => (
-                <li key={x.slot_id} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={x.slot_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <span className="text-muted-foreground">{at(x.publish_at)}</span>
@@ -115,7 +115,7 @@ export function PostsWeek({
             {s.cancelled.length === 0 && none}
             <ul className="space-y-2">
               {s.cancelled.map((x) => (
-                <li key={`${x.slot_id}-${x.at}`} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={`${x.slot_id}-${x.at}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <Badge tone="warning">{t(`posts.week.reason.${x.reason}`)}</Badge>
@@ -128,27 +128,27 @@ export function PostsWeek({
             {s.scores.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t('posts.week.noScores')}</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-lg border border-border bg-surface">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="text-xs text-muted-foreground">
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreFormat')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreKind')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreHypothesis')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreMean')}</th>
-                      <th className="py-1 font-medium">{t('posts.week.scorePosts')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreFormat')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreKind')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreHypothesis')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreMean')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scorePosts')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {s.scores.map((x) => (
                       <tr key={`${x.format}-${x.olay_kind}-${x.hypothesis_id}`} className="border-t border-border">
-                        <td className="py-1 pr-2">{t(`posts.format.${x.format}`)}</td>
-                        <td className="py-1 pr-2">
+                        <td className="px-3 py-2.5">{t(`posts.format.${x.format}`)}</td>
+                        <td className="px-3 py-2.5">
                           {x.olay_kind ? t(`materials.kind.${x.olay_kind}`) : t('posts.week.generic')}
                         </td>
-                        <td className="py-1 pr-2">{title(x.hypothesis_id)}</td>
-                        <td className="py-1 pr-2">{percent(x.mean, lang)}</td>
-                        <td className="py-1">{x.posts}</td>
+                        <td className="px-3 py-2.5">{title(x.hypothesis_id)}</td>
+                        <td className="px-3 py-2.5">{percent(x.mean, lang)}</td>
+                        <td className="px-3 py-2.5 tabular-nums">{x.posts}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import { Badge } from '@/components/ui';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   formatRange,
@@ -47,6 +48,7 @@ function EntryForm({
   const save = useMaterialsMutation((row: m.CalendarEntry) => m.calendarSet(row), onDone);
   return (
     <form
+      aria-label={isNew ? t('materials.calendar.add') : entry.name}
       className="grid grid-cols-1 gap-3 rounded-md border border-border p-3 sm:grid-cols-2"
       noValidate
       onSubmit={(e) => {
@@ -165,7 +167,7 @@ function EntryRow({
   const [editing, setEditing] = useState(false);
   const dated = entry.window_start && entry.window_end;
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`calendar-${entry.key}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`calendar-${entry.key}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">{entry.name}</span>
         <span className="flex flex-wrap gap-1">
@@ -280,7 +282,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
           ))}
         </select>
       </label>
-      <MaterialsError error={calendar.error} />
+      <MaterialsReadStatus query={calendar} />
       {undated.length > 0 && (
         <p className="rounded-md bg-warning-subtle p-3 text-sm" role="status">
           {t('materials.calendar.undated', { count: undated.length, year })}
@@ -288,7 +290,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
       )}
       {data && (
         <>
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
+          <ul className="grid grid-cols-1 gap-x-8 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
             {data.entries.map((e) => (
               <EntryRow
                 key={`${e.key}-${data.year}-${e.window_start}-${e.window_end}-${e.lead_days}-${e.enabled}-${e.name}`}

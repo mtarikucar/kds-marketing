@@ -31,7 +31,10 @@ import {
   IconButton,
   Input,
   PageHeader,
-  StatCard,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -89,6 +92,7 @@ function RuleEditor({
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(() => !rule.id);
   const set = (patch: Partial<RuleInput>) => onChange({ ...rule, ...patch });
   const when = (patch: Partial<RuleInput['when']>) => set({ when: { ...rule.when, ...patch } });
   const members = rule.to.kind === 'members' ? rule.to.user_ids : [];
@@ -128,6 +132,9 @@ function RuleEditor({
           </IconButton>
         </div>
       </div>
+      <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+        <summary className="cursor-pointer py-1 text-sm font-medium">{t('leads.distribution.workbench.ruleDetails', { defaultValue: 'Eşleşme ve yönlendirme' })}</summary>
+        <div className="mt-3 space-y-3">
       <fieldset className="flex flex-wrap gap-2 text-sm">
         <legend className="mb-1 font-medium">{t('leads.distribution.rules.sources')}</legend>
         {LEAD_SOURCE_KINDS.map((s) => (
@@ -219,6 +226,8 @@ function RuleEditor({
           ))}
         </fieldset>
       )}
+        </div>
+      </details>
     </li>
   );
 }
@@ -248,7 +257,25 @@ function RulesCard({ data }: { data: DistributionOut }) {
       [next[i], next[i + by]] = [next[i + by], next[i]];
       return next;
     });
+  const invalidNumbers = rules.flatMap((r, i) => {
+    const name = r.name.trim() || t('leads.distribution.rules.unnamed', { n: i + 1 });
+    const issues: string[] = [];
+    if (r.to.kind === 'members' && r.to.user_ids.length === 0) {
+      issues.push(t('leads.distribution.workbench.invalidMembers', { name, defaultValue: '{{name}}: En az bir üye seçin.' }));
+    }
+    if (r.when.min_score !== null && (!Number.isInteger(r.when.min_score) || r.when.min_score < 0 || r.when.min_score > 100)) {
+      issues.push(t('leads.distribution.workbench.invalidScore', { name, defaultValue: '{{name}}: En düşük puan 0 ile 100 arasında bir tam sayı olmalı.' }));
+    }
+    if (r.sla_minutes != null && (!Number.isInteger(r.sla_minutes) || r.sla_minutes < 5 || r.sla_minutes > 10080)) {
+      issues.push(t('leads.distribution.workbench.invalidSla', { name, defaultValue: '{{name}}: İlk temas süresi 5 ile 10080 dakika arasında bir tam sayı olmalı.' }));
+    }
+    return issues;
+  });
+  if (!/^\d+$/.test(maxReassign) || Number(maxReassign) > 10) {
+    invalidNumbers.push(t('leads.distribution.workbench.invalidReassign', { defaultValue: 'Yeniden atama sınırı 0 ile 10 arasında bir tam sayı olmalı.' }));
+  }
   const valid =
+    invalidNumbers.length === 0 &&
     rules.every((r) => r.name.trim() && (r.to.kind === 'all_eligible' || r.to.user_ids.length > 0)) &&
     /^\d+$/.test(maxReassign) &&
     Number(maxReassign) <= 10;
@@ -323,6 +350,11 @@ function RulesCard({ data }: { data: DistributionOut }) {
             </Button>
           </div>
           <ErrorCallout error={save.error} />
+          {invalidNumbers.length > 0 && (
+            <ul role="alert" className="space-y-1 text-sm text-danger">
+              {invalidNumbers.map((issue, index) => <li key={index}>{issue}</li>)}
+            </ul>
+          )}
           <div>
             <Button type="submit" disabled={!valid} loading={save.isPending}>
               {t('leads.distribution.rules.save')}
@@ -436,14 +468,15 @@ function RepsCard({ data }: { data: DistributionOut }) {
   const editable = (r: RepOut) => manage || r.user_id === session.data?.user_id;
   const current = data.reps.find((r) => r.user_id === editing);
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{t('leads.distribution.reps.title')}</CardTitle>
         <CardDescription>{t('leads.distribution.reps.description')}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm" aria-label={t('leads.distribution.reps.title')}>
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        <p className="text-caption text-muted-foreground sm:hidden">{t('leads.distribution.reps.scrollHint')}</p>
+        <div className="relative w-full min-w-0 overflow-x-auto">
+          <table className="w-full min-w-[48rem] text-left text-sm" aria-label={t('leads.distribution.reps.title')}>
             <thead className="text-caption text-muted-foreground">
               <tr>
                 <th className="py-1 pe-3 font-normal">{t('leads.distribution.reps.member')}</th>
@@ -458,7 +491,7 @@ function RepsCard({ data }: { data: DistributionOut }) {
             </thead>
             <tbody>
               {data.reps.map((r) => (
-                <tr key={r.user_id} className="border-t border-border align-top" data-testid="rep">
+                <tr key={r.user_id} className="border-t border-border align-top hover:bg-surface-muted/40" data-testid="rep">
                   <td className="py-2 pe-3">
                     <span className="font-medium">{r.display_name ?? r.user_id}</span>
                     {r.on_shift && <Badge tone="success" className="ms-2">{t('leads.distribution.reps.onShift')}</Badge>}
@@ -520,14 +553,10 @@ function CountsCard({ data }: { data: DistributionOut }) {
   });
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatCard
-          label={t('leads.distribution.ownerless')}
-          value={String(data.ownerless.count)}
-          tone={data.ownerless.count > 0 ? 'warning' : 'neutral'}
-        />
-        <StatCard label={t('leads.distribution.stalled')} value={String(data.stalled)} tone={data.stalled > 0 ? 'danger' : 'neutral'} />
-      </div>
+      <dl className="flex flex-wrap gap-x-10 gap-y-4 border-y border-border py-4">
+        <div><dt className="text-sm text-muted-foreground">{t('leads.distribution.ownerless')}</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{data.ownerless.count}</dd></div>
+        <div><dt className="text-sm text-muted-foreground">{t('leads.distribution.stalled')}</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{data.stalled}</dd></div>
+      </dl>
       <div className="flex flex-wrap items-center gap-2">
         {manage && (
           <Button loading={run.isPending} onClick={() => !run.isPending && run.mutate()}>
@@ -638,15 +667,21 @@ export function DistributionPage() {
       <TeamTabs />
       <QueryState query={dist}>
         {dist.data && (
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             <CountsCard data={dist.data} />
-            {/* A new draft only when the stored rules change, never on a mere refetch. */}
-            <RulesCard
-              key={JSON.stringify([dist.data.mode, dist.data.max_reassignments, dist.data.rules])}
-              data={dist.data}
-            />
-            <RepsCard data={dist.data} />
-            <AssignmentLog data={dist.data} />
+            <Tabs defaultValue="rules">
+              <TabsList aria-label={t('leads.distribution.workbench.sections', { defaultValue: 'Dağıtım bölümleri' })} className="overflow-x-auto">
+                <TabsTrigger value="rules" className="min-h-11">{t('leads.distribution.rules.title')}</TabsTrigger>
+                <TabsTrigger value="reps" className="min-h-11">{t('leads.distribution.reps.title')}</TabsTrigger>
+                <TabsTrigger value="log" className="min-h-11">{t('leads.distribution.log.title')}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="rules" forceMount className="data-[state=inactive]:hidden">
+                {/* Keep an unsaved draft across tab switches; replace it when server rules change. */}
+                <RulesCard key={JSON.stringify([dist.data.mode, dist.data.max_reassignments, dist.data.rules])} data={dist.data} />
+              </TabsContent>
+              <TabsContent value="reps" forceMount className="data-[state=inactive]:hidden"><RepsCard data={dist.data} /></TabsContent>
+              <TabsContent value="log" forceMount className="data-[state=inactive]:hidden"><AssignmentLog data={dist.data} /></TabsContent>
+            </Tabs>
           </div>
         )}
       </QueryState>

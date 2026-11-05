@@ -32,6 +32,7 @@ describe('BudgetPage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: tr.budget.title })).toBeInTheDocument();
     expect(await screen.findByText('Ekim kampanyası')).toBeInTheDocument();
     expect(screen.getByText(tr.budget.overCap)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: tr.budget.title })).toHaveAttribute('tabindex', '0');
     expect(screen.getByRole('button', { name: tr.budget.create })).toBeInTheDocument();
   });
 

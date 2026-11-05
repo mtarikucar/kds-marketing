@@ -5,11 +5,14 @@ import { Link } from 'react-router-dom';
 import * as api from '@/api/studio';
 import { listCapabilities } from '@/api/capabilities';
 import type { LaneKind } from '@/api/types';
+import { kindLabel } from '@/lib/capabilities';
 import { formatMoney, minorDigits, parseMinor } from '@/lib/format';
 import {
+  contentTypeLabel,
   Region,
   Field,
   StudioError,
+  StudioReadStatus,
   inputClass,
   buttonClass,
   useStudioKey,
@@ -57,11 +60,14 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
         <summary className="cursor-pointer text-sm font-medium">{t('studio.bind')}</summary>
         <form
           className="mt-3 space-y-3"
+          aria-label={t('studio.bind')}
           onSubmit={(e) => {
             e.preventDefault();
             bind.mutate();
           }}
         >
+          <StudioReadStatus query={capabilities} />
+          <StudioReadStatus query={adsets} />
           <Field label="account">
             <select
               required
@@ -108,7 +114,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
                 .map(({ arm: a }) => (
                   <option key={a.id} value={a.id}>
                     {data.hypotheses.find((h) => h.id === a.key.hypothesis_id)?.title} /{' '}
-                    {a.key.content_type}
+                    {contentTypeLabel(t, a.key.content_type)}
                   </option>
                 ))}
             </select>
@@ -123,6 +129,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
           <summary className="cursor-pointer text-sm font-medium">{t('studio.budgetMove')}</summary>
           <form
             className="mt-3 space-y-3"
+            aria-label={t('studio.budgetMove')}
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
@@ -172,7 +179,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
           </form>
         </details>
       )}
-      <StudioError error={capabilities.error || adsets.error || bind.error || move.error} />
+      <StudioError error={bind.error || move.error} />
       {(bind.isSuccess || move.isSuccess) && <p role="status">{t('studio.success')}</p>}
     </div>
   );
@@ -233,7 +240,7 @@ export function StudioLearned({
     </Field>
   );
   return (
-    <Region name="learned">
+    <Region name="learned" className="xl:col-span-2">
       <div className="flex flex-wrap gap-2">
         <button
           className={buttonClass}
@@ -270,12 +277,12 @@ export function StudioLearned({
         ) : (
           <p className="text-sm">{t('studio.connectorUnavailable')}</p>
         ))}
-      <ul className="space-y-3">
+      <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-1">
         {data?.learned.arms.map(({ arm, evidence: rows }) => (
-          <li key={arm.id}>
+          <li key={arm.id} className="border-b border-border pb-3">
             <p className="text-sm font-medium">
               {data.hypotheses.find((h) => h.id === arm.key.hypothesis_id)?.title} /{' '}
-              {arm.key.content_type} / {arm.key.channel}
+              {contentTypeLabel(t, arm.key.content_type)} / {kindLabel(t, arm.key.channel)}
             </p>
             <p className="text-sm text-muted-foreground">
               {rows.length
@@ -306,6 +313,7 @@ export function StudioLearned({
             </ul>
             <form
               className="space-y-3"
+              aria-label={t('studio.recordTrend')}
               onSubmit={(e) => {
                 e.preventDefault();
                 trend.mutate(new FormData(e.currentTarget));
@@ -335,6 +343,7 @@ export function StudioLearned({
             </ul>
             <form
               className="space-y-3"
+              aria-label={t('studio.recordJudgment')}
               onSubmit={(e) => {
                 e.preventDefault();
                 judgment.mutate(new FormData(e.currentTarget));

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   BookText,
@@ -8,6 +9,7 @@ import {
   KeyRound,
   LogOut,
   Mail,
+  Menu,
   Phone,
   Plug,
   ShieldCheck,
@@ -33,6 +35,10 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
   ThemeToggle,
   cn,
   toast,
@@ -77,33 +83,37 @@ const NAV: { to: string; key: NavKey; Icon: LucideIcon; permission?: Permission 
   { to: '/ledger', key: 'ledger', Icon: BookText },
 ];
 
-function NavItems({ orientation }: { orientation: 'vertical' | 'horizontal' }) {
+const NAV_GROUPS: { label: 'workGroup' | 'growthGroup' | 'workspaceGroup'; keys: NavKey[] }[] = [
+  { label: 'workGroup', keys: ['home', 'inbox', 'people', 'prospects', 'outreach', 'calls'] },
+  { label: 'growthGroup', keys: ['strategy', 'studio'] },
+  { label: 'workspaceGroup', keys: ['capabilities', 'budget', 'team', 'roles', 'apiKeys', 'agents', 'ledger'] },
+];
+
+function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useTranslation();
   const me = useSession().data;
-  return (
-    <>
-      {NAV.filter(({ permission }) => !permission || can(me, permission)).map(({ to, key, Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          end={to === '/'}
-          className={({ isActive }) =>
-            cn(
-              'flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              isActive
-                ? 'bg-primary/10 text-primary'
-                : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
-              orientation === 'horizontal' && 'py-1.5',
-            )
-          }
-        >
-          <Icon className="h-4 w-4" aria-hidden="true" />
-          {t(`nav.${key}`)}
-        </NavLink>
-      ))}
-    </>
-  );
+  return <>
+    {NAV_GROUPS.map((group) => (
+      <div key={group.label} className="space-y-1">
+        <p className="px-3 pb-2 pt-4 text-xs text-muted-foreground">{t(`nav.${group.label}`)}</p>
+        {group.keys.map((key) => NAV.find((item) => item.key === key)!)
+          .filter(({ permission }) => !permission || can(me, permission))
+          .map(({ to, key, Icon }) => (
+            <NavLink key={to} to={to} end={to === '/'} onClick={onNavigate}
+              className={({ isActive }) => cn(
+                'relative flex min-h-11 items-center gap-3 rounded-md px-3 text-sm transition-colors md:min-h-9',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isActive
+                  ? 'bg-surface font-medium text-foreground shadow-xs before:absolute before:inset-y-3 before:start-0 before:w-0.5 before:bg-brand-accent'
+                  : 'text-muted-foreground hover:bg-surface/70 hover:text-foreground',
+              )}>
+              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {t(`nav.${key}`)}
+            </NavLink>
+          ))}
+      </div>
+    ))}
+  </>;
 }
 
 function WorkspaceSwitcher({ me }: { me: MeOut }) {
@@ -156,6 +166,7 @@ function WorkspaceSwitcher({ me }: { me: MeOut }) {
 export function Shell() {
   const { t } = useTranslation();
   const session = useSession();
+  const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const signOut = useMutation({
@@ -168,9 +179,9 @@ export function Shell() {
 
   if (!session.data) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <main id="main-content" tabIndex={-1} className="flex min-h-screen items-center justify-center bg-background p-6">
         <QueryState query={session} />
-      </div>
+      </main>
     );
   }
 
@@ -179,30 +190,39 @@ export function Shell() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <aside className="hidden w-60 shrink-0 flex-col gap-6 border-e border-border bg-surface px-3 py-4 md:flex">
-        <Brand className="px-2" />
-        <nav aria-label={t('nav.label')} className="flex flex-col gap-1">
-          <NavItems orientation="vertical" />
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-e border-border bg-surface-muted/60 md:flex">
+        <Brand className="px-6 pb-3 pt-6" />
+        <nav aria-label={t('nav.label')} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 pb-6 pt-0">
+          <NavItems />
         </nav>
+        <div className="flex items-center gap-3 border-t border-border px-6 py-4">
+          <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-sm font-medium">{me.display_name.trim().slice(0, 1).toLocaleUpperCase()}</span>
+          <div className="min-w-0">
+            <p className="truncate text-sm">{me.display_name}</p>
+            <p className="truncate text-xs text-muted-foreground" title={me.email}>{me.email}</p>
+          </div>
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-2.5 sm:px-6">
-          <Brand className="md:hidden" />
+        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 sm:px-8">
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-10 w-10 px-0 md:hidden" aria-label={t('nav.label')}><Menu className="h-5 w-5" aria-hidden="true" /></Button>
+            </SheetTrigger>
+            <SheetContent side="left" className="max-w-[288px] bg-background" aria-describedby={undefined}>
+              <SheetTitle><Brand /></SheetTitle>
+              <nav aria-label={t('nav.label')} className="flex flex-col gap-4"><NavItems onNavigate={() => setMenuOpen(false)} /></nav>
+            </SheetContent>
+          </Sheet>
           <div className="flex min-w-0 items-center gap-2">
-            <span className="sr-only">{t('shell.workspace')}</span>
+            <span className="hidden text-caption text-muted-foreground sm:inline">{t('shell.workspace')}</span>
             <WorkspaceSwitcher me={me} />
             {current && <WorkspaceStatusBadge status={current.workspace_status} />}
           </div>
           <div className="ms-auto flex items-center gap-2">
             <LanguageSwitcher />
             <ThemeToggle />
-            <span
-              className="hidden max-w-[12rem] truncate text-sm text-muted-foreground lg:inline"
-              title={t('shell.signedInAs', { name: me.email })}
-            >
-              {me.display_name}
-            </span>
             <Button
               variant="ghost"
               size="sm"
@@ -216,26 +236,20 @@ export function Shell() {
           </div>
         </header>
 
-        <nav
-          aria-label={t('nav.label')}
-          className="flex gap-1 overflow-x-auto border-b border-border bg-surface px-3 py-2 md:hidden"
-        >
-          <NavItems orientation="horizontal" />
-        </nav>
-
-        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <div className="mx-auto flex w-full min-w-0 max-w-[1536px] flex-col gap-6">
             {current ? (
               // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
               // editor, a half-typed form) carries over and is saved into the other workspace.
               <Outlet key={me.current_workspace ?? 'none'} />
             ) : me.memberships.length > 0 ? (
               <EmptyState
+                headingLevel="h1"
                 title={t('shell.chooseWorkspace')}
                 description={t('shell.chooseWorkspaceBody')}
               />
             ) : (
-              <EmptyState title={t('shell.noWorkspace')} description={t('shell.noWorkspaceBody')} />
+              <EmptyState headingLevel="h1" title={t('shell.noWorkspace')} description={t('shell.noWorkspaceBody')} />
             )}
           </div>
         </main>

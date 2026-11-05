@@ -40,17 +40,17 @@ export function StudioMaterials({ onOpenSlot }: { onOpenSlot: (id: string) => vo
   const openOlay = (id: string | null) => go('olays', id ? { olay: id } : {});
   const openMaterial = (id: string) => go('olays', { ...(olay ? { olay } : {}), material: id });
   return (
-    <div className="space-y-4" data-testid="studio-materials">
+    <div className="space-y-6" data-testid="studio-materials">
       <nav aria-label={t('materials.tab')}>
-        <ul className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+        <ul className="flex flex-wrap gap-1 border-b border-border pb-3">
           {MATERIAL_VIEWS.map((v) => (
             <li key={v}>
               <button
                 type="button"
                 aria-current={view === v ? 'page' : undefined}
                 onClick={() => go(v)}
-                className={`inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border px-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  view === v ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-surface'
+                className={`inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md px-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  view === v ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground'
                 }`}
               >
                 {t(`materials.views.${v}`)}

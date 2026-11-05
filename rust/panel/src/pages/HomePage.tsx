@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bot, CheckCircle2, Compass, ListTodo, Pencil, Play } from 'lucide-react';
+import { ArrowRight, CheckCircle2, ChevronDown, Pencil, Play } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
@@ -28,11 +28,6 @@ import {
   Badge,
   Button,
   Callout,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   Field,
   PageHeader,
   toast,
@@ -40,6 +35,7 @@ import {
 import { formatDateTime, formatRelative } from '@/lib/format';
 import { can, canApproveStrategy, roleLabel } from '@/lib/roles';
 import { PENDING_KEY, STRATEGY_KEY, invalidateStrategy } from './strategy/queries';
+import { useEntryCopy } from './entryCopy';
 
 /** How many of a draft's gaps the home page lists before "and N more". */
 const GAPS_SHOWN = 5;
@@ -154,16 +150,16 @@ function StrategyCard({ state }: { state: StrategyState }) {
   }
 
   return (
-    <Card className="flex flex-col">
-      <CardHeader className="flex-row items-center gap-2">
-        <Compass className="h-5 w-5 text-primary" aria-hidden="true" />
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-3 text-sm text-foreground">
+    <section aria-labelledby="home-strategy" className="flex flex-col gap-4">
+      <div>
+        <p className="mb-2 text-xs font-medium text-muted-foreground">{t('home.strategy.label')}</p>
+        <h2 id="home-strategy" className="text-xl font-normal leading-snug tracking-tight text-foreground">{title}</h2>
+      </div>
+      <div className="flex flex-1 flex-col gap-4 text-sm leading-relaxed text-muted-foreground">
         {body}
         <ErrorCallout error={start.error} />
         <div className="mt-auto flex flex-wrap gap-2">{actions}</div>
-      </CardContent>
+      </div>
       {submitted && canApprove && (
         // The shortcut approves the draft the dialog shows, fetched when it opens (never the
         // pending work's stamp, which may be older), and lists what it rests on.
@@ -173,7 +169,7 @@ function StrategyCard({ state }: { state: StrategyState }) {
           draft={strategy.data && !strategy.isFetching ? strategy.data.draft : undefined}
         />
       )}
-    </Card>
+    </section>
   );
 }
 
@@ -200,29 +196,30 @@ function AgentCard({ agent }: { agent: AgentState }) {
   };
 
   return (
-    <Card className="flex flex-col">
-      <CardHeader className="flex-row items-center gap-2">
-        <Bot className="h-5 w-5 text-primary" aria-hidden="true" />
-        <CardTitle>{t('home.agent.title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3 text-sm">
+    <section aria-labelledby="home-agent" className="flex flex-col gap-4 border-t border-border pt-6">
+      <h2 id="home-agent" className="text-lg font-medium text-foreground">{t('home.agent.title')}</h2>
+      <div className="flex flex-col gap-4 text-sm leading-relaxed">
         {!agent.last_seen_at ? (
           // Never connected is a setup step, not an incident.
-          <Callout tone="info" title={t('home.agent.neverTitle')}>
-            <p>{t('home.agent.never')}</p>
+          <div>
+            <p className="mb-1 font-medium text-foreground">{t('home.agent.neverTitle')}</p>
+            <p className="text-muted-foreground">{t('home.agent.never')}</p>
             <Link className="mt-1 inline-block text-primary underline" to="/api-keys">
               {t('home.agent.connectLink')}
             </Link>
-          </Callout>
+          </div>
         ) : agent.overdue ? (
           <Callout tone="danger" title={t('home.agent.overdueTitle')}>
             <p>{t('home.agent.overdueBody')}</p>
             <p className="mt-1">{t('home.agent.schedulerNote')}</p>
           </Callout>
         ) : (
-          <Callout tone="success">{t('home.agent.onTime')}</Callout>
+          <p className="flex items-start gap-2 text-foreground">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+            {t('home.agent.onTime')}
+          </p>
         )}
-        <dl className="grid gap-3 sm:grid-cols-2">
+        <dl className="grid gap-4">
           <div className="flex flex-col gap-0.5">
             <dt className="text-caption text-muted-foreground">{t('home.agent.lastSeen')}</dt>
             <dd className="text-foreground">
@@ -249,7 +246,7 @@ function AgentCard({ agent }: { agent: AgentState }) {
           </div>
         </dl>
         {editing !== null && (
-          <form className="flex flex-col gap-2 sm:flex-row sm:items-end" onSubmit={onSubmit} noValidate>
+          <form className="flex flex-col gap-3" onSubmit={onSubmit} noValidate>
             <Field label={t('home.agent.intervalLabel')} hint={t('home.agent.intervalHint')} className="sm:flex-1">
               {(ids) => (
                 <WholeNumberInput
@@ -281,8 +278,8 @@ function AgentCard({ agent }: { agent: AgentState }) {
         )}
         <ErrorCallout error={save.error} />
         {!agent.overdue && <p className="text-caption text-muted-foreground">{t('home.agent.schedulerNote')}</p>}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -329,6 +326,20 @@ function itemLink(item: WorkItem): string | null {
       return '/strategy';
     case 'reconnect_connector':
       return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
+    case 'research_due':
+      return '/prospects/tasks';
+    case 'prospects_to_score':
+    case 'prospects_to_promote':
+      return '/prospects';
+    case 'ownerless_journeys':
+    case 'assignment_stalled':
+      return '/team/distribution';
+    case 'promoted_not_contacted':
+      return '/inbox';
+    case 'campaign_approval':
+    case 'campaign_blocked':
+    case 'personalization_due':
+      return `/outreach/${encodeURIComponent(item.campaign_id)}`;
     case 'inbound_events':
       return null;
     default:
@@ -339,42 +350,85 @@ function itemLink(item: WorkItem): string | null {
 /** The pending items, most urgent first, each in the panel's own words (the hints are for the agent). */
 function PendingList({ items }: { items: readonly WorkItem[] }) {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
+  const [all, setAll] = useState(false);
+  const ordered = [...items].sort((a, b) => a.priority - b.priority);
   return (
-    <Card>
-      <CardHeader className="flex-row items-center gap-2">
-        <ListTodo className="h-5 w-5 text-primary" aria-hidden="true" />
-        <CardTitle>{t('home.pending.title')}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('home.pending.empty')}</p>
-        ) : (
-          <ul className="flex flex-col divide-y divide-border">
-            {items.map((item, i) => {
-              const link = itemLink(item);
-              return (
-                <li
-                  key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
-                  className="flex items-center gap-3 py-2.5"
-                >
-                  <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
-                    {t('home.pending.priority', { priority: item.priority })}
-                  </Badge>
-                  <span className="min-w-0 flex-1 text-sm text-foreground">{itemText(t, item)}</span>
-                  {link && (
-                    <Button asChild variant="ghost" size="sm">
-                      <Link to={link}>
-                        {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
-                      </Link>
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
+    <section aria-labelledby="home-pending">
+      <div className="flex items-start justify-between gap-6 border-b border-border pb-6">
+        <div>
+          <h2 id="home-pending" className="text-2xl font-normal tracking-tight text-foreground">{t('home.pending.title')}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t('home.pending.description')}</p>
+        </div>
+        <span className="text-5xl font-normal leading-none tabular-nums tracking-tight text-foreground">
+          <span aria-hidden="true">{items.length}</span>
+          <span className="sr-only">{t('home.pending.count', { count: items.length })}</span>
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <div className="flex flex-col items-start gap-4 py-8 sm:flex-row sm:items-center sm:gap-6">
+          <img
+            src="/brand/guide-plan.webp"
+            alt=""
+            aria-hidden="true"
+            width={480}
+            height={480}
+            className="h-28 w-28 shrink-0 object-contain"
+          />
+          <div>
+            <p className="font-medium text-foreground">{t('home.pending.empty')}</p>
+            <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">{t('home.pending.emptyHint')}</p>
+          </div>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {(all ? ordered : ordered.slice(0, 5)).map((item, i) => {
+            const link = itemLink(item);
+            return (
+              <li
+                key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
+                className="group relative flex items-start gap-4 py-6 sm:gap-6"
+              >
+                <span aria-hidden="true" className="w-6 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">{String(i + 1).padStart(2, '0')}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-base leading-6 text-foreground">{itemText(t, item)}</p>
+                  <div className="mt-2">
+                    <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm" className="rounded-none bg-transparent px-0 font-normal">
+                      {t('home.pending.priority', { priority: item.priority })}
+                    </Badge>
+                  </div>
+                </div>
+                {link && (
+                  <Button asChild variant="ghost" size="sm" className="shrink-0">
+                    <Link to={link}>
+                      {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
+                      <ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden="true" />
+                    </Link>
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {items.length > 5 && <Button variant="outline" size="sm" onClick={() => setAll(value => !value)}>{all ? copy('homeLessWork') : copy('homeAllWork', { count: items.length })}</Button>}
+      <nav aria-label={t('home.continueWorking')} className="mt-5 grid border-t border-border sm:grid-cols-2">
+        <Link to="/inbox" className="group flex items-start justify-between gap-4 py-5 sm:pe-6">
+          <div>
+            <p className="text-sm font-medium text-foreground group-hover:text-primary">{t('nav.inbox')}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('home.inboxHint')}</p>
+          </div>
+          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground rtl:rotate-180" aria-hidden="true" />
+        </Link>
+        <Link to="/studio" className="group flex items-start justify-between gap-4 border-t border-border py-5 sm:border-s sm:border-t-0 sm:ps-6">
+          <div>
+            <p className="text-sm font-medium text-foreground group-hover:text-primary">{t('nav.studio')}</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('home.studioHint')}</p>
+          </div>
+          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground rtl:rotate-180" aria-hidden="true" />
+        </Link>
+      </nav>
+    </section>
   );
 }
 
@@ -393,51 +447,62 @@ export function HomePage() {
   });
 
   return (
-    <>
-      <PageHeader title={t('home.title')} description={t('home.description')} />
-      <div className="flex gap-4"><Link className="text-primary underline" to="/onboarding">{t('onboarding.title')}</Link><Link className="text-primary underline" to="/billing">{t('billing.title')}</Link></div>
+    <div className="flex flex-col gap-8">
+      <PageHeader
+        title={t('home.title')}
+        description={t('home.description')}
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link to="/onboarding">{t('onboarding.title')}<ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden="true" /></Link>
+          </Button>
+        }
+      />
       <QueryState query={workspace}>
         {workspace.data && (
-          <Card>
-            <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-col gap-1">
-                <CardTitle>{workspace.data.name}</CardTitle>
-                <CardDescription>{t(`home.inactive.${workspace.data.status}`)}</CardDescription>
+          <section aria-labelledby="home-workspace" className="border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                <h2 id="home-workspace" className="min-w-0 break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">{workspace.data.name}</h2>
+                <WorkspaceStatusBadge status={workspace.data.status} />
               </div>
-              <WorkspaceStatusBadge status={workspace.data.status} />
-            </CardHeader>
-            <CardContent>
-              <dl className="grid gap-4 text-sm sm:grid-cols-3">
-                <div className="flex flex-col gap-1">
-                  <dt className="text-caption text-muted-foreground">{t('home.slug')}</dt>
+              <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+                <span>{t('home.myRole')}: {roleLabel(t, workspace.data.my_role)}</span>
+                <Link className="underline underline-offset-4 hover:text-foreground" to="/billing">{t('billing.title')}</Link>
+              </div>
+            </div>
+            {workspace.data.status !== 'active' && (
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{t(`home.inactive.${workspace.data.status}`)}</p>
+            )}
+            <details className="group mt-3 text-xs text-muted-foreground">
+              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden">
+                {t('home.workspaceDetails')}
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
+              </summary>
+              <dl className="mt-4 grid gap-4 pb-1 sm:grid-cols-[1fr_3fr]">
+                <div>
+                  <dt className="mb-1">{t('home.slug')}</dt>
                   <dd className="font-mono text-foreground">{workspace.data.slug}</dd>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <dt className="text-caption text-muted-foreground">{t('home.myRole')}</dt>
-                  <dd className="text-foreground">{roleLabel(t, workspace.data.my_role)}</dd>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <dt className="text-caption text-muted-foreground">{t('home.myPermissions')}</dt>
-                  <dd>
-                    <PermissionList permissions={workspace.data.my_permissions} />
-                  </dd>
+                <div>
+                  <dt className="mb-2">{t('home.myPermissions')}</dt>
+                  <dd><PermissionList permissions={workspace.data.my_permissions} /></dd>
                 </div>
               </dl>
-            </CardContent>
-          </Card>
+            </details>
+          </section>
         )}
       </QueryState>
       <QueryState query={pending}>
         {pending.data && (
-          <>
-            <div className="grid gap-4 lg:grid-cols-2">
+          <div className="grid min-w-0 items-start gap-8 xl:grid-cols-[minmax(0,1fr)_272px] xl:gap-8">
+            <div className="min-w-0 rounded-lg border border-border bg-surface p-5 sm:p-8"><PendingList items={pending.data.items} /></div>
+            <aside className="flex min-w-0 flex-col gap-8 border-t border-border pt-6 xl:border-t-0 xl:pt-2">
               <StrategyCard state={pending.data.strategy} />
               <AgentCard agent={pending.data.agent} />
-            </div>
-            <PendingList items={pending.data.items} />
-          </>
+            </aside>
+          </div>
         )}
       </QueryState>
-    </>
+    </div>
   );
 }

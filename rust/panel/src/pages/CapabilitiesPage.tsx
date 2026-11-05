@@ -1,8 +1,9 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plug, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { listBudgetItems } from '@/api/budget';
 import { listCapabilities, listGroups, retireCapability, unlinkBudget } from '@/api/capabilities';
 import { connectorHealth, probeConnector, reconnectConnector } from '@/api/connectors';
@@ -21,11 +22,24 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Disclosure,
+  Input,
   EmptyState,
-  PageHeader,
   cn,
   toast,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
 } from '@/components/ui';
+import {
+  CAPABILITY_GOALS,
+  matchesGoal,
+  needsCapabilityAttention,
+  type CapabilityGoal,
+} from '@/lib/capabilityGoals';
+import { kindLabel } from '@/lib/capabilities';
+import { PurposePanel } from './capabilities/PurposePanel';
 import { browser, providerUrl } from '@/lib/browser';
 import { connectsByOAuth, isErrorKind, providerOf } from '@/lib/connectors';
 import { errorMessage } from '@/lib/errors';
@@ -67,7 +81,7 @@ function FilterChips({ value, onChange }: { value: Filter; onChange: (next: Filt
             aria-pressed={active}
             onClick={() => onChange(option)}
             className={cn(
-              'rounded-full border px-3 py-1 text-caption font-medium transition-colors',
+              'rounded-md border px-3 py-1.5 text-caption font-medium transition-colors',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               active
                 ? 'border-primary bg-primary/10 text-primary'
@@ -83,7 +97,13 @@ function FilterChips({ value, onChange }: { value: Filter; onChange: (next: Filt
 }
 
 /** A probe's outcome: whether it succeeded (and why not), how long it took, the status after it. */
-function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOut } | null; onClose: () => void }) {
+function ProbeDialog({
+  probed,
+  onClose,
+}: {
+  probed: { name: string; out: ProbeOut } | null;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
   const result = probed?.out.result;
   const reason =
@@ -94,7 +114,9 @@ function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOu
     <Dialog open={probed !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('capabilities.connector.probeDialog.title', { name: probed?.name ?? '' })}</DialogTitle>
+          <DialogTitle>
+            {t('capabilities.connector.probeDialog.title', { name: probed?.name ?? '' })}
+          </DialogTitle>
           <DialogDescription>{t('capabilities.connector.probeDialog.description')}</DialogDescription>
         </DialogHeader>
         {probed && result && (
@@ -113,13 +135,17 @@ function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOu
             )}
             <dl className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-0.5">
-                <dt className="text-caption text-muted-foreground">{t('capabilities.connector.probeDialog.latency')}</dt>
+                <dt className="text-caption text-muted-foreground">
+                  {t('capabilities.connector.probeDialog.latency')}
+                </dt>
                 <dd className="text-foreground">
                   {t('capabilities.connector.probeDialog.latencyValue', { ms: result.latency_ms })}
                 </dd>
               </div>
               <div className="flex flex-col gap-0.5">
-                <dt className="text-caption text-muted-foreground">{t('capabilities.connector.probeDialog.status')}</dt>
+                <dt className="text-caption text-muted-foreground">
+                  {t('capabilities.connector.probeDialog.status')}
+                </dt>
                 <dd>
                   <CapabilityStatusBadge status={probed.out.status} />
                 </dd>
@@ -138,7 +164,7 @@ function ProbeDialog({ probed, onClose }: { probed: { name: string; out: ProbeOu
 }
 
 export function CapabilitiesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
   const navigate = useNavigate();
@@ -148,7 +174,33 @@ export function CapabilitiesPage() {
   const canUsePhones = can(session.data, 'devices.work');
   // A bridge key holds exactly `devices.bridge`, which its issuer must hold too.
   const canPair = can(session.data, 'api_keys.manage') && can(session.data, 'devices.bridge');
+  const [params, setParams] = useSearchParams();
+  const requestedGoal = params.get('goal');
+  const goal: CapabilityGoal = CAPABILITY_GOALS.includes(requestedGoal as CapabilityGoal)
+    ? (requestedGoal as CapabilityGoal)
+    : 'all';
   const [filter, setFilter] = useState<Filter>('all');
+  const [page, setPage] = useState(1);
+  const [section, setSection] = useState('connections');
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState<'all' | 'attention' | 'verified' | 'retired'>('all');
+  const chooseGoal = (next: CapabilityGoal) => {
+    setFilter('all');
+    setPage(1);
+    setParams((previous) => {
+      const copy = new URLSearchParams(previous);
+      if (next === 'all') copy.delete('goal');
+      else copy.set('goal', next);
+      return copy;
+    });
+  };
+  const clearFilters = () => {
+    setSearch('');
+    setStatus('all');
+    setFilter('all');
+    chooseGoal('all');
+  };
+
   const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
   const [action, setAction] = useState<{ kind: CapabilityAction; item: CapabilityOut } | null>(null);
@@ -156,7 +208,7 @@ export function CapabilitiesPage() {
   // The filter is the server's `group` parameter; the unfiltered list also feeds the groups panel.
   // The Devices tab follows its phones: their bridges register every heartbeat, so it reads them
   // (and each card its log) again as often, while it is shown.
-  const devices = filter === 'device';
+  const devices = filter === 'device' || goal === 'devices';
   const listed = useQuery({
     queryKey: [...CAPABILITIES_KEY, filter],
     queryFn: () => listCapabilities(filter === 'all' ? {} : { group: filter }),
@@ -224,11 +276,33 @@ export function CapabilitiesPage() {
 
   const target = (kind: CapabilityAction) => (action?.kind === kind ? action.item : null);
   const close = () => setAction(null);
-  const items = listed.data ?? [];
+  const source = listed.data ?? [];
+  const needle = search.trim().toLocaleLowerCase(i18n.language);
+  const items = source
+    .filter((item) => matchesGoal(item, goal))
+    .filter((item) => {
+      if (status === 'attention' && !needsCapabilityAttention(item, healthOf(item.capability.id)))
+        return false;
+      if (status === 'verified' && item.effective_status !== 'verified') return false;
+      if (status === 'retired' && item.effective_status !== 'retired') return false;
+      return (
+        !needle ||
+        [
+          item.capability.name,
+          item.capability.external_id ?? '',
+          kindLabel(t, item.capability.kind_key),
+        ].some((value) => value.toLocaleLowerCase(i18n.language).includes(needle))
+      );
+    });
+  const pageCount = Math.max(1, Math.ceil(items.length / 8));
+  const activePage = Math.min(page, pageCount);
+  const visibleItems = items.slice((activePage - 1) * 8, activePage * 8);
+  const firstConnection = all.isSuccess && all.data.length === 0;
+  const filtered = goal !== 'all' || filter !== 'all' || status !== 'all' || !!search;
 
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene={firstConnection ? undefined : 'connections'}
         title={t('capabilities.title')}
         description={t('capabilities.description')}
         actions={
@@ -248,43 +322,189 @@ export function CapabilitiesPage() {
           ) : null
         }
       />
-      <FilterChips value={filter} onChange={setFilter} />
-      {devices && canPair && <PairBridgePanel />}
-      {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
-      <QueryState query={listed} keepOnError>
-        {items.length === 0 ? (
-          <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {items.map((item) => (
-              <CapabilityCard
-                key={item.capability.id}
-                item={item}
-                budgetItems={budgetItems.data ?? []}
-                groups={groups.data ?? []}
-                canManage={canManage}
-                onAction={(kind, it) => setAction({ kind, item: it })}
-                onUnlink={(it, itemId) => unlink.mutate({ id: it.capability.id, itemId })}
-                unlinking={unlink.isPending}
-                health={healthOf(item.capability.id)}
-                canProbe={canProbe}
-                onConnector={onConnector}
-                connectorBusy={probe.isPending || reconnect.isPending}
-                canCall={canCall}
-                canUsePhones={canUsePhones}
-                livePhones={devices}
-                readAt={listed.dataUpdatedAt}
-              />
-            ))}
-          </div>
+      <Tabs value={section} onValueChange={setSection}>
+        <TabsList aria-label={t('capabilities.title')} className="flex w-full flex-wrap">
+          <TabsTrigger value="connections" className="min-h-11 px-3 sm:px-4">
+            {t('capabilities.workbench.inventory')}
+          </TabsTrigger>
+          <TabsTrigger value="groups" className="min-h-11 px-3 sm:px-4">
+            {t('capabilities.workbench.groupsTab')}
+          </TabsTrigger>
+          {canManage && (
+            <TabsTrigger value="technical" className="min-h-11 px-3 sm:px-4">
+              {t('capabilities.workbench.technicalTab')}
+            </TabsTrigger>
+          )}
+        </TabsList>
+        <TabsContent value="connections" className="space-y-5">
+          <PurposePanel
+            goal={goal}
+            onChange={chooseGoal}
+            canManage={canManage}
+            canPair={canPair}
+            onDeclare={() => setDeclaring(true)}
+            onDevices={() => {
+              setFilter('device');
+              setPage(1);
+              document.getElementById('capability-inventory')?.scrollIntoView?.({ block: 'start' });
+            }}
+          />
+          <section id="capability-inventory" className="scroll-mt-6 space-y-4">
+            {!firstConnection && (
+              <>
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-medium">{t('capabilities.workbench.inventory')}</h2>
+                    {listed.isSuccess && (
+                      <p className="mt-1 text-caption text-muted-foreground" role="status">
+                        {t('capabilities.workbench.count', { count: items.length })}
+                      </p>
+                    )}
+                  </div>
+                  {filtered && (
+                    <Button variant="ghost" onClick={clearFilters}>
+                      {t('capabilities.workbench.clear')}
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Input
+                    aria-label={t('capabilities.workbench.search')}
+                    placeholder={t('capabilities.workbench.searchPlaceholder')}
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setPage(1);
+                    }}
+                    className="sm:max-w-sm"
+                  />
+                  <select
+                    aria-label={t('capabilities.workbench.statusLabel')}
+                    value={status}
+                    onChange={(e) => {
+                      setStatus(e.target.value as typeof status);
+                      setPage(1);
+                    }}
+                    className="h-10 min-w-0 rounded-md border border-input bg-surface px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {(['all', 'attention', 'verified', 'retired'] as const).map((value) => (
+                      <option key={value} value={value}>
+                        {t(`capabilities.workbench.${value === 'all' ? 'allStatus' : value}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Disclosure title={t('capabilities.workbench.advanced')}>
+                  <FilterChips
+                    value={filter}
+                    onChange={(next) => {
+                      setFilter(next);
+                      setPage(1);
+                    }}
+                  />
+                </Disclosure>
+              </>
+            )}
+            {filter === 'device' && canPair && <PairBridgePanel />}
+            {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
+            <QueryState query={listed} keepOnError>
+              {items.length === 0 ? (
+                filtered && !firstConnection ? (
+                  <EmptyState
+                    title={t('capabilities.workbench.noMatch')}
+                    description={t('capabilities.workbench.noMatchBody')}
+                  />
+                ) : (
+                  <section
+                    className="flex items-start gap-4 border-y border-border bg-surface p-4 sm:items-center sm:gap-6 sm:p-6"
+                    aria-label={t('capabilities.empty')}
+                  >
+                    <img
+                      src="/brand/editorial/connections-320.webp"
+                      alt=""
+                      aria-hidden="true"
+                      width={128}
+                      height={96}
+                      className="h-24 w-28 shrink-0 rounded-md object-cover sm:w-32"
+                    />
+                    <div className="min-w-0 space-y-3">
+                      <div>
+                        <h3 className="text-base font-medium">{t('capabilities.empty')}</h3>
+                        <p className="mt-1 max-w-lg text-sm leading-6 text-muted-foreground">
+                          {t(
+                            canManage
+                              ? 'capabilities.workbench.startHelp'
+                              : 'capabilities.workbench.managerNeeded',
+                          )}
+                        </p>
+                      </div>
+                      {canManage && (
+                        <Button asChild>
+                          <Link to="/connect">{t('capabilities.workbench.startConnection')}</Link>
+                        </Button>
+                      )}
+                    </div>
+                  </section>
+                )
+              ) : (
+                <div className="divide-y divide-border border-y border-border">
+                  {visibleItems.map((item) => (
+                    <CapabilityCard
+                      key={item.capability.id}
+                      item={item}
+                      budgetItems={budgetItems.data ?? []}
+                      groups={groups.data ?? []}
+                      canManage={canManage}
+                      onAction={(kind, it) => setAction({ kind, item: it })}
+                      onUnlink={(it, itemId) => unlink.mutate({ id: it.capability.id, itemId })}
+                      unlinking={unlink.isPending}
+                      health={healthOf(item.capability.id)}
+                      canProbe={canProbe}
+                      onConnector={onConnector}
+                      connectorBusy={probe.isPending || reconnect.isPending}
+                      canCall={canCall}
+                      canUsePhones={canUsePhones}
+                      livePhones={devices}
+                      readAt={listed.dataUpdatedAt}
+                    />
+                  ))}
+                </div>
+              )}
+            </QueryState>
+            {pageCount > 1 && (
+              <nav
+                aria-label={t('capabilities.workbench.pagination')}
+                className="flex items-center justify-between gap-3 border-t border-border pt-3"
+              >
+                <Button variant="outline" disabled={activePage === 1} onClick={() => setPage(activePage - 1)}>
+                  {t('capabilities.workbench.previous')}
+                </Button>
+                <span className="text-caption text-muted-foreground">
+                  {t('capabilities.workbench.page', { current: activePage, total: pageCount })}
+                </span>
+                <Button
+                  variant="outline"
+                  disabled={activePage === pageCount}
+                  onClick={() => setPage(activePage + 1)}
+                >
+                  {t('capabilities.workbench.next')}
+                </Button>
+              </nav>
+            )}
+          </section>
+        </TabsContent>
+        <TabsContent value="groups">
+          <QueryState query={groups}>
+            <GroupsPanel groups={groups.data ?? []} capabilities={all.data ?? []} canManage={canManage} />
+          </QueryState>
+        </TabsContent>
+        {canManage && (
+          <TabsContent value="technical">
+            <WebhookPanel />
+          </TabsContent>
         )}
-      </QueryState>
+      </Tabs>
       <ProbeDialog probed={probed} onClose={() => setProbed(null)} />
-      <QueryState query={groups}>
-        <GroupsPanel groups={groups.data ?? []} capabilities={all.data ?? []} canManage={canManage} />
-      </QueryState>
-      {/* The NetGSM addresses carry the workspace's hook tokens: only who may manage capabilities. */}
-      {canManage && <WebhookPanel />}
 
       {canManage && (
         <>

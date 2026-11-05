@@ -32,6 +32,18 @@ describe('Shell', () => {
     expect(document.documentElement.lang).toBe('tr');
   });
 
+  it('opens the navigation drawer, follows a link and dismisses the drawer', async () => {
+    const user = userEvent.setup();
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
+    const { router } = renderAt('/');
+    await user.click(await screen.findByRole('button', { name: tr.nav.label }));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getByRole('link', { name: tr.nav.inbox })).toHaveAttribute('href', '/inbox');
+    await user.click(within(drawer).getByRole('link', { name: tr.nav.people }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('shows only the name, without a switcher, for a single current workspace', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
     renderAt('/');

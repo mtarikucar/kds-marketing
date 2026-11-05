@@ -9,6 +9,7 @@ import {
   Field,
   Reason,
   StudioError,
+  StudioReadStatus,
   inputClass,
   buttonClass,
   useStudioKey,
@@ -24,7 +25,7 @@ import type { TFunction } from 'i18next';
 import * as lib from '@/api/materials';
 import { MaterialHold } from './materials/MaterialHold';
 import { materialsHref } from './materials/StudioMaterials';
-import { MaterialsError, findingText } from './materials/MaterialsShared';
+import { MaterialsError, MaterialsReadStatus, findingText } from './materials/MaterialsShared';
 
 /** A blocker of the slot: the material check's hold with its findings, else its reason. */
 function Blocker({
@@ -128,7 +129,7 @@ function MaterialPicker({
   return (
     <fieldset className="space-y-2">
       <legend className="text-sm font-medium">{t('materials.slot.title')}</legend>
-      <MaterialsError error={options.error} />
+      <MaterialsReadStatus query={options} />
       {options.data && candidates.length === 0 && (
         <p className="text-sm">
           {t('materials.slot.none')}{' '}
@@ -156,7 +157,7 @@ function MaterialPicker({
           </select>
         </label>
       )}
-      <ul className="space-y-1">
+      <ul className={`space-y-1 ${shown.length > 6 ? 'max-h-72 overflow-y-auto pe-2' : ''}`}>
         {shown.map((c) => (
           <li key={c.material_id}>
             <label className="flex min-h-11 items-center gap-2 text-sm">
@@ -292,7 +293,7 @@ function PiecePreview({
     <div
       role="group"
       aria-label={t('studio.preview')}
-      className="space-y-2 rounded-md border border-border bg-surface-muted p-3 text-sm"
+      className="space-y-3 border-s-2 border-border bg-surface-muted/50 px-4 py-3 text-sm"
     >
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
         <dt className="text-muted-foreground">{t('studio.publishTo')}</dt>
@@ -310,7 +311,6 @@ function PiecePreview({
           </time>
         </dd>
       </dl>
-      {detail.isPending && <p className="text-xs text-muted-foreground">{t('studio.loading')}</p>}
       {detail.data &&
         (piece?.text.trim() ? (
           <p className="whitespace-pre-wrap break-words">{piece.text}</p>
@@ -326,7 +326,7 @@ function PiecePreview({
           ))}
         </ul>
       )}
-      <StudioError error={detail.error} />
+      <StudioReadStatus query={detail} />
     </div>
   );
 }
@@ -379,7 +379,11 @@ function SlotEditor({
   const done = () => {
     const back = opener.current;
     close();
-    if (back instanceof HTMLElement && back.isConnected) back.focus();
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) {
+      back.focus();
+    } else {
+      document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"][data-studio-section]')?.focus();
+    }
   };
   const detail = useQuery({ queryKey: [...key, 'slot', id], queryFn: () => api.slotGet(id) });
   const pieceFiles = (detail.data?.piece?.media ?? []).flatMap((x) => (x.kind === 'file' ? [x.id] : []));
@@ -408,10 +412,10 @@ function SlotEditor({
       role="group"
       aria-labelledby={headingId}
       id={`slot-editor-${id}`}
-      className="space-y-3 rounded-md border border-primary p-3"
+      className="space-y-5 border-y border-border bg-surface-muted/40 py-5"
       data-testid="slot-detail"
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <h3 ref={heading} id={headingId} tabIndex={-1} className="font-medium focus:outline-none">
           {data?.hypothesis.title ?? t('studio.detail')}
         </h3>
@@ -419,7 +423,7 @@ function SlotEditor({
           {t('studio.close')}
         </button>
       </div>
-      <StudioError error={detail.error} />
+      <StudioReadStatus query={detail} />
       {data && (
         <>
           <p className="text-sm">
@@ -508,12 +512,14 @@ export function StudioToday({
   data,
   selectedSlot,
   onSelect,
+  onViewPlan,
   manage,
   overdue,
 }: {
   data?: api.Overview;
   selectedSlot: string | null;
   onSelect: (id: string | null) => void;
+  onViewPlan: () => void;
   manage: boolean;
   overdue: boolean;
 }) {
@@ -602,6 +608,7 @@ export function StudioToday({
   const shoots = data?.today.shoot_requests?.length ?? 0;
   return (
     <Region name="today">
+      <p className="text-sm text-muted-foreground">{t('studio.workbench.todayHint', { defaultValue: 'Onaylar, planlanan içerikler ve ilgilenmeniz gereken engeller.' })}</p>
       <div className="flex flex-wrap items-center gap-2">
         {overdue && (
           <p className="rounded bg-warning-subtle px-2 py-1 text-sm">{t('studio.agentWaiting')}</p>
@@ -626,15 +633,15 @@ export function StudioToday({
         {data?.today.slots.map(({ slot, overdue }) => (
           <li
             key={slot.id}
-            className="space-y-2 border-b border-border pb-3"
+            className="space-y-4 border-b border-border pb-6"
             data-testid={`today-${slot.id}`}
           >
             <div className="flex flex-wrap justify-between gap-2">
-              <button className={`${buttonClass} text-start`} {...editorToggle(slot.id)}>
+              <button className="min-h-10 text-start text-lg font-medium underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring" {...editorToggle(slot.id)}>
                 {data.hypotheses.find((h) => h.id === slot.chain.hypothesis_id)?.title ??
                   t('studio.detail')}
               </button>
-              <span className="text-sm">{t(`studio.${slot.state}`)}</span>
+              <span className="self-center text-xs text-muted-foreground">{t(`studio.${slot.state}`)}</span>
             </div>
             {awaiting(slot.id) && !screen(slot) && (
               <PiecePreview slot={slot} arms={arms} accounts={accounts.data} />
@@ -660,7 +667,7 @@ export function StudioToday({
             )}
             {manage && awaiting(slot.id) && !screen(slot) && (
               <button
-                className={buttonClass}
+                className="min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 disabled={approve.isPending}
                 onClick={() =>
                   approve.mutate({ target: { slot: slot.id }, revision: slot.revision })
@@ -673,8 +680,13 @@ export function StudioToday({
           </li>
         ))}
       </ul>
-      {!data?.today.slots.length && (
-        <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
+      {data && !data.today.slots.length && !others.length && !data.today.budget_moves.length && !data.today.paid_alerts.length && !shoots && (
+        <div className="space-y-2 py-2">
+          <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
+          <button type="button" onClick={onViewPlan} className="inline-flex min-h-10 items-center text-sm font-medium text-primary underline underline-offset-4">
+            {t('studio.workbench.viewPlan', { defaultValue: 'Haftalık planı gör' })}
+          </button>
+        </div>
       )}
       {data &&
         others.map((s) => (
@@ -691,7 +703,7 @@ export function StudioToday({
           </div>
         ))}
       {data?.today.budget_moves.map((m) => (
-        <div key={m.id} className="space-y-2 border-b border-border pb-3">
+        <div key={m.id} className="space-y-4 border-b border-border pb-6">
           <p className="text-sm">
             {t('studio.dailyBudget')}: {formatMoney(m.daily_budget_minor, m.currency, i18n.language)} ·{' '}
             {t(`studio.budgetState.${m.state}`)}
@@ -704,7 +716,7 @@ export function StudioToday({
           {manage &&
             data.today.approvals.some((a) => 'budget_move' in a && a.budget_move === m.id) && (
               <button
-                className={buttonClass}
+                className="min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 disabled={approve.isPending}
                 onClick={() =>
                   approve.mutate({ target: { budget_move: m.id }, revision: m.revision })
