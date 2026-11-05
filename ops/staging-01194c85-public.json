@@ -1,0 +1,156 @@
+{
+  "revision": "01194c8567db522d4fa9523b9b659a04023c58e5",
+  "assets": [
+    {
+      "path": "assets/i18n-DpeYrkMs.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/index-CBhkriA3.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/index-CYWQjUdu.css",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/react-8jsx0TeV.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/router-DJwXp0Dd.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/tanstack-zc3iHX_-.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "assets/vendor-DrwIBFzT.js",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/jeeta-guide.webp",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/jeeta-mark.png",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/jeeta-welcome-560.webp",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/jeeta-welcome-840.webp",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/activity.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/campaigns.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/connections.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/conversations.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/prospects.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/strategy.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/studio.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/team.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/scenes/wallet.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "brand/work-complete.svg",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "fonts/ibm-plex-sans-latin-ext.woff2",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "fonts/ibm-plex-sans-latin.woff2",
+      "status": 200,
+      "sha256_match": true
+    },
+    {
+      "path": "index.html",
+      "status": 200,
+      "sha256_match": true
+    }
+  ],
+  "ready": {
+    "ok": true
+  },
+  "routes": [
+    {
+      "path": "/login",
+      "status": 200,
+      "root": true
+    },
+    {
+      "path": "/register",
+      "status": 200,
+      "root": true
+    },
+    {
+      "path": "/inbox",
+      "status": 200,
+      "root": true
+    },
+    {
+      "path": "/studio",
+      "status": 200,
+      "root": true
+    },
+    {
+      "path": "/api-keys",
+      "status": 200,
+      "root": true
+    }
+  ],
+  "unauthenticated_api": 401
+}

@@ -45,7 +45,7 @@ has been transferred there. Replace `<sha8>` with the candidate's short SHA.
    STAMP=$(date +%Y%m%d%H%M)
    sudo -u postgres pg_dump -p 5437 -Fc jeeta > /var/backups/jeeta-staging/pre-<sha8>-$STAMP.dump
    ls -l /var/backups/jeeta-staging/pre-<sha8>-$STAMP.dump
-   /root/staging-upgrade.sh /root/jeeta-release-<sha8>.tar
+   /root/staging-upgrade.sh /root/jeeta-release-<sha8>.tar <full-sha>
    curl -fsS http://127.0.0.1:8091/readyz
    journalctl -u jeeta-staging --since "-5 min" -p warning --no-pager | head
    ```
@@ -81,3 +81,26 @@ only while the database still matches the prior release's schema; otherwise use
 the documented recovery process and preserve newer runtime data. Switching
 `jeetagrowth.com` from the old stack to Rust is a separate
 [v1 cutover](v1-cutover.md).
+
+## Observed staging procedure (2026-11-05)
+
+Read-only inspection through the existing GitHub Actions SSH credentials confirmed that the
+server's staging upgrader takes **two arguments**: the archive and full 40-character revision.
+It switches `/opt/jeeta/staging-current`; `/opt/jeeta/current` is the production pointer.
+The inspected script validates a newly installed release but skips installation checks when its
+release directory already exists. It does not take a recovery snapshot or check database schema
+compatibility itself. Its readiness output is informational, so callers must assert HTTP success.
+
+The explicit `01194c85` staging operation uses an isolated operational branch and the exact CI
+artifact. Its wrapper verifies all candidate checksums and the installed migration inventory,
+checks staging DB/port/path selectors, stops staging, snapshots database/files/private configuration,
+restores the dump into an isolated temporary database and runs the actual candidate there with
+providers/jobs disabled and external networking blocked. It verifies the six reviewed additive
+migrations, all 28 checksums and unchanged existing row counts before invoking
+the pinned upgrader. It verifies existing release content before reuse and checks both readiness
+and the unchanged production pointer afterward. A failure after the swap remains stopped/failed
+for inspection; it never runs database downs or automatically rolls back to an incompatible binary.
+
+See `ops/staging-01194c85.md` on `ops/staging-01194c85` for the candidate, workflow and publication
+record. The workflow is bound to that operational branch and candidate; ordinary application pushes
+do not deploy staging.

@@ -1,0 +1,37 @@
+{
+  "results": [
+    {
+      "width": 1440,
+      "url": "https://staging.jeetagrowth.com/login",
+      "h1": "Giriş yap",
+      "font": "\"IBM Plex Sans\", system-ui, -apple-system, sans-serif",
+      "fontsLoaded": true,
+      "overflow": false,
+      "brokenImages": 0
+    },
+    {
+      "width": 390,
+      "url": "https://staging.jeetagrowth.com/login",
+      "h1": "Giriş yap",
+      "font": "\"IBM Plex Sans\", system-ui, -apple-system, sans-serif",
+      "fontsLoaded": true,
+      "overflow": false,
+      "brokenImages": 0
+    }
+  ],
+  "redirects": [
+    {
+      "route": "/inbox",
+      "destination": "/login"
+    },
+    {
+      "route": "/studio",
+      "destination": "/login"
+    },
+    {
+      "route": "/api-keys",
+      "destination": "/login"
+    }
+  ],
+  "errors": []
+}
