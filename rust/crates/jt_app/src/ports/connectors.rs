@@ -180,6 +180,13 @@ pub trait PlatformAppConfig: Send + Sync {
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
     fn public_base_url(&self) -> Option<Url>;
+    /// The platform switch `JEETA_OUTREACH_ENABLED` (spec 2026-10-30-leads-pool-outreach-design.md
+    /// D24): off (the default) until the operator turns it on. While it is off no outreach email
+    /// is sent (fence F2 at launch, dispatch and claim) and no commercial send rests on the
+    /// business-recipient basis.
+    fn outreach_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// The app an OAuth flow signs in with, as the last segment of its redirect URI names it
@@ -397,6 +404,9 @@ impl fmt::Debug for Attachment {
 
 /// A typed outgoing mail, with credentials supplied separately. The caller persists metadata
 /// and the stable Message-ID before sending; attachment bytes never enter logs or the ledger.
+///
+/// The fields after `attachments` are read with their defaults when missing, so an intent queued
+/// before they existed still sends (as it would have).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailMessage {
     pub to: String,
@@ -406,6 +416,30 @@ pub struct MailMessage {
     pub in_reply_to: Option<String>,
     pub references: Vec<String>,
     pub attachments: Vec<Attachment>,
+    /// The display name of `From` (one line, at most 80 characters); `None` sends the address
+    /// alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_name: Option<String>,
+    /// The commercial email's unsubscribe addresses (RFC 2369, RFC 8058); every commercial email
+    /// carries them (spec 2026-10-30-leads-pool-outreach-design.md §3.14), a reply none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_unsubscribe: Option<ListUnsubscribe>,
+    /// Stored mail files whose bytes the sender reads into `attachments` just before the
+    /// provider call (spec §3.15): ids only, never bytes, in a stored intent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_files: Vec<uuid::Uuid>,
+}
+
+/// Where a recipient unsubscribes from commercial email: written as `List-Unsubscribe: <https>,
+/// <mailto>` with `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, so a mail client's
+/// unsubscribe button posts to `https` without opening a page (RFC 8058).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListUnsubscribe {
+    /// The one-click address: `https`, one line, no `<`, `>`, `,` or spaces.
+    pub https: String,
+    /// `mailto:{from}?subject=unsubscribe`, when the sending address can be written as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mailto: Option<String>,
 }
 
 /// The last seen UID within one mailbox's UIDVALIDITY generation.
@@ -639,6 +673,45 @@ pub struct InboundEventDraft {
     pub payload: Value,
     /// When it happened, by the provider's clock, when the item says.
     pub occurred_at: Option<OffsetDateTime>,
+}
+
+/// One attachment of a polled email (spec 2026-10-30-leads-pool-outreach-design.md §3.15): its
+/// name and declared type, as the draft's payload lists them, and its bytes. Transport only: never
+/// logged, stored in an event or written to the ledger. `Debug` shows the type and the byte count
+/// only (a customer's file name is theirs).
+#[derive(Clone, PartialEq, Eq)]
+pub struct InboundAttachment {
+    pub filename: String,
+    pub declared_mime: String,
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for InboundAttachment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InboundAttachment")
+            .field("declared_mime", &self.declared_mime)
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .finish_non_exhaustive()
+    }
+}
+
+/// An email a mailbox poll found: its event draft and, for an email of the inbox (not the sent
+/// folder, not a delivery or complaint report), its attachments' bytes, in the order the draft's
+/// payload lists them under `attachments`. The bytes never go into the draft.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolledMail {
+    pub draft: InboundEventDraft,
+    pub attachments: Vec<InboundAttachment>,
+}
+
+impl From<InboundEventDraft> for PolledMail {
+    /// A polled email without attachments' bytes.
+    fn from(draft: InboundEventDraft) -> Self {
+        PolledMail {
+            draft,
+            attachments: Vec::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1162,7 +1235,8 @@ pub trait MailSender: Send + Sync {
 }
 
 /// Polls mailboxes within `ws`, independently of SMS delivery reports. No cursor storage happens here.
-/// The explicit workspace controls authorization; `public` cannot override it.
+/// The explicit workspace controls authorization; `public` cannot override it. Each email comes
+/// with its attachments' bytes when it is inbox mail ([`PolledMail`]).
 #[async_trait]
 pub trait MailboxPoller: Send + Sync {
     async fn poll(
@@ -1171,7 +1245,7 @@ pub trait MailboxPoller: Send + Sync {
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
-    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>;
+    ) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>;
 }
 
 /// Reads and changes ad budgets.
@@ -1384,6 +1458,29 @@ pub trait ConsentSync: Send + Sync {
         cred: &Credential,
         rows: &[ConsentRow],
     ) -> Result<SendReceipt, ConnectorError>;
+    /// What the registry holds for `recipient` on `channel` (the registry's own channel name, as
+    /// [`ConsentRow::channel`]: `EPOSTA` for email). The default refuses (`Permanent`): only a
+    /// registry that answers lookups implements it.
+    async fn search(
+        &self,
+        _cred: &Credential,
+        _recipient: &str,
+        _channel: &str,
+    ) -> Result<IysAnswer, ConnectorError> {
+        Err(ConnectorError::permanent("no consent lookup"))
+    }
+}
+
+/// What a consent registry (İYS) holds for one recipient on one channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IysAnswer {
+    /// `ONAY`: consent given.
+    Granted,
+    /// `RET`: consent refused or withdrawn.
+    Refused,
+    /// `YOK`: no record.
+    Absent,
 }
 
 /// A provider's OAuth flow (authorization code, with PKCE where the provider takes it).

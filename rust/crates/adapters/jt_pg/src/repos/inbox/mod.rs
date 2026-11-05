@@ -155,5 +155,6 @@ mod commissions;
 mod consents;
 mod erasure;
 mod mail_cursors;
+mod mail_files;
 mod quotes;
 mod suppressions;

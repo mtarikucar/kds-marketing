@@ -118,6 +118,7 @@ pub async fn complete(deps: &Deps, ctx: &Ctx, id: TaskId) -> Result<Task, AppErr
         json!({"journey_id":row.journey_id}),
     )
     .await?;
+    crate::usecases::distribution::touch(r.as_mut(), ctx, row.journey_id).await?;
     r.commit().await?;
     Ok(row)
 }
@@ -172,6 +173,7 @@ pub async fn add_note(
         json!({"journey_id":journey}),
     )
     .await?;
+    crate::usecases::distribution::touch(r.as_mut(), ctx, journey).await?;
     r.commit().await?;
     Ok(row)
 }

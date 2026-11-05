@@ -75,8 +75,13 @@ pub struct Intervals {
     pub device_bridge_health: Duration,
     pub device_command_expiry: Duration,
     pub device_file_purge: Duration,
+    pub prospects_purge: Duration,
+    pub research_plan: Duration,
+    pub lead_distribution: Duration,
     pub whatsapp_app_sync: Duration,
+    pub outreach_dispatch: Duration,
     pub comments_poll: Duration,
+    pub purge_request_keys: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -89,8 +94,8 @@ impl Default for Intervals {
     /// Token renewal hourly, probes every 15 minutes, the delivery-report poll every minute, the
     /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
     /// purge hourly, the call timers every second, the bridges' health checks and the phones'
-    /// command expiry every minute, the device-file purge hourly, the comments backfill hourly;
-    /// first runs within 30 seconds of the start.
+    /// command expiry every minute, the device-file purge hourly, the comments backfill hourly,
+    /// the expired request keys' purge daily; first runs within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -121,8 +126,13 @@ impl Default for Intervals {
             device_bridge_health: MINUTE,
             device_command_expiry: MINUTE,
             device_file_purge: HOUR,
+            prospects_purge: DAY,
+            research_plan: HOUR,
+            lead_distribution: MINUTE,
             whatsapp_app_sync: 5 * MINUTE,
+            outreach_dispatch: MINUTE,
             comments_poll: HOUR,
+            purge_request_keys: DAY,
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -160,8 +170,13 @@ impl Intervals {
             Job::DeviceBridgeHealth => self.device_bridge_health,
             Job::DeviceCommandExpiry => self.device_command_expiry,
             Job::DeviceFilePurge => self.device_file_purge,
+            Job::ProspectsPurge => self.prospects_purge,
+            Job::ResearchPlan => self.research_plan,
+            Job::LeadDistribution => self.lead_distribution,
             Job::WhatsappAppSync => self.whatsapp_app_sync,
+            Job::OutreachDispatch => self.outreach_dispatch,
             Job::CommentsPoll => self.comments_poll,
+            Job::PurgeRequestKeys => self.purge_request_keys,
         }
     }
 }
@@ -478,8 +493,13 @@ mod tests {
             device_bridge_health: every,
             device_command_expiry: every,
             device_file_purge: every,
+            prospects_purge: every,
+            research_plan: every,
+            lead_distribution: every,
             whatsapp_app_sync: every,
+            outreach_dispatch: every,
             comments_poll: every,
+            purge_request_keys: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -588,8 +608,30 @@ mod tests {
         assert_eq!(i.of(Job::DeviceBridgeHealth), MINUTE);
         assert_eq!(i.of(Job::DeviceCommandExpiry), MINUTE);
         assert_eq!(i.of(Job::DeviceFilePurge), HOUR);
+        assert_eq!(i.of(Job::ProspectsPurge), DAY);
+        assert_eq!(i.of(Job::ResearchPlan), HOUR);
+        assert_eq!(i.of(Job::LeadDistribution), MINUTE);
+        assert_eq!(
+            Job::LeadDistribution.lock_name(),
+            "jeeta.jobs.lead_distribution"
+        );
+        assert_eq!(Job::ResearchPlan.lock_name(), "jeeta.jobs.research_plan");
+        assert_eq!(
+            Job::ProspectsPurge.lock_name(),
+            "jeeta.jobs.prospects_purge"
+        );
         assert_eq!(i.of(Job::WhatsappAppSync), 5 * MINUTE);
+        assert_eq!(i.of(Job::OutreachDispatch), MINUTE);
+        assert_eq!(
+            Job::OutreachDispatch.lock_name(),
+            "jeeta.jobs.outreach_dispatch"
+        );
         assert_eq!(i.of(Job::CommentsPoll), HOUR);
+        assert_eq!(i.of(Job::PurgeRequestKeys), DAY);
+        assert_eq!(
+            Job::PurgeRequestKeys.lock_name(),
+            "jeeta.jobs.purge_request_keys"
+        );
         assert_eq!(Job::CommentsPoll.lock_name(), "jeeta.jobs.comments_poll");
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),

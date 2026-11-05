@@ -249,6 +249,7 @@ async fn status_labels_policy_contract_fake_and_pg() {
                     times
                 },
             },
+            leads: jt_app::ports::LeadsPolicy::default(),
         };
         let mut r = uow.tenant(f.ws).await.unwrap();
         assert!(

@@ -16,6 +16,13 @@ import { CapabilitiesPage } from '@/pages/CapabilitiesPage';
 import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
 import { PeoplePage } from '@/pages/PeoplePage';
+import { ProspectsPage } from '@/pages/ProspectsPage';
+import { ProspectDetail } from '@/pages/ProspectDetail';
+import { ResearchTasksPage } from '@/pages/ResearchTasksPage';
+import { OutreachPage } from '@/pages/OutreachPage';
+import { OutreachCampaign } from '@/pages/OutreachCampaign';
+import { OutreachSettings } from '@/pages/OutreachSettings';
+import { OutreachTemplates } from '@/pages/OutreachTemplates';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
@@ -27,6 +34,7 @@ import { RegisterPage } from '@/pages/RegisterPage';
 import { RolesPage } from '@/pages/RolesPage';
 import { StrategyPage } from '@/pages/StrategyPage';
 import { TeamPage } from '@/pages/TeamPage';
+import { DistributionPage } from '@/pages/DistributionPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
 import { PaymentsPage } from '@/pages/platform/PaymentsPage';
 import { HealthPage } from '@/pages/platform/HealthPage';
@@ -80,6 +88,14 @@ export const routes: RouteObject[] = [
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
           { path: 'people', element: <PeoplePage /> },
+          { path: 'prospects', element: <ProspectsPage /> },
+          { path: 'prospects/tasks', element: <ResearchTasksPage /> },
+          { path: 'prospects/:prospectId', element: <ProspectDetail /> },
+          { path: 'outreach', element: <OutreachPage /> },
+          { path: 'outreach/templates', element: <OutreachTemplates /> },
+          { path: 'outreach/settings', element: <OutreachSettings /> },
+          { path: 'outreach/new', element: <OutreachCampaign /> },
+          { path: 'outreach/:campaignId', element: <OutreachCampaign /> },
           { path: 'calls', element: <CallsPage /> },
           { path: 'calls/:callId', element: <CallDetail /> },
           { path: 'strategy', element: <StrategyPage /> },
@@ -89,6 +105,7 @@ export const routes: RouteObject[] = [
           { path: 'oauth/callback/:provider', element: <OAuthCallbackPage /> },
           { path: 'budget', element: <BudgetPage /> },
           { path: 'team', element: <TeamPage /> },
+          { path: 'team/distribution', element: <DistributionPage /> },
           { path: 'roles', element: <RolesPage /> },
           { path: 'api-keys', element: <ApiKeysPage /> },
           { path: 'agents', element: <AgentsPage /> },

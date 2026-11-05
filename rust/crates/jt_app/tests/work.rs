@@ -463,6 +463,30 @@ async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
         WorkKind::ApproveStrategy,
         WorkKind::DeclareFirstCapability,
         WorkKind::InboundEvents { count: 1 },
+        WorkKind::ResearchDue {
+            task_id: jt_prospects::ResearchTaskId::new_v7(),
+            remaining_today: 1,
+        },
+        WorkKind::ProspectsToScore { count: 1 },
+        WorkKind::ProspectsToPromote { count: 1 },
+        WorkKind::OwnerlessJourneys {
+            count: 1,
+            oldest_journey_id: None,
+        },
+        WorkKind::AssignmentStalled { count: 1 },
+        WorkKind::PersonalizationDue {
+            campaign_id: jt_outreach::CampaignId::new_v7(),
+            count: 1,
+        },
+        WorkKind::CampaignBlocked {
+            campaign_id: jt_outreach::CampaignId::new_v7(),
+            reason: jt_outreach::PauseReason::BounceRate,
+        },
+        WorkKind::CampaignApproval {
+            campaign_id: jt_outreach::CampaignId::new_v7(),
+            revision: 1,
+        },
+        WorkKind::PromotedNotContacted { count: 1 },
     ] {
         assert!(
             jt_app::catalog::find(kind.cleared_by()).is_some(),

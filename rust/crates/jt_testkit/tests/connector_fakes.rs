@@ -8,7 +8,8 @@ use std::sync::Arc;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdInsights, AdSet, Asset, ConsentRow, DeliveryState, DeliveryStatus, InboundEventDraft,
-    OAuthApp, OAuthCallback, PostMetrics, PublishReceipt, PublishRequest, SendReceipt, Url, XApp,
+    OAuthApp, OAuthCallback, PolledMail, PostMetrics, PublishReceipt, PublishRequest, SendReceipt,
+    Url, XApp,
 };
 use jt_app::ports::{
     EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox,
@@ -1536,6 +1537,9 @@ fn mail_message() -> jt_app::ports::connectors::MailMessage {
             mime: "text/calendar".into(),
             bytes: b"PRIVATE-ATTACHMENT-CONTENT".to_vec(),
         }],
+        from_name: None,
+        list_unsubscribe: None,
+        attachment_files: vec![],
     }
 }
 
@@ -1647,7 +1651,10 @@ async fn mailbox_cursor_and_scripted_poller_contract() {
     connector.push_mailbox_poll(Err(err.clone()));
     assert_eq!(
         connector.poll(ws, &cred, &public, &cursor).await,
-        Ok((drafts, next.clone()))
+        Ok((
+            drafts.into_iter().map(PolledMail::from).collect(),
+            next.clone()
+        ))
     );
     assert_eq!(connector.poll(ws, &cred, &public, &next).await, Err(err));
     assert_eq!(

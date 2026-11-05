@@ -1,6 +1,8 @@
-//! MIME bodies are parsed only for message text and attachment metadata. Protocol errors and
-//! attachment contents are never copied into an error, event debug record or status payload.
-use jt_app::ports::connectors::InboundEventDraft;
+//! MIME bodies are parsed only for message text, attachment metadata and, for inbox mail, the
+//! attachments' bytes, which go beside the event draft ([`PolledMail`]), never into it. Protocol
+//! errors and attachment contents are never copied into an error, event debug record or status
+//! payload.
+use jt_app::ports::connectors::{InboundAttachment, InboundEventDraft, PolledMail};
 use jt_connector::{ConnectorError, EventKind};
 use mailparse::{MailHeaderMap, ParsedMail};
 use serde_json::{Value, json};
@@ -76,13 +78,16 @@ fn attachment(mail: &ParsedMail<'_>) -> bool {
             .contains_key("filename")
         || mail.ctype.params.contains_key("name")
 }
-fn parts(
-    mail: &ParsedMail<'_>,
-    text: &mut Vec<String>,
-    html: &mut Vec<String>,
-    attachments: &mut Vec<Value>,
-    depth: usize,
-) -> Result<(), ConnectorError> {
+/// The parts of a message: its text and HTML bodies, and its attachments, each as the payload
+/// lists it (`filename`, `declared_mime`, `size`) and, at the same position, with its bytes.
+struct Parts {
+    text: Vec<String>,
+    html: Vec<String>,
+    attachments: Vec<Value>,
+    files: Vec<InboundAttachment>,
+}
+
+fn parts(mail: &ParsedMail<'_>, out: &mut Parts, depth: usize) -> Result<(), ConnectorError> {
     if depth > 30 {
         return Err(invalid());
     }
@@ -94,16 +99,22 @@ fn parts(
             .cloned()
             .or_else(|| mail.ctype.params.get("name").cloned())
             .unwrap_or_default();
-        attachments.push(
-            json!({"filename":name, "size":mail.get_body_raw().map_err(|_| invalid())?.len()}),
-        );
+        let bytes = mail.get_body_raw().map_err(|_| invalid())?;
+        out.attachments
+            .push(json!({"filename":name, "declared_mime":mail.ctype.mimetype,
+            "size":bytes.len()}));
+        out.files.push(InboundAttachment {
+            filename: name,
+            declared_mime: mail.ctype.mimetype.clone(),
+            bytes,
+        });
     } else if mail.ctype.mimetype == "text/plain" {
-        text.push(mail.get_body().map_err(|_| invalid())?);
+        out.text.push(mail.get_body().map_err(|_| invalid())?);
     } else if mail.ctype.mimetype == "text/html" {
-        html.push(mail.get_body().map_err(|_| invalid())?);
+        out.html.push(mail.get_body().map_err(|_| invalid())?);
     } else if mail.ctype.mimetype.starts_with("multipart/") {
         for child in &mail.subparts {
-            parts(child, text, html, attachments, depth + 1)?;
+            parts(child, out, depth + 1)?;
         }
     }
     Ok(())
@@ -216,11 +227,34 @@ pub fn event(
     raw: &[u8],
     is_sent: bool,
 ) -> Result<InboundEventDraft, ConnectorError> {
+    polled(account, mailbox, validity, uid, raw, is_sent).map(|m| m.draft)
+}
+
+/// [`event`], with the attachments' bytes of an inbox email (a message of the inbox, not of the
+/// sent folder, not a report or a withdrawal) beside the draft, in the order its payload lists
+/// them.
+pub(crate) fn polled(
+    account: &str,
+    mailbox: &str,
+    validity: u32,
+    uid: u32,
+    raw: &[u8],
+    is_sent: bool,
+) -> Result<PolledMail, ConnectorError> {
     let mail = bounded_parse(raw)?;
-    let mut texts = Vec::new();
-    let mut html = Vec::new();
-    let mut attachments = Vec::new();
-    parts(&mail, &mut texts, &mut html, &mut attachments, 0)?;
+    let mut found = Parts {
+        text: Vec::new(),
+        html: Vec::new(),
+        attachments: Vec::new(),
+        files: Vec::new(),
+    };
+    parts(&mail, &mut found, 0)?;
+    let Parts {
+        text: mut texts,
+        html,
+        attachments,
+        files,
+    } = found;
     if texts.iter().all(|text| text.trim().is_empty()) {
         texts.clear();
         for body in html {
@@ -297,11 +331,19 @@ pub fn event(
         payload["withdrawn"] = json!(true);
         payload["channel"] = json!("email");
     }
-    Ok(InboundEventDraft {
-        external_id: format!("imap:{account}:{mailbox}:{validity}:{uid}"),
-        kind,
-        payload,
-        occurred_at,
+    let files = if !is_sent && kind == EventKind::Message {
+        files
+    } else {
+        Vec::new()
+    };
+    Ok(PolledMail {
+        draft: InboundEventDraft {
+            external_id: format!("imap:{account}:{mailbox}:{validity}:{uid}"),
+            kind,
+            payload,
+            occurred_at,
+        },
+        attachments: files,
     })
 }
 

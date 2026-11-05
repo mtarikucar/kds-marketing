@@ -2,7 +2,8 @@
 //! may be `Exempt` from the strategy gate; every other use case is `Gated`. The inbox rows that
 //! read or answer customers are listed one by one ([`EXEMPT_INBOX`]), so a new inbox row is
 //! `Gated` until someone decides it answers customers. Separately, only
-//! `auth.*`, `workspace.*` and `platform.*` use cases run whatever the workspace's status, and
+//! `auth.*`, `workspace.*` and `platform.*` use cases and the objections (a business's
+//! do-not-contact and erasure) run whatever the workspace's status, and
 //! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
 //! lives in the adapters' tests.
@@ -52,6 +53,7 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.people.get",
     "inbox.people.erase",
     "inbox.people.create",
+    "inbox.people.set_kind",
     "inbox.identities.add",
     "inbox.journeys.open",
     "inbox.events.report",
@@ -140,6 +142,9 @@ const EXEMPT_IDS: &[&str] = &[
     "devices.act",
     "devices.command_get",
     "devices.commands",
+    // A business's objection and an erasure must always be recordable (leads spec D29).
+    "prospects.do_not_contact",
+    "prospects.erase",
 ];
 
 fn may_be_exempt(id: &str) -> bool {
@@ -174,8 +179,10 @@ const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 #[test]
 fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_while_unpaid() {
     let expected = |id: &str| {
-        if matches!(id, "billing.status" | "ops.health")
-            || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
+        if matches!(
+            id,
+            "billing.status" | "ops.health" | "prospects.do_not_contact" | "prospects.erase"
+        ) || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
         {
             StatusExemption::Always
         } else if id == "billing.activate"
@@ -311,7 +318,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 52);
+    assert_eq!(rows.len(), 53);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

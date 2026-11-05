@@ -163,6 +163,18 @@ pub async fn consume_event(
         Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
         result => result?,
     };
+    // An email dropped because its sender was erased keeps no file (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.15): the rows lose their names in this
+    // transaction; the bytes go with the store's daily sweep of files no record keeps.
+    if outcome == "erased_identity_drop"
+        && event.provider == Provider::Mail
+        && event.kind == EventKind::Message
+        && let Some(capability) = event.capability_id
+    {
+        r.mail_files()
+            .erase_event(capability, &event.external_id, now)
+            .await?;
+    }
     if claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
         return Ok("duplicate");
     }
@@ -641,10 +653,12 @@ pub(crate) async fn apply_from(
     let transition = reduce(&j, &event, &policy)
         .map_err(|_| AppError::conflict("inbound journey transition refused"))?;
     let effects = transition.effects().to_vec();
+    let kind = event.kind.clone();
     r.journeys()
         .apply_transition(j.id, transition, event)
         .await?;
     journeys::apply_effects(deps, ctx, r, &j, &effects).await?;
+    crate::usecases::outreach::hooks::on_journey_event(r, ctx, j.id, &kind).await?;
     record(
         r,
         ctx,
@@ -722,6 +736,12 @@ async fn message(
     r.messages()
         .record_inbound_sender(message_id, sender.id)
         .await?;
+    // The email's files, stored when it was polled, are the message's and the person's.
+    if channel == Channel::Email {
+        r.mail_files()
+            .link_event_to_message(cap.id, &event.external_id, message_id, person.id)
+            .await?;
+    }
     r.conversations().lock_for_person(person.id).await?;
     let j = journey(deps, ctx, r, &person).await?;
     if j.status == JourneyStatus::Lost {
@@ -730,6 +750,20 @@ async fn message(
             .await?;
     }
     apply(deps, ctx, r, j, key, JourneyEventKind::MessageReceived).await?;
+    // A reply to an outreach email stops the person's sequence (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.14); the conversation is ours as for any
+    // inbound, so the agent answers.
+    let in_reply_to = (channel == Channel::Email)
+        .then(|| text(&event.payload, "in_reply_to"))
+        .flatten();
+    crate::usecases::outreach::hooks::on_inbound(
+        r,
+        ctx,
+        person.id,
+        in_reply_to,
+        activity_at(event),
+    )
+    .await?;
     Ok("consumed")
 }
 async fn outbound(
@@ -1080,6 +1114,11 @@ async fn mail_evidence(
     if row.state == "queued" {
         return Ok("deferred");
     }
+    // An outreach email's bounce or complaint is recorded on its send before the evidence
+    // settles the entry (an unknown send becomes bounced, not failed), and stops the sequence.
+    if let Some(status @ ("failed" | "complaint")) = text(&event.payload, "status") {
+        crate::usecases::outreach::hooks::on_bounce(r, ctx, &row, status == "complaint").await?;
+    }
     super::replies::record_result_in(deps, ctx, r, id, result, true).await?;
     if matches!(text(&event.payload, "status"), Some("failed" | "complaint")) {
         let conversation = r
@@ -1204,6 +1243,17 @@ async fn consent_event(
                 reason: SuppressionReason::Unsubscribe,
             })
             .await?;
+        // An email whose subject is `unsubscribe` is the `mailto:` fallback of a commercial
+        // email's `List-Unsubscribe` (spec 2026-10-30-leads-pool-outreach-design.md §3.14): from
+        // a person an outreach email reached in the last 90 days, an unsubscribe from it.
+        let mailto = event.provider == Provider::Mail
+            && text(p, "subject").is_some_and(|s| s.trim().eq_ignore_ascii_case("unsubscribe"));
+        if !(mailto
+            && crate::usecases::outreach::links::unsubscribed_by_mail(r, ctx, person.id, at)
+                .await?)
+        {
+            crate::usecases::outreach::hooks::on_withdrawn(r, ctx, person.id, channel).await?;
+        }
     }
     record(
         r,

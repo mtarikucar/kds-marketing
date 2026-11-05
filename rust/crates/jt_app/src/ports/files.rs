@@ -33,6 +33,8 @@ pub trait ByteSource: Send {
 /// chunk, so a reader that counts the bytes against `size_bytes` never takes it for whole.
 pub struct StreamedFile {
     pub mime: String,
+    /// The name the file was stored with (a download's `Content-Disposition` names it).
+    pub filename: String,
     pub size_bytes: u64,
     pub bytes: Box<dyn ByteSource>,
 }
@@ -68,6 +70,7 @@ pub trait FileStore: Send + Sync {
         let upload = self.read(ws, id).await?;
         Ok(StreamedFile {
             mime: upload.mime,
+            filename: upload.filename,
             size_bytes: upload.bytes.len() as u64,
             bytes: Box::new(Whole(Some(upload.bytes))),
         })
@@ -152,6 +155,21 @@ pub trait FileStore: Send + Sync {
         expires_at: OffsetDateTime,
     ) -> Result<Url, AppError> {
         self.provider_url(ws, id, expires_at).await
+    }
+    /// An address, signed as [`FileStore::provider_url`] signs one but for a person's download of
+    /// a mail attachment (spec 2026-10-30-leads-pool-outreach-design.md §3.15): served only as a
+    /// download (`Content-Disposition: attachment`, `application/octet-stream`, `nosniff`, a
+    /// sandboxing `Content-Security-Policy`), never shown inline in the panel's origin, and from a
+    /// pool of its own. This default refuses: a store that cannot serve a file as a download gives
+    /// no address for one.
+    async fn attachment_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        expires_at: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        let _ = (ws, id, expires_at);
+        Err(AppError::internal("file downloads are not configured"))
     }
     async fn delete(&self, ws: WorkspaceId, id: FileId) -> Result<(), AppError>;
 }

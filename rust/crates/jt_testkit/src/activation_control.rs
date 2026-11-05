@@ -91,6 +91,39 @@ impl TenantRepos for Tenant {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self.inner.device_commands()
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self.inner.prospects()
+    }
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self.inner.research_tasks()
+    }
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self.inner.prospect_blocklist()
+    }
+    fn rep_profiles(&mut self) -> &mut dyn jt_app::ports::distribution::RepProfileRepo {
+        self.inner.rep_profiles()
+    }
+    fn distribution_rules(&mut self) -> &mut dyn jt_app::ports::distribution::RuleRepo {
+        self.inner.distribution_rules()
+    }
+    fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
+        self.inner.assignments()
+    }
+    fn outreach_templates(&mut self) -> &mut dyn jt_app::ports::outreach::TemplateRepo {
+        self.inner.outreach_templates()
+    }
+    fn outreach_campaigns(&mut self) -> &mut dyn jt_app::ports::outreach::CampaignRepo {
+        self.inner.outreach_campaigns()
+    }
+    fn outreach_enrollments(&mut self) -> &mut dyn jt_app::ports::outreach::EnrollmentRepo {
+        self.inner.outreach_enrollments()
+    }
+    fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
+        self.inner.outreach_sends()
+    }
+    fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
+        self.inner.mail_files()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

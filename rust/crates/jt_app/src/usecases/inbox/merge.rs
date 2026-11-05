@@ -128,6 +128,8 @@ pub async fn apply(
     }
     let source = if a.id == input.keep { b.id } else { a.id };
     r.people().mark_merged(source, Some(input.keep), at).await?;
+    // The merged person's outreach sequence stops; an undo does not restart it.
+    crate::usecases::outreach::hooks::on_merged(r.as_mut(), ctx, source).await?;
     row.source_id = source;
     row.target_id = input.keep;
     row.status = "applied".into();

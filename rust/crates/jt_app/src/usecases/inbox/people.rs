@@ -47,6 +47,8 @@ pub struct PersonOut {
     pub identities: Vec<Identity>,
     pub open_journey: Option<Journey>,
     pub conversations: Vec<Conversation>,
+    /// The prospect this person was promoted from.
+    pub prospect: Option<crate::usecases::prospects::ProspectSummary>,
 }
 
 pub async fn search(deps: &Deps, ctx: &Ctx, input: SearchInput) -> Result<Vec<Person>, AppError> {
@@ -70,9 +72,90 @@ pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppE
         identities: r.identities().list(person.id).await?,
         open_journey: r.journeys().open_for(person.id).await?,
         conversations: r.conversations().list(Some(person.id), 500).await?,
+        prospect: crate::usecases::prospects::promote::summary_for(r.as_mut(), person.id).await?,
         person,
     })
 }
+/// `inbox.people.set_kind`'s input.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetKindInput {
+    pub kind: RecipientKind,
+    /// Why (up to 500 characters): kept as a note on the person's current journey, never in the
+    /// ledger.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `jeeta.inbox.people_set_kind`: sets whom a commercial message to the person reaches (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.12): a business's own contact point or a private
+/// individual (promotion never overrides `individual`, L-02). A note is kept on the person's
+/// current journey; the ledger names the kinds and whether a note was kept, never its text.
+pub async fn set_kind(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: PersonId,
+    input: SetKindInput,
+) -> Result<Person, AppError> {
+    ctx.require(Permission::InboxWork)?;
+    let note = input
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned);
+    if note.as_ref().is_some_and(|n| n.chars().count() > 500) {
+        return Err(invalid("note", "at most 500 characters"));
+    }
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.people().lock_workspace().await?;
+    r.people().set_write_time(ctx.now).await?;
+    let person = resolve(r.as_mut(), id).await?;
+    if person.recipient_kind == input.kind {
+        return Ok(person);
+    }
+    r.people()
+        .set_recipient_kind(person.id, input.kind, ctx.now)
+        .await?;
+    let journey = super::active_or_latest_journey(r.as_mut(), person.id).await?;
+    let kept = match (&note, &journey) {
+        (Some(text), Some(j)) => {
+            r.notes()
+                .insert(Note {
+                    id: NoteId::from(deps.ids.uuid()),
+                    workspace_id: ctx.workspace_id,
+                    journey_id: j.id,
+                    author: match ctx.actor {
+                        jt_ledger::Actor::Human { user_id } => EventSource::Human(user_id),
+                        jt_ledger::Actor::Agent { .. } => EventSource::Agent,
+                        jt_ledger::Actor::System { .. } => EventSource::System,
+                    },
+                    text: text.clone(),
+                    at: ctx.now,
+                })
+                .await?;
+            true
+        }
+        _ => false,
+    };
+    record(
+        r.as_mut(),
+        ctx,
+        "inbox.person.kind_set",
+        "person",
+        person.id,
+        json!({"person_id": person.id, "from": person.recipient_kind, "to": input.kind, "note": kept}),
+    )
+    .await?;
+    let out = r
+        .people()
+        .get(person.id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such person"))?;
+    r.commit().await?;
+    Ok(out)
+}
+
 pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<CreateOut, AppError> {
     ctx.require(Permission::InboxWork)?;
     required("display_name", &input.display_name)?;
@@ -103,18 +186,29 @@ pub(crate) async fn match_or_create(
     input: CreateInput,
     own_identity: Option<usize>,
 ) -> Result<CreateOut, AppError> {
-    match_or_create_with(deps, ctx, r, input, own_identity, true).await
+    match_or_create_with(deps, ctx, r, input, own_identity, None, true).await
 }
 
-/// [`match_or_create`], a person it creates starting with a journey only when `open_journey`:
-/// a commenter or a marketplace asker is a person without one until buying intent shows (spec
-/// 2026-10-30-inbox-comments-marketplace-design.md D4).
+/// What a person created by a promotion from the prospect pool starts with (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.5); a person created any other way starts with no
+/// company and an unknown recipient kind.
+#[derive(Clone, Debug)]
+pub(crate) struct NewPerson {
+    pub company: String,
+    pub recipient_kind: RecipientKind,
+}
+
+/// [`match_or_create`], a new person starting with `new`'s company and kind, and with a journey
+/// only when `open_journey`: a commenter or a marketplace asker is a person without one until
+/// buying intent shows (spec 2026-10-30-inbox-comments-marketplace-design.md D4). A matched person
+/// is left as it is: the caller decides what changes.
 pub(crate) async fn match_or_create_with(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     input: CreateInput,
     own_identity: Option<usize>,
+    new: Option<NewPerson>,
     open_journey: bool,
 ) -> Result<CreateOut, AppError> {
     if input.identities.is_empty() {
@@ -160,7 +254,8 @@ pub(crate) async fn match_or_create_with(
             id: PersonId::from(deps.ids.uuid()),
             workspace_id: ctx.workspace_id,
             display_name: input.display_name,
-            company: String::new(),
+            company: new.as_ref().map(|n| n.company.clone()).unwrap_or_default(),
+            recipient_kind: new.as_ref().map(|n| n.recipient_kind).unwrap_or_default(),
             first_touch: FirstTouch {
                 source: input.source.clone(),
                 capability_id: own_identity.and_then(|i| input.identities[i].capability_id),

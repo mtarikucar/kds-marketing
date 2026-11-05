@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{Channel, ConsentId, PersonId, Suppression};
+use crate::{Channel, ConsentId, PersonId, RecipientKind, Suppression};
 
 /// The customer's decision, independent of synchronization with a provider.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,21 +94,74 @@ pub fn effective_consent(
 ///
 /// Callers supply tenant- and person-scoped rows. Missing permission and mixed-person input
 /// fail closed; consent is checked by contact channel, never by shared identity namespace.
+/// The same as [`commercial_basis`] for an unknown recipient without business channels.
 pub fn commercial_allowed(
     consents: &[Consent],
     suppressions: &[Suppression],
     channel: Channel,
 ) -> Result<(), IzinYok> {
-    let person_id = consents.first().ok_or(IzinYok)?.person_id;
-    if consents.iter().any(|c| c.person_id != person_id)
-        || suppressions
-            .iter()
-            .any(|s| s.person_id != person_id || s.channel == channel)
+    commercial_basis(consents, suppressions, channel, RecipientKind::Unknown, &[]).map(|_| ())
+}
+
+/// What a commercial contact rests on (spec 2026-10-30-leads-pool-outreach-design.md §3.12,
+/// D17). Stored as its key on an outreach enrollment and in a send's fence snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommercialBasis {
+    /// An effective explicit or contract consent on the channel.
+    Consent,
+    /// A business's own contact point on a channel the workspace's business-recipient basis
+    /// covers (off by default; only a human owner, with the counsel's confirmation, turns it on).
+    BusinessRecipient,
+}
+
+impl CommercialBasis {
+    /// The stable key, as stored.
+    pub fn key(self) -> &'static str {
+        match self {
+            CommercialBasis::Consent => "consent",
+            CommercialBasis::BusinessRecipient => "business_recipient",
+        }
+    }
+}
+
+/// The basis of a commercial contact on `channel` from one person's consent and suppression
+/// rows: a withdrawal (an İYS refusal included, cached as one) or a suppression on the channel
+/// always refuses; an effective explicit or contract consent is [`CommercialBasis::Consent`];
+/// otherwise a [`RecipientKind::Business`] recipient on a channel in `b2b_channels` is
+/// [`CommercialBasis::BusinessRecipient`]. Everything else, and rows of more than one person,
+/// is [`IzinYok`].
+pub fn commercial_basis(
+    consents: &[Consent],
+    suppressions: &[Suppression],
+    channel: Channel,
+    recipient: RecipientKind,
+    b2b_channels: &[Channel],
+) -> Result<CommercialBasis, IzinYok> {
+    let person = consents
+        .first()
+        .map(|c| c.person_id)
+        .or_else(|| suppressions.first().map(|s| s.person_id));
+    if let Some(person) = person
+        && (consents.iter().any(|c| c.person_id != person)
+            || suppressions.iter().any(|s| s.person_id != person))
     {
         return Err(IzinYok);
     }
-    match effective_consent(consents, person_id, channel).map(|c| c.kind) {
-        Some(ConsentKind::Explicit | ConsentKind::ImpliedByContract) => Ok(()),
-        Some(ConsentKind::Withdrawn) | None => Err(IzinYok),
+    if suppressions.iter().any(|s| s.channel == channel) {
+        return Err(IzinYok);
+    }
+    match person
+        .and_then(|p| effective_consent(consents, p, channel))
+        .map(|c| c.kind)
+    {
+        Some(ConsentKind::Explicit | ConsentKind::ImpliedByContract) => {
+            Ok(CommercialBasis::Consent)
+        }
+        Some(ConsentKind::Withdrawn) => Err(IzinYok),
+        None if recipient == RecipientKind::Business && b2b_channels.contains(&channel) => {
+            Ok(CommercialBasis::BusinessRecipient)
+        }
+        None => Err(IzinYok),
     }
 }

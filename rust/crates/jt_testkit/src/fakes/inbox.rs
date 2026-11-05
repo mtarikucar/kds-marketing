@@ -186,6 +186,7 @@ impl PersonRepo for MemTenant {
         Ok(())
     }
     async fn lock_workspace(&mut self) -> Result<(), AppError> {
+        self.tx.journal_lock("inbox");
         Ok(())
     }
     async fn insert(&mut self, row: Person) -> Result<(), AppError> {
@@ -316,6 +317,29 @@ impl PersonRepo for MemTenant {
                     .find(|r| r.workspace_id == ws && r.id == id)
                 {
                     r.erased_at = Some(at);
+                    r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
+                }
+            });
+            Ok(())
+        })
+    }
+    async fn set_recipient_kind(
+        &mut self,
+        id: PersonId,
+        kind: jt_inbox::RecipientKind,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            person(t.state(), ws, id)?;
+            t.tx.write(move |s| {
+                if let Some(r) = s
+                    .inbox
+                    .people
+                    .iter_mut()
+                    .find(|r| r.workspace_id == ws && r.id == id)
+                {
+                    r.recipient_kind = kind;
                     r.updated_at = at.max(r.updated_at + Duration::microseconds(1));
                 }
             });
@@ -1018,6 +1042,26 @@ impl JourneyRepo for MemTenant {
         Ok(rows)
     }
 
+    async fn list_open(
+        &mut self,
+        after: Option<JourneyId>,
+        limit: u32,
+    ) -> Result<Vec<Journey>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .inbox
+            .journeys
+            .iter()
+            .filter(|j| {
+                j.workspace_id == self.ws && j.closed_at.is_none() && after.is_none_or(|a| j.id > a)
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|j| j.id);
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
         journey(self.state(), self.ws, id)?;
         Ok(*self
@@ -1664,6 +1708,45 @@ impl RequestKeyRepo for MemTenant {
             });
             Ok(true)
         })
+    }
+
+    async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let (prefix, field, value) = (prefix.to_owned(), field.to_owned(), value.to_owned());
+        let matches = move |r: &StoredRequestKey| {
+            r.workspace_id == ws
+                && r.key.starts_with(&prefix)
+                && r.response.get(&field).and_then(Value::as_str) == Some(value.as_str())
+        };
+        let n = self
+            .state()
+            .inbox
+            .request_keys
+            .iter()
+            .filter(|r| matches(r))
+            .count();
+        if n > 0 {
+            self.tx
+                .write(move |s| s.inbox.request_keys.retain(|r| !matches(r)));
+        }
+        Ok(n as u64)
+    }
+
+    async fn purge_expired(&mut self, before: OffsetDateTime) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let expired = move |r: &StoredRequestKey| r.workspace_id == ws && r.at <= before;
+        let n = self
+            .state()
+            .inbox
+            .request_keys
+            .iter()
+            .filter(|r| expired(r))
+            .count();
+        if n > 0 {
+            self.tx
+                .write(move |s| s.inbox.request_keys.retain(|r| !expired(r)));
+        }
+        Ok(n as u64)
     }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {

@@ -27,8 +27,9 @@ use jt_app::{
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
 pub use serve::{
-    DEVICE_PURPOSE, MAX_CONCURRENT_READS, READ_DEADLINE, READ_IDLE, READ_TURN_WAIT, READS_PER_FILE,
-    READS_PER_WORKSPACE, ReadLimits, router, router_with_limits,
+    ATTACHMENT_POLICY, ATTACHMENT_PURPOSE, DEVICE_PURPOSE, MAX_CONCURRENT_READS, READ_DEADLINE,
+    READ_IDLE, READ_TURN_WAIT, READS_PER_FILE, READS_PER_WORKSPACE, ReadLimits, router,
+    router_with_limits,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -470,7 +471,9 @@ impl DiskFiles {
     /// A URL that reads file `id` until `expires_at`: after now and at most 24 hours (and a
     /// second's grace) ahead, the longest [`verify_for`] accepts, signed for `purpose` (`None`: a
     /// provider's, as studio hands its media out for 24 hours; [`DEVICE_PURPOSE`]: a device's
-    /// download or an agent's file address, served from a pool of its own).
+    /// download or an agent's file address, served from a pool of its own;
+    /// [`ATTACHMENT_PURPOSE`]: a person's download of a mail attachment, served as a download
+    /// only, from a pool of its own).
     fn signed_url(
         &self,
         ws: WorkspaceId,
@@ -680,6 +683,7 @@ impl FileStore for DiskFiles {
             .map_err(|_| storage())??;
         Ok(StreamedFile {
             mime: f.mime,
+            filename: f.filename,
             size_bytes: f.size_bytes,
             bytes: Box::new(Serving {
                 file: tokio::fs::File::from_std(file),
@@ -781,6 +785,17 @@ impl FileStore for DiskFiles {
     ) -> Result<Url, AppError> {
         let this = self.clone();
         tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, Some(DEVICE_PURPOSE)))
+            .await
+            .map_err(|_| storage())?
+    }
+    async fn attachment_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        e: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        let this = self.clone();
+        tokio::task::spawn_blocking(move || this.signed_url(ws, id, e, Some(ATTACHMENT_PURPOSE)))
             .await
             .map_err(|_| storage())?
     }

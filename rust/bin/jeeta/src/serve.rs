@@ -334,6 +334,11 @@ pub(crate) fn log_providers(config: &Config) {
         "provider apps: OAuth needs a configured app; webhook and redirect addresses need the \
          public base URL"
     );
+    tracing::info!(
+        outreach_enabled = config.apps.outreach_enabled(),
+        "outreach email: campaigns launch and send only while {} is on",
+        config::OUTREACH_ENABLED
+    );
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy
@@ -754,6 +759,39 @@ mod tests {
         .unwrap();
         let resp = app.clone().oneshot(netgsm).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// A commercial email's public links are served by the one router outside the panel's
+    /// checks (a recipient posts without a session or the panel's request header: the gate's own
+    /// `404` for a link that does not hold, not the panel's `403`), and their pages keep their
+    /// stricter policy, which forbids framing too.
+    #[tokio::test]
+    async fn the_public_links_are_served_outside_the_panel_checks_with_their_own_policy() {
+        let app = app(test_deps(), Arc::new(NoStrategyYet), &test_config(&[]));
+        let ws = "0192f0c4-0000-7000-8000-000000000000";
+        let token = "0192f0c4-0000-7000-8000-000000000001";
+        for req in [
+            Request::post(format!("/u/{ws}/{token}/AAAAAAAAAAAAAAAAAAAAAA"))
+                .body(Body::from("List-Unsubscribe=One-Click"))
+                .unwrap(),
+            Request::get(format!("/u/{ws}/{token}/AAAAAAAAAAAAAAAAAAAAAA"))
+                .body(Body::empty())
+                .unwrap(),
+            Request::get(format!("/c/{ws}/{token}/0/AAAAAAAAAAAAAAAAAAAAAA"))
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let resp = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+            let headers = resp.headers();
+            let policy: Vec<_> = headers.get_all("content-security-policy").iter().collect();
+            assert_eq!(policy, [jt_webhook::links::PAGE_POLICY]);
+            assert_eq!(headers["x-content-type-options"], "nosniff");
+            assert_eq!(headers["referrer-policy"], "no-referrer");
+            assert_eq!(headers["cache-control"], "no-store");
+            let text = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            assert!(String::from_utf8_lossy(&text).contains("This link is not valid."));
+        }
     }
 
     #[tokio::test]

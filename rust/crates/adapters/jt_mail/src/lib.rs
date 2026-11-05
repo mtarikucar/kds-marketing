@@ -11,8 +11,7 @@ mod socket;
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    Connector, InboundEventDraft, MailMessage, MailSender, MailboxCursor, MailboxPoller,
-    SendReceipt,
+    Connector, MailMessage, MailSender, MailboxCursor, MailboxPoller, PolledMail, SendReceipt,
 };
 use jt_connector::{ConnectorError, Credential, MailTls, ProbeResult, Provider};
 use jt_outbound::Egress;
@@ -157,7 +156,7 @@ impl MailboxPoller for MailConnector {
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
-    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+    ) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError> {
         let cred = MailCred::of(cred)?;
         imap::poll(self, ws, &cred, public, cursor).await
     }

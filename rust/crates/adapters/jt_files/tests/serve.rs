@@ -470,3 +470,141 @@ async fn device_downloads_never_hold_up_provider_fetches() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     std::fs::remove_dir_all(p).unwrap();
 }
+
+/// The path and query of file `id`'s download address (a mail attachment), signed for ten
+/// minutes.
+async fn attachment_signed(d: &DiskFiles, ws: WorkspaceId, id: FileId) -> String {
+    let url = d
+        .attachment_url(ws, id, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    format!("{}?{}", url.path(), url.query().unwrap())
+}
+
+#[tokio::test]
+async fn attachment_purpose_forces_download_headers() {
+    let p = root();
+    let d = disk(&p);
+    let ws = WorkspaceId::new_v7();
+    let app = jt_files::router(d.clone(), Arc::new(FixedClock(FIXED_NOW)), KEY);
+    // A page a customer mailed: kept as any bytes, served as a download that cannot run.
+    let page = b"<html><script>alert(1)</script></html>".to_vec();
+    let html = FileId::new_v7();
+    d.put(
+        ws,
+        html,
+        MediaUpload {
+            bytes: page.clone(),
+            mime: "application/octet-stream".into(),
+            filename: "fiyat teklifi \"son\"; ğ.html".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let path = attachment_signed(&d, ws, html).await;
+    assert!(path.contains("purpose=attachment"), "{path}");
+    let response = app.clone().oneshot(get(&path)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    assert_eq!(headers["content-type"], "application/octet-stream");
+    assert_eq!(
+        headers["content-disposition"],
+        "attachment; filename*=UTF-8''fiyat%20teklifi%20%22son%22%3B%20%C4%9F.html"
+    );
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(
+        headers["content-security-policy"],
+        "sandbox; frame-ancestors 'none'"
+    );
+    assert_eq!(
+        jt_files::ATTACHMENT_POLICY,
+        "sandbox; frame-ancestors 'none'"
+    );
+    assert_eq!(headers["cache-control"], "private, no-store");
+    assert_eq!(headers["content-length"], page.len().to_string());
+    assert_eq!(drain(response.into_body()).await, (page, false));
+
+    // A stored image is a download too, whatever type it was stored with; its provider address
+    // still serves it as itself, with no disposition.
+    let shot = FileId::new_v7();
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend([7u8; 64]);
+    d.put(
+        ws,
+        shot,
+        MediaUpload {
+            bytes: png.clone(),
+            mime: "image/png".into(),
+            filename: "shot.png".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(get(&attachment_signed(&d, ws, shot).await))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "application/octet-stream"
+    );
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename*=UTF-8''shot.png"
+    );
+    assert_eq!(drain(response.into_body()).await, (png, false));
+    let response = app.oneshot(get(&signed(&d, ws, shot).await)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert!(response.headers().get("content-disposition").is_none());
+    assert!(response.headers().get("content-security-policy").is_none());
+    std::fs::remove_dir_all(p).unwrap();
+}
+
+#[tokio::test]
+async fn attachment_address_does_not_verify_as_device() {
+    let p = root();
+    let d = disk(&p);
+    let ws = WorkspaceId::new_v7();
+    let (id, bytes) = large(&d, ws).await;
+    let app = jt_files::router(d.clone(), Arc::new(FixedClock(FIXED_NOW)), KEY);
+    let download = attachment_signed(&d, ws, id).await;
+    let response = app.clone().oneshot(get(&download)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(drain(response.into_body()).await, (bytes, false));
+    // The purpose is signed: as a device's, a provider's or another purpose, the download
+    // address does not verify.
+    for path in [
+        download.replace("purpose=attachment", "purpose=device"),
+        download.replace("&purpose=attachment", ""),
+        download.replace("purpose=attachment", "purpose=attachments"),
+    ] {
+        let response = app.clone().oneshot(get(&path)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+    }
+    // Nor does a device's or a provider's address verify as a download.
+    let device = device_signed(&d, ws, id).await;
+    let response = app
+        .clone()
+        .oneshot(get(&device.replace("purpose=device", "purpose=attachment")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let provider = signed(&d, ws, id).await;
+    let response = app
+        .clone()
+        .oneshot(get(&format!("{provider}&purpose=attachment")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    // Another workspace's download address of the same id is not this one's.
+    let other = WorkspaceId::new_v7();
+    let response = app
+        .oneshot(get(&download.replace(&ws.to_string(), &other.to_string())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    std::fs::remove_dir_all(p).unwrap();
+}

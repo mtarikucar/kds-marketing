@@ -89,12 +89,38 @@ async fn mail_socket_refuses_a_public_name_resolving_to_private_space() {
 
 mod support;
 use jt_app::ports::connectors::{
-    Attachment, Connector, MailSender, MailboxCursor, MailboxPoller, MailboxPosition,
+    Attachment, Connector, InboundEventDraft, MailMessage, MailSender, MailboxCursor,
+    MailboxPoller, MailboxPosition,
 };
 use jt_connector::{ConnectorError, EventKind, MailTls};
 use jt_mail::MailConnector;
 use serde_json::json;
 use support::*;
+
+/// A poll's drafts alone: what most of these tests read (the attachments' bytes are
+/// `poll_returns_attachment_bytes_for_inbox_mail_only`'s).
+trait PollDrafts {
+    async fn poll_drafts(
+        &self,
+        ws: WorkspaceId,
+        cred: &jt_connector::Credential,
+        public: &serde_json::Value,
+        cursor: &MailboxCursor,
+    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>;
+}
+
+impl PollDrafts for MailConnector {
+    async fn poll_drafts(
+        &self,
+        ws: WorkspaceId,
+        cred: &jt_connector::Credential,
+        public: &serde_json::Value,
+        cursor: &MailboxCursor,
+    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+        let (polled, next) = MailboxPoller::poll(self, ws, cred, public, cursor).await?;
+        Ok((polled.into_iter().map(|m| m.draft).collect(), next))
+    }
+}
 
 fn workspace() -> WorkspaceId {
     "11111111-1111-4111-8111-111111111111".parse().unwrap()
@@ -204,7 +230,7 @@ async fn imap_account_mailbox_uid_dedupe() {
     let connector = connector();
     let cred = credential(465, port, MailTls::Implicit);
     let (events, cursor) = connector
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account-a"}),
@@ -226,7 +252,7 @@ async fn imap_account_mailbox_uid_dedupe() {
     assert_eq!(events[0].payload["in_reply_to"], "<parent@example.com>");
     assert!(events[0].occurred_at.is_some());
     let (again, next) = connector
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account-a"}),
@@ -237,7 +263,7 @@ async fn imap_account_mailbox_uid_dedupe() {
     assert!(again.is_empty());
     assert_eq!(next, cursor);
     let (other, _) = connector
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account-b"}),
@@ -259,7 +285,7 @@ async fn a_newly_connected_mailbox_starts_at_its_end_without_its_history() {
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
     let (events, cursor) = connector
-        .poll(workspace(), &cred, &public, &MailboxCursor::default())
+        .poll_drafts(workspace(), &cred, &public, &MailboxCursor::default())
         .await
         .unwrap();
     // The message already in INBOX and Sent (UID 7) is history: recorded as the start, not read.
@@ -272,7 +298,7 @@ async fn a_newly_connected_mailbox_starts_at_its_end_without_its_history() {
     assert_eq!(cursor.mailboxes["Sent"], end);
     assert!(!cursor.read_history);
     let (again, next) = connector
-        .poll(workspace(), &cred, &public, &cursor)
+        .poll_drafts(workspace(), &cred, &public, &cursor)
         .await
         .unwrap();
     assert!(again.is_empty());
@@ -292,7 +318,7 @@ async fn a_uidvalidity_change_does_not_reimport_history() {
         },
     );
     let (events, next) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(587, port, MailTls::StartTls),
             &json!({"external_id":"account"}),
@@ -323,7 +349,7 @@ async fn uidvalidity_reset() {
         },
     );
     let (events, next) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(587, port, MailTls::StartTls),
             &json!({"external_id":"account"}),
@@ -349,7 +375,7 @@ async fn uidvalidity_reset() {
 async fn sent_echo_reconciles_unknown() {
     let (port, task) = imap(false, 42, BODY.to_vec(), 1).await;
     let (events, _) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -404,7 +430,7 @@ async fn bounce_and_consent_payload_fixtures() {
     for (body, kind) in fixtures {
         let (port, task) = imap(false, 42, body.to_vec(), 1).await;
         let (events, _) = connector()
-            .poll(
+            .poll_drafts(
                 workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
@@ -539,7 +565,7 @@ async fn poison_mail_is_rejected_without_blocking_the_next_uid() {
     let connector = connector();
     let cred = credential(465, port, MailTls::Implicit);
     let (events, cursor) = connector
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account"}),
@@ -556,7 +582,7 @@ async fn poison_mail_is_rejected_without_blocking_the_next_uid() {
     assert_eq!(events[3].kind, EventKind::Message);
     assert_eq!(events[7].kind, EventKind::Status);
     let (again, next) = connector
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account"}),
@@ -616,7 +642,7 @@ async fn imap_rejects_oversized_literal_before_waiting_for_body() {
     let public = json!({"external_id":"account"});
     let result = tokio::time::timeout(
         Duration::from_millis(300),
-        connector.poll(
+        connector.poll_drafts(
             workspace(),
             &cred,
             &public,
@@ -640,7 +666,7 @@ async fn list_unsubscribe_advertisement_is_not_withdrawal() {
     body.extend_from_slice(b"{33554432}\r\n");
     let (port, task) = imap(false, 42, body, 1).await;
     let (events, _) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -693,7 +719,7 @@ async fn discovers_sent_folders_and_keeps_inbox_when_sent_is_missing() {
         )
         .await;
         let (events, cursor) = connector()
-            .poll(
+            .poll_drafts(
                 workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
@@ -741,7 +767,7 @@ async fn html_only_mail_has_readable_text_and_plain_alternative_wins() {
     ] {
         let (port, task) = imap(false, 42, mime.as_bytes().to_vec(), 1).await;
         let (events, _) = connector()
-            .poll(
+            .poll_drafts(
                 workspace(),
                 &credential(465, port, MailTls::Implicit),
                 &json!({"external_id":"account"}),
@@ -775,7 +801,7 @@ async fn slow_fetch_batch_returns_completed_cursor_progress() {
     let conn = connector();
     let cred = credential(465, port, MailTls::Implicit);
     let (first, cursor) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account"}),
@@ -790,7 +816,7 @@ async fn slow_fetch_batch_returns_completed_cursor_progress() {
     );
     assert_eq!(cursor.mailboxes["INBOX"].last_uid as usize, first.len());
     let (second, cursor) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &json!({"external_id":"account"}),
@@ -827,7 +853,7 @@ async fn completed_poll_does_not_wait_for_logout() {
     let cursor = MailboxCursor::reading_history();
     let (events, cursor) = tokio::time::timeout(
         Duration::from_secs(1),
-        conn.poll(workspace(), &cred, &public, &cursor),
+        conn.poll_drafts(workspace(), &cred, &public, &cursor),
     )
     .await
     .expect("cleanup must not delay completed polling")
@@ -887,7 +913,7 @@ async fn shared_mail_adapter_uses_each_calls_workspace_and_live_revocations() {
     ));
     assert!(
         matches!(
-            mail.poll(b, &cred, &public, &MailboxCursor::reading_history())
+            mail.poll_drafts(b, &cred, &public, &MailboxCursor::reading_history())
                 .await,
             Err(ConnectorError::Permission { .. })
         ),
@@ -900,7 +926,7 @@ async fn shared_mail_adapter_uses_each_calls_workspace_and_live_revocations() {
     ));
     assert!(mail.send(a, &cred, message()).await.is_ok());
     assert!(
-        mail.poll(a, &cred, &public, &MailboxCursor::reading_history())
+        mail.poll_drafts(a, &cred, &public, &MailboxCursor::reading_history())
             .await
             .is_ok()
     );
@@ -912,7 +938,7 @@ async fn shared_mail_adapter_uses_each_calls_workspace_and_live_revocations() {
         Err(ConnectorError::Permission { .. })
     ));
     assert!(matches!(
-        mail.poll(a, &cred, &public, &MailboxCursor::reading_history())
+        mail.poll_drafts(a, &cred, &public, &MailboxCursor::reading_history())
             .await,
         Err(ConnectorError::Permission { .. })
     ));
@@ -1141,7 +1167,7 @@ async fn imap_server_change_does_not_collide_with_stored_events() {
     let conn = connector();
     let public = json!({"external_id":"same-account"});
     let (stored, _) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port_a, MailTls::Implicit),
             &public,
@@ -1151,7 +1177,7 @@ async fn imap_server_change_does_not_collide_with_stored_events() {
         .unwrap();
     // Credential rebinding resets the cursor, but retains the external account and old events.
     let (new, _) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port_b, MailTls::Implicit),
             &public,
@@ -1189,7 +1215,7 @@ async fn imap_poll_fetches_sparse_high_uids_immediately() {
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
     let (events, cursor) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &public,
@@ -1201,7 +1227,7 @@ async fn imap_poll_fetches_sparse_high_uids_immediately() {
     assert_eq!(events[0].payload["text"], "hello\r\n");
     assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000_000);
     let (again, next) = conn
-        .poll(workspace(), &cred, &public, &cursor)
+        .poll_drafts(workspace(), &cred, &public, &cursor)
         .await
         .unwrap();
     assert!(again.is_empty());
@@ -1230,7 +1256,7 @@ async fn imap_poll_caps_total_messages_and_resumes_existing_uids() {
         let cred = credential(465, port, MailTls::Implicit);
         let public = json!({"external_id":"account"});
         let (first, cursor) = conn
-            .poll(
+            .poll_drafts(
                 workspace(),
                 &cred,
                 &public,
@@ -1241,14 +1267,14 @@ async fn imap_poll_caps_total_messages_and_resumes_existing_uids() {
         assert_eq!(first.len(), 100);
         assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_000);
         let (second, cursor) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert_eq!(second.len(), 100);
         assert_eq!(cursor.mailboxes["INBOX"].last_uid, 1_010);
         assert_eq!(cursor.mailboxes["Sent"].last_uid, 990);
         let (third, cursor) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert_eq!(third.len(), 2);
@@ -1289,7 +1315,7 @@ async fn imap_large_mailbox_makes_progress_with_bounded_search_results() {
     let mut ids = std::collections::HashSet::new();
     for poll in 1..=3 {
         let (events, next) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert_eq!(events.len(), 100);
@@ -1329,7 +1355,7 @@ async fn imap_empty_scan_stops_at_uidnext_and_does_not_rescan() {
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
     let (events, cursor) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &public,
@@ -1340,7 +1366,7 @@ async fn imap_empty_scan_stops_at_uidnext_and_does_not_rescan() {
     assert!(events.is_empty());
     assert_eq!(cursor.mailboxes["INBOX"].last_uid, 12_345);
     let (events, next) = conn
-        .poll(workspace(), &cred, &public, &cursor)
+        .poll_drafts(workspace(), &cred, &public, &cursor)
         .await
         .unwrap();
     assert!(events.is_empty());
@@ -1369,7 +1395,7 @@ async fn imap_empty_windows_never_skip_a_pending_body() {
     )
     .await;
     let (events, cursor) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -1405,7 +1431,7 @@ async fn imap_window_budget_never_skips_an_unscanned_uid() {
     let cred = credential(465, port, MailTls::Implicit);
     let public = json!({"external_id":"account"});
     let (events, cursor) = conn
-        .poll(
+        .poll_drafts(
             workspace(),
             &cred,
             &public,
@@ -1422,7 +1448,7 @@ async fn imap_window_budget_never_skips_an_unscanned_uid() {
     assert_eq!(searches.lock().unwrap().len(), 20);
     assert_eq!(searches.lock().unwrap().last().unwrap(), "95001:100000");
     let (events, next) = conn
-        .poll(workspace(), &cred, &public, &cursor)
+        .poll_drafts(workspace(), &cred, &public, &cursor)
         .await
         .unwrap();
     assert_eq!(events.len(), 20);
@@ -1449,7 +1475,7 @@ async fn imap_empty_tail_advances_only_after_all_selected_uids_are_fetched() {
     )
     .await;
     let (events, cursor) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -1484,7 +1510,7 @@ async fn imap_fallback_fetches_sparse_high_uid_within_three_polls() {
     let mut received = Vec::new();
     for _ in 0..3 {
         let (events, next) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         received.extend(events);
@@ -1520,7 +1546,7 @@ async fn imap_grown_window_is_bisected_without_losing_dense_tail() {
     let mut cursor = MailboxCursor::reading_history();
     for poll in 1..=3 {
         let (events, next) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert_eq!(events.len(), 100);
@@ -1549,7 +1575,7 @@ async fn imap_esearch_empty_result_is_bounded_by_uidnext() {
     )
     .await;
     let (events, cursor) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -1587,7 +1613,7 @@ async fn imap_esearch_rejects_invalid_or_uncorrelated_results() {
         .await;
         assert!(
             connector()
-                .poll(
+                .poll_drafts(
                     workspace(),
                     &credential(465, port, MailTls::Implicit),
                     &json!({"external_id":"account"}),
@@ -1625,7 +1651,7 @@ async fn imap_slow_discovery_still_dispatches_selected_messages() {
     let mut previous = 0;
     for _ in 0..2 {
         let (events, next) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert!(!events.is_empty());
@@ -1660,7 +1686,7 @@ async fn imap_search_preserves_fragmented_unsolicited_responses() {
             )
             .await;
             let result = connector()
-                .poll(
+                .poll_drafts(
                     workspace(),
                     &credential(465, port, MailTls::Implicit),
                     &json!({"external_id":"account"}),
@@ -1690,7 +1716,7 @@ async fn imap_one_slow_search_cannot_starve_selected_uids() {
     )
     .await;
     let (events, cursor) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -1719,7 +1745,7 @@ async fn imap_slow_esearch_minimum_still_makes_progress() {
     )
     .await;
     let (events, cursor) = connector()
-        .poll(
+        .poll_drafts(
             workspace(),
             &credential(465, port, MailTls::Implicit),
             &json!({"external_id":"account"}),
@@ -1756,7 +1782,7 @@ async fn imap_slow_overflow_retries_still_make_progress() {
     let mut previous = 0;
     for _ in 0..2 {
         let (events, next) = conn
-            .poll(workspace(), &cred, &public, &cursor)
+            .poll_drafts(workspace(), &cred, &public, &cursor)
             .await
             .unwrap();
         assert!(!events.is_empty());
@@ -1766,5 +1792,252 @@ async fn imap_slow_overflow_retries_still_make_progress() {
         previous = last;
         cursor = next;
     }
+    task.await.unwrap();
+}
+
+// ---- Commercial email headers (spec 2026-10-30-leads-pool-outreach-design.md §3.14, §8) ----
+
+/// The unsubscribe addresses a commercial email carries.
+fn unsubscribe() -> jt_app::ports::connectors::ListUnsubscribe {
+    jt_app::ports::connectors::ListUnsubscribe {
+        https: "https://panel.example.com/u/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/AbC-_9".into(),
+        mailto: Some("mailto:sender@example.com?subject=unsubscribe".into()),
+    }
+}
+
+#[tokio::test]
+async fn outreach_headers_are_on_the_wire() {
+    use mailparse::MailHeaderMap;
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.from_name = Some("Acme Sales".into());
+    msg.list_unsubscribe = Some(unsubscribe());
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&wire).unwrap();
+    let u = unsubscribe();
+    assert_eq!(
+        parsed.headers.get_first_value("List-Unsubscribe").unwrap(),
+        format!("<{}>, <{}>", u.https, u.mailto.unwrap())
+    );
+    assert_eq!(
+        parsed
+            .headers
+            .get_first_value("List-Unsubscribe-Post")
+            .unwrap(),
+        "List-Unsubscribe=One-Click"
+    );
+    let from =
+        mailparse::addrparse_header(parsed.headers.get_first_header("From").unwrap()).unwrap();
+    match &from[0] {
+        mailparse::MailAddr::Single(info) => {
+            assert_eq!(info.display_name.as_deref(), Some("Acme Sales"));
+            assert_eq!(info.addr, "sender@example.com");
+        }
+        other => panic!("one mailbox expected, got {other:?}"),
+    }
+    // Without a mailto fallback the https address stands alone.
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.list_unsubscribe = Some(jt_app::ports::connectors::ListUnsubscribe {
+        mailto: None,
+        ..unsubscribe()
+    });
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let parsed_wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&parsed_wire).unwrap();
+    assert_eq!(
+        parsed.headers.get_first_value("List-Unsubscribe").unwrap(),
+        format!("<{}>", unsubscribe().https)
+    );
+}
+
+#[tokio::test]
+async fn from_display_name_is_encoded() {
+    use mailparse::MailHeaderMap;
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.from_name = Some("Acme Satış, \"Ekip\"".into());
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let bytes = task.await.unwrap();
+    let header_end = bytes.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+    assert!(
+        bytes[..header_end].is_ascii(),
+        "the name is an encoded word"
+    );
+    let parsed = mailparse::parse_mail(&bytes).unwrap();
+    let addrs =
+        mailparse::addrparse_header(parsed.headers.get_first_header("From").unwrap()).unwrap();
+    match &addrs[0] {
+        mailparse::MailAddr::Single(info) => {
+            assert_eq!(info.display_name.as_deref(), Some("Acme Satış, \"Ekip\""));
+            assert_eq!(info.addr, "sender@example.com");
+        }
+        other => panic!("one mailbox expected, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn header_injection_in_name_or_urls_is_refused() {
+    let https = |raw: &str| jt_app::ports::connectors::ListUnsubscribe {
+        https: raw.into(),
+        mailto: None,
+    };
+    let mailto = |raw: &str| jt_app::ports::connectors::ListUnsubscribe {
+        mailto: Some(raw.into()),
+        ..unsubscribe()
+    };
+    let named = |name: String| MailMessage {
+        from_name: Some(name),
+        ..message()
+    };
+    let unsubscribing = |u| MailMessage {
+        list_unsubscribe: Some(u),
+        ..message()
+    };
+    let cases = vec![
+        named("Acme\r\nBcc: other@example.com".into()),
+        named("x".repeat(81)),
+        named("   ".into()),
+        unsubscribing(https("https://panel.example.com/u/1\r\nBcc: o@example.com")),
+        unsubscribing(https("http://panel.example.com/u/1")),
+        unsubscribing(https("https://panel.example.com/u/1>, <x")),
+        unsubscribing(https("https://panel.example.com/u/ 1")),
+        unsubscribing(https(&format!(
+            "https://panel.example.com/{}",
+            "a".repeat(900)
+        ))),
+        unsubscribing(mailto("sender@example.com")),
+        unsubscribing(mailto("mailto:a@example.com\nBcc: b")),
+    ];
+    for (i, msg) in cases.into_iter().enumerate() {
+        // Port 465 has no listener: a message that got past the checks would fail to connect,
+        // transiently. A refused one never connects.
+        let err = connector()
+            .send(workspace(), &credential(465, 993, MailTls::Implicit), msg)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ConnectorError::Permanent { .. }),
+            "case {i}: {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn old_intents_without_new_fields_still_send() {
+    use mailparse::MailHeaderMap;
+    // A mail intent stored before the sender name, the unsubscribe addresses and the file ids.
+    let stored = json!({
+        "to": "person@example.com",
+        "subject": "Meeting",
+        "text": "See you",
+        "message_id": "<stable@example.com>",
+        "in_reply_to": null,
+        "references": [],
+        "attachments": [],
+    });
+    let msg: MailMessage = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(msg.from_name, None);
+    assert_eq!(msg.list_unsubscribe, None);
+    assert!(msg.attachment_files.is_empty());
+    // Written back, it is the same JSON: nothing new appears in an intent that has none.
+    assert_eq!(serde_json::to_value(&msg).unwrap(), stored);
+    let (port, task) = smtp(SmtpMode::default()).await;
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let parsed_wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&parsed_wire).unwrap();
+    assert!(parsed.headers.get_first_value("List-Unsubscribe").is_none());
+    assert_eq!(
+        parsed.headers.get_first_value("From").unwrap(),
+        "sender@example.com"
+    );
+}
+
+/// An inbox email with a PDF and a CSV attached: each listed in the draft's payload (name,
+/// declared type, size) and given beside it with its bytes, in that order. The same email in the
+/// sent folder gives no bytes, nor does a bounce; the payload never holds them.
+#[tokio::test]
+async fn poll_returns_attachment_bytes_for_inbox_mail_only() {
+    let body = b"From: Person <person@example.com>\r\nTo: sender@example.com\r\nSubject: Teklif\r\nMessage-ID: <files@example.com>\r\nDate: Fri, 23 Oct 2026 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nEkte teklif var\r\n--b\r\nContent-Type: application/pdf; name=\"teklif.pdf\"\r\nContent-Disposition: attachment; filename=\"teklif.pdf\"\r\nContent-Transfer-Encoding: base64\r\n\r\nJVBERi0xLjcgUFJJVkFURS1CWVRFUw==\r\n--b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"liste.csv\"\r\nContent-Transfer-Encoding: base64\r\n\r\nYSxiCg==\r\n--b--\r\n";
+    let (port, task) = imap(false, 42, body.to_vec(), 1).await;
+    let (polled, _) = MailboxPoller::poll(
+        &connector(),
+        workspace(),
+        &credential(465, port, MailTls::Implicit),
+        &json!({"external_id":"account"}),
+        &MailboxCursor::reading_history(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(polled.len(), 2);
+    let (inbox, sent) = (&polled[0], &polled[1]);
+    assert_eq!(inbox.draft.payload["mailbox"], "INBOX");
+    assert_eq!(inbox.draft.kind, EventKind::Message);
+    let files: Vec<_> = inbox
+        .attachments
+        .iter()
+        .map(|a| {
+            (
+                a.filename.as_str(),
+                a.declared_mime.as_str(),
+                a.bytes.as_slice(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        files,
+        [
+            (
+                "teklif.pdf",
+                "application/pdf",
+                &b"%PDF-1.7 PRIVATE-BYTES"[..]
+            ),
+            ("liste.csv", "text/csv", &b"a,b\n"[..]),
+        ]
+    );
+    assert_eq!(
+        inbox.draft.payload["attachments"],
+        json!([
+            {"filename": "teklif.pdf", "declared_mime": "application/pdf", "size": 22},
+            {"filename": "liste.csv", "declared_mime": "text/csv", "size": 4},
+        ])
+    );
+    assert!(!inbox.draft.payload.to_string().contains("PRIVATE-BYTES"));
+    assert!(!format!("{inbox:?}").contains("PRIVATE-BYTES"));
+    // The sent folder's copy is our own mail: its files are not kept again.
+    assert_eq!(sent.draft.kind, EventKind::Status);
+    assert!(sent.attachments.is_empty());
+    assert_eq!(
+        sent.draft.payload["attachments"].as_array().map(Vec::len),
+        Some(2)
+    );
+    task.await.unwrap();
+
+    // A bounce carries the original's parts: no bytes.
+    let bounce = include_bytes!("fixtures/bounce.eml");
+    let (port, task) = imap(false, 42, bounce.to_vec(), 1).await;
+    let (polled, _) = MailboxPoller::poll(
+        &connector(),
+        workspace(),
+        &credential(465, port, MailTls::Implicit),
+        &json!({"external_id":"account"}),
+        &MailboxCursor::reading_history(),
+    )
+    .await
+    .unwrap();
+    assert!(polled.iter().all(|m| m.attachments.is_empty()));
     task.await.unwrap();
 }

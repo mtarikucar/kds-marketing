@@ -547,7 +547,9 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
 /// one transaction the approved version, if any, is archived (its log notes it was superseded),
 /// the draft becomes the approved version with `approved_by` the user behind the caller (for an
 /// agent, the user who issued its key), its log records the approval, and `strategy.approve` is
-/// written (payload `number`, `hypotheses`: how many are in force). Should another approval have
+/// written (payload `number`, `hypotheses`: how many are in force). The research tasks' planner
+/// runs in the same transaction (`research::plan_in`), so the version's ICP entries have their
+/// standing tasks at once and the older versions' are superseded. Should another approval have
 /// committed first, `CONFLICT` "another approval won", and nothing changes.
 pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<VersionOut, AppError> {
     require_owner_or_manager(ctx)?;
@@ -639,6 +641,7 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
             .collect(),
     };
     deps.transition_hook.apply(repos.as_mut(), &change).await?;
+    super::research::plan_in(deps, ctx, repos.as_mut(), &draft).await?;
     let out = reread(repos.as_mut(), draft.id, &known).await?;
     repos.commit().await?;
     Ok(out)

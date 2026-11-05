@@ -65,6 +65,7 @@ impl Fixture {
             workspace_id: self.ws,
             display_name: name.into(),
             company: "Company".into(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: Source::Import,
                 capability_id: None,
@@ -249,6 +250,72 @@ pub async fn request_keys_workspace_scope_and_24h_expiry(uow: Arc<dyn UnitOfWork
     drop(t);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     assert_eq!(t.request_keys().get("rollback", now).await.unwrap(), None);
+}
+
+/// `purge_expired(before)` deletes the workspace's request keys stored at `before` or earlier
+/// (expired once `before` is 24 hours before now), and only those, in its own workspace only:
+/// how many went. A key that is still live still replays; the other workspace's old key stays.
+pub async fn request_keys_purge_expired(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow).await;
+    let now = FIXED_NOW;
+    let cutoff = now - REQUEST_KEY_TTL;
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    for (key, at) in [
+        ("old", now - Duration::days(3)),
+        ("at-cutoff", cutoff),
+        ("live", cutoff + Duration::nanoseconds(1_000)),
+        ("new", now),
+    ] {
+        assert!(
+            t.request_keys()
+                .store(key, json!({"id": key}), at)
+                .await
+                .unwrap()
+        );
+    }
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert!(
+        t.request_keys()
+            .store("old", json!({"id": "other"}), now - Duration::days(3))
+            .await
+            .unwrap()
+    );
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    assert_eq!(t.request_keys().purge_expired(cutoff).await.unwrap(), 2);
+    t.commit().await.unwrap();
+    let mut t = f.uow.tenant(f.ws).await.unwrap();
+    for (key, live) in [
+        ("old", false),
+        ("at-cutoff", false),
+        ("live", true),
+        ("new", true),
+    ] {
+        assert_eq!(
+            t.request_keys().get(key, now).await.unwrap(),
+            live.then(|| json!({"id": key})),
+            "{key}"
+        );
+    }
+    // A deleted key is free again at once.
+    assert!(
+        t.request_keys()
+            .store("old", json!({"id": 2}), now)
+            .await
+            .unwrap()
+    );
+    assert_eq!(t.request_keys().purge_expired(cutoff).await.unwrap(), 0);
+    drop(t);
+    let mut t = f.uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        t.request_keys()
+            .get("old", now - Duration::days(3))
+            .await
+            .unwrap(),
+        Some(json!({"id": "other"})),
+        "another workspace's key is not touched"
+    );
 }
 
 pub async fn consumer_filters_before_limit_ignores_ack(uow: Arc<dyn UnitOfWork>) {

@@ -1,10 +1,13 @@
 use crate::{IO_TIMEOUT, MAX_MESSAGE_BYTES, MailConnector, MailCred, socket};
-use jt_app::ports::connectors::{MailMessage, SendReceipt};
+use jt_app::ports::connectors::{ListUnsubscribe, MailMessage, SendReceipt, Url};
 use jt_connector::{ConnectorError, MailTls};
 use jt_tenancy::WorkspaceId;
 use lettre::{
     Message,
-    message::{Attachment, MultiPart, SinglePart, header::ContentType},
+    message::{
+        Attachment, Mailbox, MultiPart, SinglePart,
+        header::{ContentType, HeaderName, HeaderValue},
+    },
     transport::smtp::{
         Error,
         authentication::{Credentials, Mechanism},
@@ -174,6 +177,41 @@ fn valid_id(id: &str) -> bool {
         && !id.chars().any(char::is_whitespace)
         && !id[1..id.len() - 1].contains(['<', '>'])
 }
+/// The longest `From` display name, in characters (spec 2026-10-30-leads-pool-outreach-design.md
+/// §8).
+const MAX_FROM_NAME_CHARS: usize = 80;
+/// The longest unsubscribe address, in bytes: one header line holds it whole (RFC 5322 bounds a
+/// line at 998), whatever the folding.
+const MAX_UNSUBSCRIBE_BYTES: usize = 900;
+
+/// A display name: one non-blank line of at most [`MAX_FROM_NAME_CHARS`] characters.
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty()
+        && name.chars().count() <= MAX_FROM_NAME_CHARS
+        && !name.chars().any(char::is_control)
+}
+
+/// An unsubscribe address as `List-Unsubscribe` writes it between angle brackets: ASCII without
+/// spaces, controls, `<`, `>` or `,`, within [`MAX_UNSUBSCRIBE_BYTES`].
+fn valid_uri(uri: &str) -> bool {
+    !uri.is_empty()
+        && uri.len() <= MAX_UNSUBSCRIBE_BYTES
+        && uri
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !matches!(b, b'<' | b'>' | b','))
+}
+
+/// The one-click address is an `https` URL with a host; the fallback a `mailto:` address.
+fn valid_unsubscribe(u: &ListUnsubscribe) -> bool {
+    valid_uri(&u.https)
+        && Url::parse(&u.https).is_ok_and(|url| {
+            url.scheme() == "https" && url.host_str().is_some_and(|h| !h.is_empty())
+        })
+        && u.mailto
+            .as_deref()
+            .is_none_or(|m| valid_uri(m) && m.len() > "mailto:".len() && m.starts_with("mailto:"))
+}
+
 fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorError> {
     let invalid = || ConnectorError::permanent("invalid mail message");
     let headers = [&mail.to, &mail.subject, &mail.message_id];
@@ -181,6 +219,11 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
         || !valid_id(&mail.message_id)
         || mail.in_reply_to.as_ref().is_some_and(|v| !valid_id(v))
         || mail.references.iter().any(|v| !valid_id(v))
+        || mail.from_name.as_deref().is_some_and(|n| !valid_name(n))
+        || mail
+            .list_unsubscribe
+            .as_ref()
+            .is_some_and(|u| !valid_unsubscribe(u))
     {
         return Err(invalid());
     }
@@ -192,8 +235,12 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
     if size > MAX_MESSAGE_BYTES {
         return Err(ConnectorError::permanent("mail exceeds size limit"));
     }
+    let from = Mailbox::new(
+        mail.from_name.as_deref().map(|n| n.trim().to_owned()),
+        cred.from_address.parse().map_err(|_| invalid())?,
+    );
     let mut builder = Message::builder()
-        .from(cred.from_address.parse().map_err(|_| invalid())?)
+        .from(from)
         .to(mail.to.parse().map_err(|_| invalid())?)
         .subject(mail.subject.clone())
         .message_id(Some(mail.message_id.clone()));
@@ -202,6 +249,24 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
     }
     if !mail.references.is_empty() {
         builder = builder.references(mail.references.join(" "));
+    }
+    if let Some(u) = &mail.list_unsubscribe {
+        // RFC 2369 and RFC 8058: a mail client's unsubscribe button posts to the https address.
+        let mut value = format!("<{}>", u.https);
+        if let Some(mailto) = &u.mailto {
+            value.push_str(", <");
+            value.push_str(mailto);
+            value.push('>');
+        }
+        builder = builder
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("List-Unsubscribe"),
+                value,
+            ))
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
+                "List-Unsubscribe=One-Click".to_owned(),
+            ));
     }
     let text = SinglePart::plain(mail.text.clone());
     let message = if mail.attachments.is_empty() {

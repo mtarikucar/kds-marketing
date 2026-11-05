@@ -21,12 +21,12 @@ use async_trait::async_trait;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
-    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, LeadGenFetcher, LeadGenRecord,
-    LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller, MessagingSender, MetaApp,
-    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformAppConfig, PostMetrics,
-    PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
-    PublishResolution, Publisher, RecentPost, SendReceipt, SmsSender, SubjectFacts, Telephony,
-    TiktokApp, TiktokCreator, Url, XApp,
+    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
+    LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
+    MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
+    PlatformAppConfig, PolledMail, PostMetrics, PrivateReceipt, PublicPoller, PublicSurface,
+    PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost,
+    SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -55,6 +55,8 @@ pub struct FakeAppConfig {
     /// The Hepsiburada integrator user; `None` by default (the merchant id stands in for it).
     pub hepsiburada_integrator_user: Option<String>,
     pub public_base_url: Option<Url>,
+    /// The platform switch `JEETA_OUTREACH_ENABLED`; off by default, as on a real platform.
+    pub outreach_enabled: bool,
 }
 
 impl Default for FakeAppConfig {
@@ -67,6 +69,7 @@ impl Default for FakeAppConfig {
             linkedin: None,
             hepsiburada_integrator_user: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
+            outreach_enabled: false,
         }
     }
 }
@@ -139,6 +142,10 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn public_base_url(&self) -> Option<Url> {
         self.public_base_url.clone()
+    }
+
+    fn outreach_enabled(&self) -> bool {
+        self.outreach_enabled
     }
 }
 
@@ -295,6 +302,11 @@ pub enum ConnectorCall {
         credential: Credential,
         rows: Vec<ConsentRow>,
     },
+    ConsentSearch {
+        credential: Credential,
+        recipient: String,
+        channel: String,
+    },
     Report {
         credential: Credential,
         job_ids: Vec<String>,
@@ -325,7 +337,7 @@ pub struct ScriptedConnector {
     on_connected: Script<Result<Value, ConnectorError>>,
     sms: Script<Result<SendReceipt, ConnectorError>>,
     mail: Script<Result<SendReceipt, ConnectorError>>,
-    mailbox_poll: Script<Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>>,
+    mailbox_poll: Script<Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>>,
     send_hooks: Script<SendHook>,
     ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
@@ -374,6 +386,7 @@ pub struct ScriptedConnector {
     hangup: Script<Result<(), ConnectorError>>,
     call_records: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
     consent_add: Script<Result<SendReceipt, ConnectorError>>,
+    consent_search: Script<Result<IysAnswer, ConnectorError>>,
     report: Script<Result<Vec<DeliveryStatus>, ConnectorError>>,
     inbox: Script<Result<Vec<InboundEventDraft>, ConnectorError>>,
 }
@@ -437,6 +450,7 @@ impl ScriptedConnector {
             hangup: Script::default(),
             call_records: Script::default(),
             consent_add: Script::default(),
+            consent_search: Script::default(),
             report: Script::default(),
             inbox: Script::default(),
         }
@@ -488,9 +502,22 @@ impl ScriptedConnector {
         self.mail.push(result);
     }
 
+    /// A poll's answer of drafts alone: emails without attachments' bytes.
     pub fn push_mailbox_poll(
         &self,
         result: Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>,
+    ) {
+        self.mailbox_poll.push(
+            result.map(|(drafts, cursor)| {
+                (drafts.into_iter().map(PolledMail::from).collect(), cursor)
+            }),
+        );
+    }
+
+    /// A poll's answer of emails with their attachments' bytes.
+    pub fn push_mailbox_poll_mail(
+        &self,
+        result: Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>,
     ) {
         self.mailbox_poll.push(result);
     }
@@ -618,6 +645,10 @@ impl ScriptedConnector {
         self.hangup.push(result);
     }
 
+    /// Queues the answer of the next consent lookup (`ConsentSync::search`).
+    pub fn push_consent_search(&self, result: Result<IysAnswer, ConnectorError>) {
+        self.consent_search.push(result);
+    }
     pub fn push_consent_add(&self, result: Result<SendReceipt, ConnectorError>) {
         self.consent_add.push(result);
     }
@@ -736,7 +767,7 @@ impl MailboxPoller for ScriptedConnector {
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
-    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+    ) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError> {
         self.record(ConnectorCall::MailboxPoll {
             workspace_id: ws,
             credential: cred.clone(),
@@ -1053,6 +1084,20 @@ impl ConsentSync for ScriptedConnector {
             rows: rows.to_vec(),
         });
         self.next(&self.consent_add, "consent result")
+    }
+
+    async fn search(
+        &self,
+        cred: &Credential,
+        recipient: &str,
+        channel: &str,
+    ) -> Result<IysAnswer, ConnectorError> {
+        self.record(ConnectorCall::ConsentSearch {
+            credential: cred.clone(),
+            recipient: recipient.to_owned(),
+            channel: channel.to_owned(),
+        });
+        self.next(&self.consent_search, "consent search result")
     }
 }
 

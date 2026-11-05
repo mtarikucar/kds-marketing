@@ -27,6 +27,16 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             run: people_erase,
         },
         ToolDef {
+            use_case: "inbox.people.set_kind",
+            description: "Set whom a commercial message to the person (person_id) reaches: kind \
+                          business (the business's own contact point), individual (a private \
+                          person: promotion never overrides it) or unknown. Outreach reads it for \
+                          the business-recipient basis. [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("people.set_kind")).expect("inbox schema"),
+            run: people_set_kind,
+        },
+        ToolDef {
             use_case: "inbox.commissions.list",
             description: "commissions.list for workspace commissions. [risk: READ]",
             permission: Permission::InboxWork,
@@ -675,6 +685,13 @@ fn commissions_pay<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFutu
         let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&commissions::pay(deps, ctx, id).await?)
+    })
+}
+
+fn people_set_kind<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: PersonId = take_id(&mut raw, "person_id")?;
+        to_json(&jt_app::usecases::inbox::people::set_kind(deps, ctx, id, args(raw)?).await?)
     })
 }
 
