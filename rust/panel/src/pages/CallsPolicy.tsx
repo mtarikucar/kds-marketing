@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { getCallPolicy, setCallPolicy, type CallPhrases, type CallPolicy } from '@/api/calls';
 import { QueryState } from '@/components/QueryState';
-import { Button, Card, CardContent, CardHeader, CardTitle, Field, Input, Switch, Label, Textarea, toast } from '@/components/ui';
+import { ErrorCallout } from '@/components/ErrorCallout';
+import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Field, Input, Switch, Label, Textarea, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 
 const POLICY_KEY = ['calls', 'policy'] as const;
@@ -168,6 +169,7 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       </fieldset>
+      <ErrorCallout error={save.error} />
       <div className="flex justify-end border-t border-border pt-4">
         <Button type="submit" loading={save.isPending}>
           {t('common.save')}
@@ -188,6 +190,7 @@ export function CallsPolicy() {
     <Card className="mt-8">
       <CardHeader className="mb-5 border-b border-border bg-surface-muted">
         <CardTitle>{t('calls.policy.title')}</CardTitle>
+        <CardDescription className="max-w-2xl leading-6">{t('calls.policy.description')}</CardDescription>
       </CardHeader>
       <CardContent>
         <QueryState query={policy}>{policy.data && <PolicyForm stored={policy.data} />}</QueryState>

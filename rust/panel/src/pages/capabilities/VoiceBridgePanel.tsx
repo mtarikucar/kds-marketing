@@ -58,7 +58,7 @@ export function VoiceBridgePanel({ capability }: { capability: Capability }) {
       ]
     : [];
   return (
-    <div role="group" aria-labelledby={`${id}-title`} className="flex flex-col gap-2 rounded-lg border border-border p-3">
+    <div role="group" aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
       <p id={`${id}-title`} className="text-caption text-muted-foreground">
         {t('capabilities.bridge.title')}
       </p>
@@ -75,7 +75,7 @@ export function VoiceBridgePanel({ capability }: { capability: Capability }) {
         <p className="text-sm text-foreground">{t('capabilities.bridge.never')}</p>
       )}
       <p className="text-caption text-muted-foreground">
-        {t('capabilities.bridge.hint')} <code className="font-mono text-micro">docs/operations/voice-bridge.md</code>
+        {t('capabilities.bridge.hint')} <code className="break-all font-mono text-micro">docs/operations/voice-bridge.md</code>
       </p>
     </div>
   );

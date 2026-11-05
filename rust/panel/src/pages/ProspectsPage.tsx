@@ -270,7 +270,7 @@ export function ProspectsPage() {
         cell: ({ row }) => {
           const p = row.original;
           return (
-            <div className="flex justify-end gap-1">
+            <div className="flex flex-wrap justify-end gap-1">
               {open(p) && canPromote && <PromoteButton prospect={p} />}
               {open(p) && (
                 <Button size="sm" variant="ghost" onClick={() => setRejecting(targets([p]))}>

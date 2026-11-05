@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { cn } from './cn';
 import { Spinner } from './Spinner';
 import { Button } from './Button';
+import { useTranslation } from 'react-i18next';
+import { AlertCircle } from 'lucide-react';
 
 export interface QueryStateBoundaryProps {
   isLoading?: boolean;
@@ -33,10 +35,14 @@ export function QueryStateBoundary({
   className,
   children,
 }: QueryStateBoundaryProps) {
+  const { t } = useTranslation();
   if (isError) {
     return (
-      <div className={cn('flex flex-col items-center gap-3 py-10', className)} role="alert">
-        <p className="text-sm text-danger">{errorMessage}</p>
+      <div className={cn('flex min-w-0 flex-col items-start gap-3 rounded-lg border border-border bg-surface p-5', className)} role="alert">
+        <div className="flex min-w-0 items-start gap-3">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-danger" aria-hidden="true" />
+          <p className="break-words text-sm leading-6 text-foreground [overflow-wrap:anywhere]">{errorMessage}</p>
+        </div>
         {onRetry && (
           <Button variant="outline" size="sm" onClick={onRetry}>
             {retryLabel}
@@ -48,8 +54,9 @@ export function QueryStateBoundary({
   if (isLoading) {
     return (
       loading ?? (
-        <div className={cn('flex justify-center py-16', className)}>
+            <div className={cn('flex items-center justify-center gap-3 py-12 text-muted-foreground', className)}>
           <Spinner />
+              <span className="text-sm" aria-hidden="true">{t('kit.loading')}</span>
         </div>
       )
     );

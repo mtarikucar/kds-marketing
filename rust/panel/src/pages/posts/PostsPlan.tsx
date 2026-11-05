@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import * as p from '@/api/posts';
 import { Badge } from '@/components/ui';
-import { MaterialsError, cardClass, formatRange, tapClass } from '../materials/MaterialsShared';
+import { MaterialsReadStatus, cardClass, formatRange, tapClass } from '../materials/MaterialsShared';
 import { isLive, useChannelName, usePosts, usePostsKey } from './PostsShared';
 
 /** One open post request: why Studio asks, what it lists, the best format, its last day. */
@@ -96,7 +96,7 @@ export function PostsPlan({ onOpenSlot }: { onOpenSlot: (id: string) => void }) 
           {t('posts.requests.title')}
         </h3>
         <p className="text-sm text-muted-foreground">{t('posts.requests.help')}</p>
-        <MaterialsError error={requests.error} />
+        <MaterialsReadStatus query={requests} />
         {requests.data && requests.data.length === 0 && (
           <p className="text-sm">{t('posts.requests.empty')}</p>
         )}
@@ -111,7 +111,7 @@ export function PostsPlan({ onOpenSlot }: { onOpenSlot: (id: string) => void }) 
           {t('posts.plan.title')}
         </h3>
         <p className="text-xs text-muted-foreground">{t('posts.plan.tz', { tz })}</p>
-        <MaterialsError error={posts.error} />
+        <MaterialsReadStatus query={posts} />
         {posts.data && live.length === 0 && (
           <div className="flex flex-col items-start gap-5 py-4 sm:flex-row sm:items-center">
             <img src="/brand/scenes/studio.svg" alt="" aria-hidden="true" width={128} height={128} className="h-32 w-32 shrink-0" />

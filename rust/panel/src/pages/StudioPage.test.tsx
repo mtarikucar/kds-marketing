@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 import { inboxAnswers, inboxMe } from '@/test/inbox';
 import tr from '@/i18n/tr.json';
 import en from '@/i18n/en.json';
@@ -584,4 +584,23 @@ it('clicking_an_approval_title_opens_its_editor_inside_that_card', async () => {
   expect(screen.queryByTestId('slot-detail')).not.toBeInTheDocument();
   expect(title).toHaveFocus();
   expect(title).toHaveAttribute('aria-expanded', 'false');
+});
+
+
+it('does not describe pending reads as empty work and offers recovery after a failed overview', async () => {
+  const user = userEvent.setup();
+  mockFetch({ ...answers, 'GET /api/studio/overview': delayed(200, overview) });
+  const first = renderAt('/studio');
+  await screen.findByRole('heading', { name: tr.studio.title });
+  expect(screen.queryByText(tr.studio.emptyToday)).not.toBeInTheDocument();
+  expect(screen.queryByText(tr.studio.emptyPlan)).not.toBeInTheDocument();
+  await screen.findByTestId('today-s1');
+  first.unmount();
+
+  mockFetch({ ...answers, 'GET /api/studio/overview': withStatus(503, { code: 'INTERNAL', message: 'unavailable', details: {} }) });
+  renderAt('/studio');
+  const retry = await screen.findByRole('button', { name: tr.common.retry });
+  mockFetch(answers);
+  await user.click(retry);
+  expect(await screen.findByTestId('today-s1')).toBeInTheDocument();
 });

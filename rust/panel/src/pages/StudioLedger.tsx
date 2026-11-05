@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as api from '@/api/studio';
-import { Region, StudioError, buttonClass, useStudioKey } from './StudioShared';
+import { Region, StudioError, StudioReadStatus, buttonClass, useStudioKey } from './StudioShared';
 export function StudioLedger({ query, allowed }: { query: api.Query; allowed: boolean }) {
   const { t, i18n } = useTranslation();
   const key = useStudioKey();
@@ -33,7 +33,8 @@ export function StudioLedger({ query, allowed }: { query: api.Query; allowed: bo
       >
         {t('studio.export')}
       </button>
-      <StudioError error={rows.error || download.error} />
+      <StudioReadStatus query={rows} />
+      <StudioError error={download.error} />
       <ol className="divide-y divide-border">
         {entries.map(({ id, entry: e }) => (
           <li key={id} className="grid gap-3 py-4 text-sm sm:grid-cols-[12rem_minmax(0,1fr)]">
@@ -61,7 +62,7 @@ export function StudioLedger({ query, allowed }: { query: api.Query; allowed: bo
           </li>
         ))}
       </ol>
-      {!entries.length && (
+      {rows.data && !entries.length && (
         <p className="text-sm text-muted-foreground">{t('studio.emptyLedger')}</p>
       )}
       {rows.hasNextPage && (

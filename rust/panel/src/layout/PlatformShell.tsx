@@ -22,7 +22,7 @@ export function PlatformShell() {
           <ThemeToggle />
         </div>
       </header>
-      <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+      <main id="main-content" tabIndex={-1} className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           <nav className="flex flex-wrap gap-1 border-b border-border" aria-label={t('platform.console')}>
             <NavLink className={({ isActive }) => `border-b-2 px-3 py-2 text-sm font-medium ${isActive ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`} to="/platform/workspaces">{t('platform.workspaces.title')}</NavLink>

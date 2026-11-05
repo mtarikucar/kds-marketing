@@ -7,6 +7,7 @@ import { ConfirmDialog } from '@/components/ui';
 import {
   MaterialBadges,
   MaterialsError,
+  MaterialsReadStatus,
   MediaThumb,
   TagsFields,
   cardClass,
@@ -52,7 +53,7 @@ export function MaterialEditor({
       <button type="button" className={tapClass} onClick={onBack}>
         {t('materials.back')}
       </button>
-      <MaterialsError error={detail.error} />
+      <MaterialsReadStatus query={detail} />
       {material && (
         <>
           <div className={`${cardClass} grid grid-cols-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)]`}>
@@ -137,6 +138,7 @@ function TagsSection({ material }: { material: m.Material }) {
   );
   return (
     <form
+      aria-label={t('materials.editor.tags')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -226,7 +228,7 @@ function PeopleSection({ material }: { material: m.Material }) {
             ))}
         </ul>
       )}
-      <MaterialsError error={found.error} />
+      <MaterialsReadStatus query={found} />
       {changed && (
         <button
           type="button"
@@ -255,6 +257,7 @@ function PermissionSection({ material, decider }: { material: m.Material; decide
   const share = material.share;
   return (
     <form
+      aria-label={t('materials.editor.permission')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -366,6 +369,7 @@ function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[
   );
   return (
     <form
+      aria-label={t('materials.editor.bind')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -404,7 +408,7 @@ function DeleteSection({ material, used }: { material: m.Material; used: boolean
     <section className={cardClass}>
       <h4 className="font-semibold">{t('materials.editor.delete')}</h4>
       <p className="text-sm text-muted-foreground">{t('materials.editor.deleteHelp')}</p>
-      <button type="button" className={tapClass} onClick={() => setOpen(true)}>
+      <button type="button" className={`${tapClass} border-danger/30 text-danger hover:bg-danger-subtle`} onClick={() => setOpen(true)}>
         {t('materials.editor.delete')}
       </button>
       <ConfirmDialog

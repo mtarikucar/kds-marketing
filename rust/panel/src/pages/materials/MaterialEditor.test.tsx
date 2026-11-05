@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 import { material, materialsAnswers, olay, repMe } from '@/test/materials';
 
 // Materyal (spec §10): tags (an agent's suggestion shown as such), permission, freeing, another
@@ -143,4 +143,23 @@ describe('Materyaller · Materyal', () => {
     expect(within(editor).getByText(/gönderi ig-9/)).toBeInTheDocument();
     expect(within(editor).getByRole('button', { name: 'İçeriği aç' })).toBeInTheDocument();
   });
+});
+
+
+it('keeps the material location available during loading and retries a failed read in place', async () => {
+  const user = userEvent.setup();
+  mockFetch({ ...answers, 'GET /api/studio/materials/m1': delayed(200, { material: suggested, used_in: [] }) });
+  const first = open();
+  const editor = await screen.findByTestId('material-editor');
+  expect(within(editor).getByRole('button', { name: 'Geri' })).toBeInTheDocument();
+  expect(within(editor).getByRole('status')).toHaveTextContent('Yükleniyor');
+  await within(editor).findByRole('button', { name: 'Etiketleri onayla' });
+  first.unmount();
+
+  mockFetch({ ...answers, 'GET /api/studio/materials/m1': withStatus(503, { code: 'INTERNAL', message: 'unavailable', details: {} }) });
+  open();
+  const retry = await screen.findByRole('button', { name: 'Yeniden dene' });
+  mockFetch(answers);
+  await user.click(retry);
+  expect(await screen.findByRole('button', { name: 'Etiketleri onayla' })).toBeInTheDocument();
 });

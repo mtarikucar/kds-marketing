@@ -20,7 +20,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: api, changeOrigin: false },
+      // Match the API path segment, not the panel route /api-keys.
+      '^/api(?:/|$)': { target: api, changeOrigin: false },
       '/healthz': { target: api, changeOrigin: false },
     },
   },

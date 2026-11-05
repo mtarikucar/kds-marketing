@@ -356,8 +356,9 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
           <h2 id="home-pending" className="text-xl font-semibold tracking-tight text-foreground">{t('home.pending.title')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t('home.pending.description')}</p>
         </div>
-        <span className="text-2xl font-medium tabular-nums text-foreground" aria-label={t('home.pending.count', { count: items.length })}>
-          {items.length}
+        <span className="text-2xl font-medium tabular-nums text-foreground">
+          <span aria-hidden="true">{items.length}</span>
+          <span className="sr-only">{t('home.pending.count', { count: items.length })}</span>
         </span>
       </div>
       {items.length === 0 ? (
@@ -455,10 +456,10 @@ export function HomePage() {
           <section aria-labelledby="home-workspace" className="border-y border-border py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                <h2 id="home-workspace" className="text-base font-semibold text-foreground">{workspace.data.name}</h2>
+                <h2 id="home-workspace" className="min-w-0 break-words text-base font-semibold text-foreground [overflow-wrap:anywhere]">{workspace.data.name}</h2>
                 <WorkspaceStatusBadge status={workspace.data.status} />
               </div>
-              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
                 <span>{t('home.myRole')}: {roleLabel(t, workspace.data.my_role)}</span>
                 <Link className="underline underline-offset-4 hover:text-foreground" to="/billing">{t('billing.title')}</Link>
               </div>

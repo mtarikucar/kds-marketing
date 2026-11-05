@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import {
   MaterialTile,
   MaterialsError,
+  MaterialsReadStatus,
   OlayFields,
   OlayLine,
   ProposedBadge,
@@ -79,6 +80,7 @@ function OlayForm({
   );
   return (
     <form
+      aria-label={t(olay ? 'materials.olay.edit' : 'materials.olay.new')}
       className={cardClass}
       noValidate
       onSubmit={(e) => {
@@ -175,7 +177,7 @@ function OlayList({ onOpen }: { onOpen: (id: string) => void }) {
           }}
         />
       )}
-      <MaterialsError error={olays.error} />
+      <MaterialsReadStatus query={olays} />
       {olays.data && olays.data.length === 0 && (
         <p className="text-sm text-muted-foreground">{t('materials.olay.empty')}</p>
       )}
@@ -217,7 +219,7 @@ function Shelf({
       <p className="text-sm text-muted-foreground">
         {shelf === GENEL ? t('materials.genelHelp') : t('materials.review.help')}
       </p>
-      <MaterialsError error={list.error} />
+      <MaterialsReadStatus query={list} />
       {shown && shown.length === 0 && (
         <p className="text-sm text-muted-foreground">{t('materials.noMaterials')}</p>
       )}
@@ -262,7 +264,7 @@ function OlayDetailView({
       <button type="button" className={tapClass} onClick={onBack}>
         {t('materials.back')}
       </button>
-      <MaterialsError error={detail.error} />
+      <MaterialsReadStatus query={detail} />
       {data && (
         <>
           <section className={cardClass}>

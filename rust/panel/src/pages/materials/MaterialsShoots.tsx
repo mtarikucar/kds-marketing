@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import { Badge } from '@/components/ui';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   formatDay,
@@ -87,6 +88,7 @@ function AddRequest() {
   );
   return (
     <form
+      aria-label={t('materials.views.shoots')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -139,7 +141,7 @@ export function MaterialsShoots(links: ShootLinks) {
   return (
     <div className="space-y-4" data-testid="materials-shoots">
       <AddRequest />
-      <MaterialsError error={list.error} />
+      <MaterialsReadStatus query={list} />
       <section aria-labelledby="shoots-this-week" className="space-y-2">
         <h3 id="shoots-this-week" className="font-semibold">
           {t('materials.shoot.thisWeek')}

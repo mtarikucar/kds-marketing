@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import * as p from '@/api/posts';
 import type { Hypothesis } from '@/api/types';
 import { Badge } from '@/components/ui';
-import { MaterialsError, cardClass, formatDay, tapClass } from '../materials/MaterialsShared';
+import { MaterialsReadStatus, cardClass, formatDay, tapClass } from '../materials/MaterialsShared';
 import { percent, useChannelName, usePostsKey } from './PostsShared';
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -76,7 +76,7 @@ export function PostsWeek({
           </h3>
         )}
       </div>
-      <MaterialsError error={summary.error} />
+      <MaterialsReadStatus query={summary} />
       {s && (
         <div className="grid grid-cols-1 gap-x-8 gap-y-4 lg:grid-cols-2">
           <Section id="week-published" title={t('posts.week.published')}>

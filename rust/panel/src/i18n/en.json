@@ -37,7 +37,10 @@
     "disclosure": {
       "show": "Show",
       "hide": "Hide"
-    }
+    },
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "skipContent": "Skip to content"
   },
   "nav": {
     "label": "Main menu",
@@ -1340,7 +1343,9 @@
         "pending": "Pending approval",
         "approved": "Approved",
         "paid": "Paid"
-      }
+      },
+      "empty": "No commissions found",
+      "emptyBody": "Commissions appear when a journey is won. Try another filter if you expected a result."
     },
     "emailSubject": "Email subject",
     "title": "Inbox",
@@ -1550,7 +1555,11 @@
       "removeNamed": "Remove suppression: {{channel}} / {{reason}}",
       "send": "Send commercial message",
       "intent": "Send intent",
-      "sendHint": "Commercial contact requires effective consent. Suppressions are checked again immediately before sending."
+      "sendHint": "Commercial contact requires effective consent. Suppressions are checked again immediately before sending.",
+      "consents": "Recorded permissions",
+      "suppressions": "Contact restrictions",
+      "noConsents": "No permission records.",
+      "noSuppressions": "No contact restrictions."
     },
     "offers": {
       "quotes": "Quotes",
@@ -1589,7 +1598,9 @@
         "booked": "Booked",
         "held": "Held",
         "cancelled": "Cancelled"
-      }
+      },
+      "noQuotes": "No quotes yet.",
+      "noAppointments": "No appointments yet."
     },
     "public": {
       "surface": {
@@ -1672,7 +1683,9 @@
       },
       "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
       "approvalNote": "On this account the agent's replies wait for your approval."
-    }
+    },
+    "noTasks": "No tasks yet. Add the next follow-up below.",
+    "noNotes": "No notes yet. Add useful context for your team."
   },
   "studio": {
     "title": "Growth studio",
@@ -1974,7 +1987,8 @@
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
     "suspendedChecks": "This step is not checked while the workspace is suspended.",
-    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts."
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts.",
+    "teamOwnerHelp": "Ask a workspace manager to manage team invitations and API keys."
   },
   "providerSetup": {
     "title": "Provider application setup",
@@ -2027,7 +2041,9 @@
       "email": "Email",
       "webchat": "Web chat",
       "phone": "Phone"
-    }
+    },
+    "clearSearch": "Clear search",
+    "noMatchBody": "Try another name or company, or clear your search."
   },
   "failure": {
     "recipientNotAllowed": "the recipient is not on the Meta test number's allowed list. Add the number as a recipient in Meta under WhatsApp → API Setup, or connect a real WhatsApp number.",
@@ -2209,7 +2225,8 @@
       },
       "scriptsTitle": "Greetings and notices",
       "phrasesTitle": "Holding and fallback phrases",
-      "limitsTitle": "Timing and transfer"
+      "limitsTitle": "Timing and transfer",
+      "description": "Set what callers hear, holding phrases and timing limits."
     },
     "filterEmpty": "No calls in this direction",
     "filterEmptyBody": "Choose another direction to see the rest of your call log.",
@@ -2652,14 +2669,14 @@
       "emptyBody": "Write a template, then prepare a campaign with its steps and audience.",
       "locked": {
         "title": "Cold email is off on the platform",
-        "body": "No campaign can launch and no campaign email is sent until JEETA_OUTREACH_ENABLED is turned on for this server. You can still prepare campaigns."
+        "body": "You can prepare campaigns while your platform administrator enables campaign sending. Until then, campaigns cannot launch and no campaign emails are sent."
       },
       "identityMissing": {
         "title": "Sender details missing",
         "body": "A campaign cannot launch until the details every email ends with (company name, address, privacy notice link) are set."
       },
       "blocked": {
-        "platform": "Cold email is off on the platform (JEETA_OUTREACH_ENABLED).",
+        "platform": "Cold email is off on the platform.",
         "identity": "Sender details missing: company name, address and privacy notice link."
       }
     },
@@ -2908,7 +2925,7 @@
       "do_not_contact": "On the do-not-contact list.",
       "system_actor": "The system records nothing in the pool.",
       "rubric_mismatch": "The scoring rubric changed; score again.",
-      "outreach_disabled_on_platform": "Cold email is off on this server (JEETA_OUTREACH_ENABLED); the campaign cannot launch.",
+      "outreach_disabled_on_platform": "Cold email is off on this server; the campaign cannot launch.",
       "sender_identity_missing": "Sender details missing: set the company name, address and privacy notice link in the email settings.",
       "approval_required": "Approval is needed first.",
       "human_required": "Only a team member can do this.",
@@ -3016,7 +3033,8 @@
         "cities": "Cities (comma separated)",
         "sectors": "Sectors (comma separated)",
         "awayUntil": "Away until",
-        "saved": "Availability saved."
+        "saved": "Availability saved.",
+        "scrollHint": "Scroll horizontally to see all columns and actions."
       },
       "log": {
         "title": "Assignment log",

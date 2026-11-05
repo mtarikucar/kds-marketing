@@ -36,18 +36,18 @@
     --muted-foreground: #606772;
     --accent: #eceeed;
     --accent-foreground: #191d25;
-    --destructive: #e11d48;
+    --destructive: #be123c;
     --destructive-foreground: #ffffff;
-    --danger: #e11d48;
+    --danger: #be123c;
     --danger-subtle: #fff1f2;
     --danger-foreground: #ffffff;
-    --success: #059669;
+    --success: #047857;
     --success-subtle: #ecfdf5;
     --success-foreground: #ffffff;
-    --warning: #d97706;
+    --warning: #92400e;
     --warning-subtle: #fffbeb;
     --warning-foreground: #ffffff;
-    --info: #0284c7;
+    --info: #0369a1;
     --info-subtle: #f0f9ff;
     --info-foreground: #ffffff;
     --border: #e1e3e2;
@@ -135,6 +135,11 @@
   button, a, input, select, textarea {
     @apply transition-colors duration-200;
   }
+
+  :where(a, button, summary, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
 }
 
 /* Custom scrollbar — token-driven so it follows light/dark mode (was hard-coded
@@ -197,9 +202,8 @@
     content: attr(data-label);
     flex-shrink: 0;
     text-align: left;
-    text-transform: uppercase;
-    font-size: 0.6875rem;
-    letter-spacing: 0.02em;
+    font-size: 0.75rem;
+    font-weight: 500;
     color: var(--muted-foreground);
   }
 }
@@ -210,5 +214,14 @@
 */
 .secret-masked {
   -webkit-text-security: disc;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 

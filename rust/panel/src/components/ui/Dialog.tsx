@@ -1,4 +1,4 @@
-import { forwardRef } from 'react';
+import { forwardRef, useRef } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -46,8 +46,9 @@ export interface DialogContentProps
 export const DialogContent = forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   DialogContentProps
->(({ className, children, dismissible = true, onEscapeKeyDown, onInteractOutside, ...props }, ref) => {
+>(({ className, children, dismissible = true, onEscapeKeyDown, onInteractOutside, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
   const { t } = useTranslation();
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -72,6 +73,19 @@ export const DialogContent = forwardRef<
           if (!dismissible) event.preventDefault();
           onInteractOutside?.(event);
         }}
+        onOpenAutoFocus={(event) => {
+          // Controlled dialogs often have an ordinary button rather than DialogTrigger.
+          // Remember it before the focus scope moves focus into this content.
+          opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          onOpenAutoFocus?.(event);
+        }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          if (!event.defaultPrevented && opener.current?.isConnected && opener.current !== document.body) {
+            event.preventDefault();
+            opener.current.focus({ preventScroll: true });
+          }
+        }}
         {...props}
       >
         {children}
@@ -94,7 +108,7 @@ export const DialogContent = forwardRef<
 DialogContent.displayName = 'DialogContent';
 
 export function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('flex flex-col gap-1.5 text-start', className)} {...props} />;
+  return <div className={cn('flex min-w-0 flex-col gap-2 pe-9 text-start', className)} {...props} />;
 }
 DialogHeader.displayName = 'DialogHeader';
 
@@ -114,7 +128,7 @@ export const DialogTitle = forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('font-display text-h3 text-foreground', className)}
+    className={cn('break-words font-display text-h3 text-foreground', className)}
     {...props}
   />
 ));

@@ -192,7 +192,10 @@ export function InboxPage() {
                 </Link>
               ))}
               {people.data?.length === 0 && (
-                <p className="text-sm text-muted-foreground">{t('inbox.empty')}</p>
+                <div className="space-y-3 rounded-lg bg-surface-muted p-3">
+                  <p className="text-sm text-muted-foreground">{t('people.noMatch')}</p>
+                  <Button size="sm" variant="outline" onClick={() => setSearch('')}>{t('people.clearSearch')}</Button>
+                </div>
               )}
             </QueryState>
           ) : (

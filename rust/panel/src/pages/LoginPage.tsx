@@ -6,7 +6,7 @@ import { login } from '@/api/auth';
 import { isApiError } from '@/api/client';
 import { SESSION_KEY } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Button, Callout, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { returnTarget } from '@/lib/navigation';
 
 export function LoginPage() {
@@ -36,7 +36,7 @@ export function LoginPage() {
   return (
     <div className="flex flex-col gap-8">
       <PageHeader title={t('login.title')} description={t('login.description')} />
-      <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
+      <form className="flex flex-col gap-5" onSubmit={onSubmit}>
         {wrongCredentials ? (
           <Callout tone="danger">{t('login.invalid')}</Callout>
         ) : (
@@ -56,9 +56,8 @@ export function LoginPage() {
         </Field>
         <Field label={t('fields.password')} required>
           {(ids) => (
-            <Input
+            <PasswordInput
               id={ids.id}
-              type="password"
               autoComplete="current-password"
               required
               value={password}

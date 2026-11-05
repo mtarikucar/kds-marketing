@@ -251,7 +251,7 @@ export function OAuthCallbackPage() {
       if (selected.length > 0) confirm.mutate(selected);
     };
     body = (
-      <Card>
+      <Card className="w-full max-w-3xl">
         <CardHeader>
           <CardTitle>{t('oauthCallback.chooseTitle')}</CardTitle>
           <CardDescription>{t('oauthCallback.chooseBody')}</CardDescription>

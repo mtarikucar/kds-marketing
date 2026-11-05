@@ -43,9 +43,9 @@ when the pending queue is empty. The setup mascot adds a second generated pose (
 SVG scenes cover meaningful empty states across the product. These are integrated brand assets,
 not mockups or screenshots of UI.
 
-Verification: all 62 panel suites / 418 tests pass, as do TypeScript and the production build.
-The release packager's 17 regression tests pass, and its generated-panel inventory accepts the
-rebuilt output. Brand documentation lives here rather than under public assets, so Vite does not
+Verification: all 64 panel suites / 445 tests pass, as do TypeScript and the production build.
+The release packager's 17 regression tests passed in the asset pass, and its generated-panel
+inventory accepts all 22 files in the rebuilt output. Brand documentation lives here rather than under public assets, so Vite does not
 copy Markdown into the release package.
 
 Browser checks covered 27 routes at 1440px and 390px against the local Rust API. No page errors,
@@ -53,4 +53,43 @@ broken visible images or server errors were observed. The three wide table pages
 after fixing their mobile overflow: ledger, budget and distribution now measure 390px document
 width, with horizontal scrolling inside their table containers. Account, home, setup, conversation
 and studio screenshots were visually reviewed; setup, inbox and studio were also checked in dark
-mode. Asset details: [brand-assets.md](brand-assets.md).
+mode. The latest real-API sweep checks 54 route/viewport combinations, including a visible page
+heading, with no failures. The Vite API proxy now matches the `/api` path segment; refreshing
+`/api-keys` loads its panel page instead of being sent to the API server.
+Asset details: [brand-assets.md](brand-assets.md).
+
+## Full screen and state review
+
+The [coverage inventory](audits/coverage.md) lists all 38 page/fallback patterns, the platform
+redirect and nested/query-string surfaces. It links to module audits for public account flows,
+home/setup, inbox/calls, leads/outreach, Studio/materials/posts, strategy, administration,
+provider setup, billing and the operator console.
+
+This pass addresses loading mistaken for emptiness, missing read retries, hidden form errors,
+clipped mobile actions and enrollment rows, recovery from an empty next People page, password
+visibility/native validation, dialog focus return, keyboard skip navigation, reduced motion,
+long headings and status-text contrast. Destructive confirmations and one-time-secret handling
+retain their safeguards.
+
+The [recorded results](audits/results.json) contain 693 module/viewport review records:
+
+| Module | Recorded checks |
+| --- | ---: |
+| Account, home and setup | 126 |
+| Studio, strategy, materials and posts | 188 |
+| Inbox, people and calls | 126 |
+| Leads, campaigns and distribution | 52 |
+| Administration, providers, billing and platform | 201 |
+
+These are state/viewport executions, not 693 different screens. Administration includes repeated
+cases and older viewport-only captures; its report distinguishes the instrumentation available.
+Representative English/dark states are included. Foundation's 82 axe snapshots report no automated
+WCAG violations; modal manual-review flags and their keyboard/visual checks are recorded separately.
+The contrast regression tests cover readable text-token pairs in both themes.
+
+The [review scripts](../../../rust/panel/design-review/README.md) reproduce the synthetic cases.
+Provider and payment responses are simulated; live external integrations and staging/yeni
+promotion remain separate operational checks.
+
+![Mobile strategy approval](strategy-review-mobile.png)
+![Mobile activation state](billing-activation-mobile.png)

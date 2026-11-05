@@ -162,7 +162,7 @@ export function PhoneCard({
   const kinds = facts?.features.filter((f) => f !== TEXT_UNICODE) ?? [];
 
   return (
-    <div role="group" aria-labelledby={`${id}-title`} className="flex flex-col gap-2 rounded-lg border border-border p-3">
+    <div role="group" aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
       <p id={`${id}-title`} className="text-caption text-muted-foreground">
         {t('capabilities.phone.title')}
       </p>
@@ -192,7 +192,7 @@ export function PhoneCard({
         <p className="text-sm text-foreground">{t('capabilities.phone.never')}</p>
       )}
       <p className="text-caption text-muted-foreground">
-        {t('capabilities.phone.hint')} <code className="font-mono text-micro">{OPS_DOC}</code>
+        {t('capabilities.phone.hint')} <code className="break-all font-mono text-micro">{OPS_DOC}</code>
       </p>
     </div>
   );
@@ -470,7 +470,7 @@ function InstallSteps({ plaintext }: { plaintext: string }) {
         </div>
       </li>
       <li>
-        {t('capabilities.phone.pair.step3')} <code className="font-mono text-micro">{OPS_DOC}</code>
+        {t('capabilities.phone.pair.step3')} <code className="break-all font-mono text-micro">{OPS_DOC}</code>
       </li>
     </ol>
   );

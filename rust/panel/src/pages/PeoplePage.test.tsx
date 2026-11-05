@@ -46,3 +46,26 @@ it('lists every person page by page, including people with no conversation, and 
   expect(new URLSearchParams(last.search).get('offset')).toBe('0');
   expect(new URLSearchParams(last.search).get('limit')).toBe(String(PEOPLE_PAGE));
 });
+
+it('returns to the previous page when a full page is followed by an empty page', async () => {
+  const user = userEvent.setup();
+  const firstPage = Array.from({ length: PEOPLE_PAGE }, (_, index) => person(index + 1));
+  const answers: Record<string, unknown> = {
+    'GET /api/auth/me': me,
+    'GET /api/workspace': workspace,
+    'GET /api/inbox/people': firstPage,
+  };
+  const requests = mockFetch(answers);
+  renderAt('/people');
+  await screen.findByText('Kişi 1');
+  answers['GET /api/inbox/people'] = [];
+  await user.click(screen.getByRole('button', { name: tr.people.next }));
+  await screen.findByText(tr.people.noMatch);
+  expect(new URLSearchParams(requests.filter(request => request.path === '/api/inbox/people').at(-1)?.search).get('offset')).toBe(String(PEOPLE_PAGE));
+
+  answers['GET /api/inbox/people'] = firstPage;
+  await user.click(screen.getByRole('button', { name: tr.people.previous }));
+  expect(await screen.findByText('Kişi 1')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: tr.people.previous })).toBeDisabled();
+  await waitFor(() => expect(new URLSearchParams(requests.filter(request => request.path === '/api/inbox/people').at(-1)?.search).get('offset')).toBe('0'));
+});

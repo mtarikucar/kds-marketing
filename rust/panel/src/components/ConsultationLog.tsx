@@ -59,7 +59,7 @@ function RecordForm({ onRecorded }: { onRecorded: () => Promise<void> }) {
   };
 
   return (
-    <form className="flex flex-col gap-3 rounded-lg border border-border p-3" onSubmit={onSubmit} noValidate>
+    <form aria-label={t('strategy.consultation.title')} className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4" onSubmit={onSubmit} noValidate>
       <ErrorCallout error={record.error} />
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t('strategy.consultation.kind')}>

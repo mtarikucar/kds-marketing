@@ -9,6 +9,7 @@ import {
   Field,
   Reason,
   StudioError,
+  StudioReadStatus,
   inputClass,
   buttonClass,
   useStudioKey,
@@ -24,7 +25,7 @@ import type { TFunction } from 'i18next';
 import * as lib from '@/api/materials';
 import { MaterialHold } from './materials/MaterialHold';
 import { materialsHref } from './materials/StudioMaterials';
-import { MaterialsError, findingText } from './materials/MaterialsShared';
+import { MaterialsError, MaterialsReadStatus, findingText } from './materials/MaterialsShared';
 
 /** A blocker of the slot: the material check's hold with its findings, else its reason. */
 function Blocker({
@@ -128,7 +129,7 @@ function MaterialPicker({
   return (
     <fieldset className="space-y-2">
       <legend className="text-sm font-medium">{t('materials.slot.title')}</legend>
-      <MaterialsError error={options.error} />
+      <MaterialsReadStatus query={options} />
       {options.data && candidates.length === 0 && (
         <p className="text-sm">
           {t('materials.slot.none')}{' '}
@@ -310,7 +311,6 @@ function PiecePreview({
           </time>
         </dd>
       </dl>
-      {detail.isPending && <p className="text-xs text-muted-foreground">{t('studio.loading')}</p>}
       {detail.data &&
         (piece?.text.trim() ? (
           <p className="whitespace-pre-wrap break-words">{piece.text}</p>
@@ -326,7 +326,7 @@ function PiecePreview({
           ))}
         </ul>
       )}
-      <StudioError error={detail.error} />
+      <StudioReadStatus query={detail} />
     </div>
   );
 }
@@ -408,10 +408,10 @@ function SlotEditor({
       role="group"
       aria-labelledby={headingId}
       id={`slot-editor-${id}`}
-      className="space-y-3 rounded-md border border-primary p-3"
+      className="space-y-5 rounded-lg border border-border bg-surface p-4 sm:p-5"
       data-testid="slot-detail"
     >
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
         <h3 ref={heading} id={headingId} tabIndex={-1} className="font-medium focus:outline-none">
           {data?.hypothesis.title ?? t('studio.detail')}
         </h3>
@@ -419,7 +419,7 @@ function SlotEditor({
           {t('studio.close')}
         </button>
       </div>
-      <StudioError error={detail.error} />
+      <StudioReadStatus query={detail} />
       {data && (
         <>
           <p className="text-sm">
@@ -673,7 +673,7 @@ export function StudioToday({
           </li>
         ))}
       </ul>
-      {!data?.today.slots.length && (
+      {data && !data.today.slots.length && !others.length && !data.today.budget_moves.length && !data.today.paid_alerts.length && !shoots && (
         <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
       )}
       {data &&

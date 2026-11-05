@@ -1,4 +1,4 @@
-import { forwardRef } from 'react';
+import { forwardRef, useRef } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { X } from 'lucide-react';
@@ -36,7 +36,7 @@ SheetOverlay.displayName = 'SheetOverlay';
 
 const sheet = cva(
   cn(
-    'fixed z-50 flex flex-col gap-4 border-border bg-surface-raised p-6 shadow-xl',
+    'fixed z-50 flex max-h-dvh flex-col gap-4 overflow-y-auto overscroll-contain border-border bg-surface-raised p-4 shadow-xl sm:p-6',
     'data-[state=open]:animate-in data-[state=closed]:animate-out',
     'data-[state=open]:duration-slow data-[state=closed]:duration-base data-[state=closed]:ease-standard data-[state=open]:ease-standard',
   ),
@@ -46,9 +46,9 @@ const sheet = cva(
         top: 'inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
         bottom:
           'inset-x-0 bottom-0 border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
-        left: 'inset-y-0 start-0 h-full w-3/4 max-w-sm border-e data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
+        left: 'inset-y-0 start-0 h-full w-full max-w-sm border-e data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
         right:
-          'inset-y-0 end-0 h-full w-3/4 max-w-sm border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+          'inset-y-0 end-0 h-full w-full max-w-sm border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
       },
     },
     defaultVariants: { side: 'right' },
@@ -67,12 +67,25 @@ export interface SheetContentProps
 export const SheetContent = forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', className, children, hideClose, ...props }, ref) => {
+>(({ side = 'right', className, children, hideClose, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
   const { t } = useTranslation();
+  const opener = useRef<HTMLElement | null>(null);
   return (
     <SheetPortal>
       <SheetOverlay />
-      <DialogPrimitive.Content ref={ref} className={cn(sheet({ side }), className)} {...props}>
+      <DialogPrimitive.Content ref={ref} className={cn(sheet({ side }), className)}
+        onOpenAutoFocus={(event) => {
+          opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          onOpenAutoFocus?.(event);
+        }}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          if (!event.defaultPrevented && opener.current?.isConnected && opener.current !== document.body) {
+            event.preventDefault();
+            opener.current.focus({ preventScroll: true });
+          }
+        }}
+        {...props}>
         {children}
         {!hideClose && (
           <DialogPrimitive.Close asChild>
@@ -88,7 +101,7 @@ export const SheetContent = forwardRef<
 SheetContent.displayName = 'SheetContent';
 
 export function SheetHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn('flex flex-col gap-1.5 text-start', className)} {...props} />;
+  return <div className={cn('flex min-w-0 flex-col gap-2 pe-9 text-start', className)} {...props} />;
 }
 SheetHeader.displayName = 'SheetHeader';
 

@@ -57,8 +57,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
   };
   return (
     <form className="flex flex-col gap-4" onSubmit={submit} aria-label={t('leads.settings.general')}>
-      <fieldset className="grid gap-3 sm:grid-cols-2" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.identity')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-2" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.identity')}</legend>
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.settings.company')}
           <Input value={company} maxLength={120} onChange={(e) => setCompany(e.target.value)} />
@@ -72,8 +72,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="url" value={privacy} onChange={(e) => setPrivacy(e.target.value)} />
         </label>
       </fieldset>
-      <fieldset className="flex flex-col gap-2 text-sm" disabled={!editable}>
-        <legend className="mb-1 font-medium">{t('leads.settings.sending')}</legend>
+      <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-border p-4 text-sm" disabled={!editable}>
+        <legend className="px-1 font-semibold">{t('leads.settings.sending')}</legend>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={approval} onChange={(e) => setApproval(e.target.checked)} />
           {t('leads.settings.requiresApproval')}
@@ -83,8 +83,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           {t('leads.settings.clickTracking')}
         </label>
       </fieldset>
-      <fieldset className="grid gap-3 sm:grid-cols-4" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.warmup')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-4" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.warmup')}</legend>
         <label className="flex items-center gap-2 text-sm sm:col-span-4">
           <input type="checkbox" checked={warmupOn} onChange={(e) => setWarmupOn(e.target.checked)} />
           {t('leads.settings.warmupOn')}
@@ -102,8 +102,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="number" value={max} onChange={(e) => setMax(e.target.value)} />
         </label>
       </fieldset>
-      <fieldset className="grid gap-3 sm:grid-cols-2" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.frequency')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-2" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.frequency')}</legend>
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.settings.minGap')}
           <Input type="number" value={gap} onChange={(e) => setGap(e.target.value)} />

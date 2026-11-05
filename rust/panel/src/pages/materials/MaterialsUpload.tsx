@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui';
 import { captureTime } from '@/lib/capture';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   MediaThumb,
   OlayFields,
   OlayLine,
@@ -417,7 +418,7 @@ export function MaterialsUpload({
                 {t(`materials.upload.problem.${problem}`)}
               </p>
             )}
-            <MaterialsError error={olays.error} />
+            <MaterialsReadStatus query={olays} />
           </fieldset>
 
           <fieldset className="space-y-2">

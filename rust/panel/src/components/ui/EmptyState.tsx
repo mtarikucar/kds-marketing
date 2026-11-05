@@ -7,6 +7,8 @@ export interface EmptyStateProps {
   description?: string;
   action?: ReactNode;
   className?: string;
+  /** Standalone error pages can supply the page's primary heading. */
+  headingLevel?: 'h1' | 'h2' | 'p';
   /** Forwarded to the wrapper so callers can target the state in E2E. */
   'data-testid'?: string;
 }
@@ -17,6 +19,7 @@ export function EmptyState({
   description,
   action,
   className,
+  headingLevel: Heading = 'p',
   'data-testid': testId,
 }: EmptyStateProps) {
   return (
@@ -33,7 +36,7 @@ export function EmptyState({
         </span>
       )}
       <div className="flex flex-col gap-1">
-        <p className="font-display text-h3 text-foreground">{title}</p>
+        <Heading className="font-display text-h3 text-foreground">{title}</Heading>
         {description && (
           <p className="max-w-md text-sm leading-6 text-muted-foreground">{description}</p>
         )}

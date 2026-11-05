@@ -4,6 +4,7 @@ import { isApiError } from '@/api/client';
 import * as p from '@/api/posts';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   primaryClass,
@@ -124,6 +125,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
   const tzRefused = isApiError(save.error) && save.error.details.field === 'tz';
   return (
     <form
+      aria-label={t('posts.settings.title')}
       className={cardClass}
       noValidate
       data-testid="posting-settings"
@@ -236,7 +238,7 @@ export function PostsSettings() {
   const settings = posts.data?.settings;
   return (
     <div data-testid="posts-settings">
-      <MaterialsError error={posts.error} />
+      <MaterialsReadStatus query={posts} />
       {settings && (
         <SettingsForm settings={settings} decider={decider} />
       )}

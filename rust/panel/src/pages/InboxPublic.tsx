@@ -14,6 +14,7 @@ import type {
 import { useSession } from '@/auth/useSession';
 import { can } from '@/lib/roles';
 import { ErrorCallout } from '@/components/ErrorCallout';
+import { QueryState } from '@/components/QueryState';
 import {
   Badge,
   Button,
@@ -122,30 +123,32 @@ function ItemActions({
           className="text-danger"
           onClick={() => {
             setPhrase('');
+            remove.reset();
             setDeleting(true);
           }}
         >
           {t('inbox.public.actions.delete')}
         </Button>
       )}
-      <ErrorCallout error={hide.error ?? handled.error ?? report.error} />
+      <div className="basis-full empty:hidden"><ErrorCallout error={hide.error ?? handled.error ?? report.error} /></div>
       <Dialog open={deleting} onOpenChange={(open) => !remove.isPending && setDeleting(open)}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent dismissible={!remove.isPending}>
+          <DialogHeader className="pr-7">
             <DialogTitle>{t('inbox.public.delete.title')}</DialogTitle>
-            <DialogDescription>{t('inbox.public.delete.description')}</DialogDescription>
+            <DialogDescription className="leading-6">{t('inbox.public.delete.description')}</DialogDescription>
           </DialogHeader>
-          <label className="flex min-w-0 flex-col gap-2 text-sm">
+          <label className="flex min-w-0 flex-col gap-3 rounded-lg border border-danger bg-danger-subtle p-4 text-sm leading-6">
             {t('inbox.public.delete.confirm', { phrase: t('inbox.public.delete.phrase') })}
-            <Input autoComplete="off" value={phrase} onChange={(e) => setPhrase(e.target.value)} />
+            <Input autoComplete="off" disabled={remove.isPending} value={phrase} onChange={(e) => setPhrase(e.target.value)} />
           </label>
           <ErrorCallout error={remove.error} />
           <DialogFooter>
+            <Button variant="outline" disabled={remove.isPending} onClick={() => setDeleting(false)}>{t('common.cancel')}</Button>
             <Button
               variant="destructive"
               disabled={phrase !== t('inbox.public.delete.phrase') || remove.isPending}
               loading={remove.isPending}
-              onClick={() => remove.mutate()}
+              onClick={() => { if (phrase === t('inbox.public.delete.phrase')) remove.mutate(); }}
             >
               {t('inbox.public.delete.submit')}
             </Button>
@@ -368,6 +371,7 @@ export function InboxPublic({
   const target = chosen && context.items.some((entry) => entry.item.id === chosen && entry.owed) ? chosen : oldest;
   return (
     <div className="flex flex-col gap-4" data-testid="public-conversation">
+      <QueryState query={pending} />
       {held.map((row) => (
         <HeldCard
           key={row.outbox_id}

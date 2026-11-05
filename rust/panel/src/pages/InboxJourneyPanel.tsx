@@ -306,7 +306,7 @@ export function InboxJourneyPanel({
                 </p>
               )}
               <ErrorCallout error={assign.error} />
-              <ErrorCallout error={team.error} />
+              <QueryState query={team} />
             </div>
             <InboxMergeBanner personId={personId ?? journey.person_id} />
             <section>
@@ -353,6 +353,7 @@ export function InboxJourneyPanel({
                   )}
                 </div>
               ))}
+              {data.data?.tasks.length === 0 && <p className="text-sm leading-6 text-muted-foreground">{t('inbox.noTasks')}</p>}
               <ErrorCallout error={complete.error} />
               <form
                 aria-label={t('inbox.addTask')}
@@ -410,6 +411,7 @@ export function InboxJourneyPanel({
                   <InboxTime at={item.at} />
                 </div>
               ))}
+              {data.data?.notes.length === 0 && <p className="text-sm leading-6 text-muted-foreground">{t('inbox.noNotes')}</p>}
               <form
                 className="flex flex-col gap-2"
                 onSubmit={(e) => {

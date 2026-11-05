@@ -176,14 +176,23 @@ export function materialsErrorText(t: TFunction, error: unknown): string {
   return errorMessage(t, error);
 }
 
-export function MaterialsError({ error }: { error: unknown }) {
+export function MaterialsError({ error, onRetry }: { error: unknown; onRetry?: () => unknown }) {
   const { t } = useTranslation();
   if (!error) return null;
   return (
-    <p role="alert" className="rounded-md bg-danger-subtle p-3 text-sm">
-      {materialsErrorText(t, error)}
-    </p>
+    <div role="alert" className="space-y-3 rounded-md border-s-2 border-danger bg-danger-subtle p-3 text-sm">
+      <p>{materialsErrorText(t, error)}</p>
+      {onRetry && <button type="button" className={tapClass} onClick={() => void onRetry()}>{t('common.retry')}</button>}
+    </div>
   );
+}
+
+/** Read status stays outside the content so a refresh never discards an open editor. */
+export function MaterialsReadStatus({ query }: { query: { isLoading: boolean; error: unknown; refetch: () => unknown } }) {
+  const { t } = useTranslation();
+  return query.isLoading
+    ? <p role="status" className="py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+    : <MaterialsError error={query.error} onRetry={query.refetch} />;
 }
 
 /** `YYYY-MM-DD` as the reader's date (the day itself, whatever the browser's zone). */

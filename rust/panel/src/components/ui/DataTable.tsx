@@ -79,7 +79,7 @@ export function DataTable<T>({
   const showEmpty = !isLoading && data.length === 0;
 
   return (
-    <div className={cn('w-full overflow-x-auto rounded-lg border border-border bg-surface', className)}>
+    <div className={cn('relative w-full min-w-0 overflow-x-auto rounded-lg border border-border bg-surface', className)}>
       <Table className="dt-responsive">
         <THead>
           {table.getHeaderGroups().map((headerGroup) => (

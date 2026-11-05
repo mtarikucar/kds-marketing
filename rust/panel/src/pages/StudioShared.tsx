@@ -11,9 +11,9 @@ export type StudioKey = {
   [K in keyof typeof tr.studio]: (typeof tr.studio)[K] extends string ? K : never;
 }[keyof typeof tr.studio];
 export const inputClass =
-  'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-base sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 export const buttonClass =
-  'rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-muted aria-pressed:border-primary aria-pressed:bg-primary/10 aria-pressed:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
+  'min-h-10 rounded-md border border-border bg-surface px-3 py-2 text-sm font-medium hover:bg-surface-muted aria-pressed:border-primary aria-pressed:bg-primary/10 aria-pressed:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 /** Translate standard content formats while retaining names defined by the workspace. */
 export function contentTypeLabel(t: TFunction, value: string): string {
   switch (value) {
@@ -85,7 +85,7 @@ export function Field({ label, children }: { label: StudioKey | 'filters.hypothe
     </label>
   );
 }
-export function StudioError({ error }: { error: unknown }) {
+export function StudioError({ error, onRetry }: { error: unknown; onRetry?: () => unknown }) {
   const { t } = useTranslation();
   if (!error) return null;
   const code = isApiError(error) ? error.code : '';
@@ -118,8 +118,16 @@ export function StudioError({ error }: { error: unknown }) {
           {t('studio.reconnect')}
         </Link>
       ) : null}
+      {onRetry && <button type="button" className={buttonClass} onClick={() => void onRetry()}>{t('common.retry')}</button>}
     </div>
   );
+}
+
+export function StudioReadStatus({ query }: { query: { isLoading: boolean; error: unknown; refetch: () => unknown } }) {
+  const { t } = useTranslation();
+  return query.isLoading
+    ? <p role="status" className="py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+    : <StudioError error={query.error} onRetry={query.refetch} />;
 }
 export function Reason({ reason }: { reason: string }) {
   const { t } = useTranslation();

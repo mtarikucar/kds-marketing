@@ -57,9 +57,13 @@ function MergeCard({ row }: { row: InboxMerge }) {
       className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-surface p-4 text-sm [overflow-wrap:anywhere]"
     >
       <h3 className="font-display text-h3">{t('inbox.merges.suggestion')}</h3>
-      <p className="rounded-lg bg-surface-muted p-3 font-medium leading-6">
-        {sourceName} / {targetName}
-      </p>
+      <QueryState query={source}>
+        <QueryState query={target}>
+          <p className="rounded-lg bg-surface-muted p-3 font-medium leading-6">
+            {sourceName} / {targetName}
+          </p>
+        </QueryState>
+      </QueryState>
       <Badge className="self-start">
         {t(`inbox.merges.status.${row.status}`, { defaultValue: row.status })}
       </Badge>
@@ -95,6 +99,7 @@ function MergeCard({ row }: { row: InboxMerge }) {
           onClick={() => {
             setUndoOpen(true);
             setConfirmation('');
+            undo.reset();
           }}
         >
           {t('inbox.merges.undo')}
@@ -107,19 +112,20 @@ function MergeCard({ row }: { row: InboxMerge }) {
           if (!undo.isPending) setUndoOpen(open);
         }}
       >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md" dismissible={!undo.isPending}>
+          <DialogHeader className="pr-7">
             <DialogTitle>{t('inbox.merges.undo')}</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="leading-6">
               {t('inbox.merges.confirmHint', { phrase: t('inbox.merges.confirmPhrase') })}
             </DialogDescription>
           </DialogHeader>
-          <label className="text-sm">
+          <label className="flex flex-col gap-3 rounded-lg border border-warning bg-warning-subtle p-4 text-sm leading-6">
             {t('inbox.merges.confirmLabel')}
             <Input
               value={confirmation}
               onChange={(e) => setConfirmation(e.target.value)}
               autoComplete="off"
+              disabled={undo.isPending}
             />
           </label>
           <ErrorCallout error={undo.error} />

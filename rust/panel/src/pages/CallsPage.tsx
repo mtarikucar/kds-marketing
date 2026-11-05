@@ -94,8 +94,8 @@ function PlaceCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
     if (!place.isPending) place.mutate();
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={(value) => { if (!place.isPending) onOpenChange(value); }}>
+      <DialogContent dismissible={!place.isPending}>
         <DialogHeader>
           <DialogTitle>{t('calls.place.title')}</DialogTitle>
           <DialogDescription>{t('calls.place.description')}</DialogDescription>
@@ -151,10 +151,10 @@ function PlaceCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
             </Callout>
           )}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" disabled={place.isPending} onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={place.isPending || !target.trim() || !extension.trim()}>
+            <Button type="submit" loading={place.isPending} disabled={!target.trim() || !extension.trim()}>
               {t('calls.place.submit')}
             </Button>
           </DialogFooter>
@@ -200,6 +200,7 @@ export function CallsPage() {
   const [direction, setDirection] = useState<'all' | 'inbound' | 'outbound'>('all');
   const calls = useQuery({ queryKey: CALLS_KEY, queryFn: () => listCalls(), enabled: canCall });
   const visibleCalls = (calls.data ?? []).filter((call) => direction === 'all' || call.direction === direction);
+  if (session.isPending) return <QueryState query={session} />;
   return (
     <>
       <PageHeader
@@ -235,7 +236,7 @@ export function CallsPage() {
             {visibleCalls.length === 0 ? (
               <EmptyState className="rounded-none border-0" title={t('calls.filterEmpty')} description={t('calls.filterEmptyBody')} action={<Button variant="outline" onClick={() => setDirection('all')}>{t('calls.showAll')}</Button>} />
             ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" tabIndex={0} role="region" aria-label={t('calls.title')}>
             <Table aria-label={t('calls.title')}>
               <THead>
                 <TR>

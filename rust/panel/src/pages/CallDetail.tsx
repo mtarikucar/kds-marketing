@@ -14,6 +14,7 @@ import {
 } from '@/api/calls';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
+import { ErrorCallout } from '@/components/ErrorCallout';
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Field, PageHeader, Textarea, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
@@ -130,6 +131,7 @@ function EndForm({ id }: { id: string }) {
       <Field label={t('calls.detail.summary')}>
         {(ids) => <Textarea id={ids.id} value={summary} maxLength={2000} onChange={(e) => setSummary(e.target.value)} />}
       </Field>
+      <ErrorCallout error={end.error} />
       <div className="flex justify-end">
         <Button type="submit" loading={end.isPending}>
           {t('calls.detail.end')}
@@ -181,7 +183,7 @@ export function CallDetail() {
                   {c.summary && (
                     <>
                       <dt className="text-muted-foreground">{t('calls.detail.summary')}</dt>
-                      <dd className="whitespace-pre-wrap">{c.summary}</dd>
+                      <dd className="whitespace-pre-wrap [overflow-wrap:anywhere]">{c.summary}</dd>
                     </>
                   )}
                 </dl>

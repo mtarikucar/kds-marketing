@@ -12,6 +12,7 @@ import {
   Region,
   Field,
   StudioError,
+  StudioReadStatus,
   inputClass,
   buttonClass,
   useStudioKey,
@@ -59,11 +60,14 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
         <summary className="cursor-pointer text-sm font-medium">{t('studio.bind')}</summary>
         <form
           className="mt-3 space-y-3"
+          aria-label={t('studio.bind')}
           onSubmit={(e) => {
             e.preventDefault();
             bind.mutate();
           }}
         >
+          <StudioReadStatus query={capabilities} />
+          <StudioReadStatus query={adsets} />
           <Field label="account">
             <select
               required
@@ -125,6 +129,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
           <summary className="cursor-pointer text-sm font-medium">{t('studio.budgetMove')}</summary>
           <form
             className="mt-3 space-y-3"
+            aria-label={t('studio.budgetMove')}
             onSubmit={(e) => {
               e.preventDefault();
               const f = new FormData(e.currentTarget);
@@ -174,7 +179,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
           </form>
         </details>
       )}
-      <StudioError error={capabilities.error || adsets.error || bind.error || move.error} />
+      <StudioError error={bind.error || move.error} />
       {(bind.isSuccess || move.isSuccess) && <p role="status">{t('studio.success')}</p>}
     </div>
   );
@@ -308,6 +313,7 @@ export function StudioLearned({
             </ul>
             <form
               className="space-y-3"
+              aria-label={t('studio.recordTrend')}
               onSubmit={(e) => {
                 e.preventDefault();
                 trend.mutate(new FormData(e.currentTarget));
@@ -337,6 +343,7 @@ export function StudioLearned({
             </ul>
             <form
               className="space-y-3"
+              aria-label={t('studio.recordJudgment')}
               onSubmit={(e) => {
                 e.preventDefault();
                 judgment.mutate(new FormData(e.currentTarget));

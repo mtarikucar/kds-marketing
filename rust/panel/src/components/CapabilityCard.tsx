@@ -131,7 +131,7 @@ export function CapabilityCard({
   const memberOf = groups.filter((g) => g.members.some((m) => m.capability.id === c.id));
 
   return (
-    <Card className="flex flex-col" data-capability-id={c.id}>
+    <Card className="flex min-w-0 flex-col" data-capability-id={c.id}>
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <CardTitle className="truncate" title={c.name}>
@@ -146,8 +146,8 @@ export function CapabilityCard({
         <CapabilityStatusBadge status={item.effective_status} />
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-4">
-        {c.description && <p className="whitespace-pre-wrap text-sm text-foreground">{c.description}</p>}
-        <dl className="grid gap-3 text-sm sm:grid-cols-2">
+        {c.description && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{c.description}</p>}
+        <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-2">
           <div className="flex flex-col gap-0.5">
             <dt className="text-caption text-muted-foreground">{t('capabilities.reach.label')}</dt>
             <dd>
@@ -202,7 +202,7 @@ export function CapabilityCard({
           </div>
         </dl>
         {connection && (health || connecting.length > 0) && (
-          <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+          <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-caption text-muted-foreground">{t('capabilities.connector.label')}</span>
               {health && <ConnectorHealthBadge health={health} />}

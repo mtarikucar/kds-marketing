@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import { Badge } from '@/components/ui';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   formatRange,
@@ -47,6 +48,7 @@ function EntryForm({
   const save = useMaterialsMutation((row: m.CalendarEntry) => m.calendarSet(row), onDone);
   return (
     <form
+      aria-label={isNew ? t('materials.calendar.add') : entry.name}
       className="grid grid-cols-1 gap-3 rounded-md border border-border p-3 sm:grid-cols-2"
       noValidate
       onSubmit={(e) => {
@@ -280,7 +282,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
           ))}
         </select>
       </label>
-      <MaterialsError error={calendar.error} />
+      <MaterialsReadStatus query={calendar} />
       {undated.length > 0 && (
         <p className="rounded-md bg-warning-subtle p-3 text-sm" role="status">
           {t('materials.calendar.undated', { count: undated.length, year })}

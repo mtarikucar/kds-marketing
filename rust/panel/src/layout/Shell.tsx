@@ -169,9 +169,9 @@ export function Shell() {
 
   if (!session.data) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <main id="main-content" tabIndex={-1} className="flex min-h-screen items-center justify-center bg-background p-6">
         <QueryState query={session} />
-      </div>
+      </main>
     );
   }
 
@@ -224,7 +224,7 @@ export function Shell() {
           <NavItems orientation="horizontal" />
         </nav>
 
-        <main className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-9">
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-9">
           <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6">
             {current ? (
               // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
@@ -232,11 +232,12 @@ export function Shell() {
               <Outlet key={me.current_workspace ?? 'none'} />
             ) : me.memberships.length > 0 ? (
               <EmptyState
+                headingLevel="h1"
                 title={t('shell.chooseWorkspace')}
                 description={t('shell.chooseWorkspaceBody')}
               />
             ) : (
-              <EmptyState title={t('shell.noWorkspace')} description={t('shell.noWorkspaceBody')} />
+              <EmptyState headingLevel="h1" title={t('shell.noWorkspace')} description={t('shell.noWorkspaceBody')} />
             )}
           </div>
         </main>

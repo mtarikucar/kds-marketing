@@ -10,7 +10,7 @@ import type { AcceptOut, MeOut } from '@/api/types';
 import { SESSION_KEY, useOptionalSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
-import { Button, Callout, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { MIN_PASSWORD_CHARS } from './RegisterPage';
 
 /**
@@ -100,7 +100,7 @@ export function AcceptInvitePage() {
             </Button>
           </div>
         ) : (
-          <form className="flex flex-col gap-4" onSubmit={onSubmitNew} noValidate>
+          <form className="flex flex-col gap-4" onSubmit={onSubmitNew}>
             <p className="text-sm text-muted-foreground">{t('invite.newUser')}</p>
             <Field label={t('fields.display_name')} required>
               {(ids) => (
@@ -119,10 +119,9 @@ export function AcceptInvitePage() {
               required
             >
               {(ids) => (
-                <Input
+                <PasswordInput
                   id={ids.id}
                   aria-describedby={ids.describedBy}
-                  type="password"
                   autoComplete="new-password"
                   minLength={MIN_PASSWORD_CHARS}
                   required

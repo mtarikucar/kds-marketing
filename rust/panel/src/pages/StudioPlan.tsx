@@ -6,11 +6,13 @@ import type { Hypothesis } from '@/api/types';
 import { kindLabel } from '@/lib/capabilities';
 import { Region, buttonClass, contentTypeLabel } from './StudioShared';
 export function StudioPlan({
+  available = true,
   slots,
   hypotheses,
   arms,
   onSelect,
 }: {
+  available?: boolean;
   slots: Slot[];
   hypotheses: Hypothesis[];
   arms: Arm[];
@@ -90,7 +92,7 @@ export function StudioPlan({
       ) : (
         <ul className="divide-y divide-border">{visible.map(row)}</ul>
       )}
-      {!visible.length && (
+      {available && !visible.length && (
         <div className="space-y-3 py-4">
           <p className="text-sm font-medium">{t('studio.emptyPlan')}</p>
           <p className="text-sm leading-relaxed text-muted-foreground">{t('studio.emptyPlanHelp')}</p>

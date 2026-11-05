@@ -61,13 +61,14 @@ export function InboxCommissions() {
             </select>
           </label>
         </div>
+        <QueryState query={team} />
         <ErrorCallout error={approve.error || pay.error} />
         <QueryState query={rows}>
-          {rows.data?.length === 0 && <EmptyState className="border-0 py-8" title={t('inbox.empty')} />}
+          {rows.data?.length === 0 && <EmptyState className="border-0 py-8" title={t('inbox.commissions.empty')} description={t('inbox.commissions.emptyBody')} />}
           {rows.data?.map(row => <article key={row.id} data-testid={`commission-${row.id}`} className="flex min-w-0 flex-col items-start gap-3 border-b border-border px-2 py-5 text-sm last:border-0">
             <div className="flex w-full flex-wrap items-center justify-between gap-3">
               <strong className="font-display text-h2 tabular-nums">{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
-              <Badge>{t(`inbox.commissions.state.${row.state}`)}</Badge>
+              <Badge tone={row.state === 'paid' ? 'success' : row.state === 'approved' ? 'info' : row.state === 'no_payee' ? 'warning' : 'neutral'}>{t(`inbox.commissions.state.${row.state}`)}</Badge>
             </div>
             <p>{t('inbox.commissions.payee')}: {row.payee ? memberName(row.payee) : t('inbox.commissions.unassigned')}</p>
             <p className="text-caption text-muted-foreground">{t('inbox.commissions.snapshotRate', { rate: row.rate_bp / 100 })}</p>

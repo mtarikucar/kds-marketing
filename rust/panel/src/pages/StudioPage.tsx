@@ -12,7 +12,7 @@ import { StudioPlan } from './StudioPlan';
 import { StudioToday } from './StudioToday';
 import { StudioLearned } from './StudioLearned';
 import { StudioLedger } from './StudioLedger';
-import { Field, StudioError, inputClass, useStudioKey } from './StudioShared';
+import { Field, StudioReadStatus, inputClass, useStudioKey } from './StudioShared';
 import { PageHeader, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
 import { StudioPosts } from './posts/StudioPosts';
@@ -142,7 +142,7 @@ export function StudioPage() {
             </Field>
           </div>
           {!allowed && <p role="alert">{t('studio.forbidden')}</p>}
-          <StudioError error={overview.error} />
+          {allowed && <StudioReadStatus query={overview} />}
           <div className="grid grid-cols-1 items-start gap-7 xl:grid-cols-[minmax(0,1.65fr)_minmax(18rem,1fr)]">
             <StudioStrategyBar
               data={data}
@@ -161,6 +161,7 @@ export function StudioPage() {
               overdue={work.data?.agent.overdue ?? false}
             />
             <StudioPlan
+              available={Boolean(data)}
               slots={data?.slots ?? []}
               hypotheses={data?.hypotheses ?? []}
               arms={data?.learned.arms.map((a) => a.arm) ?? []}

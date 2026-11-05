@@ -56,7 +56,7 @@ export function PeoplePage() {
           </div>
           <QueryState query={people}>
             {rows.length === 0 ? (
-              <EmptyState icon={!q.trim() ? <img src="/brand/scenes/team.svg" width="120" height="96" alt="" /> : <Search className="h-8 w-8" />} className="border-0 bg-surface-muted" title={t(q.trim() ? 'people.noMatch' : 'people.empty')} description={t('people.emptyBody')} />
+              <EmptyState icon={!q.trim() && page === 0 ? <img src="/brand/scenes/team.svg" width="120" height="96" alt="" /> : <Search className="h-8 w-8" />} className="border-0 bg-surface-muted" title={t(q.trim() || page > 0 ? 'people.noMatch' : 'people.empty')} description={t(q.trim() || page > 0 ? 'people.noMatchBody' : 'people.emptyBody')} action={page > 0 ? <Button variant="outline" onClick={() => setPage((value) => value - 1)}>{t('people.previous')}</Button> : q.trim() ? <Button variant="outline" onClick={() => { setQ(''); setPage(0); }}>{t('people.clearSearch')}</Button> : undefined} />
             ) : (
               <>
                 <ul className="divide-y divide-border border-y border-border">

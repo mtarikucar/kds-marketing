@@ -137,8 +137,8 @@ function StepsEditor({ steps, onChange }: { steps: CampaignStep[]; onChange: (st
   const options = (templates.data?.items ?? []).filter((x) => !x.template.archived);
   const set = (i: number, patch: Partial<CampaignStep>) => onChange(steps.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-sm font-medium">{t('leads.campaign.steps')}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
+      <legend className="px-1 text-sm font-semibold">{t('leads.campaign.steps')}</legend>
       <ol className="flex flex-col gap-2" aria-label={t('leads.campaign.steps')}>
         {steps.map((s, i) => (
           <li key={i} className="grid gap-3 rounded-lg border border-border bg-surface-muted/40 p-3 sm:grid-cols-[1fr_8rem_auto_auto]">
@@ -204,8 +204,8 @@ function AudienceEditor({ audience, onChange }: { audience: Audience; onChange: 
   const setPros = (patch: Partial<ProspectFilter>) => onChange({ ...audience, prospects: { ...(pros ?? {}), ...patch } });
   const setPeople = (patch: Partial<PeopleFilter>) => onChange({ ...audience, people: { ...(people ?? {}), ...patch } });
   return (
-    <fieldset className="flex flex-col gap-3">
-      <legend className="mb-1 text-sm font-medium">{t('leads.campaign.audience')}</legend>
+    <fieldset className="flex min-w-0 flex-col gap-3 border-t border-border pt-4">
+      <legend className="px-1 text-sm font-semibold">{t('leads.campaign.audience')}</legend>
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -381,11 +381,13 @@ function CampaignEditor({ out }: { out: CampaignOut | null }) {
       <StepsEditor steps={def.steps} onChange={(steps) => set({ steps })} />
       <AudienceEditor audience={def.audience} onChange={(audience) => set({ audience })} />
       <AudiencePreview audience={def.audience} mailboxId={mailboxId} />
+      <div className="border-t border-border pt-4">
       <HoursFields
         label={t('leads.campaign.window')}
         value={def.schedule.window}
         onChange={(window) => window && set({ schedule: { ...def.schedule, window } })}
       />
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.campaign.startAt')}
@@ -588,7 +590,7 @@ function EnrollmentItem({ row }: { row: EnrollmentRow }) {
   });
   return (
     <tr className="border-t border-border align-top" data-testid="enrollment">
-      <td className="py-2 pe-3">
+      <td data-label={t('leads.enrollments.person')} className="py-2 pe-3">
         <Link className="text-primary hover:underline" to={`/inbox?person=${encodeURIComponent(row.person_id)}`}>
           {t('leads.enrollments.openPerson')}
         </Link>
@@ -598,14 +600,14 @@ function EnrollmentItem({ row }: { row: EnrollmentRow }) {
           </Link>
         )}
       </td>
-      <td className="py-2 pe-3">
+      <td data-label={t('leads.enrollments.status')} className="py-2 pe-3">
         <Badge tone={row.status === 'active' ? 'success' : 'neutral'}>{t(`leads.enrollmentStatus.${row.status}`)}</Badge>
         {row.stop && <span className="block text-caption">{stopText(t, row.stop)}</span>}
         {row.skip && <span className="block text-caption">{skipText(t, row.skip)}</span>}
       </td>
-      <td className="py-2 pe-3 tabular-nums">{Math.min(row.next_step, MAX_STEPS)}</td>
-      <td className="py-2 pe-3">{row.next_send_at ? formatDateTime(row.next_send_at, i18n.language) : '—'}</td>
-      <td className="py-2 pe-3">{row.basis ? t(`leads.basis.${row.basis}`) : '—'}</td>
+      <td data-label={t('leads.enrollments.step')} className="py-2 pe-3 tabular-nums">{Math.min(row.next_step, MAX_STEPS)}</td>
+      <td data-label={t('leads.enrollments.next')} className="py-2 pe-3">{row.next_send_at ? formatDateTime(row.next_send_at, i18n.language) : '—'}</td>
+      <td data-label={t('leads.enrollments.basis')} className="py-2 pe-3">{row.basis ? t(`leads.basis.${row.basis}`) : '—'}</td>
       <td className="py-2 text-end">
         {row.status === 'active' && (
           <Button size="sm" variant="ghost" loading={stop.isPending} onClick={() => !stop.isPending && stop.mutate()}>
@@ -623,17 +625,17 @@ function Enrollments({ campaignId }: { campaignId: string }) {
   const list = useQuery({ queryKey: [...key, 'outreach', 'enrollments', campaignId], queryFn: () => listEnrollments(campaignId) });
   const items = list.data?.items ?? [];
   return (
-    <Card>
+    <Card className="min-w-0 overflow-hidden">
       <CardHeader>
         <CardTitle>{t('leads.enrollments.title')}</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="min-w-0">
         <QueryState query={list}>
           {items.length === 0 ? (
             <EmptyState title={t('leads.enrollments.empty')} />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm" aria-label={t('leads.enrollments.title')}>
+            <div className="w-full overflow-x-auto">
+              <table className="dt-responsive w-full text-left text-sm" aria-label={t('leads.enrollments.title')}>
                 <thead className="text-caption text-muted-foreground">
                   <tr>
                     <th className="py-1 pe-3 font-normal">{t('leads.enrollments.person')}</th>
@@ -700,7 +702,7 @@ export function OutreachCampaign() {
       ) : (
         <QueryState query={campaign}>
           {out && c && (
-            <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-col gap-4">
               <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3">
                 <CampaignStatusBadge status={c.status} />
                 <span className="text-sm text-muted-foreground">{t('leads.campaign.revision', { revision: c.revision })}</span>

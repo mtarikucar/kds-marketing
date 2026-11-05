@@ -9,7 +9,11 @@ it('console_contains_no_tenant_body_drilldown',async()=>{
   await screen.findByText(/^1,2\s?kB$/);
   expect(document.body.textContent).not.toContain('CANARY');
   expect(screen.getByRole('link',{name:'Ödeme bildirimleri'})).toHaveAttribute('href','/platform/payments');
-  for(const link of screen.getAllByRole('link')) expect(link.getAttribute('href')).toMatch(/^\/platform/);
+  for (const link of screen.getAllByRole('link')) {
+    const href = link.getAttribute('href');
+    if (href === '#main-content') expect(document.getElementById('main-content')).toBeInTheDocument();
+    else expect(href).toMatch(/^\/platform/);
+  }
   expect(calls.every(c=>c.path.startsWith('/api/platform/'))).toBe(true);
 });
 it('operator reset accepts a target ID and clears the password',async()=>{

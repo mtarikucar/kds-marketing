@@ -442,6 +442,7 @@ function RepsCard({ data }: { data: DistributionOut }) {
         <CardDescription>{t('leads.distribution.reps.description')}</CardDescription>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-3">
+        <p className="text-caption text-muted-foreground sm:hidden">{t('leads.distribution.reps.scrollHint')}</p>
         <div className="relative w-full min-w-0 overflow-x-auto">
           <table className="w-full min-w-[48rem] text-left text-sm" aria-label={t('leads.distribution.reps.title')}>
             <thead className="text-caption text-muted-foreground">

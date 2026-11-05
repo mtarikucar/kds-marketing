@@ -5,7 +5,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { register } from '@/api/auth';
 import { SESSION_KEY } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
-import { Button, Field, Input, PageHeader } from '@/components/ui';
+import { Button, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 
 /** The server's minimum password length (`MIN_PASSWORD_CHARS`). */
 export const MIN_PASSWORD_CHARS = 10;
@@ -35,7 +35,7 @@ export function RegisterPage() {
   return (
     <div className="flex flex-col gap-8">
       <PageHeader title={t('register.title')} description={t('register.description')} />
-      <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
+      <form className="flex flex-col gap-5" onSubmit={onSubmit}>
         <ErrorCallout error={signUp.error} />
         <Field label={t('fields.display_name')} required>
           {(ids) => (
@@ -64,10 +64,9 @@ export function RegisterPage() {
           required
         >
           {(ids) => (
-            <Input
+            <PasswordInput
               id={ids.id}
               aria-describedby={ids.describedBy}
-              type="password"
               autoComplete="new-password"
               minLength={MIN_PASSWORD_CHARS}
               required

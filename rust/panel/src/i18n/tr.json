@@ -37,7 +37,10 @@
     "disclosure": {
       "show": "Göster",
       "hide": "Gizle"
-    }
+    },
+    "showPassword": "Parolayı göster",
+    "hidePassword": "Parolayı gizle",
+    "skipContent": "İçeriğe geç"
   },
   "nav": {
     "label": "Ana menü",
@@ -1340,7 +1343,9 @@
         "pending": "Onay bekliyor",
         "approved": "Onaylandı",
         "paid": "Ödendi"
-      }
+      },
+      "empty": "Komisyon bulunamadı",
+      "emptyBody": "Bir yolculuk kazanıldığında komisyonlar burada görünür. Bir kayıt bekliyorsanız başka bir filtre deneyin."
     },
     "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
@@ -1550,7 +1555,11 @@
       "removeNamed": "Engeli kaldır: {{channel}} / {{reason}}",
       "send": "Ticari mesaj gönder",
       "intent": "Gönderim amacı",
-      "sendHint": "Ticari ileti için geçerli izin gerekir. Engellemeler gönderimden hemen önce yeniden denetlenir."
+      "sendHint": "Ticari ileti için geçerli izin gerekir. Engellemeler gönderimden hemen önce yeniden denetlenir.",
+      "consents": "Kayıtlı izinler",
+      "suppressions": "İletişim engelleri",
+      "noConsents": "Henüz izin kaydı yok.",
+      "noSuppressions": "İletişim engeli yok."
     },
     "offers": {
       "quotes": "Teklifler",
@@ -1589,7 +1598,9 @@
         "booked": "Planlandı",
         "held": "Yapıldı",
         "cancelled": "İptal edildi"
-      }
+      },
+      "noQuotes": "Henüz teklif yok.",
+      "noAppointments": "Henüz randevu yok."
     },
     "public": {
       "surface": {
@@ -1672,7 +1683,9 @@
       },
       "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
       "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
-    }
+    },
+    "noTasks": "Henüz görev yok. Sıradaki takip işini aşağıdan ekleyin.",
+    "noNotes": "Henüz not yok. Ekibiniz için yararlı bilgileri ekleyin."
   },
   "studio": {
     "title": "Büyüme stüdyosu",
@@ -1974,7 +1987,8 @@
     "agentNeeded": "Ajanın güncel bağlantısı yok. İşlerin ilerlemesi için kendi ajan zamanlayıcınız çalışmalıdır.",
     "agents": "Ajanları görüntüle",
     "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
-    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz."
+    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz.",
+    "teamOwnerHelp": "Ekip davetleri ve API anahtarları için çalışma alanı yöneticinizle görüşün."
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
@@ -2027,7 +2041,9 @@
       "email": "E-posta",
       "webchat": "Web sohbeti",
       "phone": "Telefon"
-    }
+    },
+    "clearSearch": "Aramayı temizle",
+    "noMatchBody": "Başka bir ad veya şirket deneyin ya da aramayı temizleyin."
   },
   "failure": {
     "recipientNotAllowed": "alıcı, Meta test numarasının izinli alıcıları arasında değil. Numarayı Meta'da WhatsApp → API Setup'ta alıcı olarak ekleyin ya da gerçek bir WhatsApp numarası bağlayın.",
@@ -2209,7 +2225,8 @@
       },
       "scriptsTitle": "Karşılama ve bildirimler",
       "phrasesTitle": "Bekletme ve yedek ifadeler",
-      "limitsTitle": "Süreler ve aktarma"
+      "limitsTitle": "Süreler ve aktarma",
+      "description": "Arayanların duyacağı metinleri, bekletme ifadelerini ve süre sınırlarını ayarlayın."
     },
     "filterEmpty": "Bu yönde arama yok",
     "filterEmptyBody": "Diğer aramaları görmek için başka bir yön seçin.",
@@ -2652,14 +2669,14 @@
       "emptyBody": "Bir şablon yazın, sonra adımları ve kitlesiyle bir kampanya hazırlayın.",
       "locked": {
         "title": "Soğuk e-posta platformda kapalı",
-        "body": "Bu sunucuda JEETA_OUTREACH_ENABLED açılana kadar hiçbir kampanya başlatılamaz ve hiçbir kampanya e-postası gönderilmez. Kampanya hazırlayabilirsiniz."
+        "body": "Platform yöneticiniz kampanya gönderimini etkinleştirene kadar kampanyalarınızı hazırlayabilirsiniz. Bu süre içinde kampanyalar başlatılmaz ve e-posta gönderilmez."
       },
       "identityMissing": {
         "title": "Gönderen bilgileri eksik",
         "body": "Her e-postanın sonuna eklenen bilgiler (şirket adı, adres, aydınlatma metni bağlantısı) girilmeden kampanya başlatılamaz."
       },
       "blocked": {
-        "platform": "Soğuk e-posta platformda kapalı (JEETA_OUTREACH_ENABLED).",
+        "platform": "Soğuk e-posta platformda kapalı.",
         "identity": "Gönderen bilgileri eksik: şirket adı, adres ve aydınlatma metni bağlantısı."
       }
     },
@@ -2908,7 +2925,7 @@
       "do_not_contact": "İletişim yasağı listesinde.",
       "system_actor": "Sistem havuza kayıt yazamaz.",
       "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın.",
-      "outreach_disabled_on_platform": "Soğuk e-posta bu sunucuda kapalı (JEETA_OUTREACH_ENABLED); kampanya başlatılamaz.",
+      "outreach_disabled_on_platform": "Soğuk e-posta bu sunucuda kapalı; kampanya başlatılamaz.",
       "sender_identity_missing": "Gönderen bilgileri eksik: E-posta ayarlarından şirket adı, adres ve aydınlatma metni bağlantısını girin.",
       "approval_required": "Önce onay gerekiyor.",
       "human_required": "Bunu yalnızca bir ekip üyesi yapabilir.",
@@ -3016,7 +3033,8 @@
         "cities": "Şehirler (virgülle)",
         "sectors": "Sektörler (virgülle)",
         "awayUntil": "İzinli olduğu tarih",
-        "saved": "Müsaitlik kaydedildi."
+        "saved": "Müsaitlik kaydedildi.",
+        "scrollHint": "Tüm sütunları ve işlemleri görmek için yatay kaydırın."
       },
       "log": {
         "title": "Atama geçmişi",

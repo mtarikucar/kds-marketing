@@ -535,7 +535,7 @@ export function PolicyDialog({ target, onClose }: { target: CapabilityOut | null
         </Label>
       </div>
       {hoursOn && (
-        <div className="grid gap-3 rounded-lg border border-border p-3 sm:grid-cols-2">
+        <div className="grid min-w-0 gap-3 border-t border-border pt-4 sm:grid-cols-2">
           <Field label={t('capabilities.policyDialog.tz')} hint={t('capabilities.policyDialog.tzHint')} className="sm:col-span-2">
             {(ids) => (
               <Input

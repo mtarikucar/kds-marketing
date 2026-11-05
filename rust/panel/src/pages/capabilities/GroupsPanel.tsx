@@ -82,15 +82,15 @@ function GroupRow({
   };
 
   return (
-    <li className="flex flex-col gap-3 rounded-lg border border-border p-3">
+    <li className="flex min-w-0 flex-col gap-3 border-t border-border py-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         {renaming === null ? (
           <div className="flex min-w-0 flex-col">
-            <span className="font-medium text-foreground">{group.name}</span>
+            <span className="break-words font-medium text-foreground">{group.name}</span>
             {group.purpose && <span className="text-caption text-muted-foreground">{group.purpose}</span>}
           </div>
         ) : (
-          <form className="flex flex-1 items-center gap-2" onSubmit={onRename}>
+          <form className="flex min-w-0 flex-1 flex-wrap items-center gap-2" onSubmit={onRename}>
             <Input
               aria-label={t('capabilities.groupsPanel.name')}
               value={renaming}

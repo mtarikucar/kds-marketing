@@ -7,7 +7,7 @@ import { useSession } from '@/auth/useSession';
 import { can } from '@/lib/roles';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
-import { Button, Input, Textarea } from '@/components/ui';
+import { Badge, Button, Callout, Input, Textarea } from '@/components/ui';
 import { InboxTime, selectClass, useInboxKey, useInboxMutation } from './InboxShared';
 
 const channels: ContactChannel[] = ['email', 'sms', 'phone', 'whats_app', 'messenger', 'instagram_dm', 'webchat'];
@@ -25,7 +25,7 @@ export function IntentField({ value, onChange }: { value: SendIntent; onChange: 
 }
 export function DeliveryState({ state, notification = false }: { state: string; notification?: boolean }) {
   const { t } = useTranslation();
-  return <p role="status" className="rounded-md border-l-2 border-border-strong bg-surface-muted px-3 py-2 text-sm">{t(notification ? 'inbox.offers.notification' : 'inbox.offers.delivery')}: {t(`inbox.offers.deliveryState.${state}`, { defaultValue: state })}</p>;
+  return <Callout tone={state === 'unknown' || state === 'refused' || state === 'failed' ? 'warning' : state === 'sent' ? 'success' : 'info'}>{t(notification ? 'inbox.offers.notification' : 'inbox.offers.delivery')}: {t(`inbox.offers.deliveryState.${state}`, { defaultValue: state })}</Callout>;
 }
 
 export function InboxCompliance({ personId }: { personId: string }) {
@@ -42,18 +42,28 @@ export function InboxCompliance({ personId }: { personId: string }) {
   const add = useInboxMutation(() => api.addSuppression(personId, channel));
   const remove = useInboxMutation((row: { channel: ContactChannel; reason: Parameters<typeof api.removeSuppression>[2] }) => api.removeSuppression(personId, row.channel, row.reason));
   const valid = !!at && Number.isFinite(new Date(at).getTime()) && new Date(at).getTime() <= Date.now();
-  return <section className="flex flex-col gap-4 border-t border-border pt-5">
-    <h3 className="font-medium">{t('inbox.compliance.title')}</h3>
+  return <section className="flex min-w-0 flex-col gap-6">
     <QueryState query={data}>{data.data && <>
-      <ul className="space-y-2 text-sm">{data.data.consents.map(row => <li key={row.id}>
-        {t(`inbox.compliance.channels.${row.channel}`)} · {t(`inbox.compliance.kinds.${row.kind}`)} · {t(`inbox.compliance.sources.${row.source}`)} · <InboxTime at={row.at} /> · {t(`inbox.compliance.sync.${row.sync_state}`)}
+      <section className="space-y-3" aria-label={t('inbox.compliance.consents')}>
+      <h3 className="text-sm font-medium">{t('inbox.compliance.consents')}</h3>
+      {data.data.consents.length === 0 && <p className="text-sm text-muted-foreground">{t('inbox.compliance.noConsents')}</p>}
+      <ul className="divide-y divide-border text-sm">{data.data.consents.map(row => <li key={row.id} className="flex flex-col gap-2 py-3 first:pt-0">
+        <div className="flex flex-wrap items-center justify-between gap-2"><strong className="font-medium">{t(`inbox.compliance.channels.${row.channel}`)}</strong><Badge size="sm" tone={row.kind === 'withdrawn' ? 'warning' : 'neutral'}>{t(`inbox.compliance.kinds.${row.kind}`)}</Badge></div>
+        <p className="text-caption text-muted-foreground">{t(`inbox.compliance.sources.${row.source}`)}</p>
+        <div className="flex flex-wrap justify-between gap-2"><InboxTime at={row.at} /><span className="text-caption text-muted-foreground">{t(`inbox.compliance.sync.${row.sync_state}`)}</span></div>
       </li>)}</ul>
-      <ul className="space-y-2 text-sm">{data.data.suppressions.map(row => <li key={`${row.channel}:${row.reason}`}>
-        {t(`inbox.compliance.channels.${row.channel}`)} / {t(`inbox.compliance.reasons.${row.reason}`)}
+      </section>
+      <section className="space-y-3" aria-label={t('inbox.compliance.suppressions')}>
+      <h3 className="text-sm font-medium">{t('inbox.compliance.suppressions')}</h3>
+      {data.data.suppressions.length === 0 && <p className="text-sm text-muted-foreground">{t('inbox.compliance.noSuppressions')}</p>}
+      <ul className="space-y-2 text-sm">{data.data.suppressions.map(row => <li key={`${row.channel}:${row.reason}`} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border-l-2 border-warning bg-warning-subtle p-3">
+        <span className="flex min-w-0 flex-col gap-1"><strong className="font-medium">{t(`inbox.compliance.channels.${row.channel}`)}</strong><span className="text-caption">{t(`inbox.compliance.reasons.${row.reason}`)}</span></span>
         {manage && <Button variant="outline" size="sm" loading={remove.isPending} onClick={() => remove.mutate(row)} aria-label={t('inbox.compliance.removeNamed', { channel: t(`inbox.compliance.channels.${row.channel}`), reason: t(`inbox.compliance.reasons.${row.reason}`) })}>{t('inbox.compliance.remove')}</Button>}
       </li>)}</ul>
+      </section>
     </>}</QueryState>
-    <form aria-label={t('inbox.compliance.record')} className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); if (valid) save.mutate(); }}>
+    <form aria-label={t('inbox.compliance.record')} className="flex min-w-0 flex-col gap-4 border-t border-border pt-4" onSubmit={e => { e.preventDefault(); if (valid) save.mutate(); }}>
+      <h3 className="font-medium">{t('inbox.compliance.record')}</h3>
       <ChannelField value={channel} onChange={setChannel} />
       <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.compliance.kind')}<select className={selectClass} value={kind} onChange={e => setKind(e.target.value as typeof kind)}>{(['explicit', 'implied_by_contract', 'withdrawn'] as const).map(v => <option key={v} value={v}>{t(`inbox.compliance.kinds.${v}`)}</option>)}</select></label>
       <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.compliance.source')}<select className={selectClass} value={source} onChange={e => setSource(e.target.value as typeof source)}>{(['form', 'agent', 'import', 'iys_sync', 'customer'] as const).map(v => <option key={v} value={v}>{t(`inbox.compliance.sources.${v}`)}</option>)}</select></label>
@@ -83,7 +93,7 @@ function CommercialForm({ personId }: { personId: string }) {
     setText('');
     // Retain the key until the payload changes, including an uncertain delivery.
   });
-  return <form aria-label={t('inbox.compliance.send')} className="flex flex-col gap-3 border-t pt-3" onSubmit={e => { e.preventDefault(); if (text.trim()) send.mutate(); }}>
+  return <form aria-label={t('inbox.compliance.send')} className="flex min-w-0 flex-col gap-4 border-t border-border pt-4" onSubmit={e => { e.preventDefault(); if (text.trim()) send.mutate(); }}>
     <h3 className="font-medium">{t('inbox.compliance.send')}</h3>
     <p className="text-sm text-muted-foreground">{t('inbox.compliance.sendHint')}</p>
     <ChannelField sending value={channel} onChange={v => setChannel(v as SendChannel)} />

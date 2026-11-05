@@ -1,5 +1,6 @@
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription, DialogClose } from './Dialog';
 import { Button } from './Button';
+import { useTranslation } from 'react-i18next';
 
 /**
  * ConfirmDialog — a controlled confirmation modal composed from Dialog. The
@@ -30,14 +31,15 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
-  cancelLabel = 'Cancel',
+  cancelLabel,
   tone = 'default',
   onConfirm,
   loading = false,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation();
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" dismissible={!loading}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? (
@@ -46,14 +48,14 @@ export function ConfirmDialog({
             /* Always provide a description for screen readers even when not visually displayed.
                This prevents Radix's "Missing Description" advisory from firing. */
             <DialogDescription className="sr-only">
-              {confirmLabel} confirmation dialog
+              {title}
             </DialogDescription>
           )}
         </DialogHeader>
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline" disabled={loading}>
-              {cancelLabel}
+              {cancelLabel ?? t('common.cancel')}
             </Button>
           </DialogClose>
           <Button

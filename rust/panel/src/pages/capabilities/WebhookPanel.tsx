@@ -24,7 +24,7 @@ export function WebhookPanel() {
           <CardTitle id="webhook-addresses-title">{t('capabilities.hooks.title')}</CardTitle>
           <CardDescription>{t('capabilities.hooks.description')}</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-5">
+        <CardContent className="flex min-w-0 flex-col gap-5">
           <QueryState query={hooks}>
             {hooks.data && (
               <>
