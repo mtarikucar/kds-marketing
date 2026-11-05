@@ -68,6 +68,14 @@ jobs:
           server-host: '38.242.233.166'
       - name: Transfer the verified candidate
         run: scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-01194c85.tar
+      - name: Record installed staging schema metadata
+        run: |
+          ssh -o BatchMode=yes root@38.242.233.166 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          printf 'Installed staging revision: '
+          cat /opt/jeeta/staging-current/REVISION
+          sudo -u postgres psql -XAt -p 5437 -d jeeta -v ON_ERROR_STOP=1 -c "SELECT version,encode(checksum,'hex'),success FROM _sqlx_migrations ORDER BY version"
+          REMOTE
       - name: Verify, back up and publish staging only
         run: |
           ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 'bash -s' < ops/publish-staging-01194c85.sh
