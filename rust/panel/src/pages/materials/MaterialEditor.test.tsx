@@ -25,6 +25,55 @@ const answers = {
 const open = () => renderAt('/studio?tab=materials&view=olays&material=m1');
 
 describe('Materyaller · Materyal', () => {
+  it('preserves a hidden draft after another section saves and submits it at the refreshed revision', async () => {
+    const user = userEvent.setup();
+    let latest = { ...suggested, tags: { ...suggested.tags, depicts: [] as string[] } };
+    const calls = mockFetch({
+      ...answers,
+      get ['GET /api/studio/materials/m1']() { return { material: latest, used_in: [] }; },
+      get ['PUT /api/studio/materials/m1/permission']() {
+        latest = { ...suggested, revision: 3, share: { permission: 'not_shareable', at: '2026-11-05T10:00:00Z', by: 'u1' } };
+        return latest;
+      },
+      get ['PATCH /api/studio/materials/m1/tags']() {
+        latest = { ...latest, revision: 4, tags: { ...latest.tags, depicts: ['face'] } };
+        return latest;
+      },
+    });
+    open();
+    const editor = await screen.findByTestId('material-editor');
+    await user.click(await within(editor).findByRole('checkbox', { name: /Yüz/ }));
+    await user.click(within(editor).getByRole('button', { name: 'İzin ve yerleşim' }));
+    await user.click(within(editor).getByRole('radio', { name: 'Paylaşılamaz' }));
+    await user.click(within(editor).getByRole('button', { name: 'İzni kaydet' }));
+    await waitFor(() => expect(within(editor).getByRole('button', { name: 'İzni kaydet' })).toBeDisabled());
+    expect(calls.find((call) => call.method === 'PUT')?.body).toMatchObject({ expected_revision: 2 });
+    await user.click(within(editor).getByRole('button', { name: 'Etiketler ve kişiler' }));
+    expect(within(editor).getByRole('checkbox', { name: /Yüz/ })).toBeChecked();
+    await user.click(within(editor).getByRole('button', { name: 'Etiketleri onayla' }));
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({ expected_revision: 3, depicts: ['face'] }));
+  });
+
+  it('shows one task group at a time and preserves unsaved tags when changing groups', async () => {
+    const calls = mockFetch({ ...answers, 'PATCH /api/studio/materials/m1/tags': suggested });
+    const user = userEvent.setup();
+    open();
+    const editor = await screen.findByTestId('material-editor');
+    await user.click(await within(editor).findByRole('checkbox', { name: /Yüz/ }));
+    expect(within(editor).queryByRole('button', { name: 'İzni kaydet' })).not.toBeInTheDocument();
+    await user.click(within(editor).getByRole('button', { name: 'İzin ve yerleşim' }));
+    expect(within(editor).getByRole('button', { name: 'İzni kaydet' })).toBeVisible();
+    expect(within(editor).queryByRole('button', { name: 'Etiketleri onayla' })).not.toBeInTheDocument();
+    await user.click(within(editor).getByRole('button', { name: 'Kullanım geçmişi' }));
+    expect(within(editor).getByRole('button', { name: 'Materyali sil' })).toBeVisible();
+    expect(within(editor).queryByRole('radio', { name: 'Paylaşılamaz' })).not.toBeInTheDocument();
+    await user.click(within(editor).getByRole('button', { name: 'Etiketler ve kişiler' }));
+    expect(within(editor).getByRole('checkbox', { name: /Yüz/ })).toBeChecked();
+    expect(calls.some((call) => call.method !== 'GET')).toBe(false);
+    await user.click(within(editor).getByRole('button', { name: 'Etiketleri onayla' }));
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toMatchObject({ depicts: ['face'], expected_revision: 2 }));
+  });
+
   it("shows an agent's tags as a suggestion and saving them confirms them", async () => {
     const calls = mockFetch({ ...answers, 'PATCH /api/studio/materials/m1/tags': suggested });
     open();
@@ -55,7 +104,8 @@ describe('Materyaller · Materyal', () => {
     });
     open();
     const editor = await screen.findByTestId('material-editor');
-    await userEvent.click(await within(editor).findByRole('radio', { name: 'Paylaşılamaz' }));
+    await userEvent.click(await within(editor).findByRole('button', { name: 'İzin ve yerleşim' }));
+    await userEvent.click(within(editor).getByRole('radio', { name: 'Paylaşılamaz' }));
     await userEvent.click(within(editor).getByRole('button', { name: 'İzni kaydet' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/permission'))?.body).toEqual({
@@ -84,7 +134,8 @@ describe('Materyaller · Materyal', () => {
     });
     open();
     const editor = await screen.findByTestId('material-editor');
-    await userEvent.click(await within(editor).findByRole('button', { name: 'Materyali sil' }));
+    await userEvent.click(await within(editor).findByRole('button', { name: 'Kullanım geçmişi' }));
+    await userEvent.click(within(editor).getByRole('button', { name: 'Materyali sil' }));
     const dialog = await screen.findByRole('dialog', { name: 'Materyal silinsin mi?' });
     expect(within(dialog).getByText(/baytları\) silinir/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır/)).toBeInTheDocument();
@@ -102,12 +153,14 @@ describe('Materyaller · Materyal', () => {
     mockFetch({ ...answers, 'GET /api/auth/me': repMe });
     open();
     const editor = await screen.findByTestId('material-editor');
+    await userEvent.click(await within(editor).findByRole('button', { name: 'İzin ve yerleşim' }));
     expect(
-      await within(editor).findByText('Paylaşım iznini yalnızca sahip veya yönetici değiştirebilir.'),
+      within(editor).getByText('Paylaşım iznini yalnızca sahip veya yönetici değiştirebilir.'),
     ).toBeInTheDocument();
-    expect(within(editor).queryByRole('button', { name: 'Materyali sil' })).not.toBeInTheDocument();
     expect(within(editor).queryByRole('button', { name: 'Genel kullanılabilir yap' })).not.toBeInTheDocument();
     expect(within(editor).queryByRole('button', { name: 'Taşı' })).not.toBeInTheDocument();
+    await userEvent.click(within(editor).getByRole('button', { name: 'Kullanım geçmişi' }));
+    expect(within(editor).queryByRole('button', { name: 'Materyali sil' })).not.toBeInTheDocument();
   });
 
   it('names where a material was used, with its published post', async () => {

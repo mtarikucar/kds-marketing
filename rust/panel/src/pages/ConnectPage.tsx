@@ -51,18 +51,29 @@ import {
 import { rememberStart } from '@/lib/oauthFlow';
 import { can } from '@/lib/roles';
 import { CAPABILITIES_KEY, invalidateCapabilities } from './capabilities/queries';
+import { useEntryCopy } from './entryCopy';
 
 /** The kinds of every provider, in sections, one pressed. */
-function KindPicker({ value, onChange }: { value: string | null; onChange: (kind: string) => void }) {
+function KindPicker({ value, onChange, onReset }: { value: string | null; onChange: (kind: string) => void; onReset: () => void }) {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
+  const [provider, setProvider] = useState<Provider | ''>(() => value ? providerOf(value) ?? '' : '');
   return (
-    <section aria-label={t('connect.kindsLabel')} className="divide-y divide-border border-y border-border">
-      {PROVIDERS.map((provider) => (
+    <section aria-label={t('connect.kindsLabel')} className="space-y-4 border-y border-border py-5">
+      <div><h2 className="text-lg font-medium">{copy('chooseService')}</h2><p className="mt-1 text-sm text-muted-foreground">{copy('chooseServiceHelp')}</p></div>
+      <label className="flex max-w-md flex-col gap-2 text-sm font-medium">
+        {copy('providerLabel')}
+        <select className="min-h-10 rounded-md border border-input bg-surface px-3 text-sm font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={provider} onChange={event => { setProvider(event.target.value as Provider | ''); onReset(); }}>
+          <option value="">{copy('providerPlaceholder')}</option>
+          {PROVIDERS.map(item => <option key={item} value={item}>{t(`connect.providers.${item}`)}</option>)}
+        </select>
+      </label>
+      {provider && (
         <div
           key={provider}
           role="group"
           aria-label={t(`connect.providers.${provider}`)}
-          className="grid gap-3 py-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:items-start"
+          className="space-y-3"
         >
           <h2 className="pt-1.5 text-sm font-medium text-foreground">{t(`connect.providers.${provider}`)}</h2>
           <div className="flex flex-wrap gap-2">
@@ -88,7 +99,7 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
             })}
           </div>
         </div>
-      ))}
+      )}
     </section>
   );
 }
@@ -690,6 +701,7 @@ function ConnectKind({
  */
 export function ConnectPage() {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
   const session = useSession();
   const canManage = can(session.data, 'capabilities.manage');
   const [params] = useSearchParams();
@@ -736,9 +748,12 @@ export function ConnectPage() {
   } else {
     body = (
       <div className="flex flex-col gap-6">
-        <KindPicker value={kind} onChange={setChosen} />
+        <KindPicker value={kind} onChange={setChosen} onReset={() => setChosen(null)} />
         {kind ? (
-          <ConnectKind key={kind} kind={kind} capability={null} onDone={setDone} />
+          <section className="max-w-3xl space-y-4">
+            <div><h2 className="text-lg font-medium">{copy('connectStep')}</h2><p className="mt-1 text-sm text-muted-foreground">{copy('connectStepHelp')}</p></div>
+            <ConnectKind key={kind} kind={kind} capability={null} onDone={setDone} />
+          </section>
         ) : (
           <p className="text-sm text-muted-foreground">{t('connect.chooseKind')}</p>
         )}

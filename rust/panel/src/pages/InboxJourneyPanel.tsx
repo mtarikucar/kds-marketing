@@ -105,13 +105,12 @@ function EventForm({ journeyId }: { journeyId: string }) {
   return (
     <form
       aria-label={t('inbox.report')}
-      className="flex flex-col gap-4 border-t border-border pt-5"
+      className="flex flex-col gap-4"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
       }}
     >
-      <h3 className="font-medium">{t('inbox.report')}</h3>
       <label className="flex min-w-0 flex-col gap-2 text-sm">
         {t('inbox.event')}
         <select
@@ -328,7 +327,10 @@ export function InboxJourneyPanel({
             </section>
             <Disclosure title={t('inbox.offers.quotes')}><InboxQuotes journeyId={journeyId} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
             <Disclosure title={t('inbox.offers.appointments')}><InboxAppointments journeyId={journeyId} appointments={data.data?.appointments ?? []} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
-            {journey.status !== 'lost' && journey.status !== 'won' && <EventForm journeyId={journeyId} />}
+            {journey.status !== 'lost' && journey.status !== 'won' && <details className="border-t border-border pt-3">
+              <summary className="cursor-pointer text-sm font-medium">{t('inbox.report')}</summary>
+              <div className="pt-4"><EventForm journeyId={journeyId} /></div>
+            </details>}
             <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.tasks')}</h3>
               {data.data?.tasks.map((task) => (
@@ -353,9 +355,11 @@ export function InboxJourneyPanel({
               ))}
               {data.data?.tasks.length === 0 && <p className="text-sm leading-6 text-muted-foreground">{t('inbox.noTasks')}</p>}
               <ErrorCallout error={complete.error} />
+              <details>
+              <summary className="cursor-pointer text-sm font-medium">{t('inbox.addTask')}</summary>
               <form
                 aria-label={t('inbox.addTask')}
-                className="flex flex-col gap-2"
+                className="flex flex-col gap-3 pt-4"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (title.trim() && due) create.mutate();
@@ -399,6 +403,7 @@ export function InboxJourneyPanel({
                   {t('inbox.addTask')}
                 </Button>
               </form>
+              </details>
             </section>
             <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.notes')}</h3>
@@ -410,8 +415,11 @@ export function InboxJourneyPanel({
                 </div>
               ))}
               {data.data?.notes.length === 0 && <p className="text-sm leading-6 text-muted-foreground">{t('inbox.noNotes')}</p>}
+              <details>
+              <summary className="cursor-pointer text-sm font-medium">{t('inbox.addNote')}</summary>
               <form
-                className="flex flex-col gap-2"
+                aria-label={t('inbox.addNote')}
+                className="flex flex-col gap-3 pt-4"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (note.trim()) add.mutate();
@@ -426,6 +434,7 @@ export function InboxJourneyPanel({
                   {t('inbox.addNote')}
                 </Button>
               </form>
+              </details>
             </section>
           </>
         )}

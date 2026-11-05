@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { useEntryCopy } from './entryCopy';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { completeOAuth, confirmAssets } from '@/api/connectors';
 import type { AssetPublic, PendingAssetsOut } from '@/api/types';
@@ -91,6 +92,7 @@ function AssetRow({
   onChange: (checked: boolean) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const copy = useEntryCopy();
   const account = assets[0].external_id;
   const id = `asset-${account}`;
   const each = assets.map(facts);
@@ -114,6 +116,9 @@ function AssetRow({
         {assets.length > 1 && (
           <p className="text-caption text-muted-foreground">{t('oauthCallback.together', { kinds: kinds.join(' + ') })}</p>
         )}
+        <details className="mt-1 text-caption text-muted-foreground">
+        <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{copy('accountDetails')}</summary>
+        <div className="mt-2 space-y-2">
         <p className="font-mono text-micro text-muted-foreground">
           {t('oauthCallback.externalId', { id: account })}
         </p>
@@ -135,6 +140,7 @@ function AssetRow({
             ))}
           </dl>
         )}
+        </div></details>
       </div>
     </li>
   );
@@ -169,6 +175,7 @@ function Failed({ message, flow }: { message: string; flow: RememberedFlow | nul
  */
 export function OAuthCallbackPage() {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
   const { provider = '' } = useParams();
   const known = isCallback(provider);
   const [params] = useSearchParams();
@@ -280,6 +287,7 @@ export function OAuthCallbackPage() {
                   />
                 ))}
               </ul>
+              <p className="text-sm leading-6 text-muted-foreground" aria-live="polite">{copy('selectedAccounts', { count: selected.length })}</p>
               <div>
                 <Button type="submit" loading={confirm.isPending} disabled={selected.length === 0}>
                   {t('oauthCallback.confirm')}

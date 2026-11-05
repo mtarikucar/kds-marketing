@@ -157,7 +157,7 @@ function MaterialPicker({
           </select>
         </label>
       )}
-      <ul className="space-y-1">
+      <ul className={`space-y-1 ${shown.length > 6 ? 'max-h-72 overflow-y-auto pe-2' : ''}`}>
         {shown.map((c) => (
           <li key={c.material_id}>
             <label className="flex min-h-11 items-center gap-2 text-sm">

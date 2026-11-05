@@ -159,12 +159,12 @@ function mcpUrl(): string {
  * How an agent reaches this workspace: the endpoint, and with a fresh key the ready-to-paste
  * Claude Code command. The plaintext appears only while its one-time dialog is open.
  */
-export function ConnectAgent({ plaintext }: { plaintext?: string }) {
+export function ConnectAgent({ plaintext, showTitle = true }: { plaintext?: string; showTitle?: boolean }) {
   const { t } = useTranslation();
   const url = mcpUrl();
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <p className="font-medium text-foreground">{t('apiKeys.connect.title')}</p>
+      {showTitle && <p className="font-medium text-foreground">{t('apiKeys.connect.title')}</p>}
       <CopyField label={t('apiKeys.connect.url')} value={url} />
       {plaintext ? (
         <>
@@ -288,7 +288,10 @@ export function ApiKeysPage() {
       </QueryState>
       <Card className="rounded-none border-0 border-t border-border bg-transparent">
         <CardContent className="px-0 pb-0 pt-6">
-          <ConnectAgent />
+          <details>
+            <summary className="cursor-pointer text-sm font-medium">{t('apiKeys.connect.title')}</summary>
+            <div className="mt-4"><ConnectAgent showTitle={false} /></div>
+          </details>
         </CardContent>
       </Card>
       {canManage && creating && <CreateKeyDialog key={session.data?.current_workspace} open onOpenChange={setCreating} />}

@@ -297,6 +297,7 @@ export function CapabilitiesPage() {
   const pageCount = Math.max(1, Math.ceil(items.length / 8));
   const activePage = Math.min(page, pageCount);
   const visibleItems = items.slice((activePage - 1) * 8, activePage * 8);
+  const firstConnection = all.isSuccess && all.data.length === 0;
   const filtered = goal !== 'all' || filter !== 'all' || status !== 'all' || !!search;
 
   return (
@@ -323,10 +324,16 @@ export function CapabilitiesPage() {
       />
       <Tabs value={section} onValueChange={setSection}>
         <TabsList aria-label={t('capabilities.title')} className="flex w-full flex-wrap">
-          <TabsTrigger value="connections" className="min-h-11 px-3 sm:px-4">{t('capabilities.workbench.inventory')}</TabsTrigger>
-          <TabsTrigger value="groups" className="min-h-11 px-3 sm:px-4">{t('capabilities.workbench.groupsTab')}</TabsTrigger>
+          <TabsTrigger value="connections" className="min-h-11 px-3 sm:px-4">
+            {t('capabilities.workbench.inventory')}
+          </TabsTrigger>
+          <TabsTrigger value="groups" className="min-h-11 px-3 sm:px-4">
+            {t('capabilities.workbench.groupsTab')}
+          </TabsTrigger>
           {canManage && (
-            <TabsTrigger value="technical" className="min-h-11 px-3 sm:px-4">{t('capabilities.workbench.technicalTab')}</TabsTrigger>
+            <TabsTrigger value="technical" className="min-h-11 px-3 sm:px-4">
+              {t('capabilities.workbench.technicalTab')}
+            </TabsTrigger>
           )}
         </TabsList>
         <TabsContent value="connections" className="space-y-5">
@@ -339,69 +346,106 @@ export function CapabilitiesPage() {
             onDevices={() => {
               setFilter('device');
               setPage(1);
-              document.getElementById('capability-inventory')?.scrollIntoView({ block: 'start' });
+              document.getElementById('capability-inventory')?.scrollIntoView?.({ block: 'start' });
             }}
           />
           <section id="capability-inventory" className="scroll-mt-6 space-y-4">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-medium">{t('capabilities.workbench.inventory')}</h2>
-                {listed.isSuccess && (
-                  <p className="mt-1 text-caption text-muted-foreground" role="status">
-                    {t('capabilities.workbench.count', { count: items.length })}
-                  </p>
-                )}
-              </div>
-              {filtered && (
-                <Button variant="ghost" onClick={clearFilters}>
-                  {t('capabilities.workbench.clear')}
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Input
-                aria-label={t('capabilities.workbench.search')}
-                placeholder={t('capabilities.workbench.searchPlaceholder')}
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                className="sm:max-w-sm"
-              />
-              <select
-                aria-label={t('capabilities.workbench.statusLabel')}
-                value={status}
-                onChange={(e) => {
-                  setStatus(e.target.value as typeof status);
-                  setPage(1);
-                }}
-                className="h-10 min-w-0 rounded-md border border-input bg-surface px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {(['all', 'attention', 'verified', 'retired'] as const).map((value) => (
-                  <option key={value} value={value}>
-                    {t(`capabilities.workbench.${value === 'all' ? 'allStatus' : value}`)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <Disclosure title={t('capabilities.workbench.advanced')}>
-              <FilterChips
-                value={filter}
-                onChange={(next) => {
-                  setFilter(next);
-                  setPage(1);
-                }}
-              />
-            </Disclosure>
+            {!firstConnection && (
+              <>
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-medium">{t('capabilities.workbench.inventory')}</h2>
+                    {listed.isSuccess && (
+                      <p className="mt-1 text-caption text-muted-foreground" role="status">
+                        {t('capabilities.workbench.count', { count: items.length })}
+                      </p>
+                    )}
+                  </div>
+                  {filtered && (
+                    <Button variant="ghost" onClick={clearFilters}>
+                      {t('capabilities.workbench.clear')}
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <Input
+                    aria-label={t('capabilities.workbench.search')}
+                    placeholder={t('capabilities.workbench.searchPlaceholder')}
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setPage(1);
+                    }}
+                    className="sm:max-w-sm"
+                  />
+                  <select
+                    aria-label={t('capabilities.workbench.statusLabel')}
+                    value={status}
+                    onChange={(e) => {
+                      setStatus(e.target.value as typeof status);
+                      setPage(1);
+                    }}
+                    className="h-10 min-w-0 rounded-md border border-input bg-surface px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {(['all', 'attention', 'verified', 'retired'] as const).map((value) => (
+                      <option key={value} value={value}>
+                        {t(`capabilities.workbench.${value === 'all' ? 'allStatus' : value}`)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Disclosure title={t('capabilities.workbench.advanced')}>
+                  <FilterChips
+                    value={filter}
+                    onChange={(next) => {
+                      setFilter(next);
+                      setPage(1);
+                    }}
+                  />
+                </Disclosure>
+              </>
+            )}
             {filter === 'device' && canPair && <PairBridgePanel />}
             {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
             <QueryState query={listed} keepOnError>
               {items.length === 0 ? (
-                <EmptyState
-                  title={t(filtered ? 'capabilities.workbench.noMatch' : 'capabilities.empty')}
-                  description={t(filtered ? 'capabilities.workbench.noMatchBody' : 'capabilities.emptyBody')}
-                />
+                filtered && !firstConnection ? (
+                  <EmptyState
+                    title={t('capabilities.workbench.noMatch')}
+                    description={t('capabilities.workbench.noMatchBody')}
+                  />
+                ) : (
+                  <section
+                    className="flex items-start gap-4 border-y border-border bg-surface p-4 sm:items-center sm:gap-6 sm:p-6"
+                    aria-label={t('capabilities.empty')}
+                  >
+                    <img
+                      src="/brand/guide-setup.webp"
+                      alt=""
+                      aria-hidden="true"
+                      width={112}
+                      height={112}
+                      className="h-20 w-20 shrink-0 object-contain sm:h-28 sm:w-28"
+                    />
+                    <div className="min-w-0 space-y-3">
+                      <div>
+                        <h3 className="text-base font-medium">{t('capabilities.empty')}</h3>
+                        <p className="mt-1 max-w-lg text-sm leading-6 text-muted-foreground">
+                          {t(
+                            canManage
+                              ? 'capabilities.workbench.startHelp'
+                              : 'capabilities.workbench.managerNeeded',
+                          )}
+                        </p>
+                      </div>
+                      {canManage && (
+                        <Button asChild>
+                          <Link to="/connect">{t('capabilities.workbench.startConnection')}</Link>
+                        </Button>
+                      )}
+                    </div>
+                  </section>
+                )
               ) : (
                 <div className="divide-y divide-border border-y border-border">
                   {visibleItems.map((item) => (

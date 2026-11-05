@@ -50,11 +50,15 @@ describe('ResearchTasksPage', () => {
       `/prospects?task=${taskId(2)}`,
     );
 
-    // The form mirrors the brief.
+    // The form opens on demand and keeps a draft when hidden.
+    await user.click(screen.getByRole('button', { name: tr.leads.tasks.create.title }));
     const form = within(screen.getByRole('form', { name: tr.leads.tasks.create.title }));
     const submit = form.getByRole('button', { name: tr.leads.tasks.create.submit });
     expect(submit).toBeDisabled();
     await user.type(form.getByRole('textbox', { name: tr.leads.tasks.create.sectors }), 'kafe{Enter}pastane');
+    await user.click(screen.getByRole('button', { name: /Hide task form|Görev formunu gizle/ }));
+    await user.click(screen.getByRole('button', { name: tr.leads.tasks.create.title }));
+    expect(form.getByRole('textbox', { name: tr.leads.tasks.create.sectors })).toHaveValue('kafe\npastane');
     await user.type(form.getByRole('textbox', { name: tr.leads.tasks.create.areas }), 'İzmir / Alsancak{Enter}Manisa');
     await user.type(form.getByRole('textbox', { name: tr.leads.tasks.create.exclusions }), 'zincir');
     await user.clear(form.getByRole('spinbutton', { name: tr.leads.tasks.create.dailyCap }));
@@ -99,6 +103,7 @@ describe('ResearchTasksPage', () => {
       answers({ 'POST /api/research/tasks': delayed(300, { task: task(3), remaining_today: 10 }) }),
     );
     renderAt('/prospects/tasks');
+    await user.click(await screen.findByRole('button', { name: tr.leads.tasks.create.title }, LOADED));
     const formEl = await screen.findByRole('form', { name: tr.leads.tasks.create.title }, LOADED);
     const form = within(formEl);
     await user.type(form.getByRole('textbox', { name: tr.leads.tasks.create.sectors }), 'kafe');

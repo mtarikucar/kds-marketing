@@ -28,6 +28,8 @@ describe('ProspectsPage', () => {
 
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.status }), 'qualified');
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.bucket }), '75-100');
+    expect(screen.queryByRole('textbox', { name: tr.leads.prospects.filters.city })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /More filters|Diğer filtreler/ }));
     await screen.findByRole('option', { name: 'Strateji görevi · kafeler_izmir' }, LOADED);
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.task }), task(1).id);
     await user.click(screen.getByRole('textbox', { name: tr.leads.prospects.filters.city }));
@@ -68,12 +70,21 @@ describe('ProspectsPage', () => {
     // Many steps, each a render of the table: more time than one interaction needs.
   }, 15_000);
 
+  it('keeps a task filter visible when opened from a research task', async () => {
+    const calls = mockFetch(answers());
+    renderAt(`/prospects?task=${task(1).id}`);
+    const taskFilter = await screen.findByRole('combobox', { name: tr.leads.prospects.filters.task }, LOADED);
+    expect(taskFilter).toHaveValue(task(1).id);
+    await waitFor(() => expect(listCalls(calls).at(-1)!.get('research_task_id')).toBe(task(1).id));
+  });
+
   it('clears filters when no prospects match', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(answers({ 'GET /api/prospects': { items: [], next: null } }));
     renderAt('/prospects');
     await screen.findByText(tr.leads.prospects.empty, {}, LOADED);
     const status = screen.getByRole('combobox', { name: tr.leads.prospects.filters.status });
+    await user.click(screen.getByRole('button', { name: /More filters|Diğer filtreler/ }));
     const city = screen.getByRole('textbox', { name: tr.leads.prospects.filters.city });
     await user.selectOptions(status, 'qualified');
     await user.type(city, 'Izmir');

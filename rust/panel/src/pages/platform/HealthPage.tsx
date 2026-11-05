@@ -37,10 +37,13 @@ export function HealthPage() {
         <div><dt>{t('platform.health.started')}</dt><dd>{date(h.process_started_at)}</dd></div>
       </dl>
       <p className="text-sm text-muted-foreground">{t('platform.health.history')}</p>
+      <details className="space-y-4 border-t border-border pt-5">
+      <summary className="cursor-pointer text-sm font-medium">{t('platform.health.workbench.details', { defaultValue: 'İşler, bağlantılar ve yedekleme' })}</summary>
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.jobs')}</h2>{h.jobs.map(j=><p key={j.name}>{j.name} · {date(j.last_success_at)} · {t('platform.health.failures')}: {j.failed_total}</p>)}</section>
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.connectors')}</h2>{h.connectors.map(c=><p key={`${c.workspace_id}:${c.kind_key}`}>{c.workspace_id} · {c.kind_key} · {t('platform.health.reconnect')}: {c.reconnect_required} · {date(c.expires_before)}</p>)}</section>
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.webhooks')}</h2><p>{t('platform.health.accepted')}: {h.webhooks.accepted} · {t('platform.health.unrouted')}: {h.webhooks.unrouted} · {t('platform.health.unresolved')}: {h.webhooks.unresolved}</p></section>
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.backup')}</h2><p>{t(`platform.health.${h.backup.backup_state}`)} · {date(h.backup.last_backup_at)}</p><p>WAL: {t(`platform.health.${h.backup.wal_state}`)} · {date(h.backup.last_wal_archive_at)}</p></section>
+      </details>
     </>}</QueryState>
     <form className="max-w-lg space-y-3 border-t border-border pt-6" onSubmit={e=>{e.preventDefault();void reset();}}>
       <h2 className="font-display text-h3">{t('platform.health.reset')}</h2><p className="text-sm text-muted-foreground">{t('platform.health.resetHelp')}</p>

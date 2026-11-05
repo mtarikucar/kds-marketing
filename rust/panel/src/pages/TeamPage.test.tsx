@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
-import { me, members, roles } from '@/test/fixtures';
+import { me, members, repMe, roles } from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
 
 describe('TeamPage', () => {
@@ -51,4 +51,19 @@ describe('TeamPage invite dialog', () => {
     await user.click(within(dialog).getByRole('button', { name: tr.common.close }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+});
+
+
+it('offers an invitation from the empty team state only to managers', async () => {
+  mockFetch({ 'GET /api/auth/me': me, 'GET /api/team': [], 'GET /api/roles': roles });
+  const view = renderAt('/team');
+  await screen.findByText(tr.team.empty);
+  await waitFor(() => expect(screen.getByRole('button', { name: tr.team.invite })).toBeEnabled());
+  await userEvent.click(screen.getByRole('button', { name: tr.team.invite }));
+  expect(await screen.findByRole('dialog')).toBeVisible();
+  view.unmount();
+  mockFetch({ 'GET /api/auth/me': repMe, 'GET /api/team': [], 'GET /api/roles': roles });
+  renderAt('/team');
+  await screen.findByText(tr.team.empty);
+  expect(screen.queryByRole('button', { name: tr.team.invite })).not.toBeInTheDocument();
 });

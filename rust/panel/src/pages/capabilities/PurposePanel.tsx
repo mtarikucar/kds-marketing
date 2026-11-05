@@ -79,7 +79,7 @@ export function PurposePanel({
           <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             {t(`capabilities.workbench.goals.${goal}.description`)}
           </p>
-          {canManage ? (
+          {canManage || (goal === 'devices' && canPair) ? (
             <div className="mt-3">
               <Disclosure title={t('capabilities.workbench.addForPurpose')}>
                 <div className="flex flex-wrap gap-2 py-2">
@@ -96,7 +96,7 @@ export function PurposePanel({
                       {t('capabilities.workbench.pairDevice')}
                     </Button>
                   )}
-                  {(goal === 'devices' || goal === 'tools' || goal === 'growth') && (
+                  {canManage && (goal === 'devices' || goal === 'tools' || goal === 'growth') && (
                     <Button variant="outline" onClick={onDeclare}>
                       {t('capabilities.declare')}
                     </Button>

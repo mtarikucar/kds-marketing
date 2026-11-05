@@ -492,7 +492,10 @@
     "redactedNote": "Secret values are masked.",
     "loadMore": "Load more",
     "empty": "The ledger is empty.",
-    "emptyBody": "Things that happen in the workspace will show up here."
+    "emptyBody": "Things that happen in the workspace will show up here.",
+    "workbench": {
+      "scrollHint": "Scroll the table horizontally to see the other columns."
+    }
   },
   "platform": {
     "console": "Platform console",
@@ -570,7 +573,10 @@
       "resetHelp": "Reset a different operator and revoke all their sessions. Use at least 12 characters.",
       "operator": "Operator ID",
       "password": "New password",
-      "resetDone": "Password reset; target sessions revoked."
+      "resetDone": "Password reset; target sessions revoked.",
+      "workbench": {
+        "details": "Jobs, connections and backups"
+      }
     }
   },
   "notFound": {
@@ -1190,7 +1196,9 @@
       "next": "Next",
       "page": "{{current}} / {{total}}",
       "showDetails": "Details",
-      "hideDetails": "Hide details"
+      "hideDetails": "Hide details",
+      "startHelp": "Connect one account your customers use. Then check its connection status here.",
+      "startConnection": "Connect your first account"
     }
   },
   "connect": {
@@ -1391,6 +1399,9 @@
       "human": "Human",
       "agent": "Agent",
       "connector": "Connector ({{name}})"
+    },
+    "workbench": {
+      "scrollHint": "Scroll the table horizontally to see the other columns."
     }
   },
   "inbox": {
@@ -1766,7 +1777,12 @@
       "approvalNote": "On this account the agent's replies wait for your approval."
     },
     "noTasks": "No tasks yet. Add the next follow-up below.",
-    "noNotes": "No notes yet. Add useful context for your team."
+    "noNotes": "No notes yet. Add useful context for your team.",
+    "ux": {
+      "browseQueues": "Queues and people search",
+      "emptyQueueHint": "Choose another queue or search for a person. New conversations arrive here from connected customer channels.",
+      "chooseHint": "Choose a conversation from a queue. Search for a person to find earlier conversations."
+    }
   },
   "studio": {
     "title": "Growth studio",
@@ -2134,7 +2150,11 @@
       "phone": "Phone"
     },
     "clearSearch": "Clear search",
-    "noMatchBody": "Try another name or company, or clear your search."
+    "noMatchBody": "Try another name or company, or clear your search.",
+    "ux": {
+      "connectChannels": "Connect customer channels",
+      "emptyBody": "People appear here when a connected channel receives a first message or a lead is imported."
+    }
   },
   "failure": {
     "recipientNotAllowed": "the recipient is not on the Meta test number's allowed list. Add the number as a recipient in Meta under WhatsApp → API Setup, or connect a real WhatsApp number.",
@@ -2317,7 +2337,10 @@
       "scriptsTitle": "Greetings and notices",
       "phrasesTitle": "Holding and fallback phrases",
       "limitsTitle": "Timing and transfer",
-      "description": "Set what callers hear, holding phrases and timing limits."
+      "description": "Set what callers hear, holding phrases and timing limits.",
+      "ux": {
+        "sectionHint": "Open the section you want to change. Values and draft edits in closed sections are preserved; Save applies all settings together."
+      }
     },
     "filterEmpty": "No calls in this direction",
     "filterEmptyBody": "Choose another direction to see the rest of your call log.",
@@ -2544,7 +2567,12 @@
       "again": "New upload",
       "serverSuggests": "By its capture date, this material may belong to “{{title}}”.",
       "moveThere": "Move it to that event",
-      "moved": "Moved to “{{title}}”."
+      "moved": "Moved to “{{title}}”.",
+      "workbench": {
+        "searchEvents": "Search event name or place",
+        "selectedEvent": "Selected event: {{title}}",
+        "noEvents": "No matching events. Change your search or create an event below."
+      }
     },
     "olay": {
       "kind": "Type",
@@ -2613,7 +2641,15 @@
       "deleteKvkk": "As KVKK requires, the file itself (its bytes) is deleted and its title, tags and people are cleared. Its record stays as evidence of the content it was used in.",
       "deleteUsed": "Posts already published stay on their provider: remove them yourself from the “Where it was used” links.",
       "deleteConfirm": "Delete",
-      "deleteCancel": "Cancel"
+      "deleteCancel": "Cancel",
+      "workbench": {
+        "sections": "Material sections",
+        "review": "Tags and people",
+        "publishing": "Permission and location",
+        "history": "Usage history",
+        "reviewHelp": "Review the content and the people shown. Save each section separately.",
+        "publishingHelp": "Decide where this material can be used. Sharing permission and event assignment are separate decisions."
+      }
     },
     "people": {
       "title": "People shown",
@@ -3155,6 +3191,14 @@
         "slaDue": "First contact due {{at}}",
         "acted": "Acted on {{at}}",
         "superseded": "Replaced by a later decision"
+      },
+      "workbench": {
+        "sections": "Distribution sections",
+        "ruleDetails": "Matching and routing",
+        "invalidScore": "{{name}}: The minimum score must be a whole number from 0 to 100.",
+        "invalidSla": "{{name}}: The first-contact time must be a whole number from 5 to 10080 minutes.",
+        "invalidMembers": "{{name}}: Select at least one member.",
+        "invalidReassign": "The reassignment limit must be a whole number from 0 to 10."
       }
     },
     "basis": {
@@ -3402,6 +3446,11 @@
       "title": "No matching results",
       "body": "Change or clear the filters to see more results.",
       "clear": "Clear filters"
+    },
+    "ux": {
+      "moreFilters": "More filters",
+      "hideFilters": "Hide extra filters",
+      "hideTaskForm": "Hide task form"
     }
   },
   "posts": {
@@ -3506,7 +3555,14 @@
       "saved": "Saved.",
       "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
       "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
-      "managerOnly": "Only an owner or manager changes these settings."
+      "managerOnly": "Only an owner or manager changes these settings.",
+      "workbench": {
+        "sections": "Settings groups",
+        "formats": "Format timing",
+        "limits": "Daily limits",
+        "calendar": "Calendar and time",
+        "saveHelp": "Switch between groups as needed. Save applies changes from all groups together."
+      }
     }
   },
   "publicIntro": {
@@ -3524,5 +3580,51 @@
       "title": "See what happened",
       "description": "Follow completed work and its results back to the source."
     }
+  },
+  "entryUx": {
+    "providerLabel": "Service provider",
+    "providerPlaceholder": "Choose a service",
+    "chooseService": "1. Which account will you connect?",
+    "chooseServiceHelp": "Choose the provider, then the type of account you use",
+    "connectStep": "2. Give access to your account",
+    "connectStepHelp": "After connecting, review the account on the Capabilities page",
+    "setupAudience": "These technical details are for the team managing the provider app. Use the step above to connect your own account",
+    "callbackProvider": "Provider callback to show",
+    "transferDetails": "Bank details and payment reference",
+    "reportDetails": "Review or correct the notification",
+    "reportSection": "I have made the transfer",
+    "reportHelp": "If you have transferred the payment, confirm its amount and time",
+    "billingPending": "Make the transfer with the reference below, then send the payment notification",
+    "billingApproval": "Your notification is under review. Once approved, enter the activation code you receive on this page",
+    "billingActivation": "Enter the 8-character code you received to open the workspace",
+    "billingActive": "Your workspace is open. Continue with any remaining setup steps",
+    "billingSuspended": "The workspace is suspended. Check with the operator before reporting another payment",
+    "setupNextTitle": "Next step",
+    "setupNextPayment": "Check payment and activation",
+    "setupNextStrategy": "Prepare the strategy your team will follow",
+    "setupNextConnection": "Connect the first account you will use",
+    "setupNextAgent": "Check the agent connection",
+    "setupDone": "The core setup is ready. Open your pending work",
+    "setupOpen": "Open this step",
+    "setupOptional": "When needed",
+    "homeAllWork": "Show all work ({{count}})",
+    "homeLessWork": "Show the first five",
+    "loginInviteHint": "Sign in with the invited email address; you will return to your invitation",
+    "registerNext": "After creating your account, review payment and setup steps inside your workspace",
+    "workspaceHint": "Your team or business name",
+    "inviteReturn": "If you already have an account, sign in and return to this invitation",
+    "inviteAcceptedHelp": "Open the workspace with the permissions your team assigned",
+    "notFoundHint": "Check the address or return to the previous page",
+    "previousPage": "Previous page",
+    "inviteIntroTitle": "Join your team’s workspace",
+    "inviteIntroBody": "Accept the invitation, then continue with the work your team gives you access to",
+    "registerIntroTitle": "Set up your team’s workspace",
+    "registerIntroBody": "Create your account first. Setup, payment and account connections come next",
+    "operatorIntroTitle": "Workspace operations",
+    "operatorIntroBody": "Use your operator account to manage payment, access and system status",
+    "accountDetails": "Account identity and permission details",
+    "selectedAccounts": "{{count}} accounts selected. Confirmation opens the Capabilities page",
+    "setupSuspended": "Setup is paused",
+    "setupPermission": "Check setup progress with your workspace administrator"
   }
 }

@@ -492,7 +492,10 @@
     "redactedNote": "Gizli değerler maskelenmiştir.",
     "loadMore": "Daha fazla yükle",
     "empty": "Günlükte kayıt yok.",
-    "emptyBody": "Çalışma alanında bir şey olduğunda burada görünecek."
+    "emptyBody": "Çalışma alanında bir şey olduğunda burada görünecek.",
+    "workbench": {
+      "scrollHint": "Diğer sütunları görmek için tabloyu yatay kaydırın."
+    }
   },
   "platform": {
     "console": "Platform konsolu",
@@ -570,7 +573,10 @@
       "resetHelp": "Başka bir operatörün parolasını sıfırlar ve tüm oturumlarını kapatır. En az 12 karakter kullanın.",
       "operator": "Operatör kimliği",
       "password": "Yeni parola",
-      "resetDone": "Parola sıfırlandı; hedef operatörün oturumları kapatıldı."
+      "resetDone": "Parola sıfırlandı; hedef operatörün oturumları kapatıldı.",
+      "workbench": {
+        "details": "İşler, bağlantılar ve yedekleme"
+      }
     }
   },
   "notFound": {
@@ -1190,7 +1196,9 @@
       "next": "Sonraki",
       "page": "{{current}} / {{total}}",
       "showDetails": "Ayrıntılar",
-      "hideDetails": "Ayrıntıları kapat"
+      "hideDetails": "Ayrıntıları kapat",
+      "startHelp": "Müşterilerinizin kullandığı bir hesabı bağlayın. Ardından bağlantının durumunu buradan kontrol edin.",
+      "startConnection": "İlk hesabı bağla"
     }
   },
   "connect": {
@@ -1391,6 +1399,9 @@
       "human": "İnsan",
       "agent": "Ajan",
       "connector": "Bağlayıcı ({{name}})"
+    },
+    "workbench": {
+      "scrollHint": "Diğer sütunları görmek için tabloyu yatay kaydırın."
     }
   },
   "inbox": {
@@ -1766,7 +1777,12 @@
       "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
     },
     "noTasks": "Henüz görev yok. Sıradaki takip işini aşağıdan ekleyin.",
-    "noNotes": "Henüz not yok. Ekibiniz için yararlı bilgileri ekleyin."
+    "noNotes": "Henüz not yok. Ekibiniz için yararlı bilgileri ekleyin.",
+    "ux": {
+      "browseQueues": "Kuyruklar ve kişi araması",
+      "emptyQueueHint": "Başka bir kuyruk seçin veya bir kişiyi arayın. Yeni görüşmeler bağlı müşteri kanallarından buraya gelir.",
+      "chooseHint": "Kuyruktan bir görüşme seçin. Kişi aramasıyla geçmiş görüşmelere de ulaşabilirsiniz."
+    }
   },
   "studio": {
     "title": "Büyüme stüdyosu",
@@ -2134,7 +2150,11 @@
       "phone": "Telefon"
     },
     "clearSearch": "Aramayı temizle",
-    "noMatchBody": "Başka bir ad veya şirket deneyin ya da aramayı temizleyin."
+    "noMatchBody": "Başka bir ad veya şirket deneyin ya da aramayı temizleyin.",
+    "ux": {
+      "connectChannels": "Müşteri kanallarını bağla",
+      "emptyBody": "Bağlı kanallardan ilk mesaj geldiğinde veya müşteri adayı içe aktarıldığında kişiler burada görünür."
+    }
   },
   "failure": {
     "recipientNotAllowed": "alıcı, Meta test numarasının izinli alıcıları arasında değil. Numarayı Meta'da WhatsApp → API Setup'ta alıcı olarak ekleyin ya da gerçek bir WhatsApp numarası bağlayın.",
@@ -2317,7 +2337,10 @@
       "scriptsTitle": "Karşılama ve bildirimler",
       "phrasesTitle": "Bekletme ve yedek ifadeler",
       "limitsTitle": "Süreler ve aktarma",
-      "description": "Arayanların duyacağı metinleri, bekletme ifadelerini ve süre sınırlarını ayarlayın."
+      "description": "Arayanların duyacağı metinleri, bekletme ifadelerini ve süre sınırlarını ayarlayın.",
+      "ux": {
+        "sectionHint": "Değiştirmek istediğiniz bölümü açın. Kapalı bölümlerdeki değerler ve taslak düzenlemeler korunur; Kaydet tüm ayarları birlikte uygular."
+      }
     },
     "filterEmpty": "Bu yönde arama yok",
     "filterEmptyBody": "Diğer aramaları görmek için başka bir yön seçin.",
@@ -2544,7 +2567,12 @@
       "again": "Yeni yükleme",
       "serverSuggests": "Çekim tarihine göre bu materyal “{{title}}” olayına ait olabilir.",
       "moveThere": "Bu olaya taşı",
-      "moved": "“{{title}}” olayına taşındı."
+      "moved": "“{{title}}” olayına taşındı.",
+      "workbench": {
+        "searchEvents": "Olay adı veya yer ara",
+        "selectedEvent": "Seçili olay: {{title}}",
+        "noEvents": "Eşleşen olay yok. Aramayı değiştirin veya aşağıdan yeni olay oluşturun."
+      }
     },
     "olay": {
       "kind": "Tür",
@@ -2613,7 +2641,15 @@
       "deleteKvkk": "KVKK gereği dosyanın kendisi (baytları) silinir; başlığı, etiketleri ve kişileri temizlenir. Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır.",
       "deleteUsed": "Sağlayıcıda yayınlanmış gönderiler silinmez: onları “Kullanıldığı yerler” bağlantılarından kendiniz kaldırın.",
       "deleteConfirm": "Sil",
-      "deleteCancel": "Vazgeç"
+      "deleteCancel": "Vazgeç",
+      "workbench": {
+        "sections": "Materyal bölümleri",
+        "review": "Etiketler ve kişiler",
+        "publishing": "İzin ve yerleşim",
+        "history": "Kullanım geçmişi",
+        "reviewHelp": "Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.",
+        "publishingHelp": "Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır."
+      }
     },
     "people": {
       "title": "Görünen kişiler",
@@ -3155,6 +3191,14 @@
         "slaDue": "İlk temas için son: {{at}}",
         "acted": "{{at}} tarihinde ilgilenildi",
         "superseded": "Yerine başka bir karar geçti"
+      },
+      "workbench": {
+        "sections": "Dağıtım bölümleri",
+        "ruleDetails": "Eşleşme ve yönlendirme",
+        "invalidScore": "{{name}}: En düşük puan 0 ile 100 arasında bir tam sayı olmalı.",
+        "invalidSla": "{{name}}: İlk temas süresi 5 ile 10080 dakika arasında bir tam sayı olmalı.",
+        "invalidMembers": "{{name}}: En az bir üye seçin.",
+        "invalidReassign": "Yeniden atama sınırı 0 ile 10 arasında bir tam sayı olmalı."
       }
     },
     "basis": {
@@ -3402,6 +3446,11 @@
       "title": "Eşleşen sonuç yok",
       "body": "Daha fazla sonuç görmek için filtreleri değiştirin veya temizleyin.",
       "clear": "Filtreleri temizle"
+    },
+    "ux": {
+      "moreFilters": "Diğer filtreler",
+      "hideFilters": "Ek filtreleri gizle",
+      "hideTaskForm": "Görev formunu gizle"
     }
   },
   "posts": {
@@ -3506,7 +3555,14 @@
       "saved": "Kaydedildi.",
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
       "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
-      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
+      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir.",
+      "workbench": {
+        "sections": "Ayar grupları",
+        "formats": "Format süreleri",
+        "limits": "Günlük sınırlar",
+        "calendar": "Takvim ve saat",
+        "saveHelp": "Gruplar arasında geçiş yapabilirsiniz. Kaydet, tüm gruplardaki değişiklikleri birlikte uygular."
+      }
     }
   },
   "publicIntro": {
@@ -3524,5 +3580,51 @@
       "title": "Ne olduğunu görün",
       "description": "Yapılan işleri ve sonuçlarını kaynağına kadar takip edin."
     }
+  },
+  "entryUx": {
+    "providerLabel": "Hizmet sağlayıcısı",
+    "providerPlaceholder": "Bir hizmet seçin",
+    "chooseService": "1. Hangi hesabı bağlayacaksınız?",
+    "chooseServiceHelp": "Önce sağlayıcıyı, ardından kullanacağınız hesap türünü seçin",
+    "connectStep": "2. Hesabınıza erişim verin",
+    "connectStepHelp": "Bağlantı tamamlandığında hesabı Kabiliyetler sayfasında kontrol edebilirsiniz",
+    "setupAudience": "Bu teknik bilgiler sağlayıcı uygulamasını yöneten ekip içindir. Kendi hesabınızı bağlamak için yukarıdaki adımı kullanın",
+    "callbackProvider": "Callback adresi gösterilecek sağlayıcı",
+    "transferDetails": "Banka bilgileri ve açıklama kodu",
+    "reportDetails": "Bildirim bilgilerini gözden geçir veya düzelt",
+    "reportSection": "Havaleyi yaptım",
+    "reportHelp": "Havaleyi yaptıysanız tutarı ve ödeme zamanını doğrulayın",
+    "billingPending": "Havaleyi aşağıdaki açıklama koduyla yapın. Ardından ödeme bildirimini gönderin",
+    "billingApproval": "Bildiriminiz incelemede. Onaydan sonra size iletilen etkinleştirme kodunu bu sayfaya girin",
+    "billingActivation": "Size iletilen 8 haneli kodu girerek çalışma alanını açın",
+    "billingActive": "Çalışma alanı açık. Kalan kurulum adımlarına devam edebilirsiniz",
+    "billingSuspended": "Çalışma alanı askıda. Yeni bir ödeme bildiriminden önce işletmenle durumu netleştirin",
+    "setupNextTitle": "Sıradaki adım",
+    "setupNextPayment": "Ödeme ve etkinleştirme durumunu kontrol edin",
+    "setupNextStrategy": "Ekibinizin çalışacağı stratejiyi hazırlayın",
+    "setupNextConnection": "Kullanacağınız ilk hesabı bağlayın",
+    "setupNextAgent": "Ajan bağlantısını kontrol edin",
+    "setupDone": "Temel kurulum hazır. Bekleyen işlere geçebilirsiniz",
+    "setupOpen": "Bu adıma git",
+    "setupOptional": "Gerektiğinde",
+    "homeAllWork": "Tüm işleri göster ({{count}})",
+    "homeLessWork": "İlk beş işe dön",
+    "loginInviteHint": "Davetin gönderildiği e-posta ile giriş yapın; ardından davetinize döneceksiniz",
+    "registerNext": "Hesabınız oluşturulunca ödeme ve kurulum adımlarını çalışma alanınızda görebilirsiniz",
+    "workspaceHint": "Ekibinizin veya işletmenizin adı",
+    "inviteReturn": "Zaten hesabınız varsa giriş yapın; bu davete geri döneceksiniz",
+    "inviteAcceptedHelp": "Ekibin size verdiği yetkilerle çalışma alanını açabilirsiniz",
+    "notFoundHint": "Adresi kontrol edin veya önceki sayfaya dönün",
+    "previousPage": "Önceki sayfa",
+    "inviteIntroTitle": "Ekibinizin çalışma alanına katılın",
+    "inviteIntroBody": "Davetinizi kabul edin, ardından ekibinizin izin verdiği işlere devam edin",
+    "registerIntroTitle": "Ekibinizin çalışma alanını kurun",
+    "registerIntroBody": "Önce hesabınızı oluşturun. Kurulum, ödeme ve hesap bağlantıları sonraki adımda",
+    "operatorIntroTitle": "Çalışma alanı işletimi",
+    "operatorIntroBody": "İşletmen hesabınızla ödeme, erişim ve sistem durumunu yönetin",
+    "accountDetails": "Hesap kimliği ve izin ayrıntıları",
+    "selectedAccounts": "{{count}} hesap seçili. Onayladığınızda Kabiliyetler sayfasına geçeceksiniz",
+    "setupSuspended": "Kurulum duraklatıldı",
+    "setupPermission": "Kurulum durumunu çalışma alanı yöneticinizle kontrol edin"
   }
 }

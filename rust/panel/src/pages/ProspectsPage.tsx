@@ -119,6 +119,7 @@ export function ProspectsPage() {
   const refresh = useLeadsRefresh();
   const canPromote = can(session.data, 'inbox.work');
   const [params] = useSearchParams();
+  const [moreFilters, setMoreFilters] = useState(() => Boolean(params.get('task')));
   const [filters, setFilters] = useState<Filters>(() => ({
     status: '',
     bucket: '',
@@ -308,7 +309,8 @@ export function ProspectsPage() {
         </Disclosure>
       </div>
       <section className="flex min-w-0 flex-col gap-4" aria-label={t('leads.prospects.title')}>
-          <div className="grid gap-3 border-b border-border pb-4 sm:grid-cols-2 xl:grid-cols-5">
+          <div className="border-b border-border pb-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.status')}
               <select
@@ -339,6 +341,14 @@ export function ProspectsPage() {
                 ))}
               </select>
             </label>
+          </div>
+          <button type="button" aria-expanded={moreFilters} aria-controls="prospect-more-filters"
+            className="mt-3 text-sm font-medium text-primary hover:underline"
+            onClick={() => setMoreFilters((open) => !open)}>
+            {moreFilters ? t('leads.ux.hideFilters', { defaultValue: 'Hide extra filters' }) : t('leads.ux.moreFilters', { defaultValue: 'More filters' })}
+            {[filters.task, filters.city, filters.segment].filter(Boolean).length > 0 && ` (${[filters.task, filters.city, filters.segment].filter(Boolean).length})`}
+          </button>
+          <div id="prospect-more-filters" hidden={!moreFilters} className={moreFilters ? "mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" : "hidden"}>
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.task')}
               <select className={selectClass} value={filters.task} onChange={(e) => setFilter('task', e.target.value)}>
@@ -361,6 +371,7 @@ export function ProspectsPage() {
               {t('leads.prospects.filters.segment')}
               <Input value={filters.segment} autoComplete="off" onChange={(e) => setFilter('segment', e.target.value)} />
             </label>
+          </div>
           </div>
 
           {chosen.length > 0 && (

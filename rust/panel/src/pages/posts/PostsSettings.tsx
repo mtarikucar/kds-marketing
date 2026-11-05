@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react';
+import { useEffect, useState, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '@/api/client';
 import * as p from '@/api/posts';
@@ -8,6 +8,7 @@ import {
   cardClass,
   fieldClass,
   primaryClass,
+  tapClass,
   useDecider,
   useMaterialsMutation,
 } from '../materials/MaterialsShared';
@@ -17,6 +18,7 @@ import { usePosts } from './PostsShared';
 const ZONES = ['Europe/Istanbul', 'Europe/Berlin', 'Europe/London', 'Europe/Amsterdam', 'UTC'];
 
 type Draft = Record<string, string>;
+type SettingGroup = 'formats' | 'limits' | 'calendar';
 
 const hours = (minutes: number) => String(minutes / 60);
 
@@ -46,7 +48,7 @@ function num(value: string, min: number, max: number): number | null {
 }
 
 /** The settings `d` says, or `null` when a value is out of the server's ranges (D21–D29). */
-function settingsOf(d: Draft, keep: p.PostingSettings): p.PostingSettings | null {
+function settingsOf(d: Draft, keep: p.PostingSettings, reveal: (group: SettingGroup) => void): p.PostingSettings | null {
   const minutes = (h: number | null) => (h === null ? null : Math.round(h * 60));
   const horizon = num(d.horizon, 1, 90);
   const whole = (v: string, min: number, max: number) => {
@@ -58,7 +60,7 @@ function settingsOf(d: Draft, keep: p.PostingSettings): p.PostingSettings | null
   for (const f of p.POST_FORMATS) {
     const l = minutes(num(d[`lead.${f}`], 0, (horizon ?? 90) * 24));
     const g = minutes(num(d[`grace.${f}`], 0, 24));
-    if (l === null || g === null) return null;
+    if (l === null || g === null) { reveal('formats'); return null; }
     lead[f] = l;
     grace[f] = g;
   }
@@ -74,7 +76,12 @@ function settingsOf(d: Draft, keep: p.PostingSettings): p.PostingSettings | null
     debounce: whole(d.debounce, 0, 1440),
     horizon: horizon !== null && Number.isInteger(horizon) ? horizon : null,
   };
-  if (feedSpacing === null || Object.values(values).some((v) => v === null) || !d.tz.trim()) {
+  if (feedSpacing === null || [values.feedCap, values.storyCap, values.storySpacing, values.tiktokCap].some((v) => v === null)) {
+    reveal('limits');
+    return null;
+  }
+  if ([values.quietFrom, values.quietUntil, values.floor, values.debounce, values.horizon].some((v) => v === null) || !d.tz.trim()) {
+    reveal('calendar');
     return null;
   }
   const v = values as Record<keyof typeof values, number>;
@@ -101,6 +108,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
   const [draft, setDraft] = useState<Draft>(() => draftOf(settings));
   const [invalid, setInvalid] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [group, setGroup] = useState<SettingGroup>('formats');
   const save = useMaterialsMutation(
     (s: p.PostingSettings) => p.postingPolicySet(s),
     () => setSaved(true),
@@ -123,6 +131,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
     </label>
   );
   const tzRefused = isApiError(save.error) && save.error.details.field === 'tz';
+  useEffect(() => { if (tzRefused) setGroup('calendar'); }, [tzRefused]);
   return (
     <form
       aria-label={t('posts.settings.title')}
@@ -132,13 +141,26 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
       onSubmit={(e) => {
         e.preventDefault();
         if (!decider || save.isPending) return;
-        const next = settingsOf(draft, settings);
+        const next = settingsOf(draft, settings, setGroup);
         setInvalid(next === null);
         if (next) save.mutate(next);
       }}
     >
       <h3 className="font-semibold">{t('posts.settings.title')}</h3>
       <p className="text-sm text-muted-foreground">{t('posts.settings.help')}</p>
+      <nav aria-label={t('posts.settings.workbench.sections', { defaultValue: 'Ayar grupları' })} className="flex flex-wrap gap-2 border-b border-border pb-3">
+        {([
+          ['formats', t('posts.settings.workbench.formats', { defaultValue: 'Format süreleri' })],
+          ['limits', t('posts.settings.workbench.limits', { defaultValue: 'Günlük sınırlar' })],
+          ['calendar', t('posts.settings.workbench.calendar', { defaultValue: 'Takvim ve saat' })],
+        ] as const).map(([value, label]) => (
+          <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)} className={`${tapClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground`}>
+            {label}
+          </button>
+        ))}
+      </nav>
+      <p className="text-sm text-muted-foreground">{t('posts.settings.workbench.saveHelp', { defaultValue: 'Gruplar arasında geçiş yapabilirsiniz. Kaydet, tüm gruplardaki değişiklikleri birlikte uygular.' })}</p>
+      <div hidden={group !== 'formats'} className="space-y-3">
       <div className="max-w-3xl overflow-x-auto rounded-lg border border-border bg-surface">
         <table className="w-full text-left text-sm">
           <thead>
@@ -172,12 +194,18 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
         </table>
       </div>
       <p className="text-xs text-muted-foreground">{t('posts.settings.storyNote')}</p>
+      </div>
+      <div hidden={group !== 'limits'}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {field('feedCap', t('posts.settings.feedCap'))}
         {field('feedSpacing', t('posts.settings.feedSpacing'))}
         {field('storyCap', t('posts.settings.storyCap'))}
         {field('storySpacing', t('posts.settings.storySpacing'))}
         {field('tiktokCap', t('posts.settings.tiktokCap'))}
+      </div>
+      </div>
+      <div hidden={group !== 'calendar'}>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {field('quietFrom', t('posts.settings.quietFrom'))}
         {field('quietUntil', t('posts.settings.quietUntil'))}
         {field('floor', t('posts.settings.floor'), t('posts.settings.floorHelp'))}
@@ -198,6 +226,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
             ))}
           </datalist>
         </label>
+      </div>
       </div>
       {invalid && (
         <p role="alert" className="text-sm text-danger">

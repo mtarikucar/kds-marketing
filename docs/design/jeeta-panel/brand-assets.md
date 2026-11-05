@@ -16,3 +16,17 @@ Turkish. They are distributed under the [SIL Open Font License 1.1](../../operat
 with IBM’s copyright notice preserved. The license lives under `docs/operations/`
 so the existing release packager includes it alongside the fonts; documentation
 stays outside browser assets.
+
+## Task guides added on 2026-11-05
+
+Three new transparent illustrations were generated using the existing `jeeta-guide.webp` mascot as a visual reference. Export: ImageMagick, maximum 480×480, WebP quality 82, alpha preserved. Combined transfer size is approximately 91 KB. On screen they appear at 80–112px, with adjacent explanatory text and empty alt text.
+
+| Asset | Activity and use | Original generation in this workspace |
+| --- | --- | --- |
+| `guide-setup.webp` | Plugging an orange cable into a navy docking station; empty capabilities, onboarding, empty team | `/workspace/generated_images/exec-fdd49f75-4126-4021-b65c-b24618b49305.png` |
+| `guide-conversations.webp` | Listening with a headset beside speech cards; truly empty people list | `/workspace/generated_images/exec-5dfd6aa5-0d12-4352-823d-bccd9b148784.png` |
+| `guide-plan.webp` | Placing a card on a physical planning board; empty home queue and material upload | `/workspace/generated_images/exec-2f8c8c0f-2807-4546-9719-555c094374d1.png` |
+
+Shared generation direction: preserve the reference mascot’s voxel dark curly hair, black sunglasses, navy suit, white shirt and orange accents; matte detailed voxel 3D, soft studio lighting, one physical activity, restrained navy/orange, no text, letters, logos, watermark or floating filler; full subject within a square transparent frame with padding and readable at small sizes. Each prompt specifies the activity above. The provided official logo remains unchanged.
+
+These illustrations replace or support empty-state guidance. Populated operational pages do not acquire large decorative hero images.

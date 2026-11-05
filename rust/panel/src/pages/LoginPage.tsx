@@ -8,9 +8,11 @@ import { SESSION_KEY } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { Button, Callout, Field, Input, PasswordInput, PageHeader } from '@/components/ui';
 import { returnTarget } from '@/lib/navigation';
+import { useEntryCopy } from './entryCopy';
 
 export function LoginPage() {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -36,6 +38,7 @@ export function LoginPage() {
   return (
     <div className="flex flex-col gap-8">
       <PageHeader title={t('login.title')} description={t('login.description')} />
+      {returnTarget(location.state, '/').startsWith('/invite/') && <Callout tone="info">{copy('loginInviteHint')}</Callout>}
       <form className="flex flex-col gap-5" onSubmit={onSubmit}>
         {wrongCredentials ? (
           <Callout tone="danger">{t('login.invalid')}</Callout>

@@ -35,6 +35,7 @@ import {
 import { formatDateTime, formatRelative } from '@/lib/format';
 import { can, canApproveStrategy, roleLabel } from '@/lib/roles';
 import { PENDING_KEY, STRATEGY_KEY, invalidateStrategy } from './strategy/queries';
+import { useEntryCopy } from './entryCopy';
 
 /** How many of a draft's gaps the home page lists before "and N more". */
 const GAPS_SHOWN = 5;
@@ -349,6 +350,9 @@ function itemLink(item: WorkItem): string | null {
 /** The pending items, most urgent first, each in the panel's own words (the hints are for the agent). */
 function PendingList({ items }: { items: readonly WorkItem[] }) {
   const { t } = useTranslation();
+  const copy = useEntryCopy();
+  const [all, setAll] = useState(false);
+  const ordered = [...items].sort((a, b) => a.priority - b.priority);
   return (
     <section aria-labelledby="home-pending">
       <div className="flex items-start justify-between gap-6 border-b border-border pb-6">
@@ -364,12 +368,12 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
       {items.length === 0 ? (
         <div className="flex flex-col items-start gap-4 py-8 sm:flex-row sm:items-center sm:gap-6">
           <img
-            src="/brand/work-complete.svg"
+            src="/brand/guide-plan.webp"
             alt=""
             aria-hidden="true"
-            width={112}
-            height={112}
-            className="h-24 w-24 shrink-0 sm:h-28 sm:w-28"
+            width={480}
+            height={480}
+            className="h-28 w-28 shrink-0 object-contain"
           />
           <div>
             <p className="font-medium text-foreground">{t('home.pending.empty')}</p>
@@ -378,7 +382,7 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
         </div>
       ) : (
         <ul className="divide-y divide-border">
-          {items.map((item, i) => {
+          {(all ? ordered : ordered.slice(0, 5)).map((item, i) => {
             const link = itemLink(item);
             return (
               <li
@@ -407,6 +411,7 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
           })}
         </ul>
       )}
+      {items.length > 5 && <Button variant="outline" size="sm" onClick={() => setAll(value => !value)}>{all ? copy('homeLessWork') : copy('homeAllWork', { count: items.length })}</Button>}
       <nav aria-label={t('home.continueWorking')} className="mt-5 grid border-t border-border sm:grid-cols-2">
         <Link to="/inbox" className="group flex items-start justify-between gap-4 py-5 sm:pe-6">
           <div>

@@ -300,11 +300,9 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
         </section>
       )}
 
-      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
-        <header className="mb-3">
-          <h2 className="text-base font-medium">{t('leads.prospect.scores')}</h2>
-        </header>
-        <div>
+      <details className="group border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <summary className="cursor-pointer text-base font-medium">{t('leads.prospect.scores')}</summary>
+        <div className="pt-3">
           {data.scores.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noScores')}</p>
           ) : (
@@ -353,13 +351,11 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
             </ol>
           )}
         </div>
-      </section>
+      </details>
 
-      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
-        <header className="mb-3">
-          <h2 className="text-base font-medium">{t('leads.prospect.duplicates')}</h2>
-        </header>
-        <div>
+      <details className="group border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <summary className="cursor-pointer text-base font-medium">{t('leads.prospect.duplicates')}</summary>
+        <div className="pt-3">
           {data.duplicate_candidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noDuplicates')}</p>
           ) : (
@@ -379,13 +375,11 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
             </ul>
           )}
         </div>
-      </section>
+      </details>
 
-      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
-        <header className="mb-3">
-          <h2 className="text-base font-medium">{t('leads.prospect.history')}</h2>
-        </header>
-        <div>
+      <details className="group border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <summary className="cursor-pointer text-base font-medium">{t('leads.prospect.history')}</summary>
+        <div className="pt-3">
           {data.ledger.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noHistory')}</p>
           ) : (
@@ -406,7 +400,7 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
             </ol>
           )}
         </div>
-      </section>
+      </details>
     </div>
   );
 }

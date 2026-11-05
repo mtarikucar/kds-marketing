@@ -340,6 +340,7 @@ it('opens the relevant research, prospect, distribution and outreach work instea
     'GET /api/work/pending': { ...pendingOverdue, items: cases.map(({ item }) => item) },
   });
   renderAt('/');
+  await userEvent.setup().click(await screen.findByRole('button',{name:'Tüm işleri göster (10)'}));
   for (const { item, href } of cases) {
     const text = await screen.findByText(i18n.t(`home.pending.${item.kind}`));
     expect(within(text.closest('li')!).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', href);

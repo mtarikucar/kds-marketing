@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Search } from 'lucide-react';
+import { ChevronDown, Search } from 'lucide-react';
 import * as api from '@/api/inbox';
 import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
@@ -75,6 +75,8 @@ export function InboxPage() {
   const [params] = useSearchParams();
   const [queue, setQueue] = useState<InboxQueue | 'approvals'>('ours');
   const [search, setSearch] = useState('');
+  const [queueExpanded, setQueueExpanded] = useState(false);
+  useEffect(() => setQueueExpanded(false), [conversationId, params.get('person'), params.get('task')]);
   const rows = useInfiniteQuery({
     queryKey: [...key, 'conversations', queue],
     queryFn: ({ pageParam }) => api.listConversations(queue as InboxQueue, pageParam),
@@ -107,6 +109,7 @@ export function InboxPage() {
   });
   const task = tasks.data?.find((row) => row.id === taskId);
   const journeyId = task?.journey_id ?? selectedPerson.data?.open_journey?.id;
+  const hasSelection = !!conversationId || !!personId || !!taskId;
   if (session.isPending) return <QueryState query={session} />;
   if (!allowed)
     return (
@@ -133,7 +136,12 @@ export function InboxPage() {
         className="grid min-h-[calc(100dvh-12rem)] min-w-0 grid-cols-1 items-stretch border-y border-border bg-surface xl:grid-cols-[14rem_minmax(0,1fr)_18rem]"
       >
         <aside className="flex max-h-96 min-w-0 flex-col gap-5 overflow-y-auto border-b border-border bg-surface-muted px-4 py-6 xl:max-h-[calc(100dvh-8rem)] xl:border-b-0 xl:border-r" aria-label={t('inbox.queues')}>
-          <h2 className="text-sm font-medium">{t('inbox.queues')}</h2>
+          <h2 className={`text-sm font-medium ${hasSelection ? 'hidden xl:block' : ''}`}>{t('inbox.queues')}</h2>
+          {hasSelection && <Button variant="ghost" className="justify-between px-0 xl:hidden" aria-expanded={queueExpanded} aria-controls="inbox-queue-content" onClick={() => setQueueExpanded((value) => !value)}>
+            {t('inbox.ux.browseQueues', { defaultValue: 'Kuyruklar ve kişi araması' })}
+            <ChevronDown className={`h-4 w-4 ${queueExpanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+          </Button>}
+          <div id="inbox-queue-content" className={`${hasSelection && !queueExpanded ? 'hidden' : 'flex'} min-h-0 flex-col gap-5 xl:flex`}>
           <div className="grid grid-cols-2 gap-1 xl:grid-cols-1">
             {(['ours', 'unassigned', 'snoozed', 'all'] as const).map((value) => (
               <Button
@@ -208,7 +216,10 @@ export function InboxPage() {
                   <ConversationLink key={row.id} row={row} />
                 ))}
               {rows.data?.pages[0]?.items.length === 0 && (
-                <p className="text-sm text-muted-foreground">{t('inbox.empty')}</p>
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <p>{t('inbox.empty')}</p>
+                  <p className="leading-6">{t('inbox.ux.emptyQueueHint', { defaultValue: 'Başka bir kuyruk seçin veya bir kişiyi arayın. Yeni görüşmeler bağlı müşteri kanallarından buraya gelir.' })}</p>
+                </div>
               )}
               {rows.hasNextPage && (
                 <Button
@@ -221,6 +232,7 @@ export function InboxPage() {
               )}
             </QueryState>
           )}
+          </div>
         </aside>
         {conversationId ? (
           <InboxConversation
@@ -237,7 +249,7 @@ export function InboxPage() {
               </h2>
               {!selectedPerson.data ? (
                 <div className="flex min-h-72 flex-col justify-center border-l border-border pl-6">
-                  <p className="max-w-xs text-base leading-7 text-muted-foreground">{t('inbox.choose')}</p>
+                  <p className="max-w-sm text-base leading-7 text-muted-foreground">{t('inbox.ux.chooseHint', { defaultValue: 'Kuyruktan bir görüşme seçin. Kişi aramasıyla geçmiş görüşmelere de ulaşabilirsiniz.' })}</p>
                 </div>
               ) : <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>}
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>

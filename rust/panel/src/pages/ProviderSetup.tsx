@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { connectorHooks } from '@/api/connectors';
@@ -6,6 +6,7 @@ import { useSession } from '@/auth/useSession';
 import { CopyField } from '@/components/CopyField';
 import { QueryState } from '@/components/QueryState';
 import { Card, CardContent, Disclosure } from '@/components/ui';
+import { useEntryCopy } from './entryCopy';
 
 /** The hooks API carries the configured public base URL, including its path prefix. */
 export function ProviderSetup() {
@@ -17,6 +18,8 @@ export function ProviderSetup() {
 
 function ProviderSetupBody() {
   const {t}=useTranslation();
+  const copy=useEntryCopy();
+  const [provider,setProvider]=useState('meta');
   const client=useQueryClient();
   const workspace=useSession().data?.current_workspace;
   const hooks=useQuery({queryKey:['connectors','setup',workspace],queryFn:({signal})=>connectorHooks(signal),gcTime:0,staleTime:0});
@@ -24,9 +27,9 @@ function ProviderSetupBody() {
   const url=hooks.data?.meta?.url ?? hooks.data?.netgsm[0]?.url;
   const base=url?.replace(/\/hooks\/(?:meta|netgsm)(?:\/.*)?$/, '');
   return <div className="space-y-4">
-    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{t('providerSetup.help')}</p>
+    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{copy('setupAudience')}</p>
     <QueryState query={hooks}>{hooks.data && <>
-      {base && base!==url && ['meta','instagram','x','tiktok','linkedin'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
+      {base && base!==url && <div className="space-y-3"><label className="flex max-w-sm flex-col gap-2 text-sm">{copy('callbackProvider')}<select className="min-h-10 rounded-md border border-input bg-surface px-3" value={provider} onChange={event=>setProvider(event.target.value)}>{['meta','instagram','x','tiktok','linkedin'].map(value=><option key={value} value={value}>{value}</option>)}</select></label><CopyField label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/></div>}
       {hooks.data.meta && <CopyField label={t('capabilities.hooks.metaUrl')} value={hooks.data.meta.url}/>}
       {hooks.data.netgsm.map(hook=><CopyField key={hook.purpose} label={t(`capabilities.hooks.purposes.${hook.purpose}`)} value={hook.url}/>)}
     </>}</QueryState>

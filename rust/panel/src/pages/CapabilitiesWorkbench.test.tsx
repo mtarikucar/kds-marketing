@@ -88,4 +88,17 @@ describe('purpose-driven connections', () => {
     expect(screen.getByRole('heading', { name: 'Account 00' })).toBeInTheDocument();
     expect(screen.queryByRole('navigation', { name: copy.pagination })).not.toBeInTheDocument();
   });
+  it('offers one setup step instead of empty filters, respecting management permission', async () => {
+    mockFetch({ ...routes, 'GET /api/capabilities': [] });
+    const view = renderAt('/capabilities');
+    expect(await screen.findByRole('link', { name: copy.startConnection })).toHaveAttribute('href', '/connect');
+    expect(screen.queryByRole('textbox', { name: copy.search })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: copy.statusLabel })).not.toBeInTheDocument();
+    view.unmount();
+    mockFetch({ ...routes, 'GET /api/capabilities': [], 'GET /api/auth/me': repMe });
+    renderAt('/capabilities');
+    expect(await screen.findByText(copy.managerNeeded)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: copy.startConnection })).not.toBeInTheDocument();
+  });
+
 });

@@ -69,3 +69,15 @@ it('returns to the previous page when a full page is followed by an empty page',
   expect(screen.getByRole('button', { name: tr.people.previous })).toBeDisabled();
   await waitFor(() => expect(new URLSearchParams(requests.filter(request => request.path === '/api/inbox/people').at(-1)?.search).get('offset')).toBe('0'));
 });
+
+it('offers channel setup on a true empty directory only to someone who can manage connections', async () => {
+  mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/inbox/people': [] });
+  const first = renderAt('/people');
+  expect(await screen.findByRole('link', { name: 'Müşteri kanallarını bağla' })).toHaveAttribute('href', '/capabilities');
+  first.unmount();
+  const member = { ...me, memberships: me.memberships.map(membership => ({ ...membership, permissions: ['workspace.read' as const] })) };
+  mockFetch({ 'GET /api/auth/me': member, 'GET /api/workspace': workspace, 'GET /api/inbox/people': [] });
+  renderAt('/people');
+  await screen.findByText(tr.people.empty);
+  expect(screen.queryByRole('link', { name: 'Müşteri kanallarını bağla' })).not.toBeInTheDocument();
+});

@@ -9,6 +9,7 @@ import { QueryState } from '@/components/QueryState';
 import { Button, EmptyState, Field, Input, PageHeader } from '@/components/ui';
 import { formatDateTime } from '@/lib/format';
 import { personName } from '@/lib/people';
+import { can } from '@/lib/roles';
 
 /** People per page; the server pages with limit/offset in (created_at, id) order. */
 export const PEOPLE_PAGE = 50;
@@ -19,7 +20,8 @@ export const PEOPLE_PAGE = 50;
  */
 export function PeoplePage() {
   const { t, i18n } = useTranslation();
-  const workspace = useSession().data?.current_workspace;
+  const session = useSession();
+  const workspace = session.data?.current_workspace;
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const people = useQuery({
@@ -56,7 +58,7 @@ export function PeoplePage() {
           </div>
           <QueryState query={people}>
             {rows.length === 0 ? (
-              <EmptyState className="rounded-none border-0 bg-surface" title={t(q.trim() || page > 0 ? 'people.noMatch' : 'people.empty')} description={t(q.trim() || page > 0 ? 'people.noMatchBody' : 'people.emptyBody')} action={page > 0 ? <Button variant="outline" onClick={() => setPage((value) => value - 1)}>{t('people.previous')}</Button> : q.trim() ? <Button variant="outline" onClick={() => { setQ(''); setPage(0); }}>{t('people.clearSearch')}</Button> : undefined} />
+              <EmptyState icon={!q.trim() && page === 0 ? <img src="/brand/guide-conversations.webp" width={112} height={112} alt="" /> : undefined} className="rounded-none border-0 bg-surface" title={t(q.trim() || page > 0 ? 'people.noMatch' : 'people.empty')} description={q.trim() || page > 0 ? t('people.noMatchBody') : t('people.ux.emptyBody', { defaultValue: 'Bağlı kanallardan ilk mesaj geldiğinde veya müşteri adayı içe aktarıldığında kişiler burada görünür.' })} action={page > 0 ? <Button variant="outline" onClick={() => setPage((value) => value - 1)}>{t('people.previous')}</Button> : q.trim() ? <Button variant="outline" onClick={() => { setQ(''); setPage(0); }}>{t('people.clearSearch')}</Button> : can(session.data, 'capabilities.manage') ? <Button asChild variant="outline"><Link to="/capabilities">{t('people.ux.connectChannels', { defaultValue: 'Müşteri kanallarını bağla' })}</Link></Button> : undefined} />
             ) : (
               <>
                 <ul className="divide-y divide-border">

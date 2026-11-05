@@ -136,7 +136,8 @@ export function LedgerPage() {
           <EmptyState title={t('ledger.empty')} description={t('ledger.emptyBody')} />
         ) : (
           <div className="flex min-w-0 flex-col gap-3">
-            <div className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface">
+            <p className="text-caption text-muted-foreground md:hidden">{t('ledger.workbench.scrollHint', { defaultValue: 'Diğer sütunları görmek için tabloyu yatay kaydırın.' })}</p>
+            <div role="region" aria-label={t('ledger.title')} tabIndex={0} className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <Table>
                 <THead>
                   <TR>

@@ -153,11 +153,13 @@ async function cardOf(name: string): Promise<HTMLElement> {
   return (await screen.findByRole('heading', { name })).closest('[data-capability-id]') as HTMLElement;
 }
 
-/** Follow the collapsed type-filter control before selecting Devices. */
+/** Use the device purpose even before the first capability exists. */
 async function selectDevices(user: ReturnType<typeof userEvent.setup>) {
-  const disclosure = await screen.findByRole('button', { name: new RegExp(`^${tr.capabilities.workbench.advanced}`) });
-  if (disclosure.getAttribute('aria-expanded') !== 'true') await user.click(disclosure);
-  await user.click(screen.getByRole('button', { name: tr.capabilities.groups.device }));
+  await user.click(await screen.findByRole('button', { name: tr.capabilities.workbench.goals.devices.label }));
+  const add = screen.queryByRole('button', { name: new RegExp(`^${tr.capabilities.workbench.addForPurpose}`) });
+  if (add && add.getAttribute('aria-expanded') !== 'true') await user.click(add);
+  const pair = screen.queryByRole('button', { name: tr.capabilities.workbench.pairDevice });
+  if (pair) await user.click(pair);
 }
 
 /** Open the named capability's details without folding an already-open phone panel. */
@@ -309,10 +311,20 @@ describe('PhoneCard', () => {
       mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
       const { unmount } = renderAt('/capabilities');
       await selectDevices(user);
-      await screen.findByText(tr.capabilities.workbench.noMatch);
+      await screen.findByText(tr.capabilities.empty);
       expect(screen.queryByRole('button', { name: tr.capabilities.phone.pair.open })).toBeNull();
       unmount();
     }
+  });
+
+  it('keeps pairing available with its own permissions even without capability management', async () => {
+    const user = userEvent.setup();
+    const who = { ...deviceMe, memberships: deviceMe.memberships.map(m => ({ ...m, permissions: m.permissions.filter(p => p !== 'capabilities.manage') })) };
+    mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
+    renderAt('/capabilities');
+    await selectDevices(user);
+    expect(await screen.findByRole('button', { name: tr.capabilities.phone.pair.open })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: tr.capabilities.declare })).not.toBeInTheDocument();
   });
 
   it('command_log_expands_args', async () => {
@@ -424,7 +436,7 @@ describe('PhoneCard', () => {
       await waitFor(() => expect(count('/api/capabilities', '?group=device')).toBe(phones + 2));
 
       // Back to every kind: the refresh stops.
-      await user.click(screen.getByRole('button', { name: tr.capabilities.filterAll }));
+      await user.click(screen.getByRole('button', { name: tr.capabilities.workbench.goals.all.label }));
       await panelOf('Galaxy A52 (R58M00000XX)', user);
       const [still, stillLogged] = [count('/api/capabilities', '?group=device'), count(LOG)];
       await vi.advanceTimersByTimeAsync(31_000);

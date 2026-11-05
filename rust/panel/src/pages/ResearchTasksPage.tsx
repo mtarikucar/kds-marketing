@@ -326,6 +326,7 @@ export function ResearchTasksPage() {
   const { t } = useTranslation();
   const key = useLeadsKey();
   const [status, setStatus] = useState<TaskStatus | ''>('open');
+  const [creating, setCreating] = useState(false);
   const tasks = useQuery({
     queryKey: [...key, 'research', 'list', status || 'all'],
     queryFn: () => listTasks({ status: status || undefined }),
@@ -366,7 +367,13 @@ export function ResearchTasksPage() {
           </div>
         )}
       </QueryState>
-      <CreateTask />
+      <div className="border-t border-border pt-4">
+        <Button type="button" variant="outline" aria-expanded={creating} aria-controls="research-create"
+          onClick={() => setCreating((open) => !open)}>
+          {creating ? t('leads.ux.hideTaskForm', { defaultValue: 'Hide task form' }) : t('leads.tasks.create.title')}
+        </Button>
+        <div id="research-create" hidden={!creating} className="mt-4"><CreateTask /></div>
+      </div>
     </>
   );
 }

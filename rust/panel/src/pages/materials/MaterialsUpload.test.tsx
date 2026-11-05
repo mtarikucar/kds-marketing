@@ -46,6 +46,30 @@ async function pickPhoto() {
 }
 
 describe('Materyaller · Yükle', () => {
+  it('searches a long event list without losing the selected event or its upload', async () => {
+    const events = Array.from({ length: 9 }, (_, index) => ({
+      olay: olay(`event-${index}`, { title: `Ürün çekimi ${index}`, place: index === 8 ? 'Beyoğlu' : 'Moda', starts_on: dayFrom(5), ends_on: dayFrom(6) }),
+      materials: 0,
+    }));
+    const calls = mockFetch({ ...answers, 'GET /api/studio/olays': events });
+    const user = await pickPhoto();
+    const search = screen.getByRole('searchbox', { name: 'Olay adı veya yer ara' });
+    await user.type(search, 'Beyoğlu');
+    expect(screen.getByRole('radio', { name: /Ürün çekimi 8/ })).toBeVisible();
+    expect(screen.queryByRole('radio', { name: /Ürün çekimi 0/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /Ürün çekimi 8/ }));
+    await user.clear(search);
+    await user.type(search, 'bulunmayan');
+    expect(screen.getByText('Seçili olay: Ürün çekimi 8')).toBeVisible();
+    expect(screen.getByText(/Eşleşen olay yok/)).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('radio', { name: 'Yeni olay oluştur' })).toBeVisible();
+    await user.click(screen.getByRole('radio', { name: 'Paylaşılabilir' }));
+    await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
+    await screen.findByText('1 materyal eklendi.');
+    expect(calls.filter((call) => call.path === '/api/studio/files')).toHaveLength(1);
+    expect(calls.find((call) => call.method === 'POST' && call.path === '/api/studio/materials')?.body).toMatchObject({ olay_id: 'event-8', file_id: 'file-1', share: 'shareable' });
+  });
+
   it('stores each picked file at once with its own request key', async () => {
     const calls = mockFetch(answers);
     await pickPhoto();

@@ -31,6 +31,10 @@ import {
   IconButton,
   Input,
   PageHeader,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -88,6 +92,7 @@ function RuleEditor({
   onRemove: () => void;
 }) {
   const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(() => !rule.id);
   const set = (patch: Partial<RuleInput>) => onChange({ ...rule, ...patch });
   const when = (patch: Partial<RuleInput['when']>) => set({ when: { ...rule.when, ...patch } });
   const members = rule.to.kind === 'members' ? rule.to.user_ids : [];
@@ -127,6 +132,9 @@ function RuleEditor({
           </IconButton>
         </div>
       </div>
+      <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+        <summary className="cursor-pointer py-1 text-sm font-medium">{t('leads.distribution.workbench.ruleDetails', { defaultValue: 'Eşleşme ve yönlendirme' })}</summary>
+        <div className="mt-3 space-y-3">
       <fieldset className="flex flex-wrap gap-2 text-sm">
         <legend className="mb-1 font-medium">{t('leads.distribution.rules.sources')}</legend>
         {LEAD_SOURCE_KINDS.map((s) => (
@@ -218,6 +226,8 @@ function RuleEditor({
           ))}
         </fieldset>
       )}
+        </div>
+      </details>
     </li>
   );
 }
@@ -247,7 +257,25 @@ function RulesCard({ data }: { data: DistributionOut }) {
       [next[i], next[i + by]] = [next[i + by], next[i]];
       return next;
     });
+  const invalidNumbers = rules.flatMap((r, i) => {
+    const name = r.name.trim() || t('leads.distribution.rules.unnamed', { n: i + 1 });
+    const issues: string[] = [];
+    if (r.to.kind === 'members' && r.to.user_ids.length === 0) {
+      issues.push(t('leads.distribution.workbench.invalidMembers', { name, defaultValue: '{{name}}: En az bir üye seçin.' }));
+    }
+    if (r.when.min_score !== null && (!Number.isInteger(r.when.min_score) || r.when.min_score < 0 || r.when.min_score > 100)) {
+      issues.push(t('leads.distribution.workbench.invalidScore', { name, defaultValue: '{{name}}: En düşük puan 0 ile 100 arasında bir tam sayı olmalı.' }));
+    }
+    if (r.sla_minutes != null && (!Number.isInteger(r.sla_minutes) || r.sla_minutes < 5 || r.sla_minutes > 10080)) {
+      issues.push(t('leads.distribution.workbench.invalidSla', { name, defaultValue: '{{name}}: İlk temas süresi 5 ile 10080 dakika arasında bir tam sayı olmalı.' }));
+    }
+    return issues;
+  });
+  if (!/^\d+$/.test(maxReassign) || Number(maxReassign) > 10) {
+    invalidNumbers.push(t('leads.distribution.workbench.invalidReassign', { defaultValue: 'Yeniden atama sınırı 0 ile 10 arasında bir tam sayı olmalı.' }));
+  }
   const valid =
+    invalidNumbers.length === 0 &&
     rules.every((r) => r.name.trim() && (r.to.kind === 'all_eligible' || r.to.user_ids.length > 0)) &&
     /^\d+$/.test(maxReassign) &&
     Number(maxReassign) <= 10;
@@ -322,6 +350,11 @@ function RulesCard({ data }: { data: DistributionOut }) {
             </Button>
           </div>
           <ErrorCallout error={save.error} />
+          {invalidNumbers.length > 0 && (
+            <ul role="alert" className="space-y-1 text-sm text-danger">
+              {invalidNumbers.map((issue, index) => <li key={index}>{issue}</li>)}
+            </ul>
+          )}
           <div>
             <Button type="submit" disabled={!valid} loading={save.isPending}>
               {t('leads.distribution.rules.save')}
@@ -636,13 +669,19 @@ export function DistributionPage() {
         {dist.data && (
           <div className="flex min-w-0 flex-col gap-4">
             <CountsCard data={dist.data} />
-            {/* A new draft only when the stored rules change, never on a mere refetch. */}
-            <RulesCard
-              key={JSON.stringify([dist.data.mode, dist.data.max_reassignments, dist.data.rules])}
-              data={dist.data}
-            />
-            <RepsCard data={dist.data} />
-            <AssignmentLog data={dist.data} />
+            <Tabs defaultValue="rules">
+              <TabsList aria-label={t('leads.distribution.workbench.sections', { defaultValue: 'Dağıtım bölümleri' })} className="overflow-x-auto">
+                <TabsTrigger value="rules" className="min-h-11">{t('leads.distribution.rules.title')}</TabsTrigger>
+                <TabsTrigger value="reps" className="min-h-11">{t('leads.distribution.reps.title')}</TabsTrigger>
+                <TabsTrigger value="log" className="min-h-11">{t('leads.distribution.log.title')}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="rules" forceMount className="data-[state=inactive]:hidden">
+                {/* Keep an unsaved draft across tab switches; replace it when server rules change. */}
+                <RulesCard key={JSON.stringify([dist.data.mode, dist.data.max_reassignments, dist.data.rules])} data={dist.data} />
+              </TabsContent>
+              <TabsContent value="reps" forceMount className="data-[state=inactive]:hidden"><RepsCard data={dist.data} /></TabsContent>
+              <TabsContent value="log" forceMount className="data-[state=inactive]:hidden"><AssignmentLog data={dist.data} /></TabsContent>
+            </Tabs>
           </div>
         )}
       </QueryState>

@@ -81,8 +81,11 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
   };
   return (
     <form className="flex flex-col gap-7" onSubmit={submit} noValidate aria-label={t('calls.policy.title')}>
-      <fieldset className="grid min-w-0 gap-5 md:grid-cols-2">
-      <legend className="mb-4 font-display text-h3">{t('calls.policy.scriptsTitle')}</legend>
+      <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{t('calls.policy.ux.sectionHint', { defaultValue: 'Değiştirmek istediğiniz bölümü açın. Kapalı bölümlerdeki değerler ve taslak düzenlemeler korunur; Kaydet tüm ayarları birlikte uygular.' })}</p>
+      <details open>
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.scriptsTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 md:grid-cols-2">
+      <legend className="sr-only">{t('calls.policy.scriptsTitle')}</legend>
       {TEXTS.map((key) => (
         <Field key={key} label={t(`calls.policy.fields.${key}`)}>
           {(ids) => (
@@ -123,8 +126,11 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
         </Label>
       </div>
       </fieldset>
-      <fieldset className="grid min-w-0 gap-5 border-t border-border pt-5 md:grid-cols-2">
-      <legend className="pr-3 font-display text-h3">{t('calls.policy.phrasesTitle')}</legend>
+      </details>
+      <details className="border-t border-border pt-4">
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.phrasesTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 md:grid-cols-2">
+      <legend className="sr-only">{t('calls.policy.phrasesTitle')}</legend>
       <Field label={t('calls.policy.fields.holding_default')} hint={t('calls.policy.holdingHint')}>
         {(ids) => (
           <Textarea id={ids.id} aria-describedby={ids.describedBy} value={holding} onChange={(e) => setHolding(e.target.value)} />
@@ -143,8 +149,11 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
         </Field>
       ))}
       </fieldset>
-      <fieldset className="grid min-w-0 gap-5 border-t border-border pt-5 sm:grid-cols-2 xl:grid-cols-3">
-        <legend className="pr-3 font-display text-h3">{t('calls.policy.limitsTitle')}</legend>
+      </details>
+      <details className="border-t border-border pt-4">
+      <summary className="cursor-pointer text-base font-medium">{t('calls.policy.limitsTitle')}</summary>
+      <fieldset className="grid min-w-0 gap-5 pt-5 sm:grid-cols-2 xl:grid-cols-3">
+        <legend className="sr-only">{t('calls.policy.limitsTitle')}</legend>
         {NUMBERS.map((key) => (
           <Field key={key} label={t(`calls.policy.fields.${key}`)}>
             {(ids) => (
@@ -169,6 +178,7 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       </fieldset>
+      </details>
       <ErrorCallout error={save.error} />
       <div className="flex justify-end border-t border-border pt-4">
         <Button type="submit" loading={save.isPending}>
