@@ -58,8 +58,9 @@ assert all(row==by_version.get(row[0]) for row in actual), 'Unknown, changed or 
 missing={int(row[0]) for row in expected}-{int(row[0]) for row in actual}
 assert missing=={20,21,22,26,27,28}, 'Unexpected migration delta'
 (pathlib.Path(dest)/'expected-migrations').write_text(''.join('|'.join(row)+'\n' for row in expected))
-assert u.username and __import__('re').fullmatch(r'[a-z_][a-z0-9_]*',u.username)
-(pathlib.Path(dest)/'database-role').write_text(u.username)
+role=urllib.parse.unquote(u.username or '')
+assert __import__('re').fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*',role), 'Unsupported database role identifier'
+(pathlib.Path(dest)/'database-role').write_text(role)
 (pathlib.Path(dest)/'database-migrations').write_text(rows)
 print('Candidate verified; six reviewed additive migrations are pending on staging')
 PY
