@@ -746,12 +746,20 @@
       "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
       "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
     },
-    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected."
+    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected.",
+    "workbench": {
+      "sections": "Brief sections",
+      "gapCount": "{{count}} gaps",
+      "fixFirstGap": "Resolve the first gap",
+      "viewFirstGap": "Go to the first gap",
+      "brand": "Brand and audience",
+      "plan": "Goals and plan"
+    }
   },
   "capabilities": {
     "title": "Capabilities",
-    "description": "The accounts, devices and tools the workspace can act through",
-    "declare": "Declare a capability",
+    "description": "Choose connections for your work; manage their status and permissions",
+    "declare": "Add a resource",
     "filterLabel": "Kind group",
     "filterAll": "All",
     "empty": "No capabilities.",
@@ -1113,6 +1121,76 @@
         "step3": "Run jeeta-device-bridge.exe. Within about 15 seconds each phone it sees appears under Devices on this page, verified. To start it at every logon:",
         "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
       }
+    },
+    "workbench": {
+      "purposeLabel": "What do you want to do?",
+      "inventory": "Your connections",
+      "search": "Search connections",
+      "searchPlaceholder": "Search name, account or channel…",
+      "allStatus": "All statuses",
+      "attention": "Needs attention",
+      "verified": "Verified",
+      "retired": "Retired",
+      "statusLabel": "Connection status",
+      "advanced": "Narrow by type",
+      "technical": "Technical connection settings",
+      "clear": "Clear filters",
+      "noMatch": "No connections match this selection",
+      "noMatchBody": "Choose another purpose or clear the search and status filters.",
+      "count": "Showing {{count}} connections",
+      "pairDevice": "Open phone pairing",
+      "managerNeeded": "Ask your workspace manager to add a connection.",
+      "steps": {
+        "choose": "Choose the work",
+        "connect": "Connect the account",
+        "check": "Check its status"
+      },
+      "goals": {
+        "all": {
+          "label": "All connections",
+          "title": "Your accounts, alongside the work.",
+          "description": "Choose the connections you need to talk to customers, publish content or manage calls. Keep track of their status below."
+        },
+        "messages": {
+          "label": "Talk to customers",
+          "title": "Bring conversations together.",
+          "description": "Connect the channels your customers use. Once connection and verification are complete, manage conversations in Inbox."
+        },
+        "publishing": {
+          "label": "Publish content",
+          "title": "Connect the accounts your content will reach.",
+          "description": "Choose a social account. Manage content and approvals in Growth Studio; check connections and publishing permissions here."
+        },
+        "calls": {
+          "label": "Manage calls",
+          "title": "Bring your phone line into your workspace.",
+          "description": "Connect your NetGSM PBX. Follow conversations in Calls; a voice agent additionally requires a bridge setup."
+        },
+        "devices": {
+          "label": "Work with devices",
+          "title": "Connect field devices to your team.",
+          "description": "Pair a phone or register a device. Track reachability and usage permissions on each connection."
+        },
+        "growth": {
+          "label": "Ads and community",
+          "title": "Keep growth channels together.",
+          "description": "Connect an advertising account or register community resources. Registering a resource alone does not activate an integration."
+        },
+        "tools": {
+          "label": "Work tools",
+          "title": "Organize the resources your team uses.",
+          "description": "Classify calendars, marketplaces, agents and other tools. Integration setup and permissions are completed separately for each resource."
+        }
+      },
+      "addForPurpose": "Add a connection for this purpose",
+      "groupsTab": "Account groups",
+      "technicalTab": "Technical settings",
+      "pagination": "Connection pages",
+      "previous": "Previous",
+      "next": "Next",
+      "page": "{{current}} / {{total}}",
+      "showDetails": "Details",
+      "hideDetails": "Hide details"
     }
   },
   "connect": {
@@ -1935,6 +2013,16 @@
       "text": "Text post",
       "image": "Image",
       "video": "Video"
+    },
+    "workbench": {
+      "filters": "Filters",
+      "filtersActive": "Active",
+      "clearFilters": "Clear filters",
+      "invalidRange": "The start date cannot be after the end date.",
+      "hypotheses": "Show hypotheses",
+      "todayHint": "Approvals, scheduled content, and blockers that need your attention.",
+      "viewPlan": "View the weekly plan",
+      "sections": "Studio view"
     }
   },
   "billing": {
@@ -2233,7 +2321,28 @@
     },
     "filterEmpty": "No calls in this direction",
     "filterEmptyBody": "Choose another direction to see the rest of your call log.",
-    "showAll": "Show all calls"
+    "showAll": "Show all calls",
+    "workbench": {
+      "outcomeMissing": "Outcome not recorded",
+      "recordOutcome": "Record outcome",
+      "openCall": "Review call",
+      "allCalls": "All calls",
+      "openCalls": "Open calls",
+      "unrecordedCalls": "Awaiting outcome",
+      "queues": "Call work queue",
+      "search": "Search number, extension or summary",
+      "resultCount": "{{count}} matching records from {{total}} loaded calls",
+      "unrecordedHint": "Ended calls whose outcome has not been recorded. Open the call to review it.",
+      "filteredEmpty": "No calls match these filters",
+      "filteredEmptyBody": "Change the search or selected queue, or clear the filters to see all loaded calls.",
+      "pagination": "Call pages",
+      "pageRange": "{{first}}–{{last}} / {{total}} records",
+      "previousPage": "Previous",
+      "nextPage": "Next",
+      "views": "Call views",
+      "conversationsTab": "Conversations",
+      "settingsTab": "Call settings"
+    }
   },
   "materials": {
     "tab": "Materials",

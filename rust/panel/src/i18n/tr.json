@@ -746,12 +746,20 @@
       "hypothesisChannel": "{{n}}. hipotez: bu kanal için bağlı hesap yok.",
       "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
     },
-    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin."
+    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin.",
+    "workbench": {
+      "sections": "Brief bölümleri",
+      "gapCount": "{{count}} eksik",
+      "fixFirstGap": "İlk eksiği tamamla",
+      "viewFirstGap": "İlk eksiğe git",
+      "brand": "Marka ve kitle",
+      "plan": "Hedefler ve plan"
+    }
   },
   "capabilities": {
     "title": "Kabiliyetler",
-    "description": "Çalışma alanının üzerinden iş yapabildiği hesaplar, cihazlar ve araçlar",
-    "declare": "Kabiliyet bildir",
+    "description": "İşinize göre bağlantıları seçin; durumlarını ve kullanım izinlerini yönetin",
+    "declare": "Kaynak ekle",
     "filterLabel": "Tür grubu",
     "filterAll": "Tümü",
     "empty": "Kabiliyet yok.",
@@ -1113,6 +1121,76 @@
         "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon yaklaşık 15 saniye içinde bu sayfada, Cihazlar altında doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
         "ownKey": "Her bilgisayardaki köprünün kendi anahtarı olmalı: Jeeta köprüleri anahtarlarından ayırt eder ve çalışan başka bir köprünün tuttuğu telefonu reddeder. Başka bir bilgisayar için yeniden eşleştirin."
       }
+    },
+    "workbench": {
+      "purposeLabel": "Ne yapmak istiyorsunuz?",
+      "inventory": "Bağlantılarınız",
+      "search": "Bağlantı ara",
+      "searchPlaceholder": "Ad, hesap veya kanal ara…",
+      "allStatus": "Tüm durumlar",
+      "attention": "İlgilenilmesi gereken",
+      "verified": "Doğrulanmış",
+      "retired": "Kullanımdan kaldırılmış",
+      "statusLabel": "Bağlantı durumu",
+      "advanced": "Türüne göre daralt",
+      "technical": "Teknik bağlantı ayarları",
+      "clear": "Filtreleri temizle",
+      "noMatch": "Bu seçimle eşleşen bağlantı yok",
+      "noMatchBody": "Başka bir amaç seçin veya arama ve durum filtrelerini temizleyin.",
+      "count": "{{count}} bağlantı gösteriliyor",
+      "pairDevice": "Telefon eşleştirmeyi aç",
+      "managerNeeded": "Yeni bağlantı eklemek için çalışma alanı yöneticinizle görüşün.",
+      "steps": {
+        "choose": "Yapacağınız işi seçin",
+        "connect": "İlgili hesabı bağlayın",
+        "check": "Durumunu kontrol edin"
+      },
+      "goals": {
+        "all": {
+          "label": "Tüm bağlantılar",
+          "title": "Hesaplarınız, yapacağınız işin yanında.",
+          "description": "Müşterilerle konuşmak, içerik yayımlamak veya aramaları yönetmek için gereken bağlantıları seçin. Eklediğiniz hesapların durumunu aşağıdan takip edin."
+        },
+        "messages": {
+          "label": "Müşterilerle konuş",
+          "title": "Konuşmaları tek yerde toplayın.",
+          "description": "Müşterilerinizin size ulaştığı kanalı bağlayın. Hesap bağlantısı ve doğrulama tamamlandığında konuşmaları Gelen Kutusu’ndan yönetin."
+        },
+        "publishing": {
+          "label": "İçerik yayımla",
+          "title": "İçeriğinizin ulaşacağı hesapları bağlayın.",
+          "description": "Yayın yapmak istediğiniz sosyal hesabı seçin. İçeriği ve onay sürecini Büyüme Stüdyosu’nda yönetin; bağlantı durumu ve yayın izinlerini burada kontrol edin."
+        },
+        "calls": {
+          "label": "Aramaları yönet",
+          "title": "Telefon hattınızı çalışma alanına taşıyın.",
+          "description": "NetGSM santralinizi bağlayın. Aramalar ekranında görüşmeleri takip edin; sesli temsilci kullanımı için ayrıca köprü kurulumu gerekir."
+        },
+        "devices": {
+          "label": "Cihazlarla çalış",
+          "title": "Sahadaki cihazları ekibinize bağlayın.",
+          "description": "Telefonu eşleştirin veya cihaz kaydı ekleyin. Erişilebilirlik ve kullanım izinlerini bağlantının kendi satırından takip edin."
+        },
+        "growth": {
+          "label": "Reklam ve topluluk",
+          "title": "Büyüme kanallarınızı bir arada takip edin.",
+          "description": "Reklam hesabınızı bağlayın veya topluluk kaynaklarınızı kaydedin. Kayıt eklemek tek başına entegrasyonu etkinleştirmez."
+        },
+        "tools": {
+          "label": "İş araçları",
+          "title": "Ekibinizin kullandığı kaynakları düzenleyin.",
+          "description": "Takvim, pazar yeri, ajan ve diğer iş araçlarını sınıflandırın. Entegrasyon kurulumu ve izinler kaynağa göre ayrıca tamamlanır."
+        }
+      },
+      "addForPurpose": "Bu amaç için bağlantı ekle",
+      "groupsTab": "Hesap grupları",
+      "technicalTab": "Teknik ayarlar",
+      "pagination": "Bağlantı sayfaları",
+      "previous": "Önceki",
+      "next": "Sonraki",
+      "page": "{{current}} / {{total}}",
+      "showDetails": "Ayrıntılar",
+      "hideDetails": "Ayrıntıları kapat"
     }
   },
   "connect": {
@@ -1935,6 +2013,16 @@
       "text": "Metin paylaşımı",
       "image": "Görsel",
       "video": "Video"
+    },
+    "workbench": {
+      "filters": "Filtreler",
+      "filtersActive": "Etkin",
+      "clearFilters": "Filtreleri temizle",
+      "invalidRange": "Başlangıç tarihi bitiş tarihinden sonra olamaz.",
+      "hypotheses": "Hipotezleri göster",
+      "todayHint": "Onaylar, planlanan içerikler ve ilgilenmeniz gereken engeller.",
+      "viewPlan": "Haftalık planı gör",
+      "sections": "Stüdyo görünümü"
     }
   },
   "billing": {
@@ -2233,7 +2321,28 @@
     },
     "filterEmpty": "Bu yönde arama yok",
     "filterEmptyBody": "Diğer aramaları görmek için başka bir yön seçin.",
-    "showAll": "Tüm aramaları göster"
+    "showAll": "Tüm aramaları göster",
+    "workbench": {
+      "recordOutcome": "Sonuç kaydet",
+      "openCall": "Aramayı incele",
+      "outcomeMissing": "Sonuç kaydedilmemiş",
+      "allCalls": "Tüm aramalar",
+      "openCalls": "Açık aramalar",
+      "unrecordedCalls": "Sonuç bekleyenler",
+      "queues": "Arama iş kuyruğu",
+      "search": "Numara, dahili veya özet ara",
+      "resultCount": "Yüklenen {{total}} aramadan {{count}} kayıt eşleşiyor",
+      "unrecordedHint": "Biten ama sonucu kaydedilmemiş aramalar. Görüşmeyi açıp sonucu kontrol edin.",
+      "filteredEmpty": "Bu filtrelerle eşleşen arama yok",
+      "filteredEmptyBody": "Aramayı veya seçili kuyruğu değiştirin; tüm kayıtları görmek için filtreleri temizleyin.",
+      "pagination": "Arama sayfaları",
+      "pageRange": "{{first}}–{{last}} / {{total}} kayıt",
+      "previousPage": "Önceki",
+      "nextPage": "Sonraki",
+      "views": "Arama görünümleri",
+      "conversationsTab": "Görüşmeler",
+      "settingsTab": "Arama ayarları"
+    }
   },
   "materials": {
     "tab": "Materyaller",

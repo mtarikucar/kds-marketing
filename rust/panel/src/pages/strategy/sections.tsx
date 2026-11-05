@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +43,7 @@ import {
 import { gapsOf } from '@/lib/errors';
 import { formatMoney } from '@/lib/format';
 import { invalidateStrategy } from './queries';
+import { BriefGroupContext, groupForSection, sectionId, useRequestedEdit } from './BriefNavigation';
 
 const NO_GROUP = '__none__';
 
@@ -99,6 +100,7 @@ function EditableSection<K extends EditableKey>({
   editor: (value: Sections[K], onChange: (next: Sections[K]) => void) => ReactNode;
 }) {
   const { t } = useTranslation();
+  const { group } = useContext(BriefGroupContext);
   const [editing, setEditing] = useState<Sections[K] | null>(null);
   const writer = useSectionWriter(sectionKey);
   const title = t(`strategy.sections.${sectionKey}`);
@@ -107,12 +109,25 @@ function EditableSection<K extends EditableKey>({
     writer.reset();
   };
   const gaps = gapsOf(writer.error);
+  const formRef = useRef<HTMLFormElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  const isEditing = editing !== null;
+  useRequestedEdit(sectionKey, () => {
+    if (editable) setEditing((current) => current ?? JSON.parse(JSON.stringify(value)) as Sections[K]);
+  });
+  useEffect(() => {
+    if (isEditing) formRef.current?.querySelector<HTMLElement>('input, textarea, button[role=combobox], button')?.focus();
+    else if (wasEditing.current) editButtonRef.current?.focus();
+    wasEditing.current = isEditing;
+  }, [isEditing]);
   return (
-    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
+    <div hidden={group !== groupForSection(sectionKey)}>
+    <Card id={sectionId(sectionKey)} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
       <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 p-0 md:flex-col md:justify-start md:content-start">
         <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
         {editable && editing === null && (
-          <Button variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
+          <Button ref={editButtonRef} variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             {t('common.edit')}
           </Button>
@@ -123,6 +138,7 @@ function EditableSection<K extends EditableKey>({
           view(value)
         ) : (
           <form
+            ref={formRef}
             className="flex flex-col gap-3"
             aria-label={title}
             noValidate
@@ -146,6 +162,7 @@ function EditableSection<K extends EditableKey>({
         )}
       </CardContent>
     </Card>
+    </div>
   );
 }
 
@@ -612,9 +629,11 @@ export function SectionsView({ sections, editable, groups }: SectionsViewProps) 
 function PaidSection({ value, editable }: { value: boolean; editable: boolean }) {
   const { t } = useTranslation();
   const writer = useSectionWriter('paid_enabled');
+  const { group } = useContext(BriefGroupContext);
   const label = t('strategy.fields.paidEnabled');
   return (
-    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
+    <div hidden={group !== 'plan'}>
+    <Card id={sectionId('paid_enabled')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
       <CardHeader className="p-0">
         <CardTitle className="text-sm font-medium text-muted-foreground">{t('strategy.sections.paid_enabled')}</CardTitle>
       </CardHeader>
@@ -635,5 +654,6 @@ function PaidSection({ value, editable }: { value: boolean; editable: boolean })
         <ErrorCallout error={writer.error} />
       </CardContent>
     </Card>
+    </div>
   );
 }

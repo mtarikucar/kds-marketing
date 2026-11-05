@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +27,7 @@ import {
 } from '@/components/ui';
 import { gapsOf } from '@/lib/errors';
 import { invalidateStrategy } from './queries';
+import { BriefGroupContext, sectionId, useRequestedEdit } from './BriefNavigation';
 
 /** One hypothesis as edited: `id` when it already exists, `retired` when left out of the write. */
 interface Row {
@@ -93,6 +94,7 @@ export function HypothesesSection({
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const { group } = useContext(BriefGroupContext);
   const [rows, setRows] = useState<Row[] | null>(null);
   const save = useMutation({
     mutationFn: setHypotheses,
@@ -106,13 +108,26 @@ export function HypothesesSection({
     setRows((current) => current && current.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   const channelChoices = channels.length > 0 ? [...channels, ANY_CHANNEL] : undefined;
   const gaps = gapsOf(save.error);
+  const formRef = useRef<HTMLFormElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  const isEditing = rows !== null;
+  useRequestedEdit('hypotheses', () => {
+    if (editable) setRows((current) => current ?? hypotheses.map(toRow));
+  });
+  useEffect(() => {
+    if (isEditing) formRef.current?.querySelector<HTMLElement>('input, button')?.focus();
+    else if (wasEditing.current) editButtonRef.current?.focus();
+    wasEditing.current = isEditing;
+  }, [isEditing]);
 
   return (
-    <Card className="rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none">
+    <div hidden={group !== 'hypotheses'}>
+    <Card id={sectionId('hypotheses')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none">
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 px-0 pb-4 pt-0">
         <CardTitle className="text-lg font-normal">{t('strategy.sections.hypotheses')}</CardTitle>
         {editable && rows === null && (
-          <Button variant="ghost" size="sm" onClick={() => setRows(hypotheses.map(toRow))}>
+          <Button ref={editButtonRef} variant="ghost" size="sm" onClick={() => setRows(hypotheses.map(toRow))}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
             {t('strategy.hypotheses.edit')}
           </Button>
@@ -123,6 +138,7 @@ export function HypothesesSection({
           <HypothesisTable hypotheses={hypotheses} segments={segments} />
         ) : (
           <form
+            ref={formRef}
             className="flex flex-col gap-3"
             aria-label={t('strategy.sections.hypotheses')}
             noValidate
@@ -266,5 +282,6 @@ export function HypothesesSection({
         )}
       </CardContent>
     </Card>
+    </div>
   );
 }

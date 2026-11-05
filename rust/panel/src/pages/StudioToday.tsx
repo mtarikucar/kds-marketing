@@ -379,7 +379,11 @@ function SlotEditor({
   const done = () => {
     const back = opener.current;
     close();
-    if (back instanceof HTMLElement && back.isConnected) back.focus();
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) {
+      back.focus();
+    } else {
+      document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"][data-studio-section]')?.focus();
+    }
   };
   const detail = useQuery({ queryKey: [...key, 'slot', id], queryFn: () => api.slotGet(id) });
   const pieceFiles = (detail.data?.piece?.media ?? []).flatMap((x) => (x.kind === 'file' ? [x.id] : []));
@@ -508,12 +512,14 @@ export function StudioToday({
   data,
   selectedSlot,
   onSelect,
+  onViewPlan,
   manage,
   overdue,
 }: {
   data?: api.Overview;
   selectedSlot: string | null;
   onSelect: (id: string | null) => void;
+  onViewPlan: () => void;
   manage: boolean;
   overdue: boolean;
 }) {
@@ -602,6 +608,7 @@ export function StudioToday({
   const shoots = data?.today.shoot_requests?.length ?? 0;
   return (
     <Region name="today">
+      <p className="text-sm text-muted-foreground">{t('studio.workbench.todayHint', { defaultValue: 'Onaylar, planlanan içerikler ve ilgilenmeniz gereken engeller.' })}</p>
       <div className="flex flex-wrap items-center gap-2">
         {overdue && (
           <p className="rounded bg-warning-subtle px-2 py-1 text-sm">{t('studio.agentWaiting')}</p>
@@ -674,7 +681,12 @@ export function StudioToday({
         ))}
       </ul>
       {data && !data.today.slots.length && !others.length && !data.today.budget_moves.length && !data.today.paid_alerts.length && !shoots && (
-        <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
+        <div className="space-y-2 py-2">
+          <p className="text-sm text-muted-foreground">{t('studio.emptyToday')}</p>
+          <button type="button" onClick={onViewPlan} className="inline-flex min-h-10 items-center text-sm font-medium text-primary underline underline-offset-4">
+            {t('studio.workbench.viewPlan', { defaultValue: 'Haftalık planı gör' })}
+          </button>
+        </div>
       )}
       {data &&
         others.map((s) => (

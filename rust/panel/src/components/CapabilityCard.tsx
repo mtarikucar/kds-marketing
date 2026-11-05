@@ -1,3 +1,4 @@
+import { useId, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -24,7 +25,11 @@ export type ConnectorAction = 'connect' | 'reconnect' | 'probe' | 'iys';
  * account, or giving new credentials to a NetGSM one its probe no longer verifies; probing one
  * that holds credentials. None for a retired capability, nor for a kind no provider serves.
  */
-export function connectorActions(item: CapabilityOut, canManage: boolean, canProbe: boolean): ConnectorAction[] {
+export function connectorActions(
+  item: CapabilityOut,
+  canManage: boolean,
+  canProbe: boolean,
+): ConnectorAction[] {
   const c = item.capability;
   if (c.reach !== 'connector' || c.status === 'retired' || providerOf(c.kind_key) === null) return [];
   const actions: ConnectorAction[] = [];
@@ -46,9 +51,17 @@ export function policySummary(t: TFunction, language: string, policy: Policy, by
   const lines: string[] = [];
   const hours = policy.active_hours;
   if (hours) {
-    const days = [...hours.days].sort((a, b) => a - b).map((d) => weekdayName(d, language)).join(', ');
+    const days = [...hours.days]
+      .sort((a, b) => a - b)
+      .map((d) => weekdayName(d, language))
+      .join(', ');
     lines.push(
-      t('capabilities.policy.hours', { days, from: formatHour(hours.from), to: formatHour(hours.to), tz: hours.tz }),
+      t('capabilities.policy.hours', {
+        days,
+        from: formatHour(hours.from),
+        to: formatHour(hours.to),
+        tz: hours.tz,
+      }),
     );
   } else {
     lines.push(t('capabilities.policy.anytime'));
@@ -120,6 +133,8 @@ export function CapabilityCard({
   readAt?: number;
 }) {
   const { t, i18n } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const detailId = useId();
   const c = item.capability;
   const retired = c.status === 'retired';
   const mutable = canManage && !retired;
@@ -132,149 +147,174 @@ export function CapabilityCard({
 
   return (
     <Card className="flex min-w-0 flex-col rounded-none border-0 bg-transparent" data-capability-id={c.id}>
-      <CardHeader className="flex-row items-start justify-between gap-4 px-0 pb-4 pt-6">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 px-0 py-4">
         <div className="flex min-w-0 flex-col gap-1">
-          <CardTitle className="truncate" title={c.name}>
+          <CardTitle id={`${detailId}-title`} className="truncate" title={c.name}>
             {c.name}
           </CardTitle>
           <p className="text-caption text-muted-foreground">
             {kindLabel(t, c.kind_key)}{' '}
-            <code className="font-mono text-micro">{c.kind_key}</code>
             {c.key_detail && <> · {t('capabilities.keyDetail', { detail: c.key_detail })}</>}
           </p>
         </div>
-        <CapabilityStatusBadge status={item.effective_status} />
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4 px-0 pb-6">
-        {c.description && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{c.description}</p>}
-        <dl className="grid min-w-0 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
-          <div className="flex flex-col gap-0.5">
-            <dt className="text-caption text-muted-foreground">{t('capabilities.reach.label')}</dt>
-            <dd>
-              <Badge size="sm">{t(`capabilities.reach.${c.reach}`)}</Badge>
-            </dd>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            <dt className="text-caption text-muted-foreground">{t('capabilities.lastVerified')}</dt>
-            <dd className="text-foreground">
-              {c.last_verified_at
-                ? formatDateTime(c.last_verified_at, i18n.language)
-                : t('capabilities.neverVerified')}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-0.5 sm:col-span-2 xl:col-span-2">
-            <dt className="text-caption text-muted-foreground">{t('capabilities.policy.label')}</dt>
-            <dd>
-              <ul className="flex flex-col gap-0.5 text-foreground">
-                {policySummary(t, i18n.language, c.policy, byHeartbeat).map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-            </dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className="text-caption text-muted-foreground">{t('capabilities.budgetLinks')}</dt>
-            <dd className="flex flex-wrap gap-1">
-              {c.budget_item_ids.length === 0 ? (
-                <span className="text-muted-foreground">{t('capabilities.noBudgetLinks')}</span>
-              ) : (
-                c.budget_item_ids.map((id) => (
-                  <Chip
-                    key={id}
-                    label={budgetName(id)}
-                    disabled={unlinking}
-                    onRemove={mutable ? () => onUnlink(item, id) : undefined}
-                    removeLabel={t('capabilities.actions.unlinkBudget', { name: budgetName(id) })}
-                  />
-                ))
-              )}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-1">
-            <dt className="text-caption text-muted-foreground">{t('capabilities.groupsLabel')}</dt>
-            <dd className="flex flex-wrap gap-1">
-              {memberOf.length === 0 ? (
-                <span className="text-muted-foreground">{t('capabilities.noGroups')}</span>
-              ) : (
-                memberOf.map((g) => <Chip key={g.group.id} label={g.group.name} />)
-              )}
-            </dd>
-          </div>
-        </dl>
-        {connection && (health || connecting.length > 0) && (
-          <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-caption text-muted-foreground">{t('capabilities.connector.label')}</span>
-              {health && <ConnectorHealthBadge health={health} />}
+        <div className="flex flex-wrap items-center gap-2">
+          <CapabilityStatusBadge status={item.effective_status} />
+          {connection && health && <ConnectorHealthBadge health={health} />}
+          {connecting.length > 0 && onConnector && (
+            <div
+              role="group"
+              aria-label={t('capabilities.connector.actionsLabel')}
+              className="flex flex-wrap gap-2"
+            >
+              {connecting.map((action) => (
+                <Button
+                  key={action}
+                  size="sm"
+                  variant="outline"
+                  disabled={connectorBusy}
+                  onClick={() => onConnector(action, item)}
+                >
+                  {t(`capabilities.connector.${action}`)}
+                </Button>
+              ))}
             </div>
-            {health && <ConnectorHealthReason health={health} />}
-            {health?.comments && (
-              <p
-                data-testid="comment-status"
-                className={`text-caption ${health.comments === 'reconnect' ? 'text-warning' : 'text-muted-foreground'}`}
-              >
-                {t('capabilities.connector.commentsLine', {
-                  status: t(`capabilities.connector.comments.${health.comments}`),
-                })}
-              </p>
-            )}
-            {health?.measure === 'reconnect' && (
-              <p data-testid="measure-status" className="text-caption text-warning">
-                {t('capabilities.connector.measureReconnect')}
-              </p>
-            )}
-            {connecting.length > 0 && onConnector && (
-              <div role="group" aria-label={t('capabilities.connector.actionsLabel')} className="flex flex-wrap gap-2">
-                {connecting.map((action) => (
-                  <Button
-                    key={action}
-                    size="sm"
-                    variant={action === 'probe' ? 'outline' : 'primary'}
-                    disabled={connectorBusy}
-                    onClick={() => onConnector(action, item)}
-                  >
-                    {t(`capabilities.connector.${action}`)}
-                  </Button>
-                ))}
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-expanded={expanded}
+            aria-controls={detailId}
+            aria-describedby={`${detailId}-title`}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {t(expanded ? 'capabilities.workbench.hideDetails' : 'capabilities.workbench.showDetails')}
+          </Button>
+        </div>
+      </CardHeader>
+      <div id={detailId} hidden={!expanded}>
+        <CardContent className="flex flex-1 flex-col gap-4 px-0 pb-6">
+          {c.description && (
+            <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">
+              {c.description}
+            </p>
+          )}
+          <dl className="grid min-w-0 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-caption text-muted-foreground">{t('capabilities.reach.label')}</dt>
+              <dd>
+                <Badge size="sm">{t(`capabilities.reach.${c.reach}`)}</Badge>
+              </dd>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-caption text-muted-foreground">{t('capabilities.lastVerified')}</dt>
+              <dd className="text-foreground">
+                {c.last_verified_at
+                  ? formatDateTime(c.last_verified_at, i18n.language)
+                  : t('capabilities.neverVerified')}
+              </dd>
+            </div>
+            <div className="flex flex-col gap-0.5 sm:col-span-2 xl:col-span-2">
+              <dt className="text-caption text-muted-foreground">{t('capabilities.policy.label')}</dt>
+              <dd>
+                <ul className="flex flex-col gap-0.5 text-foreground">
+                  {policySummary(t, i18n.language, c.policy, byHeartbeat).map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+              </dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-caption text-muted-foreground">{t('capabilities.budgetLinks')}</dt>
+              <dd className="flex flex-wrap gap-1">
+                {c.budget_item_ids.length === 0 ? (
+                  <span className="text-muted-foreground">{t('capabilities.noBudgetLinks')}</span>
+                ) : (
+                  c.budget_item_ids.map((id) => (
+                    <Chip
+                      key={id}
+                      label={budgetName(id)}
+                      disabled={unlinking}
+                      onRemove={mutable ? () => onUnlink(item, id) : undefined}
+                      removeLabel={t('capabilities.actions.unlinkBudget', { name: budgetName(id) })}
+                    />
+                  ))
+                )}
+              </dd>
+            </div>
+            <div className="flex flex-col gap-1">
+              <dt className="text-caption text-muted-foreground">{t('capabilities.groupsLabel')}</dt>
+              <dd className="flex flex-wrap gap-1">
+                {memberOf.length === 0 ? (
+                  <span className="text-muted-foreground">{t('capabilities.noGroups')}</span>
+                ) : (
+                  memberOf.map((g) => <Chip key={g.group.id} label={g.group.name} />)
+                )}
+              </dd>
+            </div>
+          </dl>
+          {connection && (health || connecting.length > 0) && (
+            <div className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-caption text-muted-foreground">
+                  {t('capabilities.connector.label')}
+                </span>
               </div>
-            )}
-          </div>
-        )}
-        {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
-        {bridge && !retired && <VoiceBridgePanel capability={c} />}
-        {c.kind_key === 'phone' && !retired && <PhoneCard item={item} canWork={canUsePhones} live={livePhones} readAt={readAt} />}
-        {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
-          <div>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/calls">{t('calls.place.open')}</Link>
-            </Button>
-          </div>
-        )}
-        {mutable && (
-          <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
-            {c.reach !== 'connector' && !byHeartbeat && (
-              <Button size="sm" variant="outline" onClick={() => onAction('verify', item)}>
-                {t('capabilities.actions.verify')}
+              {health && <ConnectorHealthReason health={health} />}
+              {health?.comments && (
+                <p
+                  data-testid="comment-status"
+                  className={`text-caption ${health.comments === 'reconnect' ? 'text-warning' : 'text-muted-foreground'}`}
+                >
+                  {t('capabilities.connector.commentsLine', {
+                    status: t(`capabilities.connector.comments.${health.comments}`),
+                  })}
+                </p>
+              )}
+              {health?.measure === 'reconnect' && (
+                <p data-testid="measure-status" className="text-caption text-warning">
+                  {t('capabilities.connector.measureReconnect')}
+                </p>
+              )}
+            </div>
+          )}
+          {mutable && c.kind_key === 'netgsm_pbx' && c.has_sealed_config && <PbxPolicyPanel capability={c} />}
+          {bridge && !retired && <VoiceBridgePanel capability={c} />}
+          {c.kind_key === 'phone' && !retired && (
+            <PhoneCard item={item} canWork={canUsePhones} live={livePhones} readAt={readAt} />
+          )}
+          {canCall && c.kind_key === 'netgsm_pbx' && c.status === 'verified' && (
+            <div>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/calls">{t('calls.place.open')}</Link>
               </Button>
-            )}
-            <Button size="sm" variant="outline" onClick={() => onAction('edit', item)}>
-              {t('capabilities.actions.edit')}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onAction('policy', item)}>
-              {t('capabilities.actions.policy')}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onAction('link', item)}>
-              {t('capabilities.actions.linkBudget')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onAction('unreachable', item)}>
-              {t('capabilities.actions.unreachable')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onAction('retire', item)}>
-              {t('capabilities.actions.retire')}
-            </Button>
-          </div>
-        )}
-      </CardContent>
+            </div>
+          )}
+          {mutable && (
+            <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
+              {c.reach !== 'connector' && !byHeartbeat && (
+                <Button size="sm" variant="outline" onClick={() => onAction('verify', item)}>
+                  {t('capabilities.actions.verify')}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => onAction('edit', item)}>
+                {t('capabilities.actions.edit')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onAction('policy', item)}>
+                {t('capabilities.actions.policy')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onAction('link', item)}>
+                {t('capabilities.actions.linkBudget')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => onAction('unreachable', item)}>
+                {t('capabilities.actions.unreachable')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => onAction('retire', item)}>
+                {t('capabilities.actions.retire')}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </div>
     </Card>
   );
 }

@@ -52,6 +52,7 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': { ...stored, greeting_inbound: 'Merhaba' },
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const greeting = await screen.findByLabelText(tr.calls.policy.fields.greeting_inbound);
     await user.type(greeting, 'Merhaba');
     await user.type(screen.getByLabelText(tr.calls.policy.fields.holding_default), 'Bir saniye{enter}Hemen bakıyorum');
@@ -72,6 +73,7 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': stored,
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const notice = await screen.findByLabelText(tr.calls.policy.fields.transcript_notice);
     expect(screen.getByLabelText(tr.calls.policy.fields.closing)).toHaveValue(stored.closing);
     await user.clear(notice);
@@ -101,6 +103,7 @@ describe('CallsPolicy', () => {
       'PUT /api/calls/policy': { ...shown, opening_outbound: null, disclosure_sentence: '' },
     });
     renderAt('/calls');
+    await user.click(await screen.findByRole('tab', { name: 'Arama ayarları' }));
     const opening = await screen.findByLabelText(tr.calls.policy.fields.opening_outbound);
     expect(opening).toHaveValue(stored.opening_outbound);
     const reads = () => calls.filter((c) => c.method === 'GET' && c.path === '/api/calls/policy').length;

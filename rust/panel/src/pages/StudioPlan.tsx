@@ -23,9 +23,9 @@ export function StudioPlan({
   const day = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Istanbul' });
   const start = new Date(`${day}T00:00:00+03:00`);
   const end = new Date(start.getTime() + 7 * 86400000);
-  const visible = slots.filter(
-    (s) => instant(s.scheduled_at) >= start && instant(s.scheduled_at) < end,
-  );
+  const visible = slots
+    .filter((s) => instant(s.scheduled_at) >= start && instant(s.scheduled_at) < end)
+    .sort((a, b) => instant(a.scheduled_at).getTime() - instant(b.scheduled_at).getTime());
   const groups = new Map<string, Slot[]>();
   for (let i = 0; i < 7; i++)
     groups.set(

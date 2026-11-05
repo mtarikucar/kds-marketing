@@ -277,7 +277,7 @@ export function StudioLearned({
         ) : (
           <p className="text-sm">{t('studio.connectorUnavailable')}</p>
         ))}
-      <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-1">
         {data?.learned.arms.map(({ arm, evidence: rows }) => (
           <li key={arm.id} className="border-b border-border pb-3">
             <p className="text-sm font-medium">

@@ -47,6 +47,7 @@ import { can, canApproveStrategy } from '@/lib/roles';
 import { HypothesesSection } from './strategy/HypothesesSection';
 import { GROUPS_KEY, STRATEGY_KEY, VERSIONS_KEY, invalidateStrategy } from './strategy/queries';
 import { SectionsView } from './strategy/sections';
+import { BriefNavigation, BriefGroupContext, EditRequestContext, navigateToSection, sectionForGap, sectionId, type BriefGroup, type BriefSection } from './strategy/BriefNavigation';
 
 type Tab = 'approved' | 'draft';
 
@@ -190,11 +191,13 @@ function ApprovedTab({
   groups: readonly GroupOut[];
 }) {
   const { t, i18n } = useTranslation();
+  const [group, setGroup] = useState<BriefGroup>('brand');
   const [archiving, setArchiving] = useState(false);
   if (!version) {
     return <EmptyState icon={<img src="/brand/scenes/strategy.svg" alt="" width={144} height={144} className="h-36 w-36" />} title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} className="py-10" />;
   }
   return (
+    <BriefGroupContext.Provider value={{ group, setGroup }}>
     <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
       <Card className="rounded-none border-0 bg-transparent shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
@@ -217,6 +220,7 @@ function ApprovedTab({
           </dl>
         </CardContent>
       </Card>
+      <BriefNavigation />
       <SectionsView sections={version.sections} editable={false} groups={groups} />
       <HypothesesSection
         hypotheses={version.hypotheses}
@@ -224,9 +228,10 @@ function ApprovedTab({
         channels={version.sections.channels.map((c) => c.channel)}
         editable={false}
       />
-      <ConsultationLog versionId={version.id} canRecord={false} />
+      <div hidden={group !== 'consultation'} id={sectionId('consultation')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"><ConsultationLog versionId={version.id} canRecord={false} /></div>
       {canApprove && <ArchiveDialog version={version} open={archiving} onOpenChange={setArchiving} />}
     </div>
+    </BriefGroupContext.Provider>
   );
 }
 
@@ -261,7 +266,10 @@ function DraftTab({
       await invalidateStrategy(queryClient);
     },
   });
+  const [group, setGroup] = useState<BriefGroup>('brand');
   const [approving, setApproving] = useState(false);
+  const [editRequest, setEditRequest] = useState<{ section: BriefSection; id: number } | null>(null);
+  const firstGapSection = gaps[0] ? sectionForGap(gaps[0]) : null;
 
   if (!draft) {
     return (
@@ -290,6 +298,8 @@ function DraftTab({
       : null;
 
   return (
+    <BriefGroupContext.Provider value={{ group, setGroup }}>
+    <EditRequestContext.Provider value={editRequest}>
     <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
       <Card className="rounded-none border-0 bg-transparent shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
@@ -338,11 +348,26 @@ function DraftTab({
       {gaps.length > 0 ? (
         <Callout tone="warning" title={t('strategy.gapsTitle')}>
           <GapList gaps={gaps} />
+          {firstGapSection && (
+            <Button
+              className="mt-4"
+              variant="outline"
+              onClick={() => {
+                navigateToSection(firstGapSection, setGroup, canConsult);
+                if (canConsult) setEditRequest((current) => ({ section: firstGapSection, id: (current?.id ?? 0) + 1 }));
+              }}
+            >
+              {canConsult
+                ? t('strategy.workbench.fixFirstGap', { defaultValue: 'İlk eksiği tamamla' })
+                : t('strategy.workbench.viewFirstGap', { defaultValue: 'İlk eksiğe git' })}
+            </Button>
+          )}
         </Callout>
       ) : (
         <Callout tone="success">{t('strategy.noGaps')}</Callout>
       )}
 
+      <BriefNavigation gaps={gaps} />
       <SectionsView sections={draft.sections} editable={canConsult} groups={groups} />
       <HypothesesSection
         hypotheses={draft.hypotheses}
@@ -350,8 +375,10 @@ function DraftTab({
         channels={draft.sections.channels.map((c) => c.channel)}
         editable={canConsult}
       />
-      <ConsultationLog versionId={draft.id} canRecord={canConsult} />
+      <div hidden={group !== 'consultation'} id={sectionId('consultation')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"><ConsultationLog versionId={draft.id} canRecord={canConsult} /></div>
     </div>
+    </EditRequestContext.Provider>
+    </BriefGroupContext.Provider>
   );
 }
 

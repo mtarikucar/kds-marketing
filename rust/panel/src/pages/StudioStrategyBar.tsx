@@ -37,7 +37,7 @@ export function StudioStrategyBar({
   );
   const [open, setOpen] = useState(false);
   return (
-    <Region name="strategy" className="xl:col-span-2 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(16rem,1fr)_auto] xl:gap-x-8 xl:space-y-0 [&>h2]:col-span-full [&>h2]:mb-3">
+    <Region name="strategy" className="text-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           {data && (
@@ -67,7 +67,9 @@ export function StudioStrategyBar({
         )}
       </div>
       <StudioError error={brake.error} />
-      <ul className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-1">
+      <details>
+      <summary className="cursor-pointer py-1 text-sm font-medium">{t('studio.workbench.hypotheses', { defaultValue: 'Hipotezleri göster' })}</summary>
+      <ul className="mt-4 grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-1">
         {data?.hypotheses.map((h) => (
           <li key={h.id} className="min-w-0">
             <div className="flex justify-between gap-2 text-sm">
@@ -142,6 +144,7 @@ export function StudioStrategyBar({
           )}
         </>
       )}
+      </details>
     </Region>
   );
 }
