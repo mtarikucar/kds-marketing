@@ -1,7 +1,6 @@
 /*
-  Design tokens and base styles copied from the v1 frontend's src/index.css (the design kit's
-  light and dark tokens, base layer, scrollbars and the responsive DataTable). The RTL rules are
-  left out: the panel ships Turkish and English only. Keep the tokens in step with v1.
+  Shared panel tokens, base styles, scrollbars, and responsive table layout.
+  The panel ships Turkish and English, so it does not need RTL rules.
 */
 @tailwind base;
 @tailwind components;
@@ -12,15 +11,15 @@
     color-scheme: light;
     /* Console tokens (light). Legacy keys kept for back-compat; new semantic
        tokens (surface*, border-strong, danger, info, *-subtle, chart) added. */
-    --background: #fbfbfc;
-    --foreground: #14151a;
+    --background: #f8f8f6;
+    --foreground: #191d25;
     --surface: #ffffff;
-    --surface-muted: #f4f5f7;
+    --surface-muted: #f1f2f1;
     --surface-raised: #ffffff;
     --card: #ffffff;
-    --card-foreground: #14151a;
+    --card-foreground: #191d25;
     --popover: #ffffff;
-    --popover-foreground: #14151a;
+    --popover-foreground: #191d25;
     --primary: #2458e6;
     --primary-foreground: #ffffff;
     --primary-hover: #1d48c4;
@@ -31,12 +30,12 @@
     --brand-accent-foreground: #ffffff;
     --brand-accent-hover: #da560d;
     --brand-accent-subtle: #fff2ea;
-    --secondary: #f4f5f7;
-    --secondary-foreground: #14151a;
-    --muted: #f4f5f7;
-    --muted-foreground: #5b5e68;
-    --accent: #f1f3f5;
-    --accent-foreground: #14151a;
+    --secondary: #f1f2f1;
+    --secondary-foreground: #191d25;
+    --muted: #f1f2f1;
+    --muted-foreground: #606772;
+    --accent: #eceeed;
+    --accent-foreground: #191d25;
     --destructive: #e11d48;
     --destructive-foreground: #ffffff;
     --danger: #e11d48;
@@ -51,9 +50,9 @@
     --info: #0284c7;
     --info-subtle: #f0f9ff;
     --info-foreground: #ffffff;
-    --border: #e7e8ec;
-    --border-strong: #d5d7de;
-    --input: #d5d7de;
+    --border: #e1e3e2;
+    --border-strong: #ced3d2;
+    --input: #ced3d2;
     --ring: #2458e6;
     --chart-1:#2458e6;--chart-2:#f5620f;--chart-3:#0f2350;--chart-4:#059669;
     --chart-5:#e11d48;--chart-6:#7c3aed;--chart-7:#0d9488;--chart-8:#64748b;

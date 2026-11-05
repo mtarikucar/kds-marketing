@@ -23,7 +23,7 @@ export function EmptyState({
     <div
       data-testid={testId}
       className={cn(
-        'flex flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-border p-10 text-center',
+        'flex flex-col items-center justify-center gap-4 rounded-lg border border-border bg-surface p-10 text-center',
         className,
       )}
     >

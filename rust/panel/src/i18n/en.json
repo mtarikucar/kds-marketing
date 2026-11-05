@@ -272,14 +272,14 @@
   },
   "home": {
     "title": "Home",
-    "description": "An overview of your workspace.",
+    "description": "Your next decisions, follow-ups, and workspace status.",
     "slug": "Slug",
     "status": "Status",
     "myRole": "Your role",
     "myPermissions": "Your permissions",
     "strategy": {
       "title": "Waiting for a strategy",
-      "body": "The strategy comes out of a consultation your agent runs with you over MCP: it asks, records your answers and its assumptions, and puts the draft up for your approval.",
+      "body": "Work with your agent to define your audience, goals, and approach. Review the draft before it takes effect.",
       "start": "Start the consultation",
       "open": "Open the strategy",
       "draftTitle": "A strategy draft is being worked out",
@@ -291,7 +291,8 @@
       "approve": "Approve",
       "approvedTitle": "The strategy is in force",
       "approvedBody": "Version in force: {{number}}.",
-      "hypotheses": "Hypotheses: {{count}}."
+      "hypotheses": "Hypotheses: {{count}}.",
+      "label": "Strategy"
     },
     "inactive": {
       "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
@@ -345,8 +346,15 @@
       "promoted_not_contacted": "Promoted prospects have not been written to yet.",
       "campaign_approval": "A campaign is waiting for your approval.",
       "campaign_blocked": "A campaign has stopped; check why.",
-      "personalization_due": "A campaign's recipients are waiting for personalization."
-    }
+      "personalization_due": "A campaign's recipients are waiting for personalization.",
+      "description": "Decisions and follow-ups, in priority order.",
+      "count": "{{count}} pending items",
+      "emptyHint": "New approvals and follow-ups will appear here. You can review conversations or plan your next content below."
+    },
+    "workspaceDetails": "Workspace details & permissions",
+    "continueWorking": "Continue working",
+    "inboxHint": "Conversations, contacts, and follow-ups.",
+    "studioHint": "Plan content and review upcoming work."
   },
   "team": {
     "title": "Team",
@@ -3345,6 +3353,22 @@
       "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
       "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
       "managerOnly": "Only an owner or manager changes these settings."
+    }
+  },
+  "publicIntro": {
+    "title": "Every connection has a next step.",
+    "description": "Manage customer relationships, content and daily work in one shared workspace.",
+    "people": {
+      "title": "Keep the conversation going",
+      "description": "Contacts and conversations with a shared history for your team."
+    },
+    "work": {
+      "title": "Move the work forward",
+      "description": "Pending tasks, content and approvals in one place."
+    },
+    "results": {
+      "title": "See what happened",
+      "description": "Follow completed work and its results back to the source."
     }
   }
 }

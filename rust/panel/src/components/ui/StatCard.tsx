@@ -33,7 +33,7 @@ export function StatCard({ label, value, icon, delta, tone = 'neutral', classNam
   return (
     <div
       className={cn(
-        'rounded-xl border border-border bg-surface p-5 shadow-sm',
+        'rounded-lg border border-border bg-surface p-5',
         className,
       )}
     >

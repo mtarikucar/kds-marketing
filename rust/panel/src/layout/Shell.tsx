@@ -89,16 +89,17 @@ function NavItems({ orientation }: { orientation: 'vertical' | 'horizontal' }) {
           end={to === '/'}
           className={({ isActive }) =>
             cn(
-              'flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+              'relative flex shrink-0 items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               isActive
-                ? 'bg-primary/10 text-primary'
+                ? 'bg-primary/10 font-semibold text-primary before:absolute before:inset-y-2 before:start-0 before:w-0.5 before:rounded-full before:bg-primary'
                 : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground',
-              orientation === 'horizontal' && 'py-1.5',
+              orientation === 'horizontal' && 'py-1.5 before:hidden',
+              orientation === 'vertical' && (key === 'inbox' || key === 'strategy' || key === 'team') && 'mt-3',
             )
           }
         >
-          <Icon className="h-4 w-4" aria-hidden="true" />
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
           {t(`nav.${key}`)}
         </NavLink>
       ))}
@@ -179,18 +180,18 @@ export function Shell() {
 
   return (
     <div className="flex min-h-screen bg-background">
-      <aside className="hidden w-60 shrink-0 flex-col gap-6 border-e border-border bg-surface px-3 py-4 md:flex">
-        <Brand className="px-2" />
-        <nav aria-label={t('nav.label')} className="flex flex-col gap-1">
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-e border-border bg-surface md:flex">
+        <Brand className="border-b border-border px-5 py-5" />
+        <nav aria-label={t('nav.label')} className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-3 py-4">
           <NavItems orientation="vertical" />
         </nav>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-2.5 sm:px-6">
+        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-surface px-4 py-3 sm:px-8">
           <Brand className="md:hidden" />
           <div className="flex min-w-0 items-center gap-2">
-            <span className="sr-only">{t('shell.workspace')}</span>
+            <span className="hidden text-caption text-muted-foreground sm:inline">{t('shell.workspace')}</span>
             <WorkspaceSwitcher me={me} />
             {current && <WorkspaceStatusBadge status={current.workspace_status} />}
           </div>
@@ -198,7 +199,7 @@ export function Shell() {
             <LanguageSwitcher />
             <ThemeToggle />
             <span
-              className="hidden max-w-[12rem] truncate text-sm text-muted-foreground lg:inline"
+              className="hidden max-w-[12rem] truncate border-s border-border ps-4 text-sm text-muted-foreground lg:inline"
               title={t('shell.signedInAs', { name: me.email })}
             >
               {me.display_name}
@@ -223,7 +224,7 @@ export function Shell() {
           <NavItems orientation="horizontal" />
         </nav>
 
-        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main className="flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-9">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
             {current ? (
               // Keyed by workspace: a switch mounts every page afresh, so no local state (an open

@@ -34,9 +34,9 @@ export function LoginPage() {
   const wrongCredentials = isApiError(signIn.error) && signIn.error.status === 401;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <PageHeader title={t('login.title')} description={t('login.description')} />
-      <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+      <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
         {wrongCredentials ? (
           <Callout tone="danger">{t('login.invalid')}</Callout>
         ) : (
@@ -66,7 +66,7 @@ export function LoginPage() {
             />
           )}
         </Field>
-        <Button type="submit" loading={signIn.isPending}>
+        <Button type="submit" size="lg" loading={signIn.isPending}>
           {t('login.submit')}
         </Button>
       </form>

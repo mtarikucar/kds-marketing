@@ -23,8 +23,8 @@ export default {
         'body-lg': ['1.0625rem', { lineHeight: '1.6rem' }],
         h3: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '600' }],
         h2: ['1.375rem', { lineHeight: '1.75rem', fontWeight: '650' }],
-        h1: ['1.75rem', { lineHeight: '2.1rem', fontWeight: '700' }],
-        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.02em', fontWeight: '700' }],
+        h1: ['1.75rem', { lineHeight: '2.1rem', letterSpacing: '-0.025em', fontWeight: '600' }],
+        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.03em', fontWeight: '600' }],
       },
       colors: {
         border: {

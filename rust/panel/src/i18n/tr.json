@@ -272,14 +272,14 @@
   },
   "home": {
     "title": "Ana sayfa",
-    "description": "Çalışma alanınızın özeti.",
+    "description": "Sıradaki kararlar, takip işleri ve çalışma alanınızın durumu.",
     "slug": "Kısa ad",
     "status": "Durum",
     "myRole": "Rolünüz",
     "myPermissions": "İzinleriniz",
     "strategy": {
       "title": "Strateji bekleniyor",
-      "body": "Strateji, ajanınızın MCP üzerinden sizinle yürüttüğü istişareyle oluşur: ajan sorar, yanıtlarınızı ve varsayımlarını kaydeder, taslağı onayınıza sunar.",
+      "body": "Ajanınızla hedef kitlenizi, amaçlarınızı ve yaklaşımınızı belirleyin. Taslak yürürlüğe girmeden önce gözden geçirin.",
       "start": "İstişareyi başlat",
       "open": "Stratejiye git",
       "draftTitle": "Strateji taslağı üzerinde çalışılıyor",
@@ -291,7 +291,8 @@
       "approve": "Onayla",
       "approvedTitle": "Strateji yürürlükte",
       "approvedBody": "Yürürlükteki sürüm: {{number}}.",
-      "hypotheses": "Hipotez sayısı: {{count}}."
+      "hypotheses": "Hipotez sayısı: {{count}}.",
+      "label": "Strateji"
     },
     "inactive": {
       "pending_payment": "Ödeme onaylanıp etkinleştirme kodu girildiğinde çalışma alanınız açılır.",
@@ -345,8 +346,15 @@
       "promoted_not_contacted": "Aktarılan ama henüz kendisine yazılmayan adaylar var.",
       "campaign_approval": "Bir kampanya onayınızı bekliyor.",
       "campaign_blocked": "Bir kampanya durdu; nedenine bakın.",
-      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor."
-    }
+      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor.",
+      "description": "Öncelik sırasına göre kararlar ve takip işleri.",
+      "count": "{{count}} bekleyen iş",
+      "emptyHint": "Yeni onaylar ve takip işleri burada görünür. Aşağıdan konuşmaları inceleyebilir veya sıradaki içeriği planlayabilirsiniz."
+    },
+    "workspaceDetails": "Çalışma alanı bilgileri ve izinler",
+    "continueWorking": "Çalışmaya devam et",
+    "inboxHint": "Konuşmalar, kişiler ve takip işleri.",
+    "studioHint": "İçerikleri planlayın, sıradaki işleri inceleyin."
   },
   "team": {
     "title": "Ekip",
@@ -3345,6 +3353,22 @@
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
       "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
       "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
+    }
+  },
+  "publicIntro": {
+    "title": "Her temasın bir sonraki adımı.",
+    "description": "Ekibinizin müşteri ilişkilerini, içeriklerini ve günlük işlerini aynı çalışma alanından yönetin.",
+    "people": {
+      "title": "İlişkileri takip edin",
+      "description": "Kişiler ve görüşmeler, ekip için ortak bir geçmişte."
+    },
+    "work": {
+      "title": "İşi ilerletin",
+      "description": "Bekleyen görevler, içerikler ve onaylar bir arada."
+    },
+    "results": {
+      "title": "Ne olduğunu görün",
+      "description": "Yapılan işleri ve sonuçlarını kaynağına kadar takip edin."
     }
   }
 }

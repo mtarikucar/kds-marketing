@@ -33,9 +33,9 @@ export function RegisterPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <PageHeader title={t('register.title')} description={t('register.description')} />
-      <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate>
+      <form className="flex flex-col gap-5" onSubmit={onSubmit} noValidate>
         <ErrorCallout error={signUp.error} />
         <Field label={t('fields.display_name')} required>
           {(ids) => (
@@ -76,7 +76,7 @@ export function RegisterPage() {
             />
           )}
         </Field>
-        <Button type="submit" loading={signUp.isPending}>
+        <Button type="submit" size="lg" loading={signUp.isPending}>
           {t('register.submit')}
         </Button>
       </form>
