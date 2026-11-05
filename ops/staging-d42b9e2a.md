@@ -17,3 +17,22 @@ Publication is gated on successful completion of the exact source push CI run. T
 If publication fails after the swap, automated return to the intact previous release is allowed only after confirming the database migration inventory still exactly matches the pre-publication inventory. No database rollback or account modification is part of this UI release.
 
 External checks and the publication outcome will be appended after the run.
+
+## Publication result
+
+Published successfully at **2026-11-05 21:45:57 UTC**.
+
+- Publication run: https://github.com/mtarikucar/kds-marketing/actions/runs/42112652523 — success.
+- Exact source CI completed successfully before publication.
+- Installed staging revision: `d42b9e2aa1e719e9741ed5b2f055e0d47fca1952`.
+- Recovery set: `/var/backups/jeeta-staging/pre-d42b9e2a-20261105T214538Z`.
+- Isolated restore/candidate boot passed. All 28 migration checksums and pre-existing table row counts remained unchanged.
+- Production pointer stayed at `095221a121801bbd807967c576fdb53046b3b23e`.
+- Public readiness passed. All 35 served assets matched the candidate byte-for-byte; five SPA routes returned the application; unauthenticated API access returned401.
+- Both production sites' login index hashes remained unchanged across this publication.
+
+Public evidence: [asset and readiness report](staging-d42b9e2a-public.json).
+
+Authenticated browser verification used the previously authorized staging demo account. Eight views (strategy, studio, material upload, capabilities, prospects, research tasks, calls, inbox) passed at1440px and390px: **16 captures**, no runtime exceptions, failed API responses, broken images or document overflow. Responsive editorial image sources loaded correctly. Business mutations were blocked by the verification harness; only sign-in was allowed. No account or strategy modifications were made. Studio desktop and capabilities mobile screenshots were also inspected visually.
+
+Browser evidence: [authenticated review](staging-d42b9e2a-browser.json). Screenshots remain in the private session directory `/workspace/kds-runtime/staging-d42b9e2a/`.
