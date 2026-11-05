@@ -105,14 +105,14 @@ function EventForm({ journeyId }: { journeyId: string }) {
   return (
     <form
       aria-label={t('inbox.report')}
-      className="flex flex-col gap-3 border-t pt-4"
+      className="flex flex-col gap-4 border-t border-border pt-5"
       onSubmit={(e) => {
         e.preventDefault();
         submit();
       }}
     >
       <h3 className="font-medium">{t('inbox.report')}</h3>
-      <label className="text-sm">
+      <label className="flex min-w-0 flex-col gap-2 text-sm">
         {t('inbox.event')}
         <select
           className={selectClass}
@@ -147,15 +147,15 @@ function EventForm({ journeyId }: { journeyId: string }) {
       )}
       {kind === 'won' && (
         <>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">
             {t('inbox.product')}
             <Input required value={product} onChange={(e) => setProduct(e.target.value)} />
           </label>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">
             {t('inbox.amount')}
             <MoneyInput required currency={currency} minor={amount} onChange={setAmount} />
           </label>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">
             {t('inbox.currency')}
             <Input
               required
@@ -169,7 +169,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
       )}
       {kind === 'lost' && (
         <QueryState query={reasons}>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">
             {t('inbox.lostReason')}
             <select
               required
@@ -190,7 +190,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
         </QueryState>
       )}
       {kind === 'snoozed' && (
-        <label className="text-sm">
+        <label className="flex min-w-0 flex-col gap-2 text-sm">
           {t('inbox.snoozeUntil')}
           <Input required type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} />
         </label>
@@ -259,8 +259,8 @@ export function InboxJourneyPanel({
   );
   const journey = data.data?.journey;
   return (
-    <aside className={columnClass} aria-label={t('inbox.journey')}>
-      <h2 className="font-semibold">{t('inbox.journey')}</h2>
+    <aside className={`${columnClass} xl:sticky xl:top-4 xl:max-h-[calc(100dvh-9rem)] xl:overflow-y-auto`} aria-label={t('inbox.journey')}>
+      <h2 className="font-display text-h3">{t('inbox.journey')}</h2>
       <QueryState query={data}>
         {journey && (
           <>
@@ -278,10 +278,10 @@ export function InboxJourneyPanel({
               </Button>
             )}
             <ErrorCallout error={reopen.error} />
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2 rounded-lg bg-surface-muted p-3">
               <h3 className="text-sm font-medium">{t('inbox.owner')}</h3>
               {manage ? (
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-col gap-2 text-sm">
                   <span className="sr-only">{t('inbox.owner')}</span>
                   <select
                     className={selectClass}
@@ -301,7 +301,7 @@ export function InboxJourneyPanel({
                   </select>
                 </label>
               ) : (
-                <p className="text-sm">
+                <p className="flex min-w-0 flex-col gap-2 text-sm">
                   {journey.owner ? memberName(journey.owner) : t('inbox.unassigned')}
                 </p>
               )}
@@ -311,12 +311,12 @@ export function InboxJourneyPanel({
             <InboxMergeBanner personId={personId ?? journey.person_id} />
             <section>
               <h3 className="mb-3 font-medium">{t('inbox.timeline')}</h3>
-              <ol className="flex flex-col gap-4 border-l border-border pl-3">
+              <ol className="ml-1 flex max-h-80 flex-col gap-5 overflow-y-auto border-l-2 border-border py-1 pl-4 pr-1">
                 {data.data?.events
                   .slice()
                   .sort((a, b) => a.at.localeCompare(b.at))
                   .map((event) => (
-                    <li key={event.id} className="text-sm">
+                    <li key={event.id} className="relative text-sm before:absolute before:-left-[22px] before:top-1 before:h-2.5 before:w-2.5 before:rounded-full before:border-2 before:border-surface before:bg-border-strong">
                       <InboxActorLabel actor={event.source} />
                       <p className="font-medium">{t(`inbox.eventKind.${eventName(event.kind)}`)}</p>
                       <EventDetails event={event} />
@@ -331,10 +331,10 @@ export function InboxJourneyPanel({
             <Disclosure title={t('inbox.offers.quotes')}><InboxQuotes journeyId={journeyId} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
             <Disclosure title={t('inbox.offers.appointments')}><InboxAppointments journeyId={journeyId} appointments={data.data?.appointments ?? []} terminal={journey.status === 'lost' || journey.status === 'won'} /></Disclosure>
             {journey.status !== 'lost' && journey.status !== 'won' && <EventForm journeyId={journeyId} />}
-            <section className="flex flex-col gap-3 border-t pt-4">
+            <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.tasks')}</h3>
               {data.data?.tasks.map((task) => (
-                <div key={task.id} id={`task-${task.id}`} className="rounded-lg border p-3 text-sm">
+                <div key={task.id} id={`task-${task.id}`} className={`flex flex-col items-start gap-2 rounded-lg border p-3 text-sm ${task.status === 'open' ? 'border-border-strong bg-surface' : 'border-border bg-surface-muted'}`}>
                   <p className="font-medium">{task.title}</p>
                   <InboxTime at={task.due_at} />
                   <p>
@@ -362,11 +362,11 @@ export function InboxJourneyPanel({
                   if (title.trim() && due) create.mutate();
                 }}
               >
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-col gap-2 text-sm">
                   {t('inbox.taskTitle')}
                   <Input required value={title} onChange={(e) => setTitle(e.target.value)} />
                 </label>
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-col gap-2 text-sm">
                   {t('inbox.due')}
                   <Input
                     required
@@ -375,7 +375,7 @@ export function InboxJourneyPanel({
                     onChange={(e) => setDue(e.target.value)}
                   />
                 </label>
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-col gap-2 text-sm">
                   {t('inbox.assignee')}
                   <select
                     className={selectClass}
@@ -401,12 +401,12 @@ export function InboxJourneyPanel({
                 </Button>
               </form>
             </section>
-            <section className="flex flex-col gap-3 border-t pt-4">
+            <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.notes')}</h3>
               {data.data?.notes.map((item) => (
-                <div key={item.id} className="rounded-lg bg-surface-muted p-3">
+                <div key={item.id} className="space-y-2 rounded-lg border-l-2 border-border-strong bg-surface-muted p-3">
                   <InboxActorLabel actor={item.author} />
-                  <p className="whitespace-pre-wrap text-sm">{item.text}</p>
+                  <p className="whitespace-pre-wrap text-sm leading-6">{item.text}</p>
                   <InboxTime at={item.at} />
                 </div>
               ))}
@@ -417,7 +417,7 @@ export function InboxJourneyPanel({
                   if (note.trim()) add.mutate();
                 }}
               >
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-col gap-2 text-sm">
                   {t('inbox.note')}
                   <Textarea required value={note} onChange={(e) => setNote(e.target.value)} />
                 </label>

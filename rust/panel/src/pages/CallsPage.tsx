@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Phone } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Phone } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { isApiError } from '@/api/client';
@@ -124,12 +124,13 @@ function PlaceCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
               />
             )}
           </Field>
-          <fieldset className="flex flex-col gap-1">
-            <legend className="text-sm font-medium">{t('calls.place.purpose')}</legend>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-2 text-sm font-medium">{t('calls.place.purpose')}</legend>
             {CALL_PURPOSES.map((p) => (
-              <label key={p} className="flex items-start gap-2 text-sm">
+              <label key={p} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${purpose === p ? 'border-primary bg-surface-muted' : 'border-border'}`}>
                 <input
                   type="radio"
+                  className="mt-1 accent-primary"
                   name="purpose"
                   value={p}
                   checked={purpose === p}
@@ -166,14 +167,14 @@ function PlaceCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
 function CallRow({ call }: { call: CallView }) {
   const { t, i18n } = useTranslation();
   return (
-    <TR>
+    <TR className="hover:bg-surface-muted">
       <TD className="whitespace-nowrap">
-        <Link to={`/calls/${encodeURIComponent(call.id)}`} className="text-primary underline-offset-2 hover:underline">
+        <Link to={`/calls/${encodeURIComponent(call.id)}`} className="rounded-sm font-medium text-foreground underline-offset-4 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           {formatDateTime(call.started_at, i18n.language)}
         </Link>
       </TD>
-      <TD>{t(`calls.directions.${call.direction}`)}</TD>
-      <TD className="font-mono text-caption" data-masked-number="">
+      <TD><span className="inline-flex items-center gap-2 text-muted-foreground">{call.direction === 'inbound' ? <ArrowDownLeft className="h-4 w-4" aria-hidden="true" /> : <ArrowUpRight className="h-4 w-4" aria-hidden="true" />}{t(`calls.directions.${call.direction}`)}</span></TD>
+      <TD className="whitespace-nowrap font-medium tabular-nums" data-masked-number="">
         {call.counterpart}
       </TD>
       <TD>{t(`calls.purposes.${call.purpose}`)}</TD>
@@ -182,7 +183,7 @@ function CallRow({ call }: { call: CallView }) {
           {t(`calls.states.${call.state}`)}
         </Badge>
       </TD>
-      <TD className="whitespace-nowrap">{duration(call.duration_s)}</TD>
+      <TD className="whitespace-nowrap tabular-nums">{duration(call.duration_s)}</TD>
       <TD>{call.outcome ? t(`calls.outcomes.${call.outcome}`) : '—'}</TD>
       <TD>{call.mode.kind === 'human' ? t('calls.modes.human', { ext: call.mode.rep_extension }) : t('calls.modes.agent')}</TD>
     </TR>
@@ -196,7 +197,9 @@ export function CallsPage() {
   const canCall = can(session.data, 'calls.work');
   const canManage = can(session.data, 'calls.manage');
   const [placing, setPlacing] = useState(false);
+  const [direction, setDirection] = useState<'all' | 'inbound' | 'outbound'>('all');
   const calls = useQuery({ queryKey: CALLS_KEY, queryFn: () => listCalls(), enabled: canCall });
+  const visibleCalls = (calls.data ?? []).filter((call) => direction === 'all' || call.direction === direction);
   return (
     <>
       <PageHeader
@@ -216,8 +219,23 @@ export function CallsPage() {
       ) : (
         <QueryState query={calls}>
           {(calls.data ?? []).length === 0 ? (
-            <EmptyState title={t('calls.empty')} description={t('calls.emptyBody')} />
+            <EmptyState icon={<img src="/brand/scenes/conversations.svg" width="120" height="96" alt="" />} title={t('calls.empty')} description={t('calls.emptyBody')} />
           ) : (
+            <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface" aria-label={t('calls.title')}>
+              <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+                <span className="text-sm font-medium">{t('calls.columns.direction')}</span>
+                <div className="flex flex-wrap gap-1" role="group" aria-label={t('calls.columns.direction')}>
+                  {(['all', 'inbound', 'outbound'] as const).map((value) => (
+                    <Button key={value} size="sm" variant={direction === value ? 'secondary' : 'ghost'} aria-pressed={direction === value} onClick={() => setDirection(value)}>
+                      {value === 'all' ? t('inbox.queue.all') : t(`calls.directions.${value}`)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            {visibleCalls.length === 0 ? (
+              <EmptyState className="rounded-none border-0" title={t('calls.filterEmpty')} description={t('calls.filterEmptyBody')} action={<Button variant="outline" onClick={() => setDirection('all')}>{t('calls.showAll')}</Button>} />
+            ) : (
+            <div className="overflow-x-auto">
             <Table aria-label={t('calls.title')}>
               <THead>
                 <TR>
@@ -232,11 +250,14 @@ export function CallsPage() {
                 </TR>
               </THead>
               <TBody>
-                {(calls.data ?? []).map((c) => (
+                {visibleCalls.map((c) => (
                   <CallRow key={c.id} call={c} />
                 ))}
               </TBody>
             </Table>
+            </div>
+            )}
+            </section>
           )}
         </QueryState>
       )}

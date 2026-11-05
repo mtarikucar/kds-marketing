@@ -31,17 +31,17 @@ export function StudioPosts({
   const go = (next: PostView, extra: Record<string, string> = {}) =>
     setParams({ tab: 'posts', view: next, ...extra });
   return (
-    <div className="space-y-4" data-testid="studio-posts">
+    <div className="space-y-6" data-testid="studio-posts">
       <nav aria-label={t('posts.tab')}>
-        <ul className="grid grid-cols-1 gap-2 min-[400px]:grid-cols-3 sm:flex sm:flex-wrap">
+        <ul className="flex flex-wrap gap-1 border-b border-border pb-3">
           {POST_VIEWS.map((v) => (
             <li key={v}>
               <button
                 type="button"
                 aria-current={view === v ? 'page' : undefined}
                 onClick={() => go(v)}
-                className={`inline-flex min-h-11 w-full items-center justify-center rounded-md border px-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                  view === v ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-surface'
+                className={`inline-flex min-h-11 w-full items-center justify-center rounded-md px-4 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  view === v ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-surface-muted hover:text-foreground'
                 }`}
               >
                 {t(`posts.views.${v}`)}

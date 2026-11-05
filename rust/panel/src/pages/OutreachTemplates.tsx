@@ -170,7 +170,7 @@ function TemplateEditor({ current, onSaved }: { current: TemplateOut | null; onS
           </div>
         )}
       </form>
-      <section className="flex flex-col gap-3" aria-label={t('leads.templates.preview')}>
+      <section className="flex flex-col gap-3 rounded-lg bg-surface-muted/60 p-4" aria-label={t('leads.templates.preview')}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-medium">{t('leads.templates.preview')}</h2>
           <label className="flex items-center gap-2 text-sm">
@@ -186,7 +186,7 @@ function TemplateEditor({ current, onSaved }: { current: TemplateOut | null; onS
           </label>
         </div>
         {s && !s.sender_identity_complete && <Callout tone="info">{t('leads.templates.identityHint')}</Callout>}
-        <div className="rounded-lg border border-border p-3 text-sm">
+        <div className="min-h-40 rounded-lg border border-border bg-surface p-4 text-sm leading-6">
           <p className="font-medium" data-testid="preview-subject">
             {parsedSubject.ok ? renderSegments(parsedSubject.segments, samples) : subject}
           </p>
@@ -265,7 +265,7 @@ export function OutreachTemplates() {
                       <button
                         type="button"
                         aria-current={selected === template.id ? 'true' : undefined}
-                        className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1 text-start text-sm hover:bg-surface-muted aria-[current]:bg-primary/10"
+                        className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-start text-sm hover:bg-surface-muted aria-[current]:bg-primary/10 aria-[current]:font-medium aria-[current]:text-primary"
                         onClick={() => setSelected(template.id)}
                       >
                         <span className="truncate">{template.name}</span>

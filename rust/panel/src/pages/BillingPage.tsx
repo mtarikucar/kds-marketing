@@ -93,11 +93,11 @@ function BillingForm() {
     <PageHeader title={t('billing.title')} description={t('billing.description')} />
     <Link to="/onboarding" className="text-primary underline">{t('onboarding.title')}</Link>
     <QueryState query={workspace} />
-    <QueryState query={billing}>{data && <Card><CardContent className="space-y-5 pt-6">
-      <h2 className="text-h3">{t(`billing.stages.${billingStage(data)}`)}</h2>
-      <dl className="space-y-3">
-        <div><dt>{t('billing.price')}</dt><dd>{formatMoney(data.price_minor,data.price_currency,i18n.language)} · {data.price_currency}</dd></div>
-        <div><dt>{t('billing.bank')}</dt><dd className="whitespace-pre-wrap">{data.bank_instructions}</dd></div>
+    <QueryState query={billing}>{data && <Card className="max-w-3xl"><CardContent className="space-y-6 pt-6">
+      <h2 className="font-display text-h3">{t(`billing.stages.${billingStage(data)}`)}</h2>
+      <dl className="grid gap-5 border-y border-border py-5 sm:grid-cols-2">
+        <div><dt className="text-caption text-muted-foreground">{t('billing.price')}</dt><dd className="mt-1 font-medium tabular-nums">{formatMoney(data.price_minor,data.price_currency,i18n.language)} · {data.price_currency}</dd></div>
+        <div><dt className="text-caption text-muted-foreground">{t('billing.bank')}</dt><dd className="mt-1 whitespace-pre-wrap text-sm leading-6">{data.bank_instructions}</dd></div>
       </dl>
       <Field label={t('billing.reference')}>{ids=><Input id={ids.id} readOnly value={data.payment_reference}/>}</Field>
       {data.payment && !data.payment.confirmed && <Callout tone="success">{t('billing.reported',{amount:formatMoney(data.payment.amount_minor,data.payment.currency,i18n.language),paidAt:formatDateTime(data.payment.paid_at,i18n.language)})}</Callout>}
@@ -105,12 +105,12 @@ function BillingForm() {
       {data.entitlement && <p>{t(data.entitlement.revoked_at?'billing.revoked':data.entitlement.source==='grandfathered'?'billing.grandfathered':'billing.paidEntitlement')}</p>}
       {!owner && <Callout tone="info">{t('billing.ownerOnly')}</Callout>}
       {error && <Callout tone="danger">{error}</Callout>}
-      {canReport && (!data.entitlement || data.entitlement.revoked_at) && <form onSubmit={event=>void submit(event,false)} className="space-y-4" autoComplete="off" noValidate>
+      {canReport && (!data.entitlement || data.entitlement.revoked_at) && <form onSubmit={event=>void submit(event,false)} className="max-w-md space-y-4 border-t border-border pt-5" autoComplete="off" noValidate>
         <Field label={t('billing.amount',{currency:data.price_currency})} hint={t('billing.amountHint',{price:formatMoney(data.price_minor,data.price_currency,i18n.language)})}>{ids=><MoneyInput id={ids.id} describedBy={ids.describedBy} currency={data.price_currency} minor={amount} onChange={setAmount} required/>}</Field>
         <Field label={t('billing.paidAt')}>{ids=><Input id={ids.id} type="datetime-local" required max={localMinute(new Date())} value={paidAt} onChange={event=>setPaidAt(event.target.value)}/>}</Field>
         <Button type="submit" disabled={busy}>{t('billing.report')}</Button>
       </form>}
-      {canActivate && <form onSubmit={event=>void submit(event,true)} className="space-y-4" autoComplete="off">
+      {canActivate && <form onSubmit={event=>void submit(event,true)} className="max-w-md space-y-4 border-t border-border pt-5" autoComplete="off">
         <Field label={t('billing.code')}>{ids=><Input id={ids.id} type="password" autoComplete="new-password" spellCheck={false} maxLength={8} value={code} onChange={event=>setCode(event.target.value)}/>}</Field>
         <p className="text-sm text-muted-foreground">{t('billing.codeHelp')}</p>
         <Button type="submit" disabled={busy || code.length!==8}>{t('billing.activate')}</Button>

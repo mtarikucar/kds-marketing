@@ -1691,7 +1691,7 @@
     "laneRelease": "Kanalı sürdür",
     "proposal": "Hipotez öner",
     "titleField": "Başlık",
-    "segment": "Kitle anahtarı",
+    "segment": "Kitle referansı",
     "angle": "Yaklaşım",
     "channel": "Kanal",
     "metric": "Ölçüt",
@@ -1752,7 +1752,7 @@
     "bind": "Reklam seti bağla",
     "account": "Reklam hesabı",
     "externalSet": "Mevcut reklam seti",
-    "arm": "İçerik kolu",
+    "arm": "İçerik çeşidi",
     "budgetMove": "Günlük bütçeyi değiştir",
     "binding": "Bağlı reklam seti",
     "dailyBudget": "Günlük bütçe",
@@ -1780,7 +1780,7 @@
     "retirement": "İptal veya emeklilik ayrıntısı günlükte.",
     "success": "Kaydedildi.",
     "loading": "Yükleniyor…",
-    "entryHypothesis": "Değerlendirilen hipotez",
+    "entryHypothesis": "İlgili içerik yaklaşımı",
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
     "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
@@ -1906,6 +1906,19 @@
       },
       "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
       "noCover": "Önizleme yok"
+    },
+    "description": "İçerikleri planlayın, bugünün işlerini inceleyin ve sonuçları değerlendirin.",
+    "emptyPlanHelp": "Planlanan içerikler burada görünür. Sıradaki içeriği hazırlamak için kaynak materyallerinizi ekleyin.",
+    "addMaterials": "Materyal ekle",
+    "filters": {
+      "hypothesis": "İçerik yaklaşımı",
+      "from": "Başlangıç",
+      "until": "Bu tarihten önce"
+    },
+    "contentFormats": {
+      "text": "Metin paylaşımı",
+      "image": "Görsel",
+      "video": "Video"
     }
   },
   "billing": {
@@ -2193,8 +2206,14 @@
         "opening_outbound": "Giden aramada işletmenin açılış cümlesi",
         "transcript_notice": "Yazıya dökme bildirimi",
         "closing": "Planda kapanış yoksa kapanış cümlesi"
-      }
-    }
+      },
+      "scriptsTitle": "Karşılama ve bildirimler",
+      "phrasesTitle": "Bekletme ve yedek ifadeler",
+      "limitsTitle": "Süreler ve aktarma"
+    },
+    "filterEmpty": "Bu yönde arama yok",
+    "filterEmptyBody": "Diğer aramaları görmek için başka bir yön seçin.",
+    "showAll": "Tüm aramaları göster"
   },
   "materials": {
     "tab": "Materyaller",
@@ -3248,6 +3267,11 @@
         "notInForce": "Dayanak kayıtlı, ancak platformda soğuk e-posta kapalı olduğu için şu an geçerli değil.",
         "save": "Dayanağı kaydet"
       }
+    },
+    "filteredEmpty": {
+      "title": "Eşleşen sonuç yok",
+      "body": "Daha fazla sonuç görmek için filtreleri değiştirin veya temizleyin.",
+      "clear": "Filtreleri temizle"
     }
   },
   "posts": {

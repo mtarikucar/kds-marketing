@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { ChevronRight, Search, UserRound } from 'lucide-react';
 import { searchPeople } from '@/api/inbox';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
@@ -32,11 +33,16 @@ export function PeoplePage() {
     <>
       <PageHeader title={t('people.title')} description={t('people.description')} />
       <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
+        <CardContent className="flex flex-col gap-5 pt-5">
+          <div className="max-w-xl">
           <Field label={t('people.search')}>
             {(ids) => (
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
               <Input
                 id={ids.id}
+                type="search"
+                className="pl-9"
                 value={q}
                 autoComplete="off"
                 onChange={(e) => {
@@ -44,32 +50,36 @@ export function PeoplePage() {
                   setPage(0);
                 }}
               />
+              </div>
             )}
           </Field>
+          </div>
           <QueryState query={people}>
             {rows.length === 0 ? (
-              <EmptyState title={t(q.trim() ? 'people.noMatch' : 'people.empty')} description={t('people.emptyBody')} />
+              <EmptyState icon={!q.trim() ? <img src="/brand/scenes/team.svg" width="120" height="96" alt="" /> : <Search className="h-8 w-8" />} className="border-0 bg-surface-muted" title={t(q.trim() ? 'people.noMatch' : 'people.empty')} description={t('people.emptyBody')} />
             ) : (
               <>
-                <ul className="divide-y divide-border rounded-lg border border-border">
+                <ul className="divide-y divide-border border-y border-border">
                   {rows.map((person) => (
                     <li key={person.id}>
                       <Link
                         to={`/inbox?person=${encodeURIComponent(person.id)}`}
-                        className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 hover:bg-surface-muted"
+                        className="group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 rounded-md px-2 py-4 hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-3"
                       >
-                        <span>
-                          <span className="font-medium text-foreground">{personName(t, person)}</span>
-                          {person.company && <span className="text-muted-foreground"> · {person.company}</span>}
+                        <span className="row-span-2 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-surface-muted text-muted-foreground sm:row-span-1" aria-hidden="true"><UserRound className="h-4 w-4" /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-medium text-foreground">{personName(t, person)}</span>
+                          {person.company && <span className="block truncate text-sm text-muted-foreground">{person.company}</span>}
                         </span>
-                        <span className="text-caption text-muted-foreground">
+                        <span className="col-start-2 row-start-2 text-caption text-muted-foreground sm:col-start-3 sm:row-start-1">
                           {t('people.added', { at: formatDateTime(person.created_at, i18n.language) })}
                         </span>
+                        <ChevronRight className="col-start-3 row-span-2 row-start-1 h-4 w-4 text-muted-foreground group-hover:text-primary sm:col-start-4 sm:row-span-1" aria-hidden="true" />
                       </Link>
                     </li>
                   ))}
                 </ul>
-                <div className="flex items-center justify-between gap-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
                   <span className="text-muted-foreground">
                     {t('people.range', { first, last: first + rows.length - 1 })}
                   </span>

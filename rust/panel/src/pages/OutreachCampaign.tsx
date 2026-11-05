@@ -103,7 +103,7 @@ function AudiencePreview({ audience, mailboxId }: { audience: Audience; mailboxI
   if (!mailboxId) return <p className="text-sm text-muted-foreground">{t('leads.campaign.preview.chooseMailbox')}</p>;
   const p = preview.data;
   return (
-    <section className="flex flex-col gap-2 rounded-lg bg-surface-muted p-3 text-sm" aria-label={t('leads.campaign.preview.title')}>
+    <section className="flex flex-col gap-2 rounded-lg border-s-4 border-primary bg-surface-muted p-4 text-sm" aria-label={t('leads.campaign.preview.title')}>
       <h3 className="font-medium">{t('leads.campaign.preview.title')}</h3>
       <QueryState query={preview}>
         {p && (
@@ -141,7 +141,7 @@ function StepsEditor({ steps, onChange }: { steps: CampaignStep[]; onChange: (st
       <legend className="mb-1 text-sm font-medium">{t('leads.campaign.steps')}</legend>
       <ol className="flex flex-col gap-2" aria-label={t('leads.campaign.steps')}>
         {steps.map((s, i) => (
-          <li key={i} className="grid gap-2 rounded-lg border border-border p-2 sm:grid-cols-[1fr_8rem_auto_auto]">
+          <li key={i} className="grid gap-3 rounded-lg border border-border bg-surface-muted/40 p-3 sm:grid-cols-[1fr_8rem_auto_auto]">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.campaign.stepTemplate', { n: i + 1 })}
               <select className={selectClass} value={s.template_id} onChange={(e) => set(i, { template_id: e.target.value })}>
@@ -701,7 +701,7 @@ export function OutreachCampaign() {
         <QueryState query={campaign}>
           {out && c && (
             <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3">
                 <CampaignStatusBadge status={c.status} />
                 <span className="text-sm text-muted-foreground">{t('leads.campaign.revision', { revision: c.revision })}</span>
               </div>

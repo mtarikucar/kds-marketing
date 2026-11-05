@@ -8,9 +8,9 @@ import type { InboxAuthor } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
-export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm';
+export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-surface px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 export const columnClass =
-  'min-w-0 rounded-xl border border-border bg-card p-4 flex flex-col gap-4 [overflow-wrap:anywhere]';
+  'min-w-0 rounded-xl border border-border bg-surface p-4 sm:p-5 flex flex-col gap-4 [overflow-wrap:anywhere]';
 export function useInboxKey() {
   const session = useSession();
   return ['inbox', session.data?.current_workspace] as const;

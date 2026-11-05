@@ -18,7 +18,7 @@ export const tapClass =
   'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
 export const primaryClass =
   'inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50';
-export const cardClass = 'min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4';
+export const cardClass = 'min-w-0 space-y-4 border-t border-border py-5';
 
 /** The query key of everything the library reads, under Studio's (so Studio refreshes it too). */
 export function useMaterialsKey() {
@@ -294,7 +294,7 @@ export function MaterialTile({
       <button
         type="button"
         onClick={() => onOpen(material.id)}
-        className="flex w-full min-w-0 flex-col gap-2 rounded-md border border-border p-2 text-start hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex w-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 text-start hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <MediaThumb mime={material.mime} alt={label} />
         <span className="truncate text-sm font-medium">{label}</span>
@@ -333,7 +333,7 @@ function Chips<T extends string>({
           return (
             <label
               key={o}
-              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-3 text-sm ${
+              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm ${
                 on ? 'border-primary bg-primary/10' : 'border-border'
               }`}
             >
@@ -412,7 +412,7 @@ export function TagsFields({
           {[...m.QUALITIES, null].map((q) => (
             <label
               key={q ?? 'none'}
-              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full border px-3 text-sm ${
+              className={`inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3 text-sm ${
                 value.quality === q ? 'border-primary bg-primary/10' : 'border-border'
               }`}
             >

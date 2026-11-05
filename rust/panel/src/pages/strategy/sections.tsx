@@ -108,8 +108,8 @@ function EditableSection<K extends EditableKey>({
   };
   const gaps = gapsOf(writer.error);
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
+    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none lg:grid-cols-[12rem_minmax(0,1fr)]">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2 p-0 lg:content-start">
         <CardTitle>{title}</CardTitle>
         {editable && editing === null && (
           <Button variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
@@ -118,7 +118,7 @@ function EditableSection<K extends EditableKey>({
           </Button>
         )}
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-w-0 flex-col gap-3 p-0">
         {editing === null ? (
           view(value)
         ) : (
@@ -222,7 +222,7 @@ export function SectionsView({ sections, editable, groups }: SectionsViewProps) 
   const channelKeys = sections.channels.map((c) => c.channel);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="flex flex-col">
       <EditableSection
         sectionKey="identity"
         value={sections.identity}
@@ -614,11 +614,11 @@ function PaidSection({ value, editable }: { value: boolean; editable: boolean })
   const writer = useSectionWriter('paid_enabled');
   const label = t('strategy.fields.paidEnabled');
   return (
-    <Card>
-      <CardHeader>
+    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none lg:grid-cols-[12rem_minmax(0,1fr)]">
+      <CardHeader className="p-0">
         <CardTitle>{t('strategy.sections.paid_enabled')}</CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+      <CardContent className="flex min-w-0 flex-col gap-2 p-0">
         <div className="flex items-center gap-3">
           {editable ? (
             <Switch

@@ -123,7 +123,7 @@ function OlayRow({
   const { t } = useTranslation();
   const { olay } = item;
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`olay-${olay.id}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`olay-${olay.id}`}>
       <button
         type="button"
         className="flex min-h-11 w-full min-w-0 flex-col items-start gap-1 text-start"

@@ -78,12 +78,12 @@ export function PostsWeek({
       </div>
       <MaterialsError error={summary.error} />
       {s && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-4 lg:grid-cols-2">
           <Section id="week-published" title={t('posts.week.published')}>
             {s.published.length === 0 && none}
             <ul className="space-y-2">
               {s.published.map((x) => (
-                <li key={x.publication_id} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={x.publication_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <span className="text-muted-foreground">{at(x.published_at)}</span>
@@ -100,7 +100,7 @@ export function PostsWeek({
             {s.planned.length === 0 && none}
             <ul className="space-y-2">
               {s.planned.map((x) => (
-                <li key={x.slot_id} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={x.slot_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <span className="text-muted-foreground">{at(x.publish_at)}</span>
@@ -115,7 +115,7 @@ export function PostsWeek({
             {s.cancelled.length === 0 && none}
             <ul className="space-y-2">
               {s.cancelled.map((x) => (
-                <li key={`${x.slot_id}-${x.at}`} className="flex flex-wrap items-center gap-2 text-sm">
+                <li key={`${x.slot_id}-${x.at}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border py-3 text-sm">
                   <span className="font-medium">{format(x.format)}</span>
                   <span className="break-all text-muted-foreground">{channel(x.capability_id)}</span>
                   <Badge tone="warning">{t(`posts.week.reason.${x.reason}`)}</Badge>
@@ -128,27 +128,27 @@ export function PostsWeek({
             {s.scores.length === 0 ? (
               <p className="text-sm text-muted-foreground">{t('posts.week.noScores')}</p>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-lg border border-border bg-surface">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="text-xs text-muted-foreground">
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreFormat')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreKind')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreHypothesis')}</th>
-                      <th className="py-1 pr-2 font-medium">{t('posts.week.scoreMean')}</th>
-                      <th className="py-1 font-medium">{t('posts.week.scorePosts')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreFormat')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreKind')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreHypothesis')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scoreMean')}</th>
+                      <th className="px-3 py-2.5 font-medium">{t('posts.week.scorePosts')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {s.scores.map((x) => (
                       <tr key={`${x.format}-${x.olay_kind}-${x.hypothesis_id}`} className="border-t border-border">
-                        <td className="py-1 pr-2">{t(`posts.format.${x.format}`)}</td>
-                        <td className="py-1 pr-2">
+                        <td className="px-3 py-2.5">{t(`posts.format.${x.format}`)}</td>
+                        <td className="px-3 py-2.5">
                           {x.olay_kind ? t(`materials.kind.${x.olay_kind}`) : t('posts.week.generic')}
                         </td>
-                        <td className="py-1 pr-2">{title(x.hypothesis_id)}</td>
-                        <td className="py-1 pr-2">{percent(x.mean, lang)}</td>
-                        <td className="py-1">{x.posts}</td>
+                        <td className="px-3 py-2.5">{title(x.hypothesis_id)}</td>
+                        <td className="px-3 py-2.5">{percent(x.mean, lang)}</td>
+                        <td className="px-3 py-2.5 tabular-nums">{x.posts}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -23,7 +23,7 @@ export function EmptyState({
     <div
       data-testid={testId}
       className={cn(
-        'flex flex-col items-center justify-center gap-4 rounded-lg border border-border bg-surface p-10 text-center',
+        'flex flex-col items-center justify-center gap-4 rounded-lg border border-border bg-surface px-6 py-12 text-center',
         className,
       )}
     >
@@ -35,7 +35,7 @@ export function EmptyState({
       <div className="flex flex-col gap-1">
         <p className="font-display text-h3 text-foreground">{title}</p>
         {description && (
-          <p className="text-sm text-muted-foreground">{description}</p>
+          <p className="max-w-md text-sm leading-6 text-muted-foreground">{description}</p>
         )}
       </div>
       {action && <div>{action}</div>}

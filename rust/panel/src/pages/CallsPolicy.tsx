@@ -79,7 +79,9 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
     if (!save.isPending) save.mutate();
   };
   return (
-    <form className="flex flex-col gap-3" onSubmit={submit} noValidate aria-label={t('calls.policy.title')}>
+    <form className="flex flex-col gap-7" onSubmit={submit} noValidate aria-label={t('calls.policy.title')}>
+      <fieldset className="grid min-w-0 gap-5 md:grid-cols-2">
+      <legend className="mb-4 font-display text-h3">{t('calls.policy.scriptsTitle')}</legend>
       {TEXTS.map((key) => (
         <Field key={key} label={t(`calls.policy.fields.${key}`)}>
           {(ids) => (
@@ -109,16 +111,19 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       ))}
-      <div className="flex items-center gap-3">
+      <div className="flex items-start gap-3 rounded-lg border border-border bg-surface-muted p-4 md:col-span-2">
         <Switch
           id="calls-disclose"
           checked={policy.disclose_assistant}
           onCheckedChange={(on) => setPolicy({ ...policy, disclose_assistant: on })}
         />
-        <Label htmlFor="calls-disclose" className="font-normal">
+        <Label htmlFor="calls-disclose" className="font-normal leading-6">
           {t('calls.policy.fields.disclose_assistant')}
         </Label>
       </div>
+      </fieldset>
+      <fieldset className="grid min-w-0 gap-5 border-t border-border pt-5 md:grid-cols-2">
+      <legend className="pr-3 font-display text-h3">{t('calls.policy.phrasesTitle')}</legend>
       <Field label={t('calls.policy.fields.holding_default')} hint={t('calls.policy.holdingHint')}>
         {(ids) => (
           <Textarea id={ids.id} aria-describedby={ids.describedBy} value={holding} onChange={(e) => setHolding(e.target.value)} />
@@ -136,7 +141,9 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
           )}
         </Field>
       ))}
-      <div className="grid gap-3 sm:grid-cols-2">
+      </fieldset>
+      <fieldset className="grid min-w-0 gap-5 border-t border-border pt-5 sm:grid-cols-2 xl:grid-cols-3">
+        <legend className="pr-3 font-display text-h3">{t('calls.policy.limitsTitle')}</legend>
         {NUMBERS.map((key) => (
           <Field key={key} label={t(`calls.policy.fields.${key}`)}>
             {(ids) => (
@@ -160,9 +167,9 @@ function PolicyForm({ stored }: { stored: CallPolicy }) {
             />
           )}
         </Field>
-      </div>
-      <div>
-        <Button type="submit" disabled={save.isPending}>
+      </fieldset>
+      <div className="flex justify-end border-t border-border pt-4">
+        <Button type="submit" loading={save.isPending}>
           {t('common.save')}
         </Button>
       </div>
@@ -178,8 +185,8 @@ export function CallsPolicy() {
   const { t } = useTranslation();
   const policy = useQuery({ queryKey: POLICY_KEY, queryFn: getCallPolicy });
   return (
-    <Card className="mt-6">
-      <CardHeader>
+    <Card className="mt-8">
+      <CardHeader className="mb-5 border-b border-border bg-surface-muted">
         <CardTitle>{t('calls.policy.title')}</CardTitle>
       </CardHeader>
       <CardContent>

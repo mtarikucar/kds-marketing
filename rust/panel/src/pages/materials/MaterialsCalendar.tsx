@@ -165,7 +165,7 @@ function EntryRow({
   const [editing, setEditing] = useState(false);
   const dated = entry.window_start && entry.window_end;
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`calendar-${entry.key}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`calendar-${entry.key}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">{entry.name}</span>
         <span className="flex flex-wrap gap-1">
@@ -288,7 +288,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
       )}
       {data && (
         <>
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
+          <ul className="grid grid-cols-1 gap-x-8 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
             {data.entries.map((e) => (
               <EntryRow
                 key={`${e.key}-${data.year}-${e.window_start}-${e.window_end}-${e.lead_days}-${e.enabled}-${e.name}`}

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import * as p from '@/api/posts';
 import { Badge } from '@/components/ui';
 import { MaterialsError, cardClass, formatRange, tapClass } from '../materials/MaterialsShared';
@@ -13,7 +14,7 @@ function RequestRow({ request, tz }: { request: p.PostRequest; tz: string }) {
   const expires = new Date(Date.parse(request.created_at) + p.REQUEST_DAYS * 86400_000).toISOString();
   const { window_start: start, window_end: end } = request.hints;
   return (
-    <li className="space-y-1 rounded-md border border-border p-3" data-testid={`request-${request.id}`}>
+    <li className="space-y-2 border-b border-border py-4" data-testid={`request-${request.id}`}>
       <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <span>{t(`posts.trigger.${request.trigger}`)}</span>
         <Badge>{t('posts.materials', { count: request.material_ids.length })}</Badge>
@@ -49,7 +50,7 @@ function PostRow({
   const tone = state === 'ready' ? 'success' : state === 'preparing' ? 'warning' : 'neutral';
   const at = (when: string) => p.formatAt(when, i18n.language, tz);
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`post-${post.slot_id}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`post-${post.slot_id}`}>
       <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
         <span>{t(`posts.format.${post.format}`)}</span>
         <span className="text-muted-foreground">·</span>
@@ -89,7 +90,7 @@ export function PostsPlan({ onOpenSlot }: { onOpenSlot: (id: string) => void }) 
     .filter(isLive)
     .sort((a, b) => Date.parse(a.post.publish_at) - Date.parse(b.post.publish_at));
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" data-testid="posts-plan">
+    <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(16rem,1fr)_minmax(0,1.65fr)]" data-testid="posts-plan">
       <section className={cardClass} aria-labelledby="posts-requests">
         <h3 id="posts-requests" className="font-semibold">
           {t('posts.requests.title')}
@@ -111,7 +112,15 @@ export function PostsPlan({ onOpenSlot }: { onOpenSlot: (id: string) => void }) 
         </h3>
         <p className="text-xs text-muted-foreground">{t('posts.plan.tz', { tz })}</p>
         <MaterialsError error={posts.error} />
-        {posts.data && live.length === 0 && <p className="text-sm">{t('posts.plan.empty')}</p>}
+        {posts.data && live.length === 0 && (
+          <div className="flex flex-col items-start gap-5 py-4 sm:flex-row sm:items-center">
+            <img src="/brand/scenes/studio.svg" alt="" aria-hidden="true" width={128} height={128} className="h-32 w-32 shrink-0" />
+            <div className="space-y-3">
+              <p className="text-sm leading-relaxed text-muted-foreground">{t('posts.plan.empty')}</p>
+              <Link className="inline-flex min-h-10 items-center text-sm font-medium text-primary underline underline-offset-4" to="/studio?tab=materials&view=upload">{t('studio.addMaterials')}</Link>
+            </div>
+          </div>
+        )}
         <ul className="space-y-2">
           {live.map((out) => (
             <PostRow key={out.post.slot_id} out={out} tz={tz} onOpenSlot={onOpenSlot} />

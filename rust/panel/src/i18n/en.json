@@ -1691,7 +1691,7 @@
     "laneRelease": "Resume lane",
     "proposal": "Propose hypothesis",
     "titleField": "Title",
-    "segment": "Audience key",
+    "segment": "Audience reference",
     "angle": "Angle",
     "channel": "Channel",
     "metric": "Metric",
@@ -1752,7 +1752,7 @@
     "bind": "Bind ad set",
     "account": "Ad account",
     "externalSet": "Existing ad set",
-    "arm": "Content arm",
+    "arm": "Content variation",
     "budgetMove": "Change daily budget",
     "binding": "Bound ad set",
     "dailyBudget": "Daily budget",
@@ -1780,7 +1780,7 @@
     "retirement": "Cancellation or retirement details are in the ledger.",
     "success": "Saved.",
     "loading": "Loading…",
-    "entryHypothesis": "Hypothesis for entry",
+    "entryHypothesis": "Related content approach",
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
     "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
@@ -1906,6 +1906,19 @@
       },
       "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
       "noCover": "No preview"
+    },
+    "description": "Plan content, review today’s work, and learn from results.",
+    "emptyPlanHelp": "Scheduled content will appear here. Add your source materials to prepare the next piece.",
+    "addMaterials": "Add materials",
+    "filters": {
+      "hypothesis": "Content approach",
+      "from": "From",
+      "until": "Before"
+    },
+    "contentFormats": {
+      "text": "Text post",
+      "image": "Image",
+      "video": "Video"
     }
   },
   "billing": {
@@ -2193,8 +2206,14 @@
         "opening_outbound": "Business opening on outbound calls",
         "transcript_notice": "Transcription notice",
         "closing": "Closing when the plan brings none"
-      }
-    }
+      },
+      "scriptsTitle": "Greetings and notices",
+      "phrasesTitle": "Holding and fallback phrases",
+      "limitsTitle": "Timing and transfer"
+    },
+    "filterEmpty": "No calls in this direction",
+    "filterEmptyBody": "Choose another direction to see the rest of your call log.",
+    "showAll": "Show all calls"
   },
   "materials": {
     "tab": "Materials",
@@ -3248,6 +3267,11 @@
         "notInForce": "The basis is recorded, but it does not apply while cold email is off on the platform.",
         "save": "Save the basis"
       }
+    },
+    "filteredEmpty": {
+      "title": "No matching results",
+      "body": "Change or clear the filters to see more results.",
+      "clear": "Clear filters"
     }
   },
   "posts": {

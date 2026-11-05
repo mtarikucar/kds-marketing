@@ -192,11 +192,11 @@ function ApprovedTab({
   const { t, i18n } = useTranslation();
   const [archiving, setArchiving] = useState(false);
   if (!version) {
-    return <EmptyState title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} />;
+    return <EmptyState icon={<img src="/brand/scenes/strategy.svg" alt="" width={144} height={144} className="h-36 w-36" />} title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} className="py-10" />;
   }
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
+    <div className="flex flex-col gap-6">
+      <Card className="rounded-lg border-0 bg-surface-muted shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <CardTitle>{t('strategy.versionLabel', { number: version.number })}</CardTitle>
@@ -265,12 +265,11 @@ function DraftTab({
 
   if (!draft) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('strategy.noDraft')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">{t('strategy.noDraftBody')}</p>
+      <section className="flex flex-col items-start gap-6 rounded-xl border border-border bg-surface p-6 sm:flex-row sm:items-center sm:gap-9 sm:p-9">
+        <img src="/brand/scenes/strategy.svg" alt="" aria-hidden="true" width={160} height={160} className="h-36 w-36 shrink-0 sm:h-40 sm:w-40" />
+        <div className="flex min-w-0 max-w-2xl flex-col gap-4">
+          <h2 className="text-xl font-semibold tracking-tight">{t('strategy.noDraft')}</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">{t('strategy.noDraftBody')}</p>
           <ErrorCallout error={start.error} />
           {canConsult && (
             <Button className="self-start" onClick={() => start.mutate()} loading={start.isPending}>
@@ -278,8 +277,8 @@ function DraftTab({
               {t('strategy.start')}
             </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     );
   }
 
@@ -291,8 +290,8 @@ function DraftTab({
       : null;
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
+    <div className="flex flex-col gap-6">
+      <Card className="rounded-lg border-0 bg-surface-muted shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle>{t('strategy.versionLabel', { number: draft.number })}</CardTitle>
@@ -392,10 +391,10 @@ export function StrategyPage() {
               </TabsTrigger>
               <TabsTrigger value="draft">{t('strategy.tabs.draft')}</TabsTrigger>
             </TabsList>
-            <TabsContent value="approved">
+            <TabsContent value="approved" className="mt-6">
               <ApprovedTab version={data.approved} canApprove={canApprove} groups={groups.data ?? []} />
             </TabsContent>
-            <TabsContent value="draft">
+            <TabsContent value="draft" className="mt-6">
               <DraftTab
                 draft={data.draft}
                 gaps={data.gaps}

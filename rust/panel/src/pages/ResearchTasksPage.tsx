@@ -44,11 +44,11 @@ function BriefView({ brief }: { brief: Brief }) {
     [t('leads.tasks.brief.note'), brief.note],
   ];
   return (
-    <dl className="grid gap-1 text-sm sm:grid-cols-2">
+    <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
       {rows
         .filter(([, v]) => v)
         .map(([k, v]) => (
-          <div key={k} className="flex gap-2">
+          <div key={k} className="grid grid-cols-[minmax(6rem,auto)_1fr] gap-3">
             <dt className="text-muted-foreground">{k}</dt>
             <dd>{v}</dd>
           </div>
@@ -131,7 +131,7 @@ function TaskCard({ item }: { item: TaskOut }) {
     guard((release) => close.mutate(undefined, { onSettled: release }));
   };
   return (
-    <Card data-testid="research-task">
+    <Card data-testid="research-task" className="border-s-4 border-s-primary/60">
       <CardHeader className="flex-row flex-wrap items-center gap-2">
         <CardTitle className="text-base">{taskLabel(t, task)}</CardTitle>
         <Badge tone={task.status === 'open' ? 'success' : 'neutral'}>{t(`leads.tasks.statuses.${task.status}`)}</Badge>
@@ -355,6 +355,8 @@ export function ResearchTasksPage() {
       </label>
       <QueryState query={tasks}>
         {items.length === 0 ? (
+          status ? <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
+            action={<Button variant="outline" onClick={() => setStatus('')}>{t('leads.filteredEmpty.clear')}</Button>} /> :
           <EmptyState title={t('leads.tasks.empty')} description={t('leads.tasks.emptyBody')} />
         ) : (
           <div className="flex flex-col gap-3">

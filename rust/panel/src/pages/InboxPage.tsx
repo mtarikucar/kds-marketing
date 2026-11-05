@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { Search } from 'lucide-react';
 import * as api from '@/api/inbox';
 import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
@@ -35,7 +36,7 @@ function ConversationLink({ row }: { row: InboxConversationRow }) {
     <Link
       to={`/inbox/${encodeURIComponent(row.id)}`}
       aria-current={conversationId === row.id ? 'page' : undefined}
-      className={`block min-w-0 rounded-lg border p-3 text-sm focus-visible:ring-2 focus-visible:ring-ring ${conversationId === row.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'}`}
+      className={`block min-w-0 rounded-lg border-l-[3px] p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${conversationId === row.id ? 'border-primary bg-surface-muted' : 'border-transparent hover:border-border-strong hover:bg-surface-muted'}`}
     >
       <span className="block font-medium">{personName(t, person.data?.person, person.data?.identities)}</span>
       <span className="text-xs text-muted-foreground">
@@ -128,16 +129,16 @@ export function InboxPage() {
       />
       <div
         data-testid="inbox-columns"
-        className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)_minmax(0,1.2fr)]"
+        className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(220px,0.85fr)_minmax(0,1.7fr)_minmax(250px,1fr)]"
       >
-        <aside className={columnClass} aria-label={t('inbox.queues')}>
-          <h2 className="font-semibold">{t('inbox.queues')}</h2>
-          <div className="grid grid-cols-2 gap-2">
+        <aside className={`${columnClass} max-h-[28rem] overflow-y-auto xl:sticky xl:top-4 xl:max-h-[calc(100dvh-9rem)]`} aria-label={t('inbox.queues')}>
+          <h2 className="font-display text-h3">{t('inbox.queues')}</h2>
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-surface-muted p-1">
             {(['ours', 'unassigned', 'snoozed', 'all'] as const).map((value) => (
               <Button
                 key={value}
                 size="sm"
-                variant={queue === value ? 'primary' : 'outline'}
+                variant={queue === value ? 'primary' : 'ghost'}
                 aria-pressed={queue === value}
                 onClick={() => setQueue(value)}
               >
@@ -147,16 +148,19 @@ export function InboxPage() {
             <Button
               size="sm"
               className="col-span-2"
-              variant={queue === 'approvals' ? 'primary' : 'outline'}
+              variant={queue === 'approvals' ? 'primary' : 'ghost'}
               aria-pressed={queue === 'approvals'}
               onClick={() => setQueue('approvals')}
             >
               {t('inbox.public.approvals')}
             </Button>
           </div>
-          <label className="text-sm">
+          <label className="flex flex-col gap-2 text-sm font-medium">
             {t('inbox.search')}
-            <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <span className="relative">
+              <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <Input className="pl-9" type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </span>
           </label>
           {queue === 'approvals' && !search.trim() ? (
             <QueryState query={pending}>
@@ -164,7 +168,7 @@ export function InboxPage() {
                 <Link
                   key={held.outbox_id}
                   data-testid="approval"
-                  className="flex flex-col gap-1 rounded-lg border p-3 text-sm hover:bg-muted"
+                  className="flex flex-col gap-2 rounded-lg border-l-[3px] border-warning bg-warning-subtle p-3 text-sm focus-visible:ring-2 focus-visible:ring-ring"
                   to={`/inbox/${encodeURIComponent(held.conversation_id)}`}
                 >
                   <span className="font-medium">{t('inbox.public.approvalFor')}</span>
@@ -180,7 +184,7 @@ export function InboxPage() {
               {people.data?.map((person) => (
                 <Link
                   key={person.id}
-                  className="rounded-lg border p-3 text-sm hover:bg-muted"
+                  className="rounded-lg border-l-[3px] border-transparent p-3 text-sm hover:border-border-strong hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-ring"
                   to={`/inbox?person=${encodeURIComponent(person.id)}`}
                 >
                   {personName(t, person)}
@@ -221,12 +225,17 @@ export function InboxPage() {
         ) : (
           <>
             <section className={columnClass} aria-label={t('inbox.thread')}>
-              <h2 className="font-semibold">
+              <h2 className="font-display text-h3">
                 {selectedPerson.data
                   ? personName(t, selectedPerson.data.person, selectedPerson.data.identities)
                   : t('inbox.thread')}
               </h2>
-              <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
+              {!selectedPerson.data ? (
+                <div className="flex min-h-72 flex-col items-center justify-center gap-5 px-4 py-8 text-center">
+                  <img src="/brand/scenes/conversations.svg" width="120" height="96" alt="" aria-hidden="true" />
+                  <p className="max-w-xs text-sm leading-6 text-muted-foreground">{t('inbox.choose')}</p>
+                </div>
+              ) : <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>}
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
                 <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
               </>}
@@ -254,8 +263,8 @@ export function InboxPage() {
               />
             ) : (
               <section className={columnClass}>
-                <h2 className="font-semibold">{t('inbox.journey')}</h2>
-                <p className="text-sm text-muted-foreground">{t('inbox.noJourney')}</p>
+                <h2 className="font-display text-h3">{t('inbox.journey')}</h2>
+                <p className="border-l-2 border-border-strong pl-3 text-sm leading-6 text-muted-foreground">{t('inbox.noJourney')}</p>
               </section>
             )}
           </>

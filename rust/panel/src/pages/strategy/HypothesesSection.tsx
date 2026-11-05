@@ -108,8 +108,8 @@ export function HypothesesSection({
   const gaps = gapsOf(save.error);
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
+    <Card className="rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none">
+      <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 px-0 pb-4 pt-0">
         <CardTitle>{t('strategy.sections.hypotheses')}</CardTitle>
         {editable && rows === null && (
           <Button variant="ghost" size="sm" onClick={() => setRows(hypotheses.map(toRow))}>
@@ -118,7 +118,7 @@ export function HypothesesSection({
           </Button>
         )}
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex min-w-0 flex-col gap-3 p-0">
         {rows === null ? (
           <HypothesisTable hypotheses={hypotheses} segments={segments} />
         ) : (

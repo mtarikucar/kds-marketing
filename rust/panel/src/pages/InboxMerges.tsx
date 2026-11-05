@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  EmptyState,
   PageHeader,
 } from '@/components/ui';
 import { selectClass, useInboxKey, useInboxMutation } from './InboxShared';
@@ -53,10 +54,10 @@ function MergeCard({ row }: { row: InboxMerge }) {
   return (
     <article
       id={`merge-${row.id}`}
-      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface-muted p-3 text-sm [overflow-wrap:anywhere]"
+      className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-surface p-4 text-sm [overflow-wrap:anywhere]"
     >
-      <h3 className="font-semibold">{t('inbox.merges.suggestion')}</h3>
-      <p>
+      <h3 className="font-display text-h3">{t('inbox.merges.suggestion')}</h3>
+      <p className="rounded-lg bg-surface-muted p-3 font-medium leading-6">
         {sourceName} / {targetName}
       </p>
       <Badge className="self-start">
@@ -69,7 +70,7 @@ function MergeCard({ row }: { row: InboxMerge }) {
       </ul>
       {row.status === 'suggested' && (
         <>
-          <label>
+          <label className="flex flex-col gap-2">
             {t('inbox.merges.keep')}
             <select className={selectClass} value={keep} onChange={(e) => setKeep(e.target.value)}>
               <option value={row.target_id}>{targetName}</option>
@@ -196,7 +197,7 @@ export function InboxMerges() {
             <MergeCard key={row.id} row={row} />
           ))}
         </div>
-        {rows?.length === 0 && <p className="text-muted-foreground">{t('inbox.merges.empty')}</p>}
+        {rows?.length === 0 && <EmptyState icon={<img src="/brand/scenes/team.svg" width="120" height="96" alt="" />} title={t('inbox.merges.empty')} action={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />}
       </QueryState>
     </>
   );

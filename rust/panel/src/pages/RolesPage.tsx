@@ -215,7 +215,7 @@ export function RolesPage() {
         <DataTable
           columns={columns}
           data={roles.data ?? []}
-          emptyState={<EmptyState title={t('roles.empty')} />}
+          emptyState={<EmptyState className="rounded-none border-0" icon={<img src="/brand/scenes/team.svg" alt="" width={120} height={96} />} title={t('roles.empty')} />}
         />
       </QueryState>
       {canManage && (

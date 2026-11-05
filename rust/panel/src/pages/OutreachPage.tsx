@@ -90,6 +90,7 @@ export function OutreachPage() {
         }
       />
       <LockNotice settings={settings.data} />
+      <div className="rounded-lg border border-border bg-surface p-4">
       <label className="flex max-w-xs flex-col gap-1 text-sm">
         {t('leads.outreach.statusFilter')}
         <select className={selectClass} value={status} onChange={(e) => setStatus(e.target.value as CampaignStatus | '')}>
@@ -101,13 +102,21 @@ export function OutreachPage() {
           ))}
         </select>
       </label>
-      <QueryState query={campaigns}>
+      <div className="mt-4"><QueryState query={campaigns}>
         <DataTable
           columns={columns}
           data={campaigns.data?.items ?? []}
-          emptyState={<EmptyState title={t('leads.outreach.empty')} description={t('leads.outreach.emptyBody')} />}
+          emptyState={status ? (
+            <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
+              action={<Button variant="outline" onClick={() => setStatus('')}>{t('leads.filteredEmpty.clear')}</Button>} />
+          ) : (
+            <EmptyState icon={<img src="/brand/scenes/campaigns.svg" width="120" height="96" alt="" />}
+              title={t('leads.outreach.empty')} description={t('leads.outreach.emptyBody')}
+              action={<Button asChild><Link to="/outreach/new">{t('leads.outreach.newCampaign')}</Link></Button>} />
+          )}
         />
-      </QueryState>
+      </QueryState></div>
+      </div>
     </>
   );
 }

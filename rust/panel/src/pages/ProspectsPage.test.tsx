@@ -68,6 +68,29 @@ describe('ProspectsPage', () => {
     // Many steps, each a render of the table: more time than one interaction needs.
   }, 15_000);
 
+  it('clears filters when no prospects match', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(answers({ 'GET /api/prospects': { items: [], next: null } }));
+    renderAt('/prospects');
+    await screen.findByText(tr.leads.prospects.empty, {}, LOADED);
+    const status = screen.getByRole('combobox', { name: tr.leads.prospects.filters.status });
+    const city = screen.getByRole('textbox', { name: tr.leads.prospects.filters.city });
+    await user.selectOptions(status, 'qualified');
+    await user.type(city, 'Izmir');
+    const title = await screen.findByText(tr.leads.filteredEmpty.title);
+    const empty = title.parentElement!.parentElement!;
+    expect(within(empty).queryByRole('link', { name: tr.leads.prospects.tasksLink })).not.toBeInTheDocument();
+    await waitFor(() => expect(listCalls(calls).at(-1)!.get('city')).toBe('Izmir'));
+    await user.click(within(empty).getByRole('button', { name: tr.leads.filteredEmpty.clear }));
+    expect(status).toHaveValue('');
+    expect(city).toHaveValue('');
+    await waitFor(() => {
+      expect(listCalls(calls).at(-1)!.get('status')).toBeNull();
+      expect(listCalls(calls).at(-1)!.get('city')).toBeNull();
+    });
+    expect(await screen.findByText(tr.leads.prospects.empty)).toBeInTheDocument();
+  });
+
   it('bulk_promote_shows_per_item_outcomes', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(

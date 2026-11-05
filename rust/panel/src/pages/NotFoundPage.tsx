@@ -8,6 +8,7 @@ export function NotFoundPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <EmptyState
         className="max-w-md bg-surface"
+        icon={<img src="/brand/scenes/strategy.svg" alt="" width="160" height="128" />}
         title={t('notFound.title')}
         description={t('notFound.body')}
         action={

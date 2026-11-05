@@ -565,9 +565,9 @@ export function BudgetPage() {
       />
       <QueryState query={items}>
         {(items.data ?? []).length === 0 ? (
-          <EmptyState title={t('budget.empty')} description={t('budget.emptyBody')} />
+          <EmptyState icon={<img src="/brand/scenes/wallet.svg" alt="" width={120} height={96} />} title={t('budget.empty')} description={t('budget.emptyBody')} />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+          <div className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface">
             <Table>
               <THead>
                 <TR>

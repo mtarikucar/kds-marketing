@@ -233,17 +233,17 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="flex-row flex-wrap items-center gap-2">
+        <CardHeader className="flex-row flex-wrap items-center gap-2 border-b border-border bg-surface-muted/40">
           <CardTitle>{p.business_name}</CardTitle>
           <ProspectStatusBadge status={p.status} />
           {p.latest_score && <Badge tone="neutral">{t('leads.prospect.score', { score: p.latest_score.score })}</Badge>}
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <dl className="grid gap-2 text-sm sm:grid-cols-2">
+          <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
             {facts
               .filter(([, v]) => v)
               .map(([k, v]) => (
-                <div key={k} className="flex gap-2">
+                <div key={k} className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-3">
                   <dt className="text-muted-foreground">{k}</dt>
                   <dd>{v}</dd>
                 </div>

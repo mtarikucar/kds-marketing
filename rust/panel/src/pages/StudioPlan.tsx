@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { instant, type Arm, type Slot } from '@/api/studio';
 import type { Hypothesis } from '@/api/types';
-import { Region, buttonClass } from './StudioShared';
+import { kindLabel } from '@/lib/capabilities';
+import { Region, buttonClass, contentTypeLabel } from './StudioShared';
 export function StudioPlan({
   slots,
   hypotheses,
@@ -44,13 +46,13 @@ export function StudioPlan({
   }
   const row = (slot: Slot) => (
     <li key={slot.id} data-testid={`slot-${slot.id}`}>
-      <button className={`${buttonClass} w-full text-start`} onClick={() => onSelect(slot.id)}>
+      <button className="w-full rounded-md border-s-2 border-border px-3 py-3 text-start hover:border-primary hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelect(slot.id)}>
         <span className="block">
           {hypotheses.find((h) => h.id === slot.chain.hypothesis_id)?.title ?? t('studio.detail')}
         </span>
         <span className="block text-xs text-muted-foreground">
-          {arms.find((a) => a.id === slot.chain.arm_id)?.key.content_type} /{' '}
-          {arms.find((a) => a.id === slot.chain.arm_id)?.key.channel}
+          {contentTypeLabel(t, arms.find((a) => a.id === slot.chain.arm_id)?.key.content_type ?? '')} /{' '}
+          {kindLabel(t, arms.find((a) => a.id === slot.chain.arm_id)?.key.channel ?? '')}
         </span>
         <time className="text-xs" dateTime={instant(slot.scheduled_at).toISOString()}>
           {instant(slot.scheduled_at).toLocaleString(i18n.language, {
@@ -86,9 +88,17 @@ export function StudioPlan({
           ))}
         </div>
       ) : (
-        <ul className="space-y-2">{visible.map(row)}</ul>
+        <ul className="divide-y divide-border">{visible.map(row)}</ul>
       )}
-      {!visible.length && <p className="text-sm text-muted-foreground">{t('studio.emptyPlan')}</p>}
+      {!visible.length && (
+        <div className="space-y-3 py-4">
+          <p className="text-sm font-medium">{t('studio.emptyPlan')}</p>
+          <p className="text-sm leading-relaxed text-muted-foreground">{t('studio.emptyPlanHelp')}</p>
+          <Link className="inline-flex min-h-10 items-center text-sm font-medium text-primary underline underline-offset-4" to="/studio?tab=materials&view=upload">
+            {t('studio.addMaterials')}
+          </Link>
+        </div>
+      )}
     </Region>
   );
 }

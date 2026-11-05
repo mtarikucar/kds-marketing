@@ -195,6 +195,12 @@ export function ProspectsPage() {
     onError: (err) => toast.error(errorMessage(t, err)),
   });
 
+  const hasFilters = Object.values(filters).some(Boolean);
+  const clearFilters = () => {
+    setFilters({ status: '', bucket: '', city: '', segment: '', task: '' });
+    setCursors([]);
+    setSelected(new Set());
+  };
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
   const columns = useMemo<ColumnDef<ProspectRow, unknown>[]>(
     () => [
@@ -297,7 +303,7 @@ export function ProspectsPage() {
         }
       />
       <Card>
-        <CardContent className="flex flex-col gap-3 pt-6">
+        <CardContent className="py-3">
           <Disclosure title={t('leads.prospects.playbook')}>
             <Playbook />
           </Disclosure>
@@ -305,7 +311,7 @@ export function ProspectsPage() {
       </Card>
       <Card>
         <CardContent className="flex flex-col gap-4 pt-6">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-3 rounded-lg bg-surface-muted/60 p-4 sm:grid-cols-2 xl:grid-cols-5">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.status')}
               <select
@@ -401,7 +407,14 @@ export function ProspectsPage() {
             <DataTable
               columns={columns}
               data={rows}
-              emptyState={<EmptyState title={t('leads.prospects.empty')} description={t('leads.prospects.emptyBody')} />}
+              emptyState={hasFilters ? (
+                <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
+                  action={<Button variant="outline" onClick={clearFilters}>{t('leads.filteredEmpty.clear')}</Button>} />
+              ) : (
+                <EmptyState icon={<img src="/brand/scenes/prospects.svg" width="120" height="96" alt="" />}
+                  title={t('leads.prospects.empty')} description={t('leads.prospects.emptyBody')}
+                  action={<Button asChild variant="outline"><Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link></Button>} />
+              )}
             />
             <div className="flex items-center justify-end gap-2">
               <Button variant="outline" size="sm" disabled={cursors.length === 0} onClick={() => setCursors((c) => c.slice(0, -1))}>

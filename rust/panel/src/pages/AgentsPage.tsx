@@ -81,7 +81,7 @@ export function AgentsPage() {
         <DataTable
           columns={columns}
           data={agents.data ?? []}
-          emptyState={<EmptyState title={t('agents.empty')} description={t('agents.emptyBody')} />}
+          emptyState={<EmptyState className="rounded-none border-0" icon={<img src="/brand/scenes/connections.svg" alt="" width={120} height={96} />} title={t('agents.empty')} description={t('agents.emptyBody')} />}
         />
       </QueryState>
     </>

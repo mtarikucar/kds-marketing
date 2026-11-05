@@ -109,11 +109,11 @@ describe('Growth Studio', () => {
     const calls = mockFetch(answers);
     renderAt('/studio');
     const user = userEvent.setup();
-    await within(await screen.findByLabelText('Hipotez')).findByRole('option', {
+    await within(await screen.findByLabelText(tr.studio.filters.hypothesis)).findByRole('option', {
       name: 'Kısa hikâyeler',
     });
     expect(within(screen.getByTestId('studio')).getAllByRole('region')).toHaveLength(5);
-    await user.selectOptions(screen.getByLabelText('Hipotez'), 'h1');
+    await user.selectOptions(screen.getByLabelText(tr.studio.filters.hypothesis), 'h1');
     await waitFor(() =>
       expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).toContain(
         'hypothesis_id=h1',
@@ -504,7 +504,7 @@ it('strategy_hypothesis_click_filters_regions_and_plan_names_channel_and_type', 
     ),
   );
   const row = await within(screen.getByRole('region', { name: 'Plan' })).findByTestId('slot-s1');
-  expect(row).toHaveTextContent('text / x');
+  expect(row).toHaveTextContent(`${tr.studio.contentFormats.text} / ${tr.capabilities.kinds.x}`);
 });
 
 it('approval_card_previews_the_drafted_text_media_target_and_time', async () => {

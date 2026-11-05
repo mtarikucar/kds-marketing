@@ -30,7 +30,7 @@ export function InboxErasure({ personId }: { personId: string }) {
     <Dialog open={open} onOpenChange={value => { if (!erase.isPending) setOpen(value); }}>
       <DialogContent>
         <DialogHeader><DialogTitle>{t('inbox.erasure.open')}</DialogTitle><DialogDescription>{t('inbox.erasure.description')}</DialogDescription></DialogHeader>
-        <label className="text-sm">{t('inbox.erasure.confirm', { phrase: t('inbox.erasure.phrase') })}<Input autoComplete="off" value={confirmed} onChange={e => setConfirmed(e.target.value)} /></label>
+        <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.erasure.confirm', { phrase: t('inbox.erasure.phrase') })}<Input autoComplete="off" value={confirmed} onChange={e => setConfirmed(e.target.value)} /></label>
         {erase.error && <ErrorCallout error={erase.error} />}
         <DialogFooter><Button variant="destructive" disabled={confirmed !== t('inbox.erasure.phrase') || erase.isPending} onClick={() => erase.mutate()}>{t('inbox.erasure.submit')}</Button></DialogFooter>
       </DialogContent>

@@ -31,7 +31,7 @@ export function ShootRow({ request, links = {} }: { request: m.ShootRequest; lin
     if (!resolve.isPending) resolve.mutate(status);
   };
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`shoot-${request.id}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`shoot-${request.id}`}>
       <p className="break-words text-sm font-medium">{request.text}</p>
       <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{t(`materials.shoot.reason.${reason.kind}`)}</span>

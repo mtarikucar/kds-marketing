@@ -24,7 +24,7 @@ function ProviderSetupBody() {
   const url=hooks.data?.meta?.url ?? hooks.data?.netgsm[0]?.url;
   const base=url?.replace(/\/hooks\/(?:meta|netgsm)(?:\/.*)?$/, '');
   return <div className="space-y-4">
-    <p>{t('providerSetup.help')}</p>
+    <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{t('providerSetup.help')}</p>
     <QueryState query={hooks}>{hooks.data && <>
       {base && base!==url && ['meta','instagram','x','tiktok','linkedin'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
       {hooks.data.meta && <CopyField label={t('capabilities.hooks.metaUrl')} value={hooks.data.meta.url}/>}

@@ -135,7 +135,7 @@ function ItemActions({
             <DialogTitle>{t('inbox.public.delete.title')}</DialogTitle>
             <DialogDescription>{t('inbox.public.delete.description')}</DialogDescription>
           </DialogHeader>
-          <label className="text-sm">
+          <label className="flex min-w-0 flex-col gap-2 text-sm">
             {t('inbox.public.delete.confirm', { phrase: t('inbox.public.delete.phrase') })}
             <Input autoComplete="off" value={phrase} onChange={(e) => setPhrase(e.target.value)} />
           </label>
@@ -165,7 +165,7 @@ function HeldCard({ held, draft }: { held: HeldReply; draft: InboxMessage | unde
   const discard = useInboxMutation(() => api.discardReply(held.outbox_id));
   const busy = approve.isPending || discard.isPending;
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-warning p-3" data-testid="held-reply">
+    <div className="flex flex-col gap-3 rounded-lg border-l-4 border-warning bg-warning-subtle p-4" data-testid="held-reply">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2">
           <span className="text-sm font-medium">{t('inbox.public.held.title')}</span>
@@ -268,7 +268,7 @@ function Composer({
   const within = length >= bounds.min && length <= bounds.max && !!text.trim();
   return (
     <form
-      className="flex flex-col gap-2 border-t pt-4"
+      className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted p-3"
       onSubmit={(e) => {
         e.preventDefault();
         // The guard holds on Enter too (bug class "Enter double-submit"): a ref, since a second
@@ -278,7 +278,7 @@ function Composer({
         send.mutate(undefined, { onSettled: () => (inFlight.current = false) });
       }}
     >
-      <label className="text-sm">
+      <label className="flex min-w-0 flex-col gap-2 text-sm">
         {t('inbox.public.composer.target')}
         <select
           className={selectClass}
@@ -322,7 +322,7 @@ function Composer({
       )}
       {context.rules.marketplace && <Callout tone="info">{t('inbox.public.marketplaceNote')}</Callout>}
       {context.approval_required && <Callout tone="info">{t('inbox.public.approvalNote')}</Callout>}
-      <label className="text-sm font-medium">
+      <label className="flex flex-col gap-2 text-sm font-medium">
         {t('inbox.public.composer.label')}
         <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} disabled={send.isPending} />
       </label>
@@ -333,7 +333,7 @@ function Composer({
         {t('inbox.public.composer.count', { count: length, max: bounds.max })}
       </span>
       <ErrorCallout error={send.error} />
-      <Button type="submit" loading={send.isPending} disabled={!within || send.isPending}>
+      <Button className="self-end" type="submit" loading={send.isPending} disabled={!within || send.isPending}>
         {t('inbox.public.composer.send')}
       </Button>
     </form>
@@ -377,11 +377,11 @@ export function InboxPublic({
           )}
         />
       ))}
-      <ol className="flex min-w-0 flex-col gap-4" aria-label={t('inbox.public.items')}>
+      <ol className="flex max-h-[60dvh] min-w-0 flex-col gap-4 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.public.items')}>
         {context.items.map((entry) => (
-          <li key={entry.item.id} className="flex flex-col gap-2 rounded-lg border p-3" data-testid="public-item">
+          <li key={entry.item.id} className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:p-4" data-testid="public-item">
             {entry.subject && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="subject">
+              <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3 text-xs text-muted-foreground" data-testid="subject">
                 <span>{t(`inbox.public.subject.${entry.subject.kind}`)}</span>
                 {entry.subject.url ? (
                   <a className="font-medium text-foreground underline" href={entry.subject.url} target="_blank" rel="noreferrer">
@@ -397,16 +397,16 @@ export function InboxPublic({
               {entry.item.deadline && entry.owed && <Deadline at={entry.item.deadline} />}
               <InboxTime at={entry.item.created_at} />
             </div>
-            <ol className="flex flex-col gap-1">
+            <ol className="flex flex-col gap-3">
               {entry.thread.map((line, index) => (
                 <li
                   key={`${line.external_id ?? ''}:${index}`}
-                  className={`rounded-md p-2 text-sm [overflow-wrap:anywhere] ${
+                  className={`rounded-lg border p-3 text-sm leading-6 [overflow-wrap:anywhere] ${
                     line.author === 'us'
-                      ? 'ml-5 bg-primary/10'
+                      ? 'ml-5 rounded-br-sm border-primary-200 bg-primary-50 text-slate-900 dark:border-primary-800 dark:bg-primary-950 dark:text-slate-100'
                       : line.author === 'other'
-                        ? 'bg-surface-muted text-muted-foreground'
-                        : 'bg-surface-muted'
+                        ? 'border-transparent bg-surface-muted text-muted-foreground'
+                        : 'rounded-bl-sm border-border bg-surface-muted'
                   }`}
                 >
                   <span className="block text-xs text-muted-foreground">{t(`inbox.public.author.${line.author}`)}</span>

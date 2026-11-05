@@ -283,7 +283,7 @@ export function ApiKeysPage() {
         <DataTable
           columns={columns}
           data={keys.data ?? []}
-          emptyState={<EmptyState title={t('apiKeys.empty')} description={t('apiKeys.emptyBody')} />}
+          emptyState={<EmptyState className="rounded-none border-0" icon={<img src="/brand/scenes/connections.svg" alt="" width={120} height={96} />} title={t('apiKeys.empty')} description={t('apiKeys.emptyBody')} />}
         />
       </QueryState>
       <Card>

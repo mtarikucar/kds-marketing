@@ -436,14 +436,14 @@ function RepsCard({ data }: { data: DistributionOut }) {
   const editable = (r: RepOut) => manage || r.user_id === session.data?.user_id;
   const current = data.reps.find((r) => r.user_id === editing);
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle>{t('leads.distribution.reps.title')}</CardTitle>
         <CardDescription>{t('leads.distribution.reps.description')}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm" aria-label={t('leads.distribution.reps.title')}>
+      <CardContent className="flex min-w-0 flex-col gap-3">
+        <div className="relative w-full min-w-0 overflow-x-auto">
+          <table className="w-full min-w-[48rem] text-left text-sm" aria-label={t('leads.distribution.reps.title')}>
             <thead className="text-caption text-muted-foreground">
               <tr>
                 <th className="py-1 pe-3 font-normal">{t('leads.distribution.reps.member')}</th>
@@ -458,7 +458,7 @@ function RepsCard({ data }: { data: DistributionOut }) {
             </thead>
             <tbody>
               {data.reps.map((r) => (
-                <tr key={r.user_id} className="border-t border-border align-top" data-testid="rep">
+                <tr key={r.user_id} className="border-t border-border align-top hover:bg-surface-muted/40" data-testid="rep">
                   <td className="py-2 pe-3">
                     <span className="font-medium">{r.display_name ?? r.user_id}</span>
                     {r.on_shift && <Badge tone="success" className="ms-2">{t('leads.distribution.reps.onShift')}</Badge>}
@@ -638,7 +638,7 @@ export function DistributionPage() {
       <TeamTabs />
       <QueryState query={dist}>
         {dist.data && (
-          <div className="flex flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-4">
             <CountsCard data={dist.data} />
             {/* A new draft only when the stored rules change, never on a mere refetch. */}
             <RulesCard

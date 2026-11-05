@@ -137,23 +137,23 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
     >
       <h3 className="font-semibold">{t('posts.settings.title')}</h3>
       <p className="text-sm text-muted-foreground">{t('posts.settings.help')}</p>
-      <div className="overflow-x-auto">
+      <div className="max-w-3xl overflow-x-auto rounded-lg border border-border bg-surface">
         <table className="w-full text-left text-sm">
           <thead>
             <tr className="text-xs text-muted-foreground">
-              <th className="py-1 pr-2 font-medium">{t('posts.settings.format')}</th>
-              <th className="py-1 pr-2 font-medium">{t('posts.settings.lead')}</th>
-              <th className="py-1 font-medium">{t('posts.settings.grace')}</th>
+              <th className="px-3 py-2.5 font-medium">{t('posts.settings.format')}</th>
+              <th className="px-3 py-2.5 font-medium">{t('posts.settings.lead')}</th>
+              <th className="px-3 py-2.5 font-medium">{t('posts.settings.grace')}</th>
             </tr>
           </thead>
           <tbody>
             {p.POST_FORMATS.map((f) => (
               <tr key={f} className="border-t border-border">
-                <th scope="row" className="py-1 pr-2 font-normal">
+                <th scope="row" className="px-3 py-2.5 font-normal">
                   {t(`posts.format.${f}`)}
                 </th>
                 {(['lead', 'grace'] as const).map((kind) => (
-                  <td key={kind} className="py-1 pr-2">
+                  <td key={kind} className="px-3 py-2.5">
                     <input
                       aria-label={`${t(`posts.format.${f}`)} · ${t(`posts.settings.${kind}`)}`}
                       className={fieldClass}

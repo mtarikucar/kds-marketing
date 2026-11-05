@@ -267,14 +267,18 @@ export function MaterialsUpload({
 
   return (
     <div className="space-y-4" data-testid="materials-upload">
-      <div className={cardClass}>
-        <p className="text-sm text-muted-foreground">{t('materials.upload.intro')}</p>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <button type="button" className={`${primaryClass} min-h-14`} onClick={() => camera.current?.click()}>
+      <div className="flex flex-col items-start gap-5 rounded-xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:gap-8 sm:p-8">
+        {items.length === 0 && (
+          <img src="/brand/scenes/studio.svg" alt="" aria-hidden="true" width={144} height={144} className="h-32 w-32 shrink-0 sm:h-36 sm:w-36" />
+        )}
+        <div className="min-w-0 flex-1 space-y-5">
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{t('materials.upload.intro')}</p>
+        <div className="flex flex-wrap gap-3">
+          <button type="button" className={primaryClass} onClick={() => camera.current?.click()}>
             <Camera aria-hidden="true" className="h-5 w-5" />
             {t('materials.upload.camera')}
           </button>
-          <button type="button" className={`${tapClass} min-h-14`} onClick={() => gallery.current?.click()}>
+          <button type="button" className={tapClass} onClick={() => gallery.current?.click()}>
             <Upload aria-hidden="true" className="h-5 w-5" />
             {t('materials.upload.gallery')}
           </button>
@@ -303,6 +307,7 @@ export function MaterialsUpload({
             e.target.value = '';
           }}
         />
+        </div>
       </div>
 
       {items.length > 0 && (

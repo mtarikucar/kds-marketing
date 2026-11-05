@@ -88,19 +88,15 @@ export function InboxConversation({ id }: { id: string }) {
   return (
     <>
       <section className={columnClass} aria-label={t('inbox.thread')}>
-        {ctx && !ctx.person.erased_at && !ctx.person.merged_into && <>
-          <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={ctx.person.id} /></Disclosure>
-          <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
-        </>}
         <QueryState query={conversation}>
           {row && (
             <>
-              <div className="flex flex-wrap items-start justify-between gap-2">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
                 <div>
-                  <h2 className="font-semibold">
+                  <h2 className="font-display text-h2">
                     {ctx ? personName(t, ctx.person, person.data?.identities) : t('inbox.thread')}
                   </h2>
-                  <p className="text-xs text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
                   {row.next_deadline && <Deadline at={row.next_deadline} />}
                 </div>
                 <Badge tone={row.executor === 'agent' ? 'neutral' : 'warning'}>
@@ -111,7 +107,15 @@ export function InboxConversation({ id }: { id: string }) {
                       : t('inbox.unassignedExecutor')}
                 </Badge>
               </div>
-              <div className="flex flex-wrap gap-2">
+              {ctx && !ctx.person.erased_at && !ctx.person.merged_into && (
+                <>
+                <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}>
+                  <InboxCompliance personId={ctx.person.id} />
+                </Disclosure>
+                <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
+                </>
+              )}
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t('inbox.thread')}>
                 <Button
                   size="sm"
                   variant="outline"
@@ -175,7 +179,7 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('inbox.moreMessages')}
                   </Button>
                 )}
-                <ol className="flex min-w-0 flex-col gap-3" aria-label={t('inbox.messages')}>
+                <ol className="flex max-h-[60dvh] min-w-0 scroll-py-3 flex-col gap-4 overflow-y-auto overscroll-contain py-2 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.messages')}>
                   {messages.data?.pages
                     .flatMap((page) => page.items)
                     .slice()
@@ -183,13 +187,13 @@ export function InboxConversation({ id }: { id: string }) {
                     .map((message) => (
                       <li
                         key={message.id}
-                        className={`max-w-full rounded-lg p-3 ${message.direction === 'outbound' ? 'ml-5 bg-primary/10' : 'mr-5 bg-surface-muted'}`}
+                        className={`max-w-[94%] rounded-xl border p-3 sm:p-4 ${message.direction === 'outbound' ? 'ml-auto rounded-br-sm border-primary-200 bg-primary-50 text-slate-900 dark:border-primary-800 dark:bg-primary-950 dark:text-slate-100' : 'mr-auto rounded-bl-sm border-border bg-surface-muted'}`}
                       >
                         <div className="flex flex-wrap justify-between gap-2">
                           <InboxActorLabel actor={message.author} />
                           <InboxTime at={message.at} />
                         </div>
-                        <p className="my-2 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">
+                        <p className="my-2 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
                         <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
@@ -205,14 +209,14 @@ export function InboxConversation({ id }: { id: string }) {
               <QueryState query={context} />
               {reason && <Callout tone="warning">{t(`inbox.fence.${reason}`)}</Callout>}
               <form
-                className="flex flex-col gap-2 border-t pt-4"
+                className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted p-3"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (text.trim() && !disabled && ctx) send.mutate();
                 }}
               >
                   {row.kind_key === 'mailbox' && <Input aria-label={t('inbox.emailSubject')} placeholder={t('inbox.emailSubject')} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={998} />}
-                <label className="text-sm font-medium">
+                <label className="flex flex-col gap-2 text-sm font-medium">
                   {t('inbox.reply')}
                   <Textarea
                     value={text}
@@ -235,20 +239,20 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('common.retry')}
                   </Button>
                 )}
-                <Button type="submit" loading={send.isPending} disabled={disabled || !text.trim() || !ctx}>
+                <Button className="self-end" type="submit" loading={send.isPending} disabled={disabled || !text.trim() || !ctx}>
                   {t('inbox.send')}
                 </Button>
               </form>
                 </>
               )}
               <form
-                className="flex flex-col gap-2 border-t pt-4"
+                className="flex flex-wrap items-end gap-2 border-t border-border pt-4"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (until) snooze.mutate();
                 }}
               >
-                <label className="text-sm">
+                <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm">
                   {t('inbox.snoozeUntil')}
                   <Input
                     required
@@ -280,7 +284,7 @@ export function InboxConversation({ id }: { id: string }) {
         />
       ) : (
         <section className={columnClass}>
-          <h2 className="font-semibold">{t('inbox.journey')}</h2>
+          <h2 className="font-display text-h3">{t('inbox.journey')}</h2>
           <QueryState query={context}>
             {ctx && <p className="text-sm text-muted-foreground">{t('inbox.noJourney')}</p>}
           </QueryState>

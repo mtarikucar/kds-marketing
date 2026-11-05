@@ -56,13 +56,13 @@ import { CAPABILITIES_KEY, invalidateCapabilities } from './capabilities/queries
 function KindPicker({ value, onChange }: { value: string | null; onChange: (kind: string) => void }) {
   const { t } = useTranslation();
   return (
-    <section aria-label={t('connect.kindsLabel')} className="grid gap-4 md:grid-cols-3">
+    <section aria-label={t('connect.kindsLabel')} className="grid gap-x-8 gap-y-5 border-y border-border py-5 md:grid-cols-3">
       {PROVIDERS.map((provider) => (
         <div
           key={provider}
           role="group"
           aria-label={t(`connect.providers.${provider}`)}
-          className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-4"
+          className="flex flex-col gap-3"
         >
           <h2 className="text-sm font-semibold text-foreground">{t(`connect.providers.${provider}`)}</h2>
           <div className="flex flex-wrap gap-2">
@@ -75,7 +75,7 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
                   aria-pressed={active}
                   onClick={() => onChange(kind)}
                   className={cn(
-                    'rounded-full border px-3 py-1 text-caption font-medium transition-colors',
+                    'rounded-md border px-3 py-1.5 text-caption font-medium transition-colors',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     active
                       ? 'border-primary bg-primary/10 text-primary'

@@ -34,7 +34,7 @@ export function InboxQuotes({ journeyId, terminal }: { journeyId: string; termin
     setText('');
   });
   const valid = !terminal && amount !== null && amount >= 0 && /^[A-Z]{3}$/.test(currency) && new Date(until).getTime() > Date.now() && !!text.trim();
-  return <section className="flex flex-col gap-3 border-t pt-4">
+  return <section className="flex flex-col gap-4 border-t border-border pt-5">
     <h3 className="font-medium">{t('inbox.offers.quotes')}</h3>
     <QueryState query={rows}><ul className="space-y-3 text-sm">{rows.data?.map(row => <li key={row.id}>
       <p>{formatMoney(row.amount_minor, row.currency, i18n.language)} · {t(`inbox.offers.quoteState.${row.state}`)} · <InboxTime at={row.valid_until} /></p>
@@ -43,14 +43,14 @@ export function InboxQuotes({ journeyId, terminal }: { journeyId: string; termin
     </li>)}</ul></QueryState>
     <ErrorCallout error={accept.error} />
     {!terminal && <form aria-label={t('inbox.offers.send')} className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); if (valid) send.mutate(); }}>
-      <label className="text-sm">{t('inbox.amount')}<MoneyInput required currency={currency} minor={amount} onChange={setAmount} /></label>
-      <label className="text-sm">{t('inbox.currency')}<Input required pattern="[A-Z]{3}" maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></label>
-      <label className="text-sm">{t('inbox.offers.validUntil')}<Input type="datetime-local" required value={until} onChange={e => setUntil(e.target.value)} /></label>
-      <label className="text-sm">{t('inbox.offers.file')}<Input value={file} onChange={e => setFile(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.amount')}<MoneyInput required currency={currency} minor={amount} onChange={setAmount} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.currency')}<Input required pattern="[A-Z]{3}" maxLength={3} value={currency} onChange={e => setCurrency(e.target.value.toUpperCase())} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.validUntil')}<Input type="datetime-local" required value={until} onChange={e => setUntil(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.file')}<Input value={file} onChange={e => setFile(e.target.value)} /></label>
       <p className="text-sm text-muted-foreground">{t('inbox.offers.fileHint')}</p>
       <ChannelField sending value={channel} onChange={v => setChannel(v as SendChannel)} />
       <IntentField value={intent} onChange={setIntent} />
-      <label className="text-sm">{t('inbox.offers.text')}<Textarea required value={text} onChange={e => setText(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.text')}<Textarea required value={text} onChange={e => setText(e.target.value)} /></label>
       <ErrorCallout error={send.error} />
       {delivery && <DeliveryState state={delivery} />}
       <Button type="submit" disabled={!valid} loading={send.isPending}>{t('inbox.offers.send')}</Button>
@@ -72,7 +72,7 @@ export function InboxAppointments({ journeyId, appointments, terminal }: { journ
   });
   const action = useInboxMutation(({ id, kind }: { id: string; kind: 'cancel' | 'held' }) => api.appointmentAction(id, kind));
   const valid = !terminal && !!location.trim() && new Date(end).getTime() > new Date(start).getTime();
-  return <section className="flex flex-col gap-3 border-t pt-4">
+  return <section className="flex flex-col gap-4 border-t border-border pt-5">
     <h3 className="font-medium">{t('inbox.offers.appointments')}</h3>
     <p className="text-sm text-muted-foreground">{t('inbox.offers.internal')}</p>
     <ul className="space-y-3 text-sm">{appointments.map(row => <li key={row.id}>
@@ -84,9 +84,9 @@ export function InboxAppointments({ journeyId, appointments, terminal }: { journ
     </li>)}</ul>
     <ErrorCallout error={action.error} />
     {!terminal && <form aria-label={t('inbox.offers.book')} className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); if (valid) book.mutate(); }}>
-      <label className="text-sm">{t('inbox.offers.start')}<Input type="datetime-local" required value={start} onChange={e => setStart(e.target.value)} /></label>
-      <label className="text-sm">{t('inbox.offers.end')}<Input type="datetime-local" required value={end} onChange={e => setEnd(e.target.value)} /></label>
-      <label className="text-sm">{t('inbox.offers.location')}<Input required value={location} onChange={e => setLocation(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.start')}<Input type="datetime-local" required value={start} onChange={e => setStart(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.end')}<Input type="datetime-local" required value={end} onChange={e => setEnd(e.target.value)} /></label>
+      <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.offers.location')}<Input required value={location} onChange={e => setLocation(e.target.value)} /></label>
       <IntentField value={intent} onChange={setIntent} />
       <ErrorCallout error={book.error} />
       {notification && <DeliveryState notification state={notification} />}

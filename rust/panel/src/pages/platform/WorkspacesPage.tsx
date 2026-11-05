@@ -120,7 +120,7 @@ export function WorkspacesPage() {
         <DataTable
           columns={columns}
           data={workspaces.data ?? []}
-          emptyState={<EmptyState title={t('platform.workspaces.empty')} />}
+          emptyState={<EmptyState className="rounded-none border-0" title={t('platform.workspaces.empty')} />}
         />
       </QueryState>
       <Dialog open={suspending !== null} onOpenChange={(open) => { if (!open) setSuspending(null); }}>

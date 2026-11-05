@@ -224,8 +224,8 @@ export function Shell() {
           <NavItems orientation="horizontal" />
         </nav>
 
-        <main className="flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-9">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <main className="min-w-0 flex-1 px-4 py-7 sm:px-6 lg:px-10 lg:py-9">
+          <div className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6">
             {current ? (
               // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
               // editor, a half-typed form) carries over and is saved into the other workspace.

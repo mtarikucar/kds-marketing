@@ -140,20 +140,20 @@ export function ConsultationLog({ versionId, canRecord }: { versionId: string; c
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none">
+      <CardHeader className="px-0 pb-5 pt-0">
         <CardTitle>{t('strategy.consultation.title')}</CardTitle>
         <CardDescription>{t('strategy.consultation.description')}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-col gap-5 p-0">
         {canRecord && <RecordForm onRecorded={onRecorded} />}
         <QueryState query={log}>
           {entries.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('strategy.consultation.empty')}</p>
           ) : (
-            <ol className="flex flex-col gap-3">
+            <ol className="flex flex-col divide-y divide-border">
               {entries.map((entry) => (
-                <li key={entry.id} className="flex flex-col gap-1.5 rounded-lg border border-border p-3">
+                <li key={entry.id} className="flex flex-col gap-2 py-4">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <ConsultationKindBadge kind={entry.kind} />
                     <ActorBadge kind={entry.actor.kind} />

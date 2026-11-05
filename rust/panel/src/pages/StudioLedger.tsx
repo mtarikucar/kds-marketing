@@ -25,7 +25,7 @@ export function StudioLedger({ query, allowed }: { query: api.Query; allowed: bo
   });
   const entries = rows.data?.pages.flatMap((p) => p.entries) ?? [];
   return (
-    <Region name="ledger" className="lg:col-span-3">
+    <Region name="ledger" className="xl:col-span-2">
       <button
         className={buttonClass}
         disabled={!allowed || download.isPending}
@@ -36,7 +36,7 @@ export function StudioLedger({ query, allowed }: { query: api.Query; allowed: bo
       <StudioError error={rows.error || download.error} />
       <ol className="divide-y divide-border">
         {entries.map(({ id, entry: e }) => (
-          <li key={id} className="grid gap-2 py-3 text-sm sm:grid-cols-[10rem_1fr]">
+          <li key={id} className="grid gap-3 py-4 text-sm sm:grid-cols-[12rem_minmax(0,1fr)]">
             <div>
               <time dateTime={e.at}>{new Date(e.at).toLocaleString(i18n.language)}</time>
               <p className="text-xs text-muted-foreground">

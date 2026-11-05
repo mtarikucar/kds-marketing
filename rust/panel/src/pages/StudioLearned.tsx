@@ -5,8 +5,10 @@ import { Link } from 'react-router-dom';
 import * as api from '@/api/studio';
 import { listCapabilities } from '@/api/capabilities';
 import type { LaneKind } from '@/api/types';
+import { kindLabel } from '@/lib/capabilities';
 import { formatMoney, minorDigits, parseMinor } from '@/lib/format';
 import {
+  contentTypeLabel,
   Region,
   Field,
   StudioError,
@@ -108,7 +110,7 @@ function PaidActions({ data, manage }: { data: api.Overview; manage: boolean }) 
                 .map(({ arm: a }) => (
                   <option key={a.id} value={a.id}>
                     {data.hypotheses.find((h) => h.id === a.key.hypothesis_id)?.title} /{' '}
-                    {a.key.content_type}
+                    {contentTypeLabel(t, a.key.content_type)}
                   </option>
                 ))}
             </select>
@@ -233,7 +235,7 @@ export function StudioLearned({
     </Field>
   );
   return (
-    <Region name="learned">
+    <Region name="learned" className="xl:col-span-2">
       <div className="flex flex-wrap gap-2">
         <button
           className={buttonClass}
@@ -270,12 +272,12 @@ export function StudioLearned({
         ) : (
           <p className="text-sm">{t('studio.connectorUnavailable')}</p>
         ))}
-      <ul className="space-y-3">
+      <ul className="grid gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-3">
         {data?.learned.arms.map(({ arm, evidence: rows }) => (
-          <li key={arm.id}>
+          <li key={arm.id} className="border-b border-border pb-3">
             <p className="text-sm font-medium">
               {data.hypotheses.find((h) => h.id === arm.key.hypothesis_id)?.title} /{' '}
-              {arm.key.content_type} / {arm.key.channel}
+              {contentTypeLabel(t, arm.key.content_type)} / {kindLabel(t, arm.key.channel)}
             </p>
             <p className="text-sm text-muted-foreground">
               {rows.length

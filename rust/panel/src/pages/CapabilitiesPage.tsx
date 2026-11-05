@@ -253,7 +253,7 @@ export function CapabilitiesPage() {
       {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
       <QueryState query={listed} keepOnError>
         {items.length === 0 ? (
-          <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
+          <EmptyState icon={filter === 'all' ? <img src="/brand/scenes/connections.svg" alt="" width={120} height={96} /> : undefined} title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             {items.map((item) => (

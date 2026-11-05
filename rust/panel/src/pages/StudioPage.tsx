@@ -13,7 +13,7 @@ import { StudioToday } from './StudioToday';
 import { StudioLearned } from './StudioLearned';
 import { StudioLedger } from './StudioLedger';
 import { Field, StudioError, inputClass, useStudioKey } from './StudioShared';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
+import { PageHeader, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
 import { StudioPosts } from './posts/StudioPosts';
 export function StudioPage() {
@@ -64,8 +64,8 @@ export function StudioPage() {
   }, [overview.data, hypothesis]);
   const data = overview.data;
   return (
-    <div data-testid="studio" className="space-y-5">
-      <h1 className="text-2xl font-semibold tracking-tight">{t('studio.title')}</h1>
+    <div data-testid="studio" className="space-y-6">
+      <PageHeader title={t('studio.title')} description={t('studio.description')} />
       <Tabs
         value={tab}
         onValueChange={(next) => setParams(next === 'studio' ? {} : { tab: next })}
@@ -96,8 +96,8 @@ export function StudioPage() {
           )}
         </TabsContent>
         <TabsContent value="studio" className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="hypothesis">
+          <div className="grid gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(9rem,12rem)_minmax(9rem,12rem)]">
+            <Field label="filters.hypothesis">
               <select
                 className={inputClass}
                 value={hypothesis}
@@ -114,7 +114,7 @@ export function StudioPage() {
                 ))}
               </select>
             </Field>
-            <Field label="from">
+            <Field label="filters.from">
               <input
                 className={inputClass}
                 type="date"
@@ -127,7 +127,7 @@ export function StudioPage() {
                 }}
               />
             </Field>
-            <Field label="until">
+            <Field label="filters.until">
               <input
                 className={inputClass}
                 type="date"
@@ -143,7 +143,7 @@ export function StudioPage() {
           </div>
           {!allowed && <p role="alert">{t('studio.forbidden')}</p>}
           <StudioError error={overview.error} />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 items-start gap-7 xl:grid-cols-[minmax(0,1.65fr)_minmax(18rem,1fr)]">
             <StudioStrategyBar
               data={data}
               manage={manage}
@@ -153,18 +153,18 @@ export function StudioPage() {
                 setSelectedSlot(null);
               }}
             />
-            <StudioPlan
-              slots={data?.slots ?? []}
-              hypotheses={data?.hypotheses ?? []}
-              arms={data?.learned.arms.map((a) => a.arm) ?? []}
-              onSelect={setSelectedSlot}
-            />
             <StudioToday
               data={data}
               selectedSlot={selectedSlot}
               onSelect={setSelectedSlot}
               manage={manage}
               overdue={work.data?.agent.overdue ?? false}
+            />
+            <StudioPlan
+              slots={data?.slots ?? []}
+              hypotheses={data?.hypotheses ?? []}
+              arms={data?.learned.arms.map((a) => a.arm) ?? []}
+              onSelect={setSelectedSlot}
             />
             <StudioLearned
               data={data}

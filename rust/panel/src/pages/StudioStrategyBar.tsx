@@ -37,7 +37,7 @@ export function StudioStrategyBar({
   );
   const [open, setOpen] = useState(false);
   return (
-    <Region name="strategy" className="lg:col-span-3 border-t-4 border-t-brand-navy">
+    <Region name="strategy" className="xl:col-span-2">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           {data && (
@@ -67,9 +67,9 @@ export function StudioStrategyBar({
         )}
       </div>
       <StudioError error={brake.error} />
-      <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3">
         {data?.hypotheses.map((h) => (
-          <li key={h.id}>
+          <li key={h.id} className="border-s-2 border-border ps-3">
             <div className="flex justify-between gap-2 text-sm">
               <button
                 className="text-start underline decoration-primary/40 underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring"
@@ -79,12 +79,16 @@ export function StudioStrategyBar({
               </button>
               <span>{Math.round((h.derived_confidence ?? h.prior_confidence) * 100)}%</span>
             </div>
-            <progress
+            <div
+              role="meter"
               aria-label={`${h.title} ${t('studio.confidence')}`}
-              className="h-2 w-full accent-primary"
-              max={1}
-              value={h.derived_confidence ?? h.prior_confidence}
-            />
+              aria-valuemin={0}
+              aria-valuemax={1}
+              aria-valuenow={h.derived_confidence ?? h.prior_confidence}
+              className="my-2 h-1 overflow-hidden rounded-full bg-surface-muted"
+            >
+              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.max(0, (h.derived_confidence ?? h.prior_confidence) * 100))}%` }} />
+            </div>
             <p className="text-xs text-muted-foreground">
               {h.metric} ·{' '}
               {t(h.derived_confidence == null ? 'studio.priorLabel' : 'studio.derived')}
