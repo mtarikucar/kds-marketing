@@ -30,3 +30,7 @@ Three new transparent illustrations were generated using the existing `jeeta-gui
 Shared generation direction: preserve the reference mascot’s voxel dark curly hair, black sunglasses, navy suit, white shirt and orange accents; matte detailed voxel 3D, soft studio lighting, one physical activity, restrained navy/orange, no text, letters, logos, watermark or floating filler; full subject within a square transparent frame with padding and readable at small sizes. Each prompt specifies the activity above. The provided official logo remains unchanged.
 
 These illustrations replace or support empty-state guidance. Populated operational pages do not acquire large decorative hero images.
+
+## Editorial scenes
+
+The subsequent [editorial imagery pass](editorial-visuals-2026-11-05.md) adds four photographic still lifes under `brand/editorial/`: strategy, studio, connections and research, each exported at320/640px. These appear in the main task introductions; the empty capabilities and upload surfaces now use the relevant photographic scene in place of the earlier mascot guide. The guide files remain available for other setup/empty states. Generation prompts, original file paths, responsive placement and validation are recorded in that report.

@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, Compass, History, Play, Send } from 'lucide-react';
@@ -29,7 +30,6 @@ import {
   EmptyState,
   Field,
   Input,
-  PageHeader,
   Sheet,
   SheetContent,
   SheetDescription,
@@ -398,7 +398,7 @@ export function StrategyPage() {
 
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="strategy"
         title={t('strategy.title')}
         description={t('strategy.description')}
         actions={

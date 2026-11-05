@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -13,7 +14,7 @@ import { StudioToday } from './StudioToday';
 import { StudioLearned } from './StudioLearned';
 import { StudioLedger } from './StudioLedger';
 import { Field, StudioReadStatus, inputClass, useStudioKey } from './StudioShared';
-import { PageHeader, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
 import { StudioPosts } from './posts/StudioPosts';
 export function StudioPage() {
@@ -82,7 +83,7 @@ export function StudioPage() {
   const data = overview.data;
   return (
     <div data-testid="studio" className="space-y-6">
-      <PageHeader title={t('studio.title')} description={t('studio.description')} />
+      <WorkspaceHeader scene={tab === 'materials' ? undefined : 'studio'} title={t('studio.title')} description={t('studio.description')} />
       <Tabs
         value={tab}
         onValueChange={(next) => setParams(next === 'studio' ? {} : { tab: next })}

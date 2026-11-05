@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -18,7 +19,6 @@ import {
   Disclosure,
   EmptyState,
   Input,
-  PageHeader,
   Progress,
   Textarea,
   toast,
@@ -334,7 +334,7 @@ export function ResearchTasksPage() {
   const items = tasks.data?.items ?? [];
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="research"
         title={t('leads.tasks.title')}
         description={t('leads.tasks.description')}
         actions={

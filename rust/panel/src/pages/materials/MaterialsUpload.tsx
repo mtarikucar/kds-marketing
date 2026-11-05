@@ -277,7 +277,7 @@ export function MaterialsUpload({
     <div className="space-y-4" data-testid="materials-upload">
       <div className="flex flex-col items-start gap-6 border-t-2 border-foreground bg-surface p-6 sm:flex-row sm:items-center sm:gap-8">
         {items.length === 0 && (
-          <img src="/brand/guide-plan.webp" alt="" aria-hidden="true" width={144} height={144} className="h-24 w-24 shrink-0 sm:h-28 sm:w-28" />
+          <img src="/brand/editorial/studio-320.webp" alt="" aria-hidden="true" width={160} height={104} className="h-24 w-36 shrink-0 rounded-md object-cover sm:h-28 sm:w-40" />
         )}
         <div className="min-w-0 flex-1 space-y-5">
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{t('materials.upload.intro')}</p>

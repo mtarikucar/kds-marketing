@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plug, Plus } from 'lucide-react';
@@ -24,7 +25,6 @@ import {
   Disclosure,
   Input,
   EmptyState,
-  PageHeader,
   cn,
   toast,
   Tabs,
@@ -302,7 +302,7 @@ export function CapabilitiesPage() {
 
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene={firstConnection ? undefined : 'connections'}
         title={t('capabilities.title')}
         description={t('capabilities.description')}
         actions={
@@ -420,12 +420,12 @@ export function CapabilitiesPage() {
                     aria-label={t('capabilities.empty')}
                   >
                     <img
-                      src="/brand/guide-setup.webp"
+                      src="/brand/editorial/connections-320.webp"
                       alt=""
                       aria-hidden="true"
-                      width={112}
-                      height={112}
-                      className="h-20 w-20 shrink-0 object-contain sm:h-28 sm:w-28"
+                      width={128}
+                      height={96}
+                      className="h-24 w-28 shrink-0 rounded-md object-cover sm:w-32"
                     />
                     <div className="min-w-0 space-y-3">
                       <div>

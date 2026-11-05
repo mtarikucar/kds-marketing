@@ -1,3 +1,4 @@
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -19,7 +20,7 @@ import {
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
-import { Button, DataTable, Disclosure, EmptyState, Input, PageHeader, toast } from '@/components/ui';
+import { Button, DataTable, Disclosure, EmptyState, Input, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { useDraftKey } from '@/lib/leads';
@@ -294,7 +295,7 @@ export function ProspectsPage() {
   const taskItems = tasks.data?.items ?? [];
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="research"
         title={t('leads.prospects.title')}
         description={t('leads.prospects.description')}
         actions={
