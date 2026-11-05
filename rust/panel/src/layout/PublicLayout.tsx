@@ -16,20 +16,22 @@ export function PublicLayout() {
         </div>
       </header>
       <main className="mx-auto grid w-full max-w-[1280px] flex-1 items-center gap-12 px-6 pb-10 lg:grid-cols-[1.1fr_1fr] lg:gap-20 lg:px-10 lg:py-12">
-        <section className="hidden self-stretch rounded-2xl bg-brand-navy px-10 py-12 text-brand-navy-foreground lg:flex lg:flex-col lg:justify-between xl:px-14">
-          <div>
-            <div className="mb-12 h-1 w-10 rounded-full bg-brand-accent" />
-            <h2 className="max-w-[10ch] text-[clamp(2.75rem,4vw,4.25rem)] font-semibold leading-[1.08] tracking-[-0.045em]">{t('publicIntro.title')}</h2>
-            <p className="mt-7 max-w-sm text-base leading-7 text-brand-navy-foreground/75">{t('publicIntro.description')}</p>
+        <section className="relative hidden min-h-[640px] self-stretch overflow-hidden rounded-2xl bg-brand-navy text-brand-navy-foreground lg:flex lg:flex-col">
+          <div className="relative z-10 px-10 pt-10 xl:px-12 xl:pt-12">
+            <h2 className="max-w-[16ch] text-[clamp(2.5rem,3.5vw,3.25rem)] font-semibold leading-[1.08] tracking-[-0.04em]">{t('publicIntro.title')}</h2>
+            <p className="mt-5 max-w-[38ch] text-base leading-7 text-brand-navy-foreground/75">{t('publicIntro.description')}</p>
           </div>
-          <div className="mt-16 space-y-6">
-            {(['people', 'work', 'results'] as const).map((item) => (
-              <div key={item} className="border-t border-white/20 pt-4">
-                <h2 className="text-sm font-medium">{t(`publicIntro.${item}.title`)}</h2>
-                <p className="mt-1 text-sm leading-6 text-brand-navy-foreground/65">{t(`publicIntro.${item}.description`)}</p>
-              </div>
-            ))}
-          </div>
+          <picture className="mt-8 flex min-h-0 flex-1 items-end justify-center px-7">
+            <source media="(min-width: 1024px)" srcSet="/brand/jeeta-welcome-560.webp 560w, /brand/jeeta-welcome-840.webp 840w" sizes="440px" type="image/webp" />
+            <img
+              src="/brand/jeeta-mark.png"
+              alt=""
+              width="1214"
+              height="1295"
+              className="block max-h-[460px] w-full max-w-[440px] object-contain object-bottom"
+              decoding="async"
+            />
+          </picture>
         </section>
         <div className="mx-auto w-full max-w-[390px] py-10 lg:py-12">
           <Outlet />

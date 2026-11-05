@@ -361,8 +361,15 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
         </span>
       </div>
       {items.length === 0 ? (
-        <div className="flex items-start gap-3 py-9">
-          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div className="flex flex-col items-start gap-4 py-8 sm:flex-row sm:items-center sm:gap-6">
+          <img
+            src="/brand/work-complete.svg"
+            alt=""
+            aria-hidden="true"
+            width={112}
+            height={112}
+            className="h-24 w-24 shrink-0 sm:h-28 sm:w-28"
+          />
           <div>
             <p className="font-medium text-foreground">{t('home.pending.empty')}</p>
             <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">{t('home.pending.emptyHint')}</p>
