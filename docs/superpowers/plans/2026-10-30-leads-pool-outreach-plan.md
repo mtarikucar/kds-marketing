@@ -1331,6 +1331,26 @@ pins (+18: catalog 195 → 213; `("outreach", 18)`), parity, gate, `outreach_mcp
   `click_redirects_to_snapshot_link`, `click_unknown_link_is_404`, `click_within_60s_is_automated`,
   `head_is_automated`, `click_disabled_campaign_has_no_rewritten_links`, `no_client_data_stored`.
 - [ ] Green; **commit** `feat(outreach): one-click unsubscribe and click redirect`.
+- As built (`614eeecd`, fix `1f6b8ccf`; spec D76–D78): `usecases::outreach::links::{unsubscribe_page(deps, ws,
+  token, mac), unsubscribe(..)} -> Option<LinkPage {lang, sender_company}>` and `click(deps, ws, token, link, mac,
+  ClickFrom {head, user_agent}) -> Option<String>` take the path's raw segments (the token is the outbox entry id,
+  D63, not a send id; `None` is the route's `404`); `unsubscribed_by_mail` (crate) for the consumer's
+  `consent_event`; `hooks::on_unsubscribed`; `AUTOMATED_CLICK_WINDOW`, `MAIL_UNSUBSCRIBE_WINDOW`,
+  `UNSUBSCRIBE_ACTOR`; `Lang` re-exported for the adapter. `replies::OutreachSend.links` (intent
+  `outreach.links`, D78). `jt_webhook::links` (`UNSUBSCRIBE_BODY_LIMIT`, `PAGE_POLICY`, `escape`), its routes merged
+  in `router`; `jt_panel_http::security_headers` keeps a policy that forbids framing (D76). `jt_webhook`
+  dev-depends on `jt_inbox`, `jt_outreach`, `jt_strategy`, `serde`, `uuid`: its `tests/links.rs` includes
+  `jt_app/tests/support`. No catalog row, tool, permission or pin changes (public routes, no caller). Tests: the
+  plan's names (13 in `jt_webhook/tests/links.rs`, with `a_suspended_workspace_still_redirects_and_records_nothing`,
+  `an_unsubscribe_body_over_1_kib_is_413_and_writes_nothing`,
+  `the_pages_escape_the_sender_company_and_follow_the_footer_language`; 3 in `jt_app/tests/outreach_links.rs`, with
+  `a_click_goes_where_the_emails_own_link_went_even_after_an_edit`, `an_inbox_commercial_email_unsubscribes_its_person`,
+  `a_test_emails_link_unsubscribes_the_members_inbox_person`, `a_link_that_does_not_hold_writes_nothing`,
+  `an_erased_recipient_answers_the_page_and_writes_nothing`), the lock file's
+  `the_public_links_only_ever_reduce_what_may_be_sent`, `jeeta`'s
+  `the_public_links_are_served_outside_the_panel_checks_with_their_own_policy`, and (the fix: a `&dyn Fn` held
+  across an await made the dispatcher's future non-`Send`, which only `jeeta`'s build saw)
+  `every_job_run_can_move_between_threads` in `outreach_dispatch.rs`.
 
 After L5 is deployed, the operator may set `JEETA_OUTREACH_ENABLED=1` on staging for the smoke (L9) and on
 production only after spec §15 Q1 is answered.
@@ -1573,6 +1593,11 @@ contract, `jobs.rs` (`Job::PurgeRequestKeys` `"purge_request_keys"`, daily, ever
 `bin/jeeta/src/scheduler.rs`, the job pins. Expired = `at <= now - 24 h`.
 - [ ] **Tests first:** `purge_request_keys_deletes_only_expired`, `purge_request_keys_runs_in_suspended_workspaces`.
 - [ ] Green; **commit** `feat(jobs): purge expired request keys`.
+- As built (`fb8db71d`, spec D79): `RequestKeyRepo::purge_expired(before) -> u64` deletes `at <= before`;
+  `ports::inbox::REQUEST_KEY_TTL` (24 hours); both adapters, contract `inbox_contract::request_keys_purge_expired`
+  (fakes and Postgres). `jobs::run_purge_request_keys`, `Job::PurgeRequestKeys` `"purge_request_keys"` last in
+  `Job::ALL` (34 -> 35), `Intervals::purge_request_keys` (a day) and the schedule pin, the README job table. Tests
+  as named, in `jt_app/tests/jobs.rs` (the second also covers a workspace that cannot be reached).
 
 ---
 
