@@ -1,0 +1,23 @@
+name: Jeeta staging readiness check
+on:
+  push:
+    branches: [ops/staging-01194c85]
+    paths: [.github/workflows/jeeta-staging-audit.yml, ops/staging-account-audit.sql]
+permissions:
+  contents: read
+jobs:
+  inspect:
+    if: github.repository == 'mtarikucar/kds-marketing'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: '38.242.233.166'
+      - name: Check availability only, without exporting account or tenant details
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@38.242.233.166 "sudo -u postgres env PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=10000' psql -qXAt -p 5437 -d jeeta -v ON_ERROR_STOP=1" < ops/staging-account-audit.sql
