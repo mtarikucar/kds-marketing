@@ -1,0 +1,23 @@
+name: Activate requested staging design demo
+on:
+  push:
+    branches: [ops/staging-01194c85]
+    paths: [.github/workflows/jeeta-staging-demo.yml, ops/activate-design-demo.sql]
+permissions:
+  contents: read
+jobs:
+  activate:
+    if: github.repository == 'mtarikucar/kds-marketing'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: '38.242.233.166'
+      - name: Activate only the user-requested newly registered staging workspace
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes root@38.242.233.166 "sudo -u postgres psql -qXAt -p 5437 -d jeeta -v ON_ERROR_STOP=1" < ops/activate-design-demo.sql
