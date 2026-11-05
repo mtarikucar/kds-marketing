@@ -1731,6 +1731,23 @@ impl RequestKeyRepo for MemTenant {
         }
         Ok(n as u64)
     }
+
+    async fn purge_expired(&mut self, before: OffsetDateTime) -> Result<u64, AppError> {
+        let ws = self.ws;
+        let expired = move |r: &StoredRequestKey| r.workspace_id == ws && r.at <= before;
+        let n = self
+            .state()
+            .inbox
+            .request_keys
+            .iter()
+            .filter(|r| expired(r))
+            .count();
+        if n > 0 {
+            self.tx
+                .write(move |s| s.inbox.request_keys.retain(|r| !expired(r)));
+        }
+        Ok(n as u64)
+    }
 }
 fn check_outbox(row: &OutboxRow) -> Result<(), AppError> {
     if ![

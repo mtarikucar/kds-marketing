@@ -59,6 +59,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::ports::connectors::{
     AppSync, Connector, DeliveryReports, DeliveryStatus, MessagingSender, OAuthFlow, Telephony,
 };
+use crate::ports::inbox::REQUEST_KEY_TTL;
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
 /// A token is renewed once it expires within this time (or has expired).
@@ -147,11 +148,12 @@ pub enum Job {
     WhatsappAppSync,
     OutreachDispatch,
     CommentsPoll,
+    PurgeRequestKeys,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 34] = [
+    pub const ALL: [Job; 35] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -186,6 +188,7 @@ impl Job {
         Job::WhatsappAppSync,
         Job::OutreachDispatch,
         Job::CommentsPoll,
+        Job::PurgeRequestKeys,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -226,6 +229,7 @@ impl Job {
             Job::WhatsappAppSync => "whatsapp_app_sync",
             Job::OutreachDispatch => "outreach_dispatch",
             Job::CommentsPoll => "comments_poll",
+            Job::PurgeRequestKeys => "purge_request_keys",
         }
     }
 
@@ -271,6 +275,7 @@ impl Job {
             Job::WhatsappAppSync => run_whatsapp_app_sync(deps, now).await,
             Job::OutreachDispatch => run_outreach_dispatch(deps, now).await,
             Job::CommentsPoll => run_comments_poll(deps, now).await,
+            Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
         }
     }
 }
@@ -1346,6 +1351,30 @@ pub async fn run_purge_probe_runs(deps: &Deps, now: OffsetDateTime) -> JobReport
         let purged = async {
             let mut repos = deps.uow.tenant(ws).await?;
             let n = repos.probe_runs().purge_before(cutoff).await?;
+            if n > 0 {
+                repos.commit().await?;
+            }
+            Ok::<u64, AppError>(n)
+        };
+        count_purged(job, ws, purged.await, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace whatever its status, the request keys that expired: stored
+/// [`REQUEST_KEY_TTL`] (24 hours) or longer before `now`, which no replay can read any more
+/// (`RequestKeyRepo::purge_expired`; spec 2026-10-30-leads-pool-outreach-design.md D33). Each
+/// workspace in its own transaction; no ledger entry (a key holds an id, never an answer).
+/// `touched` and `changed` count the keys deleted, `failed` the workspaces that could not be
+/// purged (the others are purged all the same).
+pub async fn run_purge_request_keys(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::PurgeRequestKeys;
+    let mut report = JobReport::default();
+    let cutoff = now - REQUEST_KEY_TTL;
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let purged = async {
+            let mut repos = deps.uow.tenant(ws).await?;
+            let n = repos.request_keys().purge_expired(cutoff).await?;
             if n > 0 {
                 repos.commit().await?;
             }

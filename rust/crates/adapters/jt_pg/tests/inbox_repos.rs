@@ -341,3 +341,10 @@ async fn attribution_by_journey_pg_fake_parity() {
     ))
     .await;
 }
+
+#[tokio::test]
+async fn request_keys_purge_expired() {
+    let db = jt_testkit::TestDb::new().await;
+    let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::inbox_contract::request_keys_purge_expired(uow).await;
+}

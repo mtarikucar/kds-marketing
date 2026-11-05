@@ -129,3 +129,9 @@ async fn undo_reads_a_version_1_snapshot() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_merge_contract::undo_reads_a_version_1_snapshot(uow).await;
 }
+
+#[tokio::test]
+async fn request_keys_purge_expired() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::request_keys_purge_expired(uow).await;
+}

@@ -508,7 +508,14 @@ pub trait RequestKeyRepo: Send + Sync {
     /// stored response holds the string `value` under its top-level `field`; how many went. An
     /// erasure, a do-not-contact mark or a purge forgets the requests that recorded the row.
     async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError>;
+    /// Deletes the workspace's request keys stored at `before` or earlier; how many went. With
+    /// `before = now - REQUEST_KEY_TTL` these are exactly the keys [`RequestKeyRepo::get`] no
+    /// longer answers at `now` (the `purge_request_keys` job).
+    async fn purge_expired(&mut self, before: OffsetDateTime) -> Result<u64, AppError>;
 }
+
+/// How long a request key answers a replay after it was stored ([`RequestKeyRepo::get`]).
+pub const REQUEST_KEY_TTL: time::Duration = time::Duration::hours(24);
 
 /// Durable outbound intent. Sending/recovery state transitions belong to the send use cases.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
