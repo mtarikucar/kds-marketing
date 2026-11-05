@@ -378,6 +378,9 @@ impl TenantRepos for FailingTenant {
     fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
         self.0.outreach_sends()
     }
+    fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
+        self.0.mail_files()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()

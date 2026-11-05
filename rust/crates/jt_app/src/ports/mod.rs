@@ -30,6 +30,7 @@ pub mod devices;
 pub mod distribution;
 pub mod files;
 pub mod inbox;
+pub mod mail_files;
 pub mod materials;
 pub mod outreach;
 pub mod posts;
@@ -1696,6 +1697,8 @@ pub trait TenantRepos: Send + Sync {
     fn outreach_campaigns(&mut self) -> &mut dyn crate::ports::outreach::CampaignRepo;
     fn outreach_enrollments(&mut self) -> &mut dyn crate::ports::outreach::EnrollmentRepo;
     fn outreach_sends(&mut self) -> &mut dyn crate::ports::outreach::OutreachSendRepo;
+    /// Email attachments' records (`ports::mail_files`).
+    fn mail_files(&mut self) -> &mut dyn crate::ports::mail_files::MailFileRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

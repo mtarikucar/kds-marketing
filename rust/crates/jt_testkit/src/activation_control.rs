@@ -121,6 +121,9 @@ impl TenantRepos for Tenant {
     fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
         self.inner.outreach_sends()
     }
+    fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
+        self.inner.mail_files()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

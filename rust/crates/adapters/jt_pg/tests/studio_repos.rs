@@ -41,9 +41,9 @@ async fn studio_schema_exact_table_delta() {
     // notes (0016_voice_bridge), the device commands and device files (0017_device_bridge), the
     // public items, subjects and cursors (0019_inbox_public), the pool (0020_prospects), the
     // materials library's seven (0021_studio_materials), the planned posts, package requests and
-    // posting policy (0022_studio_posts), outreach (0026_outreach) and distribution
-    // (0027_distribution).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3);
+    // posting policy (0022_studio_posts), outreach (0026_outreach), distribution
+    // (0027_distribution) and the mail files (0028_mail_files).
+    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1);
 }
 
 #[tokio::test]

@@ -58,6 +58,8 @@ mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod outreach;
 pub use outreach::MemOutreach;
+mod mail_files;
+pub use mail_files::MemMailFiles;
 mod public;
 pub use public::StoredCursor;
 mod platform;

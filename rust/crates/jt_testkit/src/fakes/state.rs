@@ -130,6 +130,7 @@ pub struct MemState {
     pub prospects: super::prospects::MemProspects,
     pub distribution: super::distribution::MemDistribution,
     pub outreach: super::outreach::MemOutreach,
+    pub mail_files: super::mail_files::MemMailFiles,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,

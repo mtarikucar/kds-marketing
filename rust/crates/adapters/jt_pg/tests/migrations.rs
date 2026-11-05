@@ -35,18 +35,22 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// the poll cursors of `0019_inbox_public`, the five pool tables of `0020_prospects`, the
 /// materials library's seven of `0021_studio_materials`, the planned posts, package requests and
 /// posting policy of `0022_studio_posts`, the templates, campaigns, enrollments and sends of
-/// `0026_outreach`, and the rep profiles, rules and assignment log of `0027_distribution`.
-const TABLES_AFTER_ALL: i64 = 99;
+/// `0026_outreach`, the rep profiles, rules and assignment log of `0027_distribution`, and the
+/// mail files of `0028_mail_files`.
+const TABLES_AFTER_ALL: i64 = 100;
 
-/// The tables before `0026_outreach` adds its four.
-const TABLES_BEFORE_OUTREACH: i64 = TABLES_AFTER_ALL - 4;
+/// The tables before `0028_mail_files` adds `mail_files`.
+const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 1;
 
-/// Migrations `0001_foundation` through `0027_distribution`.
-const MIGRATIONS: i64 = 27;
+/// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
+const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// The migration versions. `0028_mail_files` (leads L6) adds its version here when it lands.
+/// Migrations `0001_foundation` through `0028_mail_files`.
+const MIGRATIONS: i64 = 28;
+
+/// The migration versions.
 fn versions() -> Vec<i64> {
-    (1..=27).collect()
+    (1..=28).collect()
 }
 
 /// The tables of `0019_inbox_public`, each with its one row-level policy.
@@ -254,6 +258,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0028_mail_files",
         "0027_distribution",
         "0026_outreach",
         "0025_inbox_public_erasure",
@@ -999,9 +1004,15 @@ async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
-    // Newest first: the leads tables reference the inbox tables, the planned posts the materials
-    // library and the Studio tables, the materials library the Studio tables, the public items and
-    // the call tables the inbox tables.
+    // Newest first: the mail files and the leads tables reference the inbox tables, the planned
+    // posts the materials library and the Studio tables, the materials library the Studio tables,
+    // the public items and the call tables the inbox tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0028_mail_files.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0027_distribution.down.sql"
     ))
@@ -1178,8 +1189,14 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
-    // Newest first: the leads tables reference the inbox tables, the planned posts the materials
-    // library and the Studio tables, the materials library the Studio tables.
+    // Newest first: the mail files and the leads tables reference the inbox tables, the planned
+    // posts the materials library and the Studio tables, the materials library the Studio tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0028_mail_files.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0027_distribution.down.sql"
     ))
@@ -1327,12 +1344,21 @@ async fn studio_migration_up_down_up() {
     assert!(forced);
 }
 
-/// Reverts `0026_outreach`, whose enrollments reference the pool's prospects: every test that runs
-/// an older down runs this one first.
+/// Reverts `0028_mail_files` (its rows reference `messages`, `people` and `capabilities`) and
+/// `0026_outreach`, whose enrollments reference the pool's prospects: every test that runs an
+/// older down runs this one first.
 async fn outreach_down(pool: &PgPool) {
+    mail_files_down(pool).await;
     let down = std::fs::read_to_string(migrations_dir().join("0026_outreach.down.sql")).unwrap();
     try_run(pool, &down).await.unwrap();
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
+}
+
+/// Reverts `0028_mail_files`, the newest migration.
+async fn mail_files_down(pool: &PgPool) {
+    let down = std::fs::read_to_string(migrations_dir().join("0028_mail_files.down.sql")).unwrap();
+    try_run(pool, &down).await.unwrap();
+    assert_eq!(table_count(pool).await, TABLES_BEFORE_MAIL_FILES);
 }
 
 /// Runs `sql` as one simple query (a transaction of its own), answering the server's error.
@@ -1949,10 +1975,11 @@ async fn outreach_migration_is_repeatable_and_grants_only_the_system_owner_and_m
         );
     }
 
-    // Down, twice: the four tables go, and the two keys leave the system owner and manager only.
+    // Down, twice: the four tables go, and the two keys leave the system owner and manager only
+    // (the mail files, which name none of them, stay).
     for _ in 0..2 {
         try_run(&db.pool, &down).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, TABLES_BEFORE_OUTREACH);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 4);
         for index in OUTREACH_INDEXES {
             assert!(!index_exists(&db.pool, index).await, "{index}");
         }
@@ -2462,4 +2489,104 @@ async fn inbox_public_erasure_down_refuses_stored_public_items() {
                 .unwrap();
         assert_eq!(masked, serde_json::json!({"author": ""}), "{kind}");
     }
+}
+
+/// The indexes of `0028_mail_files` beyond its primary key.
+const MAIL_FILES_INDEXES: [&str; 3] = [
+    "mail_files_message",
+    "mail_files_expiry",
+    "mail_files_event",
+];
+
+/// `0028_mail_files` applies again and reverts again, each twice; the table forces row-level
+/// security under its one policy. Its down is refused, before anything changes, while an outbox
+/// entry waiting to be sent (queued or held) names mail files in its email; one that was sent, or
+/// that names none, does not hold it back.
+#[tokio::test]
+async fn mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachments() {
+    let db = TestDb::new().await; // already migrated up, 0028 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0028_mail_files.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0028_mail_files.down.sql")).unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+    let forced: bool = sqlx::query_scalar(
+        "select relrowsecurity and relforcerowsecurity from pg_class where relname = 'mail_files'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(forced);
+    let policies: Vec<String> = sqlx::query_scalar(
+        "select policyname::text from pg_policies where schemaname = current_schema() \
+         and tablename = 'mail_files'",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(policies, ["mail_files_ws"]);
+    for index in MAIL_FILES_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let outbox = |state: &'static str, files: serde_json::Value| {
+        let pool = db.pool.clone();
+        async move {
+            let id = Uuid::now_v7();
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query(
+                "insert into outbox (workspace_id,id,conversation_id,message_id,capability_id,intent,\
+                 expected_generation,state,created_at,updated_at) \
+                 values ($1,$2,$3,$4,$5,$6,0,$7,now(),now())",
+            )
+            .bind(ws.as_uuid())
+            .bind(id)
+            .bind(conversation)
+            .bind(message)
+            .bind(cap)
+            .bind(serde_json::json!({"mail": {"attachment_files": files}}))
+            .bind(state)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+            id
+        }
+    };
+    let set_state = |id: Uuid, state: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query("update outbox set state = $3 where workspace_id = $1 and id = $2")
+                .bind(ws.as_uuid())
+                .bind(id)
+                .bind(state)
+                .execute(tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+    // Sent, or naming no file: nothing waits.
+    outbox("sent", serde_json::json!([Uuid::now_v7()])).await;
+    outbox("queued", serde_json::json!([])).await;
+    for state in ["queued", "held"] {
+        let waiting = outbox(state, serde_json::json!([Uuid::now_v7()])).await;
+        let refused = try_run(&db.pool, &down).await.unwrap_err().to_string();
+        assert!(refused.contains("mail files rollback refused"), "{refused}");
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        set_state(waiting, "refused").await;
+    }
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_BEFORE_MAIL_FILES);
+        for index in MAIL_FILES_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+    }
+    try_run(&db.pool, &up).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
 }
