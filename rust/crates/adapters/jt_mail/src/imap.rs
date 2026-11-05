@@ -2,7 +2,7 @@ use crate::search_read::SearchRead;
 use crate::{IO_TIMEOUT, MAX_MESSAGE_BYTES, MailConnector, MailCred, parse, socket};
 use async_imap::{Client, Session};
 use futures_util::TryStreamExt;
-use jt_app::ports::connectors::{InboundEventDraft, MailboxCursor, MailboxPosition};
+use jt_app::ports::connectors::{MailboxCursor, MailboxPosition, PolledMail};
 use jt_connector::{ConnectorError, MailTls};
 use jt_outbound::TcpStream;
 use jt_tenancy::WorkspaceId;
@@ -80,7 +80,7 @@ pub(crate) async fn poll(
     cred: &MailCred<'_>,
     public: &Value,
     cursor: &MailboxCursor,
-) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError> {
     let account = public["external_id"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -256,9 +256,12 @@ pub(crate) async fn poll(
         }
         // The standalone MIME parser retains its legacy IDs. Every polled event, including
         // rejected mail, receives the server binding before it reaches durable deduplication.
-        let bind = |mut draft: InboundEventDraft, uid| {
-            draft.external_id = format!("imap:{account}:{binding}:{mailbox}:{validity}:{uid}");
-            draft
+        let bind = |mut mail: PolledMail, uid| {
+            mail.draft.external_id = format!("imap:{account}:{binding}:{mailbox}:{validity}:{uid}");
+            mail
+        };
+        let rejected = |uid, reason| {
+            PolledMail::from(parse::rejected(account, mailbox, validity, uid, reason))
         };
         if !selected.is_empty() {
             let sequence = selected
@@ -296,10 +299,7 @@ pub(crate) async fn poll(
                 }
                 processed = true;
                 if size > MAX_MESSAGE_BYTES {
-                    events.push(bind(
-                        parse::rejected(account, mailbox, validity, uid, "message_too_large"),
-                        uid,
-                    ));
+                    events.push(bind(rejected(uid, "message_too_large"), uid));
                     remaining -= 1;
                     position.last_uid = uid;
                     continue;
@@ -321,24 +321,10 @@ pub(crate) async fn poll(
                         }
                         draft = Some(match fetch.body() {
                             Some(body) if body.len() == size => {
-                                parse::event(account, mailbox, validity, uid, body, is_sent)
-                                    .unwrap_or_else(|_| {
-                                        parse::rejected(
-                                            account,
-                                            mailbox,
-                                            validity,
-                                            uid,
-                                            "invalid_mime",
-                                        )
-                                    })
+                                parse::polled(account, mailbox, validity, uid, body, is_sent)
+                                    .unwrap_or_else(|_| rejected(uid, "invalid_mime"))
                             }
-                            _ => parse::rejected(
-                                account,
-                                mailbox,
-                                validity,
-                                uid,
-                                "invalid_body_size",
-                            ),
+                            _ => rejected(uid, "invalid_body_size"),
                         });
                     }
                     Ok(draft)

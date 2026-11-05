@@ -1836,6 +1836,10 @@ pub async fn run_refresh_tenant_hosts(deps: &Deps, _now: OffsetDateTime) -> JobR
 
 /// Poll each receiving workspace's verified mailboxes. Network I/O owns no transaction;
 /// cursor and drafts commit together only if the account, credential and cursor still match.
+/// An inbox email's attachments are put in the file store before that transaction, within the
+/// caps (spec 2026-10-30-leads-pool-outreach-design.md §3.15), recorded in it for the emails
+/// stored as new events, and deleted again when it does not commit or the email is a duplicate
+/// (`inbox::attachments::PolledFiles`).
 pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let job = Job::MailInboxPoll;
     let mut report = JobReport::default();
@@ -1856,6 +1860,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
             .filter(|c| c.kind_key == "mailbox" && c.status == StoredStatus::Verified)
         {
             report.touched += 1;
+            let mut files = super::inbox::attachments::PolledFiles::default();
             let outcome = async {
                 super::connector::refresh_tenant_hosts(deps, ws).await?;
                 let (sealed, cursor) = {
@@ -1869,7 +1874,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     return Ok::<_, Failure>(vec![]);
                 };
                 let credential = open_credential(deps, ws, &sealed)?;
-                let (drafts, next) = poller
+                let (polled, next) = poller
                     .poll(
                         ws,
                         &credential,
@@ -1879,6 +1884,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     .await
                     .map_err(Failure::Provider)?;
                 drop(credential);
+                let drafts = files.store(deps, ws, cap.id, polled, now).await?;
                 let mut r = deps.uow.tenant(ws).await?;
                 r.people().lock_workspace().await?;
                 let current = r.capabilities().lock(cap.id).await?;
@@ -1893,6 +1899,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                 {
                     return Ok(vec![]);
                 }
+                files.screen(r.as_mut(), cap.id, &drafts).await?;
                 let stored = webhook::store_polled(
                     deps,
                     r.as_mut(),
@@ -1903,11 +1910,14 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     now,
                 )
                 .await?;
+                files.record(r.as_mut(), &stored).await?;
                 r.mail_cursors().store(cap.id, next).await?;
+                files.commit_started();
                 r.commit().await?;
                 Ok(stored)
             }
             .await;
+            files.settle(deps, ws).await;
             match outcome {
                 Ok(stored) => {
                     for delivery in stored {

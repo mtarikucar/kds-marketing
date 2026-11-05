@@ -24,9 +24,9 @@ use jt_app::ports::connectors::{
     DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
     LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
     MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
-    PlatformAppConfig, PostMetrics, PrivateReceipt, PublicPoller, PublicSurface, PublicTarget,
-    PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost, SendReceipt,
-    SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url, XApp,
+    PlatformAppConfig, PolledMail, PostMetrics, PrivateReceipt, PublicPoller, PublicSurface,
+    PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost,
+    SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -337,7 +337,7 @@ pub struct ScriptedConnector {
     on_connected: Script<Result<Value, ConnectorError>>,
     sms: Script<Result<SendReceipt, ConnectorError>>,
     mail: Script<Result<SendReceipt, ConnectorError>>,
-    mailbox_poll: Script<Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>>,
+    mailbox_poll: Script<Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>>,
     send_hooks: Script<SendHook>,
     ad_read_hooks: Script<SendHook>,
     publish: Script<Result<PublishReceipt, ConnectorError>>,
@@ -502,9 +502,22 @@ impl ScriptedConnector {
         self.mail.push(result);
     }
 
+    /// A poll's answer of drafts alone: emails without attachments' bytes.
     pub fn push_mailbox_poll(
         &self,
         result: Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>,
+    ) {
+        self.mailbox_poll.push(
+            result.map(|(drafts, cursor)| {
+                (drafts.into_iter().map(PolledMail::from).collect(), cursor)
+            }),
+        );
+    }
+
+    /// A poll's answer of emails with their attachments' bytes.
+    pub fn push_mailbox_poll_mail(
+        &self,
+        result: Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>,
     ) {
         self.mailbox_poll.push(result);
     }
@@ -754,7 +767,7 @@ impl MailboxPoller for ScriptedConnector {
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
-    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError> {
+    ) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError> {
         self.record(ConnectorCall::MailboxPoll {
             workspace_id: ws,
             credential: cred.clone(),

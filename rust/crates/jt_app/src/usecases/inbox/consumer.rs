@@ -163,6 +163,18 @@ pub async fn consume_event(
         Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
         result => result?,
     };
+    // An email dropped because its sender was erased keeps no file (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.15): the rows lose their names in this
+    // transaction; the bytes go with the store's daily sweep of files no record keeps.
+    if outcome == "erased_identity_drop"
+        && event.provider == Provider::Mail
+        && event.kind == EventKind::Message
+        && let Some(capability) = event.capability_id
+    {
+        r.mail_files()
+            .erase_event(capability, &event.external_id, now)
+            .await?;
+    }
     if claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
         return Ok("duplicate");
     }
@@ -724,6 +736,12 @@ async fn message(
     r.messages()
         .record_inbound_sender(message_id, sender.id)
         .await?;
+    // The email's files, stored when it was polled, are the message's and the person's.
+    if channel == Channel::Email {
+        r.mail_files()
+            .link_event_to_message(cap.id, &event.external_id, message_id, person.id)
+            .await?;
+    }
     r.conversations().lock_for_person(person.id).await?;
     let j = journey(deps, ctx, r, &person).await?;
     if j.status == JourneyStatus::Lost {

@@ -659,6 +659,45 @@ pub struct InboundEventDraft {
     pub occurred_at: Option<OffsetDateTime>,
 }
 
+/// One attachment of a polled email (spec 2026-10-30-leads-pool-outreach-design.md §3.15): its
+/// name and declared type, as the draft's payload lists them, and its bytes. Transport only: never
+/// logged, stored in an event or written to the ledger. `Debug` shows the type and the byte count
+/// only (a customer's file name is theirs).
+#[derive(Clone, PartialEq, Eq)]
+pub struct InboundAttachment {
+    pub filename: String,
+    pub declared_mime: String,
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for InboundAttachment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InboundAttachment")
+            .field("declared_mime", &self.declared_mime)
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .finish_non_exhaustive()
+    }
+}
+
+/// An email a mailbox poll found: its event draft and, for an email of the inbox (not the sent
+/// folder, not a delivery or complaint report), its attachments' bytes, in the order the draft's
+/// payload lists them under `attachments`. The bytes never go into the draft.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolledMail {
+    pub draft: InboundEventDraft,
+    pub attachments: Vec<InboundAttachment>,
+}
+
+impl From<InboundEventDraft> for PolledMail {
+    /// A polled email without attachments' bytes.
+    fn from(draft: InboundEventDraft) -> Self {
+        PolledMail {
+            draft,
+            attachments: Vec::new(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Public items: comments and marketplace questions
 // ---------------------------------------------------------------------------------------------
@@ -1165,7 +1204,8 @@ pub trait MailSender: Send + Sync {
 }
 
 /// Polls mailboxes within `ws`, independently of SMS delivery reports. No cursor storage happens here.
-/// The explicit workspace controls authorization; `public` cannot override it.
+/// The explicit workspace controls authorization; `public` cannot override it. Each email comes
+/// with its attachments' bytes when it is inbox mail ([`PolledMail`]).
 #[async_trait]
 pub trait MailboxPoller: Send + Sync {
     async fn poll(
@@ -1174,7 +1214,7 @@ pub trait MailboxPoller: Send + Sync {
         cred: &Credential,
         public: &Value,
         cursor: &MailboxCursor,
-    ) -> Result<(Vec<InboundEventDraft>, MailboxCursor), ConnectorError>;
+    ) -> Result<(Vec<PolledMail>, MailboxCursor), ConnectorError>;
 }
 
 /// Reads and changes ad budgets.
