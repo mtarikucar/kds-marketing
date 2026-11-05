@@ -19,7 +19,7 @@ import {
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
-import { Button, Card, CardContent, DataTable, Disclosure, EmptyState, Input, PageHeader, toast } from '@/components/ui';
+import { Button, DataTable, Disclosure, EmptyState, Input, PageHeader, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { useDraftKey } from '@/lib/leads';
@@ -302,16 +302,13 @@ export function ProspectsPage() {
           </Button>
         }
       />
-      <Card>
-        <CardContent className="py-3">
-          <Disclosure title={t('leads.prospects.playbook')}>
-            <Playbook />
-          </Disclosure>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
-          <div className="grid gap-3 rounded-lg bg-surface-muted/60 p-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="border-y border-border py-2">
+        <Disclosure title={t('leads.prospects.playbook')}>
+          <Playbook />
+        </Disclosure>
+      </div>
+      <section className="flex min-w-0 flex-col gap-4" aria-label={t('leads.prospects.title')}>
+          <div className="grid gap-3 border-b border-border pb-4 sm:grid-cols-2 xl:grid-cols-5">
             <label className="flex flex-col gap-1 text-sm">
               {t('leads.prospects.filters.status')}
               <select
@@ -436,8 +433,7 @@ export function ProspectsPage() {
               </Button>
             </div>
           </QueryState>
-        </CardContent>
-      </Card>
+      </section>
       {rejecting && rejecting.length > 0 && (
         <RejectDialog key={rejecting.map((x) => x.id).join()} targets={rejecting} onClose={() => setRejecting(null)} onDone={finished} />
       )}

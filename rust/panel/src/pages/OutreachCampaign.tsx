@@ -33,11 +33,6 @@ import {
   Badge,
   Button,
   Callout,
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   PageHeader,
@@ -463,14 +458,14 @@ function ApprovalCard({ out }: { out: CampaignOut }) {
         ? t('leads.recorder.agentNamed', { name: names.agent(c.created_by.connection_id), member: names.member(c.created_by.user_id) })
         : t('leads.recorder.system', { job: c.created_by.component });
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('leads.campaign.approval.title')}</CardTitle>
-        <CardDescription>
+    <section className="border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.campaign.approval.title')}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
           {t('leads.campaign.approval.body', { revision: c.revision, drafter })}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
+        </p>
+      </header>
+      <div className="flex flex-col gap-2">
         {manager ? (
           <>
             <ErrorCallout error={approve.error} />
@@ -483,8 +478,8 @@ function ApprovalCard({ out }: { out: CampaignOut }) {
         ) : (
           <p className="text-sm text-muted-foreground">{t('leads.campaign.approval.waiting')}</p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -528,11 +523,11 @@ function RunControls({ out }: { out: CampaignOut }) {
   const control = (action: ControlAction) => () => controlCampaign(c.id, action);
   const final = c.status === 'completed' || c.status === 'canceled';
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('leads.campaign.run')}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <section className="border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.campaign.run')}</h2>
+      </header>
+      <div className="flex flex-col gap-3">
         {(c.status === 'draft' || c.status === 'paused') && blockers.length > 0 && (
           <section aria-label={t('leads.campaign.blockedTitle')}>
             <p className="text-sm font-medium">{t('leads.campaign.blockedTitle')}</p>
@@ -571,8 +566,8 @@ function RunControls({ out }: { out: CampaignOut }) {
         <p className="text-caption text-muted-foreground">
           {t('leads.campaign.active', { n: out.active_enrollments })}
         </p>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -625,11 +620,11 @@ function Enrollments({ campaignId }: { campaignId: string }) {
   const list = useQuery({ queryKey: [...key, 'outreach', 'enrollments', campaignId], queryFn: () => listEnrollments(campaignId) });
   const items = list.data?.items ?? [];
   return (
-    <Card className="min-w-0 overflow-hidden">
-      <CardHeader>
-        <CardTitle>{t('leads.enrollments.title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="min-w-0">
+    <section className="min-w-0 border-t border-border py-5">
+      <header className="mb-3">
+        <h2 className="text-base font-medium">{t('leads.enrollments.title')}</h2>
+      </header>
+      <div className="min-w-0">
         <QueryState query={list}>
           {items.length === 0 ? (
             <EmptyState title={t('leads.enrollments.empty')} />
@@ -657,8 +652,8 @@ function Enrollments({ campaignId }: { campaignId: string }) {
             </div>
           )}
         </QueryState>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }
 
@@ -693,31 +688,25 @@ export function OutreachCampaign() {
       </Callout>
       {isNew ? (
         settings.data !== undefined || settings.isError ? (
-          <Card>
-            <CardContent className="pt-6">
-              <CampaignEditor out={null} />
-            </CardContent>
-          </Card>
+          <section className="rounded-lg border border-border bg-surface p-4 sm:p-6">
+            <CampaignEditor out={null} />
+          </section>
         ) : null
       ) : (
         <QueryState query={campaign}>
           {out && c && (
-            <div className="flex min-w-0 flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-3">
+            <div className="flex min-w-0 flex-col rounded-lg border border-border bg-surface px-4 py-5 sm:px-6">
+              <div className="flex flex-wrap items-center gap-3 pb-4">
                 <CampaignStatusBadge status={c.status} />
                 <span className="text-sm text-muted-foreground">{t('leads.campaign.revision', { revision: c.revision })}</span>
               </div>
               {c.status === 'awaiting_approval' && <ApprovalCard out={out} />}
               <RunControls out={out} />
               {editable && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{t('leads.campaign.editor')}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <CampaignEditor key={`${c.id}:${c.revision}`} out={out} />
-                  </CardContent>
-                </Card>
+                <section className="border-t border-border py-5">
+                  <h2 className="mb-4 text-base font-medium">{t('leads.campaign.editor')}</h2>
+                  <CampaignEditor key={`${c.id}:${c.revision}`} out={out} />
+                </section>
               )}
               {c.status !== 'draft' && <Enrollments campaignId={c.id} />}
             </div>

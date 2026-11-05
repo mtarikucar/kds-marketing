@@ -152,7 +152,7 @@ function StrategyCard({ state }: { state: StrategyState }) {
     <section aria-labelledby="home-strategy" className="flex flex-col gap-4">
       <div>
         <p className="mb-2 text-xs font-medium text-muted-foreground">{t('home.strategy.label')}</p>
-        <h2 id="home-strategy" className="text-lg font-semibold leading-snug tracking-tight text-foreground">{title}</h2>
+        <h2 id="home-strategy" className="text-xl font-normal leading-snug tracking-tight text-foreground">{title}</h2>
       </div>
       <div className="flex flex-1 flex-col gap-4 text-sm leading-relaxed text-muted-foreground">
         {body}
@@ -196,7 +196,7 @@ function AgentCard({ agent }: { agent: AgentState }) {
 
   return (
     <section aria-labelledby="home-agent" className="flex flex-col gap-4 border-t border-border pt-6">
-      <h2 id="home-agent" className="text-lg font-semibold tracking-tight text-foreground">{t('home.agent.title')}</h2>
+      <h2 id="home-agent" className="text-lg font-medium text-foreground">{t('home.agent.title')}</h2>
       <div className="flex flex-col gap-4 text-sm leading-relaxed">
         {!agent.last_seen_at ? (
           // Never connected is a setup step, not an incident.
@@ -351,12 +351,12 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
   const { t } = useTranslation();
   return (
     <section aria-labelledby="home-pending">
-      <div className="flex items-baseline justify-between gap-4 border-b border-border pb-4">
+      <div className="flex items-start justify-between gap-6 border-b border-border pb-6">
         <div>
-          <h2 id="home-pending" className="text-xl font-semibold tracking-tight text-foreground">{t('home.pending.title')}</h2>
+          <h2 id="home-pending" className="text-2xl font-normal tracking-tight text-foreground">{t('home.pending.title')}</h2>
           <p className="mt-1 text-sm text-muted-foreground">{t('home.pending.description')}</p>
         </div>
-        <span className="text-2xl font-medium tabular-nums text-foreground">
+        <span className="text-5xl font-normal leading-none tabular-nums tracking-tight text-foreground">
           <span aria-hidden="true">{items.length}</span>
           <span className="sr-only">{t('home.pending.count', { count: items.length })}</span>
         </span>
@@ -383,12 +383,13 @@ function PendingList({ items }: { items: readonly WorkItem[] }) {
             return (
               <li
                 key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
-                className="flex items-start gap-3 py-5 sm:gap-4"
+                className="group relative flex items-start gap-4 py-6 sm:gap-6"
               >
+                <span aria-hidden="true" className="w-6 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">{String(i + 1).padStart(2, '0')}</span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm leading-relaxed text-foreground">{itemText(t, item)}</p>
+                  <p className="text-base leading-6 text-foreground">{itemText(t, item)}</p>
                   <div className="mt-2">
-                    <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm">
+                    <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm" className="rounded-none bg-transparent px-0 font-normal">
                       {t('home.pending.priority', { priority: item.priority })}
                     </Badge>
                   </div>
@@ -441,7 +442,7 @@ export function HomePage() {
   });
 
   return (
-    <div className="flex flex-col gap-7">
+    <div className="flex flex-col gap-8">
       <PageHeader
         title={t('home.title')}
         description={t('home.description')}
@@ -453,10 +454,10 @@ export function HomePage() {
       />
       <QueryState query={workspace}>
         {workspace.data && (
-          <section aria-labelledby="home-workspace" className="border-y border-border py-4">
+          <section aria-labelledby="home-workspace" className="border-t border-border pt-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                <h2 id="home-workspace" className="min-w-0 break-words text-base font-semibold text-foreground [overflow-wrap:anywhere]">{workspace.data.name}</h2>
+                <h2 id="home-workspace" className="min-w-0 break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">{workspace.data.name}</h2>
                 <WorkspaceStatusBadge status={workspace.data.status} />
               </div>
               <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
@@ -488,9 +489,9 @@ export function HomePage() {
       </QueryState>
       <QueryState query={pending}>
         {pending.data && (
-          <div className="grid min-w-0 gap-8 xl:grid-cols-[minmax(0,1fr)_20rem] xl:gap-10">
-            <div className="min-w-0"><PendingList items={pending.data.items} /></div>
-            <aside className="flex min-w-0 flex-col gap-7 border-t border-border pt-6 xl:border-s xl:border-t-0 xl:ps-8 xl:pt-0">
+          <div className="grid min-w-0 items-start gap-8 xl:grid-cols-[minmax(0,1fr)_272px] xl:gap-8">
+            <div className="min-w-0 rounded-lg border border-border bg-surface p-5 sm:p-8"><PendingList items={pending.data.items} /></div>
+            <aside className="flex min-w-0 flex-col gap-8 border-t border-border pt-6 xl:border-t-0 xl:pt-2">
               <StrategyCard state={pending.data.strategy} />
               <AgentCard agent={pending.data.agent} />
             </aside>

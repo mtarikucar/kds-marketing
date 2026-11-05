@@ -47,7 +47,7 @@ export function InboxCommissions() {
       actions={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />
     <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
       <section className={columnClass} aria-label={t('inbox.commissions.title')}>
-        <div className="grid gap-4 rounded-lg bg-surface-muted p-3 sm:grid-cols-2">
+        <div className="grid gap-4 border-b border-border pb-5 sm:grid-cols-2">
           <label className="flex min-w-0 flex-col gap-2 text-sm">{t('inbox.commissions.filterState')}
             <select className={selectClass} value={state} onChange={e => setState(e.target.value as CommissionState | '')}>
               <option value="">{t('inbox.commissions.all')}</option>
@@ -67,7 +67,7 @@ export function InboxCommissions() {
           {rows.data?.length === 0 && <EmptyState className="border-0 py-8" title={t('inbox.commissions.empty')} description={t('inbox.commissions.emptyBody')} />}
           {rows.data?.map(row => <article key={row.id} data-testid={`commission-${row.id}`} className="flex min-w-0 flex-col items-start gap-3 border-b border-border px-2 py-5 text-sm last:border-0">
             <div className="flex w-full flex-wrap items-center justify-between gap-3">
-              <strong className="font-display text-h2 tabular-nums">{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
+              <strong className="font-display text-2xl font-medium tabular-nums">{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
               <Badge tone={row.state === 'paid' ? 'success' : row.state === 'approved' ? 'info' : row.state === 'no_payee' ? 'warning' : 'neutral'}>{t(`inbox.commissions.state.${row.state}`)}</Badge>
             </div>
             <p>{t('inbox.commissions.payee')}: {row.payee ? memberName(row.payee) : t('inbox.commissions.unassigned')}</p>

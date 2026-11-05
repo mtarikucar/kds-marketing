@@ -2,7 +2,7 @@ import { Fragment, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, Phone } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import {
   CALL_OUTCOMES,
   endCall,
@@ -51,7 +51,7 @@ function Timeline({ turns }: { turns: CallTurn[] }) {
             data-speaker={who}
             className={`max-w-[94%] ${who === 'counterpart' ? 'self-start' : who === 'line' ? 'self-center' : 'self-end'}`}
           >
-            <div className={`rounded-xl border px-4 py-3 text-sm ${who === 'counterpart' ? 'rounded-bl-sm border-border bg-surface-muted' : who === 'line' ? 'border-transparent text-center' : 'rounded-br-sm border-primary-200 bg-primary-50 text-slate-900 dark:border-primary-800 dark:bg-primary-950 dark:text-slate-100'}`}>
+            <div className={`text-sm ${who === 'counterpart' ? 'border-l-2 border-brand-accent py-1 pl-4' : who === 'line' ? 'py-2 text-center' : 'rounded-md bg-surface-muted px-4 py-3'}`}>
               <span className="mb-2 block text-xs text-muted-foreground">
                 {t(`calls.detail.speakers.${who}`)} · {formatDateTime(turn.at, i18n.language)}
                 {turn.meta.latency_ms !== undefined &&
@@ -122,7 +122,7 @@ function EndForm({ id }: { id: string }) {
       <fieldset className="flex flex-wrap gap-3">
         <legend className="mb-1 text-sm font-medium">{t('calls.detail.outcome')}</legend>
         {CALL_OUTCOMES.map((o) => (
-          <label key={o} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm ${outcome === o ? 'border-primary bg-surface-muted' : 'border-border'}`}>
+          <label key={o} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${outcome === o ? 'border-brand-accent bg-surface-muted' : 'border-border'}`}>
             <input className="accent-primary" type="radio" name="outcome" value={o} checked={outcome === o} onChange={() => setOutcome(o)} />
             {t(`calls.outcomes.${o}`)}
           </label>
@@ -154,11 +154,10 @@ export function CallDetail() {
       <PageHeader title={t('calls.detail.title')} actions={<Button asChild variant="outline"><Link to="/calls"><ArrowLeft className="h-4 w-4" aria-hidden="true" />{t('calls.title')}</Link></Button>} />
       <QueryState query={call}>
         {c && call.data && (
-          <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
-            <Card>
+          <div className="grid min-w-0 items-start border-y border-border bg-surface-muted lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.5fr)]">
+            <Card className="rounded-none border-0 border-b bg-transparent lg:border-b-0 lg:border-r">
               <CardHeader className="flex-row flex-wrap items-center gap-3">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface-muted text-primary" aria-hidden="true"><Phone className="h-4 w-4" /></span>
-                <CardTitle className="min-w-0 flex-1 break-words tabular-nums">{c.counterpart_e164 ?? c.counterpart}</CardTitle>
+                <CardTitle className="min-w-0 flex-1 break-words text-xl font-normal tabular-nums">{c.counterpart_e164 ?? c.counterpart}</CardTitle>
                 <Badge tone={c.state === 'ended' ? 'neutral' : 'primary'}>{t(`calls.states.${c.state}`)}</Badge>
               </CardHeader>
               <CardContent>
@@ -190,7 +189,7 @@ export function CallDetail() {
                 {c.latency && c.latency.turns > 0 && <Latency latency={c.latency} />}
               </CardContent>
             </Card>
-            <Card className="lg:row-span-2">
+            <Card className="rounded-none border-0 lg:row-span-2">
               <CardHeader className="mb-5 border-b border-border">
                 <CardTitle>{t('calls.detail.turns')}</CardTitle>
               </CardHeader>
@@ -199,7 +198,7 @@ export function CallDetail() {
               </CardContent>
             </Card>
             {canManage && !c.outcome && (
-              <Card>
+              <Card className="rounded-none border-0 border-t bg-transparent">
                 <CardHeader>
                   <CardTitle>{t('calls.detail.endTitle')}</CardTitle>
                 </CardHeader>

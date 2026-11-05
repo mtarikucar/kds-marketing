@@ -47,16 +47,16 @@ export function StudioPlan({
     groups.set(day, [...(groups.get(day) ?? []), slot]);
   }
   const row = (slot: Slot) => (
-    <li key={slot.id} data-testid={`slot-${slot.id}`}>
-      <button className="w-full rounded-md border-s-2 border-border px-3 py-3 text-start hover:border-primary hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelect(slot.id)}>
-        <span className="block">
+    <li key={slot.id} data-testid={`slot-${slot.id}`} className="relative border-s border-border ps-4 before:absolute before:-start-1 before:top-5 before:h-2 before:w-2 before:rounded-full before:border before:border-foreground/40 before:bg-background">
+      <button className="w-full px-2 py-4 text-start hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelect(slot.id)}>
+        <span className="block font-medium">
           {hypotheses.find((h) => h.id === slot.chain.hypothesis_id)?.title ?? t('studio.detail')}
         </span>
         <span className="block text-xs text-muted-foreground">
           {contentTypeLabel(t, arms.find((a) => a.id === slot.chain.arm_id)?.key.content_type ?? '')} /{' '}
           {kindLabel(t, arms.find((a) => a.id === slot.chain.arm_id)?.key.channel ?? '')}
         </span>
-        <time className="text-xs" dateTime={instant(slot.scheduled_at).toISOString()}>
+        <time className="text-xs tabular-nums" dateTime={instant(slot.scheduled_at).toISOString()}>
           {instant(slot.scheduled_at).toLocaleString(i18n.language, {
             timeZone: 'Europe/Istanbul',
             day: 'numeric',
@@ -83,14 +83,14 @@ export function StudioPlan({
       {calendar ? (
         <div className="space-y-3">
           {[...groups].map(([day, rows]) => (
-            <div key={day} className="border-s-2 border-primary ps-3">
+            <div key={day} className="border-t border-border pt-3">
               <h3 className="mb-2 text-sm font-medium">{day}</h3>
-              <ul className="space-y-2">{rows.map(row)}</ul>
+              <ul className="ms-1">{rows.map(row)}</ul>
             </div>
           ))}
         </div>
       ) : (
-        <ul className="divide-y divide-border">{visible.map(row)}</ul>
+        <ul className="ms-1">{visible.map(row)}</ul>
       )}
       {available && !visible.length && (
         <div className="space-y-3 py-4">

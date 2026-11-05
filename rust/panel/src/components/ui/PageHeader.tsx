@@ -51,7 +51,7 @@ export function PageHeader({
     );
   }
   return (
-    <div className={cn('flex flex-col gap-2', className)}>
+    <div className={cn('flex flex-col gap-3', className)}>
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs items={breadcrumbs} renderLink={renderBreadcrumbLink} />
       )}
@@ -73,7 +73,7 @@ export function PageHeader({
         <div className="min-w-0 flex-1 sm:min-w-64">
           <h1 className="break-words font-display text-h1 text-foreground [overflow-wrap:anywhere]">{title}</h1>
           {description && (
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && (

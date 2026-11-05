@@ -187,12 +187,12 @@ export function CallsPolicy() {
   const { t } = useTranslation();
   const policy = useQuery({ queryKey: POLICY_KEY, queryFn: getCallPolicy });
   return (
-    <Card className="mt-8">
-      <CardHeader className="mb-5 border-b border-border bg-surface-muted">
+    <Card className="mt-12 rounded-none border-x-0 border-b-0 bg-transparent">
+      <CardHeader className="mb-6 border-b border-border px-0 py-5">
         <CardTitle>{t('calls.policy.title')}</CardTitle>
         <CardDescription className="max-w-2xl leading-6">{t('calls.policy.description')}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="px-0">
         <QueryState query={policy}>{policy.data && <PolicyForm stored={policy.data} />}</QueryState>
       </CardContent>
     </Card>

@@ -54,12 +54,12 @@ function MergeCard({ row }: { row: InboxMerge }) {
   return (
     <article
       id={`merge-${row.id}`}
-      className="flex min-w-0 flex-col gap-4 rounded-xl border border-border bg-surface p-4 text-sm [overflow-wrap:anywhere]"
+      className="flex min-w-0 flex-col gap-4 border-b border-border bg-surface px-5 py-6 text-sm [overflow-wrap:anywhere]"
     >
-      <h3 className="font-display text-h3">{t('inbox.merges.suggestion')}</h3>
+      <h3 className="font-display text-lg font-normal">{t('inbox.merges.suggestion')}</h3>
       <QueryState query={source}>
         <QueryState query={target}>
-          <p className="rounded-lg bg-surface-muted p-3 font-medium leading-6">
+          <p className="border-l-2 border-brand-accent py-1 pl-3 font-medium leading-6">
             {sourceName} / {targetName}
           </p>
         </QueryState>
@@ -203,7 +203,7 @@ export function InboxMerges() {
             <MergeCard key={row.id} row={row} />
           ))}
         </div>
-        {rows?.length === 0 && <EmptyState icon={<img src="/brand/scenes/team.svg" width="120" height="96" alt="" />} title={t('inbox.merges.empty')} action={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />}
+        {rows?.length === 0 && <EmptyState className="rounded-none border-x-0" title={t('inbox.merges.empty')} action={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />}
       </QueryState>
     </>
   );

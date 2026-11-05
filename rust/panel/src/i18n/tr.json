@@ -58,7 +58,10 @@
     "people": "Kişiler",
     "calls": "Aramalar",
     "prospects": "Aday havuzu",
-    "outreach": "Kampanyalar"
+    "outreach": "Kampanyalar",
+    "workGroup": "Müşteri ilişkileri",
+    "growthGroup": "Planlama",
+    "workspaceGroup": "Çalışma alanı"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -245,7 +248,7 @@
   },
   "login": {
     "title": "Giriş yap",
-    "description": "Çalışma alanınıza e-posta ve parolanızla girin.",
+    "description": "Çalışma alanınıza e-posta ve parolanızla girin",
     "submit": "Giriş yap",
     "invalid": "E-posta ya da parola hatalı.",
     "noAccount": "Hesabınız yok mu?",
@@ -253,14 +256,14 @@
   },
   "register": {
     "title": "Kayıt ol",
-    "description": "Hesabınızı ve ilk çalışma alanınızı oluşturun.",
+    "description": "Hesabınızı ve ilk çalışma alanınızı oluşturun",
     "submit": "Hesap oluştur",
     "haveAccount": "Zaten hesabınız var mı?",
     "loginLink": "Giriş yapın"
   },
   "invite": {
     "title": "Daveti kabul et",
-    "description": "Bir çalışma alanına davet edildiniz.",
+    "description": "Bir çalışma alanına davet edildiniz",
     "signedInAs": "{{email}} olarak oturum açtınız. Daveti bu hesapla kabul edebilirsiniz.",
     "accept": "Daveti kabul et",
     "newUser": "Hesabınız yoksa adınızı ve bir parola girerek katılın.",
@@ -274,8 +277,8 @@
     "goHome": "Panele git"
   },
   "home": {
-    "title": "Ana sayfa",
-    "description": "Sıradaki kararlar, takip işleri ve çalışma alanınızın durumu.",
+    "title": "İş akışı",
+    "description": "Müşteri konuşmaları, bekleyen kararlar ve sıradaki takip işleri",
     "slug": "Kısa ad",
     "status": "Durum",
     "myRole": "Rolünüz",
@@ -293,8 +296,8 @@
       "submittedWait": "Bir sahip ya da yönetici onayladığında yürürlüğe girer.",
       "approve": "Onayla",
       "approvedTitle": "Strateji yürürlükte",
-      "approvedBody": "Yürürlükteki sürüm: {{number}}.",
-      "hypotheses": "Hipotez sayısı: {{count}}.",
+      "approvedBody": "Sürüm {{number}} yürürlükte",
+      "hypotheses": "{{count}} etkin hipotez",
       "label": "Strateji"
     },
     "inactive": {
@@ -361,7 +364,7 @@
   },
   "team": {
     "title": "Ekip",
-    "description": "Çalışma alanının üyeleri ve bekleyen davetler.",
+    "description": "Çalışma alanının üyeleri ve bekleyen davetler",
     "invite": "Üye davet et",
     "columns": {
       "member": "Üye",
@@ -391,7 +394,7 @@
   },
   "roles": {
     "title": "Roller",
-    "description": "Sistem rolleri sabittir; özel roller kendi izinlerini taşır.",
+    "description": "Sistem rolleri sabittir; özel roller kendi izinlerini taşır",
     "create": "Rol oluştur",
     "columns": {
       "name": "Ad",
@@ -418,7 +421,7 @@
   },
   "apiKeys": {
     "title": "API anahtarları",
-    "description": "Ajanlar bu çalışma alanına bu anahtarlarla bağlanır.",
+    "description": "Ajanlar bu çalışma alanına bu anahtarlarla bağlanır",
     "create": "Anahtar oluştur",
     "columns": {
       "name": "Ad",
@@ -455,7 +458,7 @@
   },
   "agents": {
     "title": "Ajanlar",
-    "description": "Bu çalışma alanına API anahtarlarıyla bağlanan istemciler.",
+    "description": "Bu çalışma alanına API anahtarlarıyla bağlanan istemciler",
     "columns": {
       "client": "İstemci",
       "version": "Sürüm",
@@ -473,7 +476,7 @@
   },
   "ledger": {
     "title": "Günlük",
-    "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur.",
+    "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur",
     "filter": "Eylem filtresi",
     "filterPlaceholder": "örn. team.",
     "apply": "Filtrele",
@@ -577,7 +580,7 @@
   },
   "strategy": {
     "title": "Strateji",
-    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak.",
+    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak",
     "tabs": {
       "approved": "Onaylı",
       "draft": "Taslak"
@@ -747,7 +750,7 @@
   },
   "capabilities": {
     "title": "Kabiliyetler",
-    "description": "Çalışma alanının üzerinden iş yapabildiği hesaplar, cihazlar ve araçlar.",
+    "description": "Çalışma alanının üzerinden iş yapabildiği hesaplar, cihazlar ve araçlar",
     "declare": "Kabiliyet bildir",
     "filterLabel": "Tür grubu",
     "filterAll": "Tümü",
@@ -1225,7 +1228,7 @@
   },
   "budget": {
     "title": "Bütçe",
-    "description": "Çalışma alanının kendi parası ve sınırları: reklam bütçesi, SMS, ajan kotası, sarf malzemesi.",
+    "description": "Çalışma alanının kendi parası ve sınırları: reklam bütçesi, SMS, ajan kotası, sarf malzemesi",
     "create": "Bütçe kalemi oluştur",
     "columns": {
       "name": "Ad",
@@ -1349,7 +1352,7 @@
     },
     "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
-    "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",
+    "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin",
     "queues": "Kuyruklar",
     "search": "Kişi ara",
     "empty": "Bu kuyrukta konuşma yok.",
@@ -1920,7 +1923,7 @@
       "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
       "noCover": "Önizleme yok"
     },
-    "description": "İçerikleri planlayın, bugünün işlerini inceleyin ve sonuçları değerlendirin.",
+    "description": "İçerikleri planlayın, bugünün işlerini inceleyin ve sonuçları değerlendirin",
     "emptyPlanHelp": "Planlanan içerikler burada görünür. Sıradaki içeriği hazırlamak için kaynak materyallerinizi ekleyin.",
     "addMaterials": "Materyal ekle",
     "filters": {
@@ -1936,7 +1939,7 @@
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
-    "description": "Tek seferlik havale ve işletmen onayıyla kalıcı erişim.",
+    "description": "Tek seferlik havale ve işletmen onayıyla kalıcı erişim",
     "stages": {
       "pending_payment": "Ödeme bekleniyor",
       "approval": "İşletmen onayı bekleniyor",
@@ -1964,7 +1967,7 @@
   },
   "onboarding": {
     "title": "İlk kurulum",
-    "description": "İlerlemeniz çalışma alanının güncel durumundan okunur.",
+    "description": "İlerlemeniz çalışma alanının güncel durumundan okunur",
     "paymentConfirmed": "Ödeme onaylandı",
     "paymentPending": "Ödeme onayı bekleniyor",
     "strategy": "Strateji",
@@ -2021,7 +2024,7 @@
   },
   "people": {
     "title": "Kişiler",
-    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil.",
+    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil",
     "search": "Ada ya da şirkete göre ara",
     "empty": "Henüz kişi yok.",
     "noMatch": "Eşleşen kişi yok.",
@@ -3399,7 +3402,7 @@
   },
   "publicIntro": {
     "title": "Her temasın bir sonraki adımı.",
-    "description": "Ekibinizin müşteri ilişkilerini, içeriklerini ve günlük işlerini aynı çalışma alanından yönetin.",
+    "description": "Ekibinizin müşteri ilişkilerini, içeriklerini ve günlük işlerini aynı çalışma alanından yönetin",
     "people": {
       "title": "İlişkileri takip edin",
       "description": "Kişiler ve görüşmeler, ekip için ortak bir geçmişte."

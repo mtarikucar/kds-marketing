@@ -31,7 +31,6 @@ import {
   IconButton,
   Input,
   PageHeader,
-  StatCard,
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -521,14 +520,10 @@ function CountsCard({ data }: { data: DistributionOut }) {
   });
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <StatCard
-          label={t('leads.distribution.ownerless')}
-          value={String(data.ownerless.count)}
-          tone={data.ownerless.count > 0 ? 'warning' : 'neutral'}
-        />
-        <StatCard label={t('leads.distribution.stalled')} value={String(data.stalled)} tone={data.stalled > 0 ? 'danger' : 'neutral'} />
-      </div>
+      <dl className="flex flex-wrap gap-x-10 gap-y-4 border-y border-border py-4">
+        <div><dt className="text-sm text-muted-foreground">{t('leads.distribution.ownerless')}</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{data.ownerless.count}</dd></div>
+        <div><dt className="text-sm text-muted-foreground">{t('leads.distribution.stalled')}</dt><dd className="mt-1 text-2xl font-medium tabular-nums">{data.stalled}</dd></div>
+      </dl>
       <div className="flex flex-wrap items-center gap-2">
         {manage && (
           <Button loading={run.isPending} onClick={() => !run.isPending && run.mutate()}>

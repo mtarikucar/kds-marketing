@@ -90,8 +90,8 @@ export function OutreachPage() {
         }
       />
       <LockNotice settings={settings.data} />
-      <div className="rounded-lg border border-border bg-surface p-4">
-      <label className="flex max-w-xs flex-col gap-1 text-sm">
+      <section className="min-w-0" aria-label={t('leads.outreach.title')}>
+      <label className="flex max-w-xs flex-col gap-1 pb-4 text-sm">
         {t('leads.outreach.statusFilter')}
         <select className={selectClass} value={status} onChange={(e) => setStatus(e.target.value as CampaignStatus | '')}>
           <option value="">{t('leads.prospects.filters.all')}</option>
@@ -116,7 +116,7 @@ export function OutreachPage() {
           )}
         />
       </QueryState></div>
-      </div>
+      </section>
     </>
   );
 }

@@ -295,7 +295,7 @@ export function TeamPage() {
         <DataTable
           columns={columns}
           data={team.data ?? []}
-          emptyState={<EmptyState className="rounded-none border-0" icon={<img src="/brand/scenes/team.svg" alt="" width={120} height={96} />} title={t('team.empty')} description={t('team.emptyBody')} />}
+          emptyState={<EmptyState className="rounded-none border-0" title={t('team.empty')} description={t('team.emptyBody')} />}
         />
       </QueryState>
       {canManage && <InviteDialog open={inviting} onOpenChange={setInviting} roles={roleList} />}

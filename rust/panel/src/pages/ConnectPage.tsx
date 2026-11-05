@@ -56,15 +56,15 @@ import { CAPABILITIES_KEY, invalidateCapabilities } from './capabilities/queries
 function KindPicker({ value, onChange }: { value: string | null; onChange: (kind: string) => void }) {
   const { t } = useTranslation();
   return (
-    <section aria-label={t('connect.kindsLabel')} className="grid gap-x-8 gap-y-5 border-y border-border py-5 md:grid-cols-3">
+    <section aria-label={t('connect.kindsLabel')} className="divide-y divide-border border-y border-border">
       {PROVIDERS.map((provider) => (
         <div
           key={provider}
           role="group"
           aria-label={t(`connect.providers.${provider}`)}
-          className="flex flex-col gap-3"
+          className="grid gap-3 py-4 sm:grid-cols-[12rem_minmax(0,1fr)] sm:items-start"
         >
-          <h2 className="text-sm font-semibold text-foreground">{t(`connect.providers.${provider}`)}</h2>
+          <h2 className="pt-1.5 text-sm font-medium text-foreground">{t(`connect.providers.${provider}`)}</h2>
           <div className="flex flex-wrap gap-2">
             {connectableKinds(provider).map((kind) => {
               const active = kind === value;

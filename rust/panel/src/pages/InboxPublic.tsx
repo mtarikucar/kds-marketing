@@ -271,7 +271,7 @@ function Composer({
   const within = length >= bounds.min && length <= bounds.max && !!text.trim();
   return (
     <form
-      className="flex flex-col gap-3 rounded-lg border border-border bg-surface-muted p-3"
+      className="flex flex-col gap-3 border-t border-border pt-5"
       onSubmit={(e) => {
         e.preventDefault();
         // The guard holds on Enter too (bug class "Enter double-submit"): a ref, since a second
@@ -383,7 +383,7 @@ export function InboxPublic({
       ))}
       <ol className="flex max-h-[60dvh] min-w-0 flex-col gap-4 overflow-y-auto overscroll-contain pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.public.items')}>
         {context.items.map((entry) => (
-          <li key={entry.item.id} className="flex flex-col gap-3 rounded-lg border border-border p-3 sm:p-4" data-testid="public-item">
+          <li key={entry.item.id} className="flex flex-col gap-4 border-b border-border pb-6" data-testid="public-item">
             {entry.subject && (
               <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3 text-xs text-muted-foreground" data-testid="subject">
                 <span>{t(`inbox.public.subject.${entry.subject.kind}`)}</span>
@@ -405,12 +405,12 @@ export function InboxPublic({
               {entry.thread.map((line, index) => (
                 <li
                   key={`${line.external_id ?? ''}:${index}`}
-                  className={`rounded-lg border p-3 text-sm leading-6 [overflow-wrap:anywhere] ${
+                  className={`text-sm leading-6 [overflow-wrap:anywhere] ${
                     line.author === 'us'
-                      ? 'ml-5 rounded-br-sm border-primary-200 bg-primary-50 text-slate-900 dark:border-primary-800 dark:bg-primary-950 dark:text-slate-100'
+                      ? 'ml-5 rounded-md bg-surface-muted px-4 py-3'
                       : line.author === 'other'
-                        ? 'border-transparent bg-surface-muted text-muted-foreground'
-                        : 'rounded-bl-sm border-border bg-surface-muted'
+                        ? 'pl-4 text-muted-foreground'
+                        : 'border-l-2 border-brand-accent pl-4'
                   }`}
                 >
                   <span className="block text-xs text-muted-foreground">{t(`inbox.public.author.${line.author}`)}</span>

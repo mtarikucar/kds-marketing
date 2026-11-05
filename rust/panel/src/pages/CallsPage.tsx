@@ -127,7 +127,7 @@ function PlaceCallDialog({ open, onOpenChange }: { open: boolean; onOpenChange: 
           <fieldset className="flex flex-col gap-2">
             <legend className="mb-2 text-sm font-medium">{t('calls.place.purpose')}</legend>
             {CALL_PURPOSES.map((p) => (
-              <label key={p} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${purpose === p ? 'border-primary bg-surface-muted' : 'border-border'}`}>
+              <label key={p} className={`flex cursor-pointer items-start gap-3 border-l-2 px-3 py-3 text-sm ${purpose === p ? 'border-brand-accent bg-surface-muted' : 'border-transparent'}`}>
                 <input
                   type="radio"
                   className="mt-1 accent-primary"
@@ -220,14 +220,14 @@ export function CallsPage() {
       ) : (
         <QueryState query={calls}>
           {(calls.data ?? []).length === 0 ? (
-            <EmptyState icon={<img src="/brand/scenes/conversations.svg" width="120" height="96" alt="" />} title={t('calls.empty')} description={t('calls.emptyBody')} />
+            <EmptyState className="rounded-none border-x-0" title={t('calls.empty')} description={t('calls.emptyBody')} />
           ) : (
-            <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-surface" aria-label={t('calls.title')}>
-              <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
-                <span className="text-sm font-medium">{t('calls.columns.direction')}</span>
+            <section className="min-w-0 border-y border-border bg-surface">
+              <div className="flex flex-wrap items-center gap-5 border-b border-border px-5 py-3">
+                <span className="text-caption text-muted-foreground">{t('calls.columns.direction')}</span>
                 <div className="flex flex-wrap gap-1" role="group" aria-label={t('calls.columns.direction')}>
                   {(['all', 'inbound', 'outbound'] as const).map((value) => (
-                    <Button key={value} size="sm" variant={direction === value ? 'secondary' : 'ghost'} aria-pressed={direction === value} onClick={() => setDirection(value)}>
+                    <Button key={value} size="sm" variant="ghost" className={`rounded-none border-b-2 ${direction === value ? 'border-brand-accent text-foreground' : 'border-transparent'}`} aria-pressed={direction === value} onClick={() => setDirection(value)}>
                       {value === 'all' ? t('inbox.queue.all') : t(`calls.directions.${value}`)}
                     </Button>
                   ))}

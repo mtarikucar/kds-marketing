@@ -93,7 +93,7 @@ function BillingForm() {
     <PageHeader title={t('billing.title')} description={t('billing.description')} />
     <Link to="/onboarding" className="text-primary underline">{t('onboarding.title')}</Link>
     <QueryState query={workspace} />
-    <QueryState query={billing}>{data && <Card className="max-w-3xl"><CardContent className="space-y-6 pt-6">
+    <QueryState query={billing}>{data && <Card className="max-w-3xl rounded-none border-0 border-t border-border bg-transparent"><CardContent className="space-y-6 px-0 pb-0 pt-6">
       <h2 className="font-display text-h3">{t(`billing.stages.${billingStage(data)}`)}</h2>
       <dl className="grid gap-5 border-y border-border py-5 sm:grid-cols-2">
         <div><dt className="text-caption text-muted-foreground">{t('billing.price')}</dt><dd className="mt-1 font-medium tabular-nums">{formatMoney(data.price_minor,data.price_currency,i18n.language)} · {data.price_currency}</dd></div>

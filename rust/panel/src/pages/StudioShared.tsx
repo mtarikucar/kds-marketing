@@ -67,9 +67,9 @@ export function Region({
   return (
     <section
       aria-labelledby={`studio-${name}`}
-      className={`min-w-0 space-y-4 ${name === 'today' ? 'rounded-xl border border-border bg-surface p-5 sm:p-6' : 'border-t border-border pt-5'} ${className}`}
+      className={`min-w-0 space-y-4 ${name === 'today' ? 'border-t-2 border-foreground bg-surface px-4 py-6 sm:px-6' : name === 'strategy' ? 'border-y border-border py-4' : 'border-t border-border pt-6'} ${className}`}
     >
-      <h2 id={`studio-${name}`} className="text-lg font-semibold tracking-tight">
+      <h2 id={`studio-${name}`} className={name === 'today' ? 'text-2xl font-normal' : name === 'plan' ? 'text-xl font-normal' : 'text-sm font-medium text-muted-foreground'}>
         {t(`studio.${name}`)}
       </h2>
       {children}

@@ -157,7 +157,7 @@ function VersionsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           {versions.data && versions.data.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('strategy.versionsEmpty')}</p>
           ) : (
-            <ol className="flex flex-col gap-3">
+            <ol className="flex flex-col gap-3 px-0 pb-0">
               {versions.data?.map((v) => (
                 <li key={v.id} className="flex flex-col gap-2 rounded-lg border border-border p-3">
                   <div className="flex items-center justify-between gap-2">
@@ -195,11 +195,11 @@ function ApprovedTab({
     return <EmptyState icon={<img src="/brand/scenes/strategy.svg" alt="" width={144} height={144} className="h-36 w-36" />} title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} className="py-10" />;
   }
   return (
-    <div className="flex flex-col gap-6">
-      <Card className="rounded-lg border-0 bg-surface-muted shadow-none">
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
+      <Card className="rounded-none border-0 bg-transparent shadow-none">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex items-center gap-2">
-            <CardTitle>{t('strategy.versionLabel', { number: version.number })}</CardTitle>
+            <div className="space-y-2"><p className="text-xs tabular-nums text-muted-foreground">{t('strategy.versionLabel', { number: version.number })}</p><CardTitle className="text-xl font-normal sm:text-2xl">{version.sections.goals.objective || t('strategy.title')}</CardTitle></div>
             <VersionStatusBadge status={version.status} />
           </div>
           {canApprove && (
@@ -209,7 +209,7 @@ function ApprovedTab({
             </Button>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0 pb-0">
           <dl className="grid gap-3 sm:grid-cols-3">
             <Meta label={t('strategy.approvedAt')} value={version.approved_at && formatDateTime(version.approved_at, i18n.language)} />
             <Meta label={t('strategy.approvedBy')} value={version.approved_by_email} />
@@ -290,11 +290,11 @@ function DraftTab({
       : null;
 
   return (
-    <div className="flex flex-col gap-6">
-      <Card className="rounded-lg border-0 bg-surface-muted shadow-none">
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
+      <Card className="rounded-none border-0 bg-transparent shadow-none">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('strategy.versionLabel', { number: draft.number })}</CardTitle>
+            <div className="space-y-2"><p className="text-xs tabular-nums text-muted-foreground">{t('strategy.versionLabel', { number: draft.number })}</p><CardTitle className="text-xl font-normal sm:text-2xl">{draft.sections.goals.objective || t('strategy.title')}</CardTitle></div>
             <VersionStatusBadge status={draft.status} />
             <Badge tone={submitted ? 'primary' : 'neutral'} size="sm">
               {submitted ? t('strategy.submittedBadge') : t('strategy.notSubmittedBadge')}
@@ -317,7 +317,7 @@ function DraftTab({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
+        <CardContent className="flex flex-col gap-3 px-0 pb-0">
           {approveHint && (
             <p id="strategy-approve-hint" className="text-caption text-muted-foreground">
               {approveHint}

@@ -67,7 +67,7 @@ function FilterChips({ value, onChange }: { value: Filter; onChange: (next: Filt
             aria-pressed={active}
             onClick={() => onChange(option)}
             className={cn(
-              'rounded-full border px-3 py-1 text-caption font-medium transition-colors',
+              'rounded-md border px-3 py-1.5 text-caption font-medium transition-colors',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               active
                 ? 'border-primary bg-primary/10 text-primary'
@@ -253,9 +253,9 @@ export function CapabilitiesPage() {
       {/* A refresh that fails keeps the cards (and an open command row) on screen. */}
       <QueryState query={listed} keepOnError>
         {items.length === 0 ? (
-          <EmptyState icon={filter === 'all' ? <img src="/brand/scenes/connections.svg" alt="" width={120} height={96} /> : undefined} title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
+          <EmptyState title={t('capabilities.empty')} description={t('capabilities.emptyBody')} />
         ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
+          <div className="divide-y divide-border border-y border-border">
             {items.map((item) => (
               <CapabilityCard
                 key={item.capability.id}

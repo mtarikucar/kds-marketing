@@ -131,8 +131,8 @@ export function CapabilityCard({
   const memberOf = groups.filter((g) => g.members.some((m) => m.capability.id === c.id));
 
   return (
-    <Card className="flex min-w-0 flex-col" data-capability-id={c.id}>
-      <CardHeader className="flex-row items-start justify-between gap-3">
+    <Card className="flex min-w-0 flex-col rounded-none border-0 bg-transparent" data-capability-id={c.id}>
+      <CardHeader className="flex-row items-start justify-between gap-4 px-0 pb-4 pt-6">
         <div className="flex min-w-0 flex-col gap-1">
           <CardTitle className="truncate" title={c.name}>
             {c.name}
@@ -145,9 +145,9 @@ export function CapabilityCard({
         </div>
         <CapabilityStatusBadge status={item.effective_status} />
       </CardHeader>
-      <CardContent className="flex flex-1 flex-col gap-4">
+      <CardContent className="flex flex-1 flex-col gap-4 px-0 pb-6">
         {c.description && <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{c.description}</p>}
-        <dl className="grid min-w-0 gap-4 text-sm sm:grid-cols-2">
+        <dl className="grid min-w-0 gap-x-8 gap-y-4 text-sm sm:grid-cols-2 xl:grid-cols-4">
           <div className="flex flex-col gap-0.5">
             <dt className="text-caption text-muted-foreground">{t('capabilities.reach.label')}</dt>
             <dd>
@@ -162,7 +162,7 @@ export function CapabilityCard({
                 : t('capabilities.neverVerified')}
             </dd>
           </div>
-          <div className="flex flex-col gap-0.5 sm:col-span-2">
+          <div className="flex flex-col gap-0.5 sm:col-span-2 xl:col-span-2">
             <dt className="text-caption text-muted-foreground">{t('capabilities.policy.label')}</dt>
             <dd>
               <ul className="flex flex-col gap-0.5 text-foreground">
@@ -253,7 +253,7 @@ export function CapabilityCard({
         {mutable && (
           <div className="mt-auto flex flex-wrap gap-2 border-t border-border pt-3">
             {c.reach !== 'connector' && !byHeartbeat && (
-              <Button size="sm" onClick={() => onAction('verify', item)}>
+              <Button size="sm" variant="outline" onClick={() => onAction('verify', item)}>
                 {t('capabilities.actions.verify')}
               </Button>
             )}

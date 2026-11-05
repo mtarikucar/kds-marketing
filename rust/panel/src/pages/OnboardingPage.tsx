@@ -15,9 +15,9 @@ import { billingStage, useBilling } from './billing/queries';
 
 function SetupStep({ number, title, children }: { number: number; title: string; children: ReactNode }) {
   return <li className="flex gap-4 border-b border-border py-6 last:border-b-0 sm:gap-6">
-    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-navy text-sm font-semibold text-brand-navy-foreground">{number}</span>
+    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-sm font-medium text-foreground">{number}</span>
     <div className="min-w-0 flex-1 space-y-3 text-sm leading-6">
-      <h2 className="text-base font-semibold text-foreground">{title}</h2>
+      <h2 className="text-lg font-medium text-foreground">{title}</h2>
       {children}
     </div>
   </li>;

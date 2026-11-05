@@ -10,7 +10,7 @@ import { percent, useChannelName, usePostsKey } from './PostsShared';
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <section className={cardClass} aria-labelledby={id}>
-      <h3 id={id} className="font-semibold">
+      <h3 id={id} className="text-sm font-medium text-muted-foreground">
         {title}
       </h3>
       {children}
@@ -68,7 +68,7 @@ export function PostsWeek({
           {t('posts.week.next')}
         </button>
         {s && (
-          <h3 className="text-lg font-semibold" data-testid="week-title">
+          <h3 className="text-lg font-medium" data-testid="week-title">
             {t('posts.week.title', {
               from: formatDay(s.week_start, lang),
               until: formatDay(p.addDays(s.week_start, 6), lang),
@@ -78,7 +78,7 @@ export function PostsWeek({
       </div>
       <MaterialsReadStatus query={summary} />
       {s && (
-        <div className="grid grid-cols-1 gap-x-8 gap-y-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(16rem,1fr)]">
           <Section id="week-published" title={t('posts.week.published')}>
             {s.published.length === 0 && none}
             <ul className="space-y-2">

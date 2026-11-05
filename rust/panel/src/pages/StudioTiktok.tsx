@@ -98,7 +98,7 @@ function RecentVideos({ posts }: { posts: api.RecentPost[] }) {
         {posts.map((post) => {
           const title = post.title ?? t('studio.tiktok.untitled');
           return (
-            <li key={post.id} className="flex min-w-0 gap-2 rounded-md border border-border p-2">
+            <li key={post.id} className="flex min-w-0 gap-3 border-b border-border py-3">
               <Cover url={post.cover_image_url} />
               <div className="min-w-0 space-y-1">
                 {post.share_url ? (
@@ -468,13 +468,13 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   return (
     <form
       aria-label={screenName}
-      className="space-y-5 rounded-lg border border-border bg-surface p-4 text-sm sm:p-5"
+      className="space-y-5 border-y border-border py-5 text-sm"
       onSubmit={(e) => {
         e.preventDefault();
         if (ready) post.mutate();
       }}
     >
-      <h3 className="border-b border-border pb-3 text-lg font-semibold">{screenName}</h3>
+      <h3 className="border-b border-border pb-3 text-lg font-medium">{screenName}</h3>
       <Creator creator={creator} />
       <AccountView posting={data} />
       <div role="radiogroup" aria-labelledby={`${ids}-mode`} className="space-y-3 border-y border-border py-4">

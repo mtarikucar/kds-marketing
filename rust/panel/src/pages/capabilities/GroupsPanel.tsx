@@ -208,12 +208,12 @@ export function GroupsPanel({
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="rounded-none border-0 border-t border-border bg-transparent">
+      <CardHeader className="px-0 pb-4 pt-6">
         <CardTitle>{t('capabilities.groupsPanel.title')}</CardTitle>
         <CardDescription>{t('capabilities.groupsPanel.description')}</CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="flex flex-col gap-4 px-0 pb-0">
         {canManage && (
           <form className="flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={onCreate} noValidate>
             <Field label={t('capabilities.groupsPanel.name')} className="sm:flex-1" required>

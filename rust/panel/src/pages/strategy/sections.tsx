@@ -67,7 +67,7 @@ function Empty() {
 function Dl({ rows }: { rows: { label: string; value: string }[] }) {
   const { t } = useTranslation();
   return (
-    <dl className="grid gap-3 text-sm sm:grid-cols-2">
+    <dl className="grid gap-x-8 gap-y-4 text-sm sm:grid-cols-2">
       {rows.map((row) => (
         <div key={row.label} className="flex flex-col gap-0.5">
           <dt className="text-caption text-muted-foreground">{row.label}</dt>
@@ -108,9 +108,9 @@ function EditableSection<K extends EditableKey>({
   };
   const gaps = gapsOf(writer.error);
   return (
-    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none lg:grid-cols-[12rem_minmax(0,1fr)]">
-      <CardHeader className="flex-row flex-wrap items-start justify-between gap-2 p-0 lg:content-start">
-        <CardTitle>{title}</CardTitle>
+    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
+      <CardHeader className="flex-row flex-wrap items-start justify-between gap-3 p-0 md:flex-col md:justify-start md:content-start">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
         {editable && editing === null && (
           <Button variant="ghost" size="sm" onClick={() => setEditing(JSON.parse(JSON.stringify(value)) as Sections[K])}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
@@ -614,9 +614,9 @@ function PaidSection({ value, editable }: { value: boolean; editable: boolean })
   const writer = useSectionWriter('paid_enabled');
   const label = t('strategy.fields.paidEnabled');
   return (
-    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none lg:grid-cols-[12rem_minmax(0,1fr)]">
+    <Card className="grid gap-4 rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none md:grid-cols-[10rem_minmax(0,1fr)]">
       <CardHeader className="p-0">
-        <CardTitle>{t('strategy.sections.paid_enabled')}</CardTitle>
+        <CardTitle className="text-sm font-medium text-muted-foreground">{t('strategy.sections.paid_enabled')}</CardTitle>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-2 p-0">
         <div className="flex items-center gap-3">

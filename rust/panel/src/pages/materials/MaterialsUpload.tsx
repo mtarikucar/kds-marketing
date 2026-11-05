@@ -268,9 +268,9 @@ export function MaterialsUpload({
 
   return (
     <div className="space-y-4" data-testid="materials-upload">
-      <div className="flex flex-col items-start gap-5 rounded-xl border border-border bg-surface p-5 sm:flex-row sm:items-center sm:gap-8 sm:p-8">
+      <div className="flex flex-col items-start gap-6 border-t-2 border-foreground bg-surface p-6 sm:flex-row sm:items-center sm:gap-8">
         {items.length === 0 && (
-          <img src="/brand/scenes/studio.svg" alt="" aria-hidden="true" width={144} height={144} className="h-32 w-32 shrink-0 sm:h-36 sm:w-36" />
+          <img src="/brand/scenes/studio.svg" alt="" aria-hidden="true" width={144} height={144} className="h-24 w-24 shrink-0 sm:h-28 sm:w-28" />
         )}
         <div className="min-w-0 flex-1 space-y-5">
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{t('materials.upload.intro')}</p>

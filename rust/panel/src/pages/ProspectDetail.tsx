@@ -11,10 +11,6 @@ import { QueryState } from '@/components/QueryState';
 import {
   Badge,
   Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -231,14 +227,14 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
   ];
   const person: ProspectField<ContactPerson> | null | undefined = p.contact.contact_person;
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader className="flex-row flex-wrap items-center gap-2 border-b border-border bg-surface-muted/40">
-          <CardTitle>{p.business_name}</CardTitle>
+    <div className="overflow-hidden rounded-lg border border-border bg-surface">
+      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <header className="flex flex-wrap items-center gap-2 pb-4">
+          <h2 className="text-base font-medium">{p.business_name}</h2>
           <ProspectStatusBadge status={p.status} />
           {p.latest_score && <Badge tone="neutral">{t('leads.prospect.score', { score: p.latest_score.score })}</Badge>}
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
+        </header>
+        <div className="flex flex-col gap-4">
           <dl className="grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
             {facts
               .filter(([, v]) => v)
@@ -258,14 +254,14 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
             </p>
           )}
           <Actions data={data} />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('leads.prospect.fields')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <header className="mb-3">
+          <h2 className="text-base font-medium">{t('leads.prospect.fields')}</h2>
+        </header>
+        <div>
           <ul aria-label={t('leads.prospect.fields')}>
             {CONTACT_KEYS.map((k) => {
               const field = p.contact[k];
@@ -281,15 +277,15 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
             {p.size && <FieldRow label={t('leads.fields.size')} field={p.size} text={sizeText(t, p.size.value)} />}
           </ul>
           {p.notes && <p className="mt-3 whitespace-pre-wrap text-sm">{p.notes}</p>}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {p.signals.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('leads.prospect.signals')}</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+          <header className="mb-3">
+            <h2 className="text-base font-medium">{t('leads.prospect.signals')}</h2>
+          </header>
+          <div>
             <ul className="flex flex-col gap-2 text-sm" aria-label={t('leads.prospect.signals')}>
               {p.signals.map((s, i) => (
                 <li key={i} className="flex flex-col">
@@ -300,21 +296,21 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
                 </li>
               ))}
             </ul>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('leads.prospect.scores')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <header className="mb-3">
+          <h2 className="text-base font-medium">{t('leads.prospect.scores')}</h2>
+        </header>
+        <div>
           {data.scores.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noScores')}</p>
           ) : (
             <ol className="flex flex-col gap-3" aria-label={t('leads.prospect.scores')}>
               {data.scores.map((s) => (
-                <li key={s.id} className="rounded-lg border border-border p-3 text-sm" data-testid="score">
+                <li key={s.id} className="border-b border-border py-3 text-sm last:border-b-0" data-testid="score">
                   <div className="flex flex-wrap items-baseline gap-2">
                     <span className="text-lg font-semibold tabular-nums">{s.score}</span>
                     <span className="text-caption text-muted-foreground">
@@ -356,14 +352,14 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
               ))}
             </ol>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('leads.prospect.duplicates')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <header className="mb-3">
+          <h2 className="text-base font-medium">{t('leads.prospect.duplicates')}</h2>
+        </header>
+        <div>
           {data.duplicate_candidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noDuplicates')}</p>
           ) : (
@@ -382,14 +378,14 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('leads.prospect.history')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section className="border-b border-border px-4 py-5 last:border-b-0 sm:px-6">
+        <header className="mb-3">
+          <h2 className="text-base font-medium">{t('leads.prospect.history')}</h2>
+        </header>
+        <div>
           {data.ledger.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('leads.prospect.noHistory')}</p>
           ) : (
@@ -409,8 +405,8 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
               ))}
             </ol>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

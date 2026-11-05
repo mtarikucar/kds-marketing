@@ -293,7 +293,7 @@ function PiecePreview({
     <div
       role="group"
       aria-label={t('studio.preview')}
-      className="space-y-2 rounded-md border border-border bg-surface-muted p-3 text-sm"
+      className="space-y-3 border-s-2 border-border bg-surface-muted/50 px-4 py-3 text-sm"
     >
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
         <dt className="text-muted-foreground">{t('studio.publishTo')}</dt>
@@ -408,7 +408,7 @@ function SlotEditor({
       role="group"
       aria-labelledby={headingId}
       id={`slot-editor-${id}`}
-      className="space-y-5 rounded-lg border border-border bg-surface p-4 sm:p-5"
+      className="space-y-5 border-y border-border bg-surface-muted/40 py-5"
       data-testid="slot-detail"
     >
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
@@ -626,15 +626,15 @@ export function StudioToday({
         {data?.today.slots.map(({ slot, overdue }) => (
           <li
             key={slot.id}
-            className="space-y-2 border-b border-border pb-3"
+            className="space-y-4 border-b border-border pb-6"
             data-testid={`today-${slot.id}`}
           >
             <div className="flex flex-wrap justify-between gap-2">
-              <button className={`${buttonClass} text-start`} {...editorToggle(slot.id)}>
+              <button className="min-h-10 text-start text-lg font-medium underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:ring-2 focus-visible:ring-ring" {...editorToggle(slot.id)}>
                 {data.hypotheses.find((h) => h.id === slot.chain.hypothesis_id)?.title ??
                   t('studio.detail')}
               </button>
-              <span className="text-sm">{t(`studio.${slot.state}`)}</span>
+              <span className="self-center text-xs text-muted-foreground">{t(`studio.${slot.state}`)}</span>
             </div>
             {awaiting(slot.id) && !screen(slot) && (
               <PiecePreview slot={slot} arms={arms} accounts={accounts.data} />
@@ -660,7 +660,7 @@ export function StudioToday({
             )}
             {manage && awaiting(slot.id) && !screen(slot) && (
               <button
-                className={buttonClass}
+                className="min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 disabled={approve.isPending}
                 onClick={() =>
                   approve.mutate({ target: { slot: slot.id }, revision: slot.revision })
@@ -691,7 +691,7 @@ export function StudioToday({
           </div>
         ))}
       {data?.today.budget_moves.map((m) => (
-        <div key={m.id} className="space-y-2 border-b border-border pb-3">
+        <div key={m.id} className="space-y-4 border-b border-border pb-6">
           <p className="text-sm">
             {t('studio.dailyBudget')}: {formatMoney(m.daily_budget_minor, m.currency, i18n.language)} ·{' '}
             {t(`studio.budgetState.${m.state}`)}
@@ -704,7 +704,7 @@ export function StudioToday({
           {manage &&
             data.today.approvals.some((a) => 'budget_move' in a && a.budget_move === m.id) && (
               <button
-                className={buttonClass}
+                className="min-h-10 rounded-md border border-primary bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                 disabled={approve.isPending}
                 onClick={() =>
                   approve.mutate({ target: { budget_move: m.id }, revision: m.revision })

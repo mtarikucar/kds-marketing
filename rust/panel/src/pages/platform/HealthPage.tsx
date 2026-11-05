@@ -28,7 +28,7 @@ export function HealthPage() {
   return <>
     <PageHeader title={t('platform.health.title')} description={t('platform.health.description')}/>
     <QueryState query={health}>{h && <>
-      <dl className="grid gap-x-8 gap-y-6 rounded-lg border border-border bg-surface p-6 text-sm [&_dt]:text-muted-foreground [&_dd]:mt-1 [&_dd]:font-medium sm:grid-cols-3">
+      <dl className="grid gap-x-8 gap-y-6 border-y border-border py-6 text-sm [&_dt]:text-muted-foreground [&_dd]:mt-1 [&_dd]:font-medium sm:grid-cols-3">
         {(['database','files','disk','connectors_state'] as const).map(k=><div key={k}><dt>{t(`platform.health.${k}`)}</dt><dd>{t(`platform.health.${h[k]}`)}</dd></div>)}
         <div><dt>{t('platform.health.boot')}</dt><dd>{t(h.boot_complete?'platform.health.ok':'platform.health.degraded')}</dd></div>
         <div><dt>{t('platform.health.diskBytes')}</dt><dd>{h.disk_available_bytes==null?t('platform.health.unknown'):formatBytes(h.disk_available_bytes,i18n.language)}</dd></div>
@@ -42,7 +42,7 @@ export function HealthPage() {
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.webhooks')}</h2><p>{t('platform.health.accepted')}: {h.webhooks.accepted} · {t('platform.health.unrouted')}: {h.webhooks.unrouted} · {t('platform.health.unresolved')}: {h.webhooks.unresolved}</p></section>
       <section className="space-y-2 border-t border-border pt-5 text-sm leading-6"><h2 className="font-display text-h3">{t('platform.health.backup')}</h2><p>{t(`platform.health.${h.backup.backup_state}`)} · {date(h.backup.last_backup_at)}</p><p>WAL: {t(`platform.health.${h.backup.wal_state}`)} · {date(h.backup.last_wal_archive_at)}</p></section>
     </>}</QueryState>
-    <form className="max-w-lg space-y-3 rounded-lg border border-border bg-surface p-5" onSubmit={e=>{e.preventDefault();void reset();}}>
+    <form className="max-w-lg space-y-3 border-t border-border pt-6" onSubmit={e=>{e.preventDefault();void reset();}}>
       <h2 className="font-display text-h3">{t('platform.health.reset')}</h2><p className="text-sm text-muted-foreground">{t('platform.health.resetHelp')}</p>
       <label htmlFor="operator-id">{t('platform.health.operator')}</label><Input id="operator-id" required value={operator} onChange={e=>setOperator(e.target.value)} pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"/>
       <label htmlFor="operator-password">{t('platform.health.password')}</label><Input id="operator-password" type="password" autoComplete="new-password" required value={password} onChange={e=>setPassword(e.target.value)}/>

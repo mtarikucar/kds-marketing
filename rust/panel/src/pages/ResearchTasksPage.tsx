@@ -131,13 +131,13 @@ function TaskCard({ item }: { item: TaskOut }) {
     guard((release) => close.mutate(undefined, { onSettled: release }));
   };
   return (
-    <Card data-testid="research-task" className="border-s-4 border-s-primary/60">
-      <CardHeader className="flex-row flex-wrap items-center gap-2">
-        <CardTitle className="text-base">{taskLabel(t, task)}</CardTitle>
+    <article data-testid="research-task" className="border-b border-border py-5">
+      <header className="mb-3 flex flex-wrap items-center gap-2">
+        <h2 className="text-base font-medium">{taskLabel(t, task)}</h2>
         <Badge tone={task.status === 'open' ? 'success' : 'neutral'}>{t(`leads.tasks.statuses.${task.status}`)}</Badge>
         {task.kind.type === 'ad_hoc' && <Badge tone="info">{t('leads.tasks.target', { n: task.kind.target_count })}</Badge>}
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      </header>
+      <div className="flex flex-col gap-3">
         <BriefView brief={task.brief} />
         <p className="text-sm">
           {t('leads.tasks.remaining', { remaining: item.remaining_today, cap: task.daily_cap })}
@@ -193,8 +193,8 @@ function TaskCard({ item }: { item: TaskOut }) {
         <Disclosure title={t('leads.tasks.progress')}>
           <TaskProgress id={task.id} />
         </Disclosure>
-      </CardContent>
-    </Card>
+      </div>
+    </article>
   );
 }
 
@@ -359,7 +359,7 @@ export function ResearchTasksPage() {
             action={<Button variant="outline" onClick={() => setStatus('')}>{t('leads.filteredEmpty.clear')}</Button>} /> :
           <EmptyState title={t('leads.tasks.empty')} description={t('leads.tasks.emptyBody')} />
         ) : (
-          <div className="flex flex-col gap-3">
+          <div className="border-t border-border">
             {items.map((item) => (
               <TaskCard key={item.task.id} item={item} />
             ))}

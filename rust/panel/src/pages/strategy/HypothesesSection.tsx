@@ -110,7 +110,7 @@ export function HypothesesSection({
   return (
     <Card className="rounded-none border-0 border-t border-border bg-transparent py-6 shadow-none">
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 px-0 pb-4 pt-0">
-        <CardTitle>{t('strategy.sections.hypotheses')}</CardTitle>
+        <CardTitle className="text-lg font-normal">{t('strategy.sections.hypotheses')}</CardTitle>
         {editable && rows === null && (
           <Button variant="ghost" size="sm" onClick={() => setRows(hypotheses.map(toRow))}>
             <Pencil className="h-3.5 w-3.5" aria-hidden="true" />

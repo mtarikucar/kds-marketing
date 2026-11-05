@@ -1,7 +1,6 @@
 import animate from 'tailwindcss-animate';
 
-// Copied from the v1 frontend's tailwind.config.js (the design kit's theme), with the content
-// globs pointed at this package. Keep the two in step when the kit's visual language changes.
+// Jeeta's workbench scale. The legacy marketing application has its own theme.
 
 /** @type {import('tailwindcss').Config} */
 export default {
@@ -18,13 +17,13 @@ export default {
     extend: {
       // Console type scale (additive — Tailwind's default text-* sizes remain).
       fontSize: {
-        micro: ['0.75rem', { lineHeight: '1rem', letterSpacing: '0.04em' }],
+        micro: ['0.75rem', { lineHeight: '1rem', letterSpacing: '0' }],
         caption: ['0.8125rem', { lineHeight: '1.125rem' }],
         'body-lg': ['1.0625rem', { lineHeight: '1.6rem' }],
-        h3: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '600' }],
-        h2: ['1.375rem', { lineHeight: '1.75rem', fontWeight: '650' }],
-        h1: ['1.75rem', { lineHeight: '2.1rem', letterSpacing: '-0.025em', fontWeight: '600' }],
-        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.03em', fontWeight: '600' }],
+        h3: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '500' }],
+        h2: ['1.375rem', { lineHeight: '1.75rem', fontWeight: '500' }],
+        h1: ['2rem', { lineHeight: '2.5rem', letterSpacing: '-0.025em', fontWeight: '400' }],
+        display: ['2.25rem', { lineHeight: '2.5rem', letterSpacing: '-0.03em', fontWeight: '500' }],
       },
       colors: {
         border: {
@@ -192,9 +191,9 @@ export default {
       },
 
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-        heading: ['Outfit', 'system-ui', 'sans-serif'],
-        display: ['Outfit', 'Inter', 'system-ui', 'sans-serif'],
+        sans: ['IBM Plex Sans', 'system-ui', '-apple-system', 'sans-serif'],
+        heading: ['IBM Plex Sans', 'system-ui', 'sans-serif'],
+        display: ['IBM Plex Sans', 'system-ui', 'sans-serif'],
       },
 
       spacing: {

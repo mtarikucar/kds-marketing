@@ -133,7 +133,7 @@ export function LedgerPage() {
       </form>
       <QueryState query={ledger}>
         {entries.length === 0 ? (
-          <EmptyState icon={<img src="/brand/scenes/activity.svg" alt="" width={120} height={96} />} title={t('ledger.empty')} description={t('ledger.emptyBody')} />
+          <EmptyState title={t('ledger.empty')} description={t('ledger.emptyBody')} />
         ) : (
           <div className="flex min-w-0 flex-col gap-3">
             <div className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface">

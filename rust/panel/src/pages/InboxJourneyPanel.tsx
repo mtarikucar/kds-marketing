@@ -14,7 +14,7 @@ import { formatMoney } from '@/lib/format';
 import { InboxQuotes, InboxAppointments } from './InboxOffers';
 import { InboxMergeBanner } from './InboxMerges';
 import {
-  columnClass,
+  journeyClass,
   InboxActorLabel,
   InboxTime,
   selectClass,
@@ -201,7 +201,7 @@ function EventForm({ journeyId }: { journeyId: string }) {
           {t('inbox.saved')}
         </p>
       )}
-      <Button type="submit" disabled={!valid} loading={save.isPending}>
+      <Button type="submit" variant="outline" disabled={!valid} loading={save.isPending}>
         {t('inbox.report')}
       </Button>
     </form>
@@ -259,17 +259,15 @@ export function InboxJourneyPanel({
   );
   const journey = data.data?.journey;
   return (
-    <aside className={`${columnClass} xl:sticky xl:top-4 xl:max-h-[calc(100dvh-9rem)] xl:overflow-y-auto`} aria-label={t('inbox.journey')}>
-      <h2 className="font-display text-h3">{t('inbox.journey')}</h2>
+    <aside className={`${journeyClass} xl:max-h-[calc(100dvh-8rem)] xl:overflow-y-auto`} aria-label={t('inbox.journey')}>
+      <h2 className="text-sm font-medium">{t('inbox.journey')}</h2>
       <QueryState query={data}>
         {journey && (
           <>
-            <div>
-              <Badge
-                tone={journey.status === 'lost' ? 'danger' : journey.status === 'won' ? 'success' : 'primary'}
-              >
+            <div className={`border-l-2 py-1 pl-3 ${journey.status === 'lost' ? 'border-danger' : journey.status === 'won' ? 'border-success' : 'border-brand-accent'}`}>
+              <p className="font-display text-lg font-normal">
                 {data.data?.status_label_overrides?.[journey.status] ?? t(`inbox.status.${journey.status}`)}
-              </Badge>
+              </p>
               {journey.lost_reason && <p className="mt-2 text-sm">{journey.lost_reason.reason_label}</p>}
             </div>
             {journey.status === 'lost' && reopenInbound && manage && isOwnerOrManager(session.data) && (
@@ -278,7 +276,7 @@ export function InboxJourneyPanel({
               </Button>
             )}
             <ErrorCallout error={reopen.error} />
-            <div className="flex flex-col gap-2 rounded-lg bg-surface-muted p-3">
+            <div className="flex flex-col gap-2">
               <h3 className="text-sm font-medium">{t('inbox.owner')}</h3>
               {manage ? (
                 <label className="flex min-w-0 flex-col gap-2 text-sm">
@@ -310,13 +308,13 @@ export function InboxJourneyPanel({
             </div>
             <InboxMergeBanner personId={personId ?? journey.person_id} />
             <section>
-              <h3 className="mb-3 font-medium">{t('inbox.timeline')}</h3>
-              <ol className="ml-1 flex max-h-80 flex-col gap-5 overflow-y-auto border-l-2 border-border py-1 pl-4 pr-1">
+              <h3 className="mb-3 text-sm font-medium">{t('inbox.timeline')}</h3>
+              <ol className="ml-1 flex max-h-80 flex-col gap-5 overflow-y-auto border-l border-border-strong py-1 pl-4 pr-1">
                 {data.data?.events
                   .slice()
                   .sort((a, b) => a.at.localeCompare(b.at))
                   .map((event) => (
-                    <li key={event.id} className="relative text-sm before:absolute before:-left-[22px] before:top-1 before:h-2.5 before:w-2.5 before:rounded-full before:border-2 before:border-surface before:bg-border-strong">
+                    <li key={event.id} className="relative text-caption before:absolute before:-left-5 before:top-1 before:h-2 before:w-2 before:rounded-full before:border-2 before:border-surface-muted before:bg-border-strong">
                       <InboxActorLabel actor={event.source} />
                       <p className="font-medium">{t(`inbox.eventKind.${eventName(event.kind)}`)}</p>
                       <EventDetails event={event} />
@@ -334,7 +332,7 @@ export function InboxJourneyPanel({
             <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.tasks')}</h3>
               {data.data?.tasks.map((task) => (
-                <div key={task.id} id={`task-${task.id}`} className={`flex flex-col items-start gap-2 rounded-lg border p-3 text-sm ${task.status === 'open' ? 'border-border-strong bg-surface' : 'border-border bg-surface-muted'}`}>
+                <div key={task.id} id={`task-${task.id}`} className={`flex flex-col items-start gap-2 border-l-2 py-2 pl-3 text-sm ${task.status === 'open' ? 'border-brand-accent' : 'border-border'}`}>
                   <p className="font-medium">{task.title}</p>
                   <InboxTime at={task.due_at} />
                   <p>
@@ -405,7 +403,7 @@ export function InboxJourneyPanel({
             <section className="flex flex-col gap-4 border-t border-border pt-5">
               <h3 className="font-medium">{t('inbox.notes')}</h3>
               {data.data?.notes.map((item) => (
-                <div key={item.id} className="space-y-2 rounded-lg border-l-2 border-border-strong bg-surface-muted p-3">
+                <div key={item.id} className="space-y-2 border-l border-border-strong py-1 pl-3">
                   <InboxActorLabel actor={item.author} />
                   <p className="whitespace-pre-wrap text-sm leading-6">{item.text}</p>
                   <InboxTime at={item.at} />

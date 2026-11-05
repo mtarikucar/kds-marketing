@@ -12,7 +12,7 @@ export function ProviderSetup() {
   const {t}=useTranslation();
   // Platform-operator material: tenants never configure provider apps, so it stays folded away
   // (and, being unmounted while closed, fetches nothing).
-  return <Card><CardContent className="pt-4"><Disclosure title={t('providerSetup.title')}><ProviderSetupBody/></Disclosure></CardContent></Card>;
+  return <Card className="rounded-none border-0 border-t border-border bg-transparent"><CardContent className="px-0 pb-0 pt-4"><Disclosure title={t('providerSetup.title')}><ProviderSetupBody/></Disclosure></CardContent></Card>;
 }
 
 function ProviderSetupBody() {

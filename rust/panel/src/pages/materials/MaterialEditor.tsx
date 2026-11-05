@@ -56,10 +56,10 @@ export function MaterialEditor({
       <MaterialsReadStatus query={detail} />
       {material && (
         <>
-          <div className={`${cardClass} grid grid-cols-1 gap-4 sm:grid-cols-[10rem_minmax(0,1fr)]`}>
+          <div className={`${cardClass} grid grid-cols-1 gap-6 border-t-2 border-foreground bg-surface px-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6`}>
             <MediaThumb mime={material.mime} alt={materialLabel(t, material)} />
             <div className="min-w-0 space-y-2">
-              <h3 className="break-words text-lg font-semibold">{materialLabel(t, material)}</h3>
+              <h3 className="break-words text-xl font-normal">{materialLabel(t, material)}</h3>
               <MaterialBadges material={material} />
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">{t('materials.editor.origin')}</dt>

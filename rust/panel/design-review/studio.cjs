@@ -175,8 +175,8 @@ for (const [name,url,endpoint,data] of [
  const browser=await chromium.launch({args:['--no-sandbox']}); const results=process.env.JEETA_REVIEW_RESUME && fs.existsSync(path.join(out,'results.json')) ? JSON.parse(fs.readFileSync(path.join(out,'results.json'),'utf8')).results : [];
  const save=()=>fs.writeFileSync(path.join(out,'results.json'),JSON.stringify({baseUrl,at:new Date().toISOString(),results},null,2)+'\n');
  try {
-  for (const scenario of scenarios.filter(s=>!process.env.JEETA_REVIEW_FILTER||s.name.includes(process.env.JEETA_REVIEW_FILTER))) {
-   for (const width of [1440,390]) {
+  for (const scenario of scenarios.filter(s=>(!process.env.JEETA_REVIEW_CASES||process.env.JEETA_REVIEW_CASES.split(',').includes(s.name))&&(!process.env.JEETA_REVIEW_FILTER||s.name.includes(process.env.JEETA_REVIEW_FILTER)))) {
+   for (const width of (process.env.JEETA_REVIEW_WIDTHS || '1440,390').split(',').map(Number)) {
     const prior=results.findIndex(r=>r.scenario===scenario.name&&r.width===width);
     if(prior>=0 && results[prior].passed && !results[prior].unexpected.length)continue;
     if(prior>=0)results.splice(prior,1);

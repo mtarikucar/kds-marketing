@@ -58,7 +58,10 @@
     "people": "People",
     "calls": "Calls",
     "prospects": "Prospects",
-    "outreach": "Campaigns"
+    "outreach": "Campaigns",
+    "workGroup": "Customer work",
+    "growthGroup": "Planning",
+    "workspaceGroup": "Workspace"
   },
   "shell": {
     "workspace": "Workspace",
@@ -245,7 +248,7 @@
   },
   "login": {
     "title": "Sign in",
-    "description": "Sign in to your workspace with your email and password.",
+    "description": "Sign in to your workspace with your email and password",
     "submit": "Sign in",
     "invalid": "The email or password is wrong.",
     "noAccount": "No account yet?",
@@ -253,14 +256,14 @@
   },
   "register": {
     "title": "Sign up",
-    "description": "Create your account and your first workspace.",
+    "description": "Create your account and your first workspace",
     "submit": "Create account",
     "haveAccount": "Already have an account?",
     "loginLink": "Sign in"
   },
   "invite": {
     "title": "Accept invite",
-    "description": "You have been invited to a workspace.",
+    "description": "You have been invited to a workspace",
     "signedInAs": "You are signed in as {{email}}. You can accept the invite with this account.",
     "accept": "Accept invite",
     "newUser": "No account yet? Join by entering your name and a password.",
@@ -274,8 +277,8 @@
     "goHome": "Go to the panel"
   },
   "home": {
-    "title": "Home",
-    "description": "Your next decisions, follow-ups, and workspace status.",
+    "title": "Work overview",
+    "description": "Customer conversations, pending decisions and the next follow-up",
     "slug": "Slug",
     "status": "Status",
     "myRole": "Your role",
@@ -293,8 +296,8 @@
       "submittedWait": "It takes effect once an owner or a manager approves it.",
       "approve": "Approve",
       "approvedTitle": "The strategy is in force",
-      "approvedBody": "Version in force: {{number}}.",
-      "hypotheses": "Hypotheses: {{count}}.",
+      "approvedBody": "Version {{number}} in effect",
+      "hypotheses": "{{count}} active hypotheses",
       "label": "Strategy"
     },
     "inactive": {
@@ -361,7 +364,7 @@
   },
   "team": {
     "title": "Team",
-    "description": "The workspace's members and pending invites.",
+    "description": "The workspace's members and pending invites",
     "invite": "Invite member",
     "columns": {
       "member": "Member",
@@ -391,7 +394,7 @@
   },
   "roles": {
     "title": "Roles",
-    "description": "System roles are fixed; custom roles carry their own permissions.",
+    "description": "System roles are fixed; custom roles carry their own permissions",
     "create": "Create role",
     "columns": {
       "name": "Name",
@@ -418,7 +421,7 @@
   },
   "apiKeys": {
     "title": "API keys",
-    "description": "Agents connect to this workspace with these keys.",
+    "description": "Agents connect to this workspace with these keys",
     "create": "Create key",
     "columns": {
       "name": "Name",
@@ -455,7 +458,7 @@
   },
   "agents": {
     "title": "Agents",
-    "description": "Clients that have connected to this workspace with its API keys.",
+    "description": "Clients that have connected to this workspace with its API keys",
     "columns": {
       "client": "Client",
       "version": "Version",
@@ -473,7 +476,7 @@
   },
   "ledger": {
     "title": "Ledger",
-    "description": "Everything that happens in the workspace; agent and human actions side by side.",
+    "description": "Everything that happens in the workspace; agent and human actions side by side",
     "filter": "Action filter",
     "filterPlaceholder": "e.g. team.",
     "apply": "Filter",
@@ -577,7 +580,7 @@
   },
   "strategy": {
     "title": "Strategy",
-    "description": "The workspace's approved strategy and the draft being worked out.",
+    "description": "The workspace's approved strategy and the draft being worked out",
     "tabs": {
       "approved": "Approved",
       "draft": "Draft"
@@ -747,7 +750,7 @@
   },
   "capabilities": {
     "title": "Capabilities",
-    "description": "The accounts, devices and tools the workspace can act through.",
+    "description": "The accounts, devices and tools the workspace can act through",
     "declare": "Declare a capability",
     "filterLabel": "Kind group",
     "filterAll": "All",
@@ -1225,7 +1228,7 @@
   },
   "budget": {
     "title": "Budget",
-    "description": "The workspace's own money and caps: ad budget, SMS, agent quota, consumables.",
+    "description": "The workspace's own money and caps: ad budget, SMS, agent quota, consumables",
     "create": "Create a budget item",
     "columns": {
       "name": "Name",
@@ -1349,7 +1352,7 @@
     },
     "emailSubject": "Email subject",
     "title": "Inbox",
-    "description": "Reply to conversations and manage journeys and follow-ups.",
+    "description": "Reply to conversations and manage journeys and follow-ups",
     "queues": "Queues",
     "search": "Search people",
     "empty": "No conversations in this queue.",
@@ -1920,7 +1923,7 @@
       "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
       "noCover": "No preview"
     },
-    "description": "Plan content, review today’s work, and learn from results.",
+    "description": "Plan content, review today’s work, and learn from results",
     "emptyPlanHelp": "Scheduled content will appear here. Add your source materials to prepare the next piece.",
     "addMaterials": "Add materials",
     "filters": {
@@ -1936,7 +1939,7 @@
   },
   "billing": {
     "title": "Payment and activation",
-    "description": "Permanent access with a one-time bank transfer and operator confirmation.",
+    "description": "Permanent access with a one-time bank transfer and operator confirmation",
     "stages": {
       "pending_payment": "Awaiting payment",
       "approval": "Awaiting operator confirmation",
@@ -1964,7 +1967,7 @@
   },
   "onboarding": {
     "title": "First-run setup",
-    "description": "Progress is read from the current workspace state.",
+    "description": "Progress is read from the current workspace state",
     "paymentConfirmed": "Payment confirmed",
     "paymentPending": "Awaiting payment confirmation",
     "strategy": "Strategy",
@@ -2021,7 +2024,7 @@
   },
   "people": {
     "title": "People",
-    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet.",
+    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet",
     "search": "Search by name or company",
     "empty": "No people yet.",
     "noMatch": "No matching people.",
@@ -3399,7 +3402,7 @@
   },
   "publicIntro": {
     "title": "Every connection has a next step.",
-    "description": "Manage customer relationships, content and daily work in one shared workspace.",
+    "description": "Manage customer relationships, content and daily work in one shared workspace",
     "people": {
       "title": "Keep the conversation going",
       "description": "Contacts and conversations with a shared history for your team."

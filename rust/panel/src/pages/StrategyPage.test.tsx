@@ -33,7 +33,7 @@ describe('StrategyPage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: tr.strategy.title })).toBeInTheDocument();
     expect(await screen.findByText('Atölye videoları öğrencileri çeker')).toBeInTheDocument();
     expect(screen.getByText(i18n.t('strategy.versionLabel', { number: 1 }))).toBeInTheDocument();
-    expect(screen.getByText('owner@alpha.example')).toBeInTheDocument();
+    expect(within(screen.getByRole('main')).getByText('owner@alpha.example')).toBeInTheDocument();
     expect(screen.getByText(tr.strategy.hypotheses.states.kept)).toBeInTheDocument();
   });
 

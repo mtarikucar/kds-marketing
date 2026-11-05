@@ -57,7 +57,7 @@ export function Disclosure({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-center justify-between gap-2 text-start"
       >
-        <span className="text-caption font-semibold text-muted-foreground">
+        <span className="text-caption font-medium text-muted-foreground">
           {title}
         </span>
         <span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground">

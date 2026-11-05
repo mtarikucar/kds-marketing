@@ -31,7 +31,7 @@ export const AccordionTrigger = forwardRef<
       ref={ref}
       className={cn(
         'flex flex-1 items-center justify-between py-4 text-sm font-medium text-foreground',
-        'transition-all duration-base hover:text-primary',
+        'transition-colors duration-base hover:text-primary',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring]',
         // Chevron rotates when open
         '[&[data-state=open]>svg]:rotate-180',

@@ -96,8 +96,8 @@ export function StudioPage() {
           )}
         </TabsContent>
         <TabsContent value="studio" className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(9rem,12rem)_minmax(9rem,12rem)]">
-            <Field label="filters.hypothesis">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(9rem,12rem)_minmax(9rem,12rem)]">
+            <div className="col-span-2 sm:col-span-1"><Field label="filters.hypothesis">
               <select
                 className={inputClass}
                 value={hypothesis}
@@ -113,7 +113,7 @@ export function StudioPage() {
                   </option>
                 ))}
               </select>
-            </Field>
+            </Field></div>
             <Field label="filters.from">
               <input
                 className={inputClass}
@@ -143,7 +143,7 @@ export function StudioPage() {
           </div>
           {!allowed && <p role="alert">{t('studio.forbidden')}</p>}
           {allowed && <StudioReadStatus query={overview} />}
-          <div className="grid grid-cols-1 items-start gap-7 xl:grid-cols-[minmax(0,1.65fr)_minmax(18rem,1fr)]">
+          <div className="grid grid-cols-1 items-start gap-x-8 gap-y-8 xl:grid-cols-[minmax(0,2.2fr)_minmax(18rem,1fr)]">
             <StudioStrategyBar
               data={data}
               manage={manage}
