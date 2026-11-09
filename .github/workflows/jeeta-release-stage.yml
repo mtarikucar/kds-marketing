@@ -1,0 +1,81 @@
+name: Jeeta verified staging release
+on:
+  push:
+    branches: [ops/release-dd66e8dc]
+    paths: [.github/workflows/jeeta-release-stage.yml]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: jeeta-staging-operation
+  cancel-in-progress: false
+jobs:
+  candidate-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require the complete exact-revision Rust pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 80); do
+            gh api repos/mtarikucar/kds-marketing/actions/runs/42587675461 > "$RUNNER_TEMP/candidate-run.json"
+            python3 - "$RUNNER_TEMP/candidate-run.json" <<'PY'
+          import json,sys
+          r=json.load(open(sys.argv[1]))
+          assert r['head_sha']=='8537c403b799ea1966a58004adf70c3c07cf5ebe'
+          assert r['event']=='push' and r['path']=='.github/workflows/rust.yml'
+          print('Candidate CI:',r['status'],r['conclusion'])
+          PY
+            if test "$(jq -r .status "$RUNNER_TEMP/candidate-run.json")" = completed; then
+              test "$(jq -r .conclusion "$RUNNER_TEMP/candidate-run.json")" = success
+              exit 0
+            fi
+            sleep 30
+          done
+          echo '::error::Full candidate CI has not passed; no deployment'
+          exit 1
+  publish-staging:
+    needs: candidate-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '13660545466'
+          run-id: '42587675461'
+          github-token: ${{ github.token }}
+          path: candidate
+          merge-multiple: true
+      - name: Verify the reviewed archive and operator script
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' eaa1c1fd27a5fe8126a8b54260a09f74df3c27ebbab25939269708afe73b99e9 candidate/jeeta-release.tar | sha256sum --check --status
+          printf '%s  %s\n' b43ee551be6a4a63486f73d46f48299b3beced83210b3345feac6a129a9c4799 ops/publish-release.sh | sha256sum --check --status
+          bash -n ops/publish-release.sh
+          chmod 0600 candidate/jeeta-release.tar
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: '38.242.233.166'
+      - name: Transfer the verified complete candidate
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-8537c403.tar
+          ssh -o BatchMode=yes root@38.242.233.166 'chmod 0600 /root/jeeta-release-8537c403.tar'
+      - name: Verify backup restoration and migration before staging swap
+        run: |
+          ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 \
+            'bash -s -- staging 8537c403b799ea1966a58004adf70c3c07cf5ebe eaa1c1fd27a5fe8126a8b54260a09f74df3c27ebbab25939269708afe73b99e9' < ops/publish-release.sh
+      - name: Read nonsecret publication receipt
+        run: |
+          ssh -o BatchMode=yes root@38.242.233.166 'cat /var/backups/jeeta-release/promotions/8537c403b799ea1966a58004adf70c3c07cf5ebe.staging.json' > staging-receipt.json
+          cat staging-receipt.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-staging-8537c403-receipt
+          path: staging-receipt.json
+          retention-days: 14
