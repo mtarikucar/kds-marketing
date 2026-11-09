@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Reviewed host-side operation. Invoke only after the exact revision's complete Rust CI passes.
-# Usage: publish-release.sh staging|production FULL_REVISION ARCHIVE_SHA256
-# Production means the EXISTING Rust installation at yeni.jeetagrowth.com; no legacy-domain cutover.
+# Usage for this reviewed candidate: publish-release.sh staging FULL_REVISION ARCHIVE_SHA256
+# The retained production branch is disabled by the explicit staging-only guard below.
 # Never execute this file merely to validate it: bash -n is the local syntax check.
 set -euo pipefail
 umask 077
 fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
-[[ $# == 3 ]] || fail 'usage: staging|production FULL_REVISION ARCHIVE_SHA256'
+[[ $# == 3 ]] || fail 'usage: staging FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
-PINNED_REV=19093007ceec63c4e47a459e8b2019d9c515ebe8
+[[ "$ENVIRONMENT" == staging ]] || fail 'this reviewed operation is authorized for staging only'
+PINNED_REV=e7b495a08443a67876947fabaf4a61a2dfee551b
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid archive digest'
 [[ "$EUID" == 0 ]] || fail 'run as root on the audited installation'
@@ -21,7 +22,7 @@ case "$ENVIRONMENT" in
     UNIT=jeeta-staging.service LINK=/opt/jeeta/staging-current OTHER_LINK=/opt/jeeta/current
     ENVFILE=/etc/jeeta-staging/jeeta.env PORT=5437 HTTP_PORT=8091 REHEARSAL_PORT=18091
     SERVICE_USER=jeeta-staging FILES=/var/lib/jeeta-staging/files HOST=staging.jeetagrowth.com
-    PREDECESSOR=d42b9e2aa1e719e9741ed5b2f055e0d47fca1952
+    PREDECESSOR=19093007ceec63c4e47a459e8b2019d9c515ebe8
     UPGRADE=/root/staging-upgrade.sh
     UPGRADE_SHA256=120ff74c1b8ae34cc6f9a23328b5425f2c67818a4b9a3b32fd56a9c3b5935929
     BACKUP_ROOT=/var/backups/jeeta-staging/release-operations
@@ -158,7 +159,7 @@ for path in [r,*r.rglob('*')]:
 m=json.loads((r/'manifest.json').read_text())
 assert m['source_revision']==rev and m['source_clean'] is True
 assert (r/'REVISION').read_text().strip()==rev and m['format']==1
-assert m['schema_version']==30 and m['migration_versions']==list(range(1,31))
+assert m['schema_version']==31 and m['migration_versions']==list(range(1,32))
 assert m['binary_checksum']['algorithm']=='sha256' and m['panel_checksum']['algorithm']=='sha256'
 assert m['panel_checksum']['manifest']=='panel.sha256'
 assert hashlib.sha256((r/'jeeta').read_bytes()).hexdigest()==m['binary_checksum']['value']
@@ -179,7 +180,7 @@ for entry in m['migrations']:
         assert pathlib.PurePosixPath(name).name==name and name.endswith('.'+direction+'.sql')
         assert hashlib.sha384((r/'migrations'/name).read_bytes()).hexdigest()==entry[direction+'_sha384']
     expected[version]=entry
-assert list(expected)==list(range(1,31))
+assert list(expected)==list(range(1,32))
 assert {p.name for p in (r/'migrations').iterdir()}=={e[k] for e in expected.values() for k in ['up','down']}
 values={}
 for line in pathlib.Path(envfile).read_text().splitlines():
@@ -212,10 +213,10 @@ def sql(query):
 assert sql("SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles WHERE rolname='"+role+"'").strip()=='f|f|t', 'Application role must be ordinary'
 rows=sql("SELECT version,encode(checksum,'hex'),success FROM _sqlx_migrations ORDER BY version")
 actual=[line.split('|') for line in rows.splitlines()]
-versions=list(range(1,29)) if environment=='staging' else list(range(1,20))+list(range(21,26))
+versions=list(range(1,31)) if environment=='staging' else list(range(1,20))+list(range(21,26))
 assert [int(row[0]) for row in actual]==versions, 'Unexpected applied migration set'
 assert all(row==[str(int(row[0])),expected[int(row[0])]['up_sha384'],'t'] for row in actual), 'Changed or failed migration'
-assert set(expected)-set(versions)==({29,30} if environment=='staging' else {20,26,27,28,29,30})
+assert set(expected)-set(versions)==({31} if environment=='staging' else {20,26,27,28,29,30,31})
 old=json.loads((pathlib.Path(previous)/'manifest.json').read_text())
 assert old['source_revision']==pathlib.Path(previous).name
 assert [x['version'] for x in old['migrations']]==versions
@@ -252,7 +253,7 @@ if [[ "$ENVIRONMENT" == production ]]; then
   private_file "$PROMOTIONS/$REV.staging.json"
   python3 -I - "$PROMOTIONS/$REV.staging.json" "$REV" "$ARCHIVE_SHA256" <<'PY'
 import json,sys
-record=json.load(open(sys.argv[1]));assert record['environment']=='staging' and record['revision']==sys.argv[2] and record['archive_sha256']==sys.argv[3] and record['schema_version']==30
+record=json.load(open(sys.argv[1]));assert record['environment']=='staging' and record['revision']==sys.argv[2] and record['archive_sha256']==sys.argv[3] and record['schema_version']==31
 PY
   systemctl is-active --quiet jeeta-staging.service
   curl --fail --silent --max-time 10 --noproxy '*' -H 'Host: staging.jeetagrowth.com' http://127.0.0.1:8091/readyz >/dev/null
@@ -355,8 +356,8 @@ cmp "$CANDIDATE/expected-migrations" "$BACKUP/rehearsed-migrations"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 < "$BACKUP/count-original-tables.sql" > "$BACKUP/rows-after"
 cmp "$BACKUP/rows-before" "$BACKUP/rows-after"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT count(*) FROM pg_class WHERE relname IN ('studio_material_intelligence','studio_material_productions') AND relnamespace='public'::regnamespace AND relrowsecurity AND relforcerowsecurity" > "$BACKUP/analysis-rls"
-[[ $(cat "$BACKUP/analysis-rls") == 2 ]] || fail 'new material tables must force RLS'
+  "SELECT count(*) FROM pg_class WHERE relname IN ('studio_material_intelligence','studio_material_productions','studio_production_projects') AND relnamespace='public'::regnamespace AND relrowsecurity AND relforcerowsecurity" > "$BACKUP/analysis-rls"
+[[ $(cat "$BACKUP/analysis-rls") == 3 ]] || fail 'material and production project tables must force RLS'
 sudo -u postgres dropdb -p "$PORT" "$VERIFY_DB"
 VERIFY_DB=''
 (cd "$BACKUP" && sha256sum database.dump files.tar jeeta.env manifest.json REVISION database-migrations > SHA256SUMS && sha256sum --check --status SHA256SUMS)
@@ -385,7 +386,7 @@ install -d -m 0700 "$PROMOTIONS"
 python3 -I - "$PROMOTIONS" "$ENVIRONMENT" "$REV" "$ARCHIVE_SHA256" "$BACKUP" <<'PY'
 import datetime,json,os,pathlib,sys,tempfile
 root,environment,revision,digest,backup=sys.argv[1:]
-record={'environment':environment,'revision':revision,'archive_sha256':digest,'schema_version':30,'backup':backup,'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+record={'environment':environment,'revision':revision,'archive_sha256':digest,'schema_version':31,'backup':backup,'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
 fd,temp=tempfile.mkstemp(prefix='.promotion-',dir=root)
 with os.fdopen(fd,'w') as f:json.dump(record,f);f.write('\n')
 os.replace(temp,str(pathlib.Path(root)/(revision+'.'+environment+'.json')))
