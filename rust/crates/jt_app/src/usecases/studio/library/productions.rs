@@ -187,6 +187,18 @@ pub async fn material_production_request(
     ctx: &Ctx,
     i: MaterialProductionRequestInput,
 ) -> Result<MaterialProduction, AppError> {
+    let mut r = open(d, ctx).await?;
+    r.studio_control().lock_control().await?;
+    let production = request_production_in(r.as_mut(), d, ctx, i).await?;
+    r.commit().await?;
+    Ok(production)
+}
+pub(crate) async fn request_production_in(
+    r: &mut dyn TenantRepos,
+    d: &Deps,
+    ctx: &Ctx,
+    i: MaterialProductionRequestInput,
+) -> Result<MaterialProduction, AppError> {
     decider(ctx).ok_or_else(|| person_required("material_production"))?;
     key(&i.request_key)?;
     if i.instructions.trim().is_empty()
@@ -215,8 +227,6 @@ pub async fn material_production_request(
         ));
     }
     let payload = json!(hash_token(&encode(&i)?.to_string()));
-    let mut r = open(d, ctx).await?;
-    r.studio_control().lock_control().await?;
     if let Some(v) = r
         .studio()
         .request_replay(
@@ -227,9 +237,7 @@ pub async fn material_production_request(
         .await?
     {
         let receipt: Receipt = decode(v)?;
-        return Ok(load(r.as_mut(), receipt.production_id, None)
-            .await?
-            .production);
+        return Ok(load(r, receipt.production_id, None).await?.production);
     }
     let production = MaterialProduction {
         id: d.ids.uuid(),
@@ -244,7 +252,7 @@ pub async fn material_production_request(
         created_at: ctx.now,
         updated_at: ctx.now,
     };
-    sources(r.as_mut(), &production).await?;
+    sources(r, &production).await?;
     r.studio_productions()
         .save_production(
             ProductionRecord {
@@ -273,7 +281,6 @@ pub async fn material_production_request(
             json!({"kind":production.kind,"source_count":production.sources.len()}),
         )?)
         .await?;
-    r.commit().await?;
     Ok(production)
 }
 pub async fn material_production_claim(

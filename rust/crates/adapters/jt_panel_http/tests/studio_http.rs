@@ -34,6 +34,22 @@ fn studio_routes_have_exact_catalog_twins() {
             ("POST", "/api/studio/slots/{slot_id}/tiktok"),
             ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"),
             // The materials library (spec 2026-11-03 §5.2): its twins, then a human's decisions.
+            ("GET", "/api/studio/projects"),
+            ("POST", "/api/studio/projects"),
+            ("GET", "/api/studio/projects/{project_id}"),
+            ("PATCH", "/api/studio/projects/{project_id}"),
+            ("POST", "/api/studio/projects/{project_id}/materials"),
+            ("POST", "/api/studio/projects/{project_id}/requests"),
+            (
+                "PATCH",
+                "/api/studio/projects/{project_id}/requests/{request_id}"
+            ),
+            ("POST", "/api/studio/projects/{project_id}/productions"),
+            ("POST", "/api/studio/projects/{project_id}/publications"),
+            (
+                "POST",
+                "/api/studio/projects/{project_id}/outputs/{output_id}/schedule"
+            ),
             ("GET", "/api/studio/olays"),
             ("GET", "/api/studio/olays/{olay_id}"),
             ("POST", "/api/studio/olays"),

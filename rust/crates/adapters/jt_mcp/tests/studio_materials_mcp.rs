@@ -110,6 +110,7 @@ const TWINS: &[(&str, Risk, &[&str])] = &[
 
 /// A human's decisions (D4): panel routes, never a tool.
 const HUMAN_ONLY: &[&str] = &[
+    "project_production",
     "olay_confirm",
     "material_permission",
     "material_intelligence_update",

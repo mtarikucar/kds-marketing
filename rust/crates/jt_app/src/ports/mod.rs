@@ -35,6 +35,7 @@ pub mod material_productions;
 pub mod materials;
 pub mod outreach;
 pub mod posts;
+pub mod production_projects;
 pub mod prospects;
 pub mod public;
 pub mod studio;
@@ -1682,6 +1683,7 @@ pub trait TenantRepos: Send + Sync {
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     /// The materials library (`ports::materials`).
+    fn studio_projects(&mut self) -> &mut dyn production_projects::ProjectRepo;
     fn studio_productions(&mut self)
     -> &mut dyn crate::ports::material_productions::ProductionRepo;
     fn studio_materials(&mut self) -> &mut dyn crate::ports::materials::MaterialRepo;

@@ -1,6 +1,12 @@
 //! Strict request schemas shared by the two surfaces.
 use serde_json::{Value, json};
 pub fn input(action: &str) -> Value {
+    if action == "project_schedule" {
+        return super::project_schedule::schema();
+    }
+    if let Some(name) = action.strip_prefix("project_") {
+        return super::projects::schema(name);
+    }
     if action == "ledger_export" {
         return object(json!({"filter":input("ledger")}), &["filter"]);
     }

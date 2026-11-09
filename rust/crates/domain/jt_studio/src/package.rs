@@ -41,6 +41,8 @@ pub enum PackageTrigger {
     Calendar,
     /// A channel went `floor_days` without a feed post (spec D26).
     Floor,
+    /// A production workspace output deliberately scheduled by its owner or delegated agent.
+    Project,
 }
 
 impl PackageTrigger {
@@ -49,6 +51,7 @@ impl PackageTrigger {
             Self::Olay => "olay",
             Self::Calendar => "calendar",
             Self::Floor => "floor",
+            Self::Project => "project",
         }
     }
 }
@@ -170,6 +173,15 @@ impl PackageRequest {
             }
             PackageTrigger::Floor => {
                 self.capability_id.is_some() && self.hints.max_posts == Some(1)
+            }
+            PackageTrigger::Project => {
+                self.key.starts_with("project:")
+                    && self.olay_id.is_none()
+                    && self.occasion.is_none()
+                    && self.year.is_none()
+                    && self.capability_id.is_some()
+                    && self.hints.max_posts == Some(1)
+                    && self.hints.subject == Some(crate::Subject::Generic)
             }
         };
         if !fields_ok {

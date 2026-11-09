@@ -107,6 +107,33 @@ fn request_keys_name_their_trigger() {
     );
 }
 
+#[test]
+fn a_project_request_is_a_named_single_channel_generic_output() {
+    let mut project = PackageRequest {
+        key: format!("project:{}:{}", id(11), id(12)),
+        olay_id: None,
+        capability_id: Some(CapabilityId(id(9))),
+        hints: PackageHints {
+            max_posts: Some(1),
+            subject: Some(Subject::Generic),
+            ..Default::default()
+        },
+        ..request(PackageTrigger::Project)
+    };
+    assert!(project.validate().is_ok());
+    assert_eq!(project.trigger.key(), "project");
+    assert!(project.covers(CapabilityId(id(9))));
+    assert!(!project.covers(CapabilityId(id(10))));
+    project.key = "floor:not-a-project".into();
+    assert!(project.validate().is_err());
+    project.key = format!("project:{}:{}", id(11), id(12));
+    project.olay_id = Some(OlayId(id(3)));
+    assert!(project.validate().is_err());
+    project.olay_id = None;
+    project.hints.max_posts = Some(2);
+    assert!(project.validate().is_err());
+}
+
 fn post() -> PlannedPost {
     PlannedPost {
         slot_id: SlotId(id(1)),

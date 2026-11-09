@@ -1,0 +1,33 @@
+# Example only. Do not install until dedicated runtime authentication and exact-ID proof pass.
+# Use the service account's own normal home/auth directory; never copy cloud-chat credentials.
+[Unit]
+Description=Jeeta bounded image analysis and crop worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jeeta-media-worker
+Group=jeeta-media-worker
+EnvironmentFile=/etc/jeeta-production-worker/worker.env
+WorkingDirectory=/var/lib/jeeta-production-worker
+StateDirectory=jeeta-production-worker
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/jeeta-production-worker/venv/bin/python /opt/jeeta-production-worker/worker.py --poll
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=10
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/jeeta-production-worker
+# Add the dedicated service account's own auth directory only if its CLI needs token refresh.
+# Verify Codex's unprivileged read-only sandbox works with the intended host restrictions.
+MemoryMax=2G
+CPUQuota=100%
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

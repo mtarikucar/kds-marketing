@@ -5,6 +5,7 @@ mod materials;
 mod paid;
 mod posts;
 mod productions;
+mod projects;
 mod queue;
 mod records;
 use crate::{

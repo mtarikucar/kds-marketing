@@ -106,6 +106,15 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.ledger_export",
     // The materials library: the owner gathers materials before and while the strategy is
     // worked out (spec 2026-11-03 D35), uploads included.
+    "studio.project_list",
+    "studio.project_create",
+    "studio.project_get",
+    "studio.project_update",
+    "studio.project_materials",
+    "studio.project_request",
+    "studio.project_request_update",
+    "studio.project_production",
+    "studio.project_publication",
     "studio.file_upload",
     "studio.olays_list",
     "studio.olay_get",

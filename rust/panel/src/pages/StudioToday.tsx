@@ -356,7 +356,7 @@ function CancelForm({ id, revision }: { id: string; revision: number }) {
   );
 }
 
-function SlotEditor({
+export function SlotEditor({
   id,
   close,
   tiktok = false,

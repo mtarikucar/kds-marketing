@@ -4,12 +4,25 @@ fn studio_tools_publish_shared_strict_schemas_and_manage_permission() {
         .into_iter()
         .filter(|t| t.name.starts_with("jeeta.studio."))
         .collect();
-    assert_eq!(tools.len(), 46);
+    assert_eq!(tools.len(), 55);
     for tool in tools {
         let action = tool.name.strip_prefix("jeeta.studio.").unwrap();
         assert_eq!(
             tool.permission,
-            if matches!(action, "brake" | "policy_set" | "approve" | "budget_move") {
+            if matches!(
+                action,
+                "brake"
+                    | "policy_set"
+                    | "approve"
+                    | "budget_move"
+                    | "project_create"
+                    | "project_update"
+                    | "project_materials"
+                    | "project_request"
+                    | "project_request_update"
+                    | "project_publication"
+                    | "project_schedule"
+            ) {
                 jt_tenancy::Permission::StudioManage
             } else {
                 jt_tenancy::Permission::StudioWork

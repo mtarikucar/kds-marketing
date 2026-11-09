@@ -107,6 +107,17 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
 
+  production-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r rust/scripts/production-worker/requirements.txt
+      - name: Media worker contracts (no model or provider calls)
+        run: python -m unittest discover -s rust/scripts/production-worker -p 'test_*.py' -v
+
   restore-drill:
     runs-on: ubuntu-24.04
     defaults:

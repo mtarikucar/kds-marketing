@@ -27,6 +27,7 @@ pub use intelligence::*;
 pub use items::*;
 pub(crate) use kvkk::erase_person;
 pub use olays::*;
+pub(crate) use productions::request_production_in;
 pub use productions::*;
 pub use shoots::*;
 

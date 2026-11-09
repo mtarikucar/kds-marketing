@@ -37,8 +37,8 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// posting policy of `0022_studio_posts`, the templates, campaigns, enrollments and sends of
 /// `0026_outreach`, the rep profiles, rules and assignment log of `0027_distribution`, and the
 /// mail files of `0028_mail_files` and the material intelligence and production tables of
-/// `0029` and `0030`.
-const TABLES_AFTER_ALL: i64 = 102;
+/// `0029` and `0030`, plus production projects of `0031`.
+const TABLES_AFTER_ALL: i64 = 103;
 
 /// The tables before `0028_mail_files` adds `mail_files`.
 const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
@@ -46,12 +46,12 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0030_material_productions`.
-const MIGRATIONS: i64 = 30;
+/// Migrations `0001_foundation` through `0031_production_projects`.
+const MIGRATIONS: i64 = 31;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
-    (1..=30).collect()
+    (1..=31).collect()
 }
 
 /// The tables of `0019_inbox_public`, each with its one row-level policy.
@@ -259,6 +259,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0031_production_projects",
         "0030_material_productions",
         "0029_material_intelligence",
         "0028_mail_files",
@@ -1010,6 +1011,7 @@ async fn migration_round_trip_23_36_23_36() {
     // Newest first: the mail files and the leads tables reference the inbox tables, the planned
     // posts the materials library and the Studio tables, the materials library the Studio tables,
     // the public items and the call tables the inbox tables.
+    project_tables_down(&db.pool).await;
     material_tables_down(&db.pool).await;
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0028_mail_files.down.sql"
@@ -1195,6 +1197,7 @@ async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     // Newest first: the mail files and the leads tables reference the inbox tables, the planned
     // posts the materials library and the Studio tables, the materials library the Studio tables.
+    project_tables_down(&db.pool).await;
     material_tables_down(&db.pool).await;
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0028_mail_files.down.sql"
@@ -1319,6 +1322,7 @@ async fn studio_migration_up_down_up() {
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
+    project_tables_down(&db.pool).await;
     material_tables_down(&db.pool).await;
     for sql in [
         posts_down,
@@ -1334,6 +1338,7 @@ async fn studio_migration_up_down_up() {
         posts_up,
         include_str!("../../../../migrations/0029_material_intelligence.up.sql"),
         include_str!("../../../../migrations/0030_material_productions.up.sql"),
+        include_str!("../../../../migrations/0031_production_projects.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1360,6 +1365,14 @@ async fn outreach_down(pool: &PgPool) {
     let down = std::fs::read_to_string(migrations_dir().join("0026_outreach.down.sql")).unwrap();
     try_run(pool, &down).await.unwrap();
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
+}
+
+/// Revert the project trigger extension before dropping the canonical posts table.
+/// Historical full rollbacks remove this independent project table as well; narrower
+/// library-side-table checks intentionally retain it in TABLES_AFTER_ALL-based counts.
+async fn project_tables_down(pool: &PgPool) {
+    let down = include_str!("../../../../migrations/0031_production_projects.down.sql");
+    try_run(pool, down).await.unwrap();
 }
 
 /// Reverts the material side tables before their older library dependencies.

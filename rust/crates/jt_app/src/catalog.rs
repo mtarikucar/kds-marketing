@@ -254,6 +254,17 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("studio.tiktok_metrics", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"), Read),
     // The materials library (spec 2026-11-03 §5.2): exempt from the strategy gate (D35), never
     // from the workspace-status check.
+    // Production projects prepare media before strategy approval; only scheduling is gated.
+    twin("studio.project_list", Exempt, "jeeta.studio.project_list", ("GET", "/api/studio/projects"), Read),
+    twin("studio.project_create", Exempt, "jeeta.studio.project_create", ("POST", "/api/studio/projects"), Write),
+    twin("studio.project_get", Exempt, "jeeta.studio.project_get", ("GET", "/api/studio/projects/{project_id}"), Read),
+    twin("studio.project_update", Exempt, "jeeta.studio.project_update", ("PATCH", "/api/studio/projects/{project_id}"), Write),
+    twin("studio.project_materials", Exempt, "jeeta.studio.project_materials", ("POST", "/api/studio/projects/{project_id}/materials"), Write),
+    twin("studio.project_request", Exempt, "jeeta.studio.project_request", ("POST", "/api/studio/projects/{project_id}/requests"), Write),
+    twin("studio.project_request_update", Exempt, "jeeta.studio.project_request_update", ("PATCH", "/api/studio/projects/{project_id}/requests/{request_id}"), Write),
+    panel_only("studio.project_production", Exempt, ("POST", "/api/studio/projects/{project_id}/productions"), Write),
+    twin("studio.project_publication", Exempt, "jeeta.studio.project_publication", ("POST", "/api/studio/projects/{project_id}/publications"), Write),
+    twin("studio.project_schedule", GateMode::Gated, "jeeta.studio.project_schedule", ("POST", "/api/studio/projects/{project_id}/outputs/{output_id}/schedule"), Write),
     twin("studio.olays_list", Exempt, "jeeta.studio.olays_list", ("GET", "/api/studio/olays"), Read),
     twin("studio.olay_get", Exempt, "jeeta.studio.olay_get", ("GET", "/api/studio/olays/{olay_id}"), Read),
     twin("studio.olay_create", Exempt, "jeeta.studio.olay_create", ("POST", "/api/studio/olays"), Write),

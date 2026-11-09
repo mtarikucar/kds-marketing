@@ -124,7 +124,7 @@ fn mcp_registry_matches_catalog() {
 /// (`prospects` +1) and the five `research` tools of leads L2 give 181; promotion (`prospects`
 /// +1), the five `distribution` tools and `jeeta.inbox.people_set_kind` (`inbox` +1) of leads L3
 /// give 188; the pool's report (`prospects` +1, leads L4-T6) gives 189; the 18 `outreach` tools
-/// of leads L4-T7 give 207; eleven material intelligence and production tools give 218.
+/// of leads L4-T7 give 207; eleven material intelligence and production tools give 218; nine production-project tools give 227.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -149,15 +149,15 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("outreach", 18),
     ("events", 3),
     ("inbox", 53),
-    ("studio", 46),
+    ("studio", 55),
 ];
 
 #[test]
-fn the_registry_holds_218_tools() {
+fn the_registry_holds_227_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 218);
+    assert_eq!(specs.len(), 227);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 218);
+    assert_eq!(total, 227);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -166,7 +166,7 @@ fn the_registry_holds_218_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 218);
+    assert_eq!(catalog, 227);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.
@@ -303,7 +303,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 258);
+    assert_eq!(CATALOG.len(), 268);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

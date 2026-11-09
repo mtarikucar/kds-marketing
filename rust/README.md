@@ -117,6 +117,8 @@ döndürür. Yirmi yedi göç vardır (`0028` bu dalın ekleri için L6 ile geli
 | `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 99 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
 | `0028_mail_files` | E-posta ekleri (leads L6): `mail_files`, one row per attachment kept or skipped (inbound `stored`/`skipped`, outbound `staged`/`attached`, `deleted` once its bytes went; the bytes live in the file store as `application/octet-stream`, never here) (forced RLS; 100 tables). Down drops the table (the files left in the store go with the store's daily sweep of files no record keeps), and is refused while an outbox entry waiting to be sent names mail files. |
 
+| `0031_production_projects` | Tenant-scoped production projects with revisioned JSON records and FORCE RLS (103 tables). Adds the `project` package-request trigger used by the existing post scheduler. Down inspects all tenants and refuses while any project or project-trigger request remains. |
+
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
 alma istisnası uygulama verisini silmez ve tekrar çalıştırılabilir.
@@ -3536,3 +3538,32 @@ never stolen; touched records survive rollback. Use the protected serve database
 and secret-key environment, an ordinary RLS role and an exactly matching schema.
 This command runs no migrations, HTTP, jobs or providers. See the
 [export, verification and rollback procedure](../docs/operations/v1-cutover.md#leads-only-owner-amendment-2026-10-26).
+
+
+## Production projects (first slice)
+
+`GET/POST /api/studio/projects` and the project detail, brief/output update, material attachment,
+material request, derivative request and publication-link routes collect one production brief
+inside its existing tenant workspace. The list returns `{projects,next_cursor}` with at most
+100 records per page; pass `before=next_cursor` to continue. Reads require `studio.work`;
+changes require `studio.manage`. Agents get nine MCP twins (`project_list`, `project_get`,
+`project_create`, `project_update`, `project_materials`, `project_request`,
+`project_request_update`, `project_publication`, `project_schedule`); requesting a derivative
+remains a human owner/manager decision in the panel. The complete MCP registry has 227 tools,
+55 in Studio. `work.pending`/`work.checkin` expose projects needing materials or output planning.
+
+Source attachments record their material revision. A changed source must be explicitly
+reattached before generation or scheduling. Brief edits and source removal/refresh invalidate
+dependent derivative history and revoke active production leases. Completed files remain visible
+as history; they are not automatically eligible as the new project's result. Archiving locks the
+project and cancels active derivative work, while already scheduled canonical publications continue.
+Project mutations use optimistic revisions, audit entries, tenant transactions and the existing
+Studio control lock; creation, material requests, derivative requests and scheduling use replay keys.
+
+Draft outputs hold format, account and target time. Only
+`POST /api/studio/projects/{project_id}/outputs/{output_id}/schedule` creates a real planned post
+and links it atomically through the existing posting policy, strategy gate and slot pipeline.
+Linked output identity cannot be edited or removed through the project. Scheduling never marks
+content as published; the established preparation, approval and connector delivery flow still runs.
+Material deliveries require real live material IDs. This slice does not invent generated files,
+run autonomous creative rendering, or add a second publishing engine.

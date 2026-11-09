@@ -80,9 +80,12 @@ type Choice = string | 'new' | 'genel' | '';
 export function MaterialsUpload({
   presetOlay,
   onOpenOlay,
+  onAdded,
 }: {
   presetOlay?: string;
   onOpenOlay: (id: string) => void;
+  /** Optional project attachment; a failed attachment retries the same material request key. */
+  onAdded?: (material: m.Material) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
@@ -201,6 +204,7 @@ export function MaterialsUpload({
           ...(decider && permission ? { share: permission } : {}),
           ...(item.captured ? { captured_at: item.captured.toISOString() } : {}),
         });
+        await onAdded?.(out.material);
         patch(item.key, { status: 'added', added: out, error: undefined });
       } catch (error) {
         patch(item.key, { status: 'add_failed', error });

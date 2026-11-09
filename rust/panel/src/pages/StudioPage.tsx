@@ -17,6 +17,7 @@ import { Field, StudioReadStatus, inputClass, useStudioKey } from './StudioShare
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { StudioMaterials } from './materials/StudioMaterials';
 import { StudioPosts } from './posts/StudioPosts';
+import { StudioProjects } from './projects/StudioProjects';
 export function StudioPage() {
   const { t } = useTranslation();
   const session = useSession();
@@ -29,7 +30,7 @@ export function StudioPage() {
   // Which tab is open lives in the address (`?tab=materials`, `?tab=posts`), so links reach it.
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
-  const tab = raw === 'materials' || raw === 'posts' ? raw : 'studio';
+  const tab = raw === 'materials' || raw === 'posts' || raw === 'projects' ? raw : 'studio';
   const rawSection = params.get('section');
   const section = rawSection === 'plan' || rawSection === 'learned' || rawSection === 'ledger' ? rawSection : 'today';
   const openSection = (next: string) => {
@@ -66,13 +67,13 @@ export function StudioPage() {
   const overview = useQuery({
     queryKey: [...key, 'overview', query],
     queryFn: () => api.overview(query),
-    enabled: allowed && validRange,
+    enabled: allowed && validRange && (tab === 'studio' || tab === 'posts'),
     refetchInterval: 60_000,
   });
   const work = useQuery({
     queryKey: ['work', 'pending', session.data?.current_workspace],
     queryFn: getPending,
-    enabled: allowed,
+    enabled: allowed && tab === 'studio',
     refetchInterval: 60_000,
   });
   // Keep the selector's complete choices when the server projects only the selected hypothesis.
@@ -83,14 +84,17 @@ export function StudioPage() {
   const data = overview.data;
   return (
     <div data-testid="studio" className="space-y-6">
-      <WorkspaceHeader scene={tab === 'materials' ? undefined : 'studio'} title={t('studio.title')} description={t('studio.description')} />
+      <WorkspaceHeader scene={tab === 'materials' || tab === 'projects' ? undefined : 'studio'} title={t('studio.title')} description={t('studio.description')} />
       <Tabs
         value={tab}
         onValueChange={(next) => setParams(next === 'studio' ? {} : { tab: next })}
       >
-        <TabsList aria-label={t('studio.title')}>
+        <TabsList aria-label={t('studio.title')} className="grid grid-cols-2 sm:flex">
           <TabsTrigger value="studio" className="min-h-11">
             {t('materials.studioTab')}
+          </TabsTrigger>
+          <TabsTrigger value="projects" className="min-h-11">
+            {t('projects.tab')}
           </TabsTrigger>
           <TabsTrigger value="materials" className="min-h-11">
             {t('materials.tab')}
@@ -99,6 +103,9 @@ export function StudioPage() {
             {t('posts.tab')}
           </TabsTrigger>
         </TabsList>
+        <TabsContent value="projects">
+          {allowed ? <StudioProjects onOpenSlot={openSlot} /> : <p role="alert">{t('studio.forbidden')}</p>}
+        </TabsContent>
         <TabsContent value="posts">
           {allowed ? (
             <StudioPosts hypotheses={choices} onOpenSlot={openSlot} />

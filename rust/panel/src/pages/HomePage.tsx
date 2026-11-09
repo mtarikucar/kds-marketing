@@ -285,6 +285,8 @@ function AgentCard({ agent }: { agent: AgentState }) {
 
 function itemText(t: TFunction, item: WorkItem): string {
   switch (item.kind) {
+    case 'studio_project':
+      return `/studio?tab=projects&project=${encodeURIComponent(item.project_id)}`;
     case 'verify_capability':
       return item.stale
         ? t('home.pending.verify_capability_stale', { name: item.name })

@@ -177,6 +177,11 @@ pub enum WorkKind {
         expected_revision: u64,
     },
     /// A human-requested derivative for an external agent to produce with its own tools.
+    /// A production project needs missing materials or canonical output planning.
+    StudioProject {
+        project_id: uuid::Uuid,
+        expected_revision: u64,
+    },
     StudioMaterialProduction {
         production_id: uuid::Uuid,
         expected_revision: u64,
@@ -308,6 +313,7 @@ impl WorkKind {
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
             WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
             WorkKind::StudioMaterialAnalysis { .. } => "studio.material_analysis_claim",
+            WorkKind::StudioProject { .. } => "studio.project_get",
             WorkKind::StudioMaterialProduction { .. } => "studio.material_production_claim",
             WorkKind::StudioPostRequest { .. } => "studio.posts_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
@@ -502,6 +508,30 @@ async fn pending_as_seen(
                     priority: 2,
                     hint: "Read jeeta.studio.material_production_list, claim this request at expected_revision, and inspect each source with jeeta.studio.material_preview. Use your own image/video tools; upload a new distinct file and add it as ai_generated material, then complete with your claim_token and output_material_id, or fail with a bounded error_code. Sources' people and privacy restrictions remain attached; a human must approve output share permission. This server does not generate media or wake you: poll jeeta.work.checkin.".into(),
                 });
+            }
+        }
+    }
+    let mut projects = Vec::new();
+    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
+        && ctx.permissions.contains(&Permission::StudioManage)
+        && ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.project_get").allows(status)
+    {
+        for project in repos
+            .studio_projects()
+            .list_projects(false, None)
+            .await?
+            .into_iter()
+            .take(100)
+        {
+            if project.outputs.is_empty()
+                || project.outputs.iter().any(|o| o.slot_id.is_none())
+                || project
+                    .requests
+                    .iter()
+                    .any(|r| r.status == crate::ports::production_projects::RequestStatus::Open)
+            {
+                projects.push(WorkItem {kind:WorkKind::StudioProject {project_id:project.id,expected_revision:project.revision},priority:3,hint:"Read jeeta.studio.project_get. Use its brief, live source revisions and output targets; ask for missing material with jeeta.studio.project_request. Do not invent delivered files or claim a draft target is scheduled. Respect invalidated production history and human edits. Scheduling uses jeeta.studio.project_schedule and the approved strategy. List older projects with the cursor returned by jeeta.studio.project_list. Media rendering still requires your connected tools.".into()});
             }
         }
     }
@@ -745,6 +775,7 @@ async fn pending_as_seen(
     }));
     items.extend(analyses);
     items.extend(productions);
+    items.extend(projects);
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
     items.retain(|item| actionable(&item.kind));

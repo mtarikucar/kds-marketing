@@ -97,6 +97,7 @@ pub use studio::MemStudio;
 
 mod material_productions;
 mod materials;
+mod production_projects;
 pub use materials::MemMaterials;
 
 mod posts;

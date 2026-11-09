@@ -25,7 +25,22 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 93] = [
+const POST_M4_ADDED: [(&str, &str); 102] = [
+    ("studio.project_list", "jeeta.studio.project_list"),
+    ("studio.project_create", "jeeta.studio.project_create"),
+    ("studio.project_get", "jeeta.studio.project_get"),
+    ("studio.project_update", "jeeta.studio.project_update"),
+    ("studio.project_materials", "jeeta.studio.project_materials"),
+    ("studio.project_request", "jeeta.studio.project_request"),
+    (
+        "studio.project_request_update",
+        "jeeta.studio.project_request_update",
+    ),
+    (
+        "studio.project_publication",
+        "jeeta.studio.project_publication",
+    ),
+    ("studio.project_schedule", "jeeta.studio.project_schedule"),
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -187,7 +202,8 @@ const POST_M4_ADDED: [(&str, &str); 93] = [
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
 /// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4),
 /// releasing a slot's caption findings among them (§7), and the posting policy (§14.3).
-const POST_M4_PANEL_ONLY: [&str; 21] = [
+const POST_M4_PANEL_ONLY: [&str; 22] = [
+    "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",

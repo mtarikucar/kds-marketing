@@ -18,6 +18,7 @@ mod events;
 mod inbox;
 mod ledger;
 mod outreach;
+mod projects;
 mod prospects;
 mod research;
 mod roles;
@@ -49,6 +50,7 @@ pub(crate) struct ToolDef {
 pub(crate) fn definitions() -> Vec<ToolDef> {
     [
         studio::definitions(),
+        projects::definitions(),
         agents::definitions(),
         workspace::definitions(),
         team::definitions(),

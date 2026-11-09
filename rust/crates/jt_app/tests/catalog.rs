@@ -117,6 +117,15 @@ fn panel_routes_are_unique() {
 
 /// The materials library and its uploads: exempt from the strategy gate (spec 2026-11-03 D35).
 const STUDIO_LIBRARY: &[&str] = &[
+    "studio.project_list",
+    "studio.project_create",
+    "studio.project_get",
+    "studio.project_update",
+    "studio.project_materials",
+    "studio.project_request",
+    "studio.project_request_update",
+    "studio.project_production",
+    "studio.project_publication",
     "studio.file_upload",
     "studio.olays_list",
     "studio.olay_get",
@@ -182,6 +191,16 @@ fn catalog_is_the_release_table() {
         ("studio.tiktok_posting", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Read),
         ("studio.tiktok_post", None, Some(("POST", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Write),
         ("studio.tiktok_metrics", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")), true, Risk::Read),
+        ("studio.project_list", Some("jeeta.studio.project_list"), Some(("GET", "/api/studio/projects")), false, Risk::Read),
+        ("studio.project_create", Some("jeeta.studio.project_create"), Some(("POST", "/api/studio/projects")), false, Risk::Write),
+        ("studio.project_get", Some("jeeta.studio.project_get"), Some(("GET", "/api/studio/projects/{project_id}")), false, Risk::Read),
+        ("studio.project_update", Some("jeeta.studio.project_update"), Some(("PATCH", "/api/studio/projects/{project_id}")), false, Risk::Write),
+        ("studio.project_materials", Some("jeeta.studio.project_materials"), Some(("POST", "/api/studio/projects/{project_id}/materials")), false, Risk::Write),
+        ("studio.project_request", Some("jeeta.studio.project_request"), Some(("POST", "/api/studio/projects/{project_id}/requests")), false, Risk::Write),
+        ("studio.project_request_update", Some("jeeta.studio.project_request_update"), Some(("PATCH", "/api/studio/projects/{project_id}/requests/{request_id}")), false, Risk::Write),
+        ("studio.project_production", None, Some(("POST", "/api/studio/projects/{project_id}/productions")), true, Risk::Write),
+        ("studio.project_publication", Some("jeeta.studio.project_publication"), Some(("POST", "/api/studio/projects/{project_id}/publications")), false, Risk::Write),
+        ("studio.project_schedule", Some("jeeta.studio.project_schedule"), Some(("POST", "/api/studio/projects/{project_id}/outputs/{output_id}/schedule")), false, Risk::Write),
         ("studio.olays_list", Some("jeeta.studio.olays_list"), Some(("GET", "/api/studio/olays")), false, Risk::Read),
         ("studio.olay_get", Some("jeeta.studio.olay_get"), Some(("GET", "/api/studio/olays/{olay_id}")), false, Risk::Read),
         ("studio.olay_create", Some("jeeta.studio.olay_create"), Some(("POST", "/api/studio/olays")), false, Risk::Write),
@@ -421,7 +440,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 258);
+    assert_eq!(CATALOG.len(), 268);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

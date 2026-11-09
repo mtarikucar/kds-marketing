@@ -19,6 +19,15 @@ use std::{collections::BTreeSet, fs, sync::Arc};
 use syn::visit::Visit;
 
 const ACTIONS: &[&str] = &[
+    "project_list",
+    "project_create",
+    "project_get",
+    "project_update",
+    "project_materials",
+    "project_request",
+    "project_request_update",
+    "project_publication",
+    "project_schedule",
     "brake",
     "policy_set",
     "approve",
@@ -68,6 +77,15 @@ const ACTIONS: &[&str] = &[
 ];
 /// The materials library and its uploads need no approved strategy (spec 2026-11-03 D35).
 const EXEMPT: &[&str] = &[
+    "project_list",
+    "project_create",
+    "project_get",
+    "project_update",
+    "project_materials",
+    "project_request",
+    "project_request_update",
+    "project_publication",
+    "project_production",
     "brake",
     "ledger",
     "ledger_export",
@@ -111,6 +129,7 @@ const EXEMPT: &[&str] = &[
 /// The materials library's human decisions (D4), releasing a slot's caption findings (§7) among
 /// them, are panel routes without a tool too.
 const PANEL_ONLY: &[&str] = &[
+    "project_production",
     "tiktok_posting",
     "tiktok_post",
     "tiktok_metrics",
@@ -136,7 +155,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 60);
+    assert_eq!(rows.len(), 70);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -177,7 +196,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 218);
+    assert_eq!(jt_mcp::registry().len(), 227);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -202,7 +221,7 @@ async fn studio_exact_catalog_and_gate_set() {
     // and posting policy of 0022_studio_posts, the four outreach tables of 0026_outreach, the
     // three distribution tables of 0027_distribution, mail files of 0028_mail_files, and
     // material intelligence and productions of 0029 and 0030.
-    assert_eq!(all_tables.len(), 102);
+    assert_eq!(all_tables.len(), 103);
 
     // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(
@@ -215,6 +234,7 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_slots",
             "studio_pieces",
             "studio_files",
+            "studio_production_projects",
             "studio_publications",
             "studio_publish_attempts",
             "studio_measurements",
@@ -283,6 +303,7 @@ fn calls(f: &syn::ItemFn) -> Vec<String> {
 fn all_studio_rows_have_handler_tool_and_schema_parity() {
     let http = syntax("crates/adapters/jt_panel_http/src/routes/studio.rs");
     let mcp = syntax("crates/adapters/jt_mcp/src/tools/studio.rs");
+    let project_mcp = syntax("crates/adapters/jt_mcp/src/tools/projects.rs");
     let registry = jt_mcp::registry();
     for action in ACTIONS {
         let row = CATALOG
@@ -303,7 +324,10 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
         assert_eq!(expected["additionalProperties"], false);
         assert_eq!(
             tool.permission,
-            if ["brake", "policy_set", "approve", "budget_move"].contains(action) {
+            if ["brake", "policy_set", "approve", "budget_move"].contains(action)
+                || (action.starts_with("project_")
+                    && !["project_list", "project_get"].contains(action))
+            {
                 Permission::StudioManage
             } else {
                 Permission::StudioWork
@@ -311,10 +335,15 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
         );
         // Parse both real implementations: a route-table entry alone is insufficient.
         // The same application function must be called by each actual handler.
-        for file in if row.mcp_only {
-            vec![&mcp]
+        let tool_source = if action.starts_with("project_") {
+            &project_mcp
         } else {
-            vec![&http, &mcp]
+            &mcp
+        };
+        for file in if row.mcp_only {
+            vec![tool_source]
+        } else {
+            vec![&http, tool_source]
         } {
             let handlers = functions(file);
             let handler = handlers.iter().find(|f| f.sig.ident == *action).unwrap();
@@ -345,6 +374,34 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
     let id = w.f.slot.id;
     let h = w.f.arm.key.hypothesis_id;
     vec![
+        (
+            "project_create",
+            json!({"request_key":"project","title":"Production","brief":"Prepare real material"}),
+        ),
+        (
+            "project_update",
+            json!({"project_id":id,"expected_revision":1,"brief":"Revised"}),
+        ),
+        (
+            "project_materials",
+            json!({"project_id":id,"expected_revision":1,"add":[w.material().id]}),
+        ),
+        (
+            "project_request",
+            json!({"project_id":id,"expected_revision":1,"request_key":"project-request","text":"Upload a source"}),
+        ),
+        (
+            "project_request_update",
+            json!({"project_id":id,"request_id":id,"expected_revision":1,"status":"dismissed"}),
+        ),
+        (
+            "project_publication",
+            json!({"project_id":id,"output_id":id,"slot_id":id,"expected_revision":1}),
+        ),
+        (
+            "project_schedule",
+            json!({"project_id":id,"output_id":id,"expected_revision":1,"request_key":"project-schedule","hypothesis_id":h,"material_ids":[w.material().id]}),
+        ),
         (
             "brake",
             json!({"engaged":true,"lane":null,"expected_revision":0}),

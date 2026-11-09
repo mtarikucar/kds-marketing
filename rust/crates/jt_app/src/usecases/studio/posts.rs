@@ -609,6 +609,17 @@ struct Checked {
     arm: Arm,
 }
 
+fn validate_proposal(i: &PackageProposalInput) -> Result<(), AppError> {
+    key(&i.request_key)?;
+    if i.posts.is_empty() || i.posts.len() > MAX_PACKAGE_POSTS {
+        return Err(AppError::validation(
+            format!("a package holds 1 to {MAX_PACKAGE_POSTS} posts"),
+            json!({"field": "posts", "reason": "post_count"}),
+        ));
+    }
+    Ok(())
+}
+
 /// Answers an open package request with planned posts (spec D27), all-or-nothing: each refused
 /// post names its reason (`VALIDATION` `package_refused`, `details.items`). A post is refused for
 /// its channel (`channel_unknown`, `channel_not_organic`, `channel_unavailable`, `other_channel`
@@ -627,17 +638,27 @@ pub async fn posts_propose(
     ctx: &Ctx,
     i: PackageProposalInput,
 ) -> Result<PackageProposalOut, AppError> {
-    key(&i.request_key)?;
-    if i.posts.is_empty() || i.posts.len() > MAX_PACKAGE_POSTS {
-        return Err(AppError::validation(
-            format!("a package holds 1 to {MAX_PACKAGE_POSTS} posts"),
-            json!({"field": "posts", "reason": "post_count"}),
-        ));
-    }
-    let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
+    validate_proposal(&i)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = gated(r.as_mut(), ctx).await?;
     r.studio_control().lock_control().await?;
+    let out = posts_propose_locked(d, ctx, r.as_mut(), &frame, i).await?;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// Materialize a proposal inside the caller's gated, Studio-locked transaction. Project
+/// scheduling uses this to commit its output link and the canonical slot together.
+/// The caller owns commit/rollback; every existing proposal validation still runs here.
+pub(crate) async fn posts_propose_locked(
+    d: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    frame: &StrategyVersion,
+    i: PackageProposalInput,
+) -> Result<PackageProposalOut, AppError> {
+    validate_proposal(&i)?;
+    let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
     if let Some(v) = r
         .studio()
         .request_replay("studio.posts_propose", &i.request_key, &payload)
@@ -679,24 +700,12 @@ pub async fn posts_propose(
             now,
             now + Duration::days(i64::from(MAX_POSTING_HORIZON_DAYS)),
         );
-    let lib = super::materials::library(r.as_mut(), latest).await?;
+    let lib = super::materials::library(r, latest).await?;
 
     let mut refusals: Vec<ItemRefusal> = Vec::new();
     let mut checked: Vec<(usize, Checked)> = Vec::new();
     for (index, p) in i.posts.iter().enumerate() {
-        match check_item(
-            d,
-            r.as_mut(),
-            &frame,
-            &hypotheses,
-            &arms,
-            &lib,
-            &request,
-            p,
-            now,
-        )
-        .await?
-        {
+        match check_item(d, r, frame, &hypotheses, &arms, &lib, &request, p, now).await? {
             Ok(c) => checked.push((index, c)),
             Err(mut refusal) => {
                 refusal.index = index;
@@ -720,7 +729,7 @@ pub async fn posts_propose(
             }
         })
         .collect();
-    let existing = existing_posts(r.as_mut()).await?;
+    let existing = existing_posts(r).await?;
     // Each post's hours and day at its own time in the zone (D51).
     let local = |at: OffsetDateTime| offset_at(tz, at);
     if let Err(list) = validate_package(&inputs, &existing, now, &local, &settings.policy) {
@@ -829,7 +838,6 @@ pub async fn posts_propose(
             &encode(&out)?,
         )
         .await?;
-    r.commit().await?;
     Ok(out)
 }
 
