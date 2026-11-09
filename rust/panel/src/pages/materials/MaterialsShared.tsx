@@ -139,6 +139,13 @@ const REASONS = [
   'hard_findings_not_releasable',
   'no_caption_findings',
   'findings_changed',
+  // A story's one medium (Instagram's STORIES): what to fix.
+  'story_image_jpeg_only',
+  'story_image_too_large',
+  'story_video_too_large',
+  'story_video_length',
+  'story_video_length_unknown',
+  'story_video_not_fast_start',
 ] as const;
 type ReasonCode = (typeof REASONS)[number];
 const isReason = (r: unknown): r is ReasonCode =>

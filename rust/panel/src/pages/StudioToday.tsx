@@ -480,6 +480,11 @@ function SlotEditor({
                   defaultValue={data.piece?.text ?? ''}
                 />
               </Field>
+              {data.post?.format === 'story' && (
+                <p className="text-xs text-muted-foreground" data-testid="story-note">
+                  {t('materials.slot.story')}
+                </p>
+              )}
               <MaterialPicker
                 id={id}
                 pieceFiles={pieceFiles}

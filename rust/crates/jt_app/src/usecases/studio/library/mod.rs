@@ -22,6 +22,7 @@ mod productions;
 mod shoots;
 
 pub use calendar::*;
+pub(crate) use capture::video_facts_of;
 pub use intelligence::*;
 pub use items::*;
 pub(crate) use kvkk::erase_person;

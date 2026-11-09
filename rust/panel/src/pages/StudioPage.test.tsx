@@ -489,6 +489,50 @@ it.each([
   expect(Boolean(screen.queryByText('Reklam seti bağla', { selector: 'summary' }))).toBe(visible);
 });
 
+it('a_story_says_its_text_is_not_shared_and_its_refusal_says_what_to_fix', async () => {
+  const subject = { kind: 'olay', olay_id: 'o1' };
+  const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+  mockFetch({
+    ...answers,
+    'GET /api/studio/slots/s1': { ...detail, post: { slot_id: 's1', format: 'story' } },
+    'GET /api/studio/slots/s1/materials': {
+      slot_id: 's1',
+      scheduled_at: slot.scheduled_at,
+      need: {},
+      candidates: [
+        { material_id: 'm2', file_id: 'f2', mime: 'image/png', subject, role: 'anchor', matches_need: true },
+      ],
+      refused: [],
+    },
+    'GET /api/studio/materials': [{ id: 'm2', title: 'Vitrin', mime: 'image/png' }],
+    'GET /api/studio/olays': [{ olay: { id: 'o1', title: 'Kadıköy atölyesi' }, materials: 1 }],
+    'POST /api/studio/slots/s1/piece': withStatus(422, {
+      code: 'VALIDATION',
+      message: "the story's medium is not one Instagram takes",
+      details: { field: 'media', reason: 'story_image_jpeg_only', format: 'story' },
+    }),
+  });
+  renderAt('/studio');
+  const user = userEvent.setup();
+  const plan = await screen.findByRole('region', { name: 'Plan' });
+  await user.click(
+    await within(plan)
+      .findByTestId('slot-s1')
+      .then((e) => within(e).getByRole('button')),
+  );
+  const editor = await screen.findByTestId('slot-detail');
+  expect(await within(editor).findByTestId('story-note')).toHaveTextContent(
+    'Hikâyede metin paylaşılmaz',
+  );
+  await user.click(await within(editor).findByRole('checkbox', { name: /Vitrin/ }));
+  await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
+  expect(
+    await within(editor).findByText(
+      'Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.',
+    ),
+  ).toBeInTheDocument();
+});
+
 it('organic_lane_names_a_reconnect_when_only_the_read_permission_is_missing', async () => {
   mockFetch({
     ...answers,

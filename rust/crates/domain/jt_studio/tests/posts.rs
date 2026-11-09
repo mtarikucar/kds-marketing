@@ -169,8 +169,14 @@ fn each_organic_kind_takes_only_the_formats_its_adapter_publishes() {
         "linkedin_member",
         "linkedin_page",
     ];
+    // Stories: Instagram's alone (its Content Publishing API, `media_type=STORIES`); a Facebook
+    // Page's stories are not built.
     for kind in organic.iter().chain(&["pinterest", "meta_ads", "nope"]) {
-        assert!(!supported_formats(kind).contains(&Story), "{kind}");
+        assert_eq!(
+            supported_formats(kind).contains(&Story),
+            *kind == "instagram",
+            "{kind}"
+        );
     }
     for kind in organic {
         assert_eq!(
@@ -185,7 +191,10 @@ fn each_organic_kind_takes_only_the_formats_its_adapter_publishes() {
         );
     }
     assert_eq!(supported_formats("tiktok"), [TiktokVideo]);
-    assert_eq!(supported_formats("instagram"), [FeedPost, Carousel, Reel]);
+    assert_eq!(
+        supported_formats("instagram"),
+        [Story, FeedPost, Carousel, Reel]
+    );
     assert_eq!(supported_formats("facebook_page"), [FeedPost, Carousel]);
     for kind in ["x", "linkedin_member", "linkedin_page"] {
         assert_eq!(supported_formats(kind), [FeedPost], "{kind}");
@@ -237,9 +246,10 @@ fn a_valid_package_passes_and_a_post_has_its_prep_start_and_grace() {
 fn a_format_the_channel_does_not_publish_is_refused() {
     let at = datetime!(2026-11-06 10:00 +3);
     assert_eq!(
-        refused(&[post(Story, INSTAGRAM, at)], &[]),
+        refused(&[post(Story, FACEBOOK, at)], &[]),
         [(0, PostRefusal::FormatUnsupported)]
     );
+    assert_eq!(validate(&[post(Story, INSTAGRAM, at)], &[]), Ok(()));
     assert_eq!(
         refused(
             &[
@@ -602,4 +612,72 @@ fn quiet_hours_and_days_are_read_at_each_posts_own_offset() {
         check_schedule(&three, &[], &berlin, &policy),
         Err(vec![(2, PostRefusal::CapPerDay)])
     );
+}
+
+/// An Instagram story is one image or one video (the count is one); its own media rules say
+/// what to fix: a JPEG only, at most 8 MB; an MP4 of 3 to 60 seconds, at most 100 MB.
+#[test]
+fn a_story_takes_one_jpeg_up_to_8_mb_or_one_video_of_3_to_60_seconds() {
+    assert!(media_types_ok(Story, "instagram", &["image/jpeg"]));
+    assert!(media_types_ok(Story, "instagram", &["video/mp4"]));
+    // A PNG is a story's image type to fix, named by its own rule below.
+    assert!(media_types_ok(Story, "instagram", &["image/png"]));
+    assert!(!media_types_ok(Story, "facebook_page", &["image/jpeg"]));
+    assert!(!media_types_ok(Story, "x", &["image/jpeg"]));
+    let mb = 1_000_000;
+    assert_eq!(story_media_refusal("image/jpeg", 8 * mb, None, true), None);
+    assert_eq!(
+        story_media_refusal("image/png", mb, None, true),
+        Some(StoryMediaRefusal::ImageJpegOnly)
+    );
+    assert_eq!(
+        story_media_refusal("image/jpeg", 8 * mb + 1, None, true),
+        Some(StoryMediaRefusal::ImageTooLarge)
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(3_000), true),
+        None
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(60_000), true),
+        None
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(2_999), true),
+        Some(StoryMediaRefusal::VideoLength)
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(60_001), true),
+        Some(StoryMediaRefusal::VideoLength)
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, None, false),
+        Some(StoryMediaRefusal::VideoLengthUnknown)
+    );
+    assert_eq!(
+        story_media_refusal("video/mp4", 100 * mb + 1, Some(10_000), true),
+        Some(StoryMediaRefusal::VideoTooLarge)
+    );
+    // Meta reads a video's `moov` box at its front ("fast start"): one after the media data is
+    // refused, saying how to export it.
+    assert_eq!(
+        story_media_refusal("video/mp4", 10 * mb, Some(10_000), false),
+        Some(StoryMediaRefusal::VideoNotFastStart)
+    );
+    for (r, code) in [
+        (
+            StoryMediaRefusal::VideoNotFastStart,
+            "story_video_not_fast_start",
+        ),
+        (StoryMediaRefusal::ImageJpegOnly, "story_image_jpeg_only"),
+        (StoryMediaRefusal::ImageTooLarge, "story_image_too_large"),
+        (StoryMediaRefusal::VideoTooLarge, "story_video_too_large"),
+        (StoryMediaRefusal::VideoLength, "story_video_length"),
+        (
+            StoryMediaRefusal::VideoLengthUnknown,
+            "story_video_length_unknown",
+        ),
+    ] {
+        assert_eq!(r.code(), code);
+    }
 }

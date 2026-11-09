@@ -323,6 +323,14 @@ pub(crate) async fn material_check(
     let mut texts: Vec<&str> = vec![piece.text.as_str()];
     texts.extend(piece.adaptations.values().map(|a| a.text.as_str()));
     texts.extend(title.as_deref());
+    // A story's text never goes out (Instagram takes no caption for one): nothing to check.
+    if r.studio_posts()
+        .get_post(slot)
+        .await?
+        .is_some_and(|p| p.format == jt_studio::PostFormat::Story)
+    {
+        texts.clear();
+    }
     let names = client_names(r, &lib.olays).await?;
     let findings = check_caption(
         &texts,

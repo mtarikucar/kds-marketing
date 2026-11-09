@@ -253,11 +253,12 @@ impl PostingPolicy {
 /// (spec D30). No kind takes `story`: no adapter publishes stories yet, so a story is refused
 /// as `format_unsupported` until one does. A kind that is not organic takes nothing.
 pub fn supported_formats(kind_key: &str) -> &'static [PostFormat] {
-    use PostFormat::{Carousel, FeedPost, Reel, TiktokVideo};
+    use PostFormat::{Carousel, FeedPost, Reel, Story, TiktokVideo};
     match kind_key {
-        // `jt_meta` publishes one image as a post, one video as a reel (a `REELS` container) and
-        // 2 to 10 items as a carousel (a `CAROUSEL` container).
-        "instagram" => &[FeedPost, Carousel, Reel],
+        // `jt_meta` publishes one image as a post, one video as a reel (a `REELS` container),
+        // 2 to 10 items as a carousel (a `CAROUSEL` container) and one image or video as a story
+        // (a `STORIES` container, no caption; [`story_media_refusal`] says what it takes).
+        "instagram" => &[Story, FeedPost, Carousel, Reel],
         // `jt_meta` publishes one image or one video as a post and 2 to 10 images as one post of
         // attached photos (images only: a video goes alone). A video goes to the Page's videos:
         // reels are not built in the adapter yet.
@@ -320,8 +321,82 @@ pub fn media_types_ok(format: PostFormat, kind_key: &str, mimes: &[&str]) -> boo
         (PostFormat::Carousel, "instagram") => all(|m| is_image_mime(m) || is_video_mime(m)),
         (PostFormat::Carousel, "facebook_page") => all(is_image_mime),
         (PostFormat::Reel, "instagram") => all(is_video_mime),
+        // One image or video: [`story_media_refusal`] names what a story's medium must be.
+        (PostFormat::Story, "instagram") => all(|m| is_image_mime(m) || is_video_mime(m)),
         (PostFormat::TiktokVideo, "tiktok") => all(is_video_mime),
         _ => false,
+    }
+}
+
+/// The largest image an Instagram story takes (Meta: "JPEG", "8 MB maximum").
+pub const STORY_IMAGE_MAX_BYTES: u64 = 8_000_000;
+/// The largest video an Instagram story takes (Meta: "100 MB maximum").
+pub const STORY_VIDEO_MAX_BYTES: u64 = 100_000_000;
+/// The shortest and longest story video, in milliseconds (Meta: "3 to 60 seconds").
+pub const STORY_VIDEO_MS: (u64, u64) = (3_000, 60_000);
+
+/// Why a story's one medium is refused, saying what to fix (Instagram's Content Publishing
+/// reference for `STORIES` containers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoryMediaRefusal {
+    /// A story's image is a JPEG.
+    ImageJpegOnly,
+    /// A story's image is at most [`STORY_IMAGE_MAX_BYTES`].
+    ImageTooLarge,
+    /// A story's video is at most [`STORY_VIDEO_MAX_BYTES`].
+    VideoTooLarge,
+    /// A story's video lasts [`STORY_VIDEO_MS`].
+    VideoLength,
+    /// The video names no length the server can read (its `moov` box is missing or too large).
+    VideoLengthUnknown,
+    /// The video's `moov` box comes after its media data: Meta reads it at the front ("fast
+    /// start", "optimize for web" when exporting).
+    VideoNotFastStart,
+}
+
+impl StoryMediaRefusal {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ImageJpegOnly => "story_image_jpeg_only",
+            Self::ImageTooLarge => "story_image_too_large",
+            Self::VideoTooLarge => "story_video_too_large",
+            Self::VideoLength => "story_video_length",
+            Self::VideoLengthUnknown => "story_video_length_unknown",
+            Self::VideoNotFastStart => "story_video_not_fast_start",
+        }
+    }
+}
+
+/// What is wrong with a story's medium of type `mime`, `size_bytes` long and, for a video,
+/// `video_ms` long (`None`: unreadable) with its `moov` box before its media data or not
+/// (`moov_first`); `None` when Instagram takes it. A JPEG image up to 8 MB, or an MP4 video of
+/// 3 to 60 seconds up to 100 MB whose `moov` comes first; the type is [`media_types_ok`]'s.
+pub fn story_media_refusal(
+    mime: &str,
+    size_bytes: u64,
+    video_ms: Option<u64>,
+    moov_first: bool,
+) -> Option<StoryMediaRefusal> {
+    if is_video_mime(mime) {
+        let (min, max) = STORY_VIDEO_MS;
+        return if size_bytes > STORY_VIDEO_MAX_BYTES {
+            Some(StoryMediaRefusal::VideoTooLarge)
+        } else {
+            match video_ms {
+                None => Some(StoryMediaRefusal::VideoLengthUnknown),
+                Some(_) if !moov_first => Some(StoryMediaRefusal::VideoNotFastStart),
+                Some(ms) if ms < min || ms > max => Some(StoryMediaRefusal::VideoLength),
+                Some(_) => None,
+            }
+        };
+    }
+    if !mime.trim().eq_ignore_ascii_case("image/jpeg") {
+        Some(StoryMediaRefusal::ImageJpegOnly)
+    } else if size_bytes > STORY_IMAGE_MAX_BYTES {
+        Some(StoryMediaRefusal::ImageTooLarge)
+    } else {
+        None
     }
 }
 

@@ -176,11 +176,13 @@ fn posting_definitions() -> Vec<ToolDef> {
         ),
         def(
             "studio.posts_propose",
-            "Answer an open package request (request_id) with planned posts, with request_key \
-             (replayed). Each post: format (feed_post, carousel, reel, tiktok_video; story is \
-             not published anywhere yet), capability_id (an organic, connected channel taking \
-             that format: Instagram feed_post one image, carousel 2-10 images or videos, reel one \
-             video; Facebook Page feed_post one image or video, carousel images; X feed_post \
+            "Answer an open post request (request_id) with planned posts, with request_key \
+             (replayed). Each post: format (story, feed_post, carousel, reel, tiktok_video), \
+             capability_id (an organic, connected channel taking that format: Instagram story \
+             one JPEG up to 8 MB or one MP4 of 3-60 s, its text never published (no caption), \
+             bursts at least 10 min apart and up to 25 a day; Instagram feed_post one image, \
+             carousel 2-10 images or videos, reel one video; Facebook Page feed_post one image \
+             or video, carousel images, no stories; X feed_post \
              images; LinkedIn feed_post images or one video; TikTok tiktok_video one video), \
              publish_at (at least the format's lead ahead, within the horizon, outside the quiet \
              hours), material_ids (eligible for the subject at publish_at, one an anchor), \
