@@ -8,7 +8,7 @@ umask 077
 fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
 [[ $# == 3 ]] || fail 'usage: staging|production FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
-PINNED_REV=8537c403b799ea1966a58004adf70c3c07cf5ebe
+PINNED_REV=7955e72126e0b0596821dcc98efa3fb75117b6d1
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid archive digest'
 [[ "$EUID" == 0 ]] || fail 'run as root on the audited installation'

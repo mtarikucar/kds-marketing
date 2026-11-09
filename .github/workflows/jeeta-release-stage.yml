@@ -20,11 +20,11 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 80); do
-            gh api repos/mtarikucar/kds-marketing/actions/runs/42587675461 > "$RUNNER_TEMP/candidate-run.json"
+            gh api repos/mtarikucar/kds-marketing/actions/runs/42589999298 > "$RUNNER_TEMP/candidate-run.json"
             python3 - "$RUNNER_TEMP/candidate-run.json" <<'PY'
           import json,sys
           r=json.load(open(sys.argv[1]))
-          assert r['head_sha']=='8537c403b799ea1966a58004adf70c3c07cf5ebe'
+          assert r['head_sha']=='7955e72126e0b0596821dcc98efa3fb75117b6d1'
           assert r['event']=='push' and r['path']=='.github/workflows/rust.yml'
           print('Candidate CI:',r['status'],r['conclusion'])
           PY
@@ -44,16 +44,16 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: '13660545466'
-          run-id: '42587675461'
+          artifact-ids: '13661530532'
+          run-id: '42589999298'
           github-token: ${{ github.token }}
           path: candidate
           merge-multiple: true
       - name: Verify the reviewed archive and operator script
         run: |
           set -euo pipefail
-          printf '%s  %s\n' eaa1c1fd27a5fe8126a8b54260a09f74df3c27ebbab25939269708afe73b99e9 candidate/jeeta-release.tar | sha256sum --check --status
-          printf '%s  %s\n' b43ee551be6a4a63486f73d46f48299b3beced83210b3345feac6a129a9c4799 ops/publish-release.sh | sha256sum --check --status
+          printf '%s  %s\n' ad64eb76600ca28b9312807f942630790e5d9d2e32ed1f86d75763e5c1e9d4f7 candidate/jeeta-release.tar | sha256sum --check --status
+          printf '%s  %s\n' fe872adfad1e48661b3aa127d4b7e6eac5ea683eb347170cc9c3764e346c11d1 ops/publish-release.sh | sha256sum --check --status
           bash -n ops/publish-release.sh
           chmod 0600 candidate/jeeta-release.tar
       - uses: ./.github/actions/setup-ssh
@@ -64,18 +64,18 @@ jobs:
       - name: Transfer the verified complete candidate
         run: |
           set -euo pipefail
-          scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-8537c403.tar
-          ssh -o BatchMode=yes root@38.242.233.166 'chmod 0600 /root/jeeta-release-8537c403.tar'
+          scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-7955e721.tar
+          ssh -o BatchMode=yes root@38.242.233.166 'chmod 0600 /root/jeeta-release-7955e721.tar'
       - name: Verify backup restoration and migration before staging swap
         run: |
           ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 \
-            'bash -s -- staging 8537c403b799ea1966a58004adf70c3c07cf5ebe eaa1c1fd27a5fe8126a8b54260a09f74df3c27ebbab25939269708afe73b99e9' < ops/publish-release.sh
+            'bash -s -- staging 7955e72126e0b0596821dcc98efa3fb75117b6d1 ad64eb76600ca28b9312807f942630790e5d9d2e32ed1f86d75763e5c1e9d4f7' < ops/publish-release.sh
       - name: Read nonsecret publication receipt
         run: |
-          ssh -o BatchMode=yes root@38.242.233.166 'cat /var/backups/jeeta-release/promotions/8537c403b799ea1966a58004adf70c3c07cf5ebe.staging.json' > staging-receipt.json
+          ssh -o BatchMode=yes root@38.242.233.166 'cat /var/backups/jeeta-release/promotions/7955e72126e0b0596821dcc98efa3fb75117b6d1.staging.json' > staging-receipt.json
           cat staging-receipt.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: jeeta-staging-8537c403-receipt
+          name: jeeta-staging-7955e721-receipt
           path: staging-receipt.json
           retention-days: 14
