@@ -505,7 +505,9 @@ it('pbx_policy_toggle: saves recording and call mode on the PBX card', async () 
 it('voice_bridge_card_shows_engines_extension_and_heartbeat_age', async ({ onTestFinished }) => {
   // Rendering and assertions must use the same clock even on a busy CI runner.
   vi.useFakeTimers({ toFake: ['Date'] });
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   vi.setSystemTime(new Date('2026-11-09T12:00:00Z'));
   const at = new Date(Date.now() - 30_000).toISOString();
   const bridge = {
