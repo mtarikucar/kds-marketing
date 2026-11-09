@@ -77,12 +77,7 @@ const answers = {
     memberships: [
       {
         ...inboxMe.memberships[0],
-        permissions: [
-          ...inboxMe.memberships[0].permissions,
-          'studio.work',
-          'studio.manage',
-          'team.manage',
-        ],
+        permissions: [...inboxMe.memberships[0].permissions, 'studio.work', 'studio.manage', 'team.manage'],
       },
     ],
   },
@@ -129,7 +124,9 @@ describe('Growth Studio', () => {
     await user.click(screen.getByRole('button', { name: 'Filtreleri temizle' }));
     expect(screen.getByLabelText(tr.studio.filters.hypothesis)).toHaveValue('');
     await waitFor(() =>
-      expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).not.toContain('hypothesis_id='),
+      expect(calls.filter((c) => c.path === '/api/studio/overview').at(-1)?.search).not.toContain(
+        'hypothesis_id=',
+      ),
     );
   });
   it('list_calendar_share_slot_ids', async () => {
@@ -319,9 +316,7 @@ it('panel_actions_match_every_studio_tool', async () => {
   expect(calls.at(-2)?.body).toEqual({ expected_revision: 3, post });
   expect(calls[2].body).toEqual({ filter: q });
   expect(
-    calls
-      .filter((c) => c.method !== 'GET')
-      .every((c) => c.headers.get('X-Requested-With') === 'jeeta-panel'),
+    calls.filter((c) => c.method !== 'GET').every((c) => c.headers.get('X-Requested-With') === 'jeeta-panel'),
   ).toBe(true);
 });
 
@@ -415,7 +410,14 @@ it('slot_detail_submits_and_cancels_the_current_revision', async () => {
       need: {},
       candidates: [
         { material_id: 'm1', file_id: 'f1', mime: 'image/jpeg', subject, role: 'anchor', matches_need: true },
-        { material_id: 'm2', file_id: 'f2', mime: 'image/png', subject: { kind: 'generic' }, role: 'support', matches_need: false },
+        {
+          material_id: 'm2',
+          file_id: 'f2',
+          mime: 'image/png',
+          subject: { kind: 'generic' },
+          role: 'support',
+          matches_need: false,
+        },
       ],
       refused: [{ material_id: 'm3', code: 'share_unset' }],
     },
@@ -442,7 +444,9 @@ it('slot_detail_submits_and_cancels_the_current_revision', async () => {
   await user.type(text, 'Yeni içerik');
   // A piece names its subject and shows at least one library material (spec D2, D7).
   await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
-  expect(await within(editor).findByText('İçeriğin konusunu ve en az bir materyal seçin.')).toBeInTheDocument();
+  expect(
+    await within(editor).findByText('İçeriğin konusunu ve en az bir materyal seçin.'),
+  ).toBeInTheDocument();
   expect(calls.some((c) => c.path.endsWith('/piece'))).toBe(false);
   expect(within(editor).getByLabelText('İçerik neyle ilgili?')).toHaveDisplayValue('Olay: Kadıköy atölyesi');
   expect(within(editor).getByText('İzinsiz kare: Paylaşım izni verilmedi.')).toBeInTheDocument();
@@ -492,7 +496,7 @@ it.each([
 it('a_story_says_its_text_is_not_shared_and_its_refusal_says_what_to_fix', async () => {
   const subject = { kind: 'olay', olay_id: 'o1' };
   const detail = answers['GET /api/studio/slots/s1'] as Record<string, unknown>;
-  mockFetch({
+  const calls = mockFetch({
     ...answers,
     'GET /api/studio/slots/s1': { ...detail, post: { slot_id: 's1', format: 'story' } },
     'GET /api/studio/slots/s1/materials': {
@@ -514,6 +518,7 @@ it('a_story_says_its_text_is_not_shared_and_its_refusal_says_what_to_fix', async
   });
   renderAt('/studio');
   const user = userEvent.setup();
+  await user.click(await screen.findByRole('tab', { name: 'Plan' }));
   const plan = await screen.findByRole('region', { name: 'Plan' });
   await user.click(
     await within(plan)
@@ -521,9 +526,11 @@ it('a_story_says_its_text_is_not_shared_and_its_refusal_says_what_to_fix', async
       .then((e) => within(e).getByRole('button')),
   );
   const editor = await screen.findByTestId('slot-detail');
-  expect(await within(editor).findByTestId('story-note')).toHaveTextContent(
-    'Hikâyede metin paylaşılmaz',
-  );
+  expect(screen.getByRole('tab', { name: 'Bugün' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByRole('region', { name: 'Bugün' })).toContainElement(editor);
+  const storyNote = await within(editor).findByTestId('story-note');
+  expect(storyNote).toBeVisible();
+  expect(storyNote).toHaveTextContent('Hikâyede metin paylaşılmaz');
   await user.click(await within(editor).findByRole('checkbox', { name: /Vitrin/ }));
   await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
   expect(
@@ -531,6 +538,13 @@ it('a_story_says_its_text_is_not_shared_and_its_refusal_says_what_to_fix', async
       'Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.',
     ),
   ).toBeInTheDocument();
+  expect(
+    calls.find((call) => call.method === 'POST' && call.path === '/api/studio/slots/s1/piece')?.body,
+  ).toMatchObject({
+    expected_revision: 1,
+    media: [{ kind: 'file', id: 'f2' }],
+    subject,
+  });
 });
 
 it('organic_lane_names_a_reconnect_when_only_the_read_permission_is_missing', async () => {
@@ -587,8 +601,18 @@ it('approval_card_previews_the_drafted_text_media_target_and_time', async () => 
       piece: {
         text: 'Yeni koleksiyon yarın sabah mağazada.',
         media: [
-          { kind: 'hosted_url', url: 'https://cdn.example.com/p/kapak.jpg', mime: 'image/jpeg', size_bytes: 1200 },
-          { kind: 'hosted_url', url: 'https://cdn.example.com/p/tanitim.mp4', mime: 'video/mp4', size_bytes: 9000 },
+          {
+            kind: 'hosted_url',
+            url: 'https://cdn.example.com/p/kapak.jpg',
+            mime: 'image/jpeg',
+            size_bytes: 1200,
+          },
+          {
+            kind: 'hosted_url',
+            url: 'https://cdn.example.com/p/tanitim.mp4',
+            mime: 'video/mp4',
+            size_bytes: 9000,
+          },
           { kind: 'file', id: 'file-1' },
         ],
         adaptations: {},
@@ -647,7 +671,6 @@ it('clicking_an_approval_title_opens_its_editor_inside_that_card', async () => {
   expect(title).toHaveAttribute('aria-expanded', 'false');
 });
 
-
 it('does not describe pending reads as empty work and offers recovery after a failed overview', async () => {
   const user = userEvent.setup();
   mockFetch({ ...answers, 'GET /api/studio/overview': delayed(200, overview) });
@@ -658,14 +681,16 @@ it('does not describe pending reads as empty work and offers recovery after a fa
   await screen.findByTestId('today-s1');
   first.unmount();
 
-  mockFetch({ ...answers, 'GET /api/studio/overview': withStatus(503, { code: 'INTERNAL', message: 'unavailable', details: {} }) });
+  mockFetch({
+    ...answers,
+    'GET /api/studio/overview': withStatus(503, { code: 'INTERNAL', message: 'unavailable', details: {} }),
+  });
   renderAt('/studio');
   const retry = await screen.findByRole('button', { name: tr.common.retry });
   mockFetch(answers);
   await user.click(retry);
   expect(await screen.findByTestId('today-s1')).toBeInTheDocument();
 });
-
 
 it('puts today and the plan before strategy and prevents a reversed date request', async () => {
   const calls = mockFetch(answers);
@@ -695,7 +720,14 @@ it('orders the next seven days by the scheduled instant', async () => {
 });
 
 it('links an empty today view to the weekly plan', async () => {
-  mockFetch({ ...answers, 'GET /api/studio/overview': { ...overview, slots: [], today: { ...overview.today, slots: [], approvals: [], blockers: [], budget_moves: [], paid_alerts: [] } } });
+  mockFetch({
+    ...answers,
+    'GET /api/studio/overview': {
+      ...overview,
+      slots: [],
+      today: { ...overview.today, slots: [], approvals: [], blockers: [], budget_moves: [], paid_alerts: [] },
+    },
+  });
   renderAt('/studio');
   const today = await screen.findByRole('region', { name: 'Bugün' });
   const button = await within(today).findByRole('button', { name: 'Haftalık planı gör' });
@@ -720,12 +752,14 @@ it('opens a linked plan and moves its selected slot to today with a keyboard ret
   expect(screen.getByRole('tab', { name: 'Bugün' })).toHaveFocus();
 });
 
-it.each([['plan', 'Plan'], ['learned', 'Öğrenilenler'], ['ledger', 'Günlük']])(
-  'restores the %s view from the address', async (section, label) => {
-    mockFetch(answers);
-    renderAt(`/studio?section=${section}`);
-    expect(await screen.findByRole('region', { name: label })).toBeVisible();
-    expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.queryByRole('region', { name: 'Bugün' })).not.toBeInTheDocument();
-  },
-);
+it.each([
+  ['plan', 'Plan'],
+  ['learned', 'Öğrenilenler'],
+  ['ledger', 'Günlük'],
+])('restores the %s view from the address', async (section, label) => {
+  mockFetch(answers);
+  renderAt(`/studio?section=${section}`);
+  expect(await screen.findByRole('region', { name: label })).toBeVisible();
+  expect(screen.getByRole('tab', { name: label })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.queryByRole('region', { name: 'Bugün' })).not.toBeInTheDocument();
+});
