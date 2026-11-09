@@ -1,0 +1,192 @@
+{
+  "revision": "19093007ceec63c4e47a459e8b2019d9c515ebe8",
+  "results": [
+    {
+      "name": "strategy",
+      "width": 1440,
+      "heading": "Strateji",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/strategy-640.webp"
+      ]
+    },
+    {
+      "name": "studio",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/studio-640.webp"
+      ]
+    },
+    {
+      "name": "materials",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/studio-320.webp"
+      ]
+    },
+    {
+      "name": "library",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "call-settings",
+      "width": 1440,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "capabilities",
+      "width": 1440,
+      "heading": "Kabiliyetler",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/connections-320.webp"
+      ]
+    },
+    {
+      "name": "prospects",
+      "width": 1440,
+      "heading": "Aday havuzu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/research-640.webp"
+      ]
+    },
+    {
+      "name": "research",
+      "width": 1440,
+      "heading": "Araştırma görevleri",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/research-640.webp"
+      ]
+    },
+    {
+      "name": "calls",
+      "width": 1440,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "inbox",
+      "width": 1440,
+      "heading": "Gelen kutusu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "strategy",
+      "width": 390,
+      "heading": "Strateji",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/strategy-320.webp"
+      ]
+    },
+    {
+      "name": "studio",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/studio-320.webp"
+      ]
+    },
+    {
+      "name": "materials",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/studio-320.webp"
+      ]
+    },
+    {
+      "name": "library",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "call-settings",
+      "width": 390,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "capabilities",
+      "width": 390,
+      "heading": "Kabiliyetler",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/connections-320.webp"
+      ]
+    },
+    {
+      "name": "prospects",
+      "width": 390,
+      "heading": "Aday havuzu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/research-320.webp"
+      ]
+    },
+    {
+      "name": "research",
+      "width": 390,
+      "heading": "Araştırma görevleri",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": [
+        "/brand/editorial/research-320.webp"
+      ]
+    },
+    {
+      "name": "calls",
+      "width": 390,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    },
+    {
+      "name": "inbox",
+      "width": 390,
+      "heading": "Gelen kutusu",
+      "overflow": false,
+      "brokenImages": [],
+      "editorial": []
+    }
+  ],
+  "exceptions": [],
+  "writes": [],
+  "failures": []
+}

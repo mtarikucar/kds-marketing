@@ -1,0 +1,13 @@
+{
+  "revision": "19093007ceec63c4e47a459e8b2019d9c515ebe8",
+  "checks": [
+    "authenticated-owner-login",
+    "upload-queues-analysis-with-share-permission-and-unknown-capture",
+    "signed-preview-matches-uploaded-bytes",
+    "custom-labels-dynamic-group-and-manual-locks-persist",
+    "poster-request-is-real-pending-work-with-source-revision",
+    "source-deletion-cancels-production-and-revokes-new-previews"
+  ],
+  "runtimeErrors": [],
+  "cleaned": true
+}
