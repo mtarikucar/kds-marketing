@@ -14,7 +14,7 @@ for label,root,envfile,unit in [('staging','/opt/jeeta/staging-current','/etc/je
     q="SELECT version,encode(checksum,'hex'),success FROM _sqlx_migrations ORDER BY version"
     rows=subprocess.check_output(['sudo','-u','postgres','psql','-XAt','-p',port,'-d',db,'-v','ON_ERROR_STOP=1','-c',q],text=True)
     facts[label]={'release':str(p.resolve()),'revision':(p/'REVISION').read_text().strip(),'database_port':port,'database_name':db,'selectors':config,'migrations':[r.split('|') for r in rows.splitlines()],'service':subprocess.check_output(['systemctl','is-active',unit],text=True).strip(),'manifest':json.loads((p/'manifest.json').read_text())}
-for path in ['/root/upgrade.sh','/root/staging-upgrade.sh']:
+for path in ['/root/upgrade.sh','/root/staging-upgrade.sh','/etc/jeeta/recovery-control']:
     p=pathlib.Path(path);facts[path]={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'size':p.stat().st_size}
 facts['disk']=subprocess.check_output(['df','-h','/opt/jeeta','/var/backups'],text=True)
 print(json.dumps(facts,indent=2))
@@ -22,7 +22,7 @@ print(json.dumps(facts,indent=2))
 with tempfile.TemporaryDirectory(prefix='jeeta-release-audit-') as tmp:
     tar=pathlib.Path(tmp)/'audit.tar'
     with tarfile.open(tar,'w') as out:
-        for path in ['/root/upgrade.sh','/root/staging-upgrade.sh','/etc/systemd/system/jeeta.service','/etc/systemd/system/jeeta-staging.service']:
+        for path in ['/root/upgrade.sh','/root/staging-upgrade.sh','/etc/systemd/system/jeeta.service','/etc/systemd/system/jeeta-staging.service','/etc/jeeta/recovery-control']:
             p=pathlib.Path(path)
             if p.is_file():out.add(p,arcname=p.name,recursive=False)
     subprocess.run(['openssl','cms','-encrypt','-binary','-aes256','-in',str(tar),'-outform','DER','-out','/root/jeeta-release-audit-dd66e8dc.p7m','/root/jeeta-release-audit-dd66e8dc.crt'],check=True)
