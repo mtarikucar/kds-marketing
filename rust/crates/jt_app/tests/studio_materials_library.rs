@@ -1918,3 +1918,166 @@ async fn a_material_showing_people_is_erased_24_months_after_its_olay() {
         .unwrap();
     assert_eq!(entry.entry.payload["reason"], "retention");
 }
+
+#[tokio::test]
+async fn free_labels_and_capture_corrections_preserve_manual_intent() {
+    let (w, _) = publishing_world().await;
+    let file = upload(&w, "generic-label-file", "image/png", &png(213)).await;
+    let material = add(
+        &w,
+        &w.ctx,
+        "generic-label-material",
+        file,
+        json!({
+            "genel":true,"share":"shareable","labels":["  Summer   Launch  ","summer launch","Cafe"]
+        }),
+    )
+    .await;
+    assert_eq!(
+        material.tags.labels,
+        ["cafe".into(), "summer launch".into()].into()
+    );
+    assert_eq!(
+        material.captured_at, None,
+        "upload time is not capture time"
+    );
+    let initial =
+        library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":material.id})))
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(initial.intelligence.status).unwrap(),
+        "pending"
+    );
+    let edited = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":material.revision,
+            "title":"Summer menu","labels":["Drinks"],"captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(edited.title, "Summer menu");
+    assert_eq!(edited.tags.labels, ["drinks".into()].into());
+    assert_eq!(edited.captured_at, Some(datetime!(2026-06-01 12:00 UTC)));
+    let metadata =
+        library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":material.id})))
+            .await
+            .unwrap();
+    for field in ["title", "labels", "captured_at"] {
+        assert!(metadata.intelligence.manual_fields.contains(field));
+    }
+    let cleared = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":edited.revision,"captured_at":null
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared.captured_at, None);
+    let same = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":cleared.revision,"labels":[]
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.captured_at, None);
+    assert!(same.tags.labels.is_empty());
+    let stale = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":edited.revision,"title":"stale"
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::Conflict);
+    library::material_delete(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":same.revision,"confirm":true
+        })),
+    )
+    .await
+    .unwrap();
+    let mut r = w.d.uow.tenant(w.ctx.workspace_id).await.unwrap();
+    assert!(
+        r.studio_materials()
+            .get_intelligence(material.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn legacy_tag_tool_cannot_bypass_human_analysis_field_locks() {
+    let (w, _) = publishing_world().await;
+    let file = upload(&w, "locked-source", "image/png", &png(214)).await;
+    let original = add(
+        &w,
+        &w.ctx,
+        "locked-material",
+        file,
+        json!({"genel":true,"share":"shareable"}),
+    )
+    .await;
+    let corrected = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":original.id,"expected_revision":original.revision,
+            "title":"Human title","labels":["Cafe"],"quality":"publishable",
+            "captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    for change in [
+        json!({"title":"Agent title"}),
+        json!({"labels":["other"]}),
+        json!({"quality":"unusable"}),
+        json!({"captured_at":null}),
+    ] {
+        let mut request =
+            json!({"material_id":corrected.id,"expected_revision":corrected.revision});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(change.as_object().unwrap().clone());
+        let error = library::material_tag(&w.d, &agent(&w), input(request))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(reason(&error), "material_manual_field_locked");
+        let stored =
+            library::material_get(&w.d, &w.ctx, input(json!({"material_id":corrected.id})))
+                .await
+                .unwrap()
+                .material;
+        assert_eq!(stored, corrected);
+    }
+    let same = library::material_tag(
+        &w.d,
+        &agent(&w),
+        input(json!({
+            "material_id":corrected.id,"expected_revision":corrected.revision,
+            "title":" Human title ","labels":[" CAFE "],"quality":"publishable",
+            "captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.title, corrected.title);
+    assert_eq!(same.tags, corrected.tags);
+    assert_eq!(same.captured_at, corrected.captured_at);
+}

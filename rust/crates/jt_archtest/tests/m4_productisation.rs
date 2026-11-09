@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 82] = [
+const POST_M4_ADDED: [(&str, &str); 93] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -85,6 +85,47 @@ const POST_M4_ADDED: [(&str, &str); 82] = [
     ("studio.olay_update", "jeeta.studio.olay_update"),
     ("studio.materials_list", "jeeta.studio.materials_list"),
     ("studio.material_get", "jeeta.studio.material_get"),
+    (
+        "studio.material_intelligence_list",
+        "jeeta.studio.material_intelligence_list",
+    ),
+    (
+        "studio.material_production_list",
+        "jeeta.studio.material_production_list",
+    ),
+    (
+        "studio.material_production_claim",
+        "jeeta.studio.material_production_claim",
+    ),
+    (
+        "studio.material_production_complete",
+        "jeeta.studio.material_production_complete",
+    ),
+    (
+        "studio.material_production_fail",
+        "jeeta.studio.material_production_fail",
+    ),
+    (
+        "studio.material_intelligence_get",
+        "jeeta.studio.material_intelligence_get",
+    ),
+    ("studio.material_preview", "jeeta.studio.material_preview"),
+    (
+        "studio.material_analysis_retry",
+        "jeeta.studio.material_analysis_retry",
+    ),
+    (
+        "studio.material_analysis_claim",
+        "jeeta.studio.material_analysis_claim",
+    ),
+    (
+        "studio.material_analysis_complete",
+        "jeeta.studio.material_analysis_complete",
+    ),
+    (
+        "studio.material_analysis_fail",
+        "jeeta.studio.material_analysis_fail",
+    ),
     ("studio.material_add", "jeeta.studio.material_add"),
     ("studio.material_tag", "jeeta.studio.material_tag"),
     ("studio.slot_materials", "jeeta.studio.slot_materials"),
@@ -146,7 +187,7 @@ const POST_M4_ADDED: [(&str, &str); 82] = [
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
 /// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4),
 /// releasing a slot's caption findings among them (§7), and the posting policy (§14.3).
-const POST_M4_PANEL_ONLY: [&str; 19] = [
+const POST_M4_PANEL_ONLY: [&str; 21] = [
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
@@ -166,6 +207,8 @@ const POST_M4_PANEL_ONLY: [&str; 19] = [
     "studio.material_policy_set",
     "studio.material_check_release",
     "studio.posting_policy_set",
+    "studio.material_intelligence_update",
+    "studio.material_production_request",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

@@ -43,6 +43,17 @@ const ACTIONS: &[&str] = &[
     "olay_update",
     "materials_list",
     "material_get",
+    "material_intelligence_list",
+    "material_intelligence_get",
+    "material_preview",
+    "material_analysis_retry",
+    "material_analysis_claim",
+    "material_analysis_complete",
+    "material_analysis_fail",
+    "material_production_list",
+    "material_production_claim",
+    "material_production_complete",
+    "material_production_fail",
     "material_add",
     "material_tag",
     "slot_materials",
@@ -67,6 +78,17 @@ const EXEMPT: &[&str] = &[
     "olay_update",
     "materials_list",
     "material_get",
+    "material_intelligence_list",
+    "material_intelligence_get",
+    "material_preview",
+    "material_analysis_retry",
+    "material_analysis_claim",
+    "material_analysis_complete",
+    "material_analysis_fail",
+    "material_production_list",
+    "material_production_claim",
+    "material_production_complete",
+    "material_production_fail",
     "material_add",
     "material_tag",
     "slot_materials",
@@ -81,6 +103,8 @@ const EXEMPT: &[&str] = &[
     "material_delete",
     "calendar_set",
     "material_policy_set",
+    "material_intelligence_update",
+    "material_production_request",
 ];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
 /// (TikTok's Content Sharing Guidelines), and its published post's counters.
@@ -99,6 +123,8 @@ const PANEL_ONLY: &[&str] = &[
     "material_policy_set",
     "material_check_release",
     "posting_policy_set",
+    "material_intelligence_update",
+    "material_production_request",
 ];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
@@ -110,7 +136,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 47);
+    assert_eq!(rows.len(), 60);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -151,7 +177,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 207);
+    assert_eq!(jt_mcp::registry().len(), 218);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -174,11 +200,11 @@ async fn studio_exact_catalog_and_gate_set() {
     // items, subjects and cursors of 0019_inbox_public, the five pool tables of 0020_prospects,
     // the materials library's seven of 0021_studio_materials, the planned posts, package requests
     // and posting policy of 0022_studio_posts, the four outreach tables of 0026_outreach, the
-    // three distribution tables of 0027_distribution and the mail files of 0028_mail_files.
-    assert_eq!(all_tables.len(), 100);
+    // three distribution tables of 0027_distribution, mail files of 0028_mail_files, and
+    // material intelligence and productions of 0029 and 0030.
+    assert_eq!(all_tables.len(), 102);
 
-    // All twenty-four Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
-    // 0021_studio_materials, three of 0022_studio_posts.
+    // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(
         set(tables
             .iter()
@@ -201,6 +227,8 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_request_keys",
             "studio_olays",
             "studio_materials",
+            "studio_material_intelligence",
+            "studio_material_productions",
             "studio_piece_materials",
             "studio_calendar_entries",
             "studio_shoot_requests",
@@ -261,7 +289,11 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
             .iter()
             .find(|r| r.id == format!("studio.{action}"))
             .unwrap();
-        assert!(jt_panel_http::ROUTES.contains(&row.panel_route.unwrap()));
+        if let Some(route) = row.panel_route {
+            assert!(jt_panel_http::ROUTES.contains(&route));
+        } else {
+            assert!(row.mcp_only, "{action}");
+        }
         let tool = registry
             .iter()
             .find(|t| Some(t.name) == row.mcp_tool)
@@ -279,7 +311,11 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
         );
         // Parse both real implementations: a route-table entry alone is insufficient.
         // The same application function must be called by each actual handler.
-        for file in [&http, &mcp] {
+        for file in if row.mcp_only {
+            vec![&mcp]
+        } else {
+            vec![&http, &mcp]
+        } {
             let handlers = functions(file);
             let handler = handlers.iter().find(|f| f.sig.ident == *action).unwrap();
             assert!(
@@ -370,6 +406,34 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
             json!({"material_id":w.material().id,"expected_revision":1,"doors":[]}),
         ),
         (
+            "material_analysis_retry",
+            json!({"material_id":w.material().id,"expected_revision":1}),
+        ),
+        (
+            "material_analysis_claim",
+            json!({"material_id":w.material().id,"expected_revision":1}),
+        ),
+        (
+            "material_analysis_complete",
+            json!({"material_id":w.material().id,"expected_revision":1,"claim_token":"test","description":"test","labels":[],"date_source":"unknown"}),
+        ),
+        (
+            "material_analysis_fail",
+            json!({"material_id":w.material().id,"expected_revision":1,"claim_token":"test","error_code":"test"}),
+        ),
+        (
+            "material_production_claim",
+            json!({"production_id":id,"expected_revision":1}),
+        ),
+        (
+            "material_production_complete",
+            json!({"production_id":id,"expected_revision":1,"claim_token":"test","output_material_id":w.material().id}),
+        ),
+        (
+            "material_production_fail",
+            json!({"production_id":id,"expected_revision":1,"claim_token":"test","error_code":"test"}),
+        ),
+        (
             "shoot_request",
             json!({"request_key":"shoot","text":"Ürün fotoğrafı yükle"}),
         ),
@@ -425,7 +489,22 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 .find(|t| t.use_case == format!("studio.{action}"))
                 .unwrap();
             // Call the dispatcher directly: deliberately bypass the MCP middleware gate.
-            let e = (tool.run)(&w.d, &w.ctx, args).await.unwrap_err();
+            let mut agent_ctx = w.ctx.clone();
+            if (action.starts_with("material_analysis_") && action != "material_analysis_retry")
+                || action.starts_with("material_production_")
+            {
+                let connection_id = jt_tenancy::AgentConnectionId::new_v7();
+                let user_id = match w.ctx.actor {
+                    jt_ledger::Actor::Human { user_id } => user_id,
+                    _ => panic!("fixture expects a human"),
+                };
+                agent_ctx.actor = jt_ledger::Actor::Agent {
+                    connection_id,
+                    user_id,
+                };
+                agent_ctx.agent_connection_id = Some(connection_id);
+            }
+            let e = (tool.run)(&w.d, &agent_ctx, args).await.unwrap_err();
             assert_eq!(
                 e.code,
                 if inactive {

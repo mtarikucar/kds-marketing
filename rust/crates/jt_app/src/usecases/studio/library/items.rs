@@ -50,6 +50,9 @@ pub struct MaterialAddInput {
     pub origin: Origin,
     #[serde(default)]
     pub title: String,
+    /// Business-specific labels; legacy taxonomy fields remain readable for existing libraries.
+    #[serde(default)]
+    pub labels: BTreeSet<String>,
     #[serde(default)]
     pub product_groups: BTreeSet<ProductGroup>,
     #[serde(default)]
@@ -125,6 +128,13 @@ pub struct MaterialTagInput {
     pub material_id: MaterialId,
     pub expected_revision: u64,
     #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub labels: Option<BTreeSet<String>>,
+    /// Absent leaves the date unchanged; null explicitly clears it.
+    #[serde(default, deserialize_with = "nullable_capture_time")]
+    pub captured_at: Option<Option<OffsetDateTime>>,
+    #[serde(default)]
     pub product_groups: Option<BTreeSet<ProductGroup>>,
     #[serde(default)]
     pub doors: Option<BTreeSet<Door>>,
@@ -136,6 +146,12 @@ pub struct MaterialTagInput {
     pub depicts: Option<BTreeSet<Depicts>>,
     #[serde(default)]
     pub people: Option<BTreeSet<Uuid>>,
+}
+
+fn nullable_capture_time<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<OffsetDateTime>>, D::Error> {
+    jt_studio::time_compat::option::deserialize(d).map(Some)
 }
 
 /// One material, by id.
@@ -294,6 +310,7 @@ fn summary(m: &Material) -> Value {
         "product_groups": keys(&m.tags.product_groups),
         "doors": keys(&m.tags.doors),
         "content_types": keys(&m.tags.content_types),
+        "label_count": m.tags.labels.len(),
         "quality": m.tags.quality.map(Quality::key),
         "depicts": keys(&m.tags.depicts),
         "people": m.people.len(),
@@ -584,9 +601,8 @@ pub async fn material_add(
     drop(r);
     // The capture time, from what the stored bytes say of themselves, read under no transaction
     // and without holding the file (D41).
-    let captured_at = super::capture::capture_time_of(d, &file)
-        .await?
-        .or(i.captured_at);
+    let embedded_capture = super::capture::capture_time_of(d, &file).await?;
+    let captured_at = embedded_capture.or(i.captured_at);
     let material = Material {
         id: MaterialId(d.ids.uuid()),
         workspace_id: ctx.workspace_id,
@@ -598,6 +614,10 @@ pub async fn material_add(
         freed,
         share,
         tags: Tags {
+            labels: jt_studio::normalize_material_labels(
+                &i.labels.iter().cloned().collect::<Vec<_>>(),
+            )
+            .map_err(invalid)?,
             product_groups: i.product_groups.clone(),
             doors: i.doors.clone(),
             content_types: i.content_types.clone(),
@@ -630,6 +650,37 @@ pub async fn material_add(
     r.studio_materials()
         .insert_material(material.clone())
         .await?;
+    super::intelligence::enqueue_material_analysis(
+        r.as_mut(),
+        &material,
+        ctx.now,
+        if embedded_capture.is_some() {
+            crate::ports::materials::DateSource::Exif
+        } else if i.captured_at.is_some() {
+            crate::ports::materials::DateSource::Manual
+        } else {
+            crate::ports::materials::DateSource::Unknown
+        },
+    )
+    .await?;
+    if person(ctx).is_some() {
+        let mut manual_fields = Vec::new();
+        if !i.labels.is_empty() {
+            manual_fields.push("labels");
+        }
+        if i.quality.is_some() {
+            manual_fields.push("quality");
+        }
+        if !manual_fields.is_empty() {
+            super::intelligence::mark_material_intelligence_manual(
+                r.as_mut(),
+                &material,
+                &manual_fields,
+                ctx.now,
+            )
+            .await?;
+        }
+    }
     append(
         r.as_mut(),
         ctx,
@@ -671,6 +722,9 @@ pub async fn material_add(
 /// review (D5, D17, D38, D45). Removing a marker keeps the permission.
 pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Material, AppError> {
     let given = [
+        ("title", i.title.is_some()),
+        ("labels", i.labels.is_some()),
+        ("captured_at", i.captured_at.is_some()),
         ("product_groups", i.product_groups.is_some()),
         ("doors", i.doors.is_some()),
         ("content_types", i.content_types.is_some()),
@@ -704,6 +758,16 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
         }
     }
     let mut m = next(current.clone())?;
+    if let Some(v) = i.title {
+        m.title = v.trim().to_owned();
+    }
+    if let Some(v) = i.labels {
+        m.tags.labels = jt_studio::normalize_material_labels(&v.into_iter().collect::<Vec<_>>())
+            .map_err(invalid)?;
+    }
+    if let Some(v) = i.captured_at {
+        m.captured_at = v;
+    }
     if let Some(v) = i.product_groups {
         m.tags.product_groups = v;
     }
@@ -721,6 +785,25 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     }
     if let Some(v) = i.people {
         m.people = v;
+    }
+    if super::is_agent(ctx) {
+        let metadata = super::intelligence::record(r.as_mut(), &current, ctx.now).await?;
+        let changed: Vec<_> = [
+            ("title", m.title != current.title),
+            ("labels", m.tags.labels != current.tags.labels),
+            ("captured_at", m.captured_at != current.captured_at),
+            ("quality", m.tags.quality != current.tags.quality),
+        ]
+        .into_iter()
+        .filter(|(field, changed)| *changed && metadata.intelligence.manual_fields.contains(*field))
+        .map(|(field, _)| field)
+        .collect();
+        if !changed.is_empty() {
+            return Err(AppError {
+                details: json!({"reason":"material_manual_field_locked","fields":changed}),
+                ..conflict("material_manual_field_locked")
+            });
+        }
     }
     m.tags_reviewed_by = reviewer;
     // A new privacy marker reopens the permission, whoever gave it: it was given for what the
@@ -740,6 +823,23 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     r.studio_materials()
         .update_material(m.clone(), i.expected_revision)
         .await?;
+    if reviewer.is_some() {
+        let manual_fields: Vec<_> = fields
+            .iter()
+            .copied()
+            .filter(|field| ["title", "labels", "captured_at", "quality"].contains(field))
+            .collect();
+        super::intelligence::mark_material_intelligence_manual(
+            r.as_mut(),
+            &m,
+            &manual_fields,
+            ctx.now,
+        )
+        .await?;
+    }
+    if share_cleared {
+        super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, false).await?;
+    }
     append(
         r.as_mut(),
         ctx,
@@ -780,6 +880,12 @@ pub async fn material_permission(
         json!({}),
     )
     .await?;
+    if m.share
+        .as_ref()
+        .is_none_or(|s| s.permission != SharePermission::Shareable)
+    {
+        super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, false).await?;
+    }
     r.commit().await?;
     Ok(m)
 }
@@ -886,6 +992,8 @@ pub async fn material_delete(
         r.studio_materials()
             .update_material(m.clone(), i.expected_revision)
             .await?;
+        r.studio_materials().delete_intelligence(m.id).await?;
+        super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, true).await?;
         append(r.as_mut(), ctx, "studio.material.deleted", &m, json!({})).await?;
         r.commit().await?;
         m
@@ -943,6 +1051,7 @@ pub async fn slot_materials(
     let policy = r.studio_materials().material_policy().await?;
     let materials = r.studio_materials().list_materials().await?;
     let usage = usage(r.as_mut()).await?;
+    let blocked = super::blocked_derivatives(r.as_mut()).await?;
     let lib = super::super::materials::library(r.as_mut(), slot.scheduled_at).await?;
     let (ranked, refusals) = rank_materials(
         &need,
@@ -958,6 +1067,7 @@ pub async fn slot_materials(
         need,
         candidates: ranked
             .into_iter()
+            .filter(|c| !blocked.contains(&c.material_id))
             .filter_map(|c| {
                 of(c.material_id).map(|m| SlotCandidate {
                     material_id: c.material_id,
@@ -971,10 +1081,15 @@ pub async fn slot_materials(
             .collect(),
         refused: refusals
             .into_iter()
+            .filter(|(material_id, _)| !blocked.contains(material_id))
             .map(|(material_id, r)| SlotRefusal {
                 material_id,
                 code: r.code(),
             })
+            .chain(blocked.iter().copied().map(|material_id| SlotRefusal {
+                material_id,
+                code: "source_material_restricted",
+            }))
             .collect(),
     })
 }

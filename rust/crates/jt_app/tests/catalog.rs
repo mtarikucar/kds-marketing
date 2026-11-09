@@ -43,13 +43,24 @@ fn mcp_only_use_cases_have_no_panel_route() {
             uc.id
         );
     }
-    // An agent-only tool has no human caller: the agent's check-in is the only one.
+    // Agent-only tools have no human caller.
     let mcp_only: Vec<&str> = CATALOG
         .iter()
         .filter(|uc| uc.mcp_only)
         .map(|uc| uc.id)
         .collect();
-    assert_eq!(mcp_only, ["work.checkin"]);
+    assert_eq!(
+        mcp_only,
+        [
+            "studio.material_production_claim",
+            "studio.material_production_complete",
+            "studio.material_production_fail",
+            "studio.material_analysis_claim",
+            "studio.material_analysis_complete",
+            "studio.material_analysis_fail",
+            "work.checkin",
+        ]
+    );
 }
 
 #[test]
@@ -113,6 +124,19 @@ const STUDIO_LIBRARY: &[&str] = &[
     "studio.olay_update",
     "studio.materials_list",
     "studio.material_get",
+    "studio.material_intelligence_list",
+    "studio.material_production_request",
+    "studio.material_production_list",
+    "studio.material_production_claim",
+    "studio.material_production_complete",
+    "studio.material_production_fail",
+    "studio.material_intelligence_get",
+    "studio.material_preview",
+    "studio.material_analysis_retry",
+    "studio.material_intelligence_update",
+    "studio.material_analysis_claim",
+    "studio.material_analysis_complete",
+    "studio.material_analysis_fail",
     "studio.material_add",
     "studio.material_tag",
     "studio.slot_materials",
@@ -164,6 +188,19 @@ fn catalog_is_the_release_table() {
         ("studio.olay_update", Some("jeeta.studio.olay_update"), Some(("PATCH", "/api/studio/olays/{olay_id}")), false, Risk::Write),
         ("studio.materials_list", Some("jeeta.studio.materials_list"), Some(("GET", "/api/studio/materials")), false, Risk::Read),
         ("studio.material_get", Some("jeeta.studio.material_get"), Some(("GET", "/api/studio/materials/{material_id}")), false, Risk::Read),
+        ("studio.material_intelligence_list", Some("jeeta.studio.material_intelligence_list"), Some(("GET", "/api/studio/material-intelligence")), false, Risk::Read),
+        ("studio.material_production_request", None, Some(("POST", "/api/studio/material-productions")), true, Risk::Write),
+        ("studio.material_production_list", Some("jeeta.studio.material_production_list"), Some(("GET", "/api/studio/material-productions")), false, Risk::Read),
+        ("studio.material_production_claim", Some("jeeta.studio.material_production_claim"), None, false, Risk::Write),
+        ("studio.material_production_complete", Some("jeeta.studio.material_production_complete"), None, false, Risk::Write),
+        ("studio.material_production_fail", Some("jeeta.studio.material_production_fail"), None, false, Risk::Write),
+        ("studio.material_intelligence_get", Some("jeeta.studio.material_intelligence_get"), Some(("GET", "/api/studio/materials/{material_id}/intelligence")), false, Risk::Read),
+        ("studio.material_preview", Some("jeeta.studio.material_preview"), Some(("GET", "/api/studio/materials/{material_id}/preview")), false, Risk::Read),
+        ("studio.material_analysis_retry", Some("jeeta.studio.material_analysis_retry"), Some(("POST", "/api/studio/materials/{material_id}/analysis/retry")), false, Risk::Write),
+        ("studio.material_intelligence_update", None, Some(("PATCH", "/api/studio/materials/{material_id}/intelligence")), true, Risk::Write),
+        ("studio.material_analysis_claim", Some("jeeta.studio.material_analysis_claim"), None, false, Risk::Write),
+        ("studio.material_analysis_complete", Some("jeeta.studio.material_analysis_complete"), None, false, Risk::Write),
+        ("studio.material_analysis_fail", Some("jeeta.studio.material_analysis_fail"), None, false, Risk::Write),
         ("studio.material_add", Some("jeeta.studio.material_add"), Some(("POST", "/api/studio/materials")), false, Risk::Write),
         ("studio.material_tag", Some("jeeta.studio.material_tag"), Some(("PATCH", "/api/studio/materials/{material_id}/tags")), false, Risk::Write),
         ("studio.slot_materials", Some("jeeta.studio.slot_materials"), Some(("GET", "/api/studio/slots/{slot_id}/materials")), false, Risk::Read),
@@ -384,7 +421,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 245);
+    assert_eq!(CATALOG.len(), 258);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

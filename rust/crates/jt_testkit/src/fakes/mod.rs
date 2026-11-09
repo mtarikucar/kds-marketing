@@ -95,6 +95,7 @@ mod erasure;
 mod studio;
 pub use studio::MemStudio;
 
+mod material_productions;
 mod materials;
 pub use materials::MemMaterials;
 

@@ -418,3 +418,168 @@ async fn a_slots_caption_findings_are_released_by_the_owner() {
     .await;
     assert_eq!(again["material_check"]["released"], true);
 }
+
+#[tokio::test]
+async fn intelligence_preview_retry_and_production_routes_are_tenant_and_role_scoped() {
+    use jt_testkit::fakes::files::MemoryFiles;
+    use std::sync::Arc;
+    let mut p = Panel::new().await;
+    p.deps.files = Arc::new(MemoryFiles::default());
+    p.app = jt_panel_http::router(jt_panel_http::AppState {
+        deps: p.deps.clone(),
+        gate: Arc::new(jt_pg::PgStrategyGate::new(p.db.pool.clone())),
+        cookie_secure: false,
+        panel_dir: None,
+    });
+    let (owner, me) = p
+        .register("owner@intelligence.example", "Intelligence")
+        .await;
+    let ws = workspace_of(&me);
+    let source =
+        jt_testkit::studio_contract::stored_material(&p.uow, p.deps.files.as_ref(), ws).await;
+    let base = format!("/api/studio/materials/{}", source.id);
+    let got = ok_json(p.get(&format!("{base}/intelligence"), &owner).await).await;
+    assert_eq!(got["material"]["id"], json!(source.id));
+    assert_eq!(got["intelligence"]["status"], "pending");
+    assert!(got.get("claim_token").is_none());
+    let all = ok_json(p.get("/api/studio/material-intelligence", &owner).await).await;
+    assert_eq!(all[0]["material"]["id"], json!(source.id));
+    let edited=ok_json(p.send(Method::PATCH,&format!("{base}/intelligence"),Some(&owner),Some(json!({"expected_revision":1,"description":"Owner description","group_name":"Workshop"}))).await).await;
+    assert_eq!(edited["material"]["revision"], 2);
+    assert_eq!(edited["intelligence"]["description"], "Owner description");
+    assert_eq!(edited["intelligence"]["group_name"], "Workshop");
+    let retry = format!("{base}/analysis/retry");
+    expect_error(
+        p.send(
+            Method::POST,
+            &retry,
+            Some(&owner),
+            Some(json!({"expected_revision":1})),
+        )
+        .await,
+        StatusCode::CONFLICT,
+        "CONFLICT",
+    )
+    .await;
+    expect_error(
+        p.send(
+            Method::POST,
+            &retry,
+            Some(&owner),
+            Some(json!({"material_id":source.id,"expected_revision":2})),
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    let retried = ok_json(
+        p.send(
+            Method::POST,
+            &retry,
+            Some(&owner),
+            Some(json!({"expected_revision":2})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(retried["intelligence"]["status"], "pending");
+    let preview = ok_json(p.get(&format!("{base}/preview"), &owner).await).await;
+    assert!(
+        preview["url"]
+            .as_str()
+            .unwrap()
+            .contains("files.example.com")
+    );
+    assert!(preview["expires_at"].is_string());
+    let (other, _) = p.register("other@intelligence.example", "Other").await;
+    for suffix in ["intelligence", "preview"] {
+        expect_error(
+            p.get(&format!("{base}/{suffix}"), &other).await,
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        )
+        .await;
+    }
+    let (rep, _) = p.join(&owner, "rep@intelligence.example", "rep").await;
+    for path in [
+        format!("{base}/intelligence"),
+        format!("{base}/preview"),
+        "/api/studio/material-intelligence".into(),
+        "/api/studio/material-productions".into(),
+    ] {
+        expect_error(p.get(&path, &rep).await, StatusCode::FORBIDDEN, "FORBIDDEN").await;
+    }
+    expect_error(
+        p.send(
+            Method::POST,
+            &retry,
+            Some(&rep),
+            Some(json!({"expected_revision":2})),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "FORBIDDEN",
+    )
+    .await;
+    // Creating requests is an owner/manager decision; there is no panel lease endpoint.
+    let request = json!({"request_key":"poster","kind":"poster","instructions":"Make a square poster","sources":[{"material_id":source.id,"expected_revision":2}]});
+    expect_error(
+        p.send(
+            Method::POST,
+            "/api/studio/material-productions",
+            Some(&rep),
+            Some(request.clone()),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "FORBIDDEN",
+    )
+    .await;
+    let production = ok_json(
+        p.send(
+            Method::POST,
+            "/api/studio/material-productions",
+            Some(&owner),
+            Some(request.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(production["status"], "pending");
+    assert!(production.get("claim_token").is_none());
+    let replay = ok_json(
+        p.send(
+            Method::POST,
+            "/api/studio/material-productions",
+            Some(&owner),
+            Some(request),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(replay["id"], production["id"]);
+    let listed = ok_json(
+        p.get(
+            &format!(
+                "/api/studio/material-productions?source_material_id={}",
+                source.id
+            ),
+            &owner,
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(listed[0]["id"], production["id"]);
+    let empty = ok_json(p.get("/api/studio/material-productions", &other).await).await;
+    assert_eq!(empty, json!([]));
+    let response = p
+        .send(
+            Method::POST,
+            &format!("{base}/analysis/claim"),
+            Some(&owner),
+            Some(json!({"expected_revision":2})),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

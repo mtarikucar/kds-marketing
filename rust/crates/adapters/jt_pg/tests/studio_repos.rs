@@ -17,7 +17,9 @@ async fn studio_schema_exact_table_delta() {
             "studio_control",
             "studio_files",
             "studio_learning_applications",
+            "studio_material_intelligence",
             "studio_material_policy",
+            "studio_material_productions",
             "studio_material_releases",
             "studio_materials",
             "studio_measurements",
@@ -42,8 +44,11 @@ async fn studio_schema_exact_table_delta() {
     // public items, subjects and cursors (0019_inbox_public), the pool (0020_prospects), the
     // materials library's seven (0021_studio_materials), the planned posts, package requests and
     // posting policy (0022_studio_posts), outreach (0026_outreach), distribution
-    // (0027_distribution) and the mail files (0028_mail_files).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1);
+    // (0027_distribution), mail files (0028), intelligence (0029) and productions (0030).
+    assert_eq!(
+        count,
+        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 2
+    );
 }
 
 #[tokio::test]
@@ -153,8 +158,8 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .await
     .unwrap();
     // 14 Studio tables, the materials library's seven (0021_studio_materials) and the three of
-    // olay-driven publishing (0022_studio_posts).
-    assert_eq!(tables.len(), 14 + 7 + 3);
+    // olay-driven publishing (0022_studio_posts), intelligence (0029) and productions (0030).
+    assert_eq!(tables.len(), 14 + 7 + 3 + 2);
     for table in tables {
         let forced: bool = sqlx::query_scalar(
             "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1",

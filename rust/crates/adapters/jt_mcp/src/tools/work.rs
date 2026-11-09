@@ -32,6 +32,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           them, with capabilities.manage), studio_shoot_request with \
                           shoot_request_id (a material Studio needs, listed with \
                           jeeta.studio.shoot_list: tell the owner, who shoots it), \
+                          studio_material_analysis with material_id and expected_revision (to an \
+                          agent with studio.work: claim, inspect the preview with your own tools, \
+                          and complete or fail; live leases and terminal results are omitted), \
+                          studio_material_production with production_id and expected_revision \
+                          (human-requested edit/crop/poster: claim and produce with your own tools, \
+                          then upload a distinct AI result; no server generation), \
                           studio_post_request with post_request_id (plan posts from \
                           its materials and answer it with jeeta.studio.posts_propose), \
                           declare_first_capability, research_due \
@@ -52,7 +58,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           interval (agent.interval_minutes); nothing will wake you, and the \
                           owner sees a warning when you are late. Returns what is pending, as \
                           jeeta.work.pending does; act on the items. The check-in is recorded \
-                          at most once an hour. [risk: WRITE]",
+                          at most once an hour. Uploaded materials remain pending until an \
+                          external agent polls, claims and analyzes them; no server vision job \
+                          or wake-up is implied. [risk: WRITE]",
             permission: Permission::WorkspaceRead,
             schema: schema_for::<NoArgs>,
             run: checkin,

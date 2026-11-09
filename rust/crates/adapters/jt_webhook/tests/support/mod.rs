@@ -336,6 +336,11 @@ impl TenantRepos for FailingTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.0.studio_control()
     }
+    fn studio_productions(
+        &mut self,
+    ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
+        self.0.studio_productions()
+    }
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self.0.studio_materials()
     }

@@ -12,6 +12,10 @@ use uuid::Uuid;
 pub const MAX_MATERIAL_TITLE_CHARS: usize = 120;
 /// The most people a material may name.
 pub const MAX_MATERIAL_PEOPLE: usize = 50;
+/// Maximum number of labels on a material or in one label request.
+pub const MAX_MATERIAL_LABELS: usize = 32;
+/// Maximum label length, counted in Unicode scalar values after normalization.
+pub const MAX_MATERIAL_LABEL_CHARS: usize = 64;
 /// How long a material that shows people is kept after its olay (spec D16), in months.
 pub const RETENTION_MONTHS: u32 = 24;
 
@@ -116,6 +120,33 @@ pub struct Tags {
     pub quality: Option<Quality>,
     #[serde(default)]
     pub depicts: BTreeSet<Depicts>,
+    /// Business-specific, normalized labels. Older material records have none.
+    #[serde(default)]
+    pub labels: BTreeSet<String>,
+}
+
+/// Normalize user or agent labels before storage. Control characters are rejected; other Unicode
+/// whitespace is trimmed and collapsed, and Unicode lowercase is applied. Duplicates coalesce.
+pub fn normalize_material_labels(labels: &[String]) -> Result<BTreeSet<String>, StudioError> {
+    if labels.len() > MAX_MATERIAL_LABELS {
+        return Err(invalid("labels"));
+    }
+    let mut normalized = BTreeSet::new();
+    for label in labels {
+        if label.chars().any(char::is_control) {
+            return Err(invalid("labels"));
+        }
+        let value = label
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        if value.is_empty() || value.chars().count() > MAX_MATERIAL_LABEL_CHARS {
+            return Err(invalid("labels"));
+        }
+        normalized.insert(value);
+    }
+    Ok(normalized)
 }
 
 /// Where a material comes from; fixed at birth (spec D6).
@@ -226,6 +257,10 @@ impl Material {
             && (!self.is_ai() || self.needs_human_permission())
         {
             return Err(invalid("share"));
+        }
+        let labels: Vec<_> = self.tags.labels.iter().cloned().collect();
+        if normalize_material_labels(&labels)? != self.tags.labels {
+            return Err(invalid("labels"));
         }
         if self.people.len() > MAX_MATERIAL_PEOPLE || self.people.iter().any(Uuid::is_nil) {
             return Err(invalid("people"));

@@ -446,3 +446,59 @@ fn a_slots_materials_rank_as_selection_picks_and_name_the_refusals() {
             .any(|c| c.material_id == upcoming.id && !c.matches_need)
     );
 }
+
+#[test]
+fn material_validation_requires_canonical_labels() {
+    let mut m = material(
+        1,
+        Binding::Olay {
+            olay_id: OlayId(Uuid::from_u128(901)),
+        },
+    );
+    m.tags.labels = normalize_material_labels(&["  Fresh   Bread ".into()]).unwrap();
+    assert_eq!(m.validate(), Ok(()));
+    m.tags.labels = BTreeSet::from([" Fresh Bread ".to_owned()]);
+    assert_eq!(m.validate(), Err(StudioError::InvalidMaterial("labels")));
+}
+
+#[test]
+fn strategy_label_selects_only_materials_carrying_it() {
+    let calendar = Calendar::effective(2025..=2027, &[]);
+    let now = at(date!(2026 - 11 - 16));
+    let occasion = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 11 - 20),
+        date!(2026 - 11 - 20),
+    );
+    let olays = vec![occasion.clone()];
+    let mut matching = material(
+        1,
+        Binding::Olay {
+            olay_id: occasion.id,
+        },
+    );
+    matching.tags.labels = normalize_material_labels(&[" Fresh Bread ".into()]).unwrap();
+    let other = material(
+        2,
+        Binding::Olay {
+            olay_id: occasion.id,
+        },
+    );
+    let cx = UseContext {
+        at: now,
+        olays: &olays,
+        calendar: &calendar,
+    };
+    let need = SlotNeed::from_keys("label:fresh bread", "existing_segment");
+    let pick = select_anchor(
+        &need,
+        &[other.clone(), matching.clone()],
+        &[],
+        &MaterialPolicy::default(),
+        &cx,
+    )
+    .unwrap();
+    assert_eq!(pick.material_id, matching.id);
+    assert!(select_anchor(&need, &[other], &[], &MaterialPolicy::default(), &cx).is_none());
+}

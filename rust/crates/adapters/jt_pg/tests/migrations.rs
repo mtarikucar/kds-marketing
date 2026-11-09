@@ -36,21 +36,22 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// materials library's seven of `0021_studio_materials`, the planned posts, package requests and
 /// posting policy of `0022_studio_posts`, the templates, campaigns, enrollments and sends of
 /// `0026_outreach`, the rep profiles, rules and assignment log of `0027_distribution`, and the
-/// mail files of `0028_mail_files`.
-const TABLES_AFTER_ALL: i64 = 100;
+/// mail files of `0028_mail_files` and the material intelligence and production tables of
+/// `0029` and `0030`.
+const TABLES_AFTER_ALL: i64 = 102;
 
 /// The tables before `0028_mail_files` adds `mail_files`.
-const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 1;
+const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0028_mail_files`.
-const MIGRATIONS: i64 = 28;
+/// Migrations `0001_foundation` through `0030_material_productions`.
+const MIGRATIONS: i64 = 30;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
-    (1..=28).collect()
+    (1..=30).collect()
 }
 
 /// The tables of `0019_inbox_public`, each with its one row-level policy.
@@ -258,6 +259,8 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0030_material_productions",
+        "0029_material_intelligence",
         "0028_mail_files",
         "0027_distribution",
         "0026_outreach",
@@ -1007,6 +1010,7 @@ async fn migration_round_trip_23_36_23_36() {
     // Newest first: the mail files and the leads tables reference the inbox tables, the planned
     // posts the materials library and the Studio tables, the materials library the Studio tables,
     // the public items and the call tables the inbox tables.
+    material_tables_down(&db.pool).await;
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0028_mail_files.down.sql"
     ))
@@ -1191,6 +1195,7 @@ async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
     // Newest first: the mail files and the leads tables reference the inbox tables, the planned
     // posts the materials library and the Studio tables, the materials library the Studio tables.
+    material_tables_down(&db.pool).await;
     sqlx::raw_sql(include_str!(
         "../../../../migrations/0028_mail_files.down.sql"
     ))
@@ -1355,7 +1360,16 @@ async fn outreach_down(pool: &PgPool) {
 }
 
 /// Reverts `0028_mail_files`, the newest migration.
+async fn material_tables_down(pool: &PgPool) {
+    for name in ["0030_material_productions", "0029_material_intelligence"] {
+        let down =
+            std::fs::read_to_string(migrations_dir().join(format!("{name}.down.sql"))).unwrap();
+        try_run(pool, &down).await.unwrap();
+    }
+}
+
 async fn mail_files_down(pool: &PgPool) {
+    material_tables_down(pool).await;
     let down = std::fs::read_to_string(migrations_dir().join("0028_mail_files.down.sql")).unwrap();
     try_run(pool, &down).await.unwrap();
     assert_eq!(table_count(pool).await, TABLES_BEFORE_MAIL_FILES);
@@ -2504,13 +2518,14 @@ const MAIL_FILES_INDEXES: [&str; 3] = [
 /// that names none, does not hold it back.
 #[tokio::test]
 async fn mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachments() {
-    let db = TestDb::new().await; // already migrated up, 0028 included
+    let db = TestDb::new().await; // already migrated up
+    material_tables_down(&db.pool).await;
     let dir = migrations_dir();
     let up = std::fs::read_to_string(dir.join("0028_mail_files.up.sql")).unwrap();
     let down = std::fs::read_to_string(dir.join("0028_mail_files.down.sql")).unwrap();
     for _ in 0..2 {
         try_run(&db.pool, &up).await.unwrap();
-        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
     }
     let forced: bool = sqlx::query_scalar(
         "select relrowsecurity and relforcerowsecurity from pg_class where relname = 'mail_files'",
@@ -2577,7 +2592,7 @@ async fn mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachm
         let waiting = outbox(state, serde_json::json!([Uuid::now_v7()])).await;
         let refused = try_run(&db.pool, &down).await.unwrap_err().to_string();
         assert!(refused.contains("mail files rollback refused"), "{refused}");
-        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
         set_state(waiting, "refused").await;
     }
     for _ in 0..2 {
@@ -2588,5 +2603,5 @@ async fn mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachm
         }
     }
     try_run(&db.pool, &up).await.unwrap();
-    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
 }

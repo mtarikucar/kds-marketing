@@ -314,6 +314,10 @@ function itemText(t: TFunction, item: WorkItem): string {
  */
 function itemLink(item: WorkItem): string | null {
   switch (item.kind) {
+    case 'studio_material_analysis':
+      return `/studio?tab=materials&view=olays&material=${encodeURIComponent(item.material_id)}`;
+    case 'studio_material_production':
+      return '/studio?tab=materials&view=library';
     case 'reply_due':
     case 'reopen_question':
       return `/inbox/${encodeURIComponent(item.conversation_id)}`;

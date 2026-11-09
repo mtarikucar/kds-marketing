@@ -33,6 +33,17 @@ const TOOLS: &[&str] = &[
     "jeeta.studio.olay_update",
     "jeeta.studio.materials_list",
     "jeeta.studio.material_get",
+    "jeeta.studio.material_intelligence_list",
+    "jeeta.studio.material_production_list",
+    "jeeta.studio.material_production_claim",
+    "jeeta.studio.material_production_complete",
+    "jeeta.studio.material_production_fail",
+    "jeeta.studio.material_intelligence_get",
+    "jeeta.studio.material_preview",
+    "jeeta.studio.material_analysis_retry",
+    "jeeta.studio.material_analysis_claim",
+    "jeeta.studio.material_analysis_complete",
+    "jeeta.studio.material_analysis_fail",
     "jeeta.studio.material_add",
     "jeeta.studio.material_tag",
     "jeeta.studio.slot_materials",
@@ -223,7 +234,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 207);
+    assert_eq!(TOOLS.len(), 218);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)

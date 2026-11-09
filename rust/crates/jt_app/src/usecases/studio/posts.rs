@@ -300,12 +300,12 @@ pub(crate) async fn generic_anchor(
     at: OffsetDateTime,
 ) -> Result<Option<MaterialId>, AppError> {
     let cx = lib.context(at);
+    let blocked = super::library::blocked_derivatives(r).await?;
     let state: BTreeMap<SlotId, &Slot> = slots.iter().map(|s| (s.id, s)).collect();
     let mut best: Option<(_, MaterialId)> = None;
-    for m in materials
-        .iter()
-        .filter(|m| check_use(m, UseRole::Anchor, &Subject::Generic, &cx).is_ok())
-    {
+    for m in materials.iter().filter(|m| {
+        !blocked.contains(&m.id) && check_use(m, UseRole::Anchor, &Subject::Generic, &cx).is_ok()
+    }) {
         let planned = posts
             .iter()
             .filter(|p| {
@@ -343,6 +343,7 @@ pub(crate) fn need_text(need: &SlotNeed) -> String {
         .map(|t| t.key())
         .chain(need.doors.iter().map(|t| t.key()))
         .chain(need.content_types.iter().map(|t| t.key()))
+        .chain(need.labels.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -939,6 +940,10 @@ async fn check_item(
     if !media_types_ok(p.format, &kind, &mimes) {
         return refuse(PostRefusal::MediaType.code());
     }
+    let blocked = super::library::blocked_derivatives(r).await?;
+    if materials.iter().any(|m| blocked.contains(&m.id)) {
+        return refuse("source_permission_restricted");
+    }
     let refs: Vec<&Material> = materials.iter().collect();
     match piece_roles(&refs, &p.subject, &lib.context(p.publish_at)) {
         Ok(_) => {}
@@ -1257,4 +1262,15 @@ pub async fn posting_policy_set(
     r.ledger().append(e).await?;
     r.commit().await?;
     Ok(i)
+}
+
+#[cfg(test)]
+mod label_need_tests {
+    use super::*;
+
+    #[test]
+    fn shoot_request_need_includes_business_labels() {
+        let need = SlotNeed::from_keys("boyama.label:fresh bread", "existing_segment");
+        assert_eq!(need_text(&need), "boyama, fresh bread");
+    }
 }

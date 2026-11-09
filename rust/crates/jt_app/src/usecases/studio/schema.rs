@@ -197,6 +197,77 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
             &[],
         ),
         "material_get" => (json!({"material_id":uuid()}), &["material_id"]),
+        "material_intelligence_list" => (json!({}), &[]),
+        "material_production_list" => (
+            json!({"source_material_id":{"type":["string","null"],"format":"uuid"}}),
+            &[],
+        ),
+        "material_production_request" => (
+            json!({"request_key":request_key,"kind":{"type":"string","enum":["edit","crop","poster"]},
+                "instructions":{"type":"string","minLength":1,"maxLength":2000},
+                "sources":{"type":"array","minItems":1,"maxItems":5,"items":object(json!({"material_id":uuid(),"expected_revision":revision}), &["material_id","expected_revision"])}}),
+            &["request_key", "kind", "instructions", "sources"],
+        ),
+        "material_production_claim" => (
+            json!({"production_id":uuid(),"expected_revision":revision}),
+            &["production_id", "expected_revision"],
+        ),
+        "material_production_complete" => (
+            json!({"production_id":uuid(),"expected_revision":revision,"claim_token":{"type":"string","minLength":1},"output_material_id":uuid()}),
+            &[
+                "production_id",
+                "expected_revision",
+                "claim_token",
+                "output_material_id",
+            ],
+        ),
+        "material_production_fail" => (
+            json!({"production_id":uuid(),"expected_revision":revision,"claim_token":{"type":"string","minLength":1},"error_code":{"type":"string","pattern":"^[a-z0-9_]{1,64}$"}}),
+            &[
+                "production_id",
+                "expected_revision",
+                "claim_token",
+                "error_code",
+            ],
+        ),
+        "material_intelligence_get" | "material_preview" => {
+            (json!({"material_id":uuid()}), &["material_id"])
+        }
+        "material_analysis_claim" | "material_analysis_retry" => (
+            json!({"material_id":uuid(),"expected_revision":revision}),
+            &["material_id", "expected_revision"],
+        ),
+        "material_analysis_complete" => (
+            json!({"material_id":uuid(),"expected_revision":revision,
+                "claim_token":{"type":"string","minLength":1},
+                "title":{"type":["string","null"],"maxLength":120},
+                "description":{"type":"string","minLength":1,"maxLength":4000},
+                "labels":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1,"maxLength":64}},
+                "group_name":{"type":["string","null"],"minLength":1,"maxLength":120},
+                "captured_at":{"type":["string","null"],"format":"date-time"},
+                "date_source":{"type":"string","enum":["unknown","exif","file_modified","agent_inferred"]},
+                "quality":quality(),"depicts":{"type":["array","null"],"uniqueItems":true,"items":{"type":"string","enum":keys::<jt_studio::Depicts>()}}}),
+            &[
+                "material_id",
+                "claim_token",
+                "expected_revision",
+                "description",
+                "labels",
+                "date_source",
+            ],
+        ),
+        "material_analysis_fail" => (
+            json!({"material_id":uuid(),"expected_revision":revision,
+                "claim_token":{"type":"string","minLength":1},
+                "error_code":{"type":"string","pattern":"^[a-z0-9_]{1,64}$"}}),
+            &[
+                "material_id",
+                "claim_token",
+                "expected_revision",
+                "error_code",
+            ],
+        ),
+
         "material_add" => (
             json!({"request_key":request_key,"file_id":uuid(),
                 "olay_id":{"type":["string","null"],"format":"uuid"},"genel":{"type":"boolean"},
@@ -206,6 +277,7 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
                         "generator":{"type":"string","pattern":"^[a-z0-9_.-]{1,40}$"}}), &["kind","generator"]),
                 ]},
                 "title":{"type":"string","maxLength":jt_studio::MAX_MATERIAL_TITLE_CHARS},
+                "labels":{"type":"array","maxItems":32,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":64}},
                 "product_groups":tag_set::<jt_studio::ProductGroup>(),
                 "doors":tag_set::<jt_studio::Door>(),
                 "content_types":tag_set::<jt_studio::ContentType>(),
@@ -218,6 +290,9 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
         ),
         "material_tag" => (
             json!({"material_id":uuid(),"expected_revision":revision,
+                "title":{"type":"string","maxLength":jt_studio::MAX_MATERIAL_TITLE_CHARS},
+                "labels":{"type":"array","maxItems":32,"uniqueItems":true,"items":{"type":"string","minLength":1,"maxLength":64}},
+                "captured_at":{"type":["string","null"],"format":"date-time"},
                 "product_groups":tag_set::<jt_studio::ProductGroup>(),
                 "doors":tag_set::<jt_studio::Door>(),
                 "content_types":tag_set::<jt_studio::ContentType>(),

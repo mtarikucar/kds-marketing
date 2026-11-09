@@ -500,12 +500,13 @@ impl Triggers<'_> {
         let now = self.ctx.now;
         let channels = post_rules::channels(self.d, r, self.frame, now).await?;
         let lib = super::materials::library(r, now).await?;
+        let blocked_derivatives = super::library::blocked_derivatives(r).await?;
         let materials: Vec<Material> = r
             .studio_materials()
             .list_materials()
             .await?
             .into_iter()
-            .filter(|m| m.erased_at.is_none())
+            .filter(|m| m.erased_at.is_none() && !blocked_derivatives.contains(&m.id))
             .collect();
         let settings = r.studio_posts().posting_settings().await?;
         let policy = settings.policy;

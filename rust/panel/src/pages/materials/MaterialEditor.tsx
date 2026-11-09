@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as m from '@/api/materials';
 import { getPerson, searchPeople } from '@/api/inbox';
@@ -8,7 +8,7 @@ import {
   MaterialBadges,
   MaterialsError,
   MaterialsReadStatus,
-  MediaThumb,
+  MaterialPreview,
   TagsFields,
   cardClass,
   fieldClass,
@@ -20,6 +20,7 @@ import {
   useMaterialsKey,
   useMaterialsMutation,
 } from './MaterialsShared';
+import { MaterialProduction } from './MaterialProduction';
 import { UsedInList } from './MaterialsUsedIn';
 
 /**
@@ -32,15 +33,17 @@ export function MaterialEditor({
   onBack,
   onOpenOlay,
   onOpenSlot,
+  onOpenMaterial,
 }: {
   id: string;
   onBack: () => void;
   onOpenOlay: (id: string) => void;
   onOpenSlot: (id: string) => void;
+  onOpenMaterial: (id: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const key = useMaterialsKey();
-  const [group, setGroup] = useState<'review' | 'publishing' | 'history'>('review');
+  const [group, setGroup] = useState<'content' | 'review' | 'publishing' | 'history'>('content');
   const decider = useDecider();
   const detail = useQuery({ queryKey: [...key, 'material', id], queryFn: () => m.materialGet(id) });
   const olays = useQuery({ queryKey: [...key, 'olays'], queryFn: () => m.olaysList() });
@@ -57,8 +60,10 @@ export function MaterialEditor({
       <MaterialsReadStatus query={detail} />
       {material && (
         <>
-          <div className={`${cardClass} grid grid-cols-1 gap-6 border-t-2 border-foreground bg-surface px-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6`}>
-            <MediaThumb mime={material.mime} alt={materialLabel(t, material)} />
+          <div
+            className={`${cardClass} grid grid-cols-1 gap-6 border-t-2 border-foreground bg-surface px-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6`}
+          >
+            <MaterialPreview material={material} controls />
             <div className="min-w-0 space-y-2">
               <h3 className="break-words text-xl font-normal">{materialLabel(t, material)}</h3>
               <MaterialBadges material={material} />
@@ -93,13 +98,31 @@ export function MaterialEditor({
             </div>
           </div>
           {!material.erased_at && (
-            <nav aria-label={t('materials.editor.workbench.sections', { defaultValue: 'Materyal bölümleri' })} className="flex flex-wrap gap-2 border-b border-border pb-3">
-              {([
-                ['review', t('materials.editor.workbench.review', { defaultValue: 'Etiketler ve kişiler' })],
-                ['publishing', t('materials.editor.workbench.publishing', { defaultValue: 'İzin ve yerleşim' })],
-                ['history', t('materials.editor.workbench.history', { defaultValue: 'Kullanım geçmişi' })],
-              ] as const).map(([value, label]) => (
-                <button key={value} type="button" aria-pressed={group === value} onClick={() => setGroup(value)} className={`${tapClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground`}>
+            <nav
+              aria-label={t('materials.editor.workbench.sections', { defaultValue: 'Materyal bölümleri' })}
+              className="flex flex-wrap gap-2 border-b border-border pb-3"
+            >
+              {(
+                [
+                  ['content', t('materials.intelligence.title')],
+                  [
+                    'review',
+                    t('materials.editor.workbench.review', { defaultValue: 'Etiketler ve kişiler' }),
+                  ],
+                  [
+                    'publishing',
+                    t('materials.editor.workbench.publishing', { defaultValue: 'İzin ve yerleşim' }),
+                  ],
+                  ['history', t('materials.editor.workbench.history', { defaultValue: 'Kullanım geçmişi' })],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={group === value}
+                  onClick={() => setGroup(value)}
+                  className={`${tapClass} aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground`}
+                >
                   {label}
                 </button>
               ))}
@@ -111,13 +134,27 @@ export function MaterialEditor({
             </p>
           ) : (
             <>
+              <div hidden={group !== 'content'} className="space-y-4">
+                <IntelligenceSection key={`intelligence-${material.id}`} material={material} />
+                <MaterialProduction material={material} onOpen={onOpenMaterial} />
+              </div>
               <div hidden={group !== 'review'} className="space-y-4">
-                <p className="max-w-2xl text-sm text-muted-foreground">{t('materials.editor.workbench.reviewHelp', { defaultValue: 'Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.' })}</p>
+                <p className="max-w-2xl text-sm text-muted-foreground">
+                  {t('materials.editor.workbench.reviewHelp', {
+                    defaultValue:
+                      'Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.',
+                  })}
+                </p>
                 <TagsSection key={`tags-${material.id}`} material={material} />
                 <PeopleSection key={`people-${material.id}`} material={material} />
               </div>
               <div hidden={group !== 'publishing'} className="space-y-4">
-                <p className="max-w-2xl text-sm text-muted-foreground">{t('materials.editor.workbench.publishingHelp', { defaultValue: 'Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır.' })}</p>
+                <p className="max-w-2xl text-sm text-muted-foreground">
+                  {t('materials.editor.workbench.publishingHelp', {
+                    defaultValue:
+                      'Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır.',
+                  })}
+                </p>
                 <PermissionSection key={`share-${material.id}`} material={material} decider={decider} />
                 {decider && material.origin.kind === 'real' && <FreeSection material={material} />}
                 {decider && (
@@ -137,7 +174,9 @@ export function MaterialEditor({
               </h4>
               <UsedInList uses={detail.data!.used_in} onOpenSlot={onOpenSlot} />
             </section>
-            {!material.erased_at && decider && <DeleteSection material={material} used={detail.data!.used_in.length > 0} />}
+            {!material.erased_at && decider && (
+              <DeleteSection material={material} used={detail.data!.used_in.length > 0} />
+            )}
           </div>
         </>
       )}
@@ -151,42 +190,256 @@ export function MaterialEditor({
 function useMaterialDraft<T>(source: T) {
   const [baseline, setBaseline] = useState(source);
   const [draft, setDraft] = useState(source);
+  const [conflicted, setConflicted] = useState(false);
   if (JSON.stringify(source) !== JSON.stringify(baseline)) {
     setBaseline(source);
-    if (JSON.stringify(draft) === JSON.stringify(baseline)) setDraft(source);
+    if (JSON.stringify(draft) === JSON.stringify(baseline)) {
+      setDraft(source);
+      setConflicted(false);
+    } else setConflicted(JSON.stringify(draft) !== JSON.stringify(source));
   }
-  return [draft, setDraft] as const;
+  const reload = () => {
+    setDraft(source);
+    setBaseline(source);
+    setConflicted(false);
+  };
+  return [draft, setDraft, conflicted, reload] as const;
+}
+
+function DraftConflict({ onReload }: { onReload: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div role="alert" className="space-y-2 border-s-2 border-warning bg-warning-subtle p-3 text-sm">
+      <p>{t('materials.intelligence.conflict')}</p>
+      <button type="button" className={tapClass} onClick={onReload}>
+        {t('materials.intelligence.reload')}
+      </button>
+    </div>
+  );
 }
 
 function TagsSection({ material }: { material: m.Material }) {
   const { t } = useTranslation();
-  const [tags, setTags] = useMaterialDraft(material.tags);
-  const suggested = !material.tags_reviewed_by;
-  const save = useMaterialsMutation(() =>
-    m.materialTag(material.id, material.revision, {
-      product_groups: tags.product_groups,
-      doors: tags.doors,
-      content_types: tags.content_types,
-      quality: tags.quality,
-      depicts: tags.depicts,
-    }),
+  const [tags, setTags, tagsConflict, reloadTags] = useMaterialDraft(material.tags);
+  const [title, setTitle, titleConflict, reloadTitle] = useMaterialDraft(material.title);
+  const [captured, setCaptured, capturedConflict, reloadCaptured] = useMaterialDraft(
+    toIstanbulInput(material.captured_at),
   );
+  const suggested = !material.tags_reviewed_by;
+  const conflicted = tagsConflict || titleConflict || capturedConflict;
+  const save = useMaterialsMutation(() => {
+    const input: m.MaterialTagInput = {};
+    if (title !== material.title) input.title = title;
+    if (captured !== toIstanbulInput(material.captured_at))
+      input.captured_at = captured ? new Date(`${captured}:00+03:00`).toISOString() : null;
+    for (const field of [
+      'labels',
+      'product_groups',
+      'doors',
+      'content_types',
+      'quality',
+      'depicts',
+    ] as const) {
+      const value = field === 'labels' ? (tags.labels ?? []) : tags[field];
+      const previous = field === 'labels' ? (material.tags.labels ?? []) : material.tags[field];
+      if (JSON.stringify(value) !== JSON.stringify(previous)) Object.assign(input, { [field]: value });
+    }
+    // An unchanged explicit confirmation still reviews the labels, without locking an unknown quality/date.
+    if (!Object.keys(input).length) input.labels = tags.labels ?? [];
+    return m.materialTag(material.id, material.revision, input);
+  });
   return (
     <form
       aria-label={t('materials.editor.tags')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
-        if (!save.isPending) save.mutate(undefined);
+        if (!save.isPending && !conflicted) save.mutate(undefined);
       }}
     >
       <h4 className="font-semibold">{t('materials.editor.tags')}</h4>
       {suggested && (
         <p className="rounded-md bg-info-subtle p-3 text-sm">{t('materials.editor.suggestedHelp')}</p>
       )}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span>{t('materials.intelligence.materialTitle')}</span>
+          <input
+            className={fieldClass}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={120}
+          />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>{t('materials.intelligence.capturedAt')}</span>
+          <input
+            type="datetime-local"
+            className={fieldClass}
+            value={captured}
+            onChange={(e) => setCaptured(e.target.value)}
+          />
+          <span className="block text-xs text-muted-foreground">
+            {t('materials.intelligence.captureHelp')}
+          </span>
+        </label>
+      </div>
+      {conflicted && (
+        <DraftConflict
+          onReload={() => {
+            reloadTags();
+            reloadTitle();
+            reloadCaptured();
+          }}
+        />
+      )}
       <TagsFields value={tags} onChange={setTags} suggested={suggested} />
-      <button className={primaryClass} disabled={save.isPending}>
+      <button className={primaryClass} disabled={save.isPending || conflicted}>
         {suggested ? t('materials.editor.confirmTags') : t('materials.editor.saveTags')}
+      </button>
+      <MaterialsError error={save.error} />
+    </form>
+  );
+}
+
+function toIstanbulInput(at: string | null): string {
+  if (!at) return '';
+  const time = new Date(at).getTime();
+  return Number.isFinite(time) ? new Date(time + 3 * 3600_000).toISOString().slice(0, 16) : '';
+}
+
+function IntelligenceSection({ material }: { material: m.Material }) {
+  const { t } = useTranslation();
+  const key = useMaterialsKey();
+  const query = useQuery({
+    queryKey: [...key, 'intelligence', material.id],
+    queryFn: () => m.materialIntelligence(material.id),
+    refetchInterval: (q) =>
+      ['pending', 'running'].includes(q.state.data?.intelligence?.status ?? '') ? 15_000 : false,
+  });
+  const client = useQueryClient();
+  useEffect(() => {
+    const updated = query.data?.material;
+    if (!updated || updated.revision <= material.revision) return;
+    client.setQueryData<m.MaterialDetail>([...key, 'material', material.id], (old) =>
+      old && updated.revision > old.material.revision ? { ...old, material: updated } : old,
+    );
+  }, [client, query.data, material.id, material.revision, key]);
+  const data = query.data?.intelligence;
+  const dateSource =
+    data?.date_source === 'exif'
+      ? 'embedded'
+      : data?.date_source === 'agent_inferred'
+        ? 'agent'
+        : data?.date_source === 'manual'
+          ? 'manual'
+          : 'unknown';
+  const retry = useMaterialsMutation(() => m.materialAnalysisRetry(material.id, material.revision));
+  return (
+    <section className={cardClass} aria-label={t('materials.intelligence.title')}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h4 className="font-semibold">{t('materials.intelligence.title')}</h4>
+        {data && (
+          <span role="status" className="text-sm font-medium">
+            {t(`materials.intelligence.${data.status}`)}
+          </span>
+        )}
+      </div>
+      {material.captured_at && data && (
+        <p className="text-xs text-muted-foreground">
+          {t('materials.intelligence.dateSource')}: {t(`materials.intelligence.${dateSource}`)}
+        </p>
+      )}
+      <MaterialsReadStatus query={query} />
+      {query.data && (
+        <>
+          {(!data || data.status !== 'completed') && (
+            <p className="text-sm text-muted-foreground">
+              {t(data ? 'materials.intelligence.pendingHelp' : 'materials.intelligence.noAnalysis')}
+            </p>
+          )}
+          {(!data || data.status === 'failed' || data.status === 'completed') && (
+            <button
+              type="button"
+              className={tapClass}
+              disabled={retry.isPending}
+              onClick={() => retry.mutate(undefined)}
+            >
+              {t('materials.intelligence.retry')}
+            </button>
+          )}
+          <MetadataForm
+            material={material.revision > query.data.material.revision ? material : query.data.material}
+            intelligence={data ?? null}
+          />
+        </>
+      )}
+      <MaterialsError error={retry.error} />
+    </section>
+  );
+}
+
+function MetadataForm({
+  material,
+  intelligence,
+}: {
+  material: m.Material;
+  intelligence: m.MaterialIntelligence | null;
+}) {
+  const { t } = useTranslation();
+  const [description, setDescription, descriptionConflict, reloadDescription] = useMaterialDraft(
+    intelligence?.description ?? '',
+  );
+  const [group, setGroup, groupConflict, reloadGroup] = useMaterialDraft(intelligence?.group_name ?? '');
+  const conflicted = descriptionConflict || groupConflict;
+  const save = useMaterialsMutation(() =>
+    m.materialMetadata(material.id, material.revision, {
+      ...(description !== (intelligence?.description ?? '') ? { description } : {}),
+      ...(group !== (intelligence?.group_name ?? '') ? { group_name: group.trim() || null } : {}),
+    }),
+  );
+  const changed =
+    description !== (intelligence?.description ?? '') || group !== (intelligence?.group_name ?? '');
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (changed && !save.isPending && !conflicted) save.mutate(undefined);
+      }}
+    >
+      <label className="block space-y-1 text-sm">
+        <span>{t('materials.intelligence.description')}</span>
+        <textarea
+          className={fieldClass}
+          rows={3}
+          maxLength={4000}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </label>
+      <label className="block space-y-1 text-sm">
+        <span>{t('materials.intelligence.group')}</span>
+        <input
+          className={fieldClass}
+          aria-label={t('materials.intelligence.group')}
+          maxLength={120}
+          value={group}
+          onChange={(e) => setGroup(e.target.value)}
+        />
+        <span className="block text-xs text-muted-foreground">{t('materials.intelligence.groupHelp')}</span>
+      </label>
+      {conflicted && (
+        <DraftConflict
+          onReload={() => {
+            reloadDescription();
+            reloadGroup();
+          }}
+        />
+      )}
+      <p className="text-xs text-muted-foreground">{t('materials.intelligence.manualHelp')}</p>
+      <button className={primaryClass} disabled={!changed || save.isPending || conflicted}>
+        {t('materials.intelligence.save')}
       </button>
       <MaterialsError error={save.error} />
     </form>
@@ -443,7 +696,11 @@ function DeleteSection({ material, used }: { material: m.Material; used: boolean
     <section className={cardClass}>
       <h4 className="font-semibold">{t('materials.editor.delete')}</h4>
       <p className="text-sm text-muted-foreground">{t('materials.editor.deleteHelp')}</p>
-      <button type="button" className={`${tapClass} border-danger/30 text-danger hover:bg-danger-subtle`} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={`${tapClass} border-danger/30 text-danger hover:bg-danger-subtle`}
+        onClick={() => setOpen(true)}
+      >
         {t('materials.editor.delete')}
       </button>
       <ConfirmDialog

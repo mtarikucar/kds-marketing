@@ -101,3 +101,27 @@ describe('materials API', () => {
     expect(m.mondayOf('2026-11-22')).toBe('2026-11-16');
   });
 });
+
+it('uses revision-checked intelligence and production routes', async () => {
+  const calls = mockFetch({
+    'GET /api/studio/material-intelligence': [],
+    'GET /api/studio/materials/m1/intelligence': {},
+    'PATCH /api/studio/materials/m1/intelligence': {},
+    'POST /api/studio/materials/m1/analysis/retry': {},
+    'GET /api/studio/materials/m1/preview': {},
+    'GET /api/studio/material-productions': [],
+    'POST /api/studio/material-productions': {},
+  });
+  await m.materialIntelligenceList();
+  await m.materialIntelligence('m1');
+  await m.materialMetadata('m1', 7, { group_name: null });
+  await m.materialAnalysisRetry('m1', 7);
+  await m.materialPreview('m1');
+  await m.materialProductions('m1');
+  await m.materialProductionRequest({ request_key: 'request-1', kind: 'crop', instructions: 'Square crop', sources: [{ material_id: 'm1', expected_revision: 7 }] });
+  expect(calls[2].body).toEqual({ expected_revision: 7, group_name: null });
+  expect(calls[3].body).toEqual({ expected_revision: 7 });
+  expect(calls[5].search).toBe('?source_material_id=m1');
+  expect(calls[6].body).toMatchObject({ sources: [{ material_id: 'm1', expected_revision: 7 }] });
+  expect(calls.filter((c) => c.method !== 'GET').every((c) => c.headers.get('X-Requested-With') === 'jeeta-panel')).toBe(true);
+});

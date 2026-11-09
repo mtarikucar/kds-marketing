@@ -170,6 +170,17 @@ pub enum WorkKind {
     StudioShootRequest {
         shoot_request_id: jt_studio::ShootRequestId,
     },
+    /// An external agent may claim a pending material analysis, or reclaim its expired lease.
+    /// Listed without an approved strategy; live leases and terminal results are not work.
+    StudioMaterialAnalysis {
+        material_id: jt_studio::MaterialId,
+        expected_revision: u64,
+    },
+    /// A human-requested derivative for an external agent to produce with its own tools.
+    StudioMaterialProduction {
+        production_id: uuid::Uuid,
+        expected_revision: u64,
+    },
     /// An open package request (spec 2026-11-03 D23): plan posts from its materials. Listed
     /// with an approved strategy only, as `studio.posts_propose` needs one.
     StudioPostRequest {
@@ -296,6 +307,8 @@ impl WorkKind {
             WorkKind::StudioApproval { .. } => "studio.approve",
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
             WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
+            WorkKind::StudioMaterialAnalysis { .. } => "studio.material_analysis_claim",
+            WorkKind::StudioMaterialProduction { .. } => "studio.material_production_claim",
             WorkKind::StudioPostRequest { .. } => "studio.posts_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
@@ -449,6 +462,49 @@ async fn pending_as_seen(
     } else {
         Vec::new()
     };
+    // Analysis has no server worker: only an external agent with studio.work can clear it.
+    // A live lease belongs to its claimant; expired leases become visible again at check-in.
+    let mut analyses = Vec::new();
+    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
+        && ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.material_analysis_claim").allows(status)
+    {
+        let records: std::collections::BTreeMap<_, _> = repos
+            .studio_materials()
+            .list_intelligence()
+            .await?
+            .into_iter()
+            .map(|row| (row.material_id, row))
+            .collect();
+        for material in repos.studio_materials().list_materials().await? {
+            if material.erased_at.is_none()
+                && records
+                    .get(&material.id)
+                    .is_none_or(|row| row.claimable(ctx.now))
+            {
+                analyses.push(WorkItem {
+                    kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision },
+                    priority: 2,
+                    hint: "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. Nothing wakes you: poll jeeta.work.checkin on your own schedule.".into(),
+                });
+            }
+        }
+    }
+    let mut productions = Vec::new();
+    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
+        && ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.material_production_claim").allows(status)
+    {
+        for row in repos.studio_productions().list_productions().await? {
+            if row.claimable(ctx.now) {
+                productions.push(WorkItem {
+                    kind: WorkKind::StudioMaterialProduction { production_id: row.production.id, expected_revision: row.production.revision },
+                    priority: 2,
+                    hint: "Read jeeta.studio.material_production_list, claim this request at expected_revision, and inspect each source with jeeta.studio.material_preview. Use your own image/video tools; upload a new distinct file and add it as ai_generated material, then complete with your claim_token and output_material_id, or fail with a bounded error_code. Sources' people and privacy restrictions remain attached; a human must approve output share permission. This server does not generate media or wake you: poll jeeta.work.checkin.".into(),
+                });
+            }
+        }
+    }
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -687,6 +743,8 @@ async fn pending_as_seen(
                     .into(),
         }
     }));
+    items.extend(analyses);
+    items.extend(productions);
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
     items.retain(|item| actionable(&item.kind));

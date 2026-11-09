@@ -12,7 +12,7 @@ Kullanıcının 9 Kasım2026 tarif ettiği hedef: işletmenin yüklediği fotoğ
 6. **Üretim:** özgün fotoğrafı aynen kullanma zorunluluğu yok. Kırpma, düzenleme, kolaj, metinli afiş ve farklı kanal formatları yeni türev materyaller olarak oluşturulabilsin. Özgün dosya korunmalı; kaynaklar, işlemler ve türevler birbirine bağlanmalı.
 7. **Yayın:** kullanılacak materyal/türev, metin, kanal ve zaman stratejiyle ilişkilensin. Mevcut onay/yayın akışı ayrıca çalışsın.
 
-## Kaynak incelemesinde bulunan mevcut durum
+## Uygulama öncesi kaynak incelemesi
 
 - `MaterialsUpload.tsx::pick` dosya tarihi okuyor; `File.lastModified` yedeği gerçek çekim tarihiyle karışabiliyor. `library/items.rs::material_add` tarihi tekrar inceliyor. `olay_suggestions` yalnız mevcut olayların tarih aralıklarıyla eşleşiyor. Görsel anlama ve otomatik olay oluşturma yok.
 - Sabit `ProductGroup`, `Door`, `ContentType` enumları domain `material.rs`, panel `api/materials.ts` ve MCP schema içinde. `SlotNeed::from_keys/matches` de bunları kullanıyor. DB etiketleri JSONB olduğundan yalnız SQL enum değiştirmek sorunu çözmez.
@@ -31,4 +31,34 @@ Kullanıcının 9 Kasım2026 tarif ettiği hedef: işletmenin yüklediği fotoğ
 
 Bir iş akışı, yalnız ekranda “analiz ediliyor” yazdığı için otomatik sayılmaz. Tamamlanma ölçütü: yükleme sonrasında gerçekten çalışan ajan dosyayı okuyup sonucu kaydeder; materyal/grup/etiket ve gerekirse türev, kullanıcının dosya başına form doldurmasına gerek olmadan görünür olur; başarısız işler açıkça tekrar denenebilir.
 
-Bu belge hedef ve teknik incelemedir. Burada tarif edilen yeni materyal otomasyonu henüz uygulanmadı veya yayına alınmadı.
+## 9 Kasım uygulaması
+
+Geliştirme dalına eklenen akış:
+
+- İşletmeye özgü serbest `labels`; eski ürün/kapı/içerik sınıfları mevcut kayıtlarla uyumlu kalır. Yeni yüklemede bu sabit sınıflar zorunlu değildir. Stratejinin cadence içerik tipi anahtarındaki `label:<etiket>` açık eşleşme talebidir; eski bilinmeyen segment anahtarları anlam değiştirmez.
+- Sahip/yönetici yüklemesinde genel kütüphane ve paylaşılabilir seçili gelir; izin seçimi görünürdür ve yükleme isteğinde açıkça gönderilir. Bu bir işletme genelinde otomatik izin politikası veya yayın onayı değildir. Diğer rollerin mevcut izin sınırları korunur.
+- Dosyanın gömülü tarihi, elle düzeltilen tarih ve ajan çıkarımı ayrılır. `File.lastModified` gerçek çekim tarihi olarak kullanılmaz. Elle temizlenen tarih de sonraki analize karşı korunur.
+- Her yeni materyal analiz için sıraya alınır. Eski canlı materyaller de ajan iş listesinde analiz için bulunabilir. Ajan işi süreli olarak alır, yetkili kısa ömürlü önizlemeden dosyayı inceler ve açıklama/etiket/grup/kalite sonucunu teslim eder. Başka ajanın veya eski revizyonun sonucu kabul edilmez.
+- Grup adları kütüphanede dinamik bölüm ve filtre oluşturur. Görsel kümesi, doğrulanmış olay/tarih iddiasından ayrı tutulur. Mevcut olay araçları çalışmaya devam eder; analiz görselden kesin olmayan bir etkinliği doğrulanmış gibi yaratmaz.
+- Başlık, tarih, etiket, açıklama ve grup düzeltilebilir. Açık insan düzeltmeleri sonraki analizde korunur. Bekleyen/çalışan/başarılı/hatalı durumlar ve yeniden analiz isteği görünürdür.
+- Düzenleme, kırpma ve afiş üretimi kaynak revizyonlarına bağlı ayrı iş istekleridir. Ajan kendi görsel araçlarıyla çıktı üretip yeni materyal olarak kaydeder; orijinal dosya değişmez. Tamamlanan çıktı kaynaklarıyla ilişkilendirilir, kişi/mahremiyet işaretlerini korur ve ayrıca paylaşım değerlendirmesi gerektirir. Kaynak izin kaldırma/silme işlemi türevlerine de yansır.
+
+### Çalıştırma sınırı
+
+MCP bağlantısı dış ajana araç erişimi verir; kendi başına sürekli çalışan bir işlem değildir. `work.checkin` çağıran Codex/Claude yeni analiz ve üretim işlerini alır. Sunucu model, görüntü üretim servisi veya ajan başlatıcı çalıştırmaz. Gerçek otomatik yürütme için dosyayı görebilen/görsel üretebilen dış ajan istemcisinin çalışması ve düzenli kontrol yapması gerekir. Çalışmıyorsa panel işi bekliyor gösterir. Bu değişiklikle herhangi bir dış ajan zamanlayıcısı kurulmadı veya staging üzerinde gerçek model çağrısı doğrulanmadı.
+
+Önizleme adresleri 10 dakika geçerli imzalı erişim bağlantılarıdır; verilmeden önce çalışma alanı, izin, materyal ve dosya kontrol edilir. Mevcut dosya sunucusu bağlantıyı yeniden DB yetkilendirmesiyle kontrol etmez; süre dolması veya fiziksel dosya temizliği erişimi sonlandırır. Silinen materyaller yayın denemelerinin mevcut güvenli dosya temizleme akışını kullanır.
+
+### Yayın durumu
+
+Bu değişiklikler geliştirme dalındadır; staging veya production yayını yapılmadı. Yeni `0029_material_intelligence` ve `0030_material_productions` migration dosyaları uygulamayla birlikte kurulmalıdır. Önceki çağrı ayarları değişikliği de aynı dalda yer alır.
+
+### Doğrulama kaydı
+
+- `cargo fmt --all -- --check` ve çalışma alanının tüm hedeflerinde `cargo clippy --locked --workspace --all-targets -- -D warnings`.
+- Materyal kütüphanesi 22, analiz 9, türev üretim 7, ajan iş listesi/MCP/HTTP 8 test; mevcut gönderi/iş akışı testleri de geçti.
+- Gerçek izole PostgreSQL üzerinde analiz/üretim saklama, tenant sınırı, claim kilidi ve dolu tabloda veri kaybettiren rollback engeli 4 test. Migration envanteri, tam up/down/up ve ilgili eski migration döngüleri ayrıca doğrulandı.
+- Katalog/registry, izin ve mimari kontrolleri geçti; kayıt sayıları yeni ajan araçlarına göre güncellendi.
+- Panelin ilgili 54 testi geçti; son UI değişikliklerinden sonra ilgili 19 test tekrar geçti. TypeScript ve Vite üretim derlemesi başarılı; mevcut büyük chunk uyarısı sürüyor.
+- Masaüstü ve mobilde 5 görünüm / 10 ekran görüntüsü: taşma ve tarayıcı çalışma zamanı hatası yok. `/workspace/jeeta-materials-review/index.html` örnek verili yerel inceleme galerisidir.
+- Dış Codex/Claude süreci ile gerçek görsel analizi/üretim çağrısı ve staging yayını bu doğrulamanın kapsamında değildir.

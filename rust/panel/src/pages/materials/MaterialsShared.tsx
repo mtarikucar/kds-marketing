@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Film, File as FileIcon, Image as ImageIcon } from 'lucide-react';
@@ -127,6 +127,14 @@ const REASONS = [
   'material_refused',
   'out_of_range',
   'revision_changed',
+  'material_revision_changed',
+  'analysis_in_progress',
+  'analysis_claim_expired',
+  'analysis_not_pending',
+  'production_failed',
+  'source_changed',
+  'production_not_pending',
+  'production_claim_expired',
   'slot_not_ready',
   'hard_findings_not_releasable',
   'no_caption_findings',
@@ -182,17 +190,29 @@ export function MaterialsError({ error, onRetry }: { error: unknown; onRetry?: (
   return (
     <div role="alert" className="space-y-3 rounded-md border-s-2 border-danger bg-danger-subtle p-3 text-sm">
       <p>{materialsErrorText(t, error)}</p>
-      {onRetry && <button type="button" className={tapClass} onClick={() => void onRetry()}>{t('common.retry')}</button>}
+      {onRetry && (
+        <button type="button" className={tapClass} onClick={() => void onRetry()}>
+          {t('common.retry')}
+        </button>
+      )}
     </div>
   );
 }
 
 /** Read status stays outside the content so a refresh never discards an open editor. */
-export function MaterialsReadStatus({ query }: { query: { isLoading: boolean; error: unknown; refetch: () => unknown } }) {
+export function MaterialsReadStatus({
+  query,
+}: {
+  query: { isLoading: boolean; error: unknown; refetch: () => unknown };
+}) {
   const { t } = useTranslation();
-  return query.isLoading
-    ? <p role="status" className="py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
-    : <MaterialsError error={query.error} onRetry={query.refetch} />;
+  return query.isLoading ? (
+    <p role="status" className="py-4 text-sm text-muted-foreground">
+      {t('common.loading')}
+    </p>
+  ) : (
+    <MaterialsError error={query.error} onRetry={query.refetch} />
+  );
 }
 
 /** `YYYY-MM-DD` as the reader's date (the day itself, whatever the browser's zone). */
@@ -231,9 +251,7 @@ export function formatInstant(at: string, lang: string): string {
 /** The material's own words, else what it is. */
 export function materialLabel(t: TFunction, material: m.Material): string {
   if (material.title.trim()) return material.title;
-  return material.mime.startsWith('video/')
-    ? t('materials.untitledVideo')
-    : t('materials.untitledPhoto');
+  return material.mime.startsWith('video/') ? t('materials.untitledVideo') : t('materials.untitledPhoto');
 }
 
 /** A photo, a video or another file: the medium's icon when no picture of it can be shown. */
@@ -244,22 +262,95 @@ export function MediaIcon({ mime, className = 'h-8 w-8' }: { mime: string; class
 
 /**
  * The picture of a medium: `url` when there is one (a file picked on this device), else its
- * icon. The server serves no material bytes to the panel, so stored materials show their icon.
+ * icon. Stored material previews use short-lived server-authorized URLs.
  */
-export function MediaThumb({ mime, url, alt }: { mime: string; url?: string | null; alt: string }) {
-  if (url && mime.startsWith('image/')) {
+export function MediaThumb({
+  mime,
+  url,
+  alt,
+  controls = false,
+}: {
+  mime: string;
+  url?: string | null;
+  alt: string;
+  controls?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (url && failedUrl !== url && mime.startsWith('video/'))
     return (
-      <img src={url} alt={alt} className="h-24 w-full rounded-md object-cover" loading="lazy" />
+      <video
+        src={url}
+        aria-label={alt}
+        controls={controls}
+        onError={() => setFailedUrl(url)}
+        preload="metadata"
+        className="h-40 w-full rounded-md bg-surface-muted"
+      />
+    );
+  if (url && failedUrl !== url && mime.startsWith('image/')) {
+    return (
+      <img
+        src={url}
+        alt={alt}
+        onError={() => setFailedUrl(url)}
+        className={
+          controls
+            ? 'h-48 max-h-72 w-full rounded-md bg-surface-muted object-contain'
+            : 'h-24 w-full rounded-md object-cover'
+        }
+        loading="lazy"
+      />
     );
   }
   return (
     <span
       role="img"
       aria-label={alt}
-      className="flex h-24 w-full items-center justify-center rounded-md bg-surface-muted"
+      className="flex h-24 w-full flex-col items-center justify-center gap-2 rounded-md bg-surface-muted"
     >
       <MediaIcon mime={mime} />
+      {url && failedUrl === url && (
+        <span className="text-xs text-muted-foreground">
+          {t('materials.intelligence.previewUnavailable')}
+        </span>
+      )}
     </span>
+  );
+}
+
+/** Signed preview access is checked by the server against this material and tenant. */
+export function MaterialPreview({
+  material,
+  controls = false,
+}: {
+  material: m.Material;
+  controls?: boolean;
+}) {
+  const key = useMaterialsKey();
+  const { t } = useTranslation();
+  const preview = useQuery({
+    queryKey: [...key, 'preview', material.id, material.revision],
+    queryFn: () => m.materialPreview(material.id),
+    enabled: !material.erased_at,
+    staleTime: 60_000,
+    refetchInterval: 4 * 60_000,
+    retry: false,
+  });
+  return (
+    <div className="w-full space-y-1">
+      <MediaThumb
+        controls={controls}
+        mime={material.mime}
+        url={preview.data?.url}
+        alt={materialLabel(t, material)}
+      />
+      {preview.error && (
+        <span className="text-xs text-muted-foreground">
+          {t('materials.intelligence.previewUnavailable')}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -289,13 +380,7 @@ export function MaterialBadges({ material }: { material: m.Material }) {
 }
 
 /** A material as a tile of a grid: its picture or icon, its name and badges. */
-export function MaterialTile({
-  material,
-  onOpen,
-}: {
-  material: m.Material;
-  onOpen: (id: string) => void;
-}) {
+export function MaterialTile({ material, onOpen }: { material: m.Material; onOpen: (id: string) => void }) {
   const { t } = useTranslation();
   const label = materialLabel(t, material);
   return (
@@ -305,9 +390,14 @@ export function MaterialTile({
         onClick={() => onOpen(material.id)}
         className="flex w-full min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface p-3 text-start hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <MediaThumb mime={material.mime} alt={label} />
+        <MaterialPreview material={material} />
         <span className="truncate text-sm font-medium">{label}</span>
         <MaterialBadges material={material} />
+        {!!material.tags.labels?.length && (
+          <span className="line-clamp-2 text-xs text-muted-foreground">
+            {material.tags.labels.join(' · ')}
+          </span>
+        )}
       </button>
     </li>
   );
@@ -363,6 +453,7 @@ function Chips<T extends string>({
 }
 
 export const emptyTags = (): m.Tags => ({
+  labels: [],
   product_groups: [],
   doors: [],
   content_types: [],
@@ -391,30 +482,38 @@ export function TagsFields({
   const qualityName = `quality-${suggested ? 's' : 'h'}`;
   return (
     <div className="space-y-4">
-      <Chips
-        legend={t('materials.tags.productGroups')}
-        options={m.PRODUCT_GROUPS}
-        selected={value.product_groups}
-        onToggle={(v) => onChange({ ...value, product_groups: toggle(value.product_groups, v) })}
-        label={(v) => t(`materials.productGroup.${v}`)}
-        suggested={suggested}
-      />
-      <Chips
-        legend={t('materials.tags.doors')}
-        options={m.DOORS}
-        selected={value.doors}
-        onToggle={(v) => onChange({ ...value, doors: toggle(value.doors, v) })}
-        label={(v) => t(`materials.door.${v}`)}
-        suggested={suggested}
-      />
-      <Chips
-        legend={t('materials.tags.contentTypes')}
-        options={m.CONTENT_TYPES}
-        selected={value.content_types}
-        onToggle={(v) => onChange({ ...value, content_types: toggle(value.content_types, v) })}
-        label={(v) => t(`materials.contentType.${v}`)}
-        suggested={suggested}
-      />
+      <LabelFields labels={value.labels ?? []} onChange={(labels) => onChange({ ...value, labels })} />
+      {value.product_groups.length + value.doors.length + value.content_types.length > 0 && (
+        <details className="space-y-3">
+          <summary className="min-h-11 cursor-pointer py-2 text-sm">
+            {t('materials.intelligence.legacy')}
+          </summary>
+          <Chips
+            legend={t('materials.tags.productGroups')}
+            options={value.product_groups}
+            selected={value.product_groups}
+            onToggle={(v) => onChange({ ...value, product_groups: toggle(value.product_groups, v) })}
+            label={(v) => t(`materials.productGroup.${v}`)}
+            suggested={suggested}
+          />
+          <Chips
+            legend={t('materials.tags.doors')}
+            options={value.doors}
+            selected={value.doors}
+            onToggle={(v) => onChange({ ...value, doors: toggle(value.doors, v) })}
+            label={(v) => t(`materials.door.${v}`)}
+            suggested={suggested}
+          />
+          <Chips
+            legend={t('materials.tags.contentTypes')}
+            options={value.content_types}
+            selected={value.content_types}
+            onToggle={(v) => onChange({ ...value, content_types: toggle(value.content_types, v) })}
+            label={(v) => t(`materials.contentType.${v}`)}
+            suggested={suggested}
+          />
+        </details>
+      )}
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium">{t('materials.tags.quality')}</legend>
         <div className="flex flex-wrap gap-2">
@@ -451,6 +550,61 @@ export function TagsFields({
         suggested={suggested}
       />
     </div>
+  );
+}
+
+/** Labels are specific to this business, never a global product taxonomy. */
+function LabelFields({ labels, onChange }: { labels: string[]; onChange: (labels: string[]) => void }) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const value = draft.trim().replace(/\s+/g, ' ');
+    if (!value || [...value].length > 64 || labels.length >= 32) return;
+    if (!labels.some((label) => label.toLowerCase() === value.toLowerCase())) onChange([...labels, value]);
+    setDraft('');
+  };
+  return (
+    <fieldset className="space-y-3">
+      <legend className="text-sm font-medium">{t('materials.intelligence.labels')}</legend>
+      <p className="text-xs text-muted-foreground">{t('materials.intelligence.labelsHelp')}</p>
+      <div className="flex flex-wrap gap-2">
+        {labels.map((label) => (
+          <button
+            key={label}
+            type="button"
+            className={tapClass}
+            aria-label={t('materials.intelligence.removeLabel', { label })}
+            onClick={() => onChange(labels.filter((x) => x !== label))}
+          >
+            {label}
+            <span aria-hidden="true">×</span>
+          </button>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          aria-label={t('materials.intelligence.newLabel')}
+          className={fieldClass}
+          value={draft}
+          maxLength={64}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className={`${tapClass} shrink-0`}
+          disabled={!draft.trim() || labels.length >= 32}
+          onClick={add}
+        >
+          {t('materials.intelligence.addLabel')}
+        </button>
+      </div>
+    </fieldset>
   );
 }
 

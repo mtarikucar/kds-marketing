@@ -1,8 +1,9 @@
 //! Studio picks real material first (spec 2026-11-03 §4.5, D1): the slot's need, the deterministic
 //! choice of its anchor, and the slot brief that records it.
 use crate::{
-    Binding, ContentType, Door, Material, MaterialId, Olay, ProductGroup, SlotId, Subject, TagKey,
-    Tags, UseContext, UseRole, check_use, istanbul_day,
+    Binding, ContentType, Door, MAX_MATERIAL_LABEL_CHARS, Material, MaterialId, Olay, ProductGroup,
+    SlotId, Subject, TagKey, Tags, UseContext, UseRole, check_use, istanbul_day,
+    normalize_material_labels,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -49,26 +50,43 @@ pub struct SlotNeed {
     pub doors: BTreeSet<Door>,
     #[serde(default)]
     pub content_types: BTreeSet<ContentType>,
+    /// Explicit normalized business-specific labels required by the slot.
+    #[serde(default)]
+    pub labels: BTreeSet<String>,
 }
 
 impl SlotNeed {
-    /// The need named by the parts of `content_type` and `segment_key` (split on `.`, `:` and `/`)
-    /// that are tag keys; a strategy that names none needs no tag.
+    /// Parse legacy keys and explicit `label:<value>` requirements from strategy keys. Unknown
+    /// unprefixed segments remain ignored, preserving legacy strategy matching. Invalid explicit
+    /// labels fail closed: they cannot match any validated material label.
     pub fn from_keys(content_type: &str, segment_key: &str) -> SlotNeed {
         let mut need = SlotNeed::default();
-        for part in [content_type, segment_key]
-            .into_iter()
-            .flat_map(|k| k.split(['.', ':', '/']))
-            .map(str::trim)
-        {
-            if let Some(g) = ProductGroup::parse(part) {
-                need.product_groups.insert(g);
-            }
-            if let Some(d) = Door::parse(part) {
-                need.doors.insert(d);
-            }
-            if let Some(c) = ContentType::parse(part) {
-                need.content_types.insert(c);
+        for key in [content_type, segment_key] {
+            // `label:` is an explicit marker. Dots and slashes still delimit strategy segments;
+            // a value therefore cannot itself contain these delimiters or a colon.
+            for segment in key.split(['.', '/']) {
+                let mut parts = segment.split(':').map(str::trim).peekable();
+                while let Some(part) = parts.next() {
+                    if part == "label" && parts.peek().is_some() {
+                        let value = parts.next().unwrap_or_default().to_owned();
+                        match normalize_material_labels(&[value]) {
+                            Ok(labels) => need.labels.extend(labels),
+                            Err(_) => {
+                                need.labels.insert("!".repeat(MAX_MATERIAL_LABEL_CHARS + 1));
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(g) = ProductGroup::parse(part) {
+                        need.product_groups.insert(g);
+                    }
+                    if let Some(d) = Door::parse(part) {
+                        need.doors.insert(d);
+                    }
+                    if let Some(c) = ContentType::parse(part) {
+                        need.content_types.insert(c);
+                    }
+                }
             }
         }
         need
@@ -78,10 +96,14 @@ impl SlotNeed {
         self.product_groups.is_subset(&tags.product_groups)
             && self.doors.is_subset(&tags.doors)
             && self.content_types.is_subset(&tags.content_types)
+            && self.labels.is_subset(&tags.labels)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.product_groups.is_empty() && self.doors.is_empty() && self.content_types.is_empty()
+        self.product_groups.is_empty()
+            && self.doors.is_empty()
+            && self.content_types.is_empty()
+            && self.labels.is_empty()
     }
 }
 

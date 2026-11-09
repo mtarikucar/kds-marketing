@@ -765,6 +765,8 @@ export type StrategyState =
 
 /** `jt_app::usecases::work::WorkKind`, tagged by `kind`. */
 export type WorkKind =
+  | { kind: 'studio_material_analysis'; material_id: Uuid; expected_revision: number }
+  | { kind: 'studio_material_production'; production_id: Uuid; expected_revision: number }
   | { kind: 'consult_strategy' }
   | { kind: 'approve_strategy' }
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }

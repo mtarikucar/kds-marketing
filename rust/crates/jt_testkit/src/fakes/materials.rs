@@ -19,6 +19,7 @@ use super::tenant::MemTenant;
 pub struct MemMaterials {
     pub olays: Vec<Olay>,
     pub materials: Vec<Material>,
+    pub intelligence: Vec<(WorkspaceId, MaterialAnalysisRecord)>,
     /// Each piece revision's subject with one of its uses.
     pub piece_uses: Vec<(WorkspaceId, Subject, PieceMaterial)>,
     pub calendar: Vec<(WorkspaceId, CalendarEntry)>,
@@ -39,6 +40,61 @@ impl MemTenant {
 
 #[async_trait]
 impl MaterialRepo for MemTenant {
+    async fn get_intelligence(
+        &mut self,
+        id: MaterialId,
+    ) -> Result<Option<MaterialAnalysisRecord>, AppError> {
+        Ok(self
+            .lib()
+            .intelligence
+            .iter()
+            .find(|(ws, r)| *ws == self.ws && r.material_id == id)
+            .map(|(_, r)| r.clone()))
+    }
+    async fn list_intelligence(&mut self) -> Result<Vec<MaterialAnalysisRecord>, AppError> {
+        Ok(self
+            .lib()
+            .intelligence
+            .iter()
+            .filter(|(ws, r)| {
+                *ws == self.ws
+                    && self.lib().materials.iter().any(|m| {
+                        m.workspace_id == *ws && m.id == r.material_id && m.erased_at.is_none()
+                    })
+            })
+            .map(|(_, r)| r.clone())
+            .collect())
+    }
+    async fn save_intelligence(&mut self, row: MaterialAnalysisRecord) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            if !this
+                .lib()
+                .materials
+                .iter()
+                .any(|m| m.workspace_id == ws && m.id == row.material_id && m.erased_at.is_none())
+            {
+                return Err(AppError::not_found("material"));
+            }
+            this.tx.write(move |s| {
+                s.materials
+                    .intelligence
+                    .retain(|(w, r)| *w != ws || r.material_id != row.material_id);
+                s.materials.intelligence.push((ws, row.clone()));
+            });
+            Ok(())
+        })
+    }
+    async fn delete_intelligence(&mut self, id: MaterialId) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.tx.write(move |s| {
+            s.materials
+                .intelligence
+                .retain(|(w, r)| *w != ws || r.material_id != id)
+        });
+        Ok(())
+    }
+
     async fn insert_olay(&mut self, olay: Olay) -> Result<(), AppError> {
         self.call(|this| {
             if olay.workspace_id != this.ws {

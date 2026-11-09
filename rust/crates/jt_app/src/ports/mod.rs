@@ -31,6 +31,7 @@ pub mod distribution;
 pub mod files;
 pub mod inbox;
 pub mod mail_files;
+pub mod material_productions;
 pub mod materials;
 pub mod outreach;
 pub mod posts;
@@ -1681,6 +1682,8 @@ pub trait TenantRepos: Send + Sync {
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     /// The materials library (`ports::materials`).
+    fn studio_productions(&mut self)
+    -> &mut dyn crate::ports::material_productions::ProductionRepo;
     fn studio_materials(&mut self) -> &mut dyn crate::ports::materials::MaterialRepo;
     /// Olay-driven publishing: planned posts, package requests, the posting policy
     /// (`ports::posts`).

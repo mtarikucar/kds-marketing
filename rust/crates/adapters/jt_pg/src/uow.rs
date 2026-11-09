@@ -117,6 +117,11 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn studio_productions(
+        &mut self,
+    ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
+        self
+    }
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self
     }

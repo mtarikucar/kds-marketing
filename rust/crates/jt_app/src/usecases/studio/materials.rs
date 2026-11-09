@@ -158,6 +158,14 @@ pub(crate) async fn check_piece(
     subject: &Subject,
     at: OffsetDateTime,
 ) -> Result<Vec<(MaterialId, UseRole)>, AppError> {
+    let blocked = super::library::blocked_derivatives(r).await?;
+    if let Some(m) = materials.iter().find(|m| blocked.contains(&m.id)) {
+        return Err(refused(
+            "source_permission_restricted",
+            "a derivative source may no longer be shared",
+            json!({"material_id":m.id}),
+        ));
+    }
     let lib = library(r, at).await?;
     let refs: Vec<&Material> = materials.iter().collect();
     piece_roles(&refs, subject, &lib.context(at)).map_err(piece_refusal)
@@ -280,7 +288,7 @@ pub(crate) async fn material_check(
     }
     let lib = library(r, at).await?;
     let refs: Vec<&Material> = materials.iter().collect();
-    let hard = match piece_roles(&refs, &recorded.subject, &lib.context(at)) {
+    let mut hard = match piece_roles(&refs, &recorded.subject, &lib.context(at)) {
         Ok(_) => Vec::new(),
         Err(PieceRefusal::NoAnchor) => vec![HardFinding {
             code: "no_eligible_material".into(),
@@ -294,6 +302,16 @@ pub(crate) async fn material_check(
             })
             .collect(),
     };
+    let blocked = super::library::blocked_derivatives(r).await?;
+    hard.extend(
+        materials
+            .iter()
+            .filter(|m| blocked.contains(&m.id))
+            .map(|m| HardFinding {
+                code: "source_permission_restricted".into(),
+                material_id: Some(m.id),
+            }),
+    );
     // The texts that go out: the piece's, each adaptation's, and the title a human left on the
     // TikTok posting screen, which replaces the drafted text there.
     let title = r
