@@ -1319,6 +1319,7 @@ async fn studio_migration_up_down_up() {
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
+    material_tables_down(&db.pool).await;
     for sql in [
         posts_down,
         materials_down,
@@ -1331,6 +1332,8 @@ async fn studio_migration_up_down_up() {
         public_up,
         materials_up,
         posts_up,
+        include_str!("../../../../migrations/0029_material_intelligence.up.sql"),
+        include_str!("../../../../migrations/0030_material_productions.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1359,7 +1362,7 @@ async fn outreach_down(pool: &PgPool) {
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
 }
 
-/// Reverts `0028_mail_files`, the newest migration.
+/// Reverts the material side tables before their older library dependencies.
 async fn material_tables_down(pool: &PgPool) {
     for name in ["0030_material_productions", "0029_material_intelligence"] {
         let down =
@@ -1368,6 +1371,7 @@ async fn material_tables_down(pool: &PgPool) {
     }
 }
 
+/// Reverts `0028_mail_files` after removing newer material side tables.
 async fn mail_files_down(pool: &PgPool) {
     material_tables_down(pool).await;
     let down = std::fs::read_to_string(migrations_dir().join("0028_mail_files.down.sql")).unwrap();

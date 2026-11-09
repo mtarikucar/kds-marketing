@@ -144,6 +144,15 @@ const POSTS_UP: &str = include_str!("../../../../migrations/0022_studio_posts.up
 const POSTS_DOWN: &str = include_str!("../../../../migrations/0022_studio_posts.down.sql");
 /// Public subjects reference Studio publications: their migration goes first.
 const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
+
+async fn material_side_tables_down(pool: &sqlx::PgPool) {
+    for sql in [
+        include_str!("../../../../migrations/0030_material_productions.down.sql"),
+        include_str!("../../../../migrations/0029_material_intelligence.down.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(pool).await.unwrap();
+    }
+}
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -241,6 +250,7 @@ async fn roles(pool: &sqlx::PgPool, ws: jt_tenancy::WorkspaceId) -> Vec<(String,
 #[tokio::test]
 async fn studio_role_backfill_new_workspace_parity() {
     let db = TestDb::new().await;
+    material_side_tables_down(&db.pool).await;
     sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_DOWN)
         .execute(&db.pool)
@@ -256,6 +266,12 @@ async fn studio_role_backfill_new_workspace_parity() {
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(POSTS_UP).execute(&db.pool).await.unwrap();
+    for sql in [
+        include_str!("../../../../migrations/0029_material_intelligence.up.sql"),
+        include_str!("../../../../migrations/0030_material_productions.up.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    }
     let (new, _) = db.seed_workspace("new-studio").await;
     assert_eq!(roles(&db.pool, old).await, roles(&db.pool, new).await);
     for (key, perms) in roles(&db.pool, old).await {
@@ -267,6 +283,7 @@ async fn studio_role_backfill_new_workspace_parity() {
 #[tokio::test]
 async fn studio_backfill_down_preserves_existing_grants() {
     let db = TestDb::new().await;
+    material_side_tables_down(&db.pool).await;
     sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_DOWN)
         .execute(&db.pool)
