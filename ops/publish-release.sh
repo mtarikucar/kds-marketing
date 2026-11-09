@@ -190,7 +190,12 @@ for line in pathlib.Path(envfile).read_text().splitlines():
     values[key]=parsed[0] if parsed else ''
 u=urllib.parse.urlparse(values['JEETA_DATABASE_URL'])
 assert u.scheme in ['postgres','postgresql'] and u.hostname in ['localhost','127.0.0.1'] and u.port==int(port) and u.path=='/jeeta'
-assert not u.fragment and not ({k for k,_ in urllib.parse.parse_qsl(u.query)} & {'host','hostaddr','port','dbname','user','password','passfile','service','servicefile','options'})
+query=urllib.parse.parse_qsl(u.query)
+assert not u.fragment and not ({k for k,_ in query} & {'hostaddr','port','dbname','user','password','passfile','service','servicefile','options'})
+# The audited installations use libpq's host query selector. Permit only local transports;
+# the port/database/role remain pinned above and below, including for the isolated restore.
+hosts=[value for key,value in query if key=='host']
+assert len(hosts)<=1 and all(value in ('localhost','127.0.0.1','::1','/var/run/postgresql','/run/postgresql') for value in hosts), 'Database host selector must be local'
 assert values['JEETA_BIND']=='127.0.0.1:'+http_port and values['JEETA_PUBLIC_BASE_URL']=='https://'+host
 assert values['JEETA_FILES_DIR']==files
 assert values.get('JEETA_PANEL_DIR')==('/opt/jeeta/staging-current/panel' if environment=='staging' else '/opt/jeeta/current/panel')

@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s  %s\n' c90a4c3cd55c4dafe89b0d8b9171e8494292edd22b3de1b6c2315dfffa10838c candidate/jeeta-release.tar | sha256sum --check --status
-          printf '%s  %s\n' 5c34cadc179d7aea751b9d275878577d08e96dbbf10c053d751466207381095c ops/publish-release.sh | sha256sum --check --status
+          printf '%s  %s\n' 2384b3842a482382f1f986413ad41a6f58b8f57e4e81b241a573301d1a94e216 ops/publish-release.sh | sha256sum --check --status
           bash -n ops/publish-release.sh
           chmod 0600 candidate/jeeta-release.tar
       - uses: ./.github/actions/setup-ssh
