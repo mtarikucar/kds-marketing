@@ -178,14 +178,17 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(any(name.endswith("_claim") for name, _ in client.calls))
 
     def test_health_never_claims_live_model_success_or_echoes_key(self):
-        stream = io.StringIO()
-        with patch.dict(os.environ, {"JEETA_WORKER_ENABLE_CODEX": "1", "JEETA_WORKER_API_KEY": "private-health-key", "JEETA_MCP_URL": "https://staging.example/mcp"}):
-            with contextlib.redirect_stdout(stream):
-                w.main(["--health"])
-        value = json.loads(stream.getvalue())
-        self.assertEqual(value["event"], "configured_not_verified")
-        self.assertFalse(value["live_model_verified"])
-        self.assertNotIn("private-health-key", stream.getvalue())
+        # CI deliberately has no Codex installation or model authentication.
+        for binary, event in [(None, "offline"), ("/fixture/codex", "configured_not_verified")]:
+            with self.subTest(binary_present=bool(binary)):
+                stream = io.StringIO()
+                with patch.dict(os.environ, {"JEETA_WORKER_ENABLE_CODEX": "1", "JEETA_WORKER_API_KEY": "private-health-key", "JEETA_MCP_URL": "https://staging.example/mcp"}, clear=True):
+                    with patch.object(w.shutil, "which", return_value=binary), contextlib.redirect_stdout(stream):
+                        w.main(["--health"])
+                value = json.loads(stream.getvalue())
+                self.assertEqual(value["event"], event)
+                self.assertFalse(value["live_model_verified"])
+                self.assertNotIn("private-health-key", stream.getvalue())
 
     def test_model_failure_is_fixed_code_and_stale_completion_is_not_success(self):
         client = FakeMcp()
