@@ -2340,6 +2340,92 @@
       "description": "Set what callers hear, holding phrases and timing limits.",
       "ux": {
         "sectionHint": "Open the section you want to change. Values and draft edits in closed sections are preserved; Save applies all settings together."
+      },
+      "editor": {
+        "intro": "Choose a call scenario to edit the words and timing used at that moment.",
+        "navigation": "Call scenario",
+        "changed": "Unsaved changes in {{count}} sections",
+        "upToDate": "Saved settings",
+        "modified": "Modified",
+        "direction": "Call direction",
+        "inbound": "When a customer calls us",
+        "outbound": "When we call a customer",
+        "emptyOpening": "Leave empty to omit this greeting.",
+        "phraseType": "Phrase group to edit",
+        "phraseHelp": "{{count}} / 5 phrases. Blank entries are not saved; each phrase may have up to 600 characters.",
+        "phraseLabel": "Phrase {{number}}",
+        "removePhrase": "Remove phrase {{number}}",
+        "addPhrase": "Add phrase",
+        "situation": "End-of-call situation",
+        "preview": "Scenario preview",
+        "previewHint": "Shows draft text and timing. Does not play audio or place a call.",
+        "noText": "No text has been written for this situation.",
+        "template": "Uses the workspace default template.",
+        "openingPreviewHint": "The call plan and disclosure settings also affect the opening.",
+        "disclosureOn": "Assistant disclosure is required in the opening.",
+        "disclosureOff": "Assistant disclosure is not required.",
+        "disclosureHint": "When required, the opening must contain this exact sentence.",
+        "missingDisclosure": "Disclosure is required but its sentence is empty. This may prevent calls from starting.",
+        "recordingHint": "This text does not enable recording; it is announced first when recording is used.",
+        "transcriptHint": "Played after the opening on agent calls. Leave empty to omit it.",
+        "seconds": "{{value}} s",
+        "firstWait": "First holding phrase",
+        "secondWait": "Second holding phrase",
+        "fallback": "Switch to the plan’s fallback response",
+        "notifyAgent": "Notify the agent of silence",
+        "endSilence": "End the call if silence continues",
+        "waitingPreviewHint": "Measured from when the agent response became due. The bridge may also use its own short phrases.",
+        "silencePreviewHint": "Applies while waiting for the caller. The agent and voice bridge determine when a spoken prompt is played.",
+        "variantPreview": "An example phrase; the phrase used depends on the call situation.",
+        "durationHint": "Call duration limit. The call plan may set a shorter limit.",
+        "extensionPreview": "Configured handoff extension: {{value}}",
+        "noExtension": "No handoff extension configured.",
+        "extensionHint": "1–16 digits. Leave empty to remove it; this setting alone does not trigger a handoff.",
+        "priceHint": "Used for budget estimation, not the carrier’s actual bill.",
+        "saveHint": "Save applies changes from all scenarios together.",
+        "discard": "Discard changes",
+        "loadLatest": "Load latest settings",
+        "conflict": "Server settings changed. Your draft is preserved. Load the latest settings before saving to avoid overwriting other changes; this resets your draft.",
+        "savedReadFailed": "Settings were saved, but could not be read again. Load the latest settings before continuing.",
+        "fixBeforeSave": "Fix these fields before saving:",
+        "wholeNumber": "Use whole numbers, not blanks. Durations must be at least 1; cost must be at least 0.",
+        "durationRange": "Maximum duration must be 1–900 seconds.",
+        "waitingOrder": "First wait < second wait < fallback; all durations must be 1–60 seconds.",
+        "silenceOrder": "Silence notification must precede closing; durations must be 1–120 seconds.",
+        "extensionFormat": "An extension must contain 1–16 digits only.",
+        "textLength": "Text must be at most 600 characters and cannot contain only whitespace.",
+        "phraseLimit": "A group may have up to 5 phrases, each at most 600 characters.",
+        "sections": {
+          "opening": {
+            "title": "Greeting",
+            "help": "Set the first sentence for incoming and outgoing calls separately."
+          },
+          "notices": {
+            "title": "Disclosures",
+            "help": "Edit assistant identification, transcription and recording announcements."
+          },
+          "waiting": {
+            "title": "Waiting for a reply",
+            "help": "Set holding phrases and timing while the agent prepares a response."
+          },
+          "silence": {
+            "title": "Silence and hearing",
+            "help": "Settings for a silent caller or speech that cannot be understood."
+          },
+          "ending": {
+            "title": "Ending the call",
+            "help": "Prepare separate text for normal closing, voicemail and technical problems."
+          },
+          "limits": {
+            "title": "Limits and handoff",
+            "help": "Set call duration, the handoff extension and budget estimate."
+          }
+        },
+        "endings": {
+          "closing": "Normal closing",
+          "voicemail_text": "Voicemail",
+          "fault": "Technical problem"
+        }
       }
     },
     "filterEmpty": "No calls in this direction",

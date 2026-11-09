@@ -1,0 +1,11 @@
+# Call settings as scenarios
+
+The former form grouped seven opening/notices textareas together, with unrelated timing fields elsewhere. Call settings now use six scenarios: greeting, disclosures, waiting for a response, silence/hearing, ending and limits/handoff. The greeting distinguishes incoming/outgoing calls; ending distinguishes normal closing, voicemail and faults. Only the selected scenario is mounted; drafts live above the selector.
+
+Waiting and silence timing appears beside its relevant phrase groups. A single phrase group is edited at a time; owners can add/remove individual phrases up to five. The desktop preview shows current draft text or timing; on smaller screens it opens explicitly. It describes runtime boundaries accurately: silence notification is sent to the agent, recording copy does not enable recording, and a handoff extension does not itself trigger a transfer. No fake voice playback or call action is offered.
+
+Whole-policy saves preserve the API contract and nullable template semantics. GET resolves the workspace templates after PUT. Blank numeric fields stay blank until corrected; integer/range, extension, text-length and timing-order checks follow the existing Rust domain validation. Save opens a scenario containing invalid values. Dirty-state indication, discard and browser-unload warning are included. Background reads do not overwrite a dirty draft; an observed server change blocks overwriting until the user chooses the latest settings. The API has no revision/CAS contract, so this protects observed conflicts, not all concurrent writes.
+
+Verification: 11 tests across CallsPolicy/CallsPage pass, including payload preservation, phrase limits/removal, template refetch, invalid hidden timing and dirty refresh conflicts. TypeScript and Vite build pass; the existing non-blocking chunk-size advisory remains. Six scenarios were captured at1440/390px with fixture APIs: no page errors, horizontal overflow or business writes. The mobile save footer was made part of normal document flow so it does not cover the preview control. Preview gallery: `/workspace/jeeta-call-settings-review/index.html`.
+
+This change is local; it has not been published to staging. Authenticated real telephony was not exercised.

@@ -2340,6 +2340,92 @@
       "description": "Arayanların duyacağı metinleri, bekletme ifadelerini ve süre sınırlarını ayarlayın.",
       "ux": {
         "sectionHint": "Değiştirmek istediğiniz bölümü açın. Kapalı bölümlerdeki değerler ve taslak düzenlemeler korunur; Kaydet tüm ayarları birlikte uygular."
+      },
+      "editor": {
+        "intro": "Bir arama senaryosu seçin; o anda kullanılacak metinleri ve süreleri birlikte düzenleyin.",
+        "navigation": "Arama senaryosu",
+        "changed": "{{count}} bölümde kaydedilmemiş değişiklik",
+        "upToDate": "Kaydedilmiş ayarlar",
+        "modified": "Değiştirildi",
+        "direction": "Arama yönü",
+        "inbound": "Müşteri bizi aradığında",
+        "outbound": "Biz müşteriyi aradığımızda",
+        "emptyOpening": "Boş bırakırsanız bu karşılama çalınmaz.",
+        "phraseType": "Düzenlenecek ifade grubu",
+        "phraseHelp": "{{count}} / 5 cümle. Boş satırlar kaydedilmez; her cümle en çok 600 karakter olabilir.",
+        "phraseLabel": "Cümle {{number}}",
+        "removePhrase": "{{number}}. cümleyi kaldır",
+        "addPhrase": "Cümle ekle",
+        "situation": "Görüşmenin sonundaki durum",
+        "preview": "Senaryo önizlemesi",
+        "previewHint": "Taslak metin ve süreleri gösterir. Ses çalmaz, arama başlatmaz.",
+        "noText": "Bu durum için metin yazılmamış.",
+        "template": "İşletmenin varsayılan şablonu kullanılır.",
+        "openingPreviewHint": "Arama planı ve bildirim ayarları da açılışta kullanılacak metni etkiler.",
+        "disclosureOn": "Açılışta asistan bildirimi zorunlu.",
+        "disclosureOff": "Asistan bildirimi zorunluluğu kapalı.",
+        "disclosureHint": "Zorunluluk açıksa açılış metni bu ifadeyi aynen içermelidir.",
+        "missingDisclosure": "Bildirim zorunlu, ancak metni boş. Bu durum arama başlatılmasını engelleyebilir.",
+        "recordingHint": "Bu metin tek başına kayıt başlatmaz; kayıt yapılacaksa önce duyurulur.",
+        "transcriptHint": "Ajan aramalarında açılıştan sonra okunur. Boş bırakılırsa okunmaz.",
+        "seconds": "{{value}} sn",
+        "firstWait": "İlk bekletme cümlesi",
+        "secondWait": "İkinci bekletme cümlesi",
+        "fallback": "Plandaki yedek yanıta geçiş",
+        "notifyAgent": "Sessizlik ajana bildirilir",
+        "endSilence": "Sessizlik devam ediyorsa görüşme kapatılır",
+        "waitingPreviewHint": "Süreler, ajan yanıtının beklenmeye başladığı andan ölçülür. Köprünün kısa ifadeleri ayrıca kullanılabilir.",
+        "silencePreviewHint": "Müşterinin yanıtı beklenirken geçerlidir. Uyarı metninin ne zaman çalınacağını ajan ve ses köprüsü belirler.",
+        "variantPreview": "Bir metin örneğidir; kullanılacak ifade aramanın durumuna bağlıdır.",
+        "durationHint": "Görüşmenin üst sınırı. Arama planı daha kısa bir sınır belirleyebilir.",
+        "extensionPreview": "Tanımlı aktarma dahilisi: {{value}}",
+        "noExtension": "Aktarma dahilisi tanımlı değil.",
+        "extensionHint": "1–16 rakam. Boş bırakmak tanımlı dahiliyi kaldırır; bu alan tek başına otomatik aktarma başlatmaz.",
+        "priceHint": "Dakika bedeli bütçe tahmininde kullanılır; operatörün gerçek faturası değildir.",
+        "saveHint": "Kaydet, tüm senaryolardaki değişiklikleri birlikte uygular.",
+        "discard": "Değişiklikleri geri al",
+        "loadLatest": "Güncel ayarları yükle",
+        "conflict": "Sunucudaki ayarlar değişti. Taslağınız korundu. Başka değişikliklerin üzerine yazmamak için güncel ayarları yükleyin; bu işlem taslağı sıfırlar.",
+        "savedReadFailed": "Ayarlar kaydedildi, ancak güncel değerler okunamadı. Devam etmeden önce güncel ayarları yükleyin.",
+        "fixBeforeSave": "Kaydetmeden önce şu alanları düzeltin:",
+        "wholeNumber": "Boş değer veya kesir kullanmayın. Süreler en az 1, ücret en az 0 olmalı.",
+        "durationRange": "Azami süre 1–900 saniye olmalı.",
+        "waitingOrder": "İlk bekleme < ikinci bekleme < yedek yanıt olmalı; tüm süreler 1–60 saniye arasında olmalı.",
+        "silenceOrder": "Sessizlik bildirimi kapanıştan önce olmalı; süreler 1–120 saniye arasında olmalı.",
+        "extensionFormat": "Dahili yalnızca 1–16 rakam içerebilir.",
+        "textLength": "Metin en çok 600 karakter olabilir; yalnızca boşluk kullanmayın.",
+        "phraseLimit": "Bir grupta en çok 5 cümle, her cümlede en çok 600 karakter olabilir.",
+        "sections": {
+          "opening": {
+            "title": "Karşılama",
+            "help": "Gelen ve giden aramanın ilk cümlesini ayrı ayrı belirleyin."
+          },
+          "notices": {
+            "title": "Bildirimler",
+            "help": "Asistan kimliği, yazıya dökme ve kayıt duyurularını düzenleyin."
+          },
+          "waiting": {
+            "title": "Yanıt beklerken",
+            "help": "Ajan yanıt hazırlarken müşterinin duyacağı ifadeleri ve bekleme sürelerini belirleyin."
+          },
+          "silence": {
+            "title": "Sessizlik ve duyma",
+            "help": "Müşteri yanıt vermediğinde veya sesi anlaşılamadığında kullanılacak ayarlar."
+          },
+          "ending": {
+            "title": "Görüşme sonu",
+            "help": "Normal kapanış, sesli mesaj ve teknik sorun için ayrı metinler hazırlayın."
+          },
+          "limits": {
+            "title": "Sınırlar ve aktarma",
+            "help": "Görüşme süresi, aktarma dahilisi ve bütçe tahminini ayarlayın."
+          }
+        },
+        "endings": {
+          "closing": "Normal kapanış",
+          "voicemail_text": "Sesli mesaj",
+          "fault": "Teknik sorun"
+        }
       }
     },
     "filterEmpty": "Bu yönde arama yok",
