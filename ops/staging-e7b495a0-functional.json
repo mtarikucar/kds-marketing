@@ -1,0 +1,67 @@
+{
+  "revision": "e7b495a08443a67876947fabaf4a61a2dfee551b",
+  "checks": [
+    "existing-demo-login",
+    "upload-and-signed-preview-byte-integrity",
+    "project-idempotency-and-real-material-request-delivery",
+    "stale-project-write-rejected",
+    "real-pending-edit-job-and-no-duplicate-replay",
+    "authenticated-mcp-project-read-and-immediate-key-revocation",
+    "browser-saves-output-target-without-creating-an-external-publication",
+    "archive-cancels-owned-pending-production"
+  ],
+  "views": [
+    {
+      "view": "overview",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "materials",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "production",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "publications",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "overview",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "materials",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "production",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "view": "publications",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    }
+  ],
+  "errors": [],
+  "cleaned": true,
+  "externalPublications": 0,
+  "cleanupErrors": []
+}
