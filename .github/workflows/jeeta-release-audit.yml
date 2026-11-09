@@ -1,0 +1,32 @@
+name: Jeeta release readiness audit
+on:
+  push:
+    branches: [ops/release-dd66e8dc]
+    paths: [.github/workflows/jeeta-release-audit.yml, ops/release-audit.py, ops/release-audit-recipient.crt]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: '38.242.233.166'
+      - name: Read installed release metadata and encrypt upgrade script evidence
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes ops/release-audit-recipient.crt root@38.242.233.166:/root/jeeta-release-audit-dd66e8dc.crt
+          ssh -o BatchMode=yes root@38.242.233.166 'python3 -' < ops/release-audit.py > release-audit.json
+          cat release-audit.json
+          scp -o BatchMode=yes root@38.242.233.166:/root/jeeta-release-audit-dd66e8dc.p7m .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-release-audit-dd66e8dc
+          path: |
+            release-audit.json
+            jeeta-release-audit-dd66e8dc.p7m
+          retention-days: 1
