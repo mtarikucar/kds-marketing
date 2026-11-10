@@ -9,7 +9,7 @@ fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
 [[ $# == 3 ]] || fail 'usage: staging FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
 [[ "$ENVIRONMENT" == staging ]] || fail 'this reviewed operation is authorized for staging only'
-PINNED_REV=ca2d35da187b0927dde920b6bbc29fc3e3ce1e4d
+PINNED_REV=99bdccac6ae33b2f19bf6d019a2c4c7aa87b6d16
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid archive digest'
 [[ "$EUID" == 0 ]] || fail 'run as root on the audited installation'
