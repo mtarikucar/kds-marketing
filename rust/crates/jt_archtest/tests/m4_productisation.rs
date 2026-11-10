@@ -25,7 +25,11 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 102] = [
+const POST_M4_ADDED: [(&str, &str); 106] = [
+    ("modules.list", "jeeta.modules.list"),
+    ("modules.install", "jeeta.modules.install"),
+    ("modules.update", "jeeta.modules.update"),
+    ("modules.remove", "jeeta.modules.remove"),
     ("studio.project_list", "jeeta.studio.project_list"),
     ("studio.project_create", "jeeta.studio.project_create"),
     ("studio.project_get", "jeeta.studio.project_get"),
@@ -568,7 +572,13 @@ fn only_named_billing_rows_bypass_pending_status() {
         } else if ["auth.", "workspace.", "platform."]
             .iter()
             .any(|p| row.id.starts_with(p))
-            || ["ops.health", "prospects.do_not_contact", "prospects.erase"].contains(&row.id)
+            || [
+                "ops.health",
+                "modules.list",
+                "prospects.do_not_contact",
+                "prospects.erase",
+            ]
+            .contains(&row.id)
         {
             Always
         } else if ["strategy.", "work."].iter().any(|p| row.id.starts_with(p)) {

@@ -3549,8 +3549,8 @@ inside its existing tenant workspace. The list returns `{projects,next_cursor}` 
 changes require `studio.manage`. Agents get nine MCP twins (`project_list`, `project_get`,
 `project_create`, `project_update`, `project_materials`, `project_request`,
 `project_request_update`, `project_publication`, `project_schedule`); requesting a derivative
-remains a human owner/manager decision in the panel. The complete MCP registry has 227 tools,
-55 in Studio. `work.pending`/`work.checkin` expose projects needing materials or output planning.
+remains a human owner/manager decision in the panel. The complete MCP registry has 231 tools,
+55 in Studio and four for workspace modules. `work.pending`/`work.checkin` expose projects needing materials or output planning.
 
 Source attachments record their material revision. A changed source must be explicitly
 reattached before generation or scheduling. Brief edits and source removal/refresh invalidate
