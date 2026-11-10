@@ -3,7 +3,7 @@
 //! read or answer customers are listed one by one ([`EXEMPT_INBOX`]), so a new inbox row is
 //! `Gated` until someone decides it answers customers. Separately, only
 //! `auth.*`, `workspace.*` and `platform.*` use cases and the objections (a business's
-//! do-not-contact and erasure) run whatever the workspace's status, and
+//! do-not-contact and erasure), plus the read-only module registry, run whatever the workspace's status, and
 //! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
 //! lives in the adapters' tests.
@@ -96,6 +96,12 @@ const EXEMPT_INBOX: &[&str] = &[
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
+    // Modules describe the work area and its assignments; configuration precedes strategy.
+    // Explicit identities keep any future executable module action gated by default.
+    "modules.list",
+    "modules.install",
+    "modules.update",
+    "modules.remove",
     "ops.health",
     "billing.status",
     "billing.activate",
@@ -205,7 +211,11 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
     let expected = |id: &str| {
         if matches!(
             id,
-            "billing.status" | "ops.health" | "prospects.do_not_contact" | "prospects.erase"
+            "billing.status"
+                | "ops.health"
+                | "modules.list"
+                | "prospects.do_not_contact"
+                | "prospects.erase"
         ) || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
         {
             StatusExemption::Always
@@ -227,8 +237,8 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
         .collect();
     assert!(
         wrong.is_empty(),
-        "status_exemption must be Always exactly for auth.*, workspace.* and platform.*, \
-         PendingPayment exactly for strategy.* and work.*, else Never: {wrong:?}"
+        "status_exemption must match the explicit status allowlist (including modules.list); \
+         module mutations require an active workspace: {wrong:?}"
     );
     assert_eq!(
         jt_app::catalog::STATUS_EXEMPT_PREFIXES,
