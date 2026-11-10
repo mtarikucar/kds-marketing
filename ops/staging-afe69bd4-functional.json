@@ -1,0 +1,118 @@
+{
+  "revision": "afe69bd490dd0555e403b6c2e165d8684839a87a",
+  "checks": [
+    "existing-demo-login",
+    "legacy-navigation-preserved-after-schema32",
+    "required-modules-server-protected",
+    "browser-creates-arbitrary-persisted-blueprint",
+    "browser-persists-real-agent-and-ability-bindings",
+    "stale-and-unknown-binding-rejected",
+    "connected-agent-reads-assigned-module-over-mcp",
+    "portable-export-excludes-workspace-assignments",
+    "remove-and-portable-reinstall-retains-data-and-bindings"
+  ],
+  "initialModules": [
+    {
+      "id": "inbox",
+      "installed": true,
+      "required": true
+    },
+    {
+      "id": "strategy",
+      "installed": true,
+      "required": true
+    },
+    {
+      "id": "growth-studio",
+      "installed": true,
+      "required": false
+    },
+    {
+      "id": "people",
+      "installed": true,
+      "required": false
+    },
+    {
+      "id": "prospects",
+      "installed": true,
+      "required": false
+    },
+    {
+      "id": "outreach",
+      "installed": true,
+      "required": false
+    },
+    {
+      "id": "calls",
+      "installed": true,
+      "required": false
+    }
+  ],
+  "views": [
+    {
+      "name": "hub",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "catalog",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "detail",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "settings",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "abilities",
+      "width": 1440,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "hub",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "catalog",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "detail",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "settings",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "abilities",
+      "width": 390,
+      "overflow": false,
+      "brokenImages": []
+    }
+  ],
+  "errors": [],
+  "unexpectedWrites": [],
+  "externalActions": 0,
+  "cleanupErrors": [],
+  "cleaned": true
+}

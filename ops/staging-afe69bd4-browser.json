@@ -1,0 +1,219 @@
+{
+  "revision": "afe69bd490dd0555e403b6c2e165d8684839a87a",
+  "results": [
+    {
+      "name": "hub",
+      "width": 1440,
+      "heading": "Ajan merkezi",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "catalog",
+      "width": 1440,
+      "heading": "Blueprint kataloğu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "growth-module",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "growth-settings",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "activity",
+      "width": 1440,
+      "heading": "İş akışı",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "strategy",
+      "width": 1440,
+      "heading": "Strateji",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "projects",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "materials",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "library",
+      "width": 1440,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "call-settings",
+      "width": 1440,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "abilities",
+      "width": 1440,
+      "heading": "Yetenekler ve bağlantılar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "agents",
+      "width": 1440,
+      "heading": "Ajanlar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "prospects",
+      "width": 1440,
+      "heading": "Aday havuzu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "research",
+      "width": 1440,
+      "heading": "Araştırma görevleri",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "inbox",
+      "width": 1440,
+      "heading": "Gelen kutusu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "hub",
+      "width": 390,
+      "heading": "Ajan merkezi",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "catalog",
+      "width": 390,
+      "heading": "Blueprint kataloğu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "growth-module",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "growth-settings",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "activity",
+      "width": 390,
+      "heading": "İş akışı",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "strategy",
+      "width": 390,
+      "heading": "Strateji",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "projects",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "materials",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "library",
+      "width": 390,
+      "heading": "Büyüme stüdyosu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "call-settings",
+      "width": 390,
+      "heading": "Aramalar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "abilities",
+      "width": 390,
+      "heading": "Yetenekler ve bağlantılar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "agents",
+      "width": 390,
+      "heading": "Ajanlar",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "prospects",
+      "width": 390,
+      "heading": "Aday havuzu",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "research",
+      "width": 390,
+      "heading": "Araştırma görevleri",
+      "overflow": false,
+      "brokenImages": []
+    },
+    {
+      "name": "inbox",
+      "width": 390,
+      "heading": "Gelen kutusu",
+      "overflow": false,
+      "brokenImages": []
+    }
+  ],
+  "exceptions": [],
+  "writes": [],
+  "failures": [],
+  "mobileNavigation": true
+}
