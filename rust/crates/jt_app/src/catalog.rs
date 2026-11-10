@@ -105,12 +105,13 @@ pub const OBJECTION_USE_CASES: &[&str] = &["prospects.do_not_contact", "prospect
 
 /// The status exemption of use case `id`. The exact `billing.status` row is Always and
 /// `billing.report_payment` and `billing.activate` are PendingPayment; no other billing name is exempt.
-/// The [`OBJECTION_USE_CASES`] are Always.
+/// The [`OBJECTION_USE_CASES`] and the navigation registry `modules.list` are Always.
 /// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
-    if equals(id, "ops.health")
+    if equals(id, "modules.list")
+        || equals(id, "ops.health")
         || equals(id, "billing.status")
         || equals_any(id, OBJECTION_USE_CASES)
         || starts_with_any(id, STATUS_EXEMPT_PREFIXES)
@@ -378,6 +379,10 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("billing.status", Exempt, ("GET", "/api/billing"), Read),
     panel_only("billing.activate", Exempt, ("POST", "/api/billing/activate"), Write),
     twin("billing.report_payment", Exempt, "jeeta.billing.report_payment", ("POST", "/api/billing/payments"), Write),
+    twin("modules.list", Exempt, "jeeta.modules.list", ("GET", "/api/workspace/modules"), Read),
+    twin("modules.install", Exempt, "jeeta.modules.install", ("PUT", "/api/workspace/modules/{module_id}"), Write),
+    twin("modules.update", Exempt, "jeeta.modules.update", ("PATCH", "/api/workspace/modules/{module_id}"), Write),
+    twin("modules.remove", Exempt, "jeeta.modules.remove", ("DELETE", "/api/workspace/modules/{module_id}"), Write),
     twin("workspace.info", Exempt, "jeeta.workspace.info", ("GET", "/api/workspace"), Read),
     panel_only("workspace.switch", Exempt, ("POST", "/api/auth/switch-workspace"), Write),
     twin("team.list", Exempt, "jeeta.team.list", ("GET", "/api/team"), Read),

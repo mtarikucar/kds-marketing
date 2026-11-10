@@ -56,7 +56,7 @@ describe('CapabilitiesPage', () => {
   it('shows each capability as a card with its effective status', async () => {
     mockFetch(routes);
     const { container } = renderAt('/capabilities');
-    expect(await screen.findByRole('heading', { level: 1, name: tr.capabilities.title })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Yetenekler ve bağlantılar' })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Atölye Instagram' })).toBeInTheDocument();
     for (const status of EFFECTIVE_STATUSES) {
       expect(screen.getAllByText(tr.status.capability[status]).length).toBeGreaterThan(0);
@@ -68,7 +68,7 @@ describe('CapabilitiesPage', () => {
     // Links and groups are named, not shown as ids.
     expect(screen.getAllByText('Saha giderleri').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Marka A').length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: tr.capabilities.declare })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Yetenek ekle' })).toBeInTheDocument();
   });
 
   it('edits a capability, sending only what changed', async () => {

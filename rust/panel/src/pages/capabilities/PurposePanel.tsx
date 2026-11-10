@@ -1,9 +1,10 @@
-import { ArrowRight, MessageSquare, Monitor, Phone, Send, Layers, Megaphone, Briefcase } from 'lucide-react';
+import { ArrowRight, MessageSquare, Monitor, Phone, Send, Layers, Megaphone, Briefcase, Blocks } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button, Disclosure, cn } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { CAPABILITY_GOALS, GOAL_CONNECTIONS, type CapabilityGoal } from '@/lib/capabilityGoals';
+import { useAbilityCopy } from './abilityCopy';
 
 const icons = {
   all: Layers,
@@ -13,6 +14,7 @@ const icons = {
   devices: Monitor,
   growth: Megaphone,
   tools: Briefcase,
+  custom: Blocks,
 };
 export function PurposePanel({
   goal,
@@ -30,6 +32,8 @@ export function PurposePanel({
   onDeclare: () => void;
 }) {
   const { t } = useTranslation();
+  const copy = useAbilityCopy();
+  const label = (value: CapabilityGoal) => value === 'custom' ? copy('customGoal') : value === 'all' ? copy('allAbilities') : t(`capabilities.workbench.goals.${value}.label`);
   return (
     <section className="space-y-4" aria-label={t('capabilities.workbench.purposeLabel')}>
       <label className="block text-sm font-medium md:hidden">
@@ -42,7 +46,7 @@ export function PurposePanel({
         >
           {CAPABILITY_GOALS.map((value) => (
             <option key={value} value={value}>
-              {t(`capabilities.workbench.goals.${value}.label`)}
+              {label(value)}
             </option>
           ))}
         </select>
@@ -68,16 +72,16 @@ export function PurposePanel({
               )}
             >
               <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {t(`capabilities.workbench.goals.${value}.label`)}
+              {label(value)}
             </button>
           );
         })}
       </div>
       {goal !== 'all' && (
         <div className="min-w-0 border-s-2 border-primary/30 ps-4">
-          <h3 className="text-base font-medium">{t(`capabilities.workbench.goals.${goal}.title`)}</h3>
+          <h3 className="text-base font-medium">{goal === 'custom' ? copy('customGoalTitle') : t(`capabilities.workbench.goals.${goal}.title`)}</h3>
           <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">
-            {t(`capabilities.workbench.goals.${goal}.description`)}
+            {goal === 'custom' ? copy('customGoalBody') : t(`capabilities.workbench.goals.${goal}.description`)}
           </p>
           {canManage || (goal === 'devices' && canPair) ? (
             <div className="mt-3">
@@ -96,9 +100,9 @@ export function PurposePanel({
                       {t('capabilities.workbench.pairDevice')}
                     </Button>
                   )}
-                  {canManage && (goal === 'devices' || goal === 'tools' || goal === 'growth') && (
+                  {canManage && (goal === 'devices' || goal === 'tools' || goal === 'growth' || goal === 'custom') && (
                     <Button variant="outline" onClick={onDeclare}>
-                      {t('capabilities.declare')}
+                      {goal === 'custom' ? copy('custom') : t('capabilities.declare')}
                     </Button>
                   )}
                 </div>

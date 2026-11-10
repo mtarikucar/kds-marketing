@@ -10,6 +10,7 @@ export const CAPABILITY_GOALS = [
   'devices',
   'growth',
   'tools',
+  'custom',
 ] as const;
 export type CapabilityGoal = (typeof CAPABILITY_GOALS)[number];
 export const GOAL_GROUPS: Record<CapabilityGoal, readonly KindGroup[]> = {
@@ -20,6 +21,7 @@ export const GOAL_GROUPS: Record<CapabilityGoal, readonly KindGroup[]> = {
   devices: ['device', 'computer_access'],
   growth: ['ads', 'community'],
   tools: ['calendar', 'marketplace', 'agent_connection', 'third_party'],
+  custom: ['third_party'],
 };
 export const GOAL_CONNECTIONS: Record<CapabilityGoal, readonly string[]> = {
   all: [],
@@ -29,8 +31,10 @@ export const GOAL_CONNECTIONS: Record<CapabilityGoal, readonly string[]> = {
   devices: [],
   growth: ['meta_ads'],
   tools: [],
+  custom: [],
 };
 export function matchesGoal(item: CapabilityOut, goal: CapabilityGoal): boolean {
+  if (goal === 'custom') return item.capability.kind_key === 'other';
   const group = kindOf(item.capability.kind_key)?.group;
   return goal === 'all' || (!!group && GOAL_GROUPS[goal].includes(group));
 }

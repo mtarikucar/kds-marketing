@@ -259,6 +259,13 @@ impl TenantRepos for Tenant {
 
 #[async_trait]
 impl WorkspaceRepo for Tenant {
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError> {
+        self.inner.workspace().module_registry().await
+    }
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError> {
+        self.inner.workspace().save_module_registry(data).await
+    }
+
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
         let row = self.inner.workspace().lock().await?;
         if let Some(hold) = &self.hold {

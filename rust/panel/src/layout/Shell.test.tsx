@@ -7,6 +7,7 @@ import { flatten } from '@/i18n/flatten';
 import { PERMISSIONS, type MeOut } from '@/api/types';
 import { WS_ID, me, workspace } from '@/test/fixtures';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { coreModules, legacyModules } from '@/test/modules';
 
 const NO_SESSION = withStatus(401, { code: 'UNAUTHENTICATED', message: 'no session', details: {} });
 
@@ -15,6 +16,7 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
     renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    await userEvent.click(within(nav).getByText('Yönetim'));
     for (const label of [
       tr.nav.home,
       tr.nav.strategy,
@@ -39,7 +41,7 @@ describe('Shell', () => {
     await user.click(await screen.findByRole('button', { name: tr.nav.label }));
     const drawer = await screen.findByRole('dialog');
     expect(within(drawer).getByRole('link', { name: tr.nav.inbox })).toHaveAttribute('href', '/inbox');
-    await user.click(within(drawer).getByRole('link', { name: tr.nav.people }));
+    await user.click(await within(drawer).findByRole('link', { name: tr.nav.people }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -84,7 +86,7 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': permitted, 'GET /api/workspace': workspace });
     const first = renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-    expect(within(nav).getByRole('link', { name: tr.nav.prospects })).toHaveAttribute('href', '/prospects');
+    expect(await within(nav).findByRole('link', { name: tr.nav.prospects })).toHaveAttribute('href', '/prospects');
     expect(within(nav).getByRole('link', { name: tr.nav.outreach })).toHaveAttribute('href', '/outreach');
     first.unmount();
 
@@ -95,6 +97,34 @@ describe('Shell', () => {
     expect(within(plain).getByRole('link', { name: tr.nav.home })).toBeInTheDocument();
     expect(within(plain).queryByRole('link', { name: tr.nav.prospects })).not.toBeInTheDocument();
     expect(within(plain).queryByRole('link', { name: tr.nav.outreach })).not.toBeInTheDocument();
+  });
+
+  it('keeps core modules and the add action while hiding optional modules in a new workspace', async () => {
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+    renderAt('/');
+    const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(within(nav).getByRole('link', { name: tr.nav.inbox })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: tr.nav.strategy })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'Modül ekle' })).toHaveAttribute('href', '/modules');
+    expect(within(nav).queryByRole('link', { name: tr.nav.studio })).not.toBeInTheDocument();
+  });
+
+  it('adds arbitrary installed blueprints to navigation without accepting external paths', async () => {
+    const custom = { ...legacyModules.modules[0], required: false, blueprint: {
+      id: 'quality-control', name: 'Kalite kontrol', description: '', version: '1', requirements: [], workflow: [], builtin: false,
+    } };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': { ...coreModules, modules: [...coreModules.modules, custom] } });
+    renderAt('/');
+    const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(await within(nav).findByRole('link', { name: 'Kalite kontrol' })).toHaveAttribute('href', '/modules/quality-control');
+  });
+
+  it('blocks direct navigation to an uninstalled optional screen without fetching its business data', async () => {
+    const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+    renderAt('/studio');
+    expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeInTheDocument();
+    expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
+    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/growth-studio');
   });
 
   it('permissions_copy_parity', () => {

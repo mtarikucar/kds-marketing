@@ -1,514 +1,88 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, CheckCircle2, ChevronDown, Pencil, Play } from 'lucide-react';
-import type { TFunction } from 'i18next';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowRight, Bot, ChevronRight, Compass, Inbox, Layers, Plus, SlidersHorizontal } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router-dom';
-import { getStrategy, startConsultation } from '@/api/strategy';
-import {
-  INBOUND_EVENTS_COUNT_CAP,
-  MAX_CHECKIN_INTERVAL_MINUTES,
-  MIN_CHECKIN_INTERVAL_MINUTES,
-  type AgentState,
-  type PendingOut,
-  type StrategyState,
-  type WorkItem,
-} from '@/api/types';
-import { getPending, setCheckinInterval } from '@/api/work';
-import { getWorkspace } from '@/api/workspace';
+import { listAgents } from '@/api/agents';
 import { useSession } from '@/auth/useSession';
-import { ApproveDialog } from '@/components/ApproveDialog';
-import { ErrorCallout } from '@/components/ErrorCallout';
-import { GapList } from '@/components/GapList';
-import { PermissionList } from '@/components/PermissionList';
 import { QueryState } from '@/components/QueryState';
-import { WorkspaceStatusBadge } from '@/components/StatusBadges';
-import { WholeNumberInput } from '@/components/forms';
-import {
-  Badge,
-  Button,
-  Callout,
-  Field,
-  PageHeader,
-  toast,
-} from '@/components/ui';
-import { formatDateTime, formatRelative } from '@/lib/format';
-import { can, canApproveStrategy, roleLabel } from '@/lib/roles';
-import { PENDING_KEY, STRATEGY_KEY, invalidateStrategy } from './strategy/queries';
-import { useEntryCopy } from './entryCopy';
+import { Button, cn, PageHeader } from '@/components/ui';
+import { formatRelative } from '@/lib/format';
+import { modulePath, moduleSettingsPath, moduleVisibleTo, useModules } from '@/lib/modules';
+import { can, currentMembership } from '@/lib/roles';
+import { useModuleCopy } from './modules/copy';
+import { ActivationNotice } from './modules/ActivationNotice';
 
-/** How many of a draft's gaps the home page lists before "and N more". */
-const GAPS_SHOWN = 5;
-
-/** An interval in minutes as `24 sa`, `1 sa 30 dk` or `45 dk`. */
-function durationLabel(t: TFunction, minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  const parts: string[] = [];
-  if (hours > 0) parts.push(t('home.agent.hours', { count: hours }));
-  if (rest > 0 || hours === 0) parts.push(t('home.agent.minutes', { count: rest }));
-  return parts.join(' ');
-}
-
-function OpenStrategy() {
-  const { t } = useTranslation();
-  return (
-    <Button asChild variant="outline" size="sm">
-      <Link to="/strategy">{t('home.strategy.open')}</Link>
-    </Button>
-  );
-}
-
-/** Where the strategy stands, with the one step that moves it on for this user. */
-function StrategyCard({ state }: { state: StrategyState }) {
-  const { t } = useTranslation();
-  const session = useSession();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const canConsult = can(session.data, 'team.manage');
-  const canApprove = canApproveStrategy(session.data);
-  const approvedNumber = typeof state === 'object' && 'approved' in state ? state.approved.number : null;
-  const submitted = typeof state === 'object' && 'submitted' in state;
-  const [approving, setApproving] = useState(false);
-  // To count the hypotheses in force, and to list what a submitted draft rests on before it is
-  // approved: fetched again when the approval opens, and shown only once fetched.
-  const strategy = useQuery({
-    queryKey: STRATEGY_KEY,
-    queryFn: getStrategy,
-    enabled: approvedNumber !== null || approving,
-  });
-  const openApproval = () => {
-    setApproving(true);
-    void strategy.refetch();
-  };
-
-  const start = useMutation({
-    mutationFn: startConsultation,
-    onSuccess: async () => {
-      toast.success(t('strategy.started'));
-      await invalidateStrategy(queryClient);
-      navigate('/strategy');
-    },
-  });
-
-  let title: string;
-  let body: ReactNode;
-  let actions: ReactNode;
-  if (state === 'missing') {
-    title = t('home.strategy.title');
-    body = <p>{t('home.strategy.body')}</p>;
-    actions = canConsult ? (
-      <Button size="sm" onClick={() => start.mutate()} loading={start.isPending}>
-        <Play className="h-4 w-4" aria-hidden="true" />
-        {t('home.strategy.start')}
-      </Button>
-    ) : (
-      <OpenStrategy />
-    );
-  } else if ('submitted' in state) {
-    title = t('home.strategy.submittedTitle');
-    body = canApprove ? null : <p>{t('home.strategy.submittedWait')}</p>;
-    actions = (
-      <>
-        {canApprove && (
-          <Button size="sm" onClick={openApproval}>
-            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-            {t('home.strategy.approve')}
-          </Button>
-        )}
-        <OpenStrategy />
-      </>
-    );
-  } else if ('draft_open' in state) {
-    const { gaps } = state.draft_open;
-    title = t('home.strategy.draftTitle');
-    body =
-      gaps.length === 0 ? (
-        <p>{t('home.strategy.noGaps')}</p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <p>{t('home.strategy.draftBody', { count: gaps.length })}</p>
-          <GapList gaps={gaps.slice(0, GAPS_SHOWN)} />
-          {gaps.length > GAPS_SHOWN && (
-            <p className="text-caption text-muted-foreground">
-              {t('home.strategy.moreGaps', { count: gaps.length - GAPS_SHOWN })}
-            </p>
-          )}
-        </div>
-      );
-    actions = <OpenStrategy />;
-  } else {
-    const live = strategy.data?.approved?.hypotheses.filter((h) => h.state !== 'retired').length;
-    title = t('home.strategy.approvedTitle');
-    body = (
-      <div className="flex flex-col gap-1">
-        <p>{t('home.strategy.approvedBody', { number: state.approved.number })}</p>
-        {live !== undefined && <p className="text-muted-foreground">{t('home.strategy.hypotheses', { count: live })}</p>}
-      </div>
-    );
-    actions = <OpenStrategy />;
-  }
-
-  return (
-    <section aria-labelledby="home-strategy" className="flex flex-col gap-4">
-      <div>
-        <p className="mb-2 text-xs font-medium text-muted-foreground">{t('home.strategy.label')}</p>
-        <h2 id="home-strategy" className="text-xl font-normal leading-snug tracking-tight text-foreground">{title}</h2>
-      </div>
-      <div className="flex flex-1 flex-col gap-4 text-sm leading-relaxed text-muted-foreground">
-        {body}
-        <ErrorCallout error={start.error} />
-        <div className="mt-auto flex flex-wrap gap-2">{actions}</div>
-      </div>
-      {submitted && canApprove && (
-        // The shortcut approves the draft the dialog shows, fetched when it opens (never the
-        // pending work's stamp, which may be older), and lists what it rests on.
-        <ApproveDialog
-          open={approving}
-          onOpenChange={setApproving}
-          draft={strategy.data && !strategy.isFetching ? strategy.data.draft : undefined}
-        />
-      )}
-    </section>
-  );
-}
-
-/** The agent's check-in: when it was last seen, how often it should be, and a red warning when late. */
-function AgentCard({ agent }: { agent: AgentState }) {
-  const { t, i18n } = useTranslation();
-  const session = useSession();
-  const queryClient = useQueryClient();
-  const canEdit = can(session.data, 'team.manage');
-  const [editing, setEditing] = useState<number | null>(null);
-  const save = useMutation({
-    mutationFn: setCheckinInterval,
-    onSuccess: (next) => {
-      setEditing(null);
-      toast.success(t('home.agent.intervalSaved'));
-      queryClient.setQueryData<PendingOut>(PENDING_KEY, (old) => (old ? { ...old, agent: next } : old));
-    },
-  });
-  const valid =
-    editing !== null && editing >= MIN_CHECKIN_INTERVAL_MINUTES && editing <= MAX_CHECKIN_INTERVAL_MINUTES;
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (valid) save.mutate(editing);
-  };
-
-  return (
-    <section aria-labelledby="home-agent" className="flex flex-col gap-4 border-t border-border pt-6">
-      <h2 id="home-agent" className="text-lg font-medium text-foreground">{t('home.agent.title')}</h2>
-      <div className="flex flex-col gap-4 text-sm leading-relaxed">
-        {!agent.last_seen_at ? (
-          // Never connected is a setup step, not an incident.
-          <div>
-            <p className="mb-1 font-medium text-foreground">{t('home.agent.neverTitle')}</p>
-            <p className="text-muted-foreground">{t('home.agent.never')}</p>
-            <Link className="mt-1 inline-block text-primary underline" to="/api-keys">
-              {t('home.agent.connectLink')}
-            </Link>
-          </div>
-        ) : agent.overdue ? (
-          <Callout tone="danger" title={t('home.agent.overdueTitle')}>
-            <p>{t('home.agent.overdueBody')}</p>
-            <p className="mt-1">{t('home.agent.schedulerNote')}</p>
-          </Callout>
-        ) : (
-          <p className="flex items-start gap-2 text-foreground">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-            {t('home.agent.onTime')}
-          </p>
-        )}
-        <dl className="grid gap-4">
-          <div className="flex flex-col gap-0.5">
-            <dt className="text-caption text-muted-foreground">{t('home.agent.lastSeen')}</dt>
-            <dd className="text-foreground">
-              {agent.last_seen_at ? (
-                <time dateTime={agent.last_seen_at} title={formatDateTime(agent.last_seen_at, i18n.language)}>
-                  {formatRelative(agent.last_seen_at, i18n.language)}
-                </time>
-              ) : (
-                t('common.none')
-              )}
-            </dd>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            <dt className="text-caption text-muted-foreground">{t('home.agent.interval')}</dt>
-            <dd className="flex items-center gap-2 text-foreground">
-              {durationLabel(t, agent.interval_minutes)}
-              {canEdit && editing === null && (
-                <Button variant="ghost" size="sm" onClick={() => setEditing(agent.interval_minutes)}>
-                  <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-                  {t('home.agent.editInterval')}
-                </Button>
-              )}
-            </dd>
-          </div>
-        </dl>
-        {editing !== null && (
-          <form className="flex flex-col gap-3" onSubmit={onSubmit} noValidate>
-            <Field label={t('home.agent.intervalLabel')} hint={t('home.agent.intervalHint')} className="sm:flex-1">
-              {(ids) => (
-                <WholeNumberInput
-                  id={ids.id}
-                  describedBy={ids.describedBy}
-                  min={MIN_CHECKIN_INTERVAL_MINUTES}
-                  max={MAX_CHECKIN_INTERVAL_MINUTES}
-                  value={editing}
-                  onChange={(n) => setEditing(n ?? 0)}
-                />
-              )}
-            </Field>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setEditing(null);
-                  save.reset();
-                }}
-              >
-                {t('common.cancel')}
-              </Button>
-              <Button type="submit" loading={save.isPending} disabled={!valid}>
-                {t('common.save')}
-              </Button>
-            </div>
-          </form>
-        )}
-        <ErrorCallout error={save.error} />
-        {!agent.overdue && <p className="text-caption text-muted-foreground">{t('home.agent.schedulerNote')}</p>}
-      </div>
-    </section>
-  );
-}
-
-function itemText(t: TFunction, item: WorkItem): string {
-  switch (item.kind) {
-    case 'studio_project':
-      return `/studio?tab=projects&project=${encodeURIComponent(item.project_id)}`;
-    case 'verify_capability':
-      return item.stale
-        ? t('home.pending.verify_capability_stale', { name: item.name })
-        : t('home.pending.verify_capability', { name: item.name });
-    case 'connect_connector':
-      return t('home.pending.connect_connector', { name: item.name });
-    case 'reconnect_connector':
-      return t('home.pending.reconnect_connector', { name: item.name });
-    case 'voice_bridge_offline':
-      return t('home.pending.voice_bridge_offline', { name: item.name });
-    case 'phone_offline':
-      return t('home.pending.phone_offline', { name: item.name });
-    case 'inbound_events':
-      // `count` picks the plural form; `n` is what is shown, a count of the cap as at least that many.
-      return t('home.pending.inbound_events', {
-        count: item.count,
-        n: item.count >= INBOUND_EVENTS_COUNT_CAP ? `${INBOUND_EVENTS_COUNT_CAP}+` : String(item.count),
-      });
-    default:
-      return t(`home.pending.${item.kind}`);
-  }
-}
-
-/**
- * Where an item is acted on: a capability to reconnect goes straight to its reconnection; the
- * inbound events are the agent's to read and acknowledge, so nothing opens for them.
- */
-function itemLink(item: WorkItem): string | null {
-  switch (item.kind) {
-    case 'studio_material_analysis':
-      return `/studio?tab=materials&view=olays&material=${encodeURIComponent(item.material_id)}`;
-    case 'studio_material_production':
-      return '/studio?tab=materials&view=library';
-    case 'reply_due':
-    case 'reopen_question':
-      return `/inbox/${encodeURIComponent(item.conversation_id)}`;
-    case 'merge_suggested':
-      return `/inbox/merges?merge=${encodeURIComponent(item.merge_id)}`;
-    case 'task_due':
-      return `/inbox?task=${encodeURIComponent(item.task_id)}`;
-    case 'consult_strategy':
-    case 'approve_strategy':
-      return '/strategy';
-    case 'reconnect_connector':
-      return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
-    case 'research_due':
-      return '/prospects/tasks';
-    case 'prospects_to_score':
-    case 'prospects_to_promote':
-      return '/prospects';
-    case 'ownerless_journeys':
-    case 'assignment_stalled':
-      return '/team/distribution';
-    case 'promoted_not_contacted':
-      return '/inbox';
-    case 'campaign_approval':
-    case 'campaign_blocked':
-    case 'personalization_due':
-      return `/outreach/${encodeURIComponent(item.campaign_id)}`;
-    case 'inbound_events':
-      return null;
-    default:
-      return '/capabilities';
-  }
-}
-
-/** The pending items, most urgent first, each in the panel's own words (the hints are for the agent). */
-function PendingList({ items }: { items: readonly WorkItem[] }) {
-  const { t } = useTranslation();
-  const copy = useEntryCopy();
-  const [all, setAll] = useState(false);
-  const ordered = [...items].sort((a, b) => a.priority - b.priority);
-  return (
-    <section aria-labelledby="home-pending">
-      <div className="flex items-start justify-between gap-6 border-b border-border pb-6">
-        <div>
-          <h2 id="home-pending" className="text-2xl font-normal tracking-tight text-foreground">{t('home.pending.title')}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{t('home.pending.description')}</p>
-        </div>
-        <span className="text-5xl font-normal leading-none tabular-nums tracking-tight text-foreground">
-          <span aria-hidden="true">{items.length}</span>
-          <span className="sr-only">{t('home.pending.count', { count: items.length })}</span>
-        </span>
-      </div>
-      {items.length === 0 ? (
-        <div className="flex flex-col items-start gap-4 py-8 sm:flex-row sm:items-center sm:gap-6">
-          <img
-            src="/brand/guide-plan.webp"
-            alt=""
-            aria-hidden="true"
-            width={480}
-            height={480}
-            className="h-28 w-28 shrink-0 object-contain"
-          />
-          <div>
-            <p className="font-medium text-foreground">{t('home.pending.empty')}</p>
-            <p className="mt-1 max-w-md text-sm leading-relaxed text-muted-foreground">{t('home.pending.emptyHint')}</p>
-          </div>
-        </div>
-      ) : (
-        <ul className="divide-y divide-border">
-          {(all ? ordered : ordered.slice(0, 5)).map((item, i) => {
-            const link = itemLink(item);
-            return (
-              <li
-                key={`${item.kind}-${'capability_id' in item ? item.capability_id : i}`}
-                className="group relative flex items-start gap-4 py-6 sm:gap-6"
-              >
-                <span aria-hidden="true" className="w-6 shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">{String(i + 1).padStart(2, '0')}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-base leading-6 text-foreground">{itemText(t, item)}</p>
-                  <div className="mt-2">
-                    <Badge tone={item.priority === 1 ? 'warning' : 'neutral'} size="sm" className="rounded-none bg-transparent px-0 font-normal">
-                      {t('home.pending.priority', { priority: item.priority })}
-                    </Badge>
-                  </div>
-                </div>
-                {link && (
-                  <Button asChild variant="ghost" size="sm" className="shrink-0">
-                    <Link to={link}>
-                      {item.kind === 'reconnect_connector' ? t('home.pending.reconnect') : t('home.pending.open')}
-                      <ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden="true" />
-                    </Link>
-                  </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {items.length > 5 && <Button variant="outline" size="sm" onClick={() => setAll(value => !value)}>{all ? copy('homeLessWork') : copy('homeAllWork', { count: items.length })}</Button>}
-      <nav aria-label={t('home.continueWorking')} className="mt-5 grid border-t border-border sm:grid-cols-2">
-        <Link to="/inbox" className="group flex items-start justify-between gap-4 py-5 sm:pe-6">
-          <div>
-            <p className="text-sm font-medium text-foreground group-hover:text-primary">{t('nav.inbox')}</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('home.inboxHint')}</p>
-          </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground rtl:rotate-180" aria-hidden="true" />
-        </Link>
-        <Link to="/studio" className="group flex items-start justify-between gap-4 border-t border-border py-5 sm:border-s sm:border-t-0 sm:ps-6">
-          <div>
-            <p className="text-sm font-medium text-foreground group-hover:text-primary">{t('nav.studio')}</p>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('home.studioHint')}</p>
-          </div>
-          <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground rtl:rotate-180" aria-hidden="true" />
-        </Link>
-      </nav>
-    </section>
-  );
-}
-
+/** The center is a view of recorded connections and explicit assignments, never an online claim. */
 export function HomePage() {
-  const { t } = useTranslation();
+  const copy = useModuleCopy();
+  const { i18n } = useTranslation();
   const session = useSession();
-  const workspace = useQuery({
-    queryKey: ['workspace', session.data?.current_workspace],
-    queryFn: getWorkspace,
-    enabled: !!session.data?.current_workspace,
-  });
-  const pending = useQuery({
-    queryKey: PENDING_KEY,
-    queryFn: getPending,
-    enabled: !!session.data?.current_workspace,
-  });
+  const workspaceId = session.data?.current_workspace;
+  const workspaceActive = currentMembership(session.data)?.workspace_status === 'active';
+  const agents = useQuery({ queryKey: ['agents', workspaceId], queryFn: listAgents, enabled: !!workspaceId && workspaceActive });
+  const registry = useModules();
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [allModules, setAllModules] = useState(false);
+  const installed = registry.data?.modules.filter(module => module.installed && moduleVisibleTo(module, session.data)) ?? [];
+  const optional = installed.filter(module => !module.required);
+  const selected = workspaceActive ? agents.data?.find(agent => agent.id === selectedAgent) : undefined;
+  const shown = selected ? installed.filter(module => module.config.agent_ids.includes(selected.id)) : optional;
+  const canManage = workspaceActive && can(session.data, 'capabilities.manage');
 
-  return (
-    <div className="flex flex-col gap-8">
-      <PageHeader
-        title={t('home.title')}
-        description={t('home.description')}
-        actions={
-          <Button asChild variant="outline" size="sm">
-            <Link to="/onboarding">{t('onboarding.title')}<ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" aria-hidden="true" /></Link>
-          </Button>
-        }
-      />
-      <QueryState query={workspace}>
-        {workspace.data && (
-          <section aria-labelledby="home-workspace" className="border-t border-border pt-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                <h2 id="home-workspace" className="min-w-0 break-words text-sm font-medium text-foreground [overflow-wrap:anywhere]">{workspace.data.name}</h2>
-                <WorkspaceStatusBadge status={workspace.data.status} />
-              </div>
-              <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-                <span>{t('home.myRole')}: {roleLabel(t, workspace.data.my_role)}</span>
-                <Link className="underline underline-offset-4 hover:text-foreground" to="/billing">{t('billing.title')}</Link>
-              </div>
-            </div>
-            {workspace.data.status !== 'active' && (
-              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{t(`home.inactive.${workspace.data.status}`)}</p>
-            )}
-            <details className="group mt-3 text-xs text-muted-foreground">
-              <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary [&::-webkit-details-marker]:hidden">
-                {t('home.workspaceDetails')}
-                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" aria-hidden="true" />
-              </summary>
-              <dl className="mt-4 grid gap-4 pb-1 sm:grid-cols-[1fr_3fr]">
-                <div>
-                  <dt className="mb-1">{t('home.slug')}</dt>
-                  <dd className="font-mono text-foreground">{workspace.data.slug}</dd>
-                </div>
-                <div>
-                  <dt className="mb-2">{t('home.myPermissions')}</dt>
-                  <dd><PermissionList permissions={workspace.data.my_permissions} /></dd>
-                </div>
-              </dl>
-            </details>
-          </section>
-        )}
+  return <div className="flex min-w-0 flex-col gap-8 [overflow-wrap:anywhere]">
+    <PageHeader title={copy('center')} description={copy('centerBody')}
+      actions={<Button asChild size="sm" variant="outline"><Link to="/activity">{copy('operations')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>} />
+
+    <section aria-labelledby="center-agents" className="overflow-hidden rounded-xl border border-border bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-5 py-4 sm:px-6">
+        <div className="flex items-center gap-3"><Bot className="h-5 w-5 text-muted-foreground" aria-hidden="true" /><h2 id="center-agents" className="text-base font-medium">{copy('connectedAgents')}</h2>
+          {workspaceActive && agents.data && <span className="text-xs tabular-nums text-muted-foreground">{agents.data.length}</span>}
+        </div>
+        {workspaceActive && <Button asChild variant="ghost" size="sm"><Link to={can(session.data, 'api_keys.manage') ? '/api-keys' : '/agents'}>{can(session.data, 'api_keys.manage') ? copy('agentConnect') : copy('agentsManage')}<Plus className="h-4 w-4" aria-hidden="true" /></Link></Button>}
+      </div>
+      {!workspaceActive ? <div className="p-5 sm:p-6"><ActivationNotice /></div> : <QueryState query={agents}>
+        {agents.data?.length === 0 ? <div className="grid gap-6 p-6 sm:grid-cols-[minmax(0,1fr)_160px] sm:items-center sm:p-8">
+          <div><h3 className="text-xl font-normal">{copy('noAgents')}</h3><p className="mt-2 max-w-lg text-sm leading-6 text-muted-foreground">{copy('noAgentsBody')}</p></div>
+          <svg className="hidden h-28 w-40 text-muted-foreground sm:block" viewBox="0 0 160 112" fill="none" aria-hidden="true"><path d="M24 56H56M104 56h32M80 32V16M80 80v16" stroke="currentColor" strokeOpacity=".4"/><rect x="56" y="32" width="48" height="48" rx="10" fill="currentColor" fillOpacity=".04" stroke="currentColor" strokeOpacity=".4"/><path d="M72 50v12m16-12v12M72 68h16" stroke="currentColor" strokeWidth="2"/><circle cx="24" cy="56" r="7" stroke="currentColor" strokeOpacity=".4"/><circle cx="136" cy="56" r="7" stroke="currentColor" strokeOpacity=".4"/><circle cx="80" cy="12" r="4" fill="currentColor" fillOpacity=".4"/><circle cx="80" cy="100" r="4" fill="currentColor" fillOpacity=".4"/></svg>
+        </div> : <div className={cn("grid gap-px bg-surface", (agents.data?.length ?? 0) > 1 && "sm:grid-cols-2", (agents.data?.length ?? 0) > 2 && "xl:grid-cols-3")}>
+          {agents.data?.slice(0, 6).map(agent => {
+            const assigned = installed.filter(module => module.config.agent_ids.includes(agent.id));
+            return <button type="button" key={agent.id} aria-pressed={selectedAgent === agent.id} onClick={() => setSelectedAgent(selectedAgent === agent.id ? null : agent.id)}
+              className={cn('flex min-w-0 flex-col items-start gap-4 border-b-2 bg-surface p-5 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:p-6', selectedAgent === agent.id ? 'border-primary bg-surface-muted' : 'border-transparent hover:bg-surface-muted/50')}>
+              <span className="flex w-full min-w-0 items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-background font-mono text-sm">{agent.client_name.slice(0, 2).toUpperCase()}</span><span className="min-w-0 flex-1"><span className="block truncate font-medium">{agent.client_name}</span><span className="block truncate text-xs text-muted-foreground">{agent.api_key_name}</span></span><ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /></span>
+              <span className="text-xs text-muted-foreground">{copy('lastContact')} · {formatRelative(agent.last_seen_at, i18n.language)}</span>
+              <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{assigned.length ? assigned.slice(0, 3).map(module => <span key={module.blueprint.id}>{module.blueprint.name}</span>) : copy('emptyAssigned')}{assigned.length > 3 && <span>+{assigned.length - 3}</span>}</span>
+            </button>;
+          })}
+        </div>}
+      </QueryState>}
+      {workspaceActive && agents.data && agents.data.length > 6 && <div className="border-t border-border px-5 py-3"><Button asChild size="sm" variant="ghost"><Link to="/agents">{copy('allConnections')} ({agents.data.length})<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button></div>}
+    </section>
+
+    <section aria-labelledby="center-modules" className="relative">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3"><h2 id="center-modules" className="text-lg font-medium">{selected ? copy('agentModules') : copy('modules')}</h2>{selected && <Button size="sm" variant="ghost" onClick={() => setSelectedAgent(null)}>{copy('allAgents')}</Button>}</div>
+        <Button asChild size="sm" variant="outline"><Link to="/modules"><Plus className="h-4 w-4" aria-hidden="true" />{canManage ? copy('add') : copy('moduleLibrary')}</Link></Button>
+      </div>
+      <QueryState query={registry}>
+        {shown.length === 0 ? <div className="flex flex-col items-start gap-3 border-s-2 border-border py-3 ps-5"><p className="font-medium">{selected ? copy('emptyAssigned') : copy('emptyModules')}</p><p className="max-w-xl text-sm leading-6 text-muted-foreground">{selected ? copy('emptyAssignedBody') : copy('emptyModulesBody')}</p></div>
+          : <div className="grid gap-4 lg:grid-cols-2">
+            {(allModules ? shown : shown.slice(0, 6)).map(module => <article key={module.blueprint.id} className="flex min-w-0 flex-col rounded-lg border border-border bg-surface p-5">
+              <div className="flex items-start gap-4"><div className="min-w-0 flex-1"><h3 className="break-words text-lg font-medium"><Link className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" to={modulePath(module)}>{module.blueprint.name}</Link></h3><p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{module.blueprint.description}</p></div><Layers className="mt-1 h-5 w-5 shrink-0 text-muted-foreground" aria-hidden="true" /></div>
+              <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-border pt-4"><span className="me-auto text-xs text-muted-foreground">{module.config.agent_ids.length} {copy('agentCount')} · {module.config.capability_ids.length} {copy('capabilityCount')}</span><Button asChild variant="ghost" size="sm"><Link to={moduleSettingsPath(module.blueprint.id)}><SlidersHorizontal className="h-4 w-4" aria-hidden="true" /><span className="sr-only">{module.blueprint.name} </span>{copy('configure')}</Link></Button><Button asChild size="sm" variant="outline"><Link to={modulePath(module)}>{copy('open')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button></div>
+            </article>)}
+          </div>}
       </QueryState>
-      <QueryState query={pending}>
-        {pending.data && (
-          <div className="grid min-w-0 items-start gap-8 xl:grid-cols-[minmax(0,1fr)_272px] xl:gap-8">
-            <div className="min-w-0 rounded-lg border border-border bg-surface p-5 sm:p-8"><PendingList items={pending.data.items} /></div>
-            <aside className="flex min-w-0 flex-col gap-8 border-t border-border pt-6 xl:border-t-0 xl:pt-2">
-              <StrategyCard state={pending.data.strategy} />
-              <AgentCard agent={pending.data.agent} />
-            </aside>
-          </div>
-        )}
-      </QueryState>
-    </div>
-  );
+      {shown.length > 6 && <Button variant="ghost" size="sm" className="mt-4" onClick={() => setAllModules(value => !value)}>{copy(allModules ? 'less' : 'more')} ({shown.length})</Button>}
+    </section>
+
+    <section aria-labelledby="center-foundation" className="border-t border-border pt-6">
+      <div className="mb-4 flex flex-wrap items-center gap-3"><h2 id="center-foundation" className="text-sm font-medium">{copy('core')}</h2><span className="text-xs text-muted-foreground">{copy('required')}</span></div>
+      <div className="grid gap-5 sm:grid-cols-2 ">
+        {[{ to: '/inbox', title: copy('inbox'), body: copy('inboxBody'), Icon: Inbox }, { to: '/strategy', title: copy('strategy'), body: copy('strategyBody'), Icon: Compass }].map(({ to, title, body, Icon }) => <Link to={to} key={to} className="group flex min-w-0 items-start gap-3 rounded-md py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Icon className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="min-w-0 flex-1"><span className="block text-sm font-medium group-hover:underline">{title}</span><span className="mt-1 block text-xs leading-5 text-muted-foreground">{body}</span></span><ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /></Link>)}
+      </div>
+    </section>
+    <Link to="/capabilities" className="flex items-center gap-3 border-t border-border pt-4 text-sm text-muted-foreground hover:text-foreground"><SlidersHorizontal className="h-4 w-4" aria-hidden="true" /><span>{copy('capabilitiesManage')}</span><ArrowRight className="h-4 w-4" aria-hidden="true" /></Link>
+  </div>;
 }

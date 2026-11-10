@@ -22,6 +22,7 @@ pub mod events;
 pub mod groups;
 pub mod inbox;
 pub mod ledger;
+mod modules;
 pub mod oauth_callback;
 pub mod ops;
 pub mod outreach;
@@ -194,6 +195,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/billing/activate"),
     ("POST", "/api/billing/payments"),
     ("GET", "/api/workspace"),
+    ("GET", "/api/workspace/modules"),
+    ("PUT", "/api/workspace/modules/{module_id}"),
+    ("PATCH", "/api/workspace/modules/{module_id}"),
+    ("DELETE", "/api/workspace/modules/{module_id}"),
     ("GET", "/api/team"),
     ("POST", "/api/team/invites"),
     ("POST", "/api/team/invites/accept"),
@@ -1109,6 +1114,25 @@ pub fn api_routes() -> Vec<ApiRoute> {
             billing::report_payment,
         ),
         api_route("GET", "/workspace", "workspace.info", workspace::info),
+        api_route("GET", "/workspace/modules", "modules.list", modules::list),
+        api_route(
+            "PUT",
+            "/workspace/modules/{module_id}",
+            "modules.install",
+            modules::install,
+        ),
+        api_route(
+            "PATCH",
+            "/workspace/modules/{module_id}",
+            "modules.update",
+            modules::update,
+        ),
+        api_route(
+            "DELETE",
+            "/workspace/modules/{module_id}",
+            "modules.remove",
+            modules::remove,
+        ),
         api_route("GET", "/team", "team.list", team::list),
         api_route("POST", "/team/invites", "team.invite", team::invite),
         api_route(

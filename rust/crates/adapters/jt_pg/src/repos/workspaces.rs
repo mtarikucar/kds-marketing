@@ -179,6 +179,21 @@ pub(crate) async fn member_count(
 
 #[async_trait]
 impl WorkspaceRepo for PgTenantRepos {
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError> {
+        let ws = self.workspace_id();
+        sqlx::query_scalar("select data from workspace_modules where workspace_id=$1")
+            .bind(ws.as_uuid())
+            .fetch_optional(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "read module registry"))
+    }
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query("insert into workspace_modules (workspace_id,data) values ($1,$2) on conflict (workspace_id) do update set data=excluded.data")
+            .bind(ws.as_uuid()).bind(data).execute(self.tx.conn()).await.map_err(|e| map_sqlx(e, "write module registry"))?;
+        Ok(())
+    }
+
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
         let ws = self.workspace_id();
         lock(self.tx.conn(), ws).await

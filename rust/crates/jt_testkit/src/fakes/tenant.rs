@@ -783,6 +783,28 @@ impl LedgerRepo for MemTenant {
 
 #[async_trait]
 impl WorkspaceRepo for MemTenant {
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError> {
+        self.call(|t| {
+            Ok(t.state()
+                .module_registries
+                .iter()
+                .find(|(ws, _)| *ws == t.ws)
+                .map(|(_, v)| v.clone()))
+        })
+    }
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError> {
+        self.call(|t| {
+            let ws = t.ws;
+            t.tx.write(move |state| {
+                if let Some((_, v)) = state.module_registries.iter_mut().find(|(id, _)| *id == ws) {
+                    *v = data.clone();
+                } else {
+                    state.module_registries.push((ws, data.clone()));
+                }
+            });
+            Ok(())
+        })
+    }
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
         self.tx.lock_studio().await;
         self.call(|t| t.tx.billing_workspace(t.ws))

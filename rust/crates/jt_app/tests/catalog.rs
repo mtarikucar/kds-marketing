@@ -300,6 +300,10 @@ fn catalog_is_the_release_table() {
         ("billing.status", None, Some(("GET", "/api/billing")), true, Risk::Read),
         ("billing.activate", None, Some(("POST", "/api/billing/activate")), true, Risk::Write),
         ("billing.report_payment", Some("jeeta.billing.report_payment"), Some(("POST", "/api/billing/payments")), false, Risk::Write),
+        ("modules.list", Some("jeeta.modules.list"), Some(("GET", "/api/workspace/modules")), false, Risk::Read),
+        ("modules.install", Some("jeeta.modules.install"), Some(("PUT", "/api/workspace/modules/{module_id}")), false, Risk::Write),
+        ("modules.update", Some("jeeta.modules.update"), Some(("PATCH", "/api/workspace/modules/{module_id}")), false, Risk::Write),
+        ("modules.remove", Some("jeeta.modules.remove"), Some(("DELETE", "/api/workspace/modules/{module_id}")), false, Risk::Write),
         ("workspace.info", Some("jeeta.workspace.info"), Some(("GET", "/api/workspace")), false, Risk::Read),
         ("workspace.switch", None, Some(("POST", "/api/auth/switch-workspace")), true, Risk::Write),
         ("team.list", Some("jeeta.team.list"), Some(("GET", "/api/team")), false, Risk::Read),
@@ -440,7 +444,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 268);
+    assert_eq!(CATALOG.len(), 272);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -459,6 +463,7 @@ fn catalog_is_the_release_table() {
             "auth.logout",
             "auth.me",
             "billing.status",
+            "modules.list",
             "workspace.info",
             "workspace.switch",
             "prospects.do_not_contact",

@@ -30,6 +30,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Disclosure,
   Field,
   Input,
   Label,
@@ -46,6 +47,7 @@ import { canLinkBudget, requiresKeyDetail } from '@/lib/capabilities';
 import { gapsOf } from '@/lib/errors';
 import { formatHour, weekdayName } from '@/lib/format';
 import { invalidateCapabilities } from './queries';
+import { useAbilityCopy } from './abilityCopy';
 
 /** The frame every capability dialog shares: title, description, error with its gaps, buttons. */
 function FormDialog({
@@ -137,8 +139,9 @@ function settingValue(raw: string): unknown {
 
 // --- declare ----------------------------------------------------------------------------------
 
-export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function DeclareDialog({ open, onOpenChange, initialKind }: { open: boolean; onOpenChange: (open: boolean) => void; initialKind?: string }) {
   const { t } = useTranslation();
+  const copy = useAbilityCopy();
   const [kind, setKind] = useState('');
   const [keyDetail, setKeyDetail] = useState('');
   const [name, setName] = useState('');
@@ -149,7 +152,9 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   const declare = useCapabilityMutation(declareCapability, t('capabilities.declareDialog.declared'), close);
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setKind(initialKind ?? '');
+    } else {
       setKind('');
       setKeyDetail('');
       setName('');
@@ -158,8 +163,7 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
       setSettings([]);
       declare.reset();
     }
-    // Reset only when the dialog closes.
-  }, [open]);
+  }, [open, initialKind]);
 
   const needsDetail = requiresKeyDetail(kind);
   const submit = () => {
@@ -180,12 +184,12 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t('capabilities.declareDialog.title')}
-      description={t('capabilities.declareDialog.description')}
+      title={kind === 'other' ? copy('custom') : t('capabilities.declareDialog.title')}
+      description={kind === 'other' ? copy('customDescription') : t('capabilities.declareDialog.description')}
       error={declare.error}
       submitLabel={t('capabilities.declareDialog.submit')}
       submitting={declare.isPending}
-      submitDisabled={kind === '' || name.trim() === ''}
+      submitDisabled={kind === '' || name.trim() === '' || (needsDetail && !/^[a-z0-9_-]{2,40}$/.test(keyDetail.trim()))}
       onSubmit={submit}
     >
       <Field label={t('fields.kind_key')} required>
@@ -195,11 +199,12 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
             value={kind}
             placeholder={t('capabilities.declareDialog.kindPlaceholder')}
             onChange={setKind}
+            showKeys={false}
           />
         )}
       </Field>
       {needsDetail && (
-        <Field label={t('fields.key_detail')} hint={t('capabilities.declareDialog.keyDetailHint')} required>
+        <Field label={copy('customIdentifier')} hint={copy('customIdentifierHint')} required>
           {(ids) => (
             <Input
               id={ids.id}
@@ -207,61 +212,66 @@ export function DeclareDialog({ open, onOpenChange }: { open: boolean; onOpenCha
               className="font-mono"
               spellCheck={false}
               autoCapitalize="off"
+              maxLength={40}
               value={keyDetail}
               onChange={(e) => setKeyDetail(e.target.value)}
             />
           )}
         </Field>
       )}
-      <Field label={t('fields.name')} required>
+      <Field label={kind === 'other' ? copy('customName') : t('fields.name')} required>
         {(ids) => <Input id={ids.id} autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} />}
       </Field>
-      <Field label={t('fields.description')}>
+      <Field label={kind === 'other' ? copy('customInstructions') : t('fields.description')}>
         {(ids) => <Textarea id={ids.id} rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />}
       </Field>
-      <Field label={t('fields.external_id')} hint={t('capabilities.declareDialog.externalIdHint')}>
-        {(ids) => (
-          <Input
-            id={ids.id}
-            aria-describedby={ids.describedBy}
-            autoComplete="off"
-            value={externalId}
-            onChange={(e) => setExternalId(e.target.value)}
-          />
-        )}
-      </Field>
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-foreground">
-          {t('capabilities.declareDialog.connectorPublic')}
-        </legend>
-        <p className="text-caption text-muted-foreground">{t('capabilities.declareDialog.connectorPublicHint')}</p>
-        <ListRows<{ key: string; value: string }>
-          items={settings}
-          onChange={setSettings}
-          makeItem={() => ({ key: '', value: '' })}
-          addLabel={t('capabilities.declareDialog.addSetting')}
-          removeLabel={t('strategy.remove')}
-          renderRow={(item, update) => (
-            <>
-              <Field label={t('capabilities.declareDialog.settingKey')}>
-                {(ids) => (
-                  <Input
-                    id={ids.id}
-                    className="font-mono"
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    value={item.key}
-                    onChange={(e) => update({ key: e.target.value })}
-                  />
-                )}
-              </Field>
-              <Field label={t('capabilities.declareDialog.settingValue')}>
-                {(ids) => <Input id={ids.id} value={item.value} onChange={(e) => update({ value: e.target.value })} />}
-              </Field>
-            </>
-          )}
-        />
-      </fieldset>
+      <Disclosure title={copy('advanced')}>
+        <div className="space-y-4">
+          <Field label={t('fields.external_id')} hint={t('capabilities.declareDialog.externalIdHint')}>
+            {(ids) => (
+              <Input
+                id={ids.id}
+                aria-describedby={ids.describedBy}
+                autoComplete="off"
+                value={externalId}
+                onChange={(e) => setExternalId(e.target.value)}
+              />
+            )}
+          </Field>
+          <fieldset className="flex flex-col gap-2">
+            <legend className="mb-1 text-sm font-medium text-foreground">
+              {t('capabilities.declareDialog.connectorPublic')}
+            </legend>
+            <p className="text-caption text-muted-foreground">{t('capabilities.declareDialog.connectorPublicHint')}</p>
+            <ListRows<{ key: string; value: string }>
+              items={settings}
+              onChange={setSettings}
+              makeItem={() => ({ key: '', value: '' })}
+              addLabel={t('capabilities.declareDialog.addSetting')}
+              removeLabel={t('strategy.remove')}
+              renderRow={(item, update) => (
+                <>
+                  <Field label={t('capabilities.declareDialog.settingKey')}>
+                    {(ids) => (
+                      <Input
+                        id={ids.id}
+                        className="font-mono"
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        value={item.key}
+                        onChange={(e) => update({ key: e.target.value })}
+                      />
+                    )}
+                  </Field>
+                  <Field label={t('capabilities.declareDialog.settingValue')}>
+                    {(ids) => <Input id={ids.id} value={item.value} onChange={(e) => update({ value: e.target.value })} />}
+                  </Field>
+                </>
+              )}
+            />
+          </fieldset>
+        </div>
+      </Disclosure>
     </FormDialog>
   );
 }

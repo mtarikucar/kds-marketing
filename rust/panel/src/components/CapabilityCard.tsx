@@ -13,6 +13,7 @@ import { PhoneCard } from '@/pages/capabilities/PhoneCard';
 import { VoiceBridgePanel } from '@/pages/capabilities/VoiceBridgePanel';
 import { connectsByOAuth, isConnectable, providerOf } from '@/lib/connectors';
 import { formatDateTime, formatHour, formatNumber, weekdayName } from '@/lib/format';
+import { useAbilityCopy } from '@/pages/capabilities/abilityCopy';
 
 export type CapabilityAction = 'verify' | 'edit' | 'policy' | 'unreachable' | 'link' | 'retire';
 
@@ -110,6 +111,7 @@ export function CapabilityCard({
   canUsePhones = false,
   livePhones = false,
   readAt,
+  usedBy = [],
 }: {
   item: CapabilityOut;
   budgetItems: readonly BudgetItemOut[];
@@ -131,8 +133,11 @@ export function CapabilityCard({
   livePhones?: boolean;
   /** When `item` was read (its query's `dataUpdatedAt`): a phone's age is told as of then. */
   readAt?: number;
+  /** Installed modules that explicitly bind this capability in the current workspace. */
+  usedBy?: readonly { id: string; name: string; href: string }[];
 }) {
   const { t, i18n } = useTranslation();
+  const copy = useAbilityCopy();
   const [expanded, setExpanded] = useState(false);
   const detailId = useId();
   const c = item.capability;
@@ -152,10 +157,13 @@ export function CapabilityCard({
           <CardTitle id={`${detailId}-title`} className="truncate" title={c.name}>
             {c.name}
           </CardTitle>
-          <p className="text-caption text-muted-foreground">
-            {kindLabel(t, c.kind_key)}{' '}
+          <p className="break-words text-caption text-muted-foreground [overflow-wrap:anywhere]">
+            {c.kind_key === 'other' ? copy('customLabel') : kindLabel(t, c.kind_key)}{' '}
             {c.key_detail && <> · {t('capabilities.keyDetail', { detail: c.key_detail })}</>}
           </p>
+          {usedBy.length > 0 && <div aria-label={copy('usedBy')} className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {usedBy.map(module => <Link key={module.id} to={module.href} className="break-words underline decoration-border underline-offset-4 hover:text-foreground">{module.name}</Link>)}
+          </div>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CapabilityStatusBadge status={item.effective_status} />
@@ -193,6 +201,7 @@ export function CapabilityCard({
       </CardHeader>
       <div id={detailId} hidden={!expanded}>
         <CardContent className="flex flex-1 flex-col gap-4 px-0 pb-6">
+          {c.kind_key === 'other' && <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{copy('executionNote')}</p>}
           {c.description && (
             <p className="whitespace-pre-wrap break-words text-sm leading-6 text-foreground">
               {c.description}

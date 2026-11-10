@@ -5,24 +5,24 @@ import {
   Bot,
   Compass,
   Home,
+  Plus,
+  Layers,
+  ChevronDown,
+  Activity,
   Inbox,
   KeyRound,
   LogOut,
-  Mail,
   Menu,
-  Phone,
   Plug,
   ShieldCheck,
-  Target,
-  UserRound,
   Users,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { logout, switchWorkspace } from '@/api/auth';
-import type { MeOut, Permission } from '@/api/types';
+import type { MeOut } from '@/api/types';
 import { SESSION_KEY, useSession } from '@/auth/useSession';
 import { WorkspaceStatusBadge } from '@/components/StatusBadges';
 import { QueryState } from '@/components/QueryState';
@@ -44,75 +44,63 @@ import {
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
-import { can, currentMembership } from '@/lib/roles';
+import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
+import { useModules, modulePath, moduleVisibleTo } from '@/lib/modules';
 
-type NavKey =
-  | 'studio'
-  | 'inbox'
-  | 'people'
-  | 'prospects'
-  | 'outreach'
-  | 'calls'
-  | 'home'
-  | 'strategy'
-  | 'capabilities'
-  | 'budget'
-  | 'team'
-  | 'roles'
-  | 'apiKeys'
-  | 'agents'
-  | 'ledger';
-
-/** The menu; an entry with a `permission` is listed only for those who hold it. */
-const NAV: { to: string; key: NavKey; Icon: LucideIcon; permission?: Permission }[] = [
-  { to: '/', key: 'home', Icon: Home },
-  { to: '/inbox', key: 'inbox', Icon: Inbox },
-  { to: '/people', key: 'people', Icon: UserRound },
-  { to: '/prospects', key: 'prospects', Icon: Target, permission: 'prospects.work' },
-  { to: '/outreach', key: 'outreach', Icon: Mail, permission: 'outreach.work' },
-  { to: '/calls', key: 'calls', Icon: Phone },
-  { to: '/strategy', key: 'strategy', Icon: Compass },
-  { to: '/capabilities', key: 'capabilities', Icon: Plug },
-  { to: '/budget', key: 'budget', Icon: Wallet },
-  { to: '/team', key: 'team', Icon: Users },
-  { to: '/roles', key: 'roles', Icon: ShieldCheck },
-  { to: '/api-keys', key: 'apiKeys', Icon: KeyRound },
-  { to: '/agents', key: 'agents', Icon: Bot },
-  { to: '/studio', key: 'studio', Icon: BookText },
-  { to: '/ledger', key: 'ledger', Icon: BookText },
-];
-
-const NAV_GROUPS: { label: 'workGroup' | 'growthGroup' | 'workspaceGroup'; keys: NavKey[] }[] = [
-  { label: 'workGroup', keys: ['home', 'inbox', 'people', 'prospects', 'outreach', 'calls'] },
-  { label: 'growthGroup', keys: ['strategy', 'studio'] },
-  { label: 'workspaceGroup', keys: ['capabilities', 'budget', 'team', 'roles', 'apiKeys', 'agents', 'ledger'] },
-];
+type NavItem = { to: string; label: string; Icon: LucideIcon };
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const tr = i18n.language.startsWith('tr');
   const me = useSession().data;
+  const modules = useModules();
+  const location = useLocation();
+  const core: NavItem[] = [
+    { to: '/', label: t('nav.home'), Icon: Home },
+    { to: '/inbox', label: t('nav.inbox'), Icon: Inbox },
+    { to: '/strategy', label: t('nav.strategy'), Icon: Compass },
+  ];
+  const management: NavItem[] = [
+    { to: '/capabilities', label: t('nav.capabilities'), Icon: Plug },
+    { to: '/agents', label: t('nav.agents'), Icon: Bot },
+    { to: '/activity', label: tr ? 'İş takibi' : 'Activity', Icon: Activity },
+    { to: '/budget', label: t('nav.budget'), Icon: Wallet },
+    { to: '/team', label: t('nav.team'), Icon: Users },
+    { to: '/roles', label: t('nav.roles'), Icon: ShieldCheck },
+    { to: '/api-keys', label: t('nav.apiKeys'), Icon: KeyRound },
+    { to: '/ledger', label: t('nav.ledger'), Icon: BookText },
+  ];
+  const link = ({ to, label, Icon }: NavItem) => (
+    <NavLink key={to} to={to} end={to === '/'} onClick={onNavigate}
+      className={({ isActive }) => cn(
+        'relative flex min-h-11 items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors md:min-h-9',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        isActive
+          ? 'bg-surface font-medium text-foreground shadow-xs before:absolute before:inset-y-3 before:start-0 before:w-0.5 before:bg-brand-accent'
+          : 'text-muted-foreground hover:bg-surface/70 hover:text-foreground',
+      )}>
+      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label}</span>
+    </NavLink>
+  );
   return <>
-    {NAV_GROUPS.map((group) => (
-      <div key={group.label} className="space-y-1">
-        <p className="px-3 pb-2 pt-4 text-xs text-muted-foreground">{t(`nav.${group.label}`)}</p>
-        {group.keys.map((key) => NAV.find((item) => item.key === key)!)
-          .filter(({ permission }) => !permission || can(me, permission))
-          .map(({ to, key, Icon }) => (
-            <NavLink key={to} to={to} end={to === '/'} onClick={onNavigate}
-              className={({ isActive }) => cn(
-                'relative flex min-h-11 items-center gap-3 rounded-md px-3 text-sm transition-colors md:min-h-9',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                isActive
-                  ? 'bg-surface font-medium text-foreground shadow-xs before:absolute before:inset-y-3 before:start-0 before:w-0.5 before:bg-brand-accent'
-                  : 'text-muted-foreground hover:bg-surface/70 hover:text-foreground',
-              )}>
-              <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {t(`nav.${key}`)}
-            </NavLink>
-          ))}
-      </div>
-    ))}
+    <div className="space-y-1 pt-4">{core.map(link)}</div>
+    <div className="space-y-1">
+      <p className="px-3 pb-2 pt-4 text-xs text-muted-foreground">{tr ? 'Eklenen modüller' : 'Installed modules'}</p>
+      {modules.isPending && <p className="px-3 py-2 text-xs text-muted-foreground" role="status">{t('common.loading')}</p>}
+      {modules.isError && <button className="px-3 py-2 text-left text-xs text-destructive underline" onClick={() => void modules.refetch()}>{tr ? 'Modüller yüklenemedi. Yeniden dene' : 'Modules unavailable. Retry'}</button>}
+      {modules.data?.modules.filter(m => m.installed && !m.required && moduleVisibleTo(m, me)).map(m => ({
+        to: modulePath(m), label: m.blueprint.name, Icon: Layers,
+      })).map(link)}
+      {link({ to: '/modules', label: tr ? 'Modül ekle' : 'Add module', Icon: Plus })}
+    </div>
+    <details className="group border-t border-border pt-3" open={management.some(item => location.pathname === item.to)}>
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between rounded-md px-3 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        {tr ? 'Yönetim' : 'Manage'}<ChevronDown aria-hidden="true" className="h-4 w-4 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-1">{management.map(link)}</div>
+    </details>
   </>;
 }
 

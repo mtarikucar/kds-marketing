@@ -26,6 +26,10 @@ import { OutreachTemplates } from '@/pages/OutreachTemplates';
 import { InboxMerges } from '@/pages/InboxMerges';
 import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
+import { ModulesPage } from '@/pages/modules/ModulesPage';
+import { ModuleDetailPage } from '@/pages/modules/ModuleDetailPage';
+import { WorkspaceActivityPage } from '@/pages/modules/WorkspaceActivityPage';
+import { ModuleGate } from '@/layout/ModuleGate';
 import { LedgerPage } from '@/pages/LedgerPage';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
@@ -81,23 +85,26 @@ export const routes: RouteObject[] = [
         element: <Shell />,
         children: [
           { index: true, element: <HomePage /> },
+          { path: 'modules', element: <ModulesPage /> },
+          { path: 'modules/:moduleId', element: <ModuleDetailPage /> },
+          { path: 'activity', element: <WorkspaceActivityPage /> },
           { path: 'billing', element: <BillingPage /> },
           { path: 'onboarding', element: <OnboardingPage /> },
           { path: 'inbox', element: <InboxPage /> },
           { path: 'inbox/:conversationId', element: <InboxPage /> },
           { path: 'inbox/merges', element: <InboxMerges /> },
           { path: 'inbox/commissions', element: <InboxCommissions /> },
-          { path: 'people', element: <PeoplePage /> },
-          { path: 'prospects', element: <ProspectsPage /> },
-          { path: 'prospects/tasks', element: <ResearchTasksPage /> },
-          { path: 'prospects/:prospectId', element: <ProspectDetail /> },
-          { path: 'outreach', element: <OutreachPage /> },
-          { path: 'outreach/templates', element: <OutreachTemplates /> },
-          { path: 'outreach/settings', element: <OutreachSettings /> },
-          { path: 'outreach/new', element: <OutreachCampaign /> },
-          { path: 'outreach/:campaignId', element: <OutreachCampaign /> },
-          { path: 'calls', element: <CallsPage /> },
-          { path: 'calls/:callId', element: <CallDetail /> },
+          { path: 'people', element: <ModuleGate moduleId="people"><PeoplePage /></ModuleGate> },
+          { path: 'prospects', element: <ModuleGate moduleId="prospects"><ProspectsPage /></ModuleGate> },
+          { path: 'prospects/tasks', element: <ModuleGate moduleId="prospects"><ResearchTasksPage /></ModuleGate> },
+          { path: 'prospects/:prospectId', element: <ModuleGate moduleId="prospects"><ProspectDetail /></ModuleGate> },
+          { path: 'outreach', element: <ModuleGate moduleId="outreach"><OutreachPage /></ModuleGate> },
+          { path: 'outreach/templates', element: <ModuleGate moduleId="outreach"><OutreachTemplates /></ModuleGate> },
+          { path: 'outreach/settings', element: <ModuleGate moduleId="outreach"><OutreachSettings /></ModuleGate> },
+          { path: 'outreach/new', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
+          { path: 'outreach/:campaignId', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
+          { path: 'calls', element: <ModuleGate moduleId="calls"><CallsPage /></ModuleGate> },
+          { path: 'calls/:callId', element: <ModuleGate moduleId="calls"><CallDetail /></ModuleGate> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },
@@ -110,7 +117,7 @@ export const routes: RouteObject[] = [
           { path: 'api-keys', element: <ApiKeysPage /> },
           { path: 'agents', element: <AgentsPage /> },
           { path: 'ledger', element: <LedgerPage /> },
-          { path: 'studio', element: <StudioPage /> },
+          { path: 'studio', element: <ModuleGate moduleId="growth-studio"><StudioPage /></ModuleGate> },
         ],
       },
       { path: '*', element: <NotFoundPage /> },

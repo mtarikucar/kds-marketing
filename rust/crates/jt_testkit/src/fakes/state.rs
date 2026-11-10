@@ -118,6 +118,7 @@ pub struct StoredWorkspacePolicy {
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
+    pub module_registries: Vec<(WorkspaceId, serde_json::Value)>,
     pub payments: Vec<jt_app::ports::billing::PaymentNotification>,
     pub entitlements: Vec<jt_app::ports::billing::WorkspaceEntitlement>,
     pub activation_codes: Vec<jt_app::ports::billing::ActivationCodeRow>,

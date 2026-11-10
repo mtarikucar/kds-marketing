@@ -256,7 +256,7 @@ describe('PhoneCard', () => {
       },
     });
     renderAt('/capabilities');
-    await screen.findByText(tr.capabilities.empty);
+    await screen.findByRole('heading', { name: 'İlk yeteneğinizi ekleyin' });
     // Pairing is offered on the Devices tab.
     expect(screen.queryByRole('button', { name: tr.capabilities.phone.pair.open })).toBeNull();
     await selectDevices(user);
@@ -311,7 +311,7 @@ describe('PhoneCard', () => {
       mockFetch({ ...answers(), 'GET /api/auth/me': who, 'GET /api/capabilities': [] });
       const { unmount } = renderAt('/capabilities');
       await selectDevices(user);
-      await screen.findByText(tr.capabilities.empty);
+      await screen.findByRole('heading', { name: 'İlk yeteneğinizi ekleyin' });
       expect(screen.queryByRole('button', { name: tr.capabilities.phone.pair.open })).toBeNull();
       unmount();
     }
@@ -436,7 +436,7 @@ describe('PhoneCard', () => {
       await waitFor(() => expect(count('/api/capabilities', '?group=device')).toBe(phones + 2));
 
       // Back to every kind: the refresh stops.
-      await user.click(screen.getByRole('button', { name: tr.capabilities.workbench.goals.all.label }));
+      await user.click(screen.getByRole('button', { name: 'Tüm yetenekler' }));
       await panelOf('Galaxy A52 (R58M00000XX)', user);
       const [still, stillLogged] = [count('/api/capabilities', '?group=device'), count(LOG)];
       await vi.advanceTimersByTimeAsync(31_000);

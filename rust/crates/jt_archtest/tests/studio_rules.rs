@@ -196,7 +196,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 227);
+    assert_eq!(jt_mcp::registry().len(), 231);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -220,8 +220,9 @@ async fn studio_exact_catalog_and_gate_set() {
     // the materials library's seven of 0021_studio_materials, the planned posts, package requests
     // and posting policy of 0022_studio_posts, the four outreach tables of 0026_outreach, the
     // three distribution tables of 0027_distribution, mail files of 0028_mail_files, and
-    // material intelligence and productions of 0029 and 0030.
-    assert_eq!(all_tables.len(), 103);
+    // material intelligence and productions of 0029 and 0030, production projects of 0031,
+    // and the workspace module registry of 0032.
+    assert_eq!(all_tables.len(), 104);
 
     // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(

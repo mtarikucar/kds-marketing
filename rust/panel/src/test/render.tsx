@@ -5,6 +5,7 @@ import { RouterProvider, createMemoryRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import { PROVIDER_FUTURE, ROUTER_FUTURE, routes } from '@/App';
 import { setUnauthorizedHandler } from '@/api/client';
+import { legacyModules } from '@/test/modules';
 
 /** Canned answers keyed by `"<METHOD> <path>"`, e.g. `"GET /api/team"`. */
 export type FetchRoutes = Record<string, unknown>;
@@ -62,6 +63,11 @@ export function mockFetch(answers: FetchRoutes): FetchCall[] {
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     calls.push({ method, path: url.pathname, search: url.search, headers: new Headers(init?.headers), body });
     const key = `${method} ${url.pathname}`;
+    // Existing page tests run in a migrated workspace with the prior modules installed.
+    // Individual module tests override this explicitly to exercise empty/error/removed states.
+    if (key === 'GET /api/workspace/modules' && !(key in answers)) {
+      return new Response(JSON.stringify(legacyModules), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
     if (key in answers) {
       let answer = answers[key];
       if (isDelayedAnswer(answer)) {

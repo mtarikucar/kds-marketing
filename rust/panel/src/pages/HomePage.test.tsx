@@ -23,10 +23,10 @@ const submitted = {
   strategy: { submitted: { version_id: DRAFT_ID, submitted_at: '2026-10-22T10:00:00Z' } },
 };
 
-describe('HomePage', () => {
+describe('WorkspaceActivityPage', () => {
   it('shows the workspace, its status and the missing strategy with its call to action', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': pendingOverdue });
-    renderAt('/');
+    renderAt('/activity');
     expect(await screen.findByRole('heading', { level: 1, name: tr.home.title })).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: workspace.name })).toBeInTheDocument();
     expect(screen.getAllByText(tr.status.workspace.pending_payment).length).toBeGreaterThan(0);
@@ -41,7 +41,7 @@ describe('HomePage', () => {
       'GET /api/workspace': workspace,
       'GET /api/work/pending': { ...pendingOverdue, agent: { last_seen_at: null, interval_minutes: 1440, overdue: true } },
     });
-    renderAt('/');
+    renderAt('/activity');
     const note = await screen.findByText(tr.home.agent.neverTitle);
     expect(note.closest('[role="alert"]')).toBeNull();
     expect(screen.queryByText(tr.home.agent.overdueTitle)).not.toBeInTheDocument();
@@ -50,7 +50,7 @@ describe('HomePage', () => {
 
   it('warns in red when the agent is overdue, and lists each pending item in its own words', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': pendingOverdue });
-    renderAt('/');
+    renderAt('/activity');
     const warning = await screen.findByText(tr.home.agent.overdueTitle);
     expect(warning.closest('[role="alert"]')).not.toBeNull();
     expect(screen.getByText(tr.home.agent.schedulerNote)).toBeInTheDocument();
@@ -76,7 +76,7 @@ describe('HomePage', () => {
       ],
     };
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': connector });
-    renderAt('/');
+    renderAt('/activity');
     const text = await screen.findByText(i18n.t('home.pending.connect_connector', { name: 'Marka Instagram' }));
     expect(text).toHaveTextContent('Marka Instagram');
     expect(screen.queryByText('connect it')).not.toBeInTheDocument();
@@ -84,7 +84,7 @@ describe('HomePage', () => {
 
   it('offers the approval shortcut only to someone who may approve', async () => {
     mockFetch({ 'GET /api/auth/me': repMe, 'GET /api/workspace': workspace, 'GET /api/work/pending': submitted });
-    renderAt('/');
+    renderAt('/activity');
     expect(await screen.findByText(tr.home.strategy.submittedTitle)).toBeInTheDocument();
     expect(screen.getByText(tr.home.strategy.submittedWait)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: tr.home.strategy.approve })).not.toBeInTheDocument();
@@ -103,7 +103,7 @@ describe('HomePage', () => {
       'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', assumptions: [] },
     });
     const approvals = () => calls.filter((c) => c.method === 'POST' && c.path === '/api/strategy/draft/approve');
-    renderAt('/');
+    renderAt('/activity');
     await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText('Öğrenciler akşamları sipariş verir')).toBeInTheDocument();
@@ -130,7 +130,7 @@ describe('HomePage', () => {
       },
       'POST /api/strategy/draft/approve': { ...draftVersion, status: 'approved', assumptions: [] },
     });
-    renderAt('/');
+    renderAt('/activity');
     await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
     const dialog = await screen.findByRole('dialog');
     await within(dialog).findByText('Öğrenciler akşamları sipariş verir');
@@ -158,7 +158,7 @@ describe('HomePage', () => {
         'GET /api/work/pending': submitted,
         'GET /api/strategy': { ...strategyWithDraft, draft },
       });
-      const { unmount } = renderAt('/');
+      const { unmount } = renderAt('/activity');
       await user.click(await screen.findByRole('button', { name: tr.home.strategy.approve }));
       const dialog = await screen.findByRole('dialog');
       expect(await within(dialog).findByText(reason)).toBeInTheDocument();
@@ -183,7 +183,7 @@ describe('HomePage', () => {
       ],
     };
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': reconnect });
-    renderAt('/');
+    renderAt('/activity');
     const text = await screen.findByText(i18n.t('home.pending.reconnect_connector', { name: 'Atölye sayfası' }));
     const row = text.closest('li') as HTMLElement;
     expect(within(row).getByRole('link', { name: tr.home.pending.reconnect })).toHaveAttribute(
@@ -208,7 +208,7 @@ describe('HomePage', () => {
       ],
     };
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': offline });
-    renderAt('/');
+    renderAt('/activity');
     const text = await screen.findByText(i18n.t('home.pending.voice_bridge_offline', { name: 'Voice bridge 101' }));
     const row = text.closest('li') as HTMLElement;
     expect(within(row).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', '/capabilities');
@@ -230,7 +230,7 @@ describe('HomePage', () => {
       ],
     };
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': offline });
-    renderAt('/');
+    renderAt('/activity');
     const text = await screen.findByText(i18n.t('home.pending.phone_offline', { name: 'Redmi 10C (SER1)' }));
     const row = text.closest('li') as HTMLElement;
     expect(within(row).getByRole('link', { name: tr.home.pending.open })).toHaveAttribute('href', '/capabilities');
@@ -245,7 +245,7 @@ describe('HomePage', () => {
       agent: { ...pendingOverdue.agent, overdue: false },
     };
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': draft });
-    renderAt('/');
+    renderAt('/activity');
     expect(await screen.findByText(tr.home.strategy.draftTitle)).toBeInTheDocument();
     expect(screen.getByText(i18n.t('home.strategy.draftBody', { count: 1 }))).toBeInTheDocument();
     // The panel's own sentence, never the server's English message.
@@ -261,7 +261,7 @@ describe('HomePage', () => {
       items: [{ kind: 'inbound_events' as const, count, priority: 2, hint: 'read them' }],
     });
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(3) });
-    const { unmount } = renderAt('/');
+    const { unmount } = renderAt('/activity');
     const item = await screen.findByText(i18n.t('home.pending.inbound_events', { count: 3, n: '3' }));
     // The agent handles them: nothing for the person to open.
     expect(within(item.closest('li') as HTMLElement).queryByRole('link')).not.toBeInTheDocument();
@@ -269,7 +269,7 @@ describe('HomePage', () => {
     unmount();
 
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace, 'GET /api/work/pending': withEvents(1000) });
-    renderAt('/');
+    renderAt('/activity');
     expect(
       await screen.findByText(i18n.t('home.pending.inbound_events', { count: 1000, n: '1000+' })),
     ).toBeInTheDocument();
@@ -305,7 +305,7 @@ it('links all four inbox work kinds to actionable destinations', async () => {
       { kind: 'task_due', task_id: 'task-1', priority: 3, hint: 'private hint' },
     ] },
   });
-  renderAt('/');
+  renderAt('/activity');
   for (const [copy, href] of [
     [tr.home.pending.reply_due, '/inbox/conv-1'],
     [tr.home.pending.reopen_question, '/inbox/conv-2'],
@@ -339,7 +339,7 @@ it('opens the relevant research, prospect, distribution and outreach work instea
     'GET /api/workspace': workspace,
     'GET /api/work/pending': { ...pendingOverdue, items: cases.map(({ item }) => item) },
   });
-  renderAt('/');
+  renderAt('/activity');
   await userEvent.setup().click(await screen.findByRole('button',{name:'Tüm işleri göster (10)'}));
   for (const { item, href } of cases) {
     const text = await screen.findByText(i18n.t(`home.pending.${item.kind}`));

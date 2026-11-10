@@ -37,8 +37,8 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// posting policy of `0022_studio_posts`, the templates, campaigns, enrollments and sends of
 /// `0026_outreach`, the rep profiles, rules and assignment log of `0027_distribution`, and the
 /// mail files of `0028_mail_files` and the material intelligence and production tables of
-/// `0029` and `0030`, plus production projects of `0031`.
-const TABLES_AFTER_ALL: i64 = 103;
+/// `0029` and `0030`, production projects of `0031`, and workspace modules of `0032`.
+const TABLES_AFTER_ALL: i64 = 104;
 
 /// The tables before `0028_mail_files` adds `mail_files`.
 const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
@@ -46,12 +46,12 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0031_production_projects`.
-const MIGRATIONS: i64 = 31;
+/// Migrations `0001_foundation` through `0032_workspace_modules`.
+const MIGRATIONS: i64 = 32;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
-    (1..=31).collect()
+    (1..=MIGRATIONS).collect()
 }
 
 /// The tables of `0019_inbox_public`, each with its one row-level policy.
@@ -259,6 +259,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0032_workspace_modules",
         "0031_production_projects",
         "0030_material_productions",
         "0029_material_intelligence",
@@ -1339,6 +1340,7 @@ async fn studio_migration_up_down_up() {
         include_str!("../../../../migrations/0029_material_intelligence.up.sql"),
         include_str!("../../../../migrations/0030_material_productions.up.sql"),
         include_str!("../../../../migrations/0031_production_projects.up.sql"),
+        include_str!("../../../../migrations/0032_workspace_modules.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1367,10 +1369,12 @@ async fn outreach_down(pool: &PgPool) {
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
 }
 
-/// Revert the project trigger extension before dropping the canonical posts table.
-/// Historical full rollbacks remove this independent project table as well; narrower
-/// library-side-table checks intentionally retain it in TABLES_AFTER_ALL-based counts.
+/// Revert the independent module registry and the project trigger extension before restoring
+/// historical schemas. Narrower library-side-table checks intentionally retain these tables
+/// in TABLES_AFTER_ALL-based counts.
 async fn project_tables_down(pool: &PgPool) {
+    let modules_down = include_str!("../../../../migrations/0032_workspace_modules.down.sql");
+    try_run(pool, modules_down).await.unwrap();
     let down = include_str!("../../../../migrations/0031_production_projects.down.sql");
     try_run(pool, down).await.unwrap();
 }

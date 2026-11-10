@@ -40,11 +40,14 @@ import {
 } from '@/lib/capabilityGoals';
 import { kindLabel } from '@/lib/capabilities';
 import { PurposePanel } from './capabilities/PurposePanel';
+import { AddAbilityDialog } from './capabilities/AddAbilityDialog';
+import { useAbilityCopy } from './capabilities/abilityCopy';
 import { browser, providerUrl } from '@/lib/browser';
 import { connectsByOAuth, isErrorKind, providerOf } from '@/lib/connectors';
 import { errorMessage } from '@/lib/errors';
 import { rememberStart } from '@/lib/oauthFlow';
 import { can } from '@/lib/roles';
+import { moduleSettingsPath, useModules } from '@/lib/modules';
 import {
   DeclareDialog,
   EditDialog,
@@ -165,6 +168,9 @@ function ProbeDialog({
 
 export function CapabilitiesPage() {
   const { t, i18n } = useTranslation();
+  const copy = useAbilityCopy();
+  const modules = useModules();
+  const installedModules = modules.data?.modules.filter(module => module.installed) ?? [];
   const queryClient = useQueryClient();
   const session = useSession();
   const navigate = useNavigate();
@@ -183,9 +189,11 @@ export function CapabilitiesPage() {
   const [page, setPage] = useState(1);
   const [section, setSection] = useState('connections');
   const [search, setSearch] = useState('');
+  const [moduleFilter, setModuleFilter] = useState('all');
   const [status, setStatus] = useState<'all' | 'attention' | 'verified' | 'retired'>('all');
   const chooseGoal = (next: CapabilityGoal) => {
     setFilter('all');
+    setModuleFilter('all');
     setPage(1);
     setParams((previous) => {
       const copy = new URLSearchParams(previous);
@@ -203,6 +211,12 @@ export function CapabilitiesPage() {
 
   const [probed, setProbed] = useState<{ name: string; out: ProbeOut } | null>(null);
   const [declaring, setDeclaring] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [initialKind, setInitialKind] = useState<string | undefined>();
+  const openDeclare = (kind?: string) => {
+    setInitialKind(kind);
+    setDeclaring(true);
+  };
   const [action, setAction] = useState<{ kind: CapabilityAction; item: CapabilityOut } | null>(null);
 
   // The filter is the server's `group` parameter; the unfiltered list also feeds the groups panel.
@@ -280,6 +294,9 @@ export function CapabilitiesPage() {
   const needle = search.trim().toLocaleLowerCase(i18n.language);
   const items = source
     .filter((item) => matchesGoal(item, goal))
+    .filter((item) => moduleFilter === 'all' || (moduleFilter === 'unassigned'
+      ? !installedModules.some(module => module.config.capability_ids.includes(item.capability.id))
+      : installedModules.some(module => module.blueprint.id === moduleFilter && module.config.capability_ids.includes(item.capability.id))))
     .filter((item) => {
       if (status === 'attention' && !needsCapabilityAttention(item, healthOf(item.capability.id)))
         return false;
@@ -290,6 +307,8 @@ export function CapabilitiesPage() {
         [
           item.capability.name,
           item.capability.external_id ?? '',
+          item.capability.key_detail ?? '',
+          item.capability.description ?? '',
           kindLabel(t, item.capability.kind_key),
         ].some((value) => value.toLocaleLowerCase(i18n.language).includes(needle))
       );
@@ -298,13 +317,13 @@ export function CapabilitiesPage() {
   const activePage = Math.min(page, pageCount);
   const visibleItems = items.slice((activePage - 1) * 8, activePage * 8);
   const firstConnection = all.isSuccess && all.data.length === 0;
-  const filtered = goal !== 'all' || filter !== 'all' || status !== 'all' || !!search;
+  const filtered = goal !== 'all' || filter !== 'all' || status !== 'all' || moduleFilter !== 'all' || !!search;
 
   return (
     <>
       <WorkspaceHeader scene={firstConnection ? undefined : 'connections'}
-        title={t('capabilities.title')}
-        description={t('capabilities.description')}
+        title={copy('title')}
+        description={copy('description')}
         actions={
           canManage ? (
             <>
@@ -314,18 +333,18 @@ export function CapabilitiesPage() {
                   {t('connect.open')}
                 </Link>
               </Button>
-              <Button onClick={() => setDeclaring(true)}>
+              <Button onClick={() => setAdding(true)}>
                 <Plus className="h-4 w-4" aria-hidden="true" />
-                {t('capabilities.declare')}
+                {copy('add')}
               </Button>
             </>
           ) : null
         }
       />
       <Tabs value={section} onValueChange={setSection}>
-        <TabsList aria-label={t('capabilities.title')} className="flex w-full flex-wrap">
+        <TabsList aria-label={copy('title')} className="flex w-full flex-wrap">
           <TabsTrigger value="connections" className="min-h-11 px-3 sm:px-4">
-            {t('capabilities.workbench.inventory')}
+            {copy('inventory')}
           </TabsTrigger>
           <TabsTrigger value="groups" className="min-h-11 px-3 sm:px-4">
             {t('capabilities.workbench.groupsTab')}
@@ -342,7 +361,7 @@ export function CapabilitiesPage() {
             onChange={chooseGoal}
             canManage={canManage}
             canPair={canPair}
-            onDeclare={() => setDeclaring(true)}
+            onDeclare={() => openDeclare(goal === 'custom' ? 'other' : undefined)}
             onDevices={() => {
               setFilter('device');
               setPage(1);
@@ -354,10 +373,10 @@ export function CapabilitiesPage() {
               <>
                 <div className="flex flex-wrap items-end justify-between gap-3">
                   <div>
-                    <h2 className="text-lg font-medium">{t('capabilities.workbench.inventory')}</h2>
+                    <h2 className="text-lg font-medium">{copy('inventory')}</h2>
                     {listed.isSuccess && (
                       <p className="mt-1 text-caption text-muted-foreground" role="status">
-                        {t('capabilities.workbench.count', { count: items.length })}
+                        {items.length} {copy('countSuffix')}
                       </p>
                     )}
                   </div>
@@ -393,6 +412,16 @@ export function CapabilitiesPage() {
                       </option>
                     ))}
                   </select>
+                  {modules.isSuccess && <select
+                    aria-label={copy('moduleFilter')}
+                    value={moduleFilter}
+                    onChange={e => { setModuleFilter(e.target.value); setPage(1); }}
+                    className="h-10 min-w-0 max-w-full rounded-md border border-input bg-surface px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:max-w-56"
+                  >
+                    <option value="all">{copy('allModules')}</option>
+                    <option value="unassigned">{copy('unassigned')}</option>
+                    {installedModules.map(module => <option key={module.blueprint.id} value={module.blueprint.id}>{module.blueprint.name}</option>)}
+                  </select>}
                 </div>
                 <Disclosure title={t('capabilities.workbench.advanced')}>
                   <FilterChips
@@ -417,7 +446,7 @@ export function CapabilitiesPage() {
                 ) : (
                   <section
                     className="flex items-start gap-4 border-y border-border bg-surface p-4 sm:items-center sm:gap-6 sm:p-6"
-                    aria-label={t('capabilities.empty')}
+                    aria-label={copy('emptyTitle')}
                   >
                     <img
                       src="/brand/editorial/connections-320.webp"
@@ -429,13 +458,9 @@ export function CapabilitiesPage() {
                     />
                     <div className="min-w-0 space-y-3">
                       <div>
-                        <h3 className="text-base font-medium">{t('capabilities.empty')}</h3>
+                        <h3 className="text-base font-medium">{copy('emptyTitle')}</h3>
                         <p className="mt-1 max-w-lg text-sm leading-6 text-muted-foreground">
-                          {t(
-                            canManage
-                              ? 'capabilities.workbench.startHelp'
-                              : 'capabilities.workbench.managerNeeded',
-                          )}
+                          {canManage ? copy('emptyBody') : t('capabilities.workbench.managerNeeded')}
                         </p>
                       </div>
                       {canManage && (
@@ -466,6 +491,9 @@ export function CapabilitiesPage() {
                       canUsePhones={canUsePhones}
                       livePhones={devices}
                       readAt={listed.dataUpdatedAt}
+                      usedBy={installedModules.filter(module => module.config.capability_ids.includes(item.capability.id)).map(module => ({
+                        id: module.blueprint.id, name: module.blueprint.name, href: moduleSettingsPath(module.blueprint.id),
+                      }))}
                     />
                   ))}
                 </div>
@@ -508,7 +536,11 @@ export function CapabilitiesPage() {
 
       {canManage && (
         <>
-          <DeclareDialog open={declaring} onOpenChange={setDeclaring} />
+          <AddAbilityDialog open={adding} onOpenChange={setAdding} onDeclare={openDeclare} onDevices={() => {
+            setSection('connections');
+            chooseGoal('devices');
+          }} />
+          <DeclareDialog open={declaring} onOpenChange={setDeclaring} initialKind={initialKind} />
           <EditDialog target={target('edit')} onClose={close} />
           <VerifyDialog target={target('verify')} onClose={close} />
           <PolicyDialog target={target('policy')} onClose={close} />

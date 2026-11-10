@@ -17,6 +17,7 @@ mod distribution;
 mod events;
 mod inbox;
 mod ledger;
+mod modules;
 mod outreach;
 mod projects;
 mod prospects;
@@ -53,6 +54,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         projects::definitions(),
         agents::definitions(),
         workspace::definitions(),
+        modules::definitions(),
         team::definitions(),
         roles::definitions(),
         api_keys::definitions(),

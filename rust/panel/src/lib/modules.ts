@@ -1,0 +1,51 @@
+import { useQuery } from '@tanstack/react-query';
+import { getModules, type Blueprint, type WorkspaceModule } from '@/api/modules';
+import { useSession } from '@/auth/useSession';
+
+export const modulesKey = (workspaceId: string | null | undefined) => ['workspace-modules', workspaceId] as const;
+export function useModules() {
+  const workspaceId = useSession().data?.current_workspace;
+  return useQuery({ queryKey: modulesKey(workspaceId), queryFn: getModules, enabled: !!workspaceId });
+}
+const BUILTIN_PATHS: Record<string, string> = {
+  inbox: '/inbox', strategy: '/strategy', 'growth-studio': '/studio', people: '/people',
+  prospects: '/prospects', outreach: '/outreach', calls: '/calls',
+};
+export function modulePath(module: WorkspaceModule | Blueprint): string {
+  const blueprint = 'blueprint' in module ? module.blueprint : module;
+  return blueprint.builtin && BUILTIN_PATHS[blueprint.id]
+    ? BUILTIN_PATHS[blueprint.id]
+    : `/modules/${encodeURIComponent(blueprint.id)}`;
+}
+export function moduleSettingsPath(id: string): string { return `/modules/${encodeURIComponent(id)}`; }
+export function lines(value: string): string[] { return value.split('\n').map(line => line.trim()).filter(Boolean); }
+/** Export only portable definitions. Workspace IDs, credentials and agent assignments never travel. */
+export function portableBlueprint(blueprint: Blueprint): Omit<Blueprint, 'builtin'> {
+  const { id, name, description, version, requirements, workflow } = blueprint;
+  return { id, name, description, version, requirements, workflow };
+}
+export function parseBlueprint(value: unknown): Blueprint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+  const allowed = new Set(['id', 'name', 'description', 'version', 'requirements', 'workflow']);
+  if (Object.keys(v).some(key => !allowed.has(key))) return null;
+  if (typeof v.id !== 'string' || !/^[a-z][a-z0-9_-]{1,63}$/.test(v.id)) return null;
+  if (typeof v.name !== 'string' || !v.name.trim() || v.name.length > 120) return null;
+  if (typeof v.description !== 'string' || v.description.length > 2000) return null;
+  if (typeof v.version !== 'string' || !v.version.trim() || v.version.length > 32) return null;
+  for (const key of ['requirements', 'workflow']) {
+    const a = v[key];
+    if (!Array.isArray(a) || a.length > 50 || a.some(x => typeof x !== 'string' || !x.trim() || x.length > 500)) return null;
+  }
+  return { id: v.id, name: v.name.trim(), description: v.description, version: v.version,
+    requirements: v.requirements as string[], workflow: v.workflow as string[], builtin: false };
+}
+
+/** Domain permissions remain in force when an optional module is installed. */
+export function moduleVisibleTo(module: WorkspaceModule | Blueprint, me: import('@/api/types').MeOut | undefined): boolean {
+  const blueprint = 'blueprint' in module ? module.blueprint : module;
+  const membership = me?.memberships.find(m => m.workspace_id === me.current_workspace);
+  if (!blueprint.builtin) return true;
+  const permission = ({ prospects: 'prospects.work', outreach: 'outreach.work' } as const)[blueprint.id as 'prospects' | 'outreach'];
+  return !permission || !!membership?.permissions.includes(permission);
+}

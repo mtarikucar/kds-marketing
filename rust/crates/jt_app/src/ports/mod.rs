@@ -665,6 +665,10 @@ pub trait LedgerRepo: Send + Sync {
 /// The workspace's own row.
 #[async_trait]
 pub trait WorkspaceRepo: Send + Sync {
+    /// Declarative module registry, isolated to this workspace.
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError>;
+    /// Caller holds the workspace lock for read/modify/write.
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError>;
     /// Serializes billing/status writers; held until transaction commit/drop.
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError>;
     /// Writes status and its reason/actor audit atomically; refuses another workspace.
