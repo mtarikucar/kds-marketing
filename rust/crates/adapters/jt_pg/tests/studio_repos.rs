@@ -45,10 +45,11 @@ async fn studio_schema_exact_table_delta() {
     // public items, subjects and cursors (0019_inbox_public), the pool (0020_prospects), the
     // materials library's seven (0021_studio_materials), the planned posts, package requests and
     // posting policy (0022_studio_posts), outreach (0026_outreach), distribution
-    // (0027_distribution), mail files (0028), intelligence (0029) and productions (0030).
+    // (0027_distribution), mail files (0028), intelligence (0029), productions (0030),
+    // production projects (0031) and the workspace module registry (0032).
     assert_eq!(
         count,
-        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3
+        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1
     );
 }
 
@@ -168,7 +169,8 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .await
     .unwrap();
     // 14 Studio tables, the materials library's seven (0021_studio_materials) and the three of
-    // olay-driven publishing (0022_studio_posts), intelligence (0029) and productions (0030).
+    // olay-driven publishing (0022_studio_posts), intelligence (0029), productions (0030),
+    // and production projects (0031). The module registry is outside the studio_ namespace.
     assert_eq!(tables.len(), 14 + 7 + 3 + 3);
     for table in tables {
         let forced: bool = sqlx::query_scalar(

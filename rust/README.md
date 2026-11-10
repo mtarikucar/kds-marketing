@@ -84,7 +84,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Yirmi yedi göç vardır (`0028` bu dalın ekleri için L6 ile gelir):
+döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 
 | Göç | Ne yapar |
 |---|---|
@@ -117,7 +117,10 @@ döndürür. Yirmi yedi göç vardır (`0028` bu dalın ekleri için L6 ile geli
 | `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 99 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
 | `0028_mail_files` | E-posta ekleri (leads L6): `mail_files`, one row per attachment kept or skipped (inbound `stored`/`skipped`, outbound `staged`/`attached`, `deleted` once its bytes went; the bytes live in the file store as `application/octet-stream`, never here) (forced RLS; 100 tables). Down drops the table (the files left in the store go with the store's daily sweep of files no record keeps), and is refused while an outbox entry waiting to be sent names mail files. |
 
+| `0029_material_intelligence` | Material analysis records and agent claims in `studio_material_intelligence`, with tenant isolation and FORCE RLS (101 tables). |
+| `0030_material_productions` | Revisioned image-production tasks and source provenance in `studio_material_productions`, with tenant isolation and FORCE RLS (102 tables). |
 | `0031_production_projects` | Tenant-scoped production projects with revisioned JSON records and FORCE RLS (103 tables). Adds the `project` package-request trigger used by the existing post scheduler. Down inspects all tenants and refuses while any project or project-trigger request remains. |
+| `0032_workspace_modules` | Tenant-scoped, revisioned declarative module registry in `workspace_modules` with FORCE RLS (104 tables). Existing workspaces retain their installed sections; new workspaces start with Inbox and Strategy. Down refuses while a registry contains configuration beyond the migration seed. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
