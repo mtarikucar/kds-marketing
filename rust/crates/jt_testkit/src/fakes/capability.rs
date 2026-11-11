@@ -515,6 +515,28 @@ impl CapabilityGroupRepo for MemTenant {
     }
 }
 
+/// The table's rules for the general ad budget (`0039_general_ad_budget`): the check that only
+/// an `ad_budget` in a currency with a period that is not `total` is general, and the unique
+/// index of one live general item per workspace.
+fn general_rule(state: &MemState, item: &BudgetItem) -> Result<(), AppError> {
+    if !item.general {
+        return Ok(());
+    }
+    if !item.can_be_general() {
+        return Err(AppError::internal("budget_items_general_rule"));
+    }
+    unique(
+        item.retired_at.is_some()
+            || !state.budget_items.iter().any(|i| {
+                i.workspace_id == item.workspace_id
+                    && i.id != item.id
+                    && i.general
+                    && i.retired_at.is_none()
+            }),
+        "the workspace has a general ad budget",
+    )
+}
+
 #[async_trait]
 impl BudgetRepo for MemTenant {
     /// The cap's check constraint first, then the unique id, then the workspace reference, in the
@@ -532,6 +554,7 @@ impl BudgetRepo for MemTenant {
                 "the budget item id is already taken",
             )?;
             exists(state.workspace(ws).is_some(), "budget_items.workspace_id")?;
+            general_rule(state, &item)?;
             this.tx.write(move |s| s.budget_items.push(item.clone()));
             Ok(())
         })
@@ -570,12 +593,14 @@ impl BudgetRepo for MemTenant {
                 return Err(AppError::internal("budget_items.cap must not be negative"));
             }
             ensure_item(this.state(), ws, item.id)?;
+            general_rule(this.state(), &item)?;
             this.tx.write(move |s| {
                 if let Some(stored) = s
                     .budget_items
                     .iter_mut()
                     .find(|i| i.workspace_id == ws && i.id == item.id)
                 {
+                    stored.general = item.general;
                     stored.name = item.name.clone();
                     stored.cap = item.cap;
                     stored.unit_cost_minor = item.unit_cost_minor;
@@ -685,6 +710,38 @@ impl BudgetRepo for MemTenant {
             .map(|s| i128::from(s.amount))
             .sum();
         Ok(i64::try_from(sum).unwrap_or(i64::MAX))
+    }
+
+    async fn spend_slices(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<jt_app::ports::SpendSlice>, AppError> {
+        let mut sums: std::collections::BTreeMap<
+            (BudgetItemId, Option<String>, Option<uuid::Uuid>),
+            i128,
+        > = Default::default();
+        for s in self
+            .state()
+            .budget_spend
+            .iter()
+            .filter(|s| s.workspace_id == self.ws && s.at >= from && s.at < to)
+        {
+            *sums
+                .entry((s.budget_item_id, s.module.clone(), s.campaign_id))
+                .or_default() += i128::from(s.amount);
+        }
+        Ok(sums
+            .into_iter()
+            .map(
+                |((budget_item_id, module, campaign_id), amount)| jt_app::ports::SpendSlice {
+                    budget_item_id,
+                    module,
+                    campaign_id,
+                    amount: i64::try_from(amount).unwrap_or(i64::MAX),
+                },
+            )
+            .collect())
     }
 
     async fn list_spend(

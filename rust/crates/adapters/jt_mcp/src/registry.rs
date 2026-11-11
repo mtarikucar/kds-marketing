@@ -39,7 +39,7 @@ pub struct ToolSpec {
     pub input_schema: Schema,
     pub risk: Risk,
     /// What the caller must hold to see the tool in `tools/list` and to call it.
-    pub permission: Permission,
+    pub permissions: &'static [Permission],
     pub run: ToolRun,
 }
 
@@ -113,7 +113,7 @@ pub fn registry() -> Vec<ToolSpec> {
             description: def.description,
             input_schema: (def.schema)(),
             risk: uc.risk,
-            permission: def.permission,
+            permissions: def.permissions,
             run: def.run,
         });
     }

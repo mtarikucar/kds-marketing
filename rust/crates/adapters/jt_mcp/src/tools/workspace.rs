@@ -14,7 +14,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         description: "The workspace this API key belongs to: id, name, slug and status (only an \
                       active workspace runs gated tools), the issuer's role and the key's \
                       effective permissions. [risk: READ]",
-        permission: Permission::WorkspaceRead,
+        permissions: &[Permission::WorkspaceRead],
         schema: schema_for::<NoArgs>,
         run: info,
     }]

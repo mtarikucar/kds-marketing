@@ -19,7 +19,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                       it, newest first, with secret values masked. Filter by action prefix or \
                       actor kind; page back with before_id set to the last id of the previous \
                       page. Returns {entries: [{id, entry}]}. [risk: READ]",
-        permission: Permission::LedgerRead,
+        permissions: &[Permission::LedgerRead],
         schema: schema_for::<ListArgs>,
         run: list,
     }]

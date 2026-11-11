@@ -39,3 +39,8 @@ pub mod mail_files_contract;
 /// Outreach's repository contracts, shared by the fake and PostgreSQL.
 pub mod outreach_contract;
 pub mod prospects_contract;
+
+/// The ad campaign store's contract, shared by the fake and PostgreSQL.
+pub mod ads_contract;
+pub mod production_areas_contract;
+pub mod social_accounts_contract;

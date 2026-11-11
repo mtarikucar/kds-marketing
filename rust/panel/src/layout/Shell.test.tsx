@@ -22,11 +22,9 @@ describe('Shell', () => {
       tr.nav.strategy,
       tr.nav.capabilities,
       tr.nav.budget,
-      tr.nav.team,
-      tr.nav.roles,
+      tr.nav.users,
       tr.nav.apiKeys,
       tr.nav.agents,
-      tr.nav.ledger,
     ]) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
@@ -103,7 +101,7 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
     renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-    expect(within(nav).getByRole('link', { name: tr.nav.inbox })).toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: tr.nav.inbox })).not.toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: tr.nav.strategy })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: 'Modül ekle' })).toHaveAttribute('href', '/modules');
     expect(within(nav).queryByRole('link', { name: tr.nav.studio })).not.toBeInTheDocument();
@@ -124,7 +122,7 @@ describe('Shell', () => {
     renderAt('/studio');
     expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeInTheDocument();
     expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
-    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/growth-studio');
+    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/social');
   });
 
   it('permissions_copy_parity', () => {
@@ -158,4 +156,33 @@ describe('Shell', () => {
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/platform/login');
   });
+});
+
+it('orders core, installed modules including inbox, then management without removed pages', async () => {
+  mockFetch({ 'GET /api/auth/me': { ...me, memberships: [{ ...me.memberships[0], permissions: [...PERMISSIONS] }] } });
+  renderAt('/');
+  const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+  await within(nav).findByRole('link', { name: 'Materyal kütüphanesi' });
+  await userEvent.click(within(nav).getByText('Yönetim'));
+  expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
+    '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/materials', '/people', '/prospects', '/outreach', '/calls', '/modules',
+    '/budget', '/users', '/api-keys', '/capabilities', '/agents',
+  ]);
+  expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();
+  expect(within(nav).queryByText('Günlük')).not.toBeInTheDocument();
+});
+
+it.each(['materials', 'content', 'social', 'ads'])('gates the %s module before any business query', async module => {
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+  renderAt(`/${module}`);
+  expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', `/modules/${module}`);
+  expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
+});
+
+it('offers a module installation link when a read reports MODULE_NOT_INSTALLED', async () => {
+  mockFetch({ 'GET /api/auth/me': me, 'GET /api/budget/items': withStatus(409, { code: 'MODULE_NOT_INSTALLED', message: 'removed', details: { module: 'ads' } }) });
+  renderAt('/budget');
+  expect(await screen.findByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/ads');
+  expect(screen.getByText(tr.gates.moduleBody)).toBeVisible();
 });

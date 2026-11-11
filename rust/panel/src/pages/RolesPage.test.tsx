@@ -9,8 +9,9 @@ import { mockFetch, renderAt } from '@/test/render';
 describe('RolesPage', () => {
   it('lists system and custom roles', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/roles': roles });
-    renderAt('/roles');
-    expect(await screen.findByRole('heading', { level: 1, name: tr.roles.title })).toBeInTheDocument();
+    renderAt('/users');
+    expect(await screen.findByRole('heading', { level: 1, name: tr.nav.users })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: tr.roles.title })).toBeInTheDocument();
     expect(await screen.findByText('Denetçi')).toBeInTheDocument();
     expect(screen.getByText(tr.roleNames.owner)).toBeInTheDocument();
   });

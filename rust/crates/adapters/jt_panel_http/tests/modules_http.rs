@@ -25,7 +25,8 @@ async fn module_routes_enforce_auth_tenant_permissions_core_and_strict_manifests
             .iter()
             .filter(|m| m["installed"] == true)
             .count(),
-        2,
+        // A new workspace has the strategy and nothing else.
+        1,
     );
     let blueprint = json!({
         "id":"quality-review", "name":"Quality review", "version":"1.0",
@@ -89,20 +90,48 @@ async fn module_routes_enforce_auth_tenant_permissions_core_and_strict_manifests
         "CONFLICT",
     )
     .await;
-    for core in ["inbox", "strategy"] {
-        expect_error(
-            p.send(
-                Method::DELETE,
-                &format!("/api/workspace/modules/{core}"),
-                Some(&a),
-                None,
-            )
-            .await,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "VALIDATION",
+    // The strategy is the one module that cannot be removed; the inbox is an ordinary module.
+    expect_error(
+        p.send(
+            Method::DELETE,
+            "/api/workspace/modules/strategy",
+            Some(&a),
+            None,
         )
-        .await;
-    }
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "VALIDATION",
+    )
+    .await;
+    let installed = |list: &serde_json::Value, id: &str| {
+        list["modules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["blueprint"]["id"] == id && m["installed"] == true)
+    };
+    let with_inbox = ok_json(
+        p.send(
+            Method::PUT,
+            "/api/workspace/modules/inbox",
+            Some(&a),
+            Some(json!({})),
+        )
+        .await,
+    )
+    .await;
+    assert!(installed(&with_inbox, "inbox"));
+    let without = ok_json(
+        p.send(
+            Method::DELETE,
+            "/api/workspace/modules/inbox",
+            Some(&a),
+            None,
+        )
+        .await,
+    )
+    .await;
+    assert!(!installed(&without, "inbox"));
     let (rep, _) = p.join(&a, "modules-rep@example.test", "rep").await;
     ok_json(p.get("/api/workspace/modules", &rep).await).await;
     expect_error(

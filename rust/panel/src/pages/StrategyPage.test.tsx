@@ -304,3 +304,43 @@ describe('Strategy brief workbench', () => {
   });
 
 });
+
+import { studioAnswers as answers, overview } from '@/test/studio';
+it('organic_lane_names_a_reconnect_when_only_the_read_permission_is_missing', async () => {
+  mockFetch({
+    ...answers,
+    'GET /api/studio/overview': {
+      ...overview,
+      lane_support: {
+        ...overview.lane_support,
+        organic: { visible: true, supported: false, reason: 'connector_reconnect_required' },
+      },
+    },
+  });
+  renderAt('/strategy');
+  expect(await screen.findByText(tr.studio.connectorReconnect, { exact: false })).toBeInTheDocument();
+  expect(screen.queryByText(tr.studio.connectorUnavailable)).not.toBeInTheDocument();
+  const links = screen.getAllByRole('link', { name: tr.studio.reconnect });
+  expect(links.some((l) => l.getAttribute('href') === '/capabilities')).toBe(true);
+});
+
+
+
+it.each(['content.work', 'social.work', 'ads.work'])('offers learned judgments to %s without trend or paid forms', async permission => {
+  const session = answers['GET /api/auth/me'];
+  const calls = mockFetch({ ...answers,
+    'GET /api/auth/me': { ...session, memberships: [{ ...session.memberships[0], permissions: [permission] }] },
+    'GET /api/studio/overview': { ...overview, learned: { ...overview.learned, arms: [{ ...overview.learned.arms[0], evidence: [{ id: 'e1', status: 'accepted', raw_metrics: {} }] }] } },
+    'POST /api/studio/judgments': {},
+  });
+  renderAt('/strategy');
+  const learned = await screen.findByRole('region', { name: 'Öğrenilenler' });
+  await within(learned).findByText(`Kısa hikâyeler / ${tr.studio.contentFormats.text} / ${tr.capabilities.kinds.x}`);
+  expect(within(learned).queryByText(tr.studio.recordTrend)).not.toBeInTheDocument();
+  expect(within(learned).queryByText(tr.studio.bind)).not.toBeInTheDocument();
+  await userEvent.click(within(learned).getByText(tr.studio.judgment, { selector: 'summary' }));
+  await userEvent.type(within(learned).getByLabelText(tr.studio.judgment), 'İyi sonuç');
+  await userEvent.click(within(learned).getByRole('checkbox', { name: 'e1' }));
+  await userEvent.click(within(learned).getByRole('button', { name: tr.studio.recordJudgment }));
+  await waitFor(() => expect(calls.find(c => c.path === '/api/studio/judgments')?.body).toMatchObject({ hypothesis_id: 'h1', text: 'İyi sonuç', evidence_ids: ['e1'] }));
+});

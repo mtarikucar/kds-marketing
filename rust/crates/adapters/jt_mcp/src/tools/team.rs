@@ -19,7 +19,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "List the workspace's members and open invitations, oldest first, with \
                           each one's membership id, email, role and status. Returns \
                           {members: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: list,
         },
@@ -30,7 +30,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           token, valid for 7 days, to pass on to the invitee. Only an owner may \
                           invite an owner, and a role may carry only permissions the caller \
                           holds. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<InviteArgs>,
             run: invite,
         },
@@ -39,7 +39,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Move an active member to another role of the workspace, by membership \
                           id and role key. The last owner cannot be demoted. Returns the updated \
                           member. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<SetRoleArgs>,
             run: set_role,
         },
@@ -48,7 +48,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Remove a member from the workspace, or cancel an open invitation, by \
                           membership id. The last owner cannot be removed. \
                           [risk: DESTRUCTIVE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<MembershipArgs>,
             run: remove,
         },

@@ -8,8 +8,9 @@ import { mockFetch, renderAt } from '@/test/render';
 describe('TeamPage', () => {
   it('lists the members', async () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/team': members, 'GET /api/roles': roles });
-    renderAt('/team');
-    expect(await screen.findByRole('heading', { level: 1, name: tr.team.title })).toBeInTheDocument();
+    renderAt('/users');
+    expect(await screen.findByRole('heading', { level: 1, name: tr.nav.users })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: tr.team.title })).toBeInTheDocument();
     expect(await screen.findByText('invitee@alpha.example')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: tr.team.invite })).toBeInTheDocument();
   });

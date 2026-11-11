@@ -39,7 +39,7 @@ fn research_tools_listed_with_risks() {
         let name = format!("jeeta.research.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("research.{action}"), "{name}");
-        assert_eq!(tool.permission, Permission::ProspectsWork, "{name}");
+        assert_eq!(tool.permissions, &[Permission::ProspectsWork], "{name}");
         assert_eq!(tool.risk, risk, "{name}");
         assert!(tool.description.ends_with(jt_mcp::risk_tag(risk)), "{name}");
         let schema = tool.input_schema.as_value();
@@ -110,7 +110,7 @@ fn tools_listed_with_risks() {
         let name = format!("jeeta.prospects.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("prospects.{action}"), "{name}");
-        assert_eq!(tool.permission, permission, "{name}");
+        assert_eq!(tool.permissions, &[permission], "{name}");
         assert_eq!(tool.risk, risk, "{name}");
         assert!(tool.description.ends_with(jt_mcp::risk_tag(risk)), "{name}");
         let schema = tool.input_schema.as_value();

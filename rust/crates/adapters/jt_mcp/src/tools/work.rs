@@ -33,14 +33,25 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           shoot_request_id (a material Studio needs, listed with \
                           jeeta.studio.shoot_list: tell the owner, who shoots it), \
                           studio_material_analysis with material_id and expected_revision (to an \
-                          agent with studio.work: claim, inspect the preview with your own tools, \
+                          agent with materials.work: claim, inspect the preview with your own tools, \
                           and complete or fail; live leases and terminal results are omitted), \
                           studio_material_production with production_id and expected_revision \
                           (human-requested edit/crop/poster: claim and produce with your own tools, \
                           then upload a distinct AI result; no server generation), \
                           studio_post_request with post_request_id (plan posts from \
                           its materials and answer it with jeeta.studio.posts_propose), \
-                          declare_first_capability, research_due \
+                          content_area with project_id, expected_revision and redo_note (to \
+                          an agent with content.work: a production area whose start time has \
+                          come; take it with jeeta.content.area_claim and carry it to a \
+                          package; it leaves the list while an agent holds it), \
+                          social_schedule with project_id and version_id (to an agent with \
+                          social.work: a finished platform version without a time; give it one \
+                          with jeeta.social.version_schedule), content_material_request with \
+                          project_id and request_id and content_area_held with project_id (to \
+                          a person: a capture an agent asked for, and an area whose delivery \
+                          was refused three times), \
+                          declare_first_capability (with the verify and connect items, only \
+                          to a key with capabilities.manage), research_due \
                           with task_id and remaining_today (research businesses for that task \
                           with your own tools and record them; to a key with prospects.work), \
                           prospects_to_score with count (new prospects without a score under \
@@ -48,7 +59,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: pending,
         },
@@ -61,7 +72,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           at most once an hour. Uploaded materials remain pending until an \
                           external agent polls, claims and analyzes them; no server vision job \
                           or wake-up is implied. [risk: WRITE]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: checkin,
         },
@@ -71,7 +82,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           minutes: 15 (a quarter hour) to 10080 (a week); a day unless set. \
                           Returns the check-in state under the new interval: last_seen_at, \
                           interval_minutes and overdue. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<IntervalArgs>,
             run: set_checkin_interval,
         },

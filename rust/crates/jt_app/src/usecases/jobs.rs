@@ -2422,10 +2422,21 @@ pub async fn run_studio_control(deps: &Deps) -> JobReport {
         report.failed = 1;
         return report;
     };
-    for w in workspaces
-        .into_iter()
-        .filter(|w| w.status == WorkspaceStatus::Active)
-    {
+    for w in workspaces {
+        if w.status != WorkspaceStatus::Active {
+            // A workspace that is not active runs nothing, and its panel is closed: what Jeeta
+            // built at the ad platform is paused there, and goes on when the workspace is active
+            // again (design 2026-11-10 B52). It is counted only when something changed.
+            match super::ads::watch::watch_all(deps, w.id, deps.clock.now()).await {
+                Ok(0) => {}
+                Ok(n) => {
+                    report.touched += 1;
+                    report.changed += u64::from(n);
+                }
+                Err(_) => report.failed += 1,
+            }
+            continue;
+        }
         report.touched += 1;
         if let Ok(n) = super::studio::ads::recheck_periods(deps, w.id).await {
             report.changed += u64::from(n);
@@ -2444,6 +2455,12 @@ pub async fn run_studio_control(deps: &Deps) -> JobReport {
             report.failed += 1;
         } else {
             report.changed += 1;
+        }
+        // The ad campaigns Jeeta built (design 2026-11-10 §8.6): builds go on, the provider
+        // follows a stop, and once an hour each running campaign is read.
+        match super::ads::watch::watch_all(deps, w.id, deps.clock.now()).await {
+            Ok(n) => report.changed += u64::from(n),
+            Err(_) => report.failed += 1,
         }
     }
     report
@@ -2507,7 +2524,16 @@ async fn run_studio_publications(deps: &Deps, job: Job) -> JobReport {
     for ws in workspaces(deps, job, &[WorkspaceStatus::Active], &mut report).await {
         report.touched += 1;
         let result = if job == Job::StudioPublish {
-            super::studio::publish::publish_due(deps, ws).await
+            // First what must not go out is taken back from the platforms that hold it, then
+            // what a platform can hold is left with it, then what is due is sent (design
+            // 2026-11-10 §7.3). Each on its own: one failing does not stop the others.
+            let withdrawn = super::studio::publish::withdraw_stopped(deps, ws).await;
+            let held = super::studio::publish::hold_ahead(deps, ws).await;
+            let sent = super::studio::publish::publish_due(deps, ws).await;
+            match (withdrawn, held, sent) {
+                (Ok(withdrawn), Ok(held), Ok(sent)) => Ok(withdrawn + held + sent),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+            }
         } else {
             super::studio::publish::recover_publications(deps, ws).await
         };
@@ -2527,9 +2553,14 @@ async fn run_studio_learning(deps: &Deps, job: Job, now: OffsetDateTime) -> JobR
     for ws in workspaces(deps, job, ACTIVE, &mut report).await {
         report.touched += 1;
         let result = if job == Job::StudioMeasure {
-            super::studio::measure::measure_due(deps, ws)
-                .await
-                .map(u64::from)
+            // What went out, and once a day what each social account's platform says of it.
+            // Each on its own: a workspace whose posts cannot be measured still has accounts.
+            let measured = super::studio::measure::measure_due(deps, ws).await;
+            let days = super::social::accounts::read_days(deps, ws, now).await;
+            match (measured, days) {
+                (Ok(measured), Ok(days)) => Ok(u64::from(measured) + u64::from(days)),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            }
         } else {
             super::studio::learning::reweight_week(deps, ws, now)
                 .await

@@ -15,7 +15,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Who this API key acts as: the agent actor (its connection and the user \
                           who issued the key), the workspace, the issuer's role and the key's \
                           effective permissions. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: whoami,
         },
@@ -25,7 +25,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           keys: client name and version, the key used, when first and last seen, \
                           and how many tools each has called. Returns {connections: [...]}. \
                           [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: list,
         },

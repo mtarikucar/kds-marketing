@@ -45,7 +45,7 @@ fn outreach_tools_listed_with_risks_and_permissions() {
         let name = format!("jeeta.outreach.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("outreach.{action}"), "{name}");
-        assert_eq!(tool.permission, permission, "{name}");
+        assert_eq!(tool.permissions, &[permission], "{name}");
         assert_eq!(tool.risk, risk, "{name}");
         assert!(tool.description.ends_with(jt_mcp::risk_tag(risk)), "{name}");
         let schema = tool.input_schema.as_value();

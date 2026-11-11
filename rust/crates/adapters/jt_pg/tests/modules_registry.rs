@@ -29,8 +29,9 @@ async fn registry(uow: &PgUnitOfWork, ws: jt_tenancy::WorkspaceId) -> Option<Val
 #[tokio::test]
 async fn registries_are_durable_tenant_scoped_and_rollback_uncommitted_changes() {
     let db = TestDb::new().await;
-    let (a, _) = db.seed_workspace("modules-a").await;
-    let (b, _) = db.seed_workspace("modules-b").await;
+    // As registration leaves them: no registry row yet.
+    let (a, _) = db.seed_new_workspace("modules-a").await;
+    let (b, _) = db.seed_new_workspace("modules-b").await;
     let uow = PgUnitOfWork::new(db.pool.clone());
     assert_eq!(registry(&uow, a).await, None);
     assert_eq!(registry(&uow, b).await, None);
@@ -111,7 +112,7 @@ async fn migration_seeds_all_existing_tenants_and_preserves_customized_registrie
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     assert_eq!(registry(&uow, a).await, Some(customized.clone()));
     assert_eq!(registry(&uow, b).await, Some(legacy));
-    let (new_ws, _) = db.seed_workspace("modules-new").await;
+    let (new_ws, _) = db.seed_new_workspace("modules-new").await;
     assert_eq!(registry(&uow, new_ws).await, None);
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     assert_eq!(registry(&uow, new_ws).await, None);
@@ -172,7 +173,7 @@ fn custom(id: &str) -> InstallInput {
 #[tokio::test]
 async fn simultaneous_first_installs_keep_every_blueprint_and_only_core_defaults() {
     let db = TestDb::new().await;
-    let (ws, user) = db.seed_workspace("modules-concurrent").await;
+    let (ws, user) = db.seed_new_workspace("modules-concurrent").await;
     let deps = fakes::deps(Arc::new(PgUnitOfWork::new(db.pool.clone())));
     let ctx = Ctx {
         workspace_id: ws,
@@ -183,7 +184,8 @@ async fn simultaneous_first_installs_keep_every_blueprint_and_only_core_defaults
         agent_connection_id: None,
     };
     let before = modules::list(&deps, &ctx).await.unwrap();
-    assert_eq!(before.modules.iter().filter(|m| m.installed).count(), 2);
+    // A new workspace has the strategy and nothing else.
+    assert_eq!(before.modules.iter().filter(|m| m.installed).count(), 1);
     let (a, b, c) = tokio::join!(
         modules::install(&deps, &ctx, "review-alpha", custom("review-alpha")),
         modules::install(&deps, &ctx, "review-beta", custom("review-beta")),
@@ -193,7 +195,7 @@ async fn simultaneous_first_installs_keep_every_blueprint_and_only_core_defaults
     b.unwrap();
     c.unwrap();
     let after = modules::list(&deps, &ctx).await.unwrap();
-    assert_eq!(after.modules.iter().filter(|m| m.installed).count(), 5);
+    assert_eq!(after.modules.iter().filter(|m| m.installed).count(), 4);
     for id in ["review-alpha", "review-beta", "review-gamma"] {
         assert!(
             after

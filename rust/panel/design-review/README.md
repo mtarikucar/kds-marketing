@@ -13,11 +13,15 @@ From the repository root:
 
 ```sh
 node rust/panel/design-review/foundation.cjs
-node rust/panel/design-review/studio.cjs
+node rust/panel/design-review/modules.cjs
 node rust/panel/design-review/inbox.cjs
 node rust/panel/design-review/leads.cjs
 node rust/panel/design-review/admin-fixtures.cjs
 ```
+
+`modules.cjs` covers the four module pages that replaced the Growth Studio (content, social
+media, advertising, and Bütçe's spend view). `studio.cjs` reviewed the single Growth Studio page,
+which no longer exists; it is kept for its history and is not part of a run.
 
 Run sequentially on smaller machines. Each script stores screenshots and machine-readable
 results in a temporary directory, leaving production assets and customer data untouched.

@@ -28,12 +28,13 @@
 //!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
 //!   see an item they could never clear;
 //! - `StudioShootRequest` (3): each open request of the çekim listesi, for a caller with
-//!   `studio.work`, with or without an approved strategy (the materials library needs none);
+//!   `materials.work`, with or without an approved strategy (the materials library needs none);
 //! - `StudioPostRequest` (2): each open package request (olay-driven publishing), for a
-//!   caller with `studio.work` while a strategy is approved;
+//!   caller with `social.work` while a strategy is approved;
 //! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
 //!   only from its preparation start;
-//! - `DeclareFirstCapability` (3): no capability that is not retired;
+//! - `DeclareFirstCapability` (3): no capability that is not retired; with the items to verify
+//!   and to connect a capability, only for a caller holding `capabilities.manage`;
 //! - `ResearchDue` (3): each open research task that may still record prospects today, and
 //!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, and
 //!   `ProspectsToPromote` (3): qualified prospects not promoted yet, only for a
@@ -178,9 +179,44 @@ pub enum WorkKind {
     },
     /// A human-requested derivative for an external agent to produce with its own tools.
     /// A production project needs missing materials or canonical output planning.
-    StudioProject {
+    ContentArea {
         project_id: uuid::Uuid,
         expected_revision: u64,
+        redo_note: Option<String>,
+    },
+    ContentMaterialRequest {
+        project_id: uuid::Uuid,
+        request_id: uuid::Uuid,
+    },
+    ContentAreaHeld {
+        project_id: uuid::Uuid,
+    },
+    /// A platform version of a finished content package has no time yet (design 2026-11-10
+    /// §7.2): the social module's agent gives it one.
+    SocialSchedule {
+        project_id: uuid::Uuid,
+        version_id: uuid::Uuid,
+    },
+    /// An ad campaign waits for its plan, or the provider turned one of its ads down (design
+    /// 2026-11-10 §8): the ads module's agent claims it.
+    AdsCampaignPlan {
+        campaign_id: uuid::Uuid,
+        expected_revision: u64,
+        /// What the provider said of the ad it turned down, for a rejected campaign.
+        rejected: Option<String>,
+    },
+    /// A running ad campaign nobody looked at today: the agent reads it and makes a move.
+    AdsCampaignReview {
+        campaign_id: uuid::Uuid,
+    },
+    /// An agent proposed an ad campaign: a person approves or declines it.
+    AdsCampaignProposal {
+        campaign_id: uuid::Uuid,
+    },
+    /// An ad campaign waits for a person: its plan was refused three times, or the provider
+    /// refused its build.
+    AdsCampaignHeld {
+        campaign_id: uuid::Uuid,
     },
     StudioMaterialProduction {
         production_id: uuid::Uuid,
@@ -200,7 +236,9 @@ pub enum WorkKind {
         conversation_id: jt_inbox::ConversationId,
     },
     /// A visible contact has a merge suggestion.
-    MergeSuggested { merge_id: jt_inbox::MergeId },
+    MergeSuggested {
+        merge_id: jt_inbox::MergeId,
+    },
     /// An owed comment or question of a visible conversation is due within
     /// [`ANSWER_DEADLINE_WINDOW`] (spec §3.11): the soonest first.
     AnswerDeadline {
@@ -223,7 +261,9 @@ pub enum WorkKind {
         name: String,
     },
     /// An open task has reached its due time.
-    TaskDue { task_id: jt_inbox::TaskId },
+    TaskDue {
+        task_id: jt_inbox::TaskId,
+    },
     /// Start the consultation, or continue the open draft's.
     ConsultStrategy,
     /// Approve the submitted draft.
@@ -248,7 +288,9 @@ pub enum WorkKind {
     },
     /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
     /// [`INBOUND_EVENTS_COUNT_CAP`].
-    InboundEvents { count: u32 },
+    InboundEvents {
+        count: u32,
+    },
     /// A voice bridge has not registered within its heartbeat, or never has: agent calls through
     /// it are refused until it does. `last_seen_at` is its last heartbeat.
     VoiceBridgeOffline {
@@ -272,16 +314,22 @@ pub enum WorkKind {
         remaining_today: u32,
     },
     /// `count` new prospects have no score under the approved rubric.
-    ProspectsToScore { count: u32 },
+    ProspectsToScore {
+        count: u32,
+    },
     /// `count` qualified prospects wait for promotion into the inbox.
-    ProspectsToPromote { count: u32 },
+    ProspectsToPromote {
+        count: u32,
+    },
     /// `count` open journeys have no owner; `oldest_journey_id` has waited longest.
     OwnerlessJourneys {
         count: u32,
         oldest_journey_id: Option<jt_inbox::JourneyId>,
     },
     /// `count` assignments passed their SLA after the last reassignment.
-    AssignmentStalled { count: u32 },
+    AssignmentStalled {
+        count: u32,
+    },
     /// `count` active enrollments of a campaign are due within a day and miss a `custom.*` value
     /// their next step needs.
     PersonalizationDue {
@@ -300,7 +348,9 @@ pub enum WorkKind {
         revision: u32,
     },
     /// `count` prospects promoted two to thirty days ago were not written to since.
-    PromotedNotContacted { count: u32 },
+    PromotedNotContacted {
+        count: u32,
+    },
 }
 
 impl WorkKind {
@@ -313,7 +363,14 @@ impl WorkKind {
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
             WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
             WorkKind::StudioMaterialAnalysis { .. } => "studio.material_analysis_claim",
-            WorkKind::StudioProject { .. } => "studio.project_get",
+            WorkKind::ContentArea { .. } => "content.area_claim",
+            WorkKind::ContentMaterialRequest { .. } => "studio.project_request_update",
+            WorkKind::ContentAreaHeld { .. } => "content.area_redo",
+            WorkKind::SocialSchedule { .. } => "social.version_schedule",
+            WorkKind::AdsCampaignPlan { .. } => "ads.campaign_claim",
+            WorkKind::AdsCampaignReview { .. } => "ads.campaign_move",
+            WorkKind::AdsCampaignProposal { .. } => "ads.campaign_approve",
+            WorkKind::AdsCampaignHeld { .. } => "ads.campaign_end",
             WorkKind::StudioMaterialProduction { .. } => "studio.material_production_claim",
             WorkKind::StudioPostRequest { .. } => "studio.posts_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
@@ -407,7 +464,14 @@ async fn pending_as_seen(
     } else {
         None
     };
-    let studio = if ctx.permissions.contains(&Permission::StudioWork)
+    let studio = if [
+        Permission::SocialWork,
+        Permission::SocialManage,
+        Permission::AdsWork,
+        Permission::AdsManage,
+    ]
+    .iter()
+    .any(|p| ctx.permissions.contains(p))
         && status_exemption("studio.pending").allows(status)
         && strategy.approved.is_some()
     {
@@ -455,24 +519,24 @@ async fn pending_as_seen(
     } else {
         None
     };
-    let shoots: Vec<jt_studio::ShootRequest> = if ctx.permissions.contains(&Permission::StudioWork)
-        && status_exemption("studio.shoot_list").allows(status)
-    {
-        repos
-            .studio_materials()
-            .list_shoot_requests()
-            .await?
-            .into_iter()
-            .filter(|q| q.status == jt_studio::ShootStatus::Open)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    // Analysis has no server worker: only an external agent with studio.work can clear it.
+    let shoots: Vec<jt_studio::ShootRequest> =
+        if ctx.permissions.contains(&Permission::MaterialsWork)
+            && status_exemption("studio.shoot_list").allows(status)
+        {
+            repos
+                .studio_materials()
+                .list_shoot_requests()
+                .await?
+                .into_iter()
+                .filter(|q| q.status == jt_studio::ShootStatus::Open)
+                .collect()
+        } else {
+            Vec::new()
+        };
+    // Analysis has no server worker: only an external agent with materials.work can clear it.
     // A live lease belongs to its claimant; expired leases become visible again at check-in.
     let mut analyses = Vec::new();
-    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
-        && ctx.permissions.contains(&Permission::StudioWork)
+    if ctx.permissions.contains(&Permission::MaterialsWork)
         && status_exemption("studio.material_analysis_claim").allows(status)
     {
         let records: std::collections::BTreeMap<_, _> = repos
@@ -497,8 +561,7 @@ async fn pending_as_seen(
         }
     }
     let mut productions = Vec::new();
-    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
-        && ctx.permissions.contains(&Permission::StudioWork)
+    if ctx.permissions.contains(&Permission::ContentWork)
         && status_exemption("studio.material_production_claim").allows(status)
     {
         for row in repos.studio_productions().list_productions().await? {
@@ -511,29 +574,155 @@ async fn pending_as_seen(
             }
         }
     }
+    // Production areas (design 2026-11-10 §6): the agent's is an area whose start time has come;
+    // a person's are the captures an agent asked for and the areas an agent could not finish.
     let mut projects = Vec::new();
-    if (matches!(ctx.actor, Actor::Agent { .. }) || ctx.agent_connection_id.is_some())
-        && ctx.permissions.contains(&Permission::StudioManage)
-        && ctx.permissions.contains(&Permission::StudioWork)
-        && status_exemption("studio.project_get").allows(status)
+    if ctx.permissions.contains(&Permission::ContentWork)
+        || ctx.permissions.contains(&Permission::ContentManage)
     {
-        for project in repos
-            .studio_projects()
-            .list_projects(false, None)
-            .await?
-            .into_iter()
-            .take(100)
-        {
-            if project.outputs.is_empty()
-                || project.outputs.iter().any(|o| o.slot_id.is_none())
-                || project
+        use crate::ports::production_projects::{AreaState, RequestStatus};
+        let agent = ctx.agent_connection_id.is_some();
+        let person = super::studio::library::person(ctx).is_some();
+        let work = ctx.permissions.contains(&Permission::ContentWork);
+        let manage = ctx.permissions.contains(&Permission::ContentManage);
+        for p in repos.studio_projects().list_areas(false, None).await? {
+            if agent && work && p.needs_agent(ctx.now) {
+                projects.push(WorkItem {
+                    kind: WorkKind::ContentArea {
+                        project_id: p.id,
+                        expected_revision: p.revision,
+                        redo_note: p.redo.as_ref().map(|r| r.note.clone()),
+                    },
+                    priority: 3,
+                    hint: CONTENT_AREA_HINT.into(),
+                });
+            }
+            if person && work {
+                for q in p
                     .requests
                     .iter()
-                    .any(|r| r.status == crate::ports::production_projects::RequestStatus::Open)
-            {
-                projects.push(WorkItem {kind:WorkKind::StudioProject {project_id:project.id,expected_revision:project.revision},priority:3,hint:"Read jeeta.studio.project_get. Use its brief, live source revisions and output targets; ask for missing material with jeeta.studio.project_request. Do not invent delivered files or claim a draft target is scheduled. Respect invalidated production history and human edits. Scheduling uses jeeta.studio.project_schedule and the approved strategy. List older projects with the cursor returned by jeeta.studio.project_list. Media rendering still requires your connected tools.".into()});
+                    .filter(|q| q.status == RequestStatus::Open)
+                {
+                    projects.push(WorkItem {
+                        kind: WorkKind::ContentMaterialRequest {
+                            project_id: p.id,
+                            request_id: q.id,
+                        },
+                        priority: 2,
+                        hint: "An agent asked for a real photo or video for this production \
+                               area. Upload it to the library, give its share permission, and \
+                               answer the request with it (jeeta.studio.project_request_update, \
+                               status done and the material's id): the area goes back to the \
+                               agent by itself."
+                            .into(),
+                    });
+                }
+            }
+            if person && manage && p.state(ctx.now) == AreaState::Held {
+                projects.push(WorkItem {
+                    kind: WorkKind::ContentAreaHeld { project_id: p.id },
+                    priority: 1,
+                    hint: "The agent's delivery was refused three times in a row and the area \
+                           is held. Open it in the content module, and send it back with a note \
+                           saying what to change, or archive it."
+                        .into(),
+                });
             }
         }
+    }
+    // Finished versions that wait for a time, for the agent that plans posts. One with no
+    // account that could take it is not work: nothing the agent does would clear it.
+    let mut waiting = Vec::new();
+    if ctx.agent_connection_id.is_some()
+        && ctx.permissions.contains(&Permission::SocialWork)
+        && status_exemption("social.version_schedule").allows(status)
+        && strategy.approved.is_some()
+    {
+        for package in super::social::schedule::waiting(deps, repos.as_mut(), ctx.now).await? {
+            for v in package.versions.iter().filter(|v| !v.accounts.is_empty()) {
+                waiting.push(WorkItem {
+                    kind: WorkKind::SocialSchedule {
+                        project_id: package.project_id,
+                        version_id: v.version_id,
+                    },
+                    priority: 2,
+                    hint: SOCIAL_SCHEDULE_HINT.into(),
+                });
+            }
+        }
+    }
+    // Ad campaigns: a plan or a daily look for the agent, a proposal or a held campaign for
+    // the person who manages advertising.
+    let mut campaigns = Vec::new();
+    let ads_agent =
+        ctx.agent_connection_id.is_some() && ctx.permissions.contains(&Permission::AdsWork);
+    let ads_person = ctx.agent_connection_id.is_none()
+        && matches!(ctx.actor, Actor::Human { .. })
+        && ctx.permissions.contains(&Permission::AdsManage);
+    if ads_agent || ads_person {
+        use crate::ports::ads::{CampaignScope, CampaignState};
+        for c in repos
+            .ads()
+            .list_campaigns(CampaignScope::Open, None)
+            .await?
+        {
+            let id = c.id;
+            match c.state_at(ctx.now) {
+                state @ (CampaignState::Queued | CampaignState::Rejected)
+                    if ads_agent && c.needs_agent(ctx.now) && strategy.approved.is_some() =>
+                {
+                    let rejected = (state == CampaignState::Rejected)
+                        .then(|| c.clone().present(ctx.now).state.and_then(|s| s.note))
+                        .flatten();
+                    campaigns.push(WorkItem {
+                        kind: WorkKind::AdsCampaignPlan {
+                            campaign_id: id,
+                            expected_revision: c.revision,
+                            rejected,
+                        },
+                        priority: 2,
+                        hint: ADS_PLAN_HINT.into(),
+                    });
+                }
+                CampaignState::Live if ads_agent && strategy.approved.is_some() => {
+                    let looked = c
+                        .moves
+                        .last()
+                        .is_some_and(|m| ctx.now - m.at < time::Duration::hours(24));
+                    if !looked {
+                        campaigns.push(WorkItem {
+                            kind: WorkKind::AdsCampaignReview { campaign_id: id },
+                            priority: 3,
+                            hint: ADS_REVIEW_HINT.into(),
+                        });
+                    }
+                }
+                CampaignState::Proposed if ads_person => campaigns.push(WorkItem {
+                    kind: WorkKind::AdsCampaignProposal { campaign_id: id },
+                    priority: 2,
+                    hint: "An agent proposed an ad campaign. Read why and what it would cost, \
+                           then approve or decline it in the ads module; it closes by itself \
+                           seven days after it was proposed."
+                        .into(),
+                }),
+                CampaignState::Held if ads_person => campaigns.push(WorkItem {
+                    kind: WorkKind::AdsCampaignHeld { campaign_id: id },
+                    priority: 1,
+                    hint: "An ad campaign waits for you: its plan was refused three times, or \
+                           the ad platform refused its build. Open it in the ads module to see \
+                           why; end it, or change what blocks it."
+                        .into(),
+                }),
+                _ => {}
+            }
+        }
+    }
+    let mut offered = std::collections::BTreeMap::new();
+    for module in ["content", "social", "ads", "materials"] {
+        offered.insert(
+            module,
+            module_work_offered(repos.as_mut(), ctx, module).await?,
+        );
     }
     drop(repos);
 
@@ -604,32 +793,55 @@ async fn pending_as_seen(
     }
     items.extend(enable_comment_items(deps, &capabilities));
     if let Some(p) = studio {
-        items.extend(p.slots.into_iter().map(|s| WorkItem {
-            kind: WorkKind::StudioSlot {
-                slot_id: s.slot.id,
-                overdue: s.overdue,
-            },
-            priority: if s.overdue { 1 } else { 2 },
-            hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
-        }));
-        items.extend(p.post_requests.into_iter().map(|q| {
-            WorkItem {
-                kind: WorkKind::StudioPostRequest {
-                    post_request_id: q.id,
-                },
-                priority: 2,
-                hint: "Plan posts from the request's materials (jeeta.studio.post_requests) and \
+        items.extend(
+            p.slots
+                .into_iter()
+                .filter(|_| ctx.permissions.contains(&Permission::SocialWork))
+                .map(|s| WorkItem {
+                    kind: WorkKind::StudioSlot {
+                        slot_id: s.slot.id,
+                        overdue: s.overdue,
+                    },
+                    priority: if s.overdue { 1 } else { 2 },
+                    hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+                }),
+        );
+        items.extend(
+            p.post_requests
+                .into_iter()
+                .filter(|_| ctx.permissions.contains(&Permission::SocialWork))
+                .map(|q| WorkItem {
+                    kind: WorkKind::StudioPostRequest {
+                        post_request_id: q.id,
+                    },
+                    priority: 2,
+                    hint:
+                        "Plan posts from the request's materials (jeeta.studio.post_requests) and \
                    answer it with jeeta.studio.posts_propose: each post's format, channel, \
                    time, materials, subject and hypothesis, within the caps."
-                    .into(),
-            }
-        }));
-        items.extend(p.approvals.into_iter().map(|target| WorkItem {
-            kind: WorkKind::StudioApproval { target },
-            priority: 2,
-            hint: "An owner or manager human must grant revision-bound Studio consent.".into(),
-        }));
-        items.extend(p.budget_moves.into_iter().map(|m| WorkItem {
+                            .into(),
+                }),
+        );
+        items.extend(
+            p.approvals
+                .into_iter()
+                .filter(|target| match target {
+                    crate::ports::studio::ApprovalTarget::Slot(_) => {
+                        ctx.permissions.contains(&Permission::SocialManage)
+                    }
+                    crate::ports::studio::ApprovalTarget::BudgetMove(_) => {
+                        ctx.permissions.contains(&Permission::AdsManage)
+                            && ctx.permissions.contains(&Permission::AdsWork)
+                    }
+                })
+                .map(|target| WorkItem {
+                    kind: WorkKind::StudioApproval { target },
+                    priority: 2,
+                    hint: "An owner or manager human must grant revision-bound Studio consent."
+                        .into(),
+                }),
+        );
+        items.extend(p.budget_moves.into_iter().filter(|_| ctx.permissions.contains(&Permission::AdsWork)).map(|m| WorkItem {
             kind: WorkKind::StudioBudgetMove {
                 budget_move_id: m.id,
             },
@@ -776,9 +988,28 @@ async fn pending_as_seen(
     items.extend(analyses);
     items.extend(productions);
     items.extend(projects);
-    items.extend(capability_items(&capabilities));
+    items.extend(waiting);
+    items.extend(campaigns);
+    // Declaring, verifying and connecting a capability need `capabilities.manage`: as with
+    // every item, one is listed only to a caller who can clear it, or an agent's check-in would
+    // never come back empty.
+    if ctx.permissions.contains(&Permission::CapabilitiesManage) {
+        items.extend(capability_items(&capabilities));
+    } else {
+        items.extend(capability_items(&capabilities).into_iter().filter(|i| {
+            !matches!(
+                i.kind,
+                WorkKind::DeclareFirstCapability
+                    | WorkKind::VerifyCapability { .. }
+                    | WorkKind::ConnectConnector { .. }
+                    | WorkKind::ReconnectConnector { .. }
+            )
+        }));
+    }
     items.extend(inbound_items(inbound));
-    items.retain(|item| actionable(&item.kind));
+    items.retain(|item| {
+        actionable(&item.kind) && work_module(&item.kind).is_none_or(|m| offered[&m])
+    });
     items.sort_by_key(|item| item.priority);
     Ok(PendingOut {
         strategy: state,
@@ -1131,4 +1362,110 @@ fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<Work
                 .into(),
         })
         .collect()
+}
+
+/// What an agent that has never seen the system needs to carry a production area to its package:
+/// what to read, what to call, in which order (design 2026-11-10 S26).
+const CONTENT_AREA_HINT: &str = "Carry this production area to a content package; nobody approves \
+    it in between. (1) Read jeeta.strategy.get and jeeta.studio.project_get: `brief` is the goal, \
+    `hints` holds a platform or format a person chose (empty: you choose, from the goal and the \
+    connected accounts), and `redo_note` on this item, when present, says what the person wants \
+    changed. (2) Take the area with jeeta.content.area_claim at expected_revision and keep the \
+    claim_token; the claim lasts 30 minutes from your last report, and the area leaves your \
+    check-in while you hold it. (3) Follow the 14 steps of the content module's workflow \
+    (jeeta.modules.list) and report where you are with jeeta.content.area_progress. (4) Use the \
+    area's materials, or make a visual with your own tools: upload it with \
+    jeeta.studio.file_upload, add it with jeeta.studio.material_add (genel true, origin \
+    ai_generated with the name of the tool that made it, quality publishable, depicts [] and \
+    share shareable; a visual showing a person, a name or a logo takes a person's permission \
+    instead) and attach it with jeeta.studio.project_materials. A material you add may appear \
+    in your check-in as a studio_material_analysis item; it does not hold your delivery. A \
+    visual you made may be a version's only material when the version speaks about nothing \
+    specific: beside it, name no recorded event (jeeta.studio.olays_list), nor its place, date \
+    or client. When the work needs a real photo or video, ask with \
+    jeeta.studio.project_request and give the area back with jeeta.content.area_release; it \
+    returns to your check-in once the capture is there. (5) Deliver every platform version in \
+    one call to jeeta.content.area_deliver, each with a hypothesis_id of the approved strategy; \
+    with no connected account leave capability_id out. A refusal lists, by version index, what \
+    to fix: fix it and deliver again with a new request_key. Three refusals in a row hand the \
+    area to a person. An accepted delivery finishes the area.";
+
+/// What an agent that has never seen the system needs to plan an ad campaign.
+const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \
+    jeeta.ads.campaign_get (its goal, its total budget in minor units, its start), then claim it \
+    with jeeta.ads.campaign_claim (campaign_id, expected_revision); the answer carries a \
+    claim_token. Read the strategy (jeeta.strategy.get) for the paid hypotheses, the ad account \
+    and the Facebook Page (jeeta.capability.list: kinds meta_ads and facebook_page) and the \
+    library's shareable images (jeeta.studio.materials_list). Decide the result (link_click to \
+    a website, or lead_form), the audience, the placements, an end time 24 hours to 90 days \
+    after the start, and one to six ads (one image, a primary text, a headline, a call to \
+    action each), and deliver them with jeeta.ads.plan_submit (campaign_id, claim_token, \
+    request_key, plan). You only decide: Jeeta checks the plan, holds the campaign's whole \
+    budget against every limit and builds the campaign at the ad platform itself, paused first. \
+    A refusal names each field to fix; the third in a row hands the campaign to a person. If \
+    rejected is set, the platform turned an ad down: read why in the campaign and replace that \
+    ad with jeeta.ads.campaign_move (kind fix_ad).";
+
+/// What the agent needs for its daily look at a running campaign.
+const ADS_REVIEW_HINT: &str = "A running ad campaign has had no look today. Read it with \
+    jeeta.ads.campaign_get: each ad's state, the daily numbers per ad (spend, impressions, \
+    clicks, results; a number the platform does not give is null) and the earlier moves. Then \
+    make one move with jeeta.ads.campaign_move, with its reason: pause_ad, resume_ad, add_ad, \
+    fix_ad, or none when nothing should change. The budget and the end date are a person's.";
+
+/// What the agent that plans posts needs to give a finished version its time.
+const SOCIAL_SCHEDULE_HINT: &str = "A platform version of a finished content package has no \
+    time yet. Read jeeta.social.versions_waiting: each version lists the accounts it can go out \
+    on. Choose an account and a time and call jeeta.social.version_schedule (project_id, \
+    version_id, capability_id, publish_at as an RFC 3339 time, request_key). The posting limits \
+    apply as jeeta.studio.posts_list shows them under settings: the lead before a post, quiet \
+    hours, the daily cap and the spacing between posts of an account, and the planning horizon. \
+    A refusal names the limit: choose another time. Nobody approves the post; it goes out at \
+    its time.";
+
+/// Assignment limits the offered work, never a human's visibility or underlying permissions.
+async fn module_work_offered(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    module: &str,
+) -> Result<bool, AppError> {
+    if !super::modules::installed(r, module).await? {
+        return Ok(false);
+    }
+    let Some(agent) = ctx.agent_connection_id else {
+        return Ok(true);
+    };
+    let registry = super::modules::resolve(r.workspace().module_registry().await?)?;
+    Ok(registry
+        .modules
+        .iter()
+        .find(|m| m.blueprint.id == module)
+        .is_some_and(|m| m.config.agent_ids.is_empty() || m.config.agent_ids.contains(&agent)))
+}
+fn work_module(kind: &WorkKind) -> Option<&'static str> {
+    use crate::ports::studio::ApprovalTarget;
+    Some(match kind {
+        WorkKind::StudioSlot { .. }
+        | WorkKind::StudioPostRequest { .. }
+        | WorkKind::SocialSchedule { .. }
+        | WorkKind::StudioApproval {
+            target: ApprovalTarget::Slot(_),
+        } => "social",
+        WorkKind::StudioBudgetMove { .. }
+        | WorkKind::AdsCampaignPlan { .. }
+        | WorkKind::AdsCampaignReview { .. }
+        | WorkKind::AdsCampaignProposal { .. }
+        | WorkKind::AdsCampaignHeld { .. }
+        | WorkKind::StudioApproval {
+            target: ApprovalTarget::BudgetMove(_),
+        } => "ads",
+        WorkKind::StudioShootRequest { .. } | WorkKind::StudioMaterialAnalysis { .. } => {
+            "materials"
+        }
+        WorkKind::StudioMaterialProduction { .. }
+        | WorkKind::ContentArea { .. }
+        | WorkKind::ContentMaterialRequest { .. }
+        | WorkKind::ContentAreaHeld { .. } => "content",
+        _ => return None,
+    })
 }

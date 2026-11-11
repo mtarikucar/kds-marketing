@@ -48,7 +48,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           limit 1 to 200 (50), before_at and before_id (the previous page's next). \
                           Each {template {id, name, language, subject, body, revision, archived}, \
                           facts {vars, links}, updated_at}. [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: templates_list_schema,
             run: templates_list,
         },
@@ -66,7 +66,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           it launched with. VALIDATION names the field and reason; CONFLICT \
                           stale_revision or archived. A request_key replays a creation for 24 \
                           hours. [risk: WRITE]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: templates_save_schema,
             run: templates_save,
         },
@@ -75,7 +75,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Archive a template (template_id): new campaigns cannot use it; a \
                           campaign that snapshotted it keeps sending its snapshot. Archiving an \
                           archived one changes nothing. [risk: WRITE]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: template_id_schema,
             run: templates_archive,
         },
@@ -84,7 +84,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Read the campaigns, newest first: status (draft, awaiting_approval, \
                           scheduled, running, paused, completed, canceled), limit 1 to 200 (50), \
                           before_at and before_id (the previous page's next). [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: campaigns_list_schema,
             run: campaigns_list,
         },
@@ -93,7 +93,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Read a campaign (campaign_id): its definition, status, revision, \
                           approval and pause reason, whether a launch or resume now needs a \
                           person's approval, and its active enrollments. [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: campaign_id_schema,
             run: campaigns_get,
         },
@@ -112,7 +112,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           throttle {per_hour 1 to 60, per_day 1 to 500}, click_tracking, \
                           evergreen, segment_key}. Needs an approved strategy. Check the audience \
                           with jeeta.outreach.audience_preview first. [risk: WRITE]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: campaigns_save_schema,
             run: campaigns_save,
         },
@@ -126,7 +126,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           business_basis_in_force, truncated}. While the business-recipient \
                           basis is not in force, people without consent are no_basis. \
                           [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: preview_schema,
             run: audience_preview,
         },
@@ -142,7 +142,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                  is scheduled (a future start_at) or running, its audience enrolled and its \
                  steps snapshotted."
             ),
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: revision_schema,
             run: campaigns_launch,
         },
@@ -153,7 +153,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                  with outreach.manage (FORBIDDEN human_required for an agent); a stale revision \
                  is CONFLICT stale_revision. A waiting campaign then starts."
             ),
-            permission: Permission::OutreachManage,
+            permissions: &[Permission::OutreachManage],
             schema: revision_schema,
             run: campaigns_approve,
         },
@@ -165,7 +165,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                  campaign waits for a new one); a cancel needs outreach.manage and stops every \
                  active enrollment (campaign_canceled)."
             ),
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: control_schema,
             run: campaigns_control,
         },
@@ -180,7 +180,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                  waiting_for_promotion, truncated}. Nothing is sent here: the dispatcher \
                  checks every rule again at each send."
             ),
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: enroll_schema,
             run: enroll,
         },
@@ -191,7 +191,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           page's next). Each names the person, its next step and send time, the \
                           stop or skip reason, the basis and the personalization. Answers \
                           {items, next}. [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: enrollments_list_schema,
             run: enrollments_list,
         },
@@ -200,7 +200,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Stop an active enrollment (enrollment_id) by hand (reason manual); it \
                           never restarts. CONFLICT not_active when it is not active. Answers the \
                           enrollment. [risk: WRITE]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: enrollment_id_schema,
             run: enrollments_stop,
         },
@@ -212,7 +212,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           characters about the business). A step whose template uses a custom \
                           variable without a fallback waits for it (personalization_due in \
                           jeeta.work.pending) up to 72 hours. Answers {updated}. [risk: WRITE]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: personalize_schema,
             run: personalize,
         },
@@ -225,7 +225,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                  through the same outbox as every email. Missing values read as [variable]. \
                  Answers {to, step, message_id, state}."
             ),
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: test_send_schema,
             run: test_send,
         },
@@ -239,7 +239,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           automated_clicks, meetings_30d and won_30d (within 30 days of the \
                           person's first email), stopped by reason. Read it weekly with \
                           jeeta.prospects.report. [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: report_schema,
             run: report_run,
         },
@@ -251,7 +251,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           what counts now: sender_identity_complete, platform_enabled (the \
                           switch JEETA_OUTREACH_ENABLED) and b2b_channels_in_force. \
                           [risk: READ]",
-            permission: Permission::OutreachWork,
+            permissions: &[Permission::OutreachWork],
             schema: schema_for::<NoArgs>,
             run: settings_get,
         },
@@ -267,7 +267,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (FORBIDDEN owner_required, counsel_confirmation_required); an agent \
                           never can. Narrowing needs only outreach.manage. The business basis \
                           counts only while JEETA_OUTREACH_ENABLED is on. [risk: WRITE]",
-            permission: Permission::OutreachManage,
+            permissions: &[Permission::OutreachManage],
             schema: settings_schema,
             run: settings_set,
         },

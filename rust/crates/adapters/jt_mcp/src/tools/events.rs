@@ -32,7 +32,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           processed_at. Returns {events, next}: when next is not null, pass its \
                           after_at and after_id for the following page. Acknowledge each event \
                           you have handled with jeeta.events.ack. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<PendingArgs>,
             run: pending,
         },
@@ -44,7 +44,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           counted again. All or nothing: an id that is not one of the \
                           workspace's events is NOT_FOUND and nothing is marked. Returns \
                           {acked}: how many were newly marked. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<AckArgs>,
             run: ack,
         },
@@ -56,7 +56,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           lead_gen, call_event, consent), at most limit (default 50, at most \
                           200). Returns {events, next}: when next is not null, pass its \
                           before_at and before_id for the older page. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<ListArgs>,
             run: list,
         },

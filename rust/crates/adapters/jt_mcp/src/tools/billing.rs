@@ -29,7 +29,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![ToolDef {
         use_case: "billing.report_payment",
         description: "Report bank-transfer evidence as the current workspace owner. Requires the workspace payment reference from the panel. Does not verify settlement or activate access. Reuse a request key only with identical evidence. No activation code. [risk: WRITE]",
-        permission: Permission::TeamManage,
+        permissions: &[Permission::TeamManage],
         schema: schema_for::<ReportArgs>,
         run: report,
     }]

@@ -5,6 +5,7 @@
 //! authenticated) and reaches workspace data only through tenant bundles of `Ctx::workspace_id`;
 //! the others read the `Clock`.
 
+pub mod ads;
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
@@ -13,6 +14,7 @@ pub mod budget;
 pub mod calls;
 pub mod capabilities;
 pub mod connector;
+pub mod content;
 pub mod devices;
 pub mod distribution;
 pub mod events;
@@ -30,6 +32,8 @@ pub mod platform_payments;
 pub mod prospects;
 pub mod research;
 pub mod roles;
+pub mod social;
+pub mod spending;
 pub mod strategy;
 pub mod studio;
 pub mod team;

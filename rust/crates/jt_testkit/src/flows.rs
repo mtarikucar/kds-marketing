@@ -118,6 +118,7 @@ pub async fn price_sms(deps: &Deps, ws: WorkspaceId) {
         let id = jt_capability::BudgetItemId::new_v7();
         r.budget()
             .insert_item(jt_capability::BudgetItem {
+                general: false,
                 id,
                 workspace_id: ws,
                 name: "SMS test price".into(),

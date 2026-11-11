@@ -454,7 +454,7 @@ export function TeamTabs() {
     );
   return (
     <nav aria-label={t('leads.teamTabs.label')} className="flex gap-1 border-b border-border pb-2">
-      <NavLink to="/team" end className={tab}>
+      <NavLink to="/users" end className={tab}>
         {t('leads.teamTabs.members')}
       </NavLink>
       <NavLink to="/team/distribution" className={tab}>

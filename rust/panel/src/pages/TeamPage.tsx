@@ -175,7 +175,7 @@ function InviteDialog({
   );
 }
 
-export function TeamPage() {
+export function TeamPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
@@ -278,7 +278,7 @@ export function TeamPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader embedded={embedded}
         title={t('team.title')}
         description={t('team.description')}
         actions={

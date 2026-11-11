@@ -126,6 +126,8 @@ pub struct MemState {
     pub studio: super::studio::MemStudio,
     pub materials: super::materials::MemMaterials,
     pub production_projects: Vec<jt_app::ports::production_projects::ProductionProject>,
+    /// The ad campaigns, each with its closed mark.
+    pub ads_campaigns: Vec<super::ads::StoredCampaign>,
     pub material_productions: Vec<jt_app::ports::material_productions::ProductionRecord>,
     pub posts: super::posts::MemPosts,
     pub calls: super::calls::MemCalls,

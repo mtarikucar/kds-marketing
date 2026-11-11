@@ -39,7 +39,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           verified, stale (verified longer ago than its policy allows), \
                           unreachable or retired. Filter by kind group, kind key, stored status \
                           or capability group id. Returns {capabilities: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<ListArgs>,
             run: list,
         },
@@ -49,7 +49,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           agent or device), its status and the evidence of its last \
                           verification, its policy and the budget items it spends from, with \
                           its effective_status. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<CapabilityArgs>,
             run: get,
         },
@@ -69,7 +69,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           voice_bridge or a phone, which only its bridge's registration verifies \
                           (a phone is declared by its device bridge on its own). Returns the \
                           capability. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<DeclareArgs>,
             run: declare,
         },
@@ -83,7 +83,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           capability resets its verification and drops its stored credentials: \
                           connect the account again, then it is probed. Returns the capability \
                           with verification_reset (true when that happened). [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<UpdateArgs>,
             run: update,
         },
@@ -103,7 +103,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           capability reads as stale until you verify it again (a voice_bridge's \
                           or a phone's lasts a minute after its bridge's last registration, \
                           whatever its policy). Returns the capability. [risk: WRITE]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<VerifyArgs>,
             run: verify,
         },
@@ -113,7 +113,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (the phone is off, the account is locked). Verify it again once it is \
                           back; a voice_bridge or a phone is verified again by its bridge's next \
                           registration, not by you. Returns the capability. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<UnreachableArgs>,
             run: mark_unreachable,
         },
@@ -125,7 +125,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           verify_max_age_days (0 = never stale). A field left out takes its \
                           default; an unknown field is refused. Returns the capability. \
                           [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<SetPolicyArgs>,
             run: set_policy,
         },
@@ -135,7 +135,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           every group and budget item and can no longer be verified, grouped or \
                           linked; its record stays. Returns the capability. \
                           [risk: DESTRUCTIVE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<RetireArgs>,
             run: retire,
         },
@@ -146,7 +146,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           cash for most; an ad budget for ad accounts; the SMS budget for the \
                           SMS line; agent quotas or hours (never cash) for agent connections; \
                           consumables for printers. Returns the capability. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<LinkArgs>,
             run: link_budget,
         },
@@ -154,7 +154,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.unlink_budget",
             description: "Unlink a capability from a budget item it spends from. Returns the \
                           capability. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<LinkArgs>,
             run: unlink_budget,
         },
@@ -163,7 +163,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "List the workspace's capability groups (a brand, a branch, a persona, \
                           a purpose), oldest first, each with its member capabilities. Returns \
                           {groups: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: groups_list,
         },
@@ -172,7 +172,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Create a capability group with a name of 1 to 64 characters, unique \
                           in the workspace whatever its case, and an optional purpose. Groups do \
                           not nest. Returns the group, with no members yet. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<GroupCreateArgs>,
             run: groups_create,
         },
@@ -180,7 +180,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.groups.rename",
             description: "Rename a capability group, by group id. Returns the group. \
                           [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<GroupRenameArgs>,
             run: groups_rename,
         },
@@ -188,7 +188,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.groups.delete",
             description: "Delete a capability group, by group id; its member capabilities \
                           stay. [risk: DESTRUCTIVE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<GroupArgs>,
             run: groups_delete,
         },
@@ -196,7 +196,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.groups.add_member",
             description: "Add a capability to a group; a capability may be in many groups, \
                           and a retired one in none. Returns the group. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<MemberArgs>,
             run: groups_add_member,
         },
@@ -204,7 +204,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "capability.groups.remove_member",
             description: "Remove a capability from a group; the capability itself stays. \
                           Returns the group. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<MemberArgs>,
             run: groups_remove_member,
         },

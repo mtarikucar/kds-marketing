@@ -151,6 +151,38 @@ impl TestDb {
         .await
         .unwrap();
 
+        // Every builtin module is installed, as in a workspace from before the module registry
+        // (what `0032_workspace_modules` seeds): a module that is not installed refuses its use
+        // cases and stops its lane, which is not what most tests are about. A schema reverted
+        // to before the registry has no such table.
+        let has_registry: bool =
+            sqlx::query_scalar("select to_regclass('public.workspace_modules') is not null")
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+        if has_registry {
+            sqlx::query("insert into workspace_modules (workspace_id, data) values ($1, $2)")
+                .bind(ws.as_uuid())
+                .bind(serde_json::json!({"legacy": true, "modules": []}))
+                .execute(tx.conn())
+                .await
+                .unwrap();
+        }
+
+        tx.commit().await.unwrap();
+        (ws, user)
+    }
+
+    /// [`Self::seed_workspace`] as registration leaves a workspace: no module registry row, so
+    /// the strategy is its only installed module.
+    pub async fn seed_new_workspace(&self, name: &str) -> (WorkspaceId, UserId) {
+        let (ws, user) = self.seed_workspace(name).await;
+        let mut tx = jt_pg::PlatformTx::begin(&self.pool).await.unwrap();
+        sqlx::query("delete from workspace_modules where workspace_id = $1")
+            .bind(ws.as_uuid())
+            .execute(tx.conn())
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         (ws, user)
     }

@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           exclusions, size_hint, language, note), rubric_digest, daily_cap, \
                           status and claim. Answers {items, next}: pass next.before_at and \
                           next.before_id back for the following page. [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: list_schema,
             run: tasks_list,
         },
@@ -39,7 +39,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           ceiling and, for a standing task, its segment's backlog), found (how \
                           many it recorded) and its 20 newest prospects (no contact values). \
                           [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: id_schema,
             run: tasks_get,
         },
@@ -53,7 +53,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           prospects are recorded for it. CONFLICT prospecting_off while the \
                           approved strategy has no ICP entry. A request_key replays the task it \
                           created for 24 hours. Answers {task, remaining_today}. [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: create_schema,
             run: tasks_create,
         },
@@ -65,7 +65,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           true, with their claim) and you may still record; prefer another task. \
                           Answers {task_id, claimed, claim, held_by_other}; CONFLICT task_closed. \
                           [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: id_schema,
             run: tasks_claim,
         },
@@ -76,7 +76,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           its ICP entry and is never closed by hand (CONFLICT standing_task); \
                           CONFLICT task_closed when it is closed already. Answers {task, \
                           remaining_today}. [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: close_schema,
             run: tasks_close,
         },

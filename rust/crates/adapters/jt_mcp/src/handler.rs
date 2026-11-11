@@ -139,7 +139,7 @@ impl McpHandler {
             ctx.workspace_id,
         )
         .await?;
-        ctx.require(tool.spec.permission)?;
+        ctx.require_any(tool.spec.permissions)?;
         (tool.spec.run)(&self.state.deps, ctx, arguments).await
     }
 
@@ -249,7 +249,12 @@ impl ServerHandler for McpHandler {
         let tools: Vec<Tool> = self
             .state
             .tools()
-            .filter(|t| principal.permissions.contains(&t.spec.permission))
+            .filter(|t| {
+                t.spec
+                    .permissions
+                    .iter()
+                    .any(|p| principal.permissions.contains(p))
+            })
             .map(|t| t.tool.clone())
             .collect();
         Ok(ListToolsResult::with_all_items(tools))

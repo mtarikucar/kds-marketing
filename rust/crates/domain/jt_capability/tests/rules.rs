@@ -725,6 +725,8 @@ fn budget_items_and_spend_are_validated() {
             ws,
             ok.id,
             NewBudgetSpend {
+                module: None,
+                campaign_id: None,
                 amount,
                 source: SpendSource::Agent,
                 reference,

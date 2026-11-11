@@ -10,12 +10,12 @@ fn module_tools_are_discoverable_with_strict_schemas_and_explicit_permissions() 
     assert_eq!(tools.len(), 4);
     for tool in tools {
         assert_eq!(
-            tool.permission,
-            if tool.name == "jeeta.modules.list" {
+            tool.permissions,
+            &[if tool.name == "jeeta.modules.list" {
                 Permission::WorkspaceRead
             } else {
                 Permission::CapabilitiesManage
-            },
+            }],
         );
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
     }
