@@ -122,6 +122,24 @@ impl fmt::Debug for TiktokApp {
     }
 }
 
+/// The platform's TikTok for Business app (the Marketing API): another app than the TikTok app
+/// accounts post through, registered at TikTok's API for Business portal, which an advertiser
+/// authorizes for their ad accounts (design 2026-11-11 §3.3). `Debug` masks the secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TiktokAdsApp {
+    pub app_id: String,
+    pub secret: String,
+}
+
+impl fmt::Debug for TiktokAdsApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TiktokAdsApp")
+            .field("app_id", &self.app_id)
+            .field("secret", &Masked)
+            .finish()
+    }
+}
+
 /// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn
 /// and, once LinkedIn approves each, the Community Management API and the Advertising API).
 /// `Debug` masks the client secret.
@@ -188,6 +206,10 @@ pub trait PlatformAppConfig: Send + Sync {
     fn tiktok_app(&self) -> Option<TiktokApp> {
         None
     }
+    /// The TikTok for Business app; `None` (the default) while it is not configured.
+    fn tiktok_ads_app(&self) -> Option<TiktokAdsApp> {
+        None
+    }
     /// The LinkedIn app; `None` (the default) while it is not configured.
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         None
@@ -229,6 +251,7 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
 /// | `x` | the X app | `x` | `x` |
 /// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
+/// | `tiktok_ads` | the TikTok for Business app | `tiktok_ads` | `tiktok_ads` |
 /// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
 /// | `google` | the Google app | `google_ads` | `google_ads` |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -238,6 +261,7 @@ pub enum OAuthCallback {
     Instagram,
     X,
     Tiktok,
+    TiktokAds,
     Linkedin,
     Google,
 }
@@ -250,19 +274,21 @@ impl OAuthCallback {
             OAuthCallback::Instagram,
             OAuthCallback::X,
             OAuthCallback::Tiktok,
+            OAuthCallback::TiktokAds,
             OAuthCallback::Linkedin,
             OAuthCallback::Google,
         ]
     }
 
     /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`,
-    /// `linkedin` or `google`.
+    /// `tiktok_ads`, `linkedin` or `google`.
     pub fn key(self) -> &'static str {
         match self {
             OAuthCallback::Meta => "meta",
             OAuthCallback::Instagram => "instagram",
             OAuthCallback::X => "x",
             OAuthCallback::Tiktok => "tiktok",
+            OAuthCallback::TiktokAds => "tiktok_ads",
             OAuthCallback::Linkedin => "linkedin",
             OAuthCallback::Google => "google",
         }
@@ -281,7 +307,7 @@ impl OAuthCallback {
         match self {
             OAuthCallback::Meta | OAuthCallback::Instagram => Provider::Meta,
             OAuthCallback::X => Provider::X,
-            OAuthCallback::Tiktok => Provider::Tiktok,
+            OAuthCallback::Tiktok | OAuthCallback::TiktokAds => Provider::Tiktok,
             OAuthCallback::Linkedin => Provider::Linkedin,
             OAuthCallback::Google => Provider::Google,
         }
@@ -294,6 +320,7 @@ impl OAuthCallback {
             Provider::Meta if kind_key == "instagram" => Some(OAuthCallback::Instagram),
             Provider::Meta => Some(OAuthCallback::Meta),
             Provider::X => Some(OAuthCallback::X),
+            Provider::Tiktok if kind_key == "tiktok_ads" => Some(OAuthCallback::TiktokAds),
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
             Provider::Google => Some(OAuthCallback::Google),
@@ -312,19 +339,21 @@ pub enum OAuthApp {
     Instagram(InstagramApp),
     X(XApp),
     Tiktok(TiktokApp),
+    TiktokAds(TiktokAdsApp),
     Linkedin(LinkedinApp),
     Google(GoogleApp),
 }
 
 impl OAuthApp {
-    /// The public client id: the Meta or Instagram app id, the X, LinkedIn or Google client id, or
-    /// the TikTok client key.
+    /// The public client id: the Meta or Instagram app id, the X, LinkedIn or Google client id,
+    /// the TikTok client key, or the TikTok for Business app id.
     pub fn client_id(&self) -> &str {
         match self {
             OAuthApp::Meta(app) => &app.app_id,
             OAuthApp::Instagram(app) => &app.app_id,
             OAuthApp::X(app) => &app.client_id,
             OAuthApp::Tiktok(app) => &app.client_key,
+            OAuthApp::TiktokAds(app) => &app.app_id,
             OAuthApp::Linkedin(app) => &app.client_id,
             OAuthApp::Google(app) => &app.client_id,
         }
@@ -337,6 +366,7 @@ impl OAuthApp {
             OAuthApp::Instagram(app) => &app.app_secret,
             OAuthApp::X(app) => &app.client_secret,
             OAuthApp::Tiktok(app) => &app.client_secret,
+            OAuthApp::TiktokAds(app) => &app.secret,
             OAuthApp::Linkedin(app) => &app.client_secret,
             OAuthApp::Google(app) => &app.client_secret,
         }

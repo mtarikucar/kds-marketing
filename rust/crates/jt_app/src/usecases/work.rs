@@ -1407,7 +1407,10 @@ const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \
     image per ad, a primary text, a headline, a call to action LinkedIn has a button for, the \
     countries and a website; no page (the ad speaks as the company page of the ad account), no \
     description, no age range or gender (LinkedIn's targeting may not be used to discriminate \
-    by them). Choose an end time 24 hours to 90 days after the start and \
+    by them). On TikTok (tiktok_ads): one shareable JPG or PNG image per ad, one primary text \
+    of at most 100 characters without emoji, a call to action, the countries and a website; \
+    no headline, no description, no page (the ad speaks as the TikTok account linked to the ad \
+    account, and Jeeta adds the music a TikTok image ad needs), no age range. Choose an end time 24 hours to 90 days after the start and \
     one to six ads, and deliver them with jeeta.ads.plan_submit (campaign_id, claim_token, \
     request_key, plan). You only decide: Jeeta checks the plan, holds the campaign's whole \
     budget against every limit and builds the campaign at the ad platform itself, paused first. \

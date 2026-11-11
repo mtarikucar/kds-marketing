@@ -43,6 +43,7 @@ pub enum AdsPlatform {
     Meta,
     Google,
     Linkedin,
+    Tiktok,
 }
 
 impl AdsPlatform {
@@ -52,6 +53,7 @@ impl AdsPlatform {
             AdsPlatform::Meta,
             AdsPlatform::Google,
             AdsPlatform::Linkedin,
+            AdsPlatform::Tiktok,
         ]
     }
 
@@ -61,6 +63,7 @@ impl AdsPlatform {
             AdsPlatform::Meta => "meta_ads",
             AdsPlatform::Google => "google_ads",
             AdsPlatform::Linkedin => "linkedin_ads",
+            AdsPlatform::Tiktok => "tiktok_ads",
         }
     }
 

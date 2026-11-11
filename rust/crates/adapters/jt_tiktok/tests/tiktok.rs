@@ -158,7 +158,7 @@ async fn hosts_are_the_fixed_tiktok_entries() {
     assert_eq!(TIKTOK_HOSTS, fixed.as_slice());
     assert_eq!(r.tt.hosts(), fixed.as_slice());
     assert_eq!(r.tt.provider(), Provider::Tiktok);
-    assert_eq!(Provider::Tiktok.kinds(), ["tiktok"]);
+    assert_eq!(Provider::Tiktok.kinds(), ["tiktok", "tiktok_ads"]);
     let production = TiktokBases::production();
     assert_eq!(production.api.as_str(), "https://open.tiktokapis.com/");
     assert_eq!(production.authorize.as_str(), "https://www.tiktok.com/");
@@ -588,7 +588,14 @@ async fn refresh_waits_until_near_expiry() {
         token: "EAAB-SECRET".into(),
     };
     assert_eq!(kind_of(r.tt.refresh(&foreign).await), "permanent");
-    let unconfigured = rig_with(TestApps { tiktok: None }, jt_tiktok::ATTEMPT_TIMEOUT).await;
+    let unconfigured = rig_with(
+        TestApps {
+            tiktok: None,
+            ..TestApps::default()
+        },
+        jt_tiktok::ATTEMPT_TIMEOUT,
+    )
+    .await;
     assert_eq!(
         kind_of(unconfigured.tt.refresh(&with(None)).await),
         "permanent"
@@ -1961,7 +1968,7 @@ async fn kind_key_must_be_tiktok() {
         json!(null),
         json!({ "kind_key": null }),
         json!({ "kind_key": "TIKTOK" }),
-        json!({ "kind_key": "tiktok_ads" }),
+        json!({ "kind_key": "linkedin_ads" }),
         json!({ "kind_key": "x" }),
     ] {
         let errors = [

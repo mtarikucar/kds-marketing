@@ -9,7 +9,7 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   netgsm: ['sms_line', 'netgsm_pbx'],
   x: ['x'],
   mail: ['mailbox'],
-  tiktok: ['tiktok'],
+  tiktok: ['tiktok', 'tiktok_ads'],
   linkedin: ['linkedin_member', 'linkedin_page', 'linkedin_ads'],
   google: ['google_ads'],
 };

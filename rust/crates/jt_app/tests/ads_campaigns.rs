@@ -2203,3 +2203,198 @@ async fn a_linkedin_ad_account_that_may_only_be_read_names_the_missing_permissio
     );
     assert!(s.linkedin.calls().is_empty());
 }
+
+// ---------------------------------------------------------------------------------------------
+// TikTok (design 2026-11-11 §3.3, B69, B88 to B90)
+
+/// A TikTok campaign from its plan to its activation: the ad is one image, one short text
+/// without emoji and a button under the TikTok account linked to its ad account (the plan names
+/// no account); TikTok's least budgets are the account's own limits and a finding of the plan;
+/// the build uploads the image and activates the ad, the ad group and the campaign.
+#[tokio::test]
+async fn a_tiktok_campaign_is_one_image_and_a_short_text_and_is_built_and_activated() {
+    let mut t = ads_world().await;
+    let tiktok = Arc::new(ScriptedConnector::new(Provider::Tiktok));
+    t.w.d.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(t.w.ads.clone())
+            .with_connector(tiktok.clone()),
+    );
+    // A TikTok advertiser's authorization names no scope to hold a write against.
+    let account = connection(
+        &t.w,
+        "tiktok_ads",
+        "7200000000000000001",
+        &["tiktok_business:2"],
+    )
+    .await;
+    let a = agent(&t.w);
+    let c = t.open("tiktok", 60_000).await.unwrap();
+    let claim = ads::campaign_claim(
+        &t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap();
+    let submit = |key: &str, plan: Value| {
+        let d = &t.w.d;
+        let a = &a;
+        let body = json!({"campaign_id":c.id,"claim_token":claim.claim_token,
+            "request_key":key,"plan":plan});
+        async move { ads::plan_submit(d, a, input(body)).await }
+    };
+    let ad = |text: &str| {
+        json!({"name":"Bir","material_ids":[t.image],"primary_text":text,
+            "call_to_action":"SIGN_UP","hypothesis_id":t.w.f.slot.chain.hypothesis_id})
+    };
+    let plan = |ads: Vec<Value>| {
+        json!({"ad_account":account,"result":"link_click",
+            "destination":{"kind":"website","url":"https://ornek.example/kayit"},
+            "audience":{"countries":["TR"]},
+            "end_at":at(FIXED_NOW + Duration::days(7)),
+            "ads":ads,"summary":"Kayıt sayfasına trafik",
+            "audience_summary":"Türkiye'deki TikTok kullanıcıları"})
+    };
+    let limits = |min_daily: i64, min_total: i64| {
+        tiktok.push_account_limits(Ok(AdAccountLimits {
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "Europe/Istanbul".into(),
+            min_daily_budget_minor: min_daily,
+            min_total_budget_minor: min_total,
+        }));
+    };
+    let not_taken = "field_not_for_this_platform";
+
+    // A TikTok ad has one text: no headline, no description, no page; at most 100 characters,
+    // and no emoji.
+    for (field, value, reason) in [
+        ("headline", json!("Kayıtlar açık"), not_taken),
+        ("description", json!("Kısa açıklama"), not_taken),
+        ("page", json!(t.page), not_taken),
+        (
+            "primary_text",
+            json!("x".repeat(101)),
+            "1_to_100_characters",
+        ),
+        ("primary_text", json!("Yeni sezon başlıyor 🎉"), "no_emoji"),
+        ("material_ids", json!([]), "one_image"),
+    ] {
+        let mut p = plan(vec![ad("Yeni sezon başlıyor")]);
+        p["ads"][0][field] = value;
+        let e = submit(&format!("tt-{field}-{reason}"), p)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused_field(&e),
+            (format!("ads[0].{field}"), reason.to_owned()),
+            "{field}"
+        );
+    }
+    let mut aged = plan(vec![ad("Yeni sezon başlıyor")]);
+    aged["audience"]["age_min"] = json!(25);
+    let e = submit("tt-age", aged).await.unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("audience.age_min".into(), not_taken.into())
+    );
+    assert_eq!(t.get(c.id).await.refused, 0);
+    assert!(tiktok.calls().is_empty());
+
+    // TikTok's least budgets are a finding of the plan: 200 a day for seven days here.
+    limits(20_000, 50_000);
+    let e = submit("tt-small", plan(vec![ad("Yeni sezon başlıyor")]))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "plan_refused", "{e:?}");
+    assert!(
+        e.details["findings"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"field":"budget_minor",
+                "reason":"below_the_accounts_minimum","least":140_000})),
+        "{e:?}"
+    );
+    // An image TikTok does not take in a carousel is a finding too.
+    let gif = image_of(&t.w, b"GIF89a", "image/gif").await;
+    let mut other = ad("Yeni sezon başlıyor");
+    other["material_ids"] = json!([gif]);
+    limits(0, 0);
+    let e = submit("tt-gif", plan(vec![other])).await.unwrap_err();
+    assert!(
+        e.details["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["reason"] == "image_type_not_taken"
+                && f["takes"] == json!(["image/jpeg", "image/png"])),
+        "{e:?}"
+    );
+
+    // The plan that holds.
+    limits(0, 0);
+    let x = &tiktok;
+    x.push_find_by_name(Ok(None));
+    x.push_create_campaign(Ok("tt:72:campaign:1".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_adset(Ok("tt:72:adgroup:2".into()));
+    x.push_upload_image(Ok("ad-site/synthetic-image".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_creative(Ok("inline".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_ad(Ok("tt:72:ad:3".into()));
+    for _ in 0..3 {
+        x.push_set_status(Ok(()));
+    }
+    let built = submit("tt-good", plan(vec![ad("Yeni sezon başlıyor")]))
+        .await
+        .unwrap();
+    assert_eq!(Ads::state(&built), CampaignState::InReview);
+    let b = built.built.as_ref().unwrap();
+    assert_eq!(b.platform, AdsPlatform::Tiktok);
+    assert_eq!(
+        b.ads[0].image_hash.as_deref(),
+        Some("ad-site/synthetic-image")
+    );
+    assert!(b.activated_at.is_some());
+    let calls = tiktok.calls();
+    let made = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAd { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(made.creative.identity_id, None);
+    assert_eq!(made.creative.primary_text, "Yeni sezon başlıyor");
+    assert!(made.creative.headline.is_empty());
+    assert_eq!(made.creative.call_to_action, Some(CallToAction::SignUp));
+    let statuses: Vec<(String, AdStatus)> = calls
+        .iter()
+        .filter_map(|c| match c {
+            ConnectorCall::SetAdStatus {
+                entity_id, status, ..
+            } => Some((entity_id.clone(), *status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("tt:72:ad:3".to_owned(), AdStatus::Active),
+            ("tt:72:adgroup:2".to_owned(), AdStatus::Active),
+            ("tt:72:campaign:1".to_owned(), AdStatus::Active)
+        ]
+    );
+    let detail = ads::campaign_get(&t.w.d, &t.w.ctx, input(json!({"campaign_id":c.id})))
+        .await
+        .unwrap();
+    let rules = serde_json::to_value(&detail.platforms).unwrap();
+    assert_eq!(rules[3]["platform"], "tiktok");
+    assert_eq!(rules[3]["primary_text"], 100);
+    assert_eq!(rules[3]["headline"], Value::Null);
+    assert_eq!(rules[3]["no_emoji"], true);
+    assert_eq!(rules[3]["image_types"], json!(["image/jpeg", "image/png"]));
+    assert_eq!(rules[2]["no_emoji"], false);
+}

@@ -80,6 +80,10 @@ pub(crate) async fn list_assets(
     connector: &TiktokConnector,
     cred: &Credential,
 ) -> Result<Vec<Asset>, ConnectorError> {
+    // An advertiser's authorization reaches ad accounts, not a TikTok account that posts.
+    if matches!(cred, Credential::OAuth { scopes, .. } if crate::ads::is_business(scopes)) {
+        return crate::ads::list_assets(connector, cred).await;
+    }
     let token = token_of(cred, "list accounts")?;
     let me = identity(connector, token).await?;
     let mut public = Map::new();
@@ -110,6 +114,9 @@ pub(crate) async fn probe(
     cred: &Credential,
     public: &Value,
 ) -> ProbeResult {
+    if public["kind_key"].as_str() == Some(crate::ads::ADS_KIND) {
+        return crate::ads::probe(connector, cred, public).await;
+    }
     let started = Instant::now();
     let outcome = facts(connector, cred, public).await;
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);

@@ -12,12 +12,14 @@ export const PLATFORM_NAMES: Record<Platform, string> = {
   instagram: 'Instagram',
   google: 'Google',
   linkedin: 'LinkedIn',
+  tiktok: 'TikTok',
 };
 /** The ad platforms a campaign can run on, by the capability kind of their ad accounts. */
 export const AD_ACCOUNT_KINDS: Record<string, string> = {
   meta_ads: 'Meta',
   google_ads: 'Google',
   linkedin_ads: 'LinkedIn',
+  tiktok_ads: 'TikTok',
 };
 /**
  * LinkedIn's own rule for a tool that sets an ad's audience on its platform: the tool shows this

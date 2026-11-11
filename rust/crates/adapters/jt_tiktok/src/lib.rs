@@ -1,11 +1,14 @@
 //! The TikTok adapter (spec `docs/superpowers/specs/2026-10-27-tiktok-linkedin-connectors-design.md`
 //! §2): a TikTok account, connected with Login Kit (OAuth 2.0 authorization code), its posts
 //! through the Content Posting API (one uploaded video, or photos TikTok pulls from URLs), their
-//! publishing status, and its public counters.
+//! publishing status, and its public counters. And a TikTok ad account (`tiktok_ads`, design
+//! `docs/superpowers/specs/2026-11-11-reklam-platformlari-design.md` §3.3), reached through
+//! another API with another app: one-image carousel ads on TikTok itself, built switched off and
+//! then enabled (see "Ad campaigns").
 //!
 //! [`TiktokConnector`] implements the connector ports of `jt_app` ([`Connector`],
 //! [`OAuthProvider`], [`Publisher`] with [`Publisher::resolve`] and [`Publisher::creator_info`],
-//! [`InsightsReader`]); [`webhook`] reads the webhooks TikTok sends (an account's lost access, a
+//! [`InsightsReader`], [`AdCampaignWriter`], [`AdBudgetWriter`]); [`webhook`] reads the webhooks TikTok sends (an account's lost access, a
 //! post's moves), and a post's status is also polled.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
@@ -202,14 +205,122 @@
 //! `facts.account_id` (the credential's own identity, never `public["external_id"]`), with its
 //! `display_name` and (best effort) `username`.
 //!
-//! **Kinds.** TikTok serves one kind, `tiktok`. Every operation that takes `public` refuses one
+//! **Kinds.** TikTok serves `tiktok` (an account that posts) and `tiktok_ads` (an ad account).
+//! Posting, its status and the counters are the first's: every such operation refuses a `public`
 //! without it in `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing.
+//! Campaigns are the ad account's: every such operation refuses another kind ("not a TikTok ad
+//! account") and a credential that is not an advertiser's.
+//!
+//! **Ad campaigns** (`tiktok_ads`; design 2026-11-11 §3.3, B69 and B88 to B90). TikTok's ads
+//! are reached through its API for Business (`business-api.tiktok.com/open_api/v1.3`), not the
+//! Open API of the rest of this crate, and with another app: the platform's TikTok for Business
+//! app (`TiktokAdsApp`), which an advertiser authorizes for their ad accounts. Every call below
+//! was written from TikTok's API for Business documentation
+//! (`https://business-api.tiktok.com/portal/docs?id=...`, read 2026-11-11; the ids are named
+//! beside each call). **Nothing here has been run against TikTok**: the tests answer from an
+//! in-process mock, and the first real campaign is the owner's, on their own account, with a
+//! small budget and their approval at that moment (B38).
+//!
+//! *The envelope.* Every answer is `{code, message, data, request_id}`, and the code decides
+//! whatever the HTTP status says (`1737172488964097`): `0` is a success and its `data` is what a
+//! call answers. The token goes in an `Access-Token` header. A `GET` carries its parameters in
+//! the query, lists and objects as JSON text. First match wins:
+//!
+//! | Answer | Error |
+//! |---|---|
+//! | code `40016`, `40100`, `40132`, `40133` (too many requests, for the app or the ad account); HTTP 429 | `Throttle` |
+//! | code `40113`, `40124`, `40125` (the platform's app is blocked or unknown, its developer profile is not approved, the app lacks a permission) | `Permanent` ("platform TikTok for Business app rejected"): no reconnection fixes it |
+//! | code `40102`, `40104`, `40105` (the token expired, is empty or invalid), `40110` (an authorization code that is spent or cancelled); HTTP 401 | `Auth`: the owner must authorize again |
+//! | code `40001`, `40106`, `40118`, `40119` (no permission, a token that is not this advertiser's, a feature the account is not allowlisted for, another company's advertiser); HTTP 403 | `Permission` |
+//! | code `40202`, `50000`, `50002`, `51305`, `60001` (a write conflict, TikTok's own errors, maintenance); HTTP 5xx | `Transient` |
+//! | a write answered `40050` (TikTok saw the request twice within ten seconds) or `20001` (it worked in part); a write whose answer was lost, broke off or is unreadable | `Unknown` (never sent again: the next run looks for the object by its name) |
+//! | any other code (`40002` a parameter TikTok refuses, `40007` no such object, …) | `Permanent`, with the code and TikTok's own words |
+//!
+//! *The calls.* An object is always named beside its ad account, which its own id does not
+//! carry, so the ids this adapter hands out carry both:
+//! `tt:{advertiser}:{campaign|adgroup|ad}:{id}` (B70).
+//!
+//! | Step | Call |
+//! |---|---|
+//! | authorize | `{business}/portal/auth?app_id&state&redirect_uri`: the app's "Advertiser authorization URL" with the flow's own state (`1738373141733378`). TikTok comes back with `auth_code` (and another value as `code`): the authorization code is `auth_code` |
+//! | exchange | `POST oauth2/access_token/ {app_id, secret, auth_code}` → `access_token`, `scope` (ids), `advertiser_ids` (`1739965703387137`). The token does not expire and has no refresh token; the granted ids are kept as scopes `tiktok_business:<id>`, which is also what tells an advertiser's credential from an account's |
+//! | revoke | `POST oauth2/revoke_token/ {app_id, secret, access_token}` (`1739965949088770`) |
+//! | the ad accounts ([`OAuthProvider::list_assets`]) | `GET oauth2/advertiser/get/?app_id&secret` (`1738455508553729`; TikTok takes the app's secret in this query: it is kept out of every reason), then `GET advertiser/info/?advertiser_ids=[...]` (`1739593083610113`) → `status`, `currency`, `display_timezone`, `country`; an account is offered when its status is `STATUS_ENABLE` |
+//! | finding an object by its name (before each creation, B71) | `GET campaign/get/` and `adgroup/get/` with `filtering={"<x>_name", "primary_status": "STATUS_NOT_DELETE"}`; TikTok matches a name loosely, so the rows are compared exactly, and two of one name are refused. TikTok's list of ads has no filter by name: the ad step reads the ads of its own ad group (`GET ad/get/` with `filtering={"adgroup_ids"}`) and matches the name itself |
+//! | the campaign | `POST campaign/create/ {advertiser_id, campaign_name, objective_type: "TRAFFIC", budget_mode: "BUDGET_MODE_TOTAL", budget, operation_status: "DISABLE"}` (`1739318962329602`) |
+//! | a country | `GET tool/region/?advertiser_id&placements=["PLACEMENT_TIKTOK"]&objective_type=TRAFFIC&level_range=TO_COUNTRY` (`1737189539571713`): the one `COUNTRY` row whose `region_code` is the plan's code |
+//! | the ad group | `POST adgroup/create/ {campaign_id, adgroup_name, promotion_type: "WEBSITE", placement_type: "PLACEMENT_TYPE_NORMAL", placements: ["PLACEMENT_TIKTOK"], location_ids, age_groups (18 and over), gender: "GENDER_UNLIMITED", budget_mode: "BUDGET_MODE_TOTAL", budget, schedule_type: "SCHEDULE_START_END", schedule_start_time, schedule_end_time (UTC), optimization_goal: "CLICK", billing_event: "CPC", bid_type: "BID_TYPE_NO_BID", pacing: "PACING_MODE_SMOOTH", operation_status: "DISABLE"}` (`1739499616346114`) |
+//! | the image | `POST file/image/ad/upload/`, multipart: `advertiser_id`, `upload_type=UPLOAD_BY_FILE`, `image_signature` (the image's MD5), `file_name`, `image_file` (`1739067433456642`) → `image_id`; after a refused duplicate name (`40911`), `GET file/image/ad/search/` (`1740052016789506`), whose rows carry each image's `signature` |
+//! | the ad's speaker | `GET identity/get/` (`1740218420781057`): the one `TT_USER` or `BC_AUTH_TT` identity that is available and may be advertised with |
+//! | the ad's music | `GET file/image/ad/info/` (the image must be usable in a carousel), then `GET file/music/get/?music_scene=CAROUSEL_ADS&search_type=...` (`1740053909509122`): `SEARCH_BY_LIKED`, else `SEARCH_BY_HISTORY`, else `SEARCH_BY_KEYWORD` with `filtering={"keyword"}`; the first piece of the first search that answers one |
+//! | the ad | `POST ad/create/ {advertiser_id, adgroup_id, creatives: [{ad_name, ad_format: "CAROUSEL_ADS", ad_text, call_to_action, image_ids, music_id, identity_type, identity_id, landing_page_url, operation_status: "DISABLE"}]}` (`1739953377508354`, `1766217791987713`) |
+//! | switching on and off | `POST campaign/status/update/`, `adgroup/status/update/`, `ad/status/update/` `{advertiser_id, <x>_ids: [id], operation_status: "ENABLE" or "DISABLE"}` |
+//! | the state | `GET campaign/get/` and `GET ad/get/` filtered by the campaign → `operation_status`, `secondary_status`; for an ad TikTok turned down, `GET ad/review_info/` → `reject_info[].reasons`, `suggestion` (`1740559669226498`) |
+//! | the days | `GET report/integrated/get/?service_type=AUCTION&report_type=BASIC&data_level=AUCTION_AD&dimensions=["ad_id","stat_time_day"]&metrics=["spend","impressions","clicks"]&start_date&end_date&filtering=[{campaign_ids IN}]` (`1740302848100353`), thirty days at a time (TikTok's limit for a report by day) |
+//!
+//! The choices made here, each with its reason:
+//!
+//! - **A carousel of one image.** TikTok's own placement takes no single image ad; an image
+//!   goes there as a carousel, which takes one to 35 images and requires a piece of music (B69).
+//! - **The music.** TikTok recommends music for a carousel only from two images on, and an ad
+//!   here shows one. So the piece is the first the advertiser marked as liked in TikTok's own
+//!   tools (which makes the music theirs to choose, there), else the first the ad account used
+//!   before, else the first TikTok finds for the keyword `background`; with none of the three
+//!   the ad is refused. No agent chooses it.
+//! - **The speaker.** TikTok no longer takes a name and an avatar as an ad's identity on its
+//!   own placement: an ad speaks as a real TikTok account linked to the ad account. The adapter
+//!   uses the one linked account that is available; with none, or with several, the ad is
+//!   refused (it is never put under a guessed account), and a plan names no account (B88).
+//! - **The budget.** The campaign's whole budget is the campaign's lifetime budget
+//!   (`BUDGET_MODE_TOTAL`) and, once more, the ad group's, with a start and an end. TikTok's
+//!   least budgets are known ahead: 20 US dollars a day for an ad group (times the scheduled
+//!   days for a lifetime budget) and 50 for a campaign, each times the currency's "budget
+//!   verification ratio" (`budgets.rs`, generated from TikTok's table). For a campaign, TikTok's
+//!   budget page says 20 US dollars for a daily or a lifetime budget and its value-range table
+//!   50 for a daily one: the stricter is kept. They are the account's limits, so a budget that
+//!   is too small is a finding of the plan (B89).
+//! - **No `request_id`.** TikTok describes `request_id` as what lets two campaigns carry one
+//!   name; none is sent. Whether TikTok then refuses a second campaign of the same name is not
+//!   said on its page: what keeps a build from making two is the search by name before it.
+//! - **The audience** is the plan's countries, everyone of 18 and over, on TikTok itself
+//!   (`PLACEMENT_TIKTOK`): the age groups are named explicitly, since TikTok refuses ads that may
+//!   reach 13 to 17 in many markets. A country TikTok does not offer the ad account is refused.
+//!   TikTok also shows such an ad in its own search results unless told otherwise
+//!   (`search_result_enabled` is left to its default).
+//! - **The image** must be a JPG or a PNG, told by its first bytes. Its file name carries its
+//!   MD5: TikTok refuses a second file of one name in an ad account (`40911`), and the image of
+//!   an upload whose answer was lost is then found by that digest.
+//! - **The text** is at most 100 characters and carries no emoji (TikTok's rule; the plan is
+//!   held to it before anything is sent). TikTok counts a Chinese or Japanese character twice:
+//!   the adapter counts the same way before it sends.
+//! - **States.** An ad TikTok's review turned down is `Disapproved` whatever its switch says,
+//!   with the review's reasons as feedback; one switched off is paused; one under review is in
+//!   review; one delivering, or waiting for its start, runs. Any other state (a budget reached,
+//!   a balance that ran out, a missing authorization) is passed on by its name.
+//! - **Numbers.** A day's `spend` (decimal text in the account's currency) becomes minor units,
+//!   rounded to the nearest; its result is its clicks. Days are the ad account's own
+//!   (`display_timezone`).
+//! - **AI-made images.** TikTok's switch that labels an ad as AI-generated exists only for an
+//!   ad with a custom identity, which its own placement no longer takes: an ad that speaks as a
+//!   linked account cannot carry the label through the API (TikTok may add its own).
+//!
+//! What only a first real run can tell: the authorization page's address (TikTok shows it in
+//! its portal and prints its form on no page; the form used here is the one that page has);
+//! whether TikTok still creates a traffic campaign through `campaign/create/` after 2026-12-31
+//! (its page on the upgraded Smart+ campaigns says "After December 31, 2026, you will no longer
+//! have the ability to create Manual Campaigns using the /campaign/create/ endpoint", and those
+//! campaigns take no traffic objective: design A6); whether the liked and the history lists of
+//! music are empty for a new ad account, and what the keyword search answers;
+//! whether a token sees a TikTok account another person linked to the ad account (A9); whether
+//! an ad may be created switched off under a campaign and an ad group that are switched off;
+//! whether the report names `spend` as text or as a number; and the least budgets TikTok
+//! really enforces where its two pages disagree.
 //!
 //! **Webhooks** ([`webhook`]): the body of a delivery, once the gate checked its signature, read
 //! into the event the use cases store and its effect; the crate sends nothing for them.
 //!
-//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps)
-//! and ads (`tiktok_ads`).
+//! **Not covered** (spec §4): direct messages and comments (no public API for Login Kit apps);
+//! of ads, video ads, lead forms and TikTok's Smart+ campaigns.
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
@@ -226,11 +337,16 @@
 //! [`PublishResolution::Failed`]: jt_app::ports::connectors::PublishResolution::Failed
 //! [`PublishResolution::Pending`]: jt_app::ports::connectors::PublishResolution::Pending
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader
+//! [`AdCampaignWriter`]: jt_app::ports::connectors::AdCampaignWriter
+//! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
 //! [`InsightsReader::recent_posts`]: jt_app::ports::connectors::InsightsReader::recent_posts
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
 mod account;
+mod ads;
+mod budgets;
+mod business;
 mod client;
 mod credential;
 mod insights;
@@ -248,11 +364,12 @@ use jt_outbound::Egress;
 use url::Url;
 
 /// The hosts the adapter reaches, exactly the `tiktok` entries of `jt_outbound::FIXED_HOSTS`: the
-/// Open API (with its token endpoint) and the video upload.
+/// Open API (with its token endpoint), the video upload, and the API for Business (ad accounts).
 pub const TIKTOK_HOSTS: &[&str] = &[
     "open.tiktokapis.com",
     "open-upload.tiktokapis.com",
     "open-upload-sg.tiktokapis.com",
+    "business-api.tiktok.com",
 ];
 
 /// The scopes the authorize URL asks for (<https://developers.tiktok.com/doc/tiktok-api-scopes>):
@@ -334,6 +451,10 @@ pub struct TiktokBases {
     /// The authorize dialog, `https://www.tiktok.com`: only a URL for the owner's browser, never
     /// fetched, so not an egress host.
     pub authorize: Url,
+    /// The API for Business, `https://business-api.tiktok.com`: the calls an ad account is
+    /// reached with, and the page an advertiser authorizes the platform's app on (that page is
+    /// only a URL for the owner's browser).
+    pub business: Url,
 }
 
 impl TiktokBases {
@@ -343,6 +464,7 @@ impl TiktokBases {
         TiktokBases {
             api: url("https://open.tiktokapis.com"),
             authorize: url("https://www.tiktok.com"),
+            business: url("https://business-api.tiktok.com"),
         }
     }
 }

@@ -25,8 +25,8 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::connectors::{
-    InstagramApp, MediaUpload, MetaApp, PlatformAppConfig, TiktokApp, TiktokPost, TiktokPostMode,
-    XApp,
+    InstagramApp, MediaUpload, MetaApp, PlatformAppConfig, TiktokAdsApp, TiktokApp, TiktokPost,
+    TiktokPostMode, XApp,
 };
 use jt_connector::Credential;
 use jt_outbound::{Egress, FIXED_HOSTS};
@@ -56,6 +56,10 @@ pub const DISPLAY_NAME: &str = "Jeeta Test";
 pub const PUBLISH_ID: &str = "v_pub_file~v2-1.7300000000000000009";
 pub const PHOTO_PUBLISH_ID: &str = "p_pub_url~v2-1.7300000000000000008";
 pub const VIDEO_ID: &str = "7300000000000000001";
+
+/// The platform's TikTok for Business app of the tests, and its secret (never in an error).
+pub const ADS_APP_ID: &str = "7300000000000000900";
+pub const ADS_SECRET: &str = "tt-ads-SECRET-test";
 
 pub const TOKEN: &str = "/api/v2/oauth/token/";
 pub const REVOKE: &str = "/api/v2/oauth/revoke/";
@@ -507,12 +511,17 @@ pub fn script_video(mock: &Mock) {
 #[derive(Clone)]
 pub struct TestApps {
     pub tiktok: Option<TiktokApp>,
+    pub tiktok_ads: Option<TiktokAdsApp>,
 }
 
 impl Default for TestApps {
     fn default() -> Self {
         TestApps {
             tiktok: Some(tiktok_app()),
+            tiktok_ads: Some(TiktokAdsApp {
+                app_id: ADS_APP_ID.into(),
+                secret: ADS_SECRET.into(),
+            }),
         }
     }
 }
@@ -534,6 +543,10 @@ impl PlatformAppConfig for TestApps {
         self.tiktok.clone()
     }
 
+    fn tiktok_ads_app(&self) -> Option<TiktokAdsApp> {
+        self.tiktok_ads.clone()
+    }
+
     fn public_base_url(&self) -> Option<Url> {
         Some(Url::parse("https://panel.test").unwrap())
     }
@@ -550,6 +563,7 @@ pub struct Rig {
 pub fn bases_at(addr: SocketAddr) -> TiktokBases {
     TiktokBases {
         api: Url::parse(&format!("http://{addr}/api")).unwrap(),
+        business: Url::parse(&format!("http://{addr}/business")).unwrap(),
         ..TiktokBases::production()
     }
 }

@@ -32,6 +32,7 @@ fn google_app_of(app: &OAuthApp) -> Result<&GoogleApp, ConnectorError> {
         | OAuthApp::Instagram(_)
         | OAuthApp::X(_)
         | OAuthApp::Tiktok(_)
+        | OAuthApp::TiktokAds(_)
         | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent(
             "only the Google app signs in to Google",
         )),

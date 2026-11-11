@@ -58,8 +58,8 @@ const NETGSM_KINDS: &[&str] = &["sms_line", "netgsm_pbx"];
 /// The capability kinds X serves.
 const X_KINDS: &[&str] = &["x"];
 
-/// The capability kinds TikTok serves.
-const TIKTOK_KINDS: &[&str] = &["tiktok"];
+/// The capability kinds TikTok serves: an account that posts, and an ad account.
+const TIKTOK_KINDS: &[&str] = &["tiktok", "tiktok_ads"];
 
 /// The capability kinds LinkedIn serves: a member's own feed, an organization page, and an ad
 /// account.
@@ -77,7 +77,6 @@ pub const UNSUPPORTED_CONNECTOR_KINDS: &[&str] = &[
     "discord",
     "reddit",
     "review_google",
-    "tiktok_ads",
     "google_calendar",
     "outlook_calendar",
 ];

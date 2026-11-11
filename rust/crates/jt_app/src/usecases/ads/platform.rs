@@ -35,6 +35,8 @@ pub struct PlatformRules {
     pub image: bool,
     /// The media types the platform takes an ad's image in; empty: any image.
     pub image_types: &'static [&'static str],
+    /// Whether the platform refuses emoji in an ad's texts.
+    pub no_emoji: bool,
     /// The longest `primary_text`, `headline` and `description` (the last is optional where
     /// taken).
     pub primary_text: Option<usize>,
@@ -96,6 +98,7 @@ const META: PlatformRules = PlatformRules {
     instagram: true,
     image: true,
     image_types: &[],
+    no_emoji: false,
     primary_text: Some(1000),
     headline: Some(100),
     description: Some(100),
@@ -138,6 +141,7 @@ const GOOGLE: PlatformRules = PlatformRules {
     instagram: false,
     image: false,
     image_types: &[],
+    no_emoji: false,
     primary_text: None,
     headline: None,
     description: None,
@@ -201,6 +205,7 @@ const LINKEDIN: PlatformRules = PlatformRules {
     instagram: false,
     image: true,
     image_types: &["image/jpeg", "image/png", "image/gif"],
+    no_emoji: false,
     primary_text: Some(3000),
     headline: Some(200),
     description: None,
@@ -221,6 +226,58 @@ const LINKEDIN: PlatformRules = PlatformRules {
     distinct_ads: false,
 };
 
+/// TikTok: a one-image carousel ad on TikTok itself (B69; a single image alone is not a format of
+/// TikTok's own placement). The ad speaks as the TikTok account linked to its ad account, so a
+/// plan names no account; the music a carousel needs is the first piece TikTok recommends for the
+/// image. One text of at most 100 characters without emoji, an image that is a JPG or a PNG, and
+/// a call to action (<https://business-api.tiktok.com/portal/docs?id=1739953377508354>,
+/// <https://business-api.tiktok.com/portal/docs?id=1766217791987713>, read 2026-11-11); no
+/// headline and no description. The audience is the plan's countries, everyone of 18 and over.
+/// A lifetime budget is never exceeded (TikTok's help: "will never exceed the budget you set"),
+/// and TikTok's least budgets are the ad account's own limits (`AdAccountLimits`).
+const TIKTOK: PlatformRules = PlatformRules {
+    platform: AdsPlatform::Tiktok,
+    account_kind: "tiktok_ads",
+    page_kind: None,
+    instagram: false,
+    image: true,
+    image_types: &["image/jpeg", "image/png"],
+    no_emoji: true,
+    primary_text: Some(100),
+    headline: None,
+    description: None,
+    calls_to_action: META_CALLS_TO_ACTION,
+    headlines: None,
+    descriptions: None,
+    keywords: None,
+    lead_form: false,
+    audience_age_and_gender: false,
+    audience_places_and_interests: false,
+    broad_audience: false,
+    placements: false,
+    min_run_hours: 24,
+    max_run_days: 90,
+    hard_budget_cap: true,
+    watch_minutes: 60,
+    preview: false,
+    distinct_ads: false,
+};
+
+/// Whether `text` carries an emoji: a character of the pictograph blocks, a variation selector
+/// that turns a symbol into one, or the joiner emoji sequences are built with.
+pub(crate) fn has_emoji(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(u32::from(c),
+            0x1F000..=0x1FAFF      // pictographs, emoticons, transport, flags, supplemental
+            | 0x2600..=0x27BF      // miscellaneous symbols and dingbats
+            | 0x2B00..=0x2BFF      // stars and arrows used as emoji
+            | 0x2300..=0x23FF      // technical symbols used as emoji (watch, hourglass)
+            | 0xFE0F               // the emoji variation selector
+            | 0x200D               // the zero width joiner
+            | 0xE0020..=0xE007F) // tag characters (flag sequences)
+    })
+}
+
 /// The most words a keyword carries.
 pub(crate) const MAX_KEYWORD_WORDS: usize = 10;
 
@@ -230,6 +287,7 @@ pub fn rules(platform: AdsPlatform) -> &'static PlatformRules {
         AdsPlatform::Meta => &META,
         AdsPlatform::Google => &GOOGLE,
         AdsPlatform::Linkedin => &LINKEDIN,
+        AdsPlatform::Tiktok => &TIKTOK,
     }
 }
 

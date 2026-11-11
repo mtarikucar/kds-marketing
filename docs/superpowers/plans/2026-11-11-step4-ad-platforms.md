@@ -119,11 +119,18 @@ Rules row, `linkedin_ads` kind served by LinkedIn, ad scopes on the LinkedIn app
 campaign group → campaign (`totalBudget`, `LIFETIME`) → image → dark post → creative → activation;
 state from `review.status`; days from `adAnalytics`.
 
+- [x] 3.1 Rules row, kind, ad scopes flag, ad accounts as assets, probe; writer, switches, reads;
+  tests against the in-process mock; wiring, panel, README; commit, push (`2e9fb655`).
+
 ## Task 4 — TikTok ads (in `jt_tiktok`, TikTok for Business app)
 
 Rules row (identity of the ad account, music chosen by Jeeta), `OAuthCallback::TiktokAds`, advertiser
 accounts as assets, writer: campaign → ad group → image → music → carousel ad; status endpoints;
 `/ad/review_info/`; `/report/integrated/get/`. Minimum budgets from the documented table.
+
+- [x] 4.1 Second OAuth app (`TiktokAdsApp`, `OAuthCallback::TiktokAds`, migration `0042`), API for
+  Business client, ad accounts as assets, probe, limits; writer, switches, reads; tests against the
+  in-process mock; rules row, panel (`auth_code`), README.
 
 ## Task 5 — X ads (in `jt_x`)
 
@@ -229,3 +236,46 @@ differs from the plan's sketch, each recorded in the design (B85 to B87):
 - Tests: `jt_linkedin/tests/ads.rs` (22, against the in-process mock), two more in
   `jt_app/tests/ads_campaigns.rs`, one in `jt_app/tests/connector.rs`, the scope test in
   `jt_linkedin/src/oauth.rs`. Nothing was run against LinkedIn.
+
+### Task 4 (2026-11-11)
+
+TikTok ad campaigns, in `jt_tiktok` (`src/business.rs`, `src/ads.rs`, `src/budgets.rs`,
+`tests/ads.rs`). What differs from the plan's sketch, each recorded in the design (B88 to B90):
+
+- **A second client, not a second crate.** TikTok's API for Business has its own host, its own
+  header (`Access-Token`) and an answer whose own `code` decides whatever the HTTP status says;
+  `business.rs` is that client, beside the Open API one. `business-api.tiktok.com` joined the
+  fixed hosts of the `tiktok` connector.
+- **The authorization code is `auth_code`.** TikTok's redirect carries a `code` too, which is
+  another value: the panel's callback page sends `auth_code` for the `tiktok_ads` callback.
+- **The speaker is the ad account's one linked TikTok account**, found at the ad step; none or
+  several is a refusal. A plan names no account.
+- **The music** (design B91): TikTok recommends music only for two images or more, so for a
+  one-image ad the piece is the first the advertiser liked in TikTok's tools, else the first the
+  ad account used before, else the first result of a search for `background`; none: refused.
+- An independent pass held every path, key, enum and answer field of `ads.rs`, `business.rs` and
+  the OAuth functions against the saved TikTok pages. What it changed: the music search (above;
+  the first version asked for a recommendation with one image, which TikTok does not take), the
+  ad lookup (TikTok's list of ads has no name filter: the ad group's ads are read and matched),
+  the image lookup after a refused duplicate name (no digest filter: the library is read), an
+  identity TikTok marks as unusable for Spark Ads is skipped, a Chinese or Japanese character
+  counts twice in the text, a long range of days is read thirty at a time, and the app refusal
+  keeps TikTok's own words.
+- **Minimum budgets are known ahead** (TikTok's ratio table, generated into `budgets.rs`), so they
+  are the account's limits and a plan finding, unlike LinkedIn's.
+- **Countries only**, all ages of 18 and over named explicitly; no age range, no gender.
+- **A new rule flag**, `no_emoji` (`PlatformRules`): TikTok refuses emoji in an ad's text.
+- **`md-5`** is a direct dependency of `jt_tiktok` (TikTok checks an upload against its MD5).
+- **An advertiser's credential** has no expiry and no refresh token; its scopes carry the ids
+  TikTok granted behind `tiktok_business:`, which is how `refresh` and `revoke` tell it from an
+  account's Login Kit credential. No scope is required of it by the plan check (B62).
+- Migration `0042_tiktok_ads_app` (reversible; round trip tested) widens `oauth_pending.app`.
+- Tests: `jt_tiktok/tests/ads.rs` (21, against the in-process mock), one more in
+  `jt_app/tests/ads_campaigns.rs`, one in `jt_app/tests/connector.rs`, the migration's in
+  `jt_pg/tests/migrations.rs`, the panel's `auth_code` test. Nothing was run against TikTok.
+- Open: A6. TikTok's page says manual campaigns can no longer be created through
+  `/campaign/create/` after 2026-12-31, and its Smart+ campaigns take no traffic objective. The
+  owner must ask TikTok before relying on this platform; a negative answer means a redesign
+  around web conversions (which needs a pixel).
+- The machine's disk filled during this task's full test run (`rust/target` at 132 GB): the full
+  local run of this task is recorded here once it has been repeated.

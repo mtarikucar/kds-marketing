@@ -29,7 +29,7 @@ function ProviderSetupBody() {
   return <div className="space-y-4">
     <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{copy('setupAudience')}</p>
     <QueryState query={hooks}>{hooks.data && <>
-      {base && base!==url && <div className="space-y-3"><label className="flex max-w-sm flex-col gap-2 text-sm">{copy('callbackProvider')}<select className="min-h-10 rounded-md border border-input bg-surface px-3" value={provider} onChange={event=>setProvider(event.target.value)}>{['meta','instagram','x','tiktok','linkedin','google'].map(value=><option key={value} value={value}>{value}</option>)}</select></label><CopyField label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/></div>}
+      {base && base!==url && <div className="space-y-3"><label className="flex max-w-sm flex-col gap-2 text-sm">{copy('callbackProvider')}<select className="min-h-10 rounded-md border border-input bg-surface px-3" value={provider} onChange={event=>setProvider(event.target.value)}>{['meta','instagram','x','tiktok','tiktok_ads','linkedin','google'].map(value=><option key={value} value={value}>{value}</option>)}</select></label><CopyField label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/></div>}
       {hooks.data.meta && <CopyField label={t('capabilities.hooks.metaUrl')} value={hooks.data.meta.url}/>}
       {hooks.data.netgsm.map(hook=><CopyField key={hook.purpose} label={t(`capabilities.hooks.purposes.${hook.purpose}`)} value={hook.url}/>)}
     </>}</QueryState>

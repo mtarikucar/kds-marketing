@@ -82,6 +82,7 @@ struct Rig {
     meta_oauth: Arc<ScriptedOAuth>,
     netgsm: Arc<ScriptedConnector>,
     x_oauth: Arc<ScriptedOAuth>,
+    tiktok: Arc<ScriptedConnector>,
     tiktok_oauth: Arc<ScriptedOAuth>,
     linkedin: Arc<ScriptedConnector>,
     linkedin_oauth: Arc<ScriptedOAuth>,
@@ -110,7 +111,7 @@ async fn rig() -> Rig {
         .with_connector(meta.clone())
         .with_connector(netgsm.clone())
         .with_connector(x)
-        .with_connector(tiktok)
+        .with_connector(tiktok.clone())
         .with_connector(linkedin.clone())
         .with_connector(google.clone())
         .with_oauth(google_oauth.clone())
@@ -126,6 +127,7 @@ async fn rig() -> Rig {
         meta_oauth,
         netgsm,
         x_oauth,
+        tiktok,
         tiktok_oauth,
         linkedin,
         linkedin_oauth,
@@ -581,6 +583,7 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             ("instagram", Provider::Meta),
             ("x", Provider::X),
             ("tiktok", Provider::Tiktok),
+            ("tiktok_ads", Provider::Tiktok),
             ("linkedin", Provider::Linkedin),
             ("google", Provider::Google),
         ]
@@ -588,6 +591,15 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
     assert_eq!(
         OAuthCallback::of_flow(Provider::Google, "google_ads"),
         Some(OAuthCallback::Google)
+    );
+    // TikTok's two apps: the one accounts post through, and the one ad accounts authorize.
+    assert_eq!(
+        OAuthCallback::of_flow(Provider::Tiktok, "tiktok"),
+        Some(OAuthCallback::Tiktok)
+    );
+    assert_eq!(
+        OAuthCallback::of_flow(Provider::Tiktok, "tiktok_ads"),
+        Some(OAuthCallback::TiktokAds)
     );
     assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
     // Both LinkedIn kinds come back to the one LinkedIn callback.
@@ -838,6 +850,88 @@ async fn a_linkedin_ad_account_connects_once_the_ad_scopes_are_enabled() {
         json!(scopes)
     );
     assert_eq!(r.sealed_credential(capability.id), credential);
+}
+
+/// A TikTok ad account connects through the TikTok for Business app, another app than the one
+/// TikTok accounts post through: its flow comes back to its own callback and is exchanged with
+/// its own app, and without that app configured it does not start (the TikTok app that posts
+/// does not stand in for it).
+#[tokio::test]
+async fn a_tiktok_ad_account_connects_through_the_business_app_at_its_own_callback() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let out = r.start("tiktok_ads").await;
+    assert_eq!(
+        redirect_of(&out),
+        "https://panel.test/oauth/callback/tiktok_ads"
+    );
+    assert_eq!(
+        query(&out, "client_id").as_deref(),
+        Some("tiktok-ads-app-id")
+    );
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.state_hash == hash_token(&state_of(&out)))
+        .expect("a pending flow");
+    assert_eq!(
+        (row.provider, row.app),
+        (Provider::Tiktok, OAuthCallback::TiktokAds)
+    );
+    assert_eq!(row.kind_key, "tiktok_ads");
+    // The account that posts still signs in with the TikTok app, at its own callback.
+    let posting = r.start("tiktok").await;
+    assert_eq!(
+        redirect_of(&posting),
+        "https://panel.test/oauth/callback/tiktok"
+    );
+    assert_eq!(
+        query(&posting, "client_id").as_deref(),
+        Some("tiktok-client-key")
+    );
+
+    let credential = Credential::OAuth {
+        access_token: "tt-ads-test-access".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["tiktok_business:2".into(), "tiktok_business:4".into()],
+    };
+    r.tiktok_oauth.push_exchange(Ok(credential.clone()));
+    r.tiktok_oauth.push_assets(Ok(vec![Asset {
+        kind_key: "tiktok_ads".into(),
+        external_id: "7200000000000000001".into(),
+        name: "Reklam hesabı".into(),
+        credential: credential.clone(),
+        public: json!({"currency":"TRY","time_zone":"Europe/Istanbul","country":"TR"}),
+    }]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "auth-code-tt")
+        .await
+        .unwrap();
+    r.tiktok.push_probe(ok_probe("7200000000000000001"));
+    let mut connected = r.confirm(&pending, &["7200000000000000001"]).await;
+    assert_eq!(connected.len(), 1);
+    let capability = connected.remove(0).capability;
+    assert_eq!(capability.kind_key, "tiktok_ads");
+    assert_eq!(capability.status, StoredStatus::Verified);
+    // A reconnection signs in with the app that issued the credential.
+    assert_eq!(capability.connector_public["access"]["app"], "tiktok_ads");
+    assert_eq!(r.sealed_credential(capability.id), credential);
+
+    // Without the TikTok for Business app no such flow starts.
+    let mut without = FakeAppConfig::with_all_apps();
+    without.tiktok_ads = None;
+    let mut deps = r.w.deps.clone();
+    deps.apps = Arc::new(without);
+    let e = err(connector::start_oauth(&deps, o, start("tiktok_ads")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.details["reason"], "provider_app_not_configured");
+    assert!(
+        connector::start_oauth(&deps, o, start("tiktok"))
+            .await
+            .is_ok()
+    );
 }
 
 /// Without a configured public base URL there is no redirect URI and no webhook address: starting

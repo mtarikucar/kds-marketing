@@ -165,6 +165,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Meta => Some(self.meta.clone()),
             Provider::Google => Some(self.google.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
+            Provider::Tiktok => Some(self.tiktok.clone()),
             _ => None,
         }
     }
@@ -174,6 +175,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Meta => Some(self.meta.clone()),
             Provider::Google => Some(self.google.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
+            Provider::Tiktok => Some(self.tiktok.clone()),
             _ => None,
         }
     }
@@ -296,7 +298,14 @@ mod tests {
             ),
             (
                 Provider::Tiktok,
-                vec!["connector", "oauth", "publisher", "insights"],
+                vec![
+                    "connector",
+                    "oauth",
+                    "publisher",
+                    "insights",
+                    "ads",
+                    "ad_campaigns",
+                ],
             ),
             (
                 Provider::Linkedin,

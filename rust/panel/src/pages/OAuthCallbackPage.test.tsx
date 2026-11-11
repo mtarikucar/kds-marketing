@@ -244,6 +244,16 @@ describe('OAuthCallbackPage', () => {
     }
   });
 
+  it('completes a TikTok for Business flow with its auth_code, never the other code TikTok sends beside it', async () => {
+    const path = '/api/connectors/oauth/callback/tiktok_ads';
+    const calls = mockFetch({ 'GET /api/auth/me': me, [`GET ${path}`]: pendingAssets });
+    renderAt('/oauth/callback/tiktok_ads?state=s&code=not-the-code&auth_code=the-code');
+    expect(await screen.findByRole('checkbox', { name: /Kahve Evi/ })).toBeInTheDocument();
+    const completion = calls.filter((c) => c.path === path);
+    expect(completion).toHaveLength(1);
+    expect([...new URLSearchParams(completion[0].search).entries()]).toEqual([['state', 's'], ['code', 'the-code']]);
+  });
+
   it('refuses a callback address the panel does not know, without asking the API', async () => {
     const calls = mockFetch({ 'GET /api/auth/me': me });
     renderAt('/oauth/callback/netgsm?state=s&code=c');

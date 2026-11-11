@@ -1,17 +1,18 @@
 //! The TikTok credential and the capability's kind, as the use cases hand it in `public`.
 
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{ConnectorError, Credential};
 use serde_json::Value;
 
 /// The reason every operation that takes `public` refuses one without the TikTok kind.
 pub(crate) const KIND_MISSING: &str = "kind_key missing";
 
-/// The capability's kind, as the use cases hand it in `public["kind_key"]`: the kind TikTok
-/// serves (`tiktok`), else `Permanent` ([`KIND_MISSING`]).
+/// The capability's kind, as the use cases hand it in `public["kind_key"]`: the account that
+/// posts (`tiktok`), else `Permanent` ([`KIND_MISSING`]). An ad account (`tiktok_ads`) posts
+/// nothing and has no counters: it has its own operations (`crate::ads`).
 pub(crate) fn kind_of(public: &Value) -> Result<&str, ConnectorError> {
     public["kind_key"]
         .as_str()
-        .filter(|kind| Provider::Tiktok.kinds().contains(kind))
+        .filter(|kind| *kind == "tiktok")
         .ok_or_else(|| ConnectorError::permanent(KIND_MISSING))
 }
 

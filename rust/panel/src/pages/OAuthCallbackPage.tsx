@@ -36,9 +36,10 @@ interface Answer {
 
 /**
  * The callback addresses a flow comes back to, one per provider app (`connector::OAuthCallback`):
- * `meta` (Facebook Login), `instagram` (Instagram Login), `x`, `tiktok`, `linkedin` and `google`.
+ * `meta` (Facebook Login), `instagram` (Instagram Login), `x`, `tiktok`, `tiktok_ads` (the TikTok
+ * for Business app, for ad accounts), `linkedin` and `google`.
  */
-const CALLBACKS = ['meta', 'instagram', 'x', 'tiktok', 'linkedin', 'google'] as const;
+const CALLBACKS = ['meta', 'instagram', 'x', 'tiktok', 'tiktok_ads', 'linkedin', 'google'] as const;
 
 function isCallback(segment: string): boolean {
   return (CALLBACKS as readonly string[]).includes(segment);
@@ -183,7 +184,9 @@ export function OAuthCallbackPage() {
   const queryClient = useQueryClient();
   const [answer] = useState<Answer>(() => ({
     state: params.get('state'),
-    code: params.get('code'),
+    // TikTok's API for Business comes back with two values: the authorization code is
+    // `auth_code`; its `code` is another value and exchanges for nothing.
+    code: provider === 'tiktok_ads' ? params.get('auth_code') : params.get('code'),
     error: params.get('error'),
   }));
   // The flow this tab started, if it is the one coming back: its capability, if bound to one.

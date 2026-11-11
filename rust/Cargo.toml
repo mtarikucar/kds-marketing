@@ -103,6 +103,9 @@ argon2 = "0.6"
 # keeps its pseudorandom key in (`jt_seal`).
 sha2 = { version = "0.11", features = ["zeroize"] }
 hex = "0.4"
+# MD5 only where a provider asks for it by name: TikTok checks an uploaded ad image against its
+# MD5 (`jt_tiktok`). Never for anything that must resist tampering.
+md-5 = "0.10"
 # HMAC-SHA256 for webhook signatures and the signed OAuth state (`jt_connector`); the release
 # hkdf 0.13 already uses. `zeroize`: the keyed state wipes itself when dropped.
 hmac = { version = "0.13", features = ["zeroize"] }

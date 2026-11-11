@@ -149,6 +149,9 @@ fn studio_scopes(kind: &str, write: bool) -> Option<&'static [&'static str]> {
         ("google_ads", _) => &["https://www.googleapis.com/auth/adwords"],
         // LinkedIn's ad accounts are written with `rw_ads` and read with either
         // (<https://learn.microsoft.com/en-us/linkedin/marketing/increasing-access>).
+        // A TikTok advertiser authorizes the platform's app for the ad account as a whole: its
+        // token names no scope to hold a write against (design 2026-11-11 B62).
+        ("tiktok_ads", _) => &[],
         ("linkedin_ads", true) => &["rw_ads"],
         ("linkedin_ads", false) => &["r_ads", "rw_ads"],
         ("instagram", true) => &[

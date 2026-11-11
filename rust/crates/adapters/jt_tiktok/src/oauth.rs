@@ -2,14 +2,16 @@
 //! the code exchange, the refresh near expiry and the revocation
 //! (<https://developers.tiktok.com/doc/oauth-user-access-token-management>).
 
-use jt_app::ports::connectors::{OAuthApp, TiktokApp};
+use jt_app::ports::connectors::{OAuthApp, TiktokAdsApp, TiktokApp};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
-use serde_json::Value;
+use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 use url::Url;
 
-use crate::client::{Auth, Body, Effect, Endpoint, join, missing};
+use crate::ads::{BUSINESS_SCOPE, is_business};
+use crate::business::Payload;
+use crate::client::{Auth, Body, Effect, Endpoint, join, missing, text};
 use crate::{REFRESH_AHEAD, TIKTOK_SCOPES, TiktokConnector};
 
 /// Why a credential without a refresh token cannot be renewed.
@@ -30,7 +32,9 @@ fn query(pairs: &[(&str, &str)]) -> String {
 fn tiktok_app_of(app: &OAuthApp) -> Result<&TiktokApp, ConnectorError> {
     match app {
         OAuthApp::Tiktok(tiktok) => Ok(tiktok),
-        OAuthApp::Meta(_)
+        // (An advertiser's flow is taken before this is asked: see `authorize_url`, `exchange`.)
+        OAuthApp::TiktokAds(_)
+        | OAuthApp::Meta(_)
         | OAuthApp::Instagram(_)
         | OAuthApp::X(_)
         | OAuthApp::Linkedin(_)
@@ -54,6 +58,9 @@ pub(crate) fn authorize_url(
     state: &str,
     pkce_challenge: Option<&str>,
 ) -> Result<Url, ConnectorError> {
+    if let OAuthApp::TiktokAds(ads) = app {
+        return Ok(ads_authorize_url(connector, ads, redirect, state));
+    }
     let tiktok = tiktok_app_of(app)?;
     let _ = pkce_challenge;
     let scope = TIKTOK_SCOPES.join(",");
@@ -84,6 +91,9 @@ pub(crate) async fn exchange(
     code: &str,
     pkce_verifier: Option<&str>,
 ) -> Result<Credential, ConnectorError> {
+    if let OAuthApp::TiktokAds(ads) = app {
+        return ads_exchange(connector, ads, code).await;
+    }
     let tiktok = tiktok_app_of(app)?;
     let _ = pkce_verifier;
     let code = present(Some(code))
@@ -100,12 +110,102 @@ pub(crate) async fn exchange(
     credential_of(&answer, None, &asked, OffsetDateTime::now_utc())
 }
 
+/// The page an advertiser authorizes the platform's TikTok for Business app on:
+/// `{business}/portal/auth?app_id&state&redirect_uri`, the "Advertiser authorization URL" the
+/// app's page at TikTok's portal shows, with this flow's own state. Holds no secret.
+fn ads_authorize_url(
+    connector: &TiktokConnector,
+    ads: &TiktokAdsApp,
+    redirect: &Url,
+    state: &str,
+) -> Url {
+    let mut url = join(&connector.bases().business, &["portal", "auth"], &[]);
+    url.set_query(Some(&query(&[
+        ("app_id", &ads.app_id),
+        ("state", state),
+        ("redirect_uri", redirect.as_str()),
+    ])));
+    url
+}
+
+/// The advertiser's credential the authorization code `code` (TikTok's `auth_code`: valid one
+/// hour, usable once) is exchanged for: `POST {business}/open_api/v1.3/oauth2/access_token/`
+/// `{app_id, secret, auth_code}`. The token does not expire and has no refresh token; the ids
+/// of the permissions TikTok granted are kept as its scopes, each behind [`BUSINESS_SCOPE`],
+/// which is also what tells an advertiser's credential from an account's.
+async fn ads_exchange(
+    connector: &TiktokConnector,
+    ads: &TiktokAdsApp,
+    code: &str,
+) -> Result<Credential, ConnectorError> {
+    let code = present(Some(code))
+        .ok_or_else(|| ConnectorError::permanent("no authorization code to exchange"))?;
+    let data = connector
+        .business(
+            Method::POST,
+            connector.business_url(&["oauth2", "access_token"], &[]),
+            None,
+            &Payload::Json(json!({
+                "app_id": ads.app_id,
+                "secret": ads.secret,
+                "auth_code": code,
+            })),
+            Effect::Commit,
+            &[&ads.secret, code],
+        )
+        .await?;
+    let access_token = text(&data["access_token"])
+        .ok_or_else(|| ConnectorError::unknown("accepted response lacks an access token"))?;
+    let mut scopes: Vec<String> = data["scope"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(text)
+        .map(|id| format!("{BUSINESS_SCOPE}{id}"))
+        .collect();
+    if scopes.is_empty() {
+        // An answer that names no permission is an advertiser's all the same.
+        scopes.push(format!("{BUSINESS_SCOPE}granted"));
+    }
+    Ok(Credential::OAuth {
+        access_token,
+        refresh_token: None,
+        expires_at: None,
+        scopes,
+    })
+}
+
+/// Revokes an advertiser's token: `POST {business}/open_api/v1.3/oauth2/revoke_token/`
+/// `{app_id, secret, access_token}`.
+async fn ads_revoke(connector: &TiktokConnector, token: &str) -> Result<(), ConnectorError> {
+    let ads = connector.tiktok_ads_app()?;
+    connector
+        .business(
+            Method::POST,
+            connector.business_url(&["oauth2", "revoke_token"], &[]),
+            Some(token),
+            &Payload::Json(json!({
+                "app_id": ads.app_id,
+                "secret": ads.secret,
+                "access_token": token,
+            })),
+            Effect::Commit,
+            &[&ads.secret],
+        )
+        .await
+        .map(|_| ())
+}
+
 /// A renewed credential when `cred` expires within [`REFRESH_AHEAD`] (or has expired, or names
-/// no expiry), else `None` (see the crate docs).
+/// no expiry), else `None` (see the crate docs). An advertiser's credential does not expire and
+/// has nothing to renew with: `None`.
 pub(crate) async fn refresh(
     connector: &TiktokConnector,
     cred: &Credential,
 ) -> Result<Option<Credential>, ConnectorError> {
+    if matches!(cred, Credential::OAuth { scopes, .. } if is_business(scopes)) {
+        return Ok(None);
+    }
     let Credential::OAuth {
         refresh_token,
         expires_at,
@@ -223,6 +323,15 @@ pub(crate) async fn revoke(
     connector: &TiktokConnector,
     cred: &Credential,
 ) -> Result<(), ConnectorError> {
+    if let Credential::OAuth {
+        access_token,
+        scopes,
+        ..
+    } = cred
+        && is_business(scopes)
+    {
+        return ads_revoke(connector, access_token).await;
+    }
     let held = crate::credential::token_of(cred, "be revoked")?;
     let expired = matches!(
         cred,
@@ -263,6 +372,13 @@ impl TiktokConnector {
         self.apps
             .tiktok_app()
             .ok_or_else(|| ConnectorError::permanent("the TikTok app is not configured"))
+    }
+
+    /// The TikTok for Business app, read now; `Permanent` when the platform has none.
+    pub(crate) fn tiktok_ads_app(&self) -> Result<TiktokAdsApp, ConnectorError> {
+        self.apps.tiktok_ads_app().ok_or_else(|| {
+            ConnectorError::permanent("the TikTok for Business app is not configured")
+        })
     }
 }
 

@@ -130,6 +130,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0039_general_ad_budget` | Bütçe (2026-11-10, B37): `budget_items.general` (çalışma alanının genel reklam bütçesi; yalnızca para birimli, dönemi `total` olmayan bir `ad_budget` kalemi, çalışma alanı başına en çok bir canlı kalem: `budget_items_general_rule` CHECK ve `budget_items_one_general` kısmi tekil dizini). Sütun geldiği anda tam bir uygun canlı kalemi olan çalışma alanında o kalem işaretlenir; hiç yoksa ya da birden çoksa kişi Bütçe'de seçer. `budget_spend_entries.module` (`ads`, `inbox`, `outreach`, `calls`, `social`; elle girilen harcamada boş) ve `campaign_id`. Geri alma işareti, kuralı, dizini ve iki sütunu kaldırır; kalemler ve harcama kayıtları kalır. Tablo eklemez. |
 | `0040_ads_campaigns` | Reklam yönetimi (2026-11-10, §8): `ads_campaigns` (kampanya başına tek belge: hedef, bütçe, plan, sağlayıcıda kurulanlar, ajanın hamleleri, günlük sonuçlar; `start_at` açık kampanyaları, `closed_at` bitenleri sıralar; zorunlu RLS; 103 tablo). Geri alma, saklı bir kampanya varken reddeder (kampanya paranın kaydıdır ve sağlayıcıda çalışıyor olabilir); yoksa tabloyu kaldırır. |
 | `0041_google_provider` | Google Ads hesapları OAuth ile bağlanır (tasarım `2026-11-11-reklam-platformlari-design.md`): `oauth_pending`'in `provider` ve `app` denetimleri `google`'ı da kabul eder. Başka hiçbir tablo değişmez. Geri alma, bekleyen bir Google akışı varken denetimleri genişletilmiş bırakır (akışlar 30 dakikada biter; sonra yeniden çalıştırılır) ve hiçbir satıra dokunmaz |
+| `0042_tiktok_ads_app` | TikTok reklam hesapları, TikTok'un paylaşım uygulamasından ayrı bir uygulamayla (TikTok for Business) bağlanır: `oauth_pending`'in `app` denetimi `tiktok_ads`'i de kabul eder. Geri alma, bekleyen böyle bir akış varken denetimi daraltmaz (hiçbir satıra dokunmaz); bağlı `tiktok_ads` yeteneklerine dokunulmaz |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -204,6 +205,8 @@ hiçbir günlük satırında görünmez.
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_SECRET` | — | TikTok uygulamasının client secret'ı; anahtarla birlikte verilir |
+| `JEETA_TIKTOK_ADS_APP_ID` | — | Platformun TikTok for Business uygulamasının (Marketing API; reklam hesapları için) uygulama kimliği. Yukarıdaki TikTok uygulamasından ayrı bir uygulamadır, business-api.tiktok.com portalında açılır; sırla birlikte verilir |
+| `JEETA_TIKTOK_ADS_SECRET` | — | TikTok for Business uygulamasının sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_CLIENT_ID` | — | Platformun LinkedIn uygulamasının (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn) istemci kimliği; sırla birlikte verilir |
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
@@ -909,6 +912,7 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
 | TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
+| TikTok reklamları (TikTok for Business) | `JEETA_TIKTOK_ADS_APP_ID`, `JEETA_TIKTOK_ADS_SECRET` | business-api.tiktok.com → geliştirici kaydı (şirket alan adlı e-posta, şirket sitesi) → uygulama: kapsamlar **Ad Account Management**, **Ads Management**, **Reporting**, **Creative Management**; "Advertiser redirect URL" olarak yandaki adres; uygulama incelemesi. Reklamveren, uygulamanın yetkilendirme sayfasında e-posta koduyla onay verir; belirtecin süresi dolmaz | `{genel adres}/oauth/callback/tiktok_ads` |
 | LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_AD_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; reklam hesapları için **Advertising API** onayı → `JEETA_LINKEDIN_AD_SCOPES=1` (Development kademesinde en çok beş reklam hesabı, hesaplar geliştirici portalında uygulamaya eşlenir); Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
 | Google (Google Ads) | `JEETA_GOOGLE_CLIENT_ID`, `JEETA_GOOGLE_CLIENT_SECRET` | console.cloud.google.com → proje → APIs & Services: **Google Ads API**'yi etkinleştir; OAuth consent screen (kapsam `https://www.googleapis.com/auth/adwords`; "Testing" durumunda yenileme belirteçleri 7 günde bir düşer, yayına alınıp doğrulanmalıdır); Credentials → OAuth client ID, tür "Web application" → Authorized redirect URIs. Projenin Google Ads API erişim düzeyi (Test → Explorer → Basic → Standard) Google Ads API Center'dan yükseltilir | `{genel adres}/oauth/callback/google` |
 
@@ -1388,28 +1392,28 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 `ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
 `ads_campaign_held` reklamı yöneten insana.
 
-**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B87).** Bir kampanya tek bir
+**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B90).** Bir kampanya tek bir
 reklam hesabında, yani tek bir platformda çalışır (B61); platform hesabın türünden gelir
 (`AdsPlatform::of_kind`) ve kurulan kampanyada `built.platform` olarak durur. Açma, planlama, kurma,
 izleme, durdurma ve para her platformda aynıdır; değişen, planın neyi taşıdığıdır. O kurallar tek bir
 tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `platforms` olarak gelir:
 
-| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) | LinkedIn (`linkedin_ads`): tek görselli sponsorlu içerik |
-|---|---|---|---|
-| `page` | canlı bir `facebook_page` | alınmaz | alınmaz: reklam, reklam hesabının kendi şirket Sayfası adına konuşur (B85) |
-| `instagram` | isteğe bağlı | alınmaz | alınmaz |
-| `material_ids` | tam bir görsel | alınmaz | tam bir görsel; JPG, PNG ya da GIF (başkası `image_type_not_taken` bulgusudur) |
-| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz | en çok 3000 ve 200 karakter; `description` alınmaz |
-| `call_to_action` | listedeki dokuz değer | alınmaz | yedi değer: `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`, `DOWNLOAD` |
-| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez | alınmaz |
-| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük | alınmaz |
-| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler | yalnızca ülkeler (B87) |
-| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) | `automatic` (verilmezse o) |
-| sonuç | `link_click`, `lead_form` | `link_click` | `link_click` |
-| süre | 24 saat – 90 gün | 72 saat – 89 gün | 24 saat – 90 gün |
-| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur | evet |
-| toplam bütçe kesin sınır mı | evet | evet | evet |
-| önizleme | var | yok | yok |
+| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) | LinkedIn (`linkedin_ads`): tek görselli sponsorlu içerik | TikTok (`tiktok_ads`): tek görselli kaydırmalı reklam (B69) |
+|---|---|---|---|---|
+| `page` | canlı bir `facebook_page` | alınmaz | alınmaz: reklam, reklam hesabının kendi şirket Sayfası adına konuşur (B85) | alınmaz: reklam, reklam hesabına bağlı TikTok hesabı adına konuşur (B88) |
+| `instagram` | isteğe bağlı | alınmaz | alınmaz | alınmaz |
+| `material_ids` | tam bir görsel | alınmaz | tam bir görsel; JPG, PNG ya da GIF (başkası `image_type_not_taken` bulgusudur) | tam bir görsel; JPG ya da PNG |
+| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz | en çok 3000 ve 200 karakter; `description` alınmaz | yalnızca `primary_text`: en çok 100 karakter, emoji yok (`no_emoji`) |
+| `call_to_action` | listedeki dokuz değer | alınmaz | yedi değer: `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`, `DOWNLOAD` | listedeki dokuz değer |
+| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez | alınmaz | alınmaz |
+| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük | alınmaz | alınmaz |
+| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler | yalnızca ülkeler (B87) | yalnızca ülkeler (18 yaş ve üstü herkes) |
+| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) | `automatic` (verilmezse o) | `automatic` (verilmezse o); yalnızca TikTok'un kendisi |
+| sonuç | `link_click`, `lead_form` | `link_click` | `link_click` | `link_click` |
+| süre | 24 saat – 90 gün | 72 saat – 89 gün | 24 saat – 90 gün | 24 saat – 90 gün |
+| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur | evet | evet |
+| toplam bütçe kesin sınır mı | evet | evet | evet | evet |
+| önizleme | var | yok | yok | yok |
 
 - Platformun almadığı bir alan verilirse plan o alanın adıyla reddedilir (`VALIDATION`,
   `field_not_for_this_platform`); gereken bir alan yoksa `required_on_this_platform`. Alan sessizce
@@ -1424,8 +1428,8 @@ tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `
   (`materials::check_texts`): hiçbir şeye bağlı olmayan bir metin, yalnızca doğrulanmış bir olayın
   kendi materyalinin söyleyebileceğini söyleyemez.
 - Kurulum adımları her platformda aynıdır (B70): kampanya → kampanyanın altındaki düzey (Meta'da
-  reklam seti, Google'da reklam grubu, LinkedIn'de kampanya; anahtar sözcükler ve bütçe ona da
-  verilir) → her reklam. Görseli
+  reklam seti, Google'da ve TikTok'ta reklam grubu, LinkedIn'de kampanya; anahtar sözcükler ve
+  bütçe ona da verilir) → her reklam. Görseli
   olmayan reklamda görsel adımı yoktur; kendi kreatif nesnesi olmayan platformda kreatif adımı çağrı
   yapmaz ve reklam adımı kreatifin kendisini taşır (`AdSpec.creative`).
 - Tutulan (`pause_ad`) ya da yerine yenisi konan bir reklamı sağlayıcı hâlâ çalışıyor diye
@@ -1466,6 +1470,44 @@ göstereceği noktalar `jt_linkedin`'in crate belgesindedir; özeti:
   özelliklere göre ayrımcılık yapmak için kullanılamaz" bildirimini göstermesini ister: panel bunu
   kampanya açılırken LinkedIn hesabı seçildiğinde ve LinkedIn kampanyasının sayfasında gösterir; ajan
   aracının açıklaması da söyler.
+
+**TikTok reklam bağlayıcısı (`jt_tiktok`, B69, B88–B90).** `tiktok_ads` hesabı TikTok'un paylaşım
+uygulamasıyla değil, ayrı bir uygulamayla bağlanır: TikTok for Business
+(`JEETA_TIKTOK_ADS_APP_ID` / `JEETA_TIKTOK_ADS_SECRET`). Reklamveren uygulamayı TikTok'un sayfasında
+yetkilendirir; yetkilendirmenin kapsadığı, etkin her reklam hesabı para birimi ve saat dilimiyle
+seçime sunulur. Belirtecin süresi dolmaz. Hiçbir çağrı TikTok'a karşı çalıştırılmadı; ilk gerçek
+kampanya sahibin kendi hesabında, küçük bütçeyle ve o anki onayıyladır (B38). Çağrıların tamamı,
+hata kodlarının karşılığı ve ilk gerçek çalıştırmanın göstereceği noktalar `jt_tiktok`'un crate
+belgesindedir; özeti:
+
+- **Tek görselli kaydırmalı reklam.** TikTok'un kendi yerleşiminde tek görselli reklam biçimi
+  yoktur; görsel oraya kaydırmalı reklam olarak gider ve müzik zorunludur (B69).
+- **Müzik.** TikTok müzik önerisini en az iki görsel için verir; buradaki reklam tek görsellidir.
+  Bu yüzden parça sırayla şuradan alınır: reklamverenin TikTok'un kendi araçlarında beğendiği ilk
+  parça (müziği seçmek isteyen bunu orada yapar), yoksa reklam hesabının daha önce kullandığı ilk
+  parça, o da yoksa TikTok'un `background` araması için bulduğu ilk parça. Üçü de boşsa reklam
+  kurulmaz. Ajan parça seçmez (B91).
+- **Kimin adına.** Reklam, reklam hesabına bağlı gerçek TikTok hesabı adına konuşur (TikTok kendi
+  yerleşiminde ad ve avatardan oluşan kimliği artık kabul etmiyor). Bağlı ve kullanılabilir tek bir
+  hesap olmalıdır; hiç yoksa ya da birden fazlaysa reklam kurulmaz (hesap tahmin edilmez). Plan
+  hesap taşımaz (B88).
+- **Bütçe.** Kampanyanın bütçesi hem kampanyanın hem reklam grubunun ömür boyu bütçesidir
+  (`BUDGET_MODE_TOTAL`), başlangıç ve bitişle. TikTok'un alt sınırları önceden bilinir: reklam grubu
+  için günde 20 ABD doları (ömür boyu bütçede bunun gün sayısı katı), kampanya için 50 ABD doları;
+  her biri para biriminin TikTok tablosundaki katsayısıyla çarpılır (Türk lirasında 200 ve 500).
+  Bunlar hesabın sınırlarıdır: küçük bütçe plan bulgusudur (`below_the_accounts_minimum`, B89).
+- **Kitle.** Planın ülkeleri, 18 yaş ve üstü herkes, yalnızca TikTok'un kendisi. TikTok'un o reklam
+  hesabına sunmadığı ülke reddedilir.
+- **Metin** en çok 100 karakterdir ve emoji taşıyamaz; **görsel** JPG ya da PNG olmalıdır. İkisi de
+  plan aşamasında denetlenir.
+- **Yapay zekâ etiketi.** TikTok'un "yapay zekâ ile üretildi" anahtarı yalnızca özel kimlikli
+  reklamda vardır; bağlı hesap adına konuşan reklam bu etiketi API'den taşıyamaz (TikTok kendisi
+  etiketleyebilir) (B90).
+- **Belirsizlik (önemli).** TikTok'un belgesi şunu söylüyor: "After December 31, 2026, you will no
+  longer have the ability to create Manual Campaigns using the /campaign/create/ endpoint." Yerine
+  gelen Smart+ kampanyaları trafik amacını desteklemiyor. Yani bu bağlayıcının kurduğu kampanya
+  türü 2026 sonundan sonra API'den oluşturulamayabilir. Trafik amacının durumu TikTok'a sorulmalıdır
+  (tasarım A6); yanıt olumsuzsa TikTok adımı başka bir amaçla yeniden tasarlanır.
 
 **Google bağlayıcısı (`jt_google`, B68, B76).** `google_ads` hesabı Google girişiyle bağlanır
 (`JEETA_GOOGLE_CLIENT_ID` / `JEETA_GOOGLE_CLIENT_SECRET`; çevrimdışı erişim, kapsam `adwords`): girişin

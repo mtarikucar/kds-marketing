@@ -544,7 +544,9 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
                     // X measures visible emoji clusters before publishing.
                     || (*c == "jt_x" && d == "unicode-segmentation")
                     // Google takes a campaign's days in the ad account's own time zone.
-                    || (*c == "jt_google" && matches!(d.as_str(), "chrono" | "chrono-tz")),
+                    || (*c == "jt_google" && matches!(d.as_str(), "chrono" | "chrono-tz"))
+                    // TikTok checks an uploaded ad image against its MD5.
+                    || (*c == "jt_tiktok" && d == "md-5"),
                 "{c} depends on {d}, which is not on its allowlist"
             );
         }

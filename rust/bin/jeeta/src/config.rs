@@ -20,7 +20,8 @@ use std::str::FromStr;
 
 use axum::http::uri::Authority;
 use jt_app::ports::connectors::{
-    GoogleApp, InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokApp, Url, XApp,
+    GoogleApp, InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokAdsApp, TiktokApp, Url,
+    XApp,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -96,6 +97,11 @@ pub const X_CLIENT_SECRET: &str = "JEETA_X_CLIENT_SECRET";
 pub const TIKTOK_CLIENT_KEY: &str = "JEETA_TIKTOK_CLIENT_KEY";
 /// The TikTok app's client secret; set together with [`TIKTOK_CLIENT_KEY`].
 pub const TIKTOK_CLIENT_SECRET: &str = "JEETA_TIKTOK_CLIENT_SECRET";
+/// The platform's TikTok for Business app (the Marketing API, for ad accounts): its app id. It is
+/// another app than the TikTok app above, registered at TikTok's API for Business portal.
+pub const TIKTOK_ADS_APP_ID: &str = "JEETA_TIKTOK_ADS_APP_ID";
+/// The TikTok for Business app's secret; set together with [`TIKTOK_ADS_APP_ID`].
+pub const TIKTOK_ADS_SECRET: &str = "JEETA_TIKTOK_ADS_SECRET";
 /// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn)
 /// client id.
 pub const LINKEDIN_CLIENT_ID: &str = "JEETA_LINKEDIN_CLIENT_ID";
@@ -166,6 +172,8 @@ const VARS: &[&str] = &[
     X_CLIENT_SECRET,
     TIKTOK_CLIENT_KEY,
     TIKTOK_CLIENT_SECRET,
+    TIKTOK_ADS_APP_ID,
+    TIKTOK_ADS_SECRET,
     LINKEDIN_CLIENT_ID,
     LINKEDIN_CLIENT_SECRET,
     LINKEDIN_ORG_SCOPES,
@@ -264,6 +272,7 @@ pub struct EnvPlatformApps {
     instagram: Option<InstagramApp>,
     x: Option<XApp>,
     tiktok: Option<TiktokApp>,
+    tiktok_ads: Option<TiktokAdsApp>,
     linkedin: Option<LinkedinApp>,
     google: Option<GoogleApp>,
     hepsiburada_integrator_user: Option<String>,
@@ -274,13 +283,14 @@ pub struct EnvPlatformApps {
 
 impl EnvPlatformApps {
     /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`, `tiktok`,
-    /// `linkedin`, `google`.
+    /// `tiktok_ads`, `linkedin`, `google`.
     pub fn configured(&self) -> Vec<&'static str> {
         [
             ("meta", self.meta.is_some()),
             ("instagram", self.instagram.is_some()),
             ("x", self.x.is_some()),
             ("tiktok", self.tiktok.is_some()),
+            ("tiktok_ads", self.tiktok_ads.is_some()),
             ("linkedin", self.linkedin.is_some()),
             ("google", self.google.is_some()),
         ]
@@ -297,6 +307,7 @@ impl fmt::Debug for EnvPlatformApps {
             .field("instagram", &self.instagram)
             .field("x", &self.x)
             .field("tiktok", &self.tiktok)
+            .field("tiktok_ads", &self.tiktok_ads)
             .field("linkedin", &self.linkedin)
             .field("google", &self.google)
             .field(
@@ -327,6 +338,10 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn tiktok_app(&self) -> Option<TiktokApp> {
         self.tiktok.clone()
+    }
+
+    fn tiktok_ads_app(&self) -> Option<TiktokAdsApp> {
+        self.tiktok_ads.clone()
     }
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
@@ -709,6 +724,8 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 client_secret,
             }
         });
+    let tiktok_ads = pair(&get, TIKTOK_ADS_APP_ID, TIKTOK_ADS_SECRET)?
+        .map(|(app_id, secret)| TiktokAdsApp { app_id, secret });
     let linkedin = match pair(&get, LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET)? {
         Some((client_id, client_secret)) => {
             let api_version = value(LINKEDIN_API_VERSION)
@@ -762,6 +779,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         || instagram.is_some()
         || x.is_some()
         || tiktok.is_some()
+        || tiktok_ads.is_some()
         || linkedin.is_some()
         || google.is_some();
     if any_app && public_base_url.is_none() {
@@ -776,6 +794,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         instagram,
         x,
         tiktok,
+        tiktok_ads,
         linkedin,
         google,
         hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
@@ -1253,6 +1272,8 @@ mod tests {
         (X_CLIENT_SECRET, "X-SECRET-SENTINEL"),
         (TIKTOK_CLIENT_KEY, "tt-key-1"),
         (TIKTOK_CLIENT_SECRET, "TT-SECRET-SENTINEL"),
+        (TIKTOK_ADS_APP_ID, "tta-id-1"),
+        (TIKTOK_ADS_SECRET, "TTA-SECRET-SENTINEL"),
         (LINKEDIN_CLIENT_ID, "li-id-1"),
         (LINKEDIN_CLIENT_SECRET, "LI-SECRET-SENTINEL"),
         (GOOGLE_CLIENT_ID, "g-id-1"),
@@ -1282,7 +1303,15 @@ mod tests {
         let all = Config::from_map(&with(ALL_APPS)).unwrap();
         assert_eq!(
             all.apps.configured(),
-            ["meta", "instagram", "x", "tiktok", "linkedin", "google"]
+            [
+                "meta",
+                "instagram",
+                "x",
+                "tiktok",
+                "tiktok_ads",
+                "linkedin",
+                "google"
+            ]
         );
         let google = all.apps.google_app().unwrap();
         assert_eq!(
@@ -1293,6 +1322,11 @@ mod tests {
         assert_eq!(
             (tiktok.client_key.as_str(), tiktok.client_secret.as_str()),
             ("tt-key-1", "TT-SECRET-SENTINEL")
+        );
+        let tiktok_ads = all.apps.tiktok_ads_app().unwrap();
+        assert_eq!(
+            (tiktok_ads.app_id.as_str(), tiktok_ads.secret.as_str()),
+            ("tta-id-1", "TTA-SECRET-SENTINEL")
         );
         let linkedin = all.apps.linkedin_app().unwrap();
         assert_eq!(
@@ -1362,6 +1396,8 @@ mod tests {
             ((X_CLIENT_SECRET, "HALF-SENTINEL"), X_CLIENT_ID),
             ((TIKTOK_CLIENT_KEY, "tt-key-1"), TIKTOK_CLIENT_SECRET),
             ((TIKTOK_CLIENT_SECRET, "HALF-SENTINEL"), TIKTOK_CLIENT_KEY),
+            ((TIKTOK_ADS_APP_ID, "tta-id-1"), TIKTOK_ADS_SECRET),
+            ((TIKTOK_ADS_SECRET, "HALF-SENTINEL"), TIKTOK_ADS_APP_ID),
             ((GOOGLE_CLIENT_ID, "g-id-1"), GOOGLE_CLIENT_SECRET),
             ((GOOGLE_CLIENT_SECRET, "HALF-SENTINEL"), GOOGLE_CLIENT_ID),
             ((LINKEDIN_CLIENT_ID, "li-id-1"), LINKEDIN_CLIENT_SECRET),
@@ -1445,6 +1481,8 @@ mod tests {
             (X_CLIENT_SECRET, ""),
             (TIKTOK_CLIENT_KEY, ""),
             (TIKTOK_CLIENT_SECRET, ""),
+            (TIKTOK_ADS_APP_ID, ""),
+            (TIKTOK_ADS_SECRET, ""),
             (LINKEDIN_CLIENT_ID, ""),
             (LINKEDIN_CLIENT_SECRET, ""),
             (LINKEDIN_ORG_SCOPES, ""),
@@ -1536,6 +1574,7 @@ mod tests {
             &[(INSTAGRAM_APP_ID, "i"), (INSTAGRAM_APP_SECRET, "s")][..],
             &[(X_CLIENT_ID, "x"), (X_CLIENT_SECRET, "s")][..],
             &[(TIKTOK_CLIENT_KEY, "t"), (TIKTOK_CLIENT_SECRET, "s")][..],
+            &[(TIKTOK_ADS_APP_ID, "a"), (TIKTOK_ADS_SECRET, "s")][..],
             &[(LINKEDIN_CLIENT_ID, "l"), (LINKEDIN_CLIENT_SECRET, "s")][..],
             &[(GOOGLE_CLIENT_ID, "g"), (GOOGLE_CLIENT_SECRET, "s")][..],
         ] {
@@ -1647,6 +1686,8 @@ mod tests {
             X_CLIENT_SECRET,
             TIKTOK_CLIENT_KEY,
             TIKTOK_CLIENT_SECRET,
+            TIKTOK_ADS_APP_ID,
+            TIKTOK_ADS_SECRET,
             LINKEDIN_CLIENT_ID,
             LINKEDIN_CLIENT_SECRET,
             LINKEDIN_ORG_SCOPES,

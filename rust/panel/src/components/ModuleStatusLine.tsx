@@ -12,8 +12,8 @@ import { useModules } from '@/lib/modules';
 import { can } from '@/lib/roles';
 import { formatDateTime } from '@/lib/format';
 
-/** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`). */
-const AD_WRITE_SCOPES: Record<string, string> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads' };
+/** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`); `null`: the platform's authorization names none (TikTok). */
+const AD_WRITE_SCOPES: Record<string, string | null> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads', tiktok_ads: null };
 export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
   const { t, i18n } = useTranslation();
   const session = useSession();
@@ -51,8 +51,10 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
     // server's rule, `studio::chain::capability_access`): every plan is then refused.
     const connected = adAccounts.data?.filter(c => c.effective_status === 'verified' && c.capability.kind_key in AD_WRITE_SCOPES);
     const creates = (c: NonNullable<typeof connected>[number]) => {
+      const needed = AD_WRITE_SCOPES[c.capability.kind_key];
+      if (needed === null) return true;
       const scopes = (c.capability.connector_public.access as { scopes?: unknown } | undefined)?.scopes;
-      return Array.isArray(scopes) && scopes.includes(AD_WRITE_SCOPES[c.capability.kind_key]);
+      return Array.isArray(scopes) && scopes.includes(needed);
     };
     if (connected?.length && !connected.some(creates)) rows.push({ key: 'ad-scope', text: t('moduleStatus.adScope'), href: '/capabilities' });
   }

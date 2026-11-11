@@ -17,9 +17,9 @@ export type CampaignState =
 /** Where a Meta campaign's ads are shown. */
 export type MetaPlatform = 'facebook' | 'instagram';
 /** What the campaign list filters by: Meta's two surfaces, or another ad platform. */
-export type Platform = MetaPlatform | 'google' | 'linkedin';
+export type Platform = MetaPlatform | 'google' | 'linkedin' | 'tiktok';
 /** The ad platform a campaign's ad account is of (`jt_app::ports::ads::AdsPlatform`). */
-export type AdsPlatform = 'meta' | 'google' | 'linkedin';
+export type AdsPlatform = 'meta' | 'google' | 'linkedin' | 'tiktok';
 /**
  * What a plan carries on one ad platform (`jt_app::usecases::ads::platform::PlatformRules`);
  * only what the panel shows is listed.

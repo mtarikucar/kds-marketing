@@ -48,8 +48,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0041_google_provider`.
-const MIGRATIONS: i64 = 41;
+/// Migrations `0001_foundation` through `0042_tiktok_ads_app`.
+const MIGRATIONS: i64 = 42;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -261,6 +261,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0042_tiktok_ads_app",
         "0041_google_provider",
         "0040_ads_campaigns",
         "0039_general_ad_budget",
@@ -3750,6 +3751,88 @@ async fn general_ad_budget_migration_marks_the_only_ad_budget_and_keeps_the_rule
     assert_eq!(items, 2);
     try_run(&db.pool, GENERAL_BUDGET_UP).await.unwrap();
     assert!(is_general(&db.pool, only).await);
+}
+
+/// `0042_tiktok_ads_app` lets an authorization of the TikTok for Business app be a pending flow:
+/// its up and its down are repeatable, the round trip up, down, up leaves the schema as it was,
+/// and its down keeps the widened check while such a flow is pending (it touches no row).
+#[tokio::test]
+async fn tiktok_ads_app_migration_is_repeatable_and_its_down_keeps_pending_flows() {
+    const UP: &str = include_str!("../../../../migrations/0042_tiktok_ads_app.up.sql");
+    const DOWN: &str = include_str!("../../../../migrations/0042_tiktok_ads_app.down.sql");
+    let db = TestDb::new().await; // already migrated up, 0042 included
+    let (ws, owner) = db.seed_workspace("tiktok-ads-app").await;
+    // A pending TikTok flow signed in with `app`: `None` when it is stored, else the database's
+    // refusal.
+    let insert = |app: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,'tiktok','tiktok_ads',$3,$4,$5,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(app)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let clear = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query("delete from oauth_pending")
+                .execute(tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+    const CHECK_VIOLATION: &str = "23514";
+
+    // Up, twice: a TikTok for Business flow is stored; an app nobody knows still is not.
+    for _ in 0..2 {
+        try_run(&db.pool, UP).await.unwrap();
+    }
+    assert_eq!(insert("tiktok_ads").await, None);
+    assert_eq!(
+        insert("tiktok_shop").await.as_deref(),
+        Some(CHECK_VIOLATION)
+    );
+    // Down while that flow is pending: the flow stays, and so does the widened check.
+    for _ in 0..2 {
+        try_run(&db.pool, DOWN).await.unwrap();
+    }
+    assert_eq!(insert("tiktok_ads").await, None);
+    // Down once no such flow is pending: the check is 0041's again, twice over.
+    clear().await;
+    for _ in 0..2 {
+        try_run(&db.pool, DOWN).await.unwrap();
+        assert_eq!(insert("tiktok_ads").await.as_deref(), Some(CHECK_VIOLATION));
+        // What 0041 let in is still let in: the TikTok app accounts post through.
+        assert_eq!(insert("tiktok").await, None);
+    }
+    // And up again.
+    try_run(&db.pool, UP).await.unwrap();
+    assert_eq!(insert("tiktok_ads").await, None);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
 }
 
 /// `0041_google_provider` lets a Google sign-in be a pending flow: its up and its down are

@@ -28,6 +28,7 @@ fn linkedin_app_of(app: &OAuthApp) -> Result<&LinkedinApp, ConnectorError> {
         | OAuthApp::Instagram(_)
         | OAuthApp::X(_)
         | OAuthApp::Tiktok(_)
+        | OAuthApp::TiktokAds(_)
         | OAuthApp::Google(_) => Err(ConnectorError::permanent(
             "only the LinkedIn app signs in to LinkedIn",
         )),

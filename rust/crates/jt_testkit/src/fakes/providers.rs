@@ -32,7 +32,7 @@ use jt_app::ports::connectors::{
     PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt, PublicPoller,
     PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
     RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony,
-    TiktokApp, TiktokCreator, Url, XApp,
+    TiktokAdsApp, TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -57,6 +57,7 @@ pub struct FakeAppConfig {
     pub instagram: Option<InstagramApp>,
     pub x: Option<XApp>,
     pub tiktok: Option<TiktokApp>,
+    pub tiktok_ads: Option<TiktokAdsApp>,
     pub linkedin: Option<LinkedinApp>,
     pub google: Option<GoogleApp>,
     /// The Hepsiburada integrator user; `None` by default (the merchant id stands in for it).
@@ -73,6 +74,7 @@ impl Default for FakeAppConfig {
             instagram: None,
             x: None,
             tiktok: None,
+            tiktok_ads: None,
             linkedin: None,
             google: None,
             hepsiburada_integrator_user: None,
@@ -86,6 +88,7 @@ impl FakeAppConfig {
     /// Every app configured, with test values (`meta-app-id`/`meta-app-secret`, verify token
     /// `meta-verify-token`; `instagram-app-id`/`instagram-app-secret`;
     /// `x-client-id`/`x-client-secret`; `tiktok-client-key`/`tiktok-client-secret`;
+    /// `tiktok-ads-app-id`/`tiktok-ads-secret`;
     /// `linkedin-client-id`/`linkedin-client-secret`, without the organization scopes;
     /// `google-client-id`/`google-client-secret`) and no optional Meta or LinkedIn settings.
     pub fn with_all_apps() -> Self {
@@ -111,6 +114,10 @@ impl FakeAppConfig {
             tiktok: Some(TiktokApp {
                 client_key: "tiktok-client-key".into(),
                 client_secret: "tiktok-client-secret".into(),
+            }),
+            tiktok_ads: Some(TiktokAdsApp {
+                app_id: "tiktok-ads-app-id".into(),
+                secret: "tiktok-ads-secret".into(),
             }),
             linkedin: Some(LinkedinApp {
                 client_id: "linkedin-client-id".into(),
@@ -143,6 +150,10 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn tiktok_app(&self) -> Option<TiktokApp> {
         self.tiktok.clone()
+    }
+
+    fn tiktok_ads_app(&self) -> Option<TiktokAdsApp> {
+        self.tiktok_ads.clone()
     }
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
@@ -1904,8 +1915,13 @@ const PUBLISHING: &[Provider] = &[
 /// The providers whose adapters send direct messages and fetch lead-gen submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
 /// The providers whose adapters build ad campaigns and switch their ads on and off (Meta,
-/// Google, LinkedIn).
-const AD_PLATFORMS: &[Provider] = &[Provider::Meta, Provider::Google, Provider::Linkedin];
+/// Google, LinkedIn, TikTok).
+const AD_PLATFORMS: &[Provider] = &[
+    Provider::Meta,
+    Provider::Google,
+    Provider::Linkedin,
+    Provider::Tiktok,
+];
 /// The providers whose adapters send SMS, place calls, record consent and answer delivery-report
 /// and inbox polls (NetGSM).
 const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
