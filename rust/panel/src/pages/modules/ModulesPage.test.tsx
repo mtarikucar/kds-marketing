@@ -40,7 +40,7 @@ describe('modular agent center', () => {
     const row = await within(strip).findByText('ornek-istemci');
     expect(row.closest('li')).toHaveTextContent(/son temas/);
     expect(row.closest('li')).toHaveTextContent(blueprint.name);
-    expect(within(strip).getByRole('link', { name: 'Ajan bağla' })).toHaveAttribute('href', '/api-keys');
+    expect(within(strip).getByRole('link', { name: 'Ajan bağla' })).toHaveAttribute('href', '/agents?connect=1');
     expect(screen.queryByText('Çevrimiçi')).not.toBeInTheDocument();
     expect(screen.queryByText('çalışıyor')).not.toBeInTheDocument();
     // Modules live in the navigation now, not on the home page.

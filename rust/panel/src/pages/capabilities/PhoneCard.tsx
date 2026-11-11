@@ -25,7 +25,7 @@ import {
 import { browser, fileUrl } from '@/lib/browser';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime, formatRelative } from '@/lib/format';
-import { useCreateKey } from '@/pages/ApiKeysPage';
+import { useCreateKey } from '@/pages/agents/keys';
 import { PHONE_REFRESH_MS, deviceCommandKey, invalidateCapabilities, phoneLogKey } from './queries';
 
 /** The feature a bridge lists for a phone that types text outside ASCII (`jt_devices`). */

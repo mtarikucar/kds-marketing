@@ -75,7 +75,7 @@ export function HomePage() {
     </div>
     <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,8fr)] lg:grid-rows-[auto_minmax(0,1fr)]">
       <AgentsCard className="rounded-none border-0 border-b lg:col-start-1 lg:row-start-1 lg:border-e" copy={copy} active={active} agents={agents.data} loading={agents.isLoading}
-        installed={installed} canConnect={canConnect} connectHref={canConnect ? '/api-keys' : '/agents'} />
+        installed={installed} canConnect={canConnect} connectHref={canConnect ? '/agents?connect=1' : '/agents'} />
       <WorkFeed className="max-h-[32rem] rounded-none border-0 border-b lg:col-start-1 lg:row-start-2 lg:max-h-none lg:border-b-0 lg:border-e" copy={copy} pending={pending.data?.items}
         log={ledger.data} logAvailable={active && !ledger.isError} moduleName={moduleName}
         actorName={(row: LedgerEntryOut) => actor(row.entry.actor)} />

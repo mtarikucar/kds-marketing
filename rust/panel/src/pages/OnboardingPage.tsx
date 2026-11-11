@@ -81,7 +81,7 @@ export function OnboardingPage() {
           {!active && <Callout tone="info">{t('onboarding.activationRequired')}</Callout>}
           {active && !can('team.manage') && !can('api_keys.manage') && <p className="text-muted-foreground">{t('onboarding.teamOwnerHelp')}</p>}
           {active && can('team.manage') && <><QueryState query={team}/>{team.data && <p>{t('onboarding.members',{count:team.data.length})}</p>}<Link className="inline-block text-primary underline underline-offset-4" to="/users">{t('onboarding.invite')}</Link></>}
-          {active && can('api_keys.manage') && <><QueryState query={keys}/>{keys.data && <p>{t('onboarding.keys',{count:keys.data.filter(key=>key.status==='active').length})}</p>}<Link className="block text-primary underline underline-offset-4" to="/api-keys">{t('onboarding.createKey')}</Link></>}
+          {active && can('api_keys.manage') && <><QueryState query={keys}/>{keys.data && <p>{t('onboarding.keys',{count:keys.data.filter(key=>key.status==='active').length})}</p>}<Link className="block text-primary underline underline-offset-4" to="/agents?connect=1">{t('onboarding.createKey')}</Link></>}
         </SetupStep>
         <SetupStep number={4} title={t('onboarding.connector')} current={next===4}>
           {workspace.data && !active && <p className="text-muted-foreground">{t('onboarding.connectorAfterActivation')}</p>}

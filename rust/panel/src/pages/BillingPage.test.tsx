@@ -28,7 +28,7 @@ it('reports evidence with configured instructions and a read-only reference', as
   expect(post.body).toMatchObject({reference:billing.payment_reference, amount_minor:125000});
   expect(post.body).not.toHaveProperty('code');
   expect(post.search).toBe('');
-  await act(() => router.navigate('/api-keys'));
+  await act(() => router.navigate('/agents'));
   expect(JSON.stringify(client.getQueryCache().getAll())).not.toContain(billing.payment_reference);
   expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain(billing.payment_reference);
 });
@@ -46,7 +46,7 @@ it('keeps activation input and result page-scoped, including late responses and 
   expect(screen.getByText(/72 saat/)).toBeInTheDocument();
   await user.type(input, 'ABCD1234');
   await user.click(screen.getByRole('button',{name:'Çalışma alanını etkinleştir'}));
-  await act(() => router.navigate('/api-keys'));
+  await act(() => router.navigate('/agents'));
   await act(() => new Promise(resolve => setTimeout(resolve,150)));
   expect(JSON.stringify(client.getQueryCache().getAll())).not.toContain(billing.payment_reference);
   expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain('ABCD1234');

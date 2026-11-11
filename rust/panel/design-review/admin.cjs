@@ -6,8 +6,8 @@ const base = process.env.ADMIN_BASE || 'http://localhost:5180';
 const account = process.env.ADMIN_ACCOUNT || '/workspace/kds-runtime/rust-account.json';
 const output = process.env.ADMIN_OUTPUT || '/tmp/jeeta-admin-review';
 fs.mkdirSync(output, { recursive: true });
-const routes = ['/team','/roles','/api-keys','/agents','/budget','/ledger','/billing','/capabilities','/connect'];
-const openers = {'/team':['Üye davet et'], '/roles':['Rol oluştur'], '/api-keys':['Anahtar oluştur'], '/budget':['Bütçe kalemi oluştur'], '/capabilities':['Kabiliyet bildir']};
+const routes = ['/team','/roles','/agents','/budget','/ledger','/billing','/capabilities','/connect'];
+const openers = {'/team':['Üye davet et'], '/roles':['Rol oluştur'], '/agents':['Ajan bağla'], '/budget':['Bütçe kalemi oluştur'], '/capabilities':['Kabiliyet bildir']};
 (async () => {
   const browser = await chromium.launch({args:['--no-sandbox']});
   const results=[];const pageErrors=[];
@@ -22,7 +22,7 @@ const openers = {'/team':['Üye davet et'], '/roles':['Rol oluştur'], '/api-key
     for(const width of [1440,390]) {
       await page.setViewportSize({width,height:900});
       for(const route of routes) {
-        if(route==='/api-keys') { await page.goto(base+'/',{waitUntil:'networkidle'}); await page.evaluate(()=>{history.pushState({},'', '/api-keys');dispatchEvent(new PopStateEvent('popstate'));}); await page.getByRole('heading',{level:1}).waitFor(); } else { await page.goto(base+route,{waitUntil:'networkidle'}); }
+        await page.goto(base+route,{waitUntil:'networkidle'});
         await page.screenshot({path:`${output}/${route.slice(1)}-${width}.png`,fullPage:true});
         const record={width,route,overflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),dialogs:[]};
         for(const label of openers[route] || []) {

@@ -269,9 +269,11 @@ curl -i -c jar.txt -X POST localhost:8080/api/auth/register \
 
 ## Bir ajanı MCP'ye bağlama
 
-1. Panelde **API anahtarları** sayfasından (`/api-keys`) bir anahtar açın; çalışma alanı etkin olmalıdır
-   (bkz. [Kayıt](#kayıt)). Düz metni (`jt_live_…`) yalnızca bir kez gösterilir. API'den: `POST /api/api-keys`
-   gövdesi `{"name":"ajan"}`, oturum çereziyle.
+1. Panelde **Ajanlar** sayfasında (`/agents`) **Ajan bağla** ile ajanın anahtarını açın; çalışma alanı
+   etkin olmalıdır (bkz. [Kayıt](#kayıt)). Düz metni (`jt_live_…`) yalnızca bir kez gösterilir. Sayfa
+   anahtarları ve onlarla bağlanan ajanları tek listede gösterir: her satır bir anahtar ve onunla bağlanan
+   ajanlardır; **Erişimi kes** anahtarı iptal eder. Eski `/api-keys` adresi bu sayfaya yönlenir. API'den:
+   `POST /api/api-keys` gövdesi `{"name":"ajan"}`, oturum çereziyle.
 2. Uç nokta `http://127.0.0.1:8080/mcp`, taşıma **streamable HTTP**, kimlik
    `Authorization: Bearer jt_live_…`. Anahtar her istekte doğrulanır; bir MCP oturumu (`Mcp-Session-Id`) onu
    açan anahtara bağlıdır. Bu bağı olmayan bir oturum kimliği (başka bir anahtarın, silinmiş, hiç
@@ -1477,7 +1479,7 @@ stratejinin işleridir (`consult_strategy`, `approve_strategy`); kabiliyet, bağ
   `interval_minutes` (yoklama aralığı) ve `overdue` (hiç bağlantı yok ya da en son görülen aralıktan eski).
   `GET /api/agents` ve `jeeta.agents.list` her bağlantı için aynı `overdue` bayrağını verir. Panelde ana
   sayfanın ajan kartı gecikmeyi kırmızı bir uyarıyla, **Ajanlar** sayfası her bağlantının satırında
-  "Gecikti" ya da "Zamanında" olarak gösterir.
+  "Gecikti" ya da "Zamanında" olarak gösterir (anahtarı iptal edilmiş bir bağlantıda göstermez).
 
 **Ajanın yoklaması.** Ajanı uyandırmak sistemin değil kiracının işidir: ajan kendi zamanlayıcısıyla en az
 yoklama aralığında bir `jeeta.work.checkin` çağırır (yanıtı `jeeta.work.pending` ile aynıdır, ama yoklayan

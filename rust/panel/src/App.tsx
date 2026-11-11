@@ -13,7 +13,6 @@ import { PublicLayout } from '@/layout/PublicLayout';
 import { Shell } from '@/layout/Shell';
 import { AcceptInvitePage } from '@/pages/AcceptInvitePage';
 import { AgentsPage } from '@/pages/AgentsPage';
-import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
 import { CallDetail } from '@/pages/CallDetail';
 import { CallsPage } from '@/pages/CallsPage';
@@ -112,7 +111,7 @@ export const routes: RouteObject[] = [
           { path: 'team', element: <LegacyRedirect to="/users" /> },
           { path: 'team/distribution', element: <DistributionPage /> },
           { path: 'roles', element: <LegacyRedirect to="/users" /> },
-          { path: 'api-keys', element: <ApiKeysPage /> },
+          { path: 'api-keys', element: <LegacyRedirect to="/agents" /> },
           { path: 'agents', element: <AgentsPage /> },
           { path: 'ledger', element: <LegacyRedirect to="/" /> },
           { path: 'users', element: <UsersPage /> },

@@ -8,7 +8,6 @@ import {
   Layers,
   Lock,
   ChevronDown,
-  KeyRound,
   LogOut,
   Menu,
   Plug,
@@ -61,7 +60,6 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const management: NavItem[] = [
     { to: '/budget', label: t('nav.budget'), Icon: Wallet },
     { to: '/users', label: t('nav.users'), Icon: Users },
-    { to: '/api-keys', label: t('nav.apiKeys'), Icon: KeyRound },
     { to: '/capabilities', label: t('nav.capabilities'), Icon: Plug },
     { to: '/agents', label: t('nav.agents'), Icon: Bot },
   ];

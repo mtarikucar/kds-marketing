@@ -15,15 +15,15 @@ it('first_run_resumes_after_reload_and_suspend', async () => {
   expect(await screen.findByText('Strateji onayı bekleniyor')).toBeInTheDocument();
   expect(await screen.findByText('Bağlayıcı doğrulandı')).toBeInTheDocument();
   expect(screen.getByText(/kendi ajan zamanlayıcınız/)).toBeInTheDocument();
-  await userEvent.setup().click(screen.getByText('Ekip ve API anahtarları'));
-  expect(screen.getByRole('link',{name:'API anahtarı oluştur'})).toHaveAttribute('href','/api-keys');
+  await userEvent.setup().click(screen.getByText('Ekip ve ajanlar'));
+  expect(screen.getByRole('link',{name:'Ajan bağla'})).toHaveAttribute('href','/agents?connect=1');
   first.unmount();
   answers['GET /api/workspace'].status='suspended'; answers['GET /api/billing'].workspace_status='suspended';
   const second=renderAt('/onboarding');
   expect(await screen.findByText('Çalışma alanı askıya alındı')).toBeInTheDocument();
   expect(await screen.findByText('Ödeme onaylandı')).toBeInTheDocument();
-  expect(screen.queryByRole('link',{name:'API anahtarı oluştur'})).not.toBeInTheDocument();
-  await act(()=>second.router.navigate('/api-keys'));
+  expect(screen.queryByRole('link',{name:'Ajan bağla'})).not.toBeInTheDocument();
+  await act(()=>second.router.navigate('/agents'));
   expect(JSON.stringify(second.client.getQueryCache().getAll())).not.toContain(billing.payment_reference);
 });
 

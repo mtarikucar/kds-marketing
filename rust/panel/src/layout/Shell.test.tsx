@@ -23,7 +23,6 @@ describe('Shell', () => {
       tr.nav.capabilities,
       tr.nav.budget,
       tr.nav.users,
-      tr.nav.apiKeys,
       tr.nav.agents,
     ]) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
@@ -166,7 +165,7 @@ it('orders core, installed modules including inbox, then management without remo
   await userEvent.click(within(nav).getByText('Yönetim'));
   expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
     '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/materials', '/people', '/prospects', '/outreach', '/calls', '/modules',
-    '/budget', '/users', '/api-keys', '/capabilities', '/agents',
+    '/budget', '/users', '/capabilities', '/agents',
   ]);
   expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();
   expect(within(nav).queryByText('Günlük')).not.toBeInTheDocument();
