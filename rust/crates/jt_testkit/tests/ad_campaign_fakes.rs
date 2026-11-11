@@ -289,7 +289,11 @@ fn campaign_registry_is_for_the_ad_platforms_and_absent_without_an_adapter() {
             registry.ad_campaigns(*provider).is_some(),
             matches!(
                 provider,
-                Provider::Meta | Provider::Google | Provider::Linkedin | Provider::Tiktok
+                Provider::Meta
+                    | Provider::Google
+                    | Provider::Linkedin
+                    | Provider::Tiktok
+                    | Provider::X
             ),
             "{}",
             provider.key()

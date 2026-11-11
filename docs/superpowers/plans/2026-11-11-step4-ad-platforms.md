@@ -139,6 +139,10 @@ on the X app, ad accounts as assets, writer: campaign → line item (+ targeting
 promoted-only post → promoted post; pausing an ad deletes the promoted post, resuming makes it
 again (B73).
 
+- [x] 5.1 `x_ads` kind, ad scopes flag (`JEETA_X_AD_SCOPES`), ads accounts as assets, probe, limits;
+  writer, switches, reads; tests against the in-process mock; rules row, the "no hard limit" notice
+  on the panel and in the tool texts, README.
+
 ---
 
 ## Execution log
@@ -279,3 +283,58 @@ TikTok ad campaigns, in `jt_tiktok` (`src/business.rs`, `src/ads.rs`, `src/budge
   around web conversions (which needs a pixel).
 - The machine's disk filled during this task's full test run (`rust/target` at 132 GB): the full
   local run of this task is recorded here once it has been repeated.
+
+### Task 5 (2026-11-12)
+
+X ad campaigns, in `jt_x` (`src/ads.rs`, `tests/ads.rs`). What differs from the plan's sketch, each
+recorded in the design (B92 to B97):
+
+- **The same app and the same callback.** An ads account is reached with the sign-in of an
+  account that posts: once the operator sets `JEETA_X_AD_SCOPES`, every X flow also asks for
+  `ads.read` and `ads.write`, and a sign-in that was granted them offers its ads accounts.
+  Without the flag an `x_ads` flow is refused (`provider_product_not_enabled`). No migration: the
+  provider and the app `x` were already allowed, and no database check lists capability kinds.
+- **The countries moved into the line item step** (B95). The plan's chain put the targeting last;
+  a line item without a location is shown to everybody, everywhere, so the step now finds the
+  countries first, makes or adopts the line item, adds each country that is missing and answers
+  only then. The core's lookup by name answers nothing for a line item: the step adopts it
+  itself, so that a build that broke off half way gets its missing country.
+- **One funding instrument** (B93): an ads account is offered, and a campaign built, only when
+  exactly one funding instrument can pay. The campaign's daily budget, which X asks most accounts
+  for, is the total itself.
+- **An ad is a line item and a post** (B94): its id names neither of X's promoted-post rows,
+  since pausing deletes that row and resuming makes another. Its state is the promotion that is
+  there now; its daily numbers add up every promotion it ever had (B96).
+- **No button.** A website card has an image, a title and an address: an X plan takes no call to
+  action and no description; `headline` is the card's title (70 characters), `primary_text` the
+  post (280).
+- **The pause is the limit** (B67, B97). X's rules say `hard_budget_cap: false` and
+  `watch_minutes: 15`; the core already read both. On X a campaign's switch takes its line items
+  with it (off: the campaign, then each line item, and the pause counts only once both are off;
+  on: the line items, then the campaign). The panel says so where an X ads account is chosen
+  and on an X campaign's page (`NoHardCapNotice`, driven by the rules of the campaign's
+  platform), and the agent's tool texts say it too.
+- `XApp.ad_scopes`, `AdsPlatform::X`, the `x_ads` kind (54 kinds), `ads-api.x.com` among the
+  fixed hosts of the `x` connector, the reason of an Ads API error names X's code.
+- An independent pass held every path, parameter, enum and answer field of `ads.rs` against the
+  saved X pages and found none contradicted. What it changed was logic: the ad is created off
+  (the first version promoted the post at creation, which on a running campaign would have run
+  before the build switched it on); the days are read with one more day at each end (X reads a
+  day as the ads account's own, the core asks for days of UTC: east of UTC the first hours of a
+  day would have been read a day late, on the one platform where the reading is the limit); the
+  post is written for the account's own user by X's default, not for the line item's
+  `advertiser_user_id`, and `TWEET_COMPOSER` is asked only of a signed-in user who is not that
+  user; the image is added to the account's media library; a pause tries both levels whatever
+  the first answers; spend is rounded after an ad's promotions are added up; a deleted line
+  item's spend is still read; a link written out in the post's text is refused (rule `no_link`,
+  checked at the plan too); the Ads API's 408 and 423 pass by themselves; the ads account's own
+  rate limit header is read.
+- Tests: `jt_x/tests/ads.rs` (18, against the in-process mock), one more in
+  `jt_app/tests/ads_campaigns.rs` (an X campaign from its plan to its end at the budget, read
+  every fifteen minutes), one in `jt_app/tests/connector.rs`, two in the panel's
+  `Campaigns.test.tsx`. Nothing was run against X.
+- Open (design A7, A10, A11): whether the Ads API takes the OAuth 2.0 token; whether the one-call
+  upload answers the `media_key` a card needs and a post written as the ads account's user may
+  use that image; the words X uses for an account or a promotion that is not accepted. The X Ads
+  API Agreement's duties (fees shown apart, X's approval for a white-label version) are the
+  owner's to read before applying (design §7).

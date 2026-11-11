@@ -29,7 +29,7 @@ export const GOAL_CONNECTIONS: Record<CapabilityGoal, readonly string[]> = {
   publishing: ['instagram', 'facebook_page', 'linkedin_page', 'linkedin_member', 'x', 'tiktok'],
   calls: ['netgsm_pbx'],
   devices: [],
-  growth: ['meta_ads', 'google_ads', 'linkedin_ads', 'tiktok_ads'],
+  growth: ['meta_ads', 'google_ads', 'linkedin_ads', 'tiktok_ads', 'x_ads'],
   tools: [],
   custom: [],
 };

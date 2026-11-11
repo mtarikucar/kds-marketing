@@ -511,6 +511,7 @@ export const KINDS = [
   { group: 'ads', key: 'tiktok_ads' },
   { group: 'ads', key: 'linkedin_ads' },
   { group: 'ads', key: 'google_ads' },
+  { group: 'ads', key: 'x_ads' },
   { group: 'calendar', key: 'google_calendar' },
   { group: 'calendar', key: 'outlook_calendar' },
   { group: 'marketplace', key: 'trendyol' },

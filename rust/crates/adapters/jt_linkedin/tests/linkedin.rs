@@ -240,6 +240,7 @@ async fn authorize_url_member_scopes_vs_page_scopes() {
     let x = OAuthApp::X(XApp {
         client_id: "x-id".into(),
         client_secret: "x-SECRET".into(),
+        ad_scopes: false,
     });
     assert_eq!(
         kind_of(r.li.authorize_url(&x, &redirect(), "s", None)),

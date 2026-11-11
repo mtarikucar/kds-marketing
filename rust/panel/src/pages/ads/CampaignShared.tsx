@@ -13,6 +13,7 @@ export const PLATFORM_NAMES: Record<Platform, string> = {
   google: 'Google',
   linkedin: 'LinkedIn',
   tiktok: 'TikTok',
+  x: 'X',
 };
 /** The ad platforms a campaign can run on, by the capability kind of their ad accounts. */
 export const AD_ACCOUNT_KINDS: Record<string, string> = {
@@ -20,7 +21,27 @@ export const AD_ACCOUNT_KINDS: Record<string, string> = {
   google_ads: 'Google',
   linkedin_ads: 'LinkedIn',
   tiktok_ads: 'TikTok',
+  x_ads: 'X',
 };
+/**
+ * How often the server reads a running X campaign, in minutes (`watch_minutes` of X's row in
+ * `jt_app::usecases::ads::platform`): what the notice says where an X ads account is chosen,
+ * before there is a campaign whose own rules could say it.
+ */
+export const X_WATCH_MINUTES = 15;
+/**
+ * Says that a platform does not itself stop at a campaign's total budget (its rules'
+ * `hard_budget_cap` is false): Jeeta reads the campaign every `minutes` and pauses it once the
+ * budget is reached, so a little more than the budget can be spent.
+ */
+export function NoHardCapNotice({ platform, minutes }: { platform: string; minutes: number }) {
+  const { t } = useTranslation();
+  return (
+    <p className="border-s-2 border-border ps-3 text-xs text-muted-foreground">
+      {t('adCampaigns.noHardCap', { platform, minutes })}
+    </p>
+  );
+}
 /**
  * LinkedIn's own rule for a tool that sets an ad's audience on its platform: the tool shows this
  * notice wherever that audience is chosen or shown

@@ -56,7 +56,7 @@ const META_KINDS: &[&str] = &[
 const NETGSM_KINDS: &[&str] = &["sms_line", "netgsm_pbx"];
 
 /// The capability kinds X serves.
-const X_KINDS: &[&str] = &["x"];
+const X_KINDS: &[&str] = &["x", "x_ads"];
 
 /// The capability kinds TikTok serves: an account that posts, and an ad account.
 const TIKTOK_KINDS: &[&str] = &["tiktok", "tiktok_ads"];

@@ -951,6 +951,7 @@ mod tests {
             jt_connector::Provider::Google,
             jt_connector::Provider::Linkedin,
             jt_connector::Provider::Tiktok,
+            jt_connector::Provider::X,
         ] {
             assert!(
                 deps.connectors.ad_campaigns(provider).is_some(),

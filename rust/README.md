@@ -203,6 +203,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
+| `JEETA_X_AD_SCOPES` | kapalı | `1`/`true`: X akışları reklam kapsamlarını da ister (`ads.read`, `ads.write`) ve `x_ads` (X reklam hesabı) bağlanabilir. Yalnız X uygulamaya Ads API erişimi verdikten sonra açılır; kapalıyken `x_ads` akışı `409` `details.reason = "provider_product_not_enabled"`. Açıldığında her X akışı bu kapsamları ister. X uygulaması olmadan verilemez |
 | `JEETA_TIKTOK_CLIENT_KEY` | — | Platformun TikTok uygulamasının (Login Kit, Content Posting API) client key'i; sırla birlikte verilir |
 | `JEETA_TIKTOK_CLIENT_SECRET` | — | TikTok uygulamasının client secret'ı; anahtarla birlikte verilir |
 | `JEETA_TIKTOK_ADS_APP_ID` | — | Platformun TikTok for Business uygulamasının (Marketing API; reklam hesapları için) uygulama kimliği. Yukarıdaki TikTok uygulamasından ayrı bir uygulamadır, business-api.tiktok.com portalında açılır; sırla birlikte verilir |
@@ -677,7 +678,7 @@ alanı durumu denetiminden muaf değildir.
 | `messaging` Mesajlaşma (bağlayıcı) | `whatsapp_cloud`: WhatsApp Business, `instagram_dm`: Instagram mesajları, `messenger`: Messenger, `sms_line`: SMS hattı, `mailbox`: E-posta kutusu, `webchat`: Web sohbeti |
 | `telephony` Telefon (bağlayıcı) | `netgsm_pbx`: NetGSM santrali |
 | `community` Topluluk (bağlayıcı) | `discord`: Discord, `reddit`: Reddit, `review_google`: Google yorumları, `review_facebook`: Facebook yorumları |
-| `ads` Reklam (bağlayıcı) | `meta_ads`: Meta reklamları, `tiktok_ads`: TikTok reklamları, `linkedin_ads`: LinkedIn reklamları, `google_ads`: Google reklamları |
+| `ads` Reklam (bağlayıcı) | `meta_ads`: Meta reklamları, `tiktok_ads`: TikTok reklamları, `linkedin_ads`: LinkedIn reklamları, `google_ads`: Google reklamları, `x_ads`: X reklamları |
 | `calendar` Takvim (bağlayıcı) | `google_calendar`: Google Takvim, `outlook_calendar`: Outlook takvimi |
 | `device` Cihazlar (cihaz) | `phone`: Telefon, `computer`: Bilgisayar, `printer`: Yazıcı, `printer_3d`: 3B yazıcı, `audio_io`: Ses giriş/çıkışı, `camera`: Kamera, `screen`: Ekran, `scanner`: Belge tarayıcı, `usb_storage`: USB bellek |
 | `agent_connection` Ajan bağlantıları (ajan) | `claude_code`: Komut satırı kod ajanı, `codex`: Kod ajanı, `claude_ai`: Web sohbet asistanı, `other_agent`: Başka bir ajan |
@@ -910,7 +911,7 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 |---|---|---|---|
 | Meta (Facebook Login, Graph API) | `JEETA_META_APP_ID`, `JEETA_META_APP_SECRET`, `JEETA_META_VERIFY_TOKEN`; isteğe bağlı `JEETA_META_LOGIN_CONFIG_ID`, `JEETA_META_WHATSAPP_CONFIG_ID`, `JEETA_META_GRAPH_VERSION` | developers.facebook.com → uygulama → Ayarlar → Temel: Uygulama Kimliği ve Uygulama Sırrı; Facebook Login (for Business) → Ayarlar → Geçerli OAuth Yönlendirme URI'leri; Webhooks → Sayfa, Instagram ve WhatsApp Business Hesabı nesneleri için geri çağırma adresi `{genel adres}/hooks/meta` ve doğrulama anahtarı (`JEETA_META_VERIFY_TOKEN` ile aynı değer) | `{genel adres}/oauth/callback/meta` |
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
-| X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
+| X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET`; isteğe bağlı `JEETA_X_AD_SCOPES` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret. Reklam hesapları için uygulamaya **Ads API** erişimi istenir (ads.x.com/help üzerinden başvuru; X Ads API Sözleşmesi kabul edilir) → `JEETA_X_AD_SCOPES=1`; aynı giriş, aynı yönlendirme adresi | `{genel adres}/oauth/callback/x` |
 | TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
 | TikTok reklamları (TikTok for Business) | `JEETA_TIKTOK_ADS_APP_ID`, `JEETA_TIKTOK_ADS_SECRET` | business-api.tiktok.com → geliştirici kaydı (şirket alan adlı e-posta, şirket sitesi) → uygulama: kapsamlar **Ad Account Management**, **Ads Management**, **Reporting**, **Creative Management**; "Advertiser redirect URL" olarak yandaki adres; uygulama incelemesi. Reklamveren, uygulamanın yetkilendirme sayfasında e-posta koduyla onay verir; belirtecin süresi dolmaz | `{genel adres}/oauth/callback/tiktok_ads` |
 | LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_AD_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; reklam hesapları için **Advertising API** onayı → `JEETA_LINKEDIN_AD_SCOPES=1` (Development kademesinde en çok beş reklam hesabı, hesaplar geliştirici portalında uygulamaya eşlenir); Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
@@ -984,7 +985,7 @@ birebir sabitlenir; başka hiçbir crate `reqwest` adını anmaz):
 |---|---|
 | `meta` | `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com` |
 | `netgsm` | `api.netgsm.com.tr`, `whatsappapi.netgsm.com.tr`, `sesdosya.netgsm.com.tr`, `crmsntrl.netgsm.com.tr:9111` |
-| `x` | `api.twitter.com`, `api.x.com` |
+| `x` | `api.twitter.com`, `api.x.com`, `ads-api.x.com` |
 
 Hepsi yalnız `https`'tir; tek istisna Netsantral'in tıkla-ara ucudur: sağlayıcı onu yalnız düz `http` ile,
 `crmsntrl.netgsm.com.tr` adresinin 9111 portunda sunar, bu yüzden yalnız `netgsm` kapsamında, yalnız o
@@ -1392,28 +1393,28 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 `ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
 `ads_campaign_held` reklamı yöneten insana.
 
-**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B90).** Bir kampanya tek bir
+**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B97).** Bir kampanya tek bir
 reklam hesabında, yani tek bir platformda çalışır (B61); platform hesabın türünden gelir
 (`AdsPlatform::of_kind`) ve kurulan kampanyada `built.platform` olarak durur. Açma, planlama, kurma,
 izleme, durdurma ve para her platformda aynıdır; değişen, planın neyi taşıdığıdır. O kurallar tek bir
 tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `platforms` olarak gelir:
 
-| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) | LinkedIn (`linkedin_ads`): tek görselli sponsorlu içerik | TikTok (`tiktok_ads`): tek görselli kaydırmalı reklam (B69) |
-|---|---|---|---|---|
-| `page` | canlı bir `facebook_page` | alınmaz | alınmaz: reklam, reklam hesabının kendi şirket Sayfası adına konuşur (B85) | alınmaz: reklam, reklam hesabına bağlı TikTok hesabı adına konuşur (B88) |
-| `instagram` | isteğe bağlı | alınmaz | alınmaz | alınmaz |
-| `material_ids` | tam bir görsel | alınmaz | tam bir görsel; JPG, PNG ya da GIF (başkası `image_type_not_taken` bulgusudur) | tam bir görsel; JPG ya da PNG |
-| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz | en çok 3000 ve 200 karakter; `description` alınmaz | yalnızca `primary_text`: en çok 100 karakter, emoji yok (`no_emoji`) |
-| `call_to_action` | listedeki dokuz değer | alınmaz | yedi değer: `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`, `DOWNLOAD` | listedeki dokuz değer |
-| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez | alınmaz | alınmaz |
-| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük | alınmaz | alınmaz |
-| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler | yalnızca ülkeler (B87) | yalnızca ülkeler (18 yaş ve üstü herkes) |
-| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) | `automatic` (verilmezse o) | `automatic` (verilmezse o); yalnızca TikTok'un kendisi |
-| sonuç | `link_click`, `lead_form` | `link_click` | `link_click` | `link_click` |
-| süre | 24 saat – 90 gün | 72 saat – 89 gün | 24 saat – 90 gün | 24 saat – 90 gün |
-| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur | evet | evet |
-| toplam bütçe kesin sınır mı | evet | evet | evet | evet |
-| önizleme | var | yok | yok | yok |
+| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) | LinkedIn (`linkedin_ads`): tek görselli sponsorlu içerik | TikTok (`tiktok_ads`): tek görselli kaydırmalı reklam (B69) | X (`x_ads`): web sitesi kartı taşıyan tanıtılan gönderi (B92) |
+|---|---|---|---|---|---|
+| `page` | canlı bir `facebook_page` | alınmaz | alınmaz: reklam, reklam hesabının kendi şirket Sayfası adına konuşur (B85) | alınmaz: reklam, reklam hesabına bağlı TikTok hesabı adına konuşur (B88) | alınmaz: reklam, reklam hesabının kendi X kullanıcısı adına konuşur (B92) |
+| `instagram` | isteğe bağlı | alınmaz | alınmaz | alınmaz | alınmaz |
+| `material_ids` | tam bir görsel | alınmaz | tam bir görsel; JPG, PNG ya da GIF (başkası `image_type_not_taken` bulgusudur) | tam bir görsel; JPG ya da PNG | tam bir görsel; JPG ya da PNG |
+| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz | en çok 3000 ve 200 karakter; `description` alınmaz | yalnızca `primary_text`: en çok 100 karakter, emoji yok (`no_emoji`) | `primary_text` (gönderinin metni) en çok 280 karakter, yazıyla bağlantı yok (`no_link`); `headline` (kartın başlığı) en çok 70 karakter; `description` alınmaz |
+| `call_to_action` | listedeki dokuz değer | alınmaz | yedi değer: `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`, `DOWNLOAD` | listedeki dokuz değer | alınmaz: web sitesi kartında düğme yoktur |
+| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez | alınmaz | alınmaz | alınmaz |
+| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük | alınmaz | alınmaz | alınmaz |
+| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler | yalnızca ülkeler (B87) | yalnızca ülkeler (18 yaş ve üstü herkes) | yalnızca ülkeler |
+| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) | `automatic` (verilmezse o) | `automatic` (verilmezse o); yalnızca TikTok'un kendisi | `automatic` (verilmezse o); yalnızca X'in kendisi |
+| sonuç | `link_click`, `lead_form` | `link_click` | `link_click` | `link_click` | `link_click` |
+| süre | 24 saat – 90 gün | 72 saat – 89 gün | 24 saat – 90 gün | 24 saat – 90 gün | 24 saat – 90 gün |
+| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur | evet | evet | evet |
+| toplam bütçe kesin sınır mı | evet | evet | evet | evet | **hayır**: X bunu söylemiyor; Jeeta kampanyayı 15 dakikada bir okur ve bütçe dolunca kendisi durdurur (B67) |
+| önizleme | var | yok | yok | yok | yok |
 
 - Platformun almadığı bir alan verilirse plan o alanın adıyla reddedilir (`VALIDATION`,
   `field_not_for_this_platform`); gereken bir alan yoksa `required_on_this_platform`. Alan sessizce
@@ -1428,7 +1429,8 @@ tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `
   (`materials::check_texts`): hiçbir şeye bağlı olmayan bir metin, yalnızca doğrulanmış bir olayın
   kendi materyalinin söyleyebileceğini söyleyemez.
 - Kurulum adımları her platformda aynıdır (B70): kampanya → kampanyanın altındaki düzey (Meta'da
-  reklam seti, Google'da ve TikTok'ta reklam grubu, LinkedIn'de kampanya; anahtar sözcükler ve
+  reklam seti, Google'da ve TikTok'ta reklam grubu, LinkedIn'de kampanya, X'te satır öğesi (line
+  item); anahtar sözcükler ve
   bütçe ona da verilir) → her reklam. Görseli
   olmayan reklamda görsel adımı yoktur; kendi kreatif nesnesi olmayan platformda kreatif adımı çağrı
   yapmaz ve reklam adımı kreatifin kendisini taşır (`AdSpec.creative`).
@@ -1509,6 +1511,64 @@ belgesindedir; özeti:
   türü 2026 sonundan sonra API'den oluşturulamayabilir. Trafik amacının durumu TikTok'a sorulmalıdır
   (tasarım A6); yanıt olumsuzsa TikTok adımı başka bir amaçla yeniden tasarlanır.
 
+**X reklam bağlayıcısı (`jt_x`, B67, B92–B97).** `x_ads` hesabı X girişiyle bağlanır; bunun için
+platformun X uygulamasına X'in Ads API erişimi verilmiş ve `JEETA_X_AD_SCOPES` açık olmalıdır. Giriş
+yapan kullanıcının kampanya kurabildiği (`ACCOUNT_ADMIN` ya da `AD_MANAGER`) ve tanıtılan gönderi
+yazabildiği (hesabın adına reklam verdiği kullanıcı kendisidir ya da `TWEET_COMPOSER` izni vardır),
+X'in onayladığı ve ödeyebilen tek bir ödeme aracı olan her reklam hesabı para birimi ve saat
+dilimiyle seçime sunulur. Hiçbir çağrı X'e karşı çalıştırılmadı; ilk
+gerçek kampanya sahibin kendi hesabında, küçük bütçeyle ve o anki onayıyladır (B38). Çağrıların
+tamamı ve ilk gerçek çalıştırmanın göstereceği noktalar `jt_x`'in crate belgesindedir; özeti:
+
+- **Toplam bütçe kesin sınır değildir (önemli).** X, kampanyanın toplam bütçesinin hiç aşılmayacağını
+  söylemiyor (belgeleri "fazla harcama için kredi"den söz ediyor). Bu yüzden X'te kuralların
+  `hard_budget_cap` alanı `false`'tur ve Jeeta çalışan bir X kampanyasını saatte bir değil **15
+  dakikada bir** okur (`watch_minutes`); bütçe dolduğu anda kampanyayı kendisi durdurur. İki okuma
+  arasında bütçeden biraz fazlası harcanabilir; X'in bildirdiği harcamanın tamamı, bütçenin üstündeki
+  kısım da, genel reklam bütçesine yazılır. Panel bunu X hesabı seçilirken ve X kampanyasının
+  sayfasında söyler; ajanın araç açıklaması da söyler (B67, B97).
+- **Durdurma iki düzeyi de kapatır.** Jeeta'nın durdurması X'te bütçenin tek sınırı olduğu için
+  kampanyanın anahtarı satır öğelerini de taşır: durdururken önce kampanya, sonra her satır öğesi
+  kapatılır ve ikisi de kapanmadan durdurma tamamlanmış sayılmaz (izleme yeniden dener); sürdürürken
+  önce satır öğeleri, en son kampanya açılır (B97).
+- **Üç düzey.** Kampanya (toplam bütçe; X çoğu hesapta günlük bütçe de ister, o da toplamın kendisi
+  verilir ki tek sınır toplam olsun), satır öğesi (line item: süre, bütçe bir kez daha toplam bütçe
+  olarak, web sitesi tıklamaları, yalnızca X'in kendisi, otomatik teklif) ve reklam.
+- **Reklam** iki parçadır: reklam hesabının kendi X kullanıcısı adına yazılan, yalnızca tanıtım için
+  olan bir gönderi (profilde görünmez, `nullcast`) ve onun satır öğesindeki tanıtımı. Gönderi bir
+  web sitesi kartı taşır: görsel, başlık ve adres. Kartta düğme yoktur; bu yüzden X'te
+  `call_to_action` alınmaz. Gönderinin metni yazıyla bağlantı taşıyamaz (`no_link`): adresi kart
+  taşır. Görsel yüklendikten sonra hesabın medya kitaplığına eklenir. Plan hesap taşımaz (B92).
+- **Reklam kapalı oluşturulur.** X'te duraklatılmış tanıtım yoktur (var olan tanıtım, satır öğesi ve
+  kampanya açıksa hemen yayınlanır). Bu yüzden reklam adımı yalnızca gönderiyi yazar; tanıtım,
+  reklam açıldığında oluşturulur. Çalışan bir kampanyaya eklenen reklam, kurulum onu açmadan yayına
+  girmez (B94).
+- **Ödeme aracı.** Kampanya, hesabın ödeyebilen tek ödeme aracına bağlanır. Hiç yoksa ya da birden
+  fazlaysa hesap sunulmaz ve kampanya kurulmaz: hangisinin ödeyeceği tahmin edilmez (B93).
+- **Önce duraklatılmış.** Kampanya ve satır öğesi `PAUSED` olarak oluşturulur; kurulum bitince satır
+  öğesi ve kampanya etkinleştirilir. Satır öğesi duraklatılmışken tanıtım hiçbir şey göstermez.
+- **İlk gerçek çalıştırmanın göstereceği noktalar** (tasarım A7, A10–A13): Ads API'nin OAuth 2.0
+  belirtecini kabul etmesi, tek seferlik görsel yüklemenin kartın istediği `media_key` değerini
+  vermesi, X'in hesap ile tanıtım durumlarını bildirdiği sözcükler, satır öğesinin tıklama başına mı
+  gösterim başına mı ücretlendirildiği, ve açma çağrısının biçimi.
+- **Bir reklamı duraklatmak.** X'te tek bir tanıtılan gönderinin açma/kapama anahtarı yoktur: reklam,
+  tanıtımı silinerek duraklatılır ve yeniden oluşturularak sürdürülür (gönderinin kendisi kalır).
+  Reklamın kimliği bu yüzden satır öğesi ile gönderidir, X'in tanıtım satırı değil; günlük sayılar bir
+  reklamın bütün tanıtımlarının toplamıdır (B94, B96).
+- **Kitle** yalnızca ülkelerdir. X'te konumu olmayan bir satır öğesi herkese, her yerde gösterilir:
+  satır öğesi adımı, her ülke satır öğesine eklenmeden yanıt vermez; yarıda kalmış bir kurulumda
+  eksik ülke tamamlanır. X'in tek bir konum olarak tanımadığı ülke, hiçbir şey oluşturulmadan
+  reddedilir (B95).
+- **Sayılar.** X analitiği en çok yedi günlük aralık ve çağrı başına yirmi kimlik alır; günler hesabın
+  kendi günüdür. Jeeta'nın istediği günler UTC günleri olduğu için aralığın bir gün öncesi ve bir gün
+  sonrası da okunur: UTC'nin doğusundaki bir hesapta (Türkiye) günün ilk saatlerinin harcaması
+  böylece bir gün geç okunmaz. Sonuç, karttaki bağlantıya tıklamadır (`url_clicks`). Harcama, bir
+  reklamın bütün tanıtımları toplandıktan sonra mikro birimden küçük birime en yakın değere
+  yuvarlanır.
+- **X Ads API Sözleşmesi.** X, Ads API'yi kullanan araçlara ücret, raporlama ve markalama konusunda
+  yükümlülükler getiriyor (örneğin beyaz etiketli sürümler X'in onayını ister). Bunlar kod değil
+  sözleşme konusudur: başvurmadan önce sahibin okuması gerekir (tasarım §7).
+
 **Google bağlayıcısı (`jt_google`, B68, B76).** `google_ads` hesabı Google girişiyle bağlanır
 (`JEETA_GOOGLE_CLIENT_ID` / `JEETA_GOOGLE_CLIENT_SECRET`; çevrimdışı erişim, kapsam `adwords`): girişin
 doğrudan eriştiği, etkin ve yönetici olmayan her Google Ads hesabı para birimi ve saat dilimiyle
@@ -1545,7 +1605,7 @@ tamamı `jt_google`'ın crate belgesindedir; özeti:
   "Explorer" düzeyi yaklaşık otuz çalışan kampanyaya yeter; daha fazlası için "Basic" gerekir. Kota
   dolduğunda çağrılar `throttle` olarak döner ve izleme sonraki turda yeniden dener.
 
-LinkedIn, TikTok ve X bundan sonra gelir. **Hiçbir Google çağrısı gerçek platformda
+**Hiçbir Google çağrısı gerçek platformda
 çalıştırılmadı:** alan adları Google'ın kendi REST tanımından (v26) alındı, çağrılar süreç içi sahte
 sunucuya karşı sınandı. İlk gerçek kampanya sahibinin kendi hesabında yapılır (B38).
 

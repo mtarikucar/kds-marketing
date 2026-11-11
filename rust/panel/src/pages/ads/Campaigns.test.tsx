@@ -599,3 +599,69 @@ it('shows LinkedIn’s targeting notice on a LinkedIn campaign and where a Linke
   await userEvent.selectOptions(account, 'l1');
   expect(within(dialog).getByText(notice)).toBeVisible();
 });
+
+it('says on an X campaign, and where an X ads account is chosen, that X has no hard budget limit', async () => {
+  const notice =
+    'X, bir kampanyanın toplam bütçesinde kesin olarak duracağını söylemiyor. Jeeta bu kampanyayı 15 dakikada bir okur ve bütçe dolunca kendisi durdurur; bu arada bütçeden biraz fazlası harcanabilir.';
+  const promoted = {
+    ...campaign,
+    plan: {
+      ...campaign.plan,
+      result: 'link_click',
+      placements: 'automatic',
+      ads: [
+        {
+          name: 'Tanıtılan gönderi',
+          material_ids: [],
+          primary_text: 'Yeni seri çıktı',
+          headline: 'El yapımı kupalar',
+          description: null,
+          call_to_action: '',
+          instagram: null,
+          hypothesis_id: 'h1',
+        },
+      ],
+    },
+    built: { ...campaign.built, platform: 'x' },
+    totals: { ...campaign.totals, result_kind: 'link_click' },
+  };
+  const calls = mockFetch({
+    ...adsAnswers,
+    'GET /api/capabilities': [
+      { capability: { id: 'x1', kind_key: 'x_ads', name: 'X reklam hesabı' } },
+      { capability: { id: 'm1', kind_key: 'meta_ads', name: 'Meta hesabı' } },
+    ],
+    'GET /api/ads/campaigns': { campaigns: [promoted], next_before: null },
+    'GET /api/ads/campaigns/campaign-1': { campaign: promoted, days: [], materials: [], platforms },
+  });
+  renderAt('/ads?campaign=campaign-1');
+  // The campaign's page: the notice by the budget, the ad's own texts, no preview asked.
+  expect(await screen.findByText(notice)).toBeVisible();
+  expect(screen.getByText('Bu reklam platformu önizleme göstermiyor; reklamın metinleri aşağıda.')).toBeVisible();
+  expect(screen.getByText('Yeni seri çıktı')).toBeVisible();
+  expect(calls.some((c) => c.path.endsWith('/preview'))).toBe(false);
+  // In the list it is an X campaign.
+  renderAt('/ads');
+  expect(await screen.findByText('X', { selector: 'p' })).toBeVisible();
+
+  // Opening a campaign: the notice appears once an X ads account is chosen, not before and not
+  // for another platform's account.
+  const dialog = await fillOpening();
+  const account = within(dialog).getByLabelText('Reklam hesabı (isteğe bağlı)');
+  expect(await within(account).findByRole('option', { name: 'X reklam hesabı · X' })).toBeInTheDocument();
+  expect(within(dialog).queryByText(notice)).not.toBeInTheDocument();
+  await userEvent.selectOptions(account, 'm1');
+  expect(within(dialog).queryByText(notice)).not.toBeInTheDocument();
+  await userEvent.selectOptions(account, 'x1');
+  expect(within(dialog).getByText(notice)).toBeVisible();
+});
+
+it('says nothing about a budget limit on a platform that keeps to the total itself', async () => {
+  mockFetch({
+    ...adsAnswers,
+    'GET /api/ads/campaigns/campaign-1': { campaign, days: [], materials: [], platforms },
+  });
+  renderAt('/ads?campaign=campaign-1');
+  expect(await screen.findByText(campaign.goal)).toBeVisible();
+  expect(screen.queryByText(/kesin olarak duracağını söylemiyor/)).not.toBeInTheDocument();
+});

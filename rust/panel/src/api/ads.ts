@@ -17,9 +17,9 @@ export type CampaignState =
 /** Where a Meta campaign's ads are shown. */
 export type MetaPlatform = 'facebook' | 'instagram';
 /** What the campaign list filters by: Meta's two surfaces, or another ad platform. */
-export type Platform = MetaPlatform | 'google' | 'linkedin' | 'tiktok';
+export type Platform = MetaPlatform | 'google' | 'linkedin' | 'tiktok' | 'x';
 /** The ad platform a campaign's ad account is of (`jt_app::ports::ads::AdsPlatform`). */
-export type AdsPlatform = 'meta' | 'google' | 'linkedin' | 'tiktok';
+export type AdsPlatform = 'meta' | 'google' | 'linkedin' | 'tiktok' | 'x';
 /**
  * What a plan carries on one ad platform (`jt_app::usecases::ads::platform::PlatformRules`);
  * only what the panel shows is listed.
@@ -30,7 +30,10 @@ export interface PlatformRules {
   image: boolean;
   min_run_hours: number;
   max_run_days: number;
+  /** Whether the platform itself never spends more than a campaign's total budget. */
   hard_budget_cap: boolean;
+  /** How often Jeeta asks the platform how a running campaign stands, in minutes. */
+  watch_minutes: number;
   preview: boolean;
 }
 export type Placement = 'facebook_feed' | 'instagram_feed' | 'instagram_story' | 'instagram_reels';

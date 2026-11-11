@@ -43,7 +43,13 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
     ),
     (
         KindGroup::Ads,
-        &["meta_ads", "tiktok_ads", "linkedin_ads", "google_ads"],
+        &[
+            "meta_ads",
+            "tiktok_ads",
+            "linkedin_ads",
+            "google_ads",
+            "x_ads",
+        ],
     ),
     (
         KindGroup::Calendar,
@@ -120,7 +126,7 @@ fn every_kind_key_is_unique_and_parses() {
         .collect();
     let actual: Vec<(KindGroup, &str)> = KINDS.iter().map(|k| (k.group, k.key)).collect();
     assert_eq!(actual, expected);
-    assert_eq!(KINDS.len(), 53);
+    assert_eq!(KINDS.len(), 54);
 
     let keys: BTreeSet<&str> = KINDS.iter().map(|k| k.key).collect();
     assert_eq!(keys.len(), KINDS.len(), "kind keys must be unique");
@@ -218,7 +224,7 @@ fn default_reach_per_group() {
     }
     assert_eq!(kind("voice_bridge").default_reach(), Reach::Device);
     let count = |r: Reach| KINDS.iter().filter(|k| k.default_reach() == r).count();
-    assert_eq!(count(Reach::Connector), 28);
+    assert_eq!(count(Reach::Connector), 29);
     assert_eq!(count(Reach::Device), 10);
     assert_eq!(count(Reach::Agent), 15);
 
@@ -591,7 +597,13 @@ fn budget_link_rules() {
             .collect()
     };
 
-    for key in ["meta_ads", "tiktok_ads", "linkedin_ads", "google_ads"] {
+    for key in [
+        "meta_ads",
+        "tiktok_ads",
+        "linkedin_ads",
+        "google_ads",
+        "x_ads",
+    ] {
         assert_eq!(linkable(key), [Cash, AdBudget], "{key}");
     }
     assert_eq!(linkable("sms_line"), [Cash, SmsBudget]);
@@ -623,8 +635,8 @@ fn budget_link_rules() {
 
     // Across the whole list: how many kinds each budget kind can feed.
     let feeds = |b: BudgetKind| -> usize { KINDS.iter().filter(|k| can_link_budget(k, b)).count() };
-    assert_eq!(feeds(Cash), 49, "every kind but the agent connections");
-    assert_eq!(feeds(AdBudget), 4);
+    assert_eq!(feeds(Cash), 50, "every kind but the agent connections");
+    assert_eq!(feeds(AdBudget), 5);
     assert_eq!(feeds(SmsBudget), 1);
     assert_eq!(feeds(AgentQuota), 4);
     assert_eq!(feeds(AgentHours), 4);

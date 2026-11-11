@@ -13,7 +13,7 @@ import { can } from '@/lib/roles';
 import { formatDateTime } from '@/lib/format';
 
 /** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`); `null`: the platform's authorization names none (TikTok). */
-const AD_WRITE_SCOPES: Record<string, string | null> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads', tiktok_ads: null };
+const AD_WRITE_SCOPES: Record<string, string | null> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads', tiktok_ads: null, x_ads: 'ads.write' };
 export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
   const { t, i18n } = useTranslation();
   const session = useSession();

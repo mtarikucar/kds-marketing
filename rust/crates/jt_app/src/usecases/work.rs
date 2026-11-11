@@ -1410,7 +1410,16 @@ const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \
     by them). On TikTok (tiktok_ads): one shareable JPG or PNG image per ad, one primary text \
     of at most 100 characters without emoji, a call to action, the countries and a website; \
     no headline, no description, no page (the ad speaks as the TikTok account linked to the ad \
-    account, and Jeeta adds the music a TikTok image ad needs), no age range. Choose an end time 24 hours to 90 days after the start and \
+    account, and Jeeta adds the music a TikTok image ad needs), no age range. On X (x_ads): \
+    one shareable JPG or PNG image per ad, a primary text of at most 280 characters (the post) \
+    and a headline of at most 70 (the title of the website card under it), the countries and a \
+    website; no link written out in the primary text (the card carries the address), no call \
+    to action (a website card has no button), no description, no page (the ad \
+    is a promoted-only post of the ads account's own X user), no age range. X does not promise \
+    to stop at a campaign's total budget (hard_budget_cap is false in `platforms`): Jeeta reads \
+    a running X campaign every fifteen minutes and pauses it itself once the budget is reached, \
+    so a little more than the budget can be spent there. Choose an end time 24 hours to 90 \
+    days after the start and \
     one to six ads, and deliver them with jeeta.ads.plan_submit (campaign_id, claim_token, \
     request_key, plan). You only decide: Jeeta checks the plan, holds the campaign's whole \
     budget against every limit and builds the campaign at the ad platform itself, paused first. \

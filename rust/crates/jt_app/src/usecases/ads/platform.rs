@@ -37,6 +37,9 @@ pub struct PlatformRules {
     pub image_types: &'static [&'static str],
     /// Whether the platform refuses emoji in an ad's texts.
     pub no_emoji: bool,
+    /// Whether the platform refuses a link written out in an ad's `primary_text` (the ad's own
+    /// link element carries the address).
+    pub no_link: bool,
     /// The longest `primary_text`, `headline` and `description` (the last is optional where
     /// taken).
     pub primary_text: Option<usize>,
@@ -99,6 +102,7 @@ const META: PlatformRules = PlatformRules {
     image: true,
     image_types: &[],
     no_emoji: false,
+    no_link: false,
     primary_text: Some(1000),
     headline: Some(100),
     description: Some(100),
@@ -142,6 +146,7 @@ const GOOGLE: PlatformRules = PlatformRules {
     image: false,
     image_types: &[],
     no_emoji: false,
+    no_link: false,
     primary_text: None,
     headline: None,
     description: None,
@@ -206,6 +211,7 @@ const LINKEDIN: PlatformRules = PlatformRules {
     image: true,
     image_types: &["image/jpeg", "image/png", "image/gif"],
     no_emoji: false,
+    no_link: false,
     primary_text: Some(3000),
     headline: Some(200),
     description: None,
@@ -243,6 +249,7 @@ const TIKTOK: PlatformRules = PlatformRules {
     image: true,
     image_types: &["image/jpeg", "image/png"],
     no_emoji: true,
+    no_link: false,
     primary_text: Some(100),
     headline: None,
     description: None,
@@ -262,6 +269,56 @@ const TIKTOK: PlatformRules = PlatformRules {
     preview: false,
     distinct_ads: false,
 };
+
+/// X: a promoted-only post of the ads account's own X user that carries a website card (design
+/// §3.4). The ad is a text of at most 280 characters, and a card of one image and a title of at
+/// most 70 characters that leads to the website; a website card has no button, so there is no
+/// call to action, and a plan names no account. The post's text carries no link of its own: X
+/// takes a website card or a link in the post, not both. The image is a JPG or a PNG. The
+/// audience is the plan's countries. X's pages do not say that a campaign's total budget is
+/// never exceeded: `hard_budget_cap` is false, and Jeeta reads a running X campaign every
+/// fifteen minutes and pauses it itself when its budget is reached (B67). All read 2026-11-11
+/// from X's Ads API documentation.
+const X: PlatformRules = PlatformRules {
+    platform: AdsPlatform::X,
+    account_kind: "x_ads",
+    page_kind: None,
+    instagram: false,
+    image: true,
+    image_types: &["image/jpeg", "image/png"],
+    no_emoji: false,
+    no_link: true,
+    primary_text: Some(280),
+    headline: Some(70),
+    description: None,
+    calls_to_action: &[],
+    headlines: None,
+    descriptions: None,
+    keywords: None,
+    lead_form: false,
+    audience_age_and_gender: false,
+    audience_places_and_interests: false,
+    broad_audience: false,
+    placements: false,
+    min_run_hours: 24,
+    max_run_days: 90,
+    hard_budget_cap: false,
+    watch_minutes: 15,
+    preview: false,
+    distinct_ads: false,
+};
+
+/// Whether `text` carries a link written out: an `http://` or `https://` address, or a word
+/// that begins with `www.`.
+pub(crate) fn has_link(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("http://")
+        || lower.contains("https://")
+        || lower.split_whitespace().any(|word| {
+            word.trim_start_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("www.")
+        })
+}
 
 /// Whether `text` carries an emoji: a character of the pictograph blocks, a variation selector
 /// that turns a symbol into one, or the joiner emoji sequences are built with.
@@ -288,6 +345,7 @@ pub fn rules(platform: AdsPlatform) -> &'static PlatformRules {
         AdsPlatform::Google => &GOOGLE,
         AdsPlatform::Linkedin => &LINKEDIN,
         AdsPlatform::Tiktok => &TIKTOK,
+        AdsPlatform::X => &X,
     }
 }
 

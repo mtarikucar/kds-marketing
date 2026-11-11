@@ -50,6 +50,7 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("sms_line", Provider::Netgsm),
     ("netgsm_pbx", Provider::Netgsm),
     ("x", Provider::X),
+    ("x_ads", Provider::X),
     ("mailbox", Provider::Mail),
     ("tiktok", Provider::Tiktok),
     ("tiktok_ads", Provider::Tiktok),

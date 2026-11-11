@@ -73,10 +73,11 @@ export const campaign = {
 } satisfies Campaign;
 /** What a plan carries on each ad platform, as `GET /api/ads/campaigns/{id}` answers it. */
 export const platforms = [
-  { platform: 'meta', account_kind: 'meta_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: true },
-  { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 89, hard_budget_cap: true, preview: false },
-  { platform: 'linkedin', account_kind: 'linkedin_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: false },
-  { platform: 'tiktok', account_kind: 'tiktok_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: false },
+  { platform: 'meta', account_kind: 'meta_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, watch_minutes: 60, preview: true },
+  { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 89, hard_budget_cap: true, watch_minutes: 60, preview: false },
+  { platform: 'linkedin', account_kind: 'linkedin_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, watch_minutes: 60, preview: false },
+  { platform: 'tiktok', account_kind: 'tiktok_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, watch_minutes: 60, preview: false },
+  { platform: 'x', account_kind: 'x_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: false, watch_minutes: 15, preview: false },
 ] satisfies PlatformRules[];
 export const generalBudget = {
   ...budgetItems[0],

@@ -166,6 +166,7 @@ async fn the_sign_in_asks_for_google_ads_offline_and_exchanges_the_code() {
     let x = OAuthApp::X(XApp {
         client_id: "x".into(),
         client_secret: "y".into(),
+        ad_scopes: false,
     });
     assert_eq!(
         kind_of(r.google.authorize_url(&x, &redirect(), "s", None)),

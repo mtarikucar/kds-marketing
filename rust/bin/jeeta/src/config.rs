@@ -93,6 +93,9 @@ pub const HEPSIBURADA_INTEGRATOR_USER: &str = "JEETA_HEPSIBURADA_INTEGRATOR_USER
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
 pub const X_CLIENT_SECRET: &str = "JEETA_X_CLIENT_SECRET";
+/// Whether X flows ask for the ad scopes (`1`/`true`; default off): set once X gave the app
+/// access to its Ads API, which enables `x_ads` connections. Requires the X app.
+pub const X_AD_SCOPES: &str = "JEETA_X_AD_SCOPES";
 /// The platform's TikTok app (Login Kit, Content Posting API) client key.
 pub const TIKTOK_CLIENT_KEY: &str = "JEETA_TIKTOK_CLIENT_KEY";
 /// The TikTok app's client secret; set together with [`TIKTOK_CLIENT_KEY`].
@@ -170,6 +173,7 @@ const VARS: &[&str] = &[
     INSTAGRAM_COMMENT_SCOPES,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
+    X_AD_SCOPES,
     TIKTOK_CLIENT_KEY,
     TIKTOK_CLIENT_SECRET,
     TIKTOK_ADS_APP_ID,
@@ -713,10 +717,26 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
             None
         }
     };
-    let x = pair(&get, X_CLIENT_ID, X_CLIENT_SECRET)?.map(|(client_id, client_secret)| XApp {
-        client_id,
-        client_secret,
-    });
+    let x = match pair(&get, X_CLIENT_ID, X_CLIENT_SECRET)? {
+        Some((client_id, client_secret)) => Some(XApp {
+            client_id,
+            client_secret,
+            ad_scopes: parse_flag(X_AD_SCOPES, get(X_AD_SCOPES))?,
+        }),
+        None => {
+            // The X app's setting means nothing without it: half a configuration.
+            if get(X_AD_SCOPES).is_some() {
+                return Err(ConfigError::new(
+                    X_CLIENT_ID,
+                    format!(
+                        "must be set (with {X_CLIENT_SECRET}) because {X_AD_SCOPES} is: the X \
+                         app is configured as a whole or not at all"
+                    ),
+                ));
+            }
+            None
+        }
+    };
     let tiktok =
         pair(&get, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET)?.map(|(client_key, client_secret)| {
             TiktokApp {
@@ -1431,6 +1451,23 @@ mod tests {
             assert!(err.to_string().contains(setting), "{err}");
             assert!(!err.to_string().contains("HALF-SENTINEL"), "{err}");
         }
+        // The X app's setting: the ad scopes (a flag), off until the operator enables them.
+        let plain = Config::from_map(&with(ALL_APPS)).unwrap();
+        assert!(!plain.apps.x_app().unwrap().ad_scopes);
+        let mut ads = with(ALL_APPS);
+        ads.insert(X_AD_SCOPES.to_owned(), "1".to_owned());
+        assert!(
+            Config::from_map(&ads)
+                .unwrap()
+                .apps
+                .x_app()
+                .unwrap()
+                .ad_scopes
+        );
+        ads.insert(X_AD_SCOPES.to_owned(), "yes".to_owned());
+        assert_eq!(error(&ads).var, X_AD_SCOPES);
+        let err = error(&with(&[(X_AD_SCOPES, "1"), base]));
+        assert_eq!(err.var, X_CLIENT_ID);
         // The LinkedIn app's settings: the organization scopes and the ad scopes (flags) and
         // the API version.
         let mut tuned = with(ALL_APPS);
@@ -1479,6 +1516,7 @@ mod tests {
             (INSTAGRAM_APP_SECRET, ""),
             (X_CLIENT_ID, ""),
             (X_CLIENT_SECRET, ""),
+            (X_AD_SCOPES, ""),
             (TIKTOK_CLIENT_KEY, ""),
             (TIKTOK_CLIENT_SECRET, ""),
             (TIKTOK_ADS_APP_ID, ""),
@@ -1684,6 +1722,7 @@ mod tests {
             INSTAGRAM_COMMENT_SCOPES,
             X_CLIENT_ID,
             X_CLIENT_SECRET,
+            X_AD_SCOPES,
             TIKTOK_CLIENT_KEY,
             TIKTOK_CLIENT_SECRET,
             TIKTOK_ADS_APP_ID,

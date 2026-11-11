@@ -30,10 +30,12 @@ pub const MAX_RETRY_AFTER: Duration = Duration::hours(1);
 /// secret) was not accepted, which only the platform's configuration can fix.
 pub(crate) const CLIENT_REJECTED: &str = "platform client credentials rejected";
 
-/// The headers naming when a limit resets (epoch seconds): the 15-minute window of an endpoint,
-/// and the 24-hour caps of the app and of the user (posts).
+/// The headers naming when a limit resets (epoch seconds): the 15-minute window of an endpoint
+/// (for the user, and on the Ads API for the ads account), and the 24-hour caps of the app and
+/// of the user (posts).
 const RESET_HEADERS: &[&str] = &[
     "x-rate-limit-reset",
+    "x-account-rate-limit-reset",
     "x-app-limit-24hour-reset",
     "x-user-limit-24hour-reset",
 ];
@@ -99,6 +101,9 @@ pub(crate) struct Upload<'a> {
     pub(crate) mime: &'a str,
     pub(crate) filename: String,
     pub(crate) category: &'static str,
+    /// Another X user who may use the media too (an ad's image, when the post is written on
+    /// behalf of the ads account's user); `None`: the uploader alone.
+    pub(crate) additional_owners: Option<&'a str>,
 }
 
 /// A request body. `Debug` shows its shape only: a form carries a code, a verifier or a refresh
@@ -156,9 +161,12 @@ impl<'a> Body<'a> {
                     .file_name(upload.filename.clone())
                     .mime_str(upload.mime)
                     .map_err(|_| ConnectorError::permanent("the media type cannot be sent"))?;
-                let form = Form::new()
+                let mut form = Form::new()
                     .part("media", media)
                     .text("media_category", upload.category);
+                if let Some(owner) = upload.additional_owners {
+                    form = form.text("additional_owners", owner.to_owned());
+                }
                 request.multipart(form)
             }
         })
@@ -396,7 +404,12 @@ pub(crate) fn classify(
     if status == StatusCode::FORBIDDEN {
         return ConnectorError::permission(reason);
     }
-    if status.is_server_error() {
+    // The Ads API's 408 (`CANCELLED_REQUEST`) and 423 (`LOCK_ACQUISITION_TIMEOUT`) pass by
+    // themselves, like a server error.
+    if status.is_server_error()
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::LOCKED
+    {
         return ConnectorError::transient(reason);
     }
     ConnectorError::permanent(reason)
@@ -415,7 +428,10 @@ fn reason(status: StatusCode, json: Option<&Value>, secrets: &[&str]) -> String 
     let (head, detail, extra) = match words(&json["error"]) {
         Some(error) => (Some(error), words(&json["error_description"]), None),
         None => (
-            words(&json["title"]).or_else(|| words(&first["title"])),
+            words(&json["title"])
+                .or_else(|| words(&first["title"]))
+                // The Ads API names an error by its code (`INVALID_PARAMETER`).
+                .or_else(|| words(&first["code"])),
             words(&json["detail"]).or_else(|| words(&first["detail"])),
             words(&first["message"]),
         ),
@@ -530,6 +546,9 @@ mod tests {
             (403, None, api, "permission"),
             (403, token_error("invalid_grant"), refresh, "auth"),
             (500, None, api, "transient"),
+            // The Ads API's passing conditions.
+            (408, None, api, "transient"),
+            (423, None, api, "transient"),
             (
                 503,
                 token_error("temporarily_unavailable"),
@@ -735,6 +754,7 @@ mod tests {
                     mime: "image/png",
                     filename: "a.png".into(),
                     category: "tweet_image",
+                    additional_owners: None,
                 })
             ),
         ];

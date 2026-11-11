@@ -1,6 +1,6 @@
 //! The X credential and the capability's kind, as the use cases hand it in `public`.
 
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{ConnectorError, Credential};
 use serde_json::Value;
 
 /// The reason every operation that takes `public` refuses one without the X kind.
@@ -11,7 +11,8 @@ pub(crate) const KIND_MISSING: &str = "kind_key missing";
 pub(crate) fn kind_of(public: &Value) -> Result<&str, ConnectorError> {
     public["kind_key"]
         .as_str()
-        .filter(|kind| Provider::X.kinds().contains(kind))
+        // (An ads account, `x_ads`, posts nothing and has no counters: see `crate::ads`.)
+        .filter(|kind| *kind == "x")
         .ok_or_else(|| ConnectorError::permanent(KIND_MISSING))
 }
 

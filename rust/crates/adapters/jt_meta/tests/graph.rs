@@ -228,6 +228,7 @@ async fn authorize_urls_carry_scopes_or_config_id() {
     let x = OAuthApp::X(jt_app::ports::connectors::XApp {
         client_id: "x-client".into(),
         client_secret: "x-SECRET".into(),
+        ad_scopes: false,
     });
     let e = r
         .meta

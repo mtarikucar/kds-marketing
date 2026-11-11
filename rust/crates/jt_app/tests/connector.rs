@@ -81,6 +81,7 @@ struct Rig {
     meta: Arc<ScriptedConnector>,
     meta_oauth: Arc<ScriptedOAuth>,
     netgsm: Arc<ScriptedConnector>,
+    x: Arc<ScriptedConnector>,
     x_oauth: Arc<ScriptedOAuth>,
     tiktok: Arc<ScriptedConnector>,
     tiktok_oauth: Arc<ScriptedOAuth>,
@@ -110,7 +111,7 @@ async fn rig() -> Rig {
     let registry = ScriptedRegistry::new()
         .with_connector(meta.clone())
         .with_connector(netgsm.clone())
-        .with_connector(x)
+        .with_connector(x.clone())
         .with_connector(tiktok.clone())
         .with_connector(linkedin.clone())
         .with_connector(google.clone())
@@ -126,6 +127,7 @@ async fn rig() -> Rig {
         meta,
         meta_oauth,
         netgsm,
+        x,
         x_oauth,
         tiktok,
         tiktok_oauth,
@@ -845,6 +847,104 @@ async fn a_linkedin_ad_account_connects_once_the_ad_scopes_are_enabled() {
     assert_eq!(capability.external_id.as_deref(), Some("512000001"));
     assert_eq!(capability.status, StoredStatus::Verified);
     assert_eq!(capability.connector_public["access"]["app"], "linkedin");
+    assert_eq!(
+        capability.connector_public["access"]["scopes"],
+        json!(scopes)
+    );
+    assert_eq!(r.sealed_credential(capability.id), credential);
+}
+
+/// An X ads account needs the Ads API scopes, which X grants only to an app it approved for the
+/// Ads API: until the operator enables them an `x_ads` flow is `CONFLICT` "provider product not
+/// enabled" and nothing is asked of X. Once enabled, every X flow asks for them, the flow comes
+/// back to the one X callback, and the ads account the sign-in offers is connected with a
+/// credential that may write to it.
+#[tokio::test]
+async fn an_x_ads_account_connects_once_the_ad_scopes_are_enabled() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let e = err(connector::start_oauth(&r.w.deps, o, start("x_ads")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({ "reason": "provider_product_not_enabled", "provider": "x" })
+    );
+    assert!(r.pending_rows().is_empty());
+    assert!(r.x_oauth.calls().is_empty());
+    // The account that posts connects meanwhile, without the ad scopes.
+    let posting = r.start("x").await;
+    assert_eq!(query(&posting, "ad_scopes"), None);
+
+    let mut enabled = FakeAppConfig::with_all_apps();
+    enabled.x.as_mut().unwrap().ad_scopes = true;
+    let mut deps = r.w.deps.clone();
+    deps.apps = Arc::new(enabled);
+    let posting = connector::start_oauth(&deps, o, start("x")).await.unwrap();
+    assert_eq!(query(&posting, "ad_scopes").as_deref(), Some("true"));
+    let out = connector::start_oauth(&deps, o, start("x_ads"))
+        .await
+        .unwrap();
+    assert_eq!(query(&out, "ad_scopes").as_deref(), Some("true"));
+    assert_eq!(redirect_of(&out), "https://panel.test/oauth/callback/x");
+    assert_eq!(
+        OAuthCallback::of_flow(Provider::X, "x_ads"),
+        Some(OAuthCallback::X)
+    );
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.state_hash == hash_token(&state_of(&out)))
+        .expect("a pending flow");
+    assert_eq!((row.provider, row.app), (Provider::X, OAuthCallback::X));
+    assert_eq!(row.kind_key, "x_ads");
+    // The flow is PKCE like every X flow.
+    assert!(row.pkce_verifier_sealed.is_some());
+
+    let scopes = [
+        "tweet.read",
+        "tweet.write",
+        "users.read",
+        "offline.access",
+        "media.write",
+        "ads.read",
+        "ads.write",
+    ];
+    let credential = Credential::OAuth {
+        access_token: "x-ads-test-access".into(),
+        refresh_token: Some("x-ads-test-refresh".into()),
+        expires_at: Some(FIXED_NOW + time::Duration::hours(2)),
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    r.x_oauth.push_exchange(Ok(credential.clone()));
+    r.x_oauth.push_assets(Ok(vec![
+        Asset {
+            kind_key: "x".into(),
+            external_id: "1700000000000000001".into(),
+            name: "@jeeta_test".into(),
+            credential: credential.clone(),
+            public: json!({"username":"jeeta_test"}),
+        },
+        Asset {
+            kind_key: "x_ads".into(),
+            external_id: "18ce54d4x5t".into(),
+            name: "Reklam hesabı".into(),
+            credential: credential.clone(),
+            public: json!({"currency":"TRY","time_zone":"Europe/Istanbul"}),
+        },
+    ]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&deps, &owner, &state_of(&out), "code-x")
+        .await
+        .unwrap();
+    r.x.push_probe(ok_probe("18ce54d4x5t"));
+    let mut connected = r.confirm(&pending, &["18ce54d4x5t"]).await;
+    assert_eq!(connected.len(), 1);
+    let capability = connected.remove(0).capability;
+    assert_eq!(capability.kind_key, "x_ads");
+    assert_eq!(capability.external_id.as_deref(), Some("18ce54d4x5t"));
+    assert_eq!(capability.status, StoredStatus::Verified);
+    assert_eq!(capability.connector_public["access"]["app"], "x");
     assert_eq!(
         capability.connector_public["access"]["scopes"],
         json!(scopes)

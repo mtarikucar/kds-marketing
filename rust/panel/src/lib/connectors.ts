@@ -7,7 +7,7 @@ import type { ConnectorHealth, CredentialKind, KindKey, Provider } from '@/api/t
 export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   meta: ['facebook_page', 'instagram', 'instagram_dm', 'messenger', 'whatsapp_cloud', 'meta_ads', 'review_facebook'],
   netgsm: ['sms_line', 'netgsm_pbx'],
-  x: ['x'],
+  x: ['x', 'x_ads'],
   mail: ['mailbox'],
   tiktok: ['tiktok', 'tiktok_ads'],
   linkedin: ['linkedin_member', 'linkedin_page', 'linkedin_ads'],

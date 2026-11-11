@@ -988,6 +988,7 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
         Some(XApp {
             client_id: "x-client-id".into(),
             client_secret: "x-client-secret".into(),
+            ad_scopes: false,
         })
     );
 }
@@ -1381,6 +1382,7 @@ async fn scripted_oauth_builds_urls_and_answers_exchanges_in_order() {
     let app = OAuthApp::X(XApp {
         client_id: "cid".into(),
         client_secret: "secret".into(),
+        ad_scopes: false,
     });
     let redirect = Url::parse("https://panel.test/api/connectors/oauth/callback/x").unwrap();
     let url = provider

@@ -219,6 +219,7 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Ads, "tiktok_ads"),
     k(KindGroup::Ads, "linkedin_ads"),
     k(KindGroup::Ads, "google_ads"),
+    k(KindGroup::Ads, "x_ads"),
     k(KindGroup::Calendar, "google_calendar"),
     k(KindGroup::Calendar, "outlook_calendar"),
     // A seller's store on a marketplace, connected with the seller's own API credentials; its

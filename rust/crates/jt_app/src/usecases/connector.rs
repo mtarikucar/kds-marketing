@@ -175,6 +175,10 @@ const LINKEDIN_PAGE: &str = "linkedin_page";
 ///
 /// [`LinkedinApp::ad_scopes`]: crate::ports::connectors::LinkedinApp::ad_scopes
 const LINKEDIN_ADS: &str = "linkedin_ads";
+/// The X kind whose flows need the ad scopes ([`XApp::ad_scopes`]).
+///
+/// [`XApp::ad_scopes`]: crate::ports::connectors::XApp::ad_scopes
+const X_ADS: &str = "x_ads";
 const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
@@ -1362,6 +1366,9 @@ async fn begin_oauth(
     if kind_key == LINKEDIN_ADS
         && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.ad_scopes)
     {
+        return Err(product_not_enabled(provider));
+    }
+    if kind_key == X_ADS && matches!(&app, OAuthApp::X(x) if !x.ad_scopes) {
         return Err(product_not_enabled(provider));
     }
     if flow == Some(OAuthFlow::WhatsappBusinessApp)

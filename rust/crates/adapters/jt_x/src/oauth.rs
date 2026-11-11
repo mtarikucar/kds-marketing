@@ -8,7 +8,7 @@ use time::{Duration, OffsetDateTime};
 use url::Url;
 
 use crate::client::{Auth, Body, Endpoint, Grant, join, missing};
-use crate::{X_SCOPES, XConnector};
+use crate::{AD_SCOPES, X_SCOPES, XConnector};
 
 /// Why a flow without PKCE is refused.
 pub(crate) const PKCE_REQUIRED: &str = "pkce required";
@@ -39,6 +39,16 @@ fn x_app_of(app: &OAuthApp) -> Result<&XApp, ConnectorError> {
     }
 }
 
+/// The scopes a flow with `app` asks for: [`X_SCOPES`], and [`AD_SCOPES`] when the flow's app
+/// sets `ad_scopes`.
+pub(crate) fn scopes_for(app: &XApp) -> Vec<String> {
+    let mut scopes: Vec<String> = X_SCOPES.iter().map(|s| (*s).to_owned()).collect();
+    if app.ad_scopes {
+        scopes.extend(AD_SCOPES.iter().map(|s| (*s).to_owned()));
+    }
+    scopes
+}
+
 /// `value` when it is present and not blank.
 fn present(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|v| !v.is_empty())
@@ -55,7 +65,7 @@ pub(crate) fn authorize_url(
     let x = x_app_of(app)?;
     let challenge =
         present(pkce_challenge).ok_or_else(|| ConnectorError::permanent(PKCE_REQUIRED))?;
-    let scope = X_SCOPES.join(" ");
+    let scope = scopes_for(x).join(" ");
     let mut url = join(
         &connector.bases().authorize,
         &["i", "oauth2", "authorize"],
@@ -92,8 +102,7 @@ pub(crate) async fn exchange(
         ("code_verifier", verifier),
     ]);
     let answer = token_call(connector, x, &body, Grant::Code).await?;
-    let asked: Vec<String> = X_SCOPES.iter().map(|s| (*s).to_owned()).collect();
-    credential_of(&answer, None, &asked, OffsetDateTime::now_utc())
+    credential_of(&answer, None, &scopes_for(x), OffsetDateTime::now_utc())
 }
 
 /// A renewed credential: always, when `cred` has a refresh token (X rotates it on every call;

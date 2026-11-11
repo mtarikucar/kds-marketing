@@ -85,6 +85,7 @@ pub fn x_app() -> XApp {
     XApp {
         client_id: CLIENT_ID.into(),
         client_secret: CLIENT_SECRET.into(),
+        ad_scopes: false,
     }
 }
 
@@ -515,6 +516,7 @@ pub fn bases_at(addr: SocketAddr) -> XBases {
     XBases {
         api: base("/api"),
         upload: base("/upload"),
+        ads: base("/ads"),
         ..XBases::production()
     }
 }

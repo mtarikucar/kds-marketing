@@ -1,21 +1,24 @@
 //! The X adapter (spec §4.2 rule 1, §6.1, §6.4): an X account, connected with OAuth 2.0 and PKCE,
-//! its posts (text, a link and up to four images) and its public counters.
+//! its posts (text, a link and up to four images) and its public counters; and an X ads account,
+//! in which it builds campaigns (design 2026-11-11 §3.4).
 //!
 //! [`XConnector`] implements the connector ports of `jt_app` ([`Connector`], [`OAuthProvider`],
-//! [`Publisher`], [`InsightsReader`]). X sends no webhooks.
+//! [`Publisher`], [`InsightsReader`], [`AdCampaignWriter`], [`AdBudgetWriter`]). X sends no
+//! webhooks.
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("x")`, so it can reach
 //! only the `x` hosts of the fixed tier ([`X_HOSTS`]). Where it sends them is [`XBases`], the real
-//! hosts by default ([`XBases::production`]): the API (`api.twitter.com`) and the media upload
-//! (`api.x.com`). The authorize dialog (`twitter.com`) is only a URL for the owner's browser and
-//! is never fetched. Tests point the bases at an in-process mock.
+//! hosts by default ([`XBases::production`]): the API (`api.twitter.com`), the media upload
+//! (`api.x.com`) and the Ads API (`ads-api.x.com`). The authorize dialog (`twitter.com`) is only
+//! a URL for the owner's browser and is never fetched. Tests point the bases at an in-process
+//! mock.
 //!
 //! **OAuth.** Authorization code with PKCE (S256), as a confidential client:
 //!
 //! | Step | Call |
 //! |---|---|
-//! | authorize | `https://twitter.com/i/oauth2/authorize?response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256`, the scopes [`X_SCOPES`] joined by spaces (`%20`); without a challenge (or for an app that is not X's), refused: `Permanent` "pkce required", and the use case starts no flow |
+//! | authorize | `https://twitter.com/i/oauth2/authorize?response_type=code&client_id&redirect_uri&scope&state&code_challenge&code_challenge_method=S256`, the scopes [`X_SCOPES`] (and [`AD_SCOPES`] when the platform's app has the Ads API) joined by spaces (`%20`); without a challenge (or for an app that is not X's), refused: `Permanent` "pkce required", and the use case starts no flow |
 //! | exchange | `POST {api}/2/oauth2/token`, form `grant_type=authorization_code, code, redirect_uri, client_id, code_verifier`, `Authorization: Basic base64(client_id:client_secret)`; without a verifier, refused ("pkce required") |
 //! | refresh | `POST {api}/2/oauth2/token`, form `grant_type=refresh_token, refresh_token, client_id`, the same `Basic` |
 //!
@@ -48,11 +51,11 @@
 //!
 //! | Answer | Error |
 //! |---|---|
-//! | HTTP 429 | `Throttle`, the largest wait ahead among `x-rate-limit-reset` (the endpoint's 15-minute window), `x-app-limit-24hour-reset` and `x-user-limit-24hour-reset` (the 24-hour post caps), each epoch seconds minus now; else `Retry-After` (seconds); at most [`MAX_RETRY_AFTER`] |
+//! | HTTP 429 | `Throttle`, the largest wait ahead among `x-rate-limit-reset` (the endpoint's 15-minute window), `x-account-rate-limit-reset` (the same window of an ads account, on the Ads API), `x-app-limit-24hour-reset` and `x-user-limit-24hour-reset` (the 24-hour post caps), each epoch seconds minus now; else `Retry-After` (seconds); at most [`MAX_RETRY_AFTER`] |
 //! | a token call's HTTP 401 `invalid_client` (the platform's X client id or secret refused: no reconnection can fix it) | `Permanent` ("platform client credentials rejected") |
 //! | HTTP 401; a token call's `invalid_grant` (a spent code, a verifier that does not match, a spent or revoked refresh token); a refresh's `invalid_request` (X's answer to a refresh token it no longer accepts) | `Auth`: the owner must reconnect |
 //! | HTTP 403 | `Permission` |
-//! | HTTP 5xx; a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
+//! | HTTP 5xx, and the Ads API's 408 (`CANCELLED_REQUEST`) and 423 (`LOCK_ACQUISITION_TIMEOUT`); a read transport failure or broken response, a connect failure, a host resolving to no public address | `Transient` |
 //! | A non-idempotent write may have reached the provider, but its answer was lost, broke off, was oversized/unreadable on success, or omitted the publication ID | `Unknown` (never retry blindly) |
 //! | any other status (another 4xx, a redirect, which is never followed); a read 2xx answer that is not JSON, or an answer that carries `errors` and no `data` (a deleted post); a read answer lacking what the call needs; a read answer over 4 MiB; a host the `x` tier does not hold | `Permanent` |
 //!
@@ -91,8 +94,74 @@
 //! `facts.account_id` (the credential's own identity, never `public["external_id"]`), with its
 //! `username`.
 //!
-//! **Kinds.** X serves one kind, `x`. Every operation that takes `public` refuses one without it
-//! in `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing.
+//! **Kinds.** X serves `x` (an account that posts) and `x_ads` (an ads account). Posting and the
+//! counters are the first's: every such operation refuses a `public` without it in
+//! `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing. Campaigns are the
+//! ads account's: every such operation refuses another kind ("not an X ads account").
+//!
+//! **Ad campaigns** (`x_ads`; design 2026-11-11 §3.4, B67 and B92 to B97). X's ads are reached
+//! through its Ads API (`ads-api.x.com`, version [`ADS_VERSION`] in the path), with the same
+//! sign-in as an account that posts: when the platform's X app has the Ads API
+//! (`XApp::ad_scopes`), every flow also asks for [`AD_SCOPES`], and a sign-in that was granted
+//! `ads.write` offers the ads accounts it may build in beside its own account. Every call below
+//! was written from X's Ads API documentation (`github.com/xdevplatform/docs`, commit
+//! `fe4cdaf4`, read 2026-11-11). **Nothing here has been run against X**: the tests answer from
+//! an in-process mock, and the first real campaign is the owner's, on their own account, with a
+//! small budget and their approval at that moment (B38).
+//!
+//! *The shape of a call.* The token is the OAuth 2.0 bearer of the sign-in. The parameters
+//! travel in the query, on a `POST` and a `PUT` too; only a card is sent as a JSON body. An
+//! answer is `{request, data, next_cursor}`: a list is read page by page (`count=200`, then
+//! `cursor`), at most [`MAX_AD_PAGES`] pages, and a list that still has more is refused, never
+//! cut short. An error is `{errors: [{code, message}]}` under its HTTP status, and maps as every
+//! other call of this crate does; its reason names X's code (`INVALID_PARAMETER`) and words. A
+//! write whose answer was lost is never sent again: the next run looks for the object.
+//!
+//! *The calls.* An object is always named beside its ads account, which its own id does not
+//! carry, so the ids this adapter hands out carry both (B70): `xa:{account}:campaign:{id}`,
+//! `xa:{account}:line:{id}`, and for an ad `xa:{account}:ad:{line item}:{post}` (B94).
+//!
+//! | Step | Call |
+//! |---|---|
+//! | the ads accounts ([`OAuthProvider::list_assets`]) | `GET accounts`, then for each one that is not deleted (at most [`MAX_AD_ACCOUNTS`]) the three reads of "an ads account that can be built in" below; one that cannot is left out |
+//! | an ads account that can be built in (the probe, and before each campaign) | `GET accounts/:id` → `approval_status` `ACCEPTED`, `timezone`; `GET accounts/:id/authenticated_user_access` → `user_id`, and `permissions` that hold `ACCOUNT_ADMIN` or `AD_MANAGER`; `GET accounts/:id/promotable_users` → the one `FULL` user, whom the account advertises as: the signed-in user is that user, or holds `TWEET_COMPOSER` (X's permission to write that user's promoted-only posts); `GET accounts/:id/funding_instruments` → exactly one that is `able_to_fund`, `ACTIVE` and not deleted, whose `currency` is the account's (B93) |
+//! | finding an object by its name (before a creation, B71) | `GET accounts/:id/campaigns?q=name` and `GET accounts/:id/cards?q=name`; X matches a name by its beginning, so the rows are compared exactly, and two of one name are refused. The line item and the ad are found by their own steps |
+//! | the campaign | `POST accounts/:id/campaigns?funding_instrument_id&name&total_budget_amount_local_micro&daily_budget_amount_local_micro&entity_status=PAUSED`: the whole budget as the total, and as the daily budget X asks most accounts for, which may not be above the total (B93) |
+//! | a country | `GET targeting_criteria/locations?location_type=COUNTRIES&country_code`: the one row of that code, whose `targeting_value` a line item takes |
+//! | the line item | the countries first; then `GET accounts/:id/line_items?campaign_ids&q=name`, and when none carries the name `POST accounts/:id/line_items?campaign_id&name&objective=WEBSITE_CLICKS&product_type=PROMOTED_TWEETS&placements=ALL_ON_TWITTER&start_time&end_time&total_budget_amount_local_micro&bid_strategy=AUTO&goal=LINK_CLICKS&entity_status=PAUSED`; then `GET accounts/:id/targeting_criteria?line_item_ids` and, for each country that is not on it, `POST accounts/:id/targeting_criteria?line_item_id&operator_type=EQ&targeting_type=LOCATION&targeting_value`. The step answers only once every country is there: a line item without a location is shown to everybody, everywhere (B95) |
+//! | the image | `POST {upload}/2/media/upload` (multipart, `media_category=tweet_image`; `additional_owners` names the account's user when the signed-in user is another), a JPG or a PNG of at most 3 MB → its `media_key` (when the answer names none, `3_` and the media id); then `POST accounts/:id/media_library?media_key&name`, which is where a card takes its media from |
+//! | the card | `POST accounts/:id/cards`, JSON `{name, components: [{type: "MEDIA", media_key}, {type: "DETAILS", title, destination: {type: "WEBSITE", url}}]}` → `card_uri`. A website card has no button |
+//! | the ad | `GET accounts/:id/tweets?tweet_type=PUBLISHED&timeline_type=NULLCAST&name`; when no post carries the name, `POST accounts/:id/tweet?text&card_uri&nullcast=true&name`: a promoted-only post (it is not on the user's profile) of the user the account advertises as, which is X's default when no user is named (B92). The post is not promoted here: X has no paused promotion, so the ad is created off and switching it on promotes it (B94) |
+//! | switching on and off | `PUT accounts/:id/campaigns/:id?entity_status=ACTIVE` or `PAUSED`, and the same for `line_items/:id`. A campaign's switch takes its line items with it (off: the campaign, then each line item, every one tried whatever the others answered; on: the line items, then the campaign), since on X this pause is the only limit a budget has (B97). An ad is switched on by `GET accounts/:id/promoted_tweets?line_item_ids` and, when its post is not promoted there, `POST accounts/:id/promoted_tweets?line_item_id&tweet_ids`; off by `DELETE accounts/:id/promoted_tweets/:id` (B94) |
+//! | the state | `GET accounts/:id/campaigns/:id?with_deleted=true` → `entity_status`; `GET accounts/:id/line_items?campaign_ids`; `GET accounts/:id/promoted_tweets?line_item_ids&with_deleted=true`: an ad stands as the promotion that is there now says (`approval_status` `ACCEPTED`, `PENDING`, `REJECTED`), and is paused when every promotion it had was deleted |
+//! | the days | `GET stats/accounts/:id?entity=PROMOTED_TWEET&entity_ids&start_time&end_time&granularity=DAY&placement=ALL_ON_TWITTER&metric_groups=ENGAGEMENT,BILLING`, at most twenty ids and seven days a call (X's limits), the end being the first day left out. X reads a day as the ads account's own, while the days asked for are days of UTC: one more day is read at each end (told only when something happened on it), and when X refuses the range that reaches a day ahead, the range without it is read. The line items read are the deleted ones too. The numbers of every promotion an ad ever had are added up, and the spend (`billed_charge_local_micro`) is rounded to the nearest minor unit after that (B96). `clicks` is every click on the post as X counts them; a result is a click on the card's link (`url_clicks`) |
+//!
+//! *What an ad is checked for before anything is sent.* Its text is 1 to 280 characters as X
+//! counts them (the weighted count of a post) and carries no link written out (X takes a
+//! website card or a link in the post, not both); the card's title is 1 to 70 characters; the
+//! names of the card and of the post are at most 80. X also asks for an image at least 800
+//! pixels wide, square or 1.91:1: that is not checked here, and X refuses another image at the
+//! card, before anything runs.
+//!
+//! *No hard limit.* X's pages do not say that a campaign's total budget is never exceeded (a
+//! campaign "runs until its budget is exhausted"; the only overspend they name is for ads
+//! served after the end time, which X credits back). The platform rules of X therefore say
+//! `hard_budget_cap: false`, Jeeta reads a running X campaign every fifteen minutes, and the
+//! pause it sends once the budget is reached is the limit itself (B67, B97). Each reading
+//! reads the campaign from its start, a week a call: X allows 250 analytics calls in fifteen
+//! minutes for an ads account, which is about nineteen campaigns of ninety days.
+//!
+//! *What the first real run will show* (design A7, A10 to A13): whether the Ads API takes the
+//! OAuth 2.0 token (X's Ads pages name OAuth 1.0a only, its newer pages say the Ads API accepts
+//! OAuth 2.0 and that OAuth 1.0a closes on 2027-01-31); whether the one-call upload answers the
+//! `media_key` a card needs and takes `additional_owners`; the words X uses for an account or
+//! a promotion that is not accepted (only `ACCEPTED` is in its pages; `PENDING`,
+//! `UNDER_REVIEW` and `REJECTED` are read as their names say, anything else is shown as it
+//! is); how a line item is charged (no `pay_by` is sent: X sets it from the objective, and its
+//! page names both a link click and an impression as the default); whether a plain
+//! `PUT ...?entity_status=ACTIVE` switches a line item on (the reference says so; X's page on
+//! its own MCP server names separate "activate" routes); and whether X takes two posts of one
+//! text (`DUPLICATE_TWEET`).
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
@@ -100,10 +169,13 @@
 //! [`OAuthProvider::list_assets`]: jt_app::ports::connectors::OAuthProvider::list_assets
 //! [`Publisher`]: jt_app::ports::connectors::Publisher
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader
+//! [`AdCampaignWriter`]: jt_app::ports::connectors::AdCampaignWriter
+//! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
 mod account;
+mod ads;
 mod client;
 mod credential;
 mod insights;
@@ -119,11 +191,17 @@ use jt_app::ports::connectors::PlatformAppConfig;
 use jt_outbound::Egress;
 use url::Url;
 
+pub use ads::{ADS_VERSION, MAX_AD_ACCOUNTS, MAX_AD_PAGES};
 pub use client::MAX_RETRY_AFTER;
 
 /// The hosts the adapter reaches, exactly the `x` entries of `jt_outbound::FIXED_HOSTS`: the API
 /// and the media upload.
-pub const X_HOSTS: &[&str] = &["api.twitter.com", "api.x.com"];
+pub const X_HOSTS: &[&str] = &["api.twitter.com", "api.x.com", "ads-api.x.com"];
+
+/// The scopes a flow whose app sets `ad_scopes` asks for too: reading and writing the user's
+/// ads accounts through X's Ads API (X's own example: `scope=ads.read ads.write
+/// offline.access`). Only an app X gave Ads API access to may ask.
+pub const AD_SCOPES: &[&str] = &["ads.read", "ads.write"];
 
 /// The scopes the authorize URL asks for: reading and writing posts, reading the account,
 /// a refresh token (`offline.access`) and uploading media.
@@ -177,6 +255,8 @@ pub struct XBases {
     /// The authorize dialog, `https://twitter.com`: only a URL for the owner's browser, never
     /// fetched, so not an egress host.
     pub authorize: Url,
+    /// The Ads API, `https://ads-api.x.com`.
+    pub ads: Url,
 }
 
 impl XBases {
@@ -187,6 +267,7 @@ impl XBases {
             api: url("https://api.twitter.com"),
             upload: url("https://api.x.com"),
             authorize: url("https://twitter.com"),
+            ads: url("https://ads-api.x.com"),
         }
     }
 }

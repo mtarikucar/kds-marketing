@@ -117,6 +117,9 @@ pub(crate) fn ad_shape(ad: &PlanAd, at: &str, rules: &PlatformRules) -> Result<(
     if rules.no_emoji && platform::has_emoji(&ad.primary_text) {
         return Err(malformed(&format!("{at}.primary_text"), "no_emoji"));
     }
+    if rules.no_link && platform::has_link(&ad.primary_text) {
+        return Err(malformed(&format!("{at}.primary_text"), "no_link"));
+    }
     text(&ad.headline, &format!("{at}.headline"), rules.headline)?;
     match (&ad.description, rules.description) {
         (Some(description), Some(max)) => {

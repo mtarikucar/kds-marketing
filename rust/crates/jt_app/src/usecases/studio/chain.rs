@@ -152,6 +152,9 @@ fn studio_scopes(kind: &str, write: bool) -> Option<&'static [&'static str]> {
         // A TikTok advertiser authorizes the platform's app for the ad account as a whole: its
         // token names no scope to hold a write against (design 2026-11-11 B62).
         ("tiktok_ads", _) => &[],
+        // X's Ads API is written with `ads.write` and read with either.
+        ("x_ads", true) => &["ads.write"],
+        ("x_ads", false) => &["ads.read", "ads.write"],
         ("linkedin_ads", true) => &["rw_ads"],
         ("linkedin_ads", false) => &["r_ads", "rw_ads"],
         ("instagram", true) => &[

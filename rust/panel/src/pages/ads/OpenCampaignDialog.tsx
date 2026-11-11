@@ -22,6 +22,8 @@ import { inputClass } from '../StudioShared';
 import {
   AD_ACCOUNT_KINDS,
   LinkedinTargetingNotice,
+  NoHardCapNotice,
+  X_WATCH_MINUTES,
   CampaignError,
   useAdsKey,
   useCampaignMutation,
@@ -153,6 +155,9 @@ export function OpenCampaignDialog({
           </Field>
           {accounts.data?.some((row) => row.capability.id === account && row.capability.kind_key === 'linkedin_ads') && (
             <LinkedinTargetingNotice />
+          )}
+          {accounts.data?.some((row) => row.capability.id === account && row.capability.kind_key === 'x_ads') && (
+            <NoHardCapNotice platform={AD_ACCOUNT_KINDS.x_ads} minutes={X_WATCH_MINUTES} />
           )}
           <Field label={t('adCampaigns.end')}>
             {(ids) => (

@@ -110,6 +110,7 @@ impl FakeAppConfig {
             x: Some(XApp {
                 client_id: "x-client-id".into(),
                 client_secret: "x-client-secret".into(),
+                ad_scopes: false,
             }),
             tiktok: Some(TiktokApp {
                 client_key: "tiktok-client-key".into(),
@@ -1824,7 +1825,9 @@ impl OAuthProvider for ScriptedOAuth {
             if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.organization_scopes) {
                 query.append_pair("organization_scopes", "true");
             }
-            if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.ad_scopes) {
+            if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.ad_scopes)
+                || matches!(app, OAuthApp::X(x) if x.ad_scopes)
+            {
                 query.append_pair("ad_scopes", "true");
             }
         }
@@ -1921,6 +1924,7 @@ const AD_PLATFORMS: &[Provider] = &[
     Provider::Google,
     Provider::Linkedin,
     Provider::Tiktok,
+    Provider::X,
 ];
 /// The providers whose adapters send SMS, place calls, record consent and answer delivery-report
 /// and inbox polls (NetGSM).

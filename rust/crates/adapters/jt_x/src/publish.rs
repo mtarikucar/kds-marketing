@@ -78,9 +78,22 @@ fn safe_filename(name: &str) -> String {
     }
 }
 
+/// Whether `text` carries a link written out: an `http://` or `https://` address, or a word
+/// that begins with `www.`. (A bare domain cannot be told from a missing space after a full stop
+/// without X's list of endings, so it is not judged here.)
+pub(crate) fn has_link(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("http://")
+        || lower.contains("https://")
+        || lower.split_whitespace().any(|word| {
+            word.trim_start_matches(|c: char| !c.is_alphanumeric())
+                .starts_with("www.")
+        })
+}
+
 /// URLs, including bare domains, consume 23 weighted characters. Non-URL Unicode
 /// uses extended grapheme clusters and X's single-weight ranges; CJK and emoji weigh two.
-fn weighted_length(text: &str) -> usize {
+pub(crate) fn weighted_length(text: &str) -> usize {
     fn chars(s: &str) -> usize {
         use unicode_segmentation::UnicodeSegmentation;
         s.graphemes(true)
@@ -300,6 +313,7 @@ async fn upload(
         } else {
             IMAGE_CATEGORY
         },
+        additional_owners: None,
     });
     let url = connector.upload_url(&["2", "media", "upload"]);
     let answer = connector

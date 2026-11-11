@@ -15,7 +15,14 @@ import { Button } from '@/components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { MaterialPreview } from '../materials/MaterialsShared';
 import { inputClass } from '../StudioShared';
-import { CampaignNumbers, isClosed, LinkedinTargetingNotice, useAdsKey } from './CampaignShared';
+import {
+  AD_ACCOUNT_KINDS,
+  CampaignNumbers,
+  isClosed,
+  LinkedinTargetingNotice,
+  NoHardCapNotice,
+  useAdsKey,
+} from './CampaignShared';
 import { CampaignControls } from './CampaignControls';
 
 function AdsPreview({ data }: { data: CampaignDetail }) {
@@ -276,6 +283,8 @@ export function CampaignPage({ id, manage }: { id: string; manage: boolean }) {
   });
   const data = detail.data;
   const c = data?.campaign;
+  // The rules of the platform the campaign was built on (none before it has a plan).
+  const rules = data?.platforms.find((p) => p.platform === c?.built?.platform);
   return (
     <div className="min-w-0 space-y-5">
       <Link className="text-sm underline" to="/ads">
@@ -305,6 +314,12 @@ export function CampaignPage({ id, manage }: { id: string; manage: boolean }) {
             {c.state.state === 'expired' && <p>{t('adCampaigns.expired')}</p>}
             <PlanRefusal campaign={c} />
             <CampaignNumbers campaign={c} />
+            {rules && !rules.hard_budget_cap && (
+              <NoHardCapNotice
+                platform={AD_ACCOUNT_KINDS[rules.account_kind] ?? rules.platform}
+                minutes={rules.watch_minutes}
+              />
+            )}
             <CampaignControls campaign={c} manage={manage} />
             <div className="grid min-w-0 gap-8 xl:grid-cols-2">
               <AdsPreview data={data} />

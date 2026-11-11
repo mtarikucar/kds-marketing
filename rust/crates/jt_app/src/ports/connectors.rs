@@ -94,6 +94,11 @@ impl fmt::Debug for InstagramApp {
 pub struct XApp {
     pub client_id: String,
     pub client_secret: String,
+    /// Whether flows may ask for the ad scopes (`ads.read`, `ads.write`): set by the operator
+    /// once X gave the app access to its Ads API (`JEETA_X_AD_SCOPES`). Every X flow then asks
+    /// for them (X keeps one grant per user and app: a new sign-in replaces the earlier
+    /// tokens), and without them `x_ads` flows are refused.
+    pub ad_scopes: bool,
 }
 
 impl fmt::Debug for XApp {
@@ -101,6 +106,7 @@ impl fmt::Debug for XApp {
         f.debug_struct("XApp")
             .field("client_id", &self.client_id)
             .field("client_secret", &Masked)
+            .field("ad_scopes", &self.ad_scopes)
             .finish()
     }
 }
@@ -249,7 +255,7 @@ pub trait PlatformAppConfig: Send + Sync {
 /// |---|---|---|---|
 /// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
 /// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
-/// | `x` | the X app | `x` | `x` |
+/// | `x` | the X app | `x`, `x_ads` (the latter only with the ad scopes) | the same |
 /// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
 /// | `tiktok_ads` | the TikTok for Business app | `tiktok_ads` | `tiktok_ads` |
 /// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
@@ -2051,6 +2057,7 @@ mod tests {
         let x = XApp {
             client_id: "x-id".into(),
             client_secret: "x-secret-value".into(),
+            ad_scopes: false,
         };
         let tiktok = TiktokApp {
             client_key: "tt-key".into(),

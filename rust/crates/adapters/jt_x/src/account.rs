@@ -53,13 +53,18 @@ pub(crate) async fn list_assets(
     if let Some(name) = text(&me["name"]) {
         public.insert("name".to_owned(), json!(name));
     }
-    Ok(vec![Asset {
+    let mut assets = vec![Asset {
         kind_key: "x".to_owned(),
         name: username.map_or_else(|| id.clone(), |u| format!("@{u}")),
         external_id: id,
         credential: cred.clone(),
         public: Value::Object(public),
-    }])
+    }];
+    // A sign-in that was granted the Ads API reaches the user's ads accounts too.
+    if matches!(cred, Credential::OAuth { scopes, .. } if scopes.iter().any(|s| s == "ads.write")) {
+        assets.extend(crate::ads::list_assets(connector, cred).await?);
+    }
+    Ok(assets)
 }
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
@@ -69,6 +74,9 @@ pub(crate) async fn probe(
     cred: &Credential,
     public: &Value,
 ) -> ProbeResult {
+    if public["kind_key"].as_str() == Some(crate::ads::ADS_KIND) {
+        return crate::ads::probe(connector, cred, public).await;
+    }
     let started = Instant::now();
     let outcome = facts(connector, cred, public).await;
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);

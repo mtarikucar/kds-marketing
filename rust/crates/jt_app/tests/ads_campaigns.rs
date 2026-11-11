@@ -2398,3 +2398,276 @@ async fn a_tiktok_campaign_is_one_image_and_a_short_text_and_is_built_and_activa
     assert_eq!(rules[3]["image_types"], json!(["image/jpeg", "image/png"]));
     assert_eq!(rules[2]["no_emoji"], false);
 }
+
+// ---------------------------------------------------------------------------------------------
+// X (design 2026-11-11 §3.4, B67, B92 to B97)
+
+/// An X campaign from its plan to its end: the ad is a text and a website card (one image, a
+/// title and the address; no button, no description, and the plan names no account) under the
+/// ads account's own X user. X does not say that a campaign's total budget is never exceeded:
+/// the campaign's rules say so, a running X campaign is read every fifteen minutes and not
+/// every hour, what X reports as spent is recorded whole (above the budget too), and the
+/// campaign ends and is paused at X as soon as its budget is reached.
+#[tokio::test]
+async fn an_x_campaign_is_a_text_and_a_card_and_is_read_every_fifteen_minutes() {
+    let mut t = ads_world().await;
+    let x = Arc::new(ScriptedConnector::new(Provider::X));
+    t.w.d.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(t.w.ads.clone())
+            .with_connector(x.clone()),
+    );
+    let account = connection(
+        &t.w,
+        "x_ads",
+        "18ce54d4x5t",
+        &["tweet.read", "ads.read", "ads.write"],
+    )
+    .await;
+    let a = agent(&t.w);
+    let c = t.open("x", 60_000).await.unwrap();
+    let claim = ads::campaign_claim(
+        &t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap();
+    let submit = |key: &str, plan: Value| {
+        let d = &t.w.d;
+        let a = &a;
+        let body = json!({"campaign_id":c.id,"claim_token":claim.claim_token,
+            "request_key":key,"plan":plan});
+        async move { ads::plan_submit(d, a, input(body)).await }
+    };
+    let ad = || {
+        json!({"name":"Bir","material_ids":[t.image],"primary_text":"Yeni sezon başlıyor",
+            "headline":"Kayıtlar açık","hypothesis_id":t.w.f.slot.chain.hypothesis_id})
+    };
+    let plan = |account: CapabilityId, ads: Vec<Value>| {
+        json!({"ad_account":account,"result":"link_click",
+            "destination":{"kind":"website","url":"https://ornek.example/kayit"},
+            "audience":{"countries":["TR"]},
+            "end_at":at(FIXED_NOW + Duration::days(7)),
+            "ads":ads,"summary":"Kayıt sayfasına trafik",
+            "audience_summary":"Türkiye'deki X kullanıcıları"})
+    };
+    let limits = || {
+        // X names no least budget.
+        x.push_account_limits(Ok(AdAccountLimits {
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "Europe/Istanbul".into(),
+            min_daily_budget_minor: 0,
+            min_total_budget_minor: 0,
+        }));
+    };
+    let not_taken = "field_not_for_this_platform";
+
+    // An X ad is a text of at most 280 characters and a card title of at most 70: no
+    // description, no button, no page.
+    for (field, value, reason) in [
+        ("description", json!("Kısa açıklama"), not_taken),
+        ("call_to_action", json!("LEARN_MORE"), not_taken),
+        ("page", json!(t.page), not_taken),
+        (
+            "primary_text",
+            json!("x".repeat(281)),
+            "1_to_280_characters",
+        ),
+        ("headline", json!("x".repeat(71)), "1_to_70_characters"),
+        ("headline", json!(""), "1_to_70_characters"),
+        // The card carries the address: the post's text carries no link of its own.
+        (
+            "primary_text",
+            json!("Kayıt için: https://ornek.example/kayit"),
+            "no_link",
+        ),
+        ("primary_text", json!("Kayıt: www.ornek.example"), "no_link"),
+        ("material_ids", json!([]), "one_image"),
+    ] {
+        let mut p = plan(account, vec![ad()]);
+        p["ads"][0][field] = value;
+        let e = submit(&format!("x-{field}-{reason}"), p).await.unwrap_err();
+        assert_eq!(
+            refused_field(&e),
+            (format!("ads[0].{field}"), reason.to_owned()),
+            "{field}"
+        );
+    }
+    let mut aged = plan(account, vec![ad()]);
+    aged["audience"]["age_min"] = json!(25);
+    let e = submit("x-age", aged).await.unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("audience.age_min".into(), not_taken.into())
+    );
+    assert_eq!(t.get(c.id).await.refused, 0);
+    assert!(x.calls().is_empty());
+
+    // An ads account whose sign-in may only read names the permission that is missing.
+    let read_only = connection(&t.w, "x_ads", "18ce54d4x5u", &["tweet.read", "ads.read"]).await;
+    let e = submit("x-read-only", plan(read_only, vec![ad()]))
+        .await
+        .unwrap_err();
+    assert!(
+        e.details["findings"].as_array().unwrap().contains(
+            &json!({"field":"ad_account","reason":"credential_scope_missing",
+                "needs":["ads.write"]})
+        ),
+        "{e:?}"
+    );
+    assert!(x.calls().is_empty());
+    // An image a card does not take is a finding too.
+    let gif = image_of(&t.w, b"GIF89a", "image/gif").await;
+    let mut other = ad();
+    other["material_ids"] = json!([gif]);
+    limits();
+    let e = submit("x-gif", plan(account, vec![other]))
+        .await
+        .unwrap_err();
+    assert!(
+        e.details["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["reason"] == "image_type_not_taken"
+                && f["takes"] == json!(["image/jpeg", "image/png"])),
+        "{e:?}"
+    );
+
+    // The plan that holds: the campaign, the line item, the image, the card, the promoted post.
+    const CAMPAIGN: &str = "xa:18ce54d4x5t:campaign:hwtbm";
+    const LINE: &str = "xa:18ce54d4x5t:line:8v7jo";
+    const AD: &str = "xa:18ce54d4x5t:ad:8v7jo:1822333526255120384";
+    limits();
+    x.push_find_by_name(Ok(None));
+    x.push_create_campaign(Ok(CAMPAIGN.into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_adset(Ok(LINE.into()));
+    x.push_upload_image(Ok("3_1880028106020515840".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_creative(Ok("card://1321554298900107264".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_ad(Ok(AD.into()));
+    for _ in 0..3 {
+        x.push_set_status(Ok(()));
+    }
+    let built = submit("x-good", plan(account, vec![ad()])).await.unwrap();
+    assert_eq!(Ads::state(&built), CampaignState::InReview);
+    let b = built.built.as_ref().unwrap();
+    assert_eq!(b.platform, AdsPlatform::X);
+    assert!(b.activated_at.is_some());
+    let calls = x.calls();
+    let made = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAd { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(made.adset_id, LINE);
+    assert_eq!(made.creative_id, "card://1321554298900107264");
+    assert_eq!(made.creative.identity_id, None);
+    assert_eq!(
+        made.creative.image.as_deref(),
+        Some("3_1880028106020515840")
+    );
+    assert_eq!(made.creative.primary_text, "Yeni sezon başlıyor");
+    assert_eq!(made.creative.headline, "Kayıtlar açık");
+    assert_eq!(made.creative.call_to_action, None);
+    let statuses = || -> Vec<(String, AdStatus)> {
+        x.calls()
+            .into_iter()
+            .filter_map(|c| match c {
+                ConnectorCall::SetAdStatus {
+                    entity_id, status, ..
+                } => Some((entity_id, status)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        statuses(),
+        [
+            (AD.to_owned(), AdStatus::Active),
+            (LINE.to_owned(), AdStatus::Active),
+            (CAMPAIGN.to_owned(), AdStatus::Active)
+        ]
+    );
+
+    // X's own total is not a hard limit, and the campaign's rules say so.
+    let detail = ads::campaign_get(&t.w.d, &t.w.ctx, input(json!({"campaign_id":c.id})))
+        .await
+        .unwrap();
+    let rules = serde_json::to_value(&detail.platforms).unwrap();
+    assert_eq!(rules[4]["platform"], "x");
+    assert_eq!(rules[4]["account_kind"], "x_ads");
+    assert_eq!(rules[4]["page_kind"], Value::Null);
+    assert_eq!(rules[4]["primary_text"], 280);
+    assert_eq!(rules[4]["headline"], 70);
+    assert_eq!(rules[4]["description"], Value::Null);
+    assert_eq!(rules[4]["calls_to_action"], json!([]));
+    assert_eq!(rules[4]["image_types"], json!(["image/jpeg", "image/png"]));
+    assert_eq!(rules[4]["no_link"], true);
+    assert_eq!(rules[0]["no_link"], false);
+    assert_eq!(rules[4]["hard_budget_cap"], false);
+    assert_eq!(rules[4]["watch_minutes"], 15);
+    for other in 0..4 {
+        assert_eq!(rules[other]["hard_budget_cap"], true, "{other}");
+        assert_eq!(rules[other]["watch_minutes"], 60, "{other}");
+    }
+
+    // The first reading: a third of the budget is spent.
+    let reads = || {
+        x.calls()
+            .iter()
+            .filter(|c| matches!(c, ConnectorCall::CampaignState { .. }))
+            .count()
+    };
+    let says = |spent: i64| {
+        x.push_campaign_state(Ok(CampaignProviderState {
+            campaign: ProviderAdStatus::Active,
+            ads: vec![ProviderAd {
+                ad_id: AD.into(),
+                name: "1822333526255120384".into(),
+                status: ProviderAdStatus::Active,
+                feedback: None,
+            }],
+        }));
+        x.push_ad_days(Ok(vec![day(AD, 0, spent, Some(12))]));
+    };
+    says(20_000);
+    watch_all(&t.w.d, t.w.f.ws, FIXED_NOW + Duration::minutes(1))
+        .await
+        .unwrap();
+    assert_eq!(reads(), 1);
+    // Nine minutes later it is not read again; fifteen minutes after the first reading it is
+    // (an hour would pass on a platform whose own limit is a hard one).
+    watch_all(&t.w.d, t.w.f.ws, FIXED_NOW + Duration::minutes(10))
+        .await
+        .unwrap();
+    assert_eq!(reads(), 1);
+    // By then X reports more than the budget: all of it is recorded, the campaign ends and is
+    // paused at X.
+    says(61_500);
+    x.push_set_status(Ok(()));
+    let later = FIXED_NOW + Duration::minutes(16);
+    watch_all(&t.w.d, t.w.f.ws, later).await.unwrap();
+    assert_eq!(reads(), 2);
+    let ctx = Ctx {
+        now: later,
+        ..t.w.ctx.clone()
+    };
+    let ended = ads::campaign_get(&t.w.d, &ctx, input(json!({"campaign_id":c.id})))
+        .await
+        .unwrap()
+        .campaign;
+    assert_eq!(ended.ended.as_ref().unwrap().reason, EndReason::BudgetSpent);
+    assert_eq!(ended.totals.as_ref().unwrap().spent_minor, 61_500);
+    assert_eq!(ended.recorded_spend_minor, 61_500);
+    assert_eq!(
+        statuses().last().unwrap(),
+        &(CAMPAIGN.to_owned(), AdStatus::Paused)
+    );
+}

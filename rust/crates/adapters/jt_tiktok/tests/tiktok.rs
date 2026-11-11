@@ -228,6 +228,7 @@ async fn authorize_url_uses_client_key_and_comma_scopes() {
     let x = OAuthApp::X(XApp {
         client_id: "x".into(),
         client_secret: "x-SECRET".into(),
+        ad_scopes: false,
     });
     assert_eq!(
         kind_of(r.tt.authorize_url(&x, &redirect(), "s", None)),
