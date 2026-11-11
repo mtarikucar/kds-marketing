@@ -60,6 +60,10 @@ pub struct SmtpMode {
     pub pre_tls_failure: Option<(bool, &'static str)>, // (EHLO rather than greeting, reply)
     pub bare_lf: bool,
     pub oversized: Option<(bool, bool)>, // (before TLS, multiline)
+    /// The envelope sender and recipient expected, when not `sender@example.com` and
+    /// `person@example.com` (another crate's tests driving the real adapter).
+    pub from: Option<&'static str>,
+    pub to: Option<&'static str>,
 }
 pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -143,7 +147,7 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
         let from = if mode.utf8_from {
             "çağrı@example.com"
         } else {
-            "sender@example.com"
+            mode.from.unwrap_or("sender@example.com")
         };
         let option = if needs_utf8 { " SMTPUTF8" } else { "" };
         assert_eq!(command, format!("MAIL FROM:<{from}>{option}\r\n"));
@@ -160,7 +164,7 @@ pub async fn smtp(mode: SmtpMode) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
         let to = if mode.utf8_to {
             "çağrı@example.com"
         } else {
-            "person@example.com"
+            mode.to.unwrap_or("person@example.com")
         };
         assert_eq!(next, format!("RCPT TO:<{to}>\r\n"));
         reply(&mut stream, "250 recipient accepted\r\n").await;

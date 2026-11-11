@@ -782,9 +782,16 @@ fn only_mail_names_mail_protocol_libraries() {
             }
             let manifest = std::path::PathBuf::from(package["manifest_path"].as_str().unwrap());
             let mut files = rust_files_under(manifest.parent().unwrap());
-            files.push(manifest);
+            files.push(manifest.clone());
             for file in files {
-                let source = std::fs::read_to_string(&file).unwrap();
+                let mut source = std::fs::read_to_string(&file).unwrap();
+                // `jt_app`'s smoke test (`smoke_leads.rs`, spec D100) drives the real mail adapter
+                // against `jt_mail`'s own loopback TLS fixtures, which name `tokio-rustls`: a
+                // test-only dependency, so its manifest's `[dev-dependencies]` may name that one
+                // library. Its normal dependencies are held by the `direct_deps` check above.
+                if name == "jt_app" && file == manifest && library == "tokio-rustls" {
+                    source = without_dev_dependencies(&source);
+                }
                 assert!(
                     !mentions_word(&source, library)
                         && !mentions_word(&source, &library.replace('-', "_")),
@@ -794,6 +801,18 @@ fn only_mail_names_mail_protocol_libraries() {
             }
         }
     }
+}
+
+/// `manifest` without its `[dev-dependencies]` table (from its header to the next table).
+fn without_dev_dependencies(manifest: &str) -> String {
+    let Some(start) = manifest.find("[dev-dependencies]") else {
+        return manifest.to_owned();
+    };
+    let rest = &manifest[start + 1..];
+    let end = rest
+        .find("\n[")
+        .map_or(manifest.len(), |i| start + 1 + i + 1);
+    format!("{}{}", &manifest[..start], &manifest[end..])
 }
 
 #[test]

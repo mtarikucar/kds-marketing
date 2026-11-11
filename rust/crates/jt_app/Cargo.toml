@@ -37,13 +37,17 @@ url.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-jt_outbound.workspace = true
+# `smoke_leads.rs` drives the real mail adapter against `jt_mail/tests/support`'s loopback
+# SMTP and IMAP fixtures (TLS with the fixtures' own CA).
+jt_outbound = { workspace = true, features = ["test-loopback"] }
 jt_meta.workspace = true
 jt_netgsm.workspace = true
 jt_mail.workspace = true
 jt_testkit.workspace = true
 # `devices_agent_tracing.rs` captures what `tracing` writes.
 tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["net", "io-util"] }
+tokio-rustls.workspace = true
 
 [lints]
 workspace = true
