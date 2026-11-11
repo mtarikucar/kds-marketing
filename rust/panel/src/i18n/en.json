@@ -3247,6 +3247,73 @@
         "notInForce": "The basis is recorded, but it does not apply while cold email is off on the platform.",
         "save": "Save the basis"
       }
+    },
+    "report": {
+      "title": "Reports",
+      "description": "The prospect pool's and the campaigns' results, over whole days of the workspace's time zone.",
+      "fromDay": "First day",
+      "toDay": "Last day",
+      "zone": "Days are counted in {{tz}} time.",
+      "groupBy": "Grouping",
+      "group": "Group",
+      "none": "Not set",
+      "empty": "Nothing in this range.",
+      "truncated": "The range holds more records than one report reads; its first part was counted.",
+      "campaignTab": "Report",
+      "pool": {
+        "title": "Prospect pool report",
+        "groups": {
+          "source": "By source",
+          "research_task": "By research task",
+          "segment": "By segment",
+          "sector": "By sector",
+          "city": "By city",
+          "score_bucket": "By score range",
+          "rubric_digest": "By rubric version"
+        },
+        "cols": {
+          "created": "Recorded",
+          "scored": "Scored",
+          "qualified": "Qualified",
+          "rejected": "Rejected",
+          "promoted": "Promoted",
+          "contacted": "Written to",
+          "replied": "Replied",
+          "meetings": "Meetings",
+          "quoted": "Quoted",
+          "won": "Won",
+          "lost": "Lost",
+          "revenue": "Won revenue",
+          "rates": "Rates"
+        },
+        "ratesText": "promoted→replied {{replied}} · replied→meeting {{meeting}} · meeting→won {{won}}"
+      },
+      "outreach": {
+        "title": "Campaign report",
+        "groups": {
+          "campaign": "By campaign",
+          "step": "By step",
+          "template": "By template"
+        },
+        "step": "Step {{n}}",
+        "unknownCampaign": "Deleted campaign",
+        "unknownTemplate": "Unknown template",
+        "repliedText": "{{n}} ({{threaded}} in the thread)",
+        "cols": {
+          "enrolled": "Enrolled",
+          "skipped": "Skipped",
+          "sent": "Sent",
+          "failed": "Failed",
+          "bounced": "Bounced",
+          "complained": "Complaints",
+          "replied": "Replies",
+          "unsubscribed": "Unsubscribed",
+          "unique_clicks": "Clicked",
+          "meetings_30d": "Meetings in 30 days",
+          "won_30d": "Won in 30 days",
+          "stopped": "Stopped"
+        }
+      }
     }
   },
   "posts": {

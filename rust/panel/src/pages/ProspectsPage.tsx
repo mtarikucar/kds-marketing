@@ -291,9 +291,14 @@ export function ProspectsPage() {
         title={t('leads.prospects.title')}
         description={t('leads.prospects.description')}
         actions={
-          <Button asChild variant="outline">
-            <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline">
+              <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/prospects/report">{t('leads.report.title')}</Link>
+            </Button>
+          </div>
         }
       />
       <Card>

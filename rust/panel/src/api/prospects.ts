@@ -17,6 +17,8 @@ import type {
   ProspectListOut,
   ProspectListQuery,
   ProspectOut,
+  ProspectsReportGroup,
+  ProspectsReportOut,
   ScoreOut,
 } from './types';
 
@@ -80,3 +82,7 @@ export const getPoolSettings = () => request<PoolSettingsOut>('GET', `${root}/se
 /** `PUT /api/prospects/settings`: only the keys given change. */
 export const setPoolSettings = (input: PoolSettingsInput) =>
   request<PoolSettingsOut>('PUT', `${root}/settings`, { body: input });
+
+/** `GET /api/prospects/report`: `[from, to)` RFC 3339 instants, at most 366 days. */
+export const prospectsReport = (query: { from: string; to: string; group_by: ProspectsReportGroup }) =>
+  request<ProspectsReportOut>('GET', `${root}/report`, { query: { ...query } });

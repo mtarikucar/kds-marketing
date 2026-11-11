@@ -3247,6 +3247,73 @@
         "notInForce": "Dayanak kayıtlı, ancak platformda soğuk e-posta kapalı olduğu için şu an geçerli değil.",
         "save": "Dayanağı kaydet"
       }
+    },
+    "report": {
+      "title": "Raporlar",
+      "description": "Aday havuzunun ve kampanyaların sonuçları, çalışma alanının saatine göre tam günler üzerinden.",
+      "fromDay": "İlk gün",
+      "toDay": "Son gün",
+      "zone": "Günler {{tz}} saatine göre sayılır.",
+      "groupBy": "Gruplama",
+      "group": "Grup",
+      "none": "Belirtilmemiş",
+      "empty": "Bu aralıkta kayıt yok.",
+      "truncated": "Aralıkta bir raporun okuyabileceğinden fazla kayıt var; ilk kısmı sayıldı.",
+      "campaignTab": "Rapor",
+      "pool": {
+        "title": "Aday havuzu raporu",
+        "groups": {
+          "source": "Kaynağa göre",
+          "research_task": "Araştırma görevine göre",
+          "segment": "Segmente göre",
+          "sector": "Sektöre göre",
+          "city": "Şehre göre",
+          "score_bucket": "Puan aralığına göre",
+          "rubric_digest": "Ölçüt sürümüne göre"
+        },
+        "cols": {
+          "created": "Kaydedilen",
+          "scored": "Puanlanan",
+          "qualified": "Nitelikli",
+          "rejected": "Reddedilen",
+          "promoted": "Aktarılan",
+          "contacted": "Yazılan",
+          "replied": "Yanıt veren",
+          "meetings": "Randevu",
+          "quoted": "Teklif",
+          "won": "Kazanılan",
+          "lost": "Kaybedilen",
+          "revenue": "Kazanılan gelir",
+          "rates": "Oranlar"
+        },
+        "ratesText": "aktarılan→yanıt {{replied}} · yanıt→randevu {{meeting}} · randevu→satış {{won}}"
+      },
+      "outreach": {
+        "title": "Kampanya raporu",
+        "groups": {
+          "campaign": "Kampanyaya göre",
+          "step": "Adıma göre",
+          "template": "Şablona göre"
+        },
+        "step": "{{n}}. adım",
+        "unknownCampaign": "Silinmiş kampanya",
+        "unknownTemplate": "Bilinmeyen şablon",
+        "repliedText": "{{n}} ({{threaded}} aynı yazışmada)",
+        "cols": {
+          "enrolled": "Kaydedilen",
+          "skipped": "Atlanan",
+          "sent": "Gönderilen",
+          "failed": "Başarısız",
+          "bounced": "Geri dönen",
+          "complained": "Şikâyet",
+          "replied": "Yanıt",
+          "unsubscribed": "Abonelikten çıkan",
+          "unique_clicks": "Tıklayan",
+          "meetings_30d": "30 günde randevu",
+          "won_30d": "30 günde satış",
+          "stopped": "Durdurulan"
+        }
+      }
     }
   },
   "posts": {

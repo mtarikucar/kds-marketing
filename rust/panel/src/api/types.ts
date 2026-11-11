@@ -792,13 +792,13 @@ export type WorkKind =
   | { kind: 'ownerless_journeys'; count: number; oldest_journey_id: Uuid | null }
   /** Assignments past their SLA after the last reassignment. */
   | { kind: 'assignment_stalled'; count: number }
-  // The four outreach kinds follow spec §3.17 until `jt_app::usecases::work` gains them (L4-T7).
+  // The four outreach kinds (`jt_app::usecases::outreach::work`).
   /** Promoted ≥ 2 days ago, journey open, nothing sent yet. */
   | { kind: 'promoted_not_contacted'; count: number }
   /** A launched campaign revision waits for a human with `outreach.manage`. */
   | { kind: 'campaign_approval'; campaign_id: Uuid; revision: number }
   /** A campaign stopped by a fence or an auto-pause (`reason`). */
-  | { kind: 'campaign_blocked'; campaign_id: Uuid; reason: string }
+  | { kind: 'campaign_blocked'; campaign_id: Uuid; reason: PauseReason }
   /** Enrollments of a campaign wait for their `custom.*` values. */
   | { kind: 'personalization_due'; campaign_id: Uuid; count: number };
 
@@ -2356,10 +2356,7 @@ export interface EnrollmentRow {
   last_sent_at: Rfc3339 | null;
 }
 
-/**
- * `outreach.enrollments_list` (`GET /api/outreach/campaigns/{campaign_id}/enrollments`): follows
- * spec §7.1 and `ports::outreach::EnrollmentPage` until its use case lands (L4-T7).
- */
+/** `jt_app::usecases::outreach::EnrollmentListOut`. */
 export interface EnrollmentListOut {
   items: EnrollmentRow[];
   next: Uuid | null;
@@ -2436,31 +2433,95 @@ export interface OutreachSettingsInput {
   click_tracking_default?: boolean;
 }
 
-/** `outreach.report`'s grouping (spec §3.16). */
+/** `jt_app::usecases::outreach::report::GroupBy`. */
 export type OutreachReportGroup = 'campaign' | 'step' | 'template';
 
-/**
- * `outreach.report` (`GET /api/outreach/report`): follows spec §3.16 and §7.1 until its use case
- * lands (L4-T6); one row per group.
- */
+/** `jt_app::usecases::outreach::report::ReportGroup`: one group's counts. */
 export interface OutreachReportRow {
-  key: string;
+  /** Set when grouped by campaign or step. */
+  campaign_id: Uuid | null;
+  /** Set when grouped by step. */
+  step: number | null;
+  /** Set when grouped by step or template. */
+  template_id: Uuid | null;
   enrolled: number;
+  /** By skip reason key. */
   skipped: Record<string, number>;
   sent: number;
+  unknown: number;
   failed: number;
+  refused: number;
   bounced: number;
   complained: number;
   replied: number;
   replied_threaded: number;
+  replied_unthreaded: number;
   unsubscribed: number;
-  clicked: number;
+  /** `null` while no campaign of the group tracks clicks. */
+  unique_clicks: number | null;
   automated_clicks: number;
-  meetings: number;
-  won: number;
+  meetings_30d: number;
+  won_30d: number;
+  /** By stop reason key. */
   stopped: Record<string, number>;
 }
+
+/** `jt_app::usecases::outreach::report::ReportOut` over `[from, to)`. */
 export interface OutreachReportOut {
+  from: Rfc3339;
+  to: Rfc3339;
+  campaign_id: Uuid | null;
   group_by: OutreachReportGroup;
-  rows: OutreachReportRow[];
+  groups: OutreachReportRow[];
+  truncated: boolean;
+}
+
+/** `jt_app::usecases::prospects::report::GroupBy`. */
+export type ProspectsReportGroup =
+  | 'source'
+  | 'research_task'
+  | 'segment'
+  | 'sector'
+  | 'city'
+  | 'score_bucket'
+  | 'rubric_digest';
+export const PROSPECTS_REPORT_GROUPS: readonly ProspectsReportGroup[] = [
+  'source',
+  'research_task',
+  'segment',
+  'sector',
+  'city',
+  'score_bucket',
+  'rubric_digest',
+];
+
+/** `jt_app::usecases::prospects::report::ReportGroup`: one group's counts. */
+export interface ProspectsReportRow {
+  /** The group's value; `null` for the prospects without one. */
+  key: string | null;
+  created: number;
+  scored: number;
+  qualified: number;
+  /** By reject reason key. */
+  rejected: Record<string, number>;
+  promoted: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  quoted: number;
+  won: number;
+  /** By lost-reason key. */
+  lost: Record<string, number>;
+  /** Minor units per currency code; never summed across currencies. */
+  won_revenue: Record<string, number>;
+  rates: { promoted_to_replied: number | null; replied_to_meeting: number | null; meeting_to_won: number | null };
+}
+
+/** `jt_app::usecases::prospects::report::ReportOut` over `[from, to)`. */
+export interface ProspectsReportOut {
+  from: Rfc3339;
+  to: Rfc3339;
+  group_by: ProspectsReportGroup;
+  groups: ProspectsReportRow[];
+  truncated: boolean;
 }

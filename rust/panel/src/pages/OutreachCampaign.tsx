@@ -38,6 +38,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Disclosure,
   EmptyState,
   Input,
   PageHeader,
@@ -48,6 +49,7 @@ import { formatDateTime } from '@/lib/format';
 import { useDraftKey, useInFlight } from '@/lib/leads';
 import { can } from '@/lib/roles';
 import { selectClass } from './InboxShared';
+import { CampaignReport } from './LeadsReport';
 import { HoursFields, ListInput, useLeadsKey, useLeadsNames, useLeadsRefresh } from './LeadsShared';
 import { CampaignStatusBadge, LockNotice, launchBlockers, skipText, stopText, useOutreachSettings } from './OutreachShared';
 
@@ -718,6 +720,15 @@ export function OutreachCampaign() {
                 </Card>
               )}
               {c.status !== 'draft' && <Enrollments campaignId={c.id} />}
+              {c.status !== 'draft' && (
+                <Card>
+                  <CardContent className="pt-6">
+                    <Disclosure title={t('leads.report.campaignTab')}>
+                      <CampaignReport campaignId={c.id} />
+                    </Disclosure>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           )}
         </QueryState>
