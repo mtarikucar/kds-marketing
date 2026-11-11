@@ -428,3 +428,14 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     release without a migration (record `ops/staging-d0e0f893.md` on `ops/release-dd66e8dc`);
     the operator script printed the serving binary as the candidate's. Tested against the Graph
     mock only: no call has been made to Meta on any version.
+  - **What v27.0 changes for these calls (2026-11-11).** With the ad calls now on v27.0, the
+    v26.0 and v27.0 changelogs were read against every field the campaign builder sends. Nothing
+    breaks: `advantage_audience` is already sent explicitly (v26.0 made that an error
+    otherwise), no placement position is sent (v26.0 removed two), and the "other mobile
+    devices" default applies only to sales campaigns that target devices. One default would
+    have changed what runs: from v27.0 Meta may add a Product showcase to a creative that says
+    nothing about it, for an account with a catalog. Every creative Jeeta builds now declines it
+    (B55), so the ad that runs is the one that was planned and checked. Source:
+    `developers.facebook.com/documentation/ads-commerce/marketing-api/marketing-api-changelog/version27.0`
+    and `/version26.0`. Not on staging yet: release `d0e0f893` builds creatives without the
+    decline, which matters only for an ad account that has a product catalog.

@@ -251,9 +251,12 @@ async fn creative_encodes_link_and_form_actions_and_all_ctas() {
     );
     let req = r.mock.request("POST", "/fb/v27.0/act_123/adcreatives");
     assert_auth(&req, TOKEN);
+    // Meta's Product showcase is declined: nothing is shown with the ad that was not planned.
     assert_eq!(
         req.json(),
-        json!({"name":"test creative","object_story_spec":story()})
+        json!({"name":"test creative","object_story_spec":story(),
+            "degrees_of_freedom_spec":{"creative_features_spec":{"product_extensions":{
+                "enroll_status":"OPT_OUT","action_metadata":{"type":"MANUAL"}}}}})
     );
     spec.action = CreativeAction::LeadForm {
         form_id: "form1".into(),
@@ -761,7 +764,11 @@ async fn every_method_maps_validation_refusals_and_rate_limits_without_secret_ec
 #[tokio::test]
 async fn echoed_creative_payload_and_encoded_ad_copy_are_redacted_before_truncation() {
     let r = rig().await;
-    let body = json!({"name":"test creative","object_story_spec":story()}).to_string();
+    // The body as it is sent.
+    let body = json!({"name":"test creative","object_story_spec":story(),
+        "degrees_of_freedom_spec":{"creative_features_spec":{"product_extensions":{
+            "enroll_status":"OPT_OUT","action_metadata":{"type":"MANUAL"}}}}})
+    .to_string();
     for message in [
         format!("invalid {body} {TOKEN}"),
         format!(

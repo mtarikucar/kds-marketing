@@ -1360,7 +1360,8 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 **API sürümü.** Reklam hesabına giden çağrılar Marketing API `v27.0` ile gider (B54);
 `JEETA_META_GRAPH_VERSION` daha yeni bir sürüm veriyorsa onunla. Meta her sürümü yaklaşık bir yıl
 sunar: `v27.0` kapanmadan önce bu çağrılar yeni sürümün belgesiyle karşılaştırılıp `jt_meta`'daki
-`ADS_API_VERSION` yükseltilmelidir.
+`ADS_API_VERSION` yükseltilmelidir. Kreatifler Meta'nın ürün vitrinini reddederek kurulur (B55):
+kataloğu olan bir hesapta Meta, planlanmamış ürünleri reklamın yanında kendiliğinden gösteremez.
 
 **Bu sürümde olmayanlar.** Kurulmuş kampanyanın bütçesi ve bitiş tarihi değiştirilemez (bitirip yenisi
 açılır). Kampanya sonuçları stratejinin öğrenme kayıtlarına yazılmaz. Lead formu için ad araması

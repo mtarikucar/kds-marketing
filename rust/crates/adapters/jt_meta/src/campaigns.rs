@@ -305,12 +305,17 @@ pub(crate) async fn create_creative(
     public: &Value,
     spec: &CreativeSpec,
 ) -> Result<String, ConnectorError> {
+    // The ad that runs is the one that was planned and checked: Meta's Product showcase, which
+    // from v27.0 Meta may turn on by itself for a creative that says nothing about it (products
+    // of the account's catalog shown with the ad), is declined (design 2026-11-10 B55).
     create(
         c,
         cred,
         public,
         "adcreatives",
-        json!({"name":spec.name,"object_story_spec":object_story(spec)?}),
+        json!({"name":spec.name,"object_story_spec":object_story(spec)?,
+            "degrees_of_freedom_spec":{"creative_features_spec":{"product_extensions":{
+                "enroll_status":"OPT_OUT","action_metadata":{"type":"MANUAL"}}}}}),
     )
     .await
 }

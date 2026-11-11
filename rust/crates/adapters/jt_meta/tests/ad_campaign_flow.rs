@@ -280,6 +280,11 @@ async fn a_campaign_goes_from_a_goal_to_a_running_ad_a_read_a_stop_and_an_end() 
             "name":"Book your place","image_hash":"abc123",
             "call_to_action":{"type":"LEARN_MORE","value":{"link":"https://ornek.example/kayit"}}}})
     );
+    assert_eq!(
+        creative["degrees_of_freedom_spec"]["creative_features_spec"]["product_extensions"]["enroll_status"],
+        "OPT_OUT",
+        "Meta adds nothing of its own to the ad"
+    );
     let ad = f.mock.request("POST", &format!("{ACCOUNT}/ads")).json();
     assert_eq!(
         (
