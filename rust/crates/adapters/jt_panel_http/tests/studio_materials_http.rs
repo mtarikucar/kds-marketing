@@ -1,7 +1,7 @@
 //! The materials library's routes (spec 2026-11-03 §5.2) end to end through Postgres: they answer
 //! a workspace with no approved strategy (D35), take their ids from the path (an id in the body is
 //! `422`), keep the use cases' refusals (`404`, `409`, `422`), serve the human decisions (D4) to
-//! the owner's session, and refuse a rep without `studio.work`.
+//! the owner's session, and refuse a rep without `materials.work`.
 
 use axum::http::{Method, StatusCode};
 use jt_testkit::panel::{Panel, expect_error, ok_json, workspace_of};
@@ -170,7 +170,7 @@ async fn olays_calendar_and_the_shoot_list_answer_without_a_strategy() {
     )
     .await;
 
-    // A rep has no `studio.work`.
+    // A rep has no `materials.work`.
     let (rep, _) = p.join(&owner, "rep@materials.example", "rep").await;
     expect_error(
         p.get("/api/studio/olays", &rep).await,
@@ -427,7 +427,9 @@ async fn intelligence_preview_retry_and_production_routes_are_tenant_and_role_sc
     p.deps.files = Arc::new(MemoryFiles::default());
     p.app = jt_panel_http::router(jt_panel_http::AppState {
         deps: p.deps.clone(),
-        gate: Arc::new(jt_pg::PgStrategyGate::new(p.db.pool.clone())),
+        gate: Arc::new(jt_testkit::fakes::ModulesReadyGate(Arc::new(
+            jt_pg::PgStrategyGate::new(p.db.pool.clone()),
+        ))),
         cookie_secure: false,
         panel_dir: None,
     });

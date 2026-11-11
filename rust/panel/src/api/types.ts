@@ -21,8 +21,13 @@ export type Permission =
   | 'budget.manage'
   | 'inbox.work'
   | 'inbox.manage'
-  | 'studio.work'
-  | 'studio.manage'
+  | 'materials.work'
+  | 'content.work'
+  | 'content.manage'
+  | 'social.work'
+  | 'social.manage'
+  | 'ads.work'
+  | 'ads.manage'
   | 'calls.work'
   | 'calls.manage'
   | 'calls.bridge'
@@ -41,8 +46,13 @@ export const PERMISSIONS: readonly Permission[] = [
   'budget.manage',
   'inbox.work',
   'inbox.manage',
-  'studio.work',
-  'studio.manage',
+  'materials.work',
+  'content.work',
+  'content.manage',
+  'social.work',
+  'social.manage',
+  'ads.work',
+  'ads.manage',
   'calls.work',
   'calls.manage',
   'calls.bridge',
@@ -689,6 +699,8 @@ export const BUDGET_PERIODS: readonly BudgetPeriod[] = ['daily', 'weekly', 'mont
 
 /** `jt_capability::BudgetItem`: `cap` in `unit` (minor units of a currency). */
 export interface BudgetItem {
+  /** Absent on servers predating the general ad budget. */
+  general?: boolean;
   id: Uuid;
   workspace_id: Uuid;
   name: string;
@@ -705,6 +717,7 @@ export interface BudgetItem {
 
 /** `jt_app::usecases::budget::BudgetItemInput`. */
 export interface BudgetItemInput {
+  general?: boolean;
   name: string;
   kind: BudgetKind;
   unit: Unit;
@@ -717,6 +730,7 @@ export interface BudgetItemInput {
  * one); the kind and unit never change.
  */
 export interface UpdateBudgetItemInput {
+  general?: boolean;
   name?: string;
   cap?: number;
   period?: BudgetPeriod;
@@ -765,7 +779,16 @@ export type StrategyState =
 
 /** `jt_app::usecases::work::WorkKind`, tagged by `kind`. */
 export type WorkKind =
-  | { kind: 'studio_project'; project_id: Uuid; expected_revision: number }
+  | { kind: 'ads_campaign_proposal'; campaign_id: Uuid }
+  | { kind: 'ads_campaign_held'; campaign_id: Uuid }
+  | { kind: 'studio_slot'; slot_id: Uuid; overdue: boolean }
+  | { kind: 'studio_approval'; target: { slot: Uuid } | { budget_move: Uuid } }
+  | { kind: 'studio_budget_move'; budget_move_id: Uuid }
+  | { kind: 'studio_shoot_request'; shoot_request_id: Uuid }
+  | { kind: 'studio_post_request'; post_request_id: Uuid }
+  | { kind: 'content_area'; project_id: Uuid; expected_revision: number; redo_note: string | null }
+  | { kind: 'content_material_request'; project_id: Uuid; request_id: Uuid }
+  | { kind: 'content_area_held'; project_id: Uuid }
   | { kind: 'studio_material_analysis'; material_id: Uuid; expected_revision: number }
   | { kind: 'studio_material_production'; production_id: Uuid; expected_revision: number }
   | { kind: 'consult_strategy' }
@@ -1296,8 +1319,7 @@ export type InboxJourneyEffect =
   | 'close_tasks'
   | 'close_conversations'
   | 'cancel_open_tasks'
-  | { conversation_snoozed: { until: Rfc3339 } }
-  | { commission_due: { amount_minor: number; currency: string } };
+  | { conversation_snoozed: { until: Rfc3339 } };
 export interface InboxReportOut {
   transition: {
     from: JourneyStatus;
@@ -1306,19 +1328,6 @@ export interface InboxReportOut {
   } | null;
   effects: InboxJourneyEffect[];
   duplicate: boolean;
-}
-
-export type CommissionState = 'no_payee' | 'pending' | 'approved' | 'paid';
-export interface InboxCommission {
-  id: string;
-  workspace_id: string;
-  journey_id: string;
-  payee: string | null;
-  amount_minor: number;
-  currency: string;
-  rate_bp: number;
-  state: CommissionState;
-  created_at: string;
 }
 
 // Mirrors usecases/inbox/schema.rs; both transports validate these same request fields.
@@ -2405,7 +2414,7 @@ export interface Frequency {
 /** `jt_outreach::OutreachPolicy`. */
 export interface OutreachPolicy {
   requires_approval: boolean;
-  /** Channels with the business-recipient basis (email only; off by default). */
+  /** Channels with the business-recipient basis (messaging channels the owner opened; off by default). */
   b2b_basis: ContactChannel[];
   require_iys_lookup: boolean;
   legal_ack: LegalAck | null;

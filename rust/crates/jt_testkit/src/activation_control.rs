@@ -82,6 +82,9 @@ impl TenantRepos for Tenant {
     fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
         self.inner.studio_projects()
     }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self.inner.ads()
+    }
     fn studio_productions(
         &mut self,
     ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
@@ -143,9 +146,6 @@ impl TenantRepos for Tenant {
     }
     fn appointments(&mut self) -> &mut dyn AppointmentRepo {
         self.inner.appointments()
-    }
-    fn commissions(&mut self) -> &mut dyn CommissionRepo {
-        self.inner.commissions()
     }
     fn erasure(&mut self) -> &mut dyn ErasureRepo {
         self.inner.erasure()

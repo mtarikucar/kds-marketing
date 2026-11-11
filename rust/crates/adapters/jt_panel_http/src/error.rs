@@ -34,6 +34,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::Conflict | ErrorCode::BudgetCap => StatusCode::CONFLICT,
         ErrorCode::Validation => StatusCode::UNPROCESSABLE_ENTITY,
         ErrorCode::StrategyRequired => StatusCode::CONFLICT,
+        ErrorCode::CapabilityRequired => StatusCode::CONFLICT,
+        ErrorCode::ModuleNotInstalled => StatusCode::CONFLICT,
         ErrorCode::WorkspaceInactive => StatusCode::LOCKED,
         ErrorCode::HostNotAllowed => StatusCode::FORBIDDEN,
         ErrorCode::UpstreamUnavailable => StatusCode::SERVICE_UNAVAILABLE,

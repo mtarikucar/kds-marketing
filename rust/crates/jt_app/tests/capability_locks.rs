@@ -118,6 +118,9 @@ impl TenantRepos for SpyTenant {
     fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
         self.inner.studio_projects()
     }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self.inner.ads()
+    }
     fn studio_productions(
         &mut self,
     ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
@@ -180,9 +183,6 @@ impl TenantRepos for SpyTenant {
     }
     fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
         self.inner.appointments()
-    }
-    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
-        self.inner.commissions()
     }
     fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
         self.inner.erasure()
@@ -521,6 +521,14 @@ impl BudgetRepo for SpyTenant {
         self.spy.push("budget.list_spend");
         self.inner.budget().list_spend(item, limit, before).await
     }
+    async fn spend_slices(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<jt_app::ports::SpendSlice>, AppError> {
+        self.spy.push("budget.spend_slices");
+        self.inner.budget().spend_slices(from, to).await
+    }
 }
 
 /// Asserts that `calls`, one mutation's repo calls, read the capability through `lock` first:
@@ -583,6 +591,7 @@ async fn every_capability_mutation_locks_the_capability_before_writing() {
         &w.deps,
         o,
         BudgetItemInput {
+            general: false,
             unit_cost_minor: None,
             name: "Kasa".into(),
             kind: BudgetKind::Cash,
@@ -661,6 +670,7 @@ async fn budget_item_mutations_lock_the_item_before_writing() {
         &w.deps,
         o,
         BudgetItemInput {
+            general: false,
             unit_cost_minor: None,
             name: "Kasa".into(),
             kind: BudgetKind::Cash,

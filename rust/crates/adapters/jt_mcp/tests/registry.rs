@@ -9,6 +9,14 @@ use jt_tenancy::Permission;
 use serde_json::Value;
 
 const TOOLS: &[&str] = &[
+    "jeeta.content.area_claim",
+    "jeeta.content.area_progress",
+    "jeeta.content.area_release",
+    "jeeta.content.area_deliver",
+    "jeeta.social.version_schedule",
+    "jeeta.social.versions_waiting",
+    "jeeta.social.accounts_list",
+    "jeeta.social.account_get",
     "jeeta.studio.adsets_list",
     "jeeta.studio.adset_bind",
     "jeeta.studio.budget_move",
@@ -25,7 +33,6 @@ const TOOLS: &[&str] = &[
     "jeeta.studio.ledger",
     "jeeta.studio.ledger_export",
     "jeeta.studio.brake",
-    "jeeta.studio.policy_set",
     "jeeta.studio.approve",
     "jeeta.studio.project_schedule",
     "jeeta.studio.project_list",
@@ -86,10 +93,6 @@ const TOOLS: &[&str] = &[
     "jeeta.inbox.appointments_book",
     "jeeta.inbox.appointments_cancel",
     "jeeta.inbox.appointments_held",
-    "jeeta.inbox.commissions_list",
-    "jeeta.inbox.commissions_approve",
-    "jeeta.inbox.commissions_pay",
-    "jeeta.inbox.commission_rates_set",
     "jeeta.inbox.public_hide",
     "jeeta.inbox.public_delete",
     "jeeta.inbox.public_mark_handled",
@@ -169,6 +172,16 @@ const TOOLS: &[&str] = &[
     "jeeta.budget.items_retire",
     "jeeta.budget.spend_record",
     "jeeta.budget.spend_list",
+    "jeeta.budget.breakdown",
+    "jeeta.ads.campaigns_list",
+    "jeeta.ads.campaign_get",
+    "jeeta.ads.campaign_propose",
+    "jeeta.ads.campaign_claim",
+    "jeeta.ads.campaign_release",
+    "jeeta.ads.plan_submit",
+    "jeeta.ads.campaign_move",
+    "jeeta.ads.campaign_pause",
+    "jeeta.ads.ad_preview",
     "jeeta.work.pending",
     "jeeta.work.checkin",
     "jeeta.work.set_checkin_interval",
@@ -247,7 +260,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 231);
+    assert_eq!(TOOLS.len(), 244);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -357,7 +370,7 @@ fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
             | "jeeta.strategy.consultation" => Permission::WorkspaceRead,
             _ => Permission::TeamManage,
         };
-        assert_eq!(spec.permission, expected, "{}", spec.name);
+        assert_eq!(spec.permissions, &[expected], "{}", spec.name);
     }
     let get = registry()
         .into_iter()
@@ -420,8 +433,23 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         .into_iter()
         .filter(|s| s.use_case.starts_with("capability.") || s.use_case.starts_with("budget."))
         .collect();
-    assert_eq!(specs.len(), 22);
+    assert_eq!(specs.len(), 23);
     for spec in &specs {
+        // Spend by module is read by whoever manages the budget or works in a module.
+        if spec.name == "jeeta.budget.breakdown" {
+            assert_eq!(
+                spec.permissions,
+                &[
+                    Permission::BudgetManage,
+                    Permission::AdsWork,
+                    Permission::SocialWork,
+                    Permission::ContentWork,
+                    Permission::InboxWork,
+                    Permission::CallsWork
+                ]
+            );
+            continue;
+        }
         let expected = match spec.name {
             // Reading, and what an agent reports about its own hands and spend: the use cases
             // decide per actor (a person verifies only with capabilities.manage).
@@ -437,7 +465,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
             | "jeeta.budget.items_retire" => Permission::BudgetManage,
             _ => Permission::CapabilitiesManage,
         };
-        assert_eq!(spec.permission, expected, "{}", spec.name);
+        assert_eq!(spec.permissions, &[expected], "{}", spec.name);
     }
     let destructive: BTreeSet<&str> = specs
         .iter()
@@ -513,7 +541,7 @@ fn capability_tools_need_the_permissions_their_use_cases_check() {
         (
             "jeeta.budget.items_update",
             "budget_item_id",
-            &["name", "cap", "period", "unit_cost_minor"][..],
+            &["name", "cap", "period", "unit_cost_minor", "general"][..],
         ),
     ] {
         let schema = find(name).input_schema.clone().to_value();
@@ -611,18 +639,26 @@ fn work_tools_read_and_check_in_with_workspace_read_and_set_the_interval_with_te
         .into_iter()
         .filter(|s| s.use_case.starts_with("work."))
         .collect();
-    let permissions: Vec<(&str, Permission, Risk)> = specs
+    let permissions: Vec<(&str, &[Permission], Risk)> = specs
         .iter()
-        .map(|s| (s.name, s.permission, s.risk))
+        .map(|s| (s.name, s.permissions, s.risk))
         .collect();
     assert_eq!(
         permissions,
         [
-            ("jeeta.work.pending", Permission::WorkspaceRead, Risk::Read),
-            ("jeeta.work.checkin", Permission::WorkspaceRead, Risk::Write),
+            (
+                "jeeta.work.pending",
+                &[Permission::WorkspaceRead][..],
+                Risk::Read
+            ),
+            (
+                "jeeta.work.checkin",
+                &[Permission::WorkspaceRead][..],
+                Risk::Write
+            ),
             (
                 "jeeta.work.set_checkin_interval",
-                Permission::TeamManage,
+                &[Permission::TeamManage][..],
                 Risk::Write
             ),
         ]
@@ -650,51 +686,51 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
         .into_iter()
         .filter(|s| s.use_case.starts_with("connector."))
         .collect();
-    let permissions: Vec<(&str, Permission, Risk)> = specs
+    let permissions: Vec<(&str, &[Permission], Risk)> = specs
         .iter()
-        .map(|s| (s.name, s.permission, s.risk))
+        .map(|s| (s.name, s.permissions, s.risk))
         .collect();
     assert_eq!(
         permissions,
         [
             (
                 "jeeta.connector.start_oauth",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
             (
                 "jeeta.connector.confirm_assets",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
             (
                 "jeeta.connector.set_credentials",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
             (
                 "jeeta.connector.probe",
-                Permission::WorkspaceRead,
+                &[Permission::WorkspaceRead][..],
                 Risk::Write
             ),
             (
                 "jeeta.connector.health",
-                Permission::WorkspaceRead,
+                &[Permission::WorkspaceRead][..],
                 Risk::Read
             ),
             (
                 "jeeta.connector.reconnect",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
             (
                 "jeeta.connector.hooks",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Read
             ),
             (
                 "jeeta.connector.set_pbx_policy",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
         ]
@@ -779,24 +815,28 @@ fn event_tools_read_with_workspace_read_and_acknowledge_with_capabilities_manage
         .into_iter()
         .filter(|s| s.use_case.starts_with("events."))
         .collect();
-    let permissions: Vec<(&str, Permission, Risk)> = specs
+    let permissions: Vec<(&str, &[Permission], Risk)> = specs
         .iter()
-        .map(|s| (s.name, s.permission, s.risk))
+        .map(|s| (s.name, s.permissions, s.risk))
         .collect();
     assert_eq!(
         permissions,
         [
             (
                 "jeeta.events.pending",
-                Permission::WorkspaceRead,
+                &[Permission::WorkspaceRead][..],
                 Risk::Read
             ),
             (
                 "jeeta.events.ack",
-                Permission::CapabilitiesManage,
+                &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
-            ("jeeta.events.list", Permission::WorkspaceRead, Risk::Read),
+            (
+                "jeeta.events.list",
+                &[Permission::WorkspaceRead][..],
+                Risk::Read
+            ),
         ]
     );
     let find = |name: &str| {

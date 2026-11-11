@@ -247,7 +247,7 @@ fn the_inbox_runs_without_a_strategy_while_the_studio_and_outreach_do_not() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(inbox.len(), 53);
+    assert_eq!(inbox.len(), 49);
     for uc in &inbox {
         let result = ready(check_gate(uc, WorkspaceStatus::Active, &NoStrategyYet, ws));
         if uc.id == "inbox.send" {
@@ -324,4 +324,244 @@ fn gate_errors_serialise_as_structured_errors() {
     assert_eq!(v["code"], "STRATEGY_REQUIRED");
     assert!(v["message"].as_str().is_some_and(|m| !m.is_empty()));
     assert!(v["details"].is_object());
+}
+
+/// Approved strategy; every module but strategy lacks its capability.
+struct NothingConnected;
+
+#[async_trait]
+impl StrategyGate for NothingConnected {
+    async fn has_approved_strategy(&self, _ws: WorkspaceId) -> Result<bool, AppError> {
+        Ok(true)
+    }
+    async fn missing_capabilities(
+        &self,
+        _ws: WorkspaceId,
+        module: &str,
+    ) -> Result<Vec<String>, AppError> {
+        Ok(vec![format!("{module}-needs")])
+    }
+}
+
+#[test]
+fn a_locked_module_refuses_its_use_cases_on_both_transports_but_never_legal_or_stopping_duties() {
+    use jt_app::catalog::find;
+    use jt_app::gate::{CAPABILITY_EXEMPT, gating_module};
+    let ws = WorkspaceId::new_v7();
+    for (id, module) in [
+        ("inbox.conversations.list", "inbox"),
+        ("inbox.reply", "inbox"),
+        ("studio.posts_list", "social"),
+        ("studio.adsets_list", "ads"),
+        ("studio.project_list", "content"),
+        ("studio.materials_list", "materials"),
+        ("outreach.campaigns_list", "outreach"),
+        ("calls.place", "calls"),
+    ] {
+        let uc = find(id).unwrap_or_else(|| panic!("{id} is a catalog row"));
+        let err = ready(check_gate(
+            uc,
+            WorkspaceStatus::Active,
+            &NothingConnected,
+            ws,
+        ))
+        .expect_err("a locked module refuses");
+        assert_eq!(err.code, ErrorCode::CapabilityRequired, "{id}");
+        assert_eq!(err.details["module"], module, "{id}");
+        assert_eq!(err.details["missing"][0], format!("{module}-needs"), "{id}");
+    }
+    for id in CAPABILITY_EXEMPT {
+        let uc = find(id).unwrap_or_else(|| panic!("{id} is a catalog row"));
+        assert_eq!(gating_module(id), None, "{id}");
+        assert!(
+            ready(check_gate(
+                uc,
+                WorkspaceStatus::Active,
+                &NothingConnected,
+                ws
+            ))
+            .is_ok(),
+            "{id}"
+        );
+    }
+    // Strategy, the workspace and the device bridge's plumbing never wait for a module.
+    for uc in CATALOG.iter().filter(|uc| {
+        [
+            "strategy.",
+            "workspace.",
+            "modules.",
+            "capability.",
+            "calls.bridge.",
+        ]
+        .iter()
+        .any(|p| uc.id.starts_with(p))
+    }) {
+        assert_eq!(gating_module(uc.id), None, "{}", uc.id);
+    }
+    // The workspace-status check still comes first.
+    let inbox = find("inbox.conversations.list").unwrap();
+    assert_eq!(
+        code(ready(check_gate(
+            inbox,
+            WorkspaceStatus::Suspended,
+            &NothingConnected,
+            ws
+        ))),
+        ErrorCode::WorkspaceInactive
+    );
+}
+
+/// Approved strategy, every capability connected; one module is removed from the workspace.
+struct Removed(&'static str);
+
+#[async_trait]
+impl StrategyGate for Removed {
+    async fn has_approved_strategy(&self, _ws: WorkspaceId) -> Result<bool, AppError> {
+        Ok(true)
+    }
+    async fn module_installed(&self, _ws: WorkspaceId, module: &str) -> Result<bool, AppError> {
+        Ok(module != self.0)
+    }
+}
+
+/// The five groups of `studio.*` use cases since the Growth Studio became four modules (design
+/// 2026-11-10 Ek A): the shared library, content, social media, advertising, and the ones that
+/// belong to no single module.
+#[test]
+fn every_studio_use_case_has_a_module_or_is_listed_cross_module() {
+    use jt_app::gate::{gating_module, studio_module};
+    use std::collections::BTreeMap;
+    const CROSS_MODULE: [&str; 10] = [
+        "studio.overview",
+        "studio.pending",
+        "studio.learned",
+        "studio.ledger",
+        "studio.ledger_export",
+        "studio.judgment_record",
+        "studio.trend_record",
+        "studio.hypothesis_propose",
+        "studio.brake",
+        "studio.approve",
+    ];
+    let mut groups: BTreeMap<&str, usize> = BTreeMap::new();
+    for uc in CATALOG.iter().filter(|uc| uc.id.starts_with("studio.")) {
+        match studio_module(uc.id) {
+            Some(module) => {
+                *groups.entry(module).or_default() += 1;
+                assert_eq!(gating_module(uc.id), Some(module), "{}", uc.id);
+            }
+            None => {
+                assert!(CROSS_MODULE.contains(&uc.id), "{} has no module", uc.id);
+                *groups.entry("none").or_default() += 1;
+                assert_eq!(gating_module(uc.id), None, "{}", uc.id);
+            }
+        }
+    }
+    assert_eq!(
+        groups,
+        BTreeMap::from([
+            ("materials", 28),
+            ("content", 16),
+            ("social", 12),
+            ("ads", 3),
+            ("none", 10),
+        ])
+    );
+    for id in CROSS_MODULE {
+        assert!(jt_app::catalog::find(id).is_some(), "{id} is a catalog row");
+    }
+    // Only `studio.*` ids have a Studio module.
+    assert_eq!(studio_module("inbox.reply"), None);
+    assert_eq!(studio_module("studio.no_such_action"), None);
+}
+
+#[test]
+fn a_removed_module_refuses_its_use_cases_and_nothing_else() {
+    use jt_app::catalog::find;
+    let ws = WorkspaceId::new_v7();
+    let gate = |id: &str, removed: &'static str| {
+        let uc = find(id).unwrap_or_else(|| panic!("{id} is a catalog row"));
+        ready(check_gate(
+            uc,
+            WorkspaceStatus::Active,
+            &Removed(removed),
+            ws,
+        ))
+    };
+    for (id, module) in [
+        ("studio.adset_bind", "ads"),
+        ("studio.budget_move", "ads"),
+        ("studio.posts_propose", "social"),
+        ("studio.project_create", "content"),
+        ("studio.material_add", "materials"),
+        ("studio.piece_submit", "materials"),
+    ] {
+        let err = gate(id, module).expect_err("a removed module refuses");
+        assert_eq!(err.code, ErrorCode::ModuleNotInstalled, "{id}");
+        assert_eq!(err.details["module"], module, "{id}");
+        let v = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["code"], "MODULE_NOT_INSTALLED", "{id}");
+        // Another module's removal does not touch it.
+        let other = if module == "ads" { "social" } else { "ads" };
+        assert!(gate(id, other).is_ok(), "{id} while {other} is removed");
+    }
+    // What belongs to no single module, and stopping what runs, stays open whatever is removed.
+    for removed in ["content", "social", "ads", "materials"] {
+        for id in [
+            "studio.overview",
+            "studio.pending",
+            "studio.learned",
+            "studio.brake",
+            "studio.approve",
+        ] {
+            assert!(gate(id, removed).is_ok(), "{id} while {removed} is removed");
+        }
+    }
+    // The older modules keep their rule: removal is navigation only, the gate does not ask.
+    for (id, removed) in [
+        ("inbox.reply", "inbox"),
+        ("outreach.campaigns_list", "outreach"),
+        ("calls.place", "calls"),
+    ] {
+        assert!(gate(id, removed).is_ok(), "{id}");
+    }
+    // The workspace-status check and the strategy gate still come first.
+    let uc = find("studio.adset_bind").unwrap();
+    assert_eq!(
+        code(ready(check_gate(
+            uc,
+            WorkspaceStatus::Suspended,
+            &Removed("ads"),
+            ws
+        ))),
+        ErrorCode::WorkspaceInactive
+    );
+}
+
+/// People records are `inbox.*` use cases, and the People module works without the inbox
+/// (design 2026-11-10 §4.4): no module gates them.
+#[test]
+fn people_records_never_wait_for_the_inbox() {
+    use jt_app::gate::gating_module;
+    let ws = WorkspaceId::new_v7();
+    let people: Vec<&UseCase> = CATALOG
+        .iter()
+        .filter(|uc| uc.id.starts_with("inbox.people."))
+        .collect();
+    assert!(people.len() >= 4);
+    for uc in people {
+        assert_eq!(gating_module(uc.id), None, "{}", uc.id);
+        assert!(
+            ready(check_gate(
+                uc,
+                WorkspaceStatus::Active,
+                &NothingConnected,
+                ws
+            ))
+            .is_ok(),
+            "{}",
+            uc.id
+        );
+    }
+    assert_eq!(gating_module("inbox.reply"), Some("inbox"));
 }

@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Blueprint, ModulesOut, WorkspaceModule } from '@/api/modules';
 import { agents, capabilities, me, repMe } from '@/test/fixtures';
-import { coreModules } from '@/test/modules';
+import { coreModules, legacyModules } from '@/test/modules';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { parseBlueprint, portableBlueprint } from '@/lib/modules';
 
@@ -31,20 +31,95 @@ describe('modular agent center', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('uses recorded connections and explicit assignments to focus the modules', async () => {
-    const user = userEvent.setup();
+  it('shows each agent compactly with its recorded contact and assigned modules, never an online claim', async () => {
     const assigned = { ...module, config: { ...module.config, agent_ids: [agents[0].id] } };
     mockFetch(answers({ 'GET /api/workspace/modules': registry([assigned]) }));
     renderAt('/');
     expect(await screen.findByRole('heading', { name: 'Ajan merkezi', level: 1 })).toBeInTheDocument();
-    const agentsSection = await screen.findByRole('region', { name: 'Ajan bağlantıları' });
-    const choice = await within(agentsSection).findByRole('button', { name: /ornek-istemci/ });
-    expect(choice).toHaveTextContent('Son temas');
+    const strip = screen.getByRole('region', { name: /Ajanlar/ });
+    const row = await within(strip).findByText('ornek-istemci');
+    expect(row.closest('li')).toHaveTextContent(/son temas/);
+    expect(row.closest('li')).toHaveTextContent(blueprint.name);
+    expect(within(strip).getByRole('link', { name: 'Ajan bağla' })).toHaveAttribute('href', '/api-keys');
     expect(screen.queryByText('Çevrimiçi')).not.toBeInTheDocument();
-    await user.click(choice);
-    const section = screen.getByRole('region', { name: 'Bu ajanın modülleri' });
-    expect(within(section).getByRole('heading', { name: blueprint.name })).toBeInTheDocument();
-    expect(within(section).queryByRole('heading', { name: 'Büyüme stüdyosu' })).not.toBeInTheDocument();
+    expect(screen.queryByText('çalışıyor')).not.toBeInTheDocument();
+    // Modules live in the navigation now, not on the home page.
+    expect(screen.queryByRole('heading', { name: 'İş modülleri' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Ortak temel' })).not.toBeInTheDocument();
+  });
+
+  it('puts pending work before the log, in plain words with who did it and in which module', async () => {
+    const at = new Date().toISOString();
+    mockFetch(answers({
+      'GET /api/work/pending': { strategy: 'missing', agent: { last_seen_at: null, interval_minutes: 60, overdue: false },
+        items: [{ kind: 'approve_strategy', priority: 1, hint: '' }] },
+      'GET /api/ledger': [{ id: 7, entry: { workspace_id: me.current_workspace, at, actor: { kind: 'human', user_id: me.user_id },
+        action: 'strategy.start_consultation', subject: null, payload: null, strategy_version_id: null } }],
+    }));
+    renderAt('/');
+    const feed = await screen.findByRole('region', { name: /İşler ve onaylar/ });
+    const pending = await within(feed).findByRole('list', { name: 'Bekleyen' });
+    expect(within(pending).getByRole('link', { name: 'Aç' })).toHaveAttribute('href', '/strategy');
+    const log = await within(feed).findByRole('list', { name: 'Günlük' });
+    expect(log).toHaveTextContent('Sen strateji istişaresini başlattı');
+    expect(log).toHaveTextContent('Strateji');
+    expect(pending.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('calendars every visible module’s actions with module, who, when and status', async () => {
+    const now = new Date();
+    const later = new Date(now.getTime() + 60 * 60_000);
+    if (later.getDate() !== now.getDate()) later.setTime(now.getTime() - 60 * 60_000);
+    const planned = new Date(now.getTime() + 2 * 60 * 60_000);
+    if (planned.getDate() !== now.getDate()) planned.setTime(now.getTime() - 2 * 60 * 60_000);
+    const social = legacyModules.modules.find(m => m.blueprint.id === 'social')!;
+    const studioAgent = { ...social, config: { ...social.config, agent_ids: [agents[0].id] } };
+    const calls = mockFetch(answers({
+      'GET /api/workspace/modules': { ...legacyModules, modules: legacyModules.modules.map(m => m.blueprint.id === 'social' ? studioAgent : m) },
+      'GET /api/inbox/tasks': [{ id: 't1', workspace_id: me.current_workspace, journey_id: 'j1', title: 'Teklifi ara', due_at: later.toISOString(), assignee: null, status: 'open' }],
+      'GET /api/studio/summary': { week_start: '', tz: 'Europe/Istanbul', from: '', until: '', published: [], cancelled: [], scores: [],
+        planned: [{ slot_id: 's1', capability_id: 'c1', format: 'reel', publish_at: planned.toISOString(), prep_start_at: planned.toISOString(), state: 'planned' }] },
+    }));
+    renderAt('/');
+    const calendar = await screen.findByRole('region', { name: /Takvim/ });
+    const task = await within(calendar).findByRole('link', { name: /Teklifi ara/ });
+    expect(task).toHaveAttribute('href', '/inbox?task=t1');
+    expect(task).toHaveTextContent('Atanmamış');
+    const post = await within(calendar).findByRole('link', { name: /Reels/ });
+    expect(post).toHaveTextContent('ornek-istemci');
+    expect(post).toHaveAttribute('href', '/social?slot=s1');
+    expect(within(calendar).getByText('Sosyal medya yönetimi')).toBeInTheDocument();
+    expect(calls.some(call => call.path === '/api/studio/summary')).toBe(true);
+    expect(calls.some(call => call.path === '/api/calls')).toBe(true);
+  });
+
+  it('asks nothing of a module that is not installed', async () => {
+    const calls = mockFetch(answers());
+    renderAt('/');
+    await screen.findByRole('region', { name: /Takvim/ });
+    await screen.findByRole('link', { name: blueprint.name });
+    expect(calls.some(call => ['/api/inbox/tasks', '/api/studio/summary', '/api/calls', '/api/outreach/campaigns'].includes(call.path))).toBe(false);
+  });
+
+  it('locks the inbox until a messaging channel is connected, without asking the inbox anything', async () => {
+    const locked = { ...registry(), modules: registry().modules.map(m => m.blueprint.id === 'inbox' ? { ...m, installed: true } : m), availability: { inbox: { ready: false, missing: ['messaging'] }, strategy: { ready: true, missing: [] } } };
+    const calls = mockFetch(answers({ 'GET /api/workspace/modules': locked }));
+    renderAt('/inbox');
+    expect(await screen.findByRole('heading', { name: 'Gelen kutusu için bir yetenek bağlanmalı', level: 1 })).toBeInTheDocument();
+    expect(screen.getByTestId('module-missing')).toHaveTextContent('Mesajlaşma');
+    expect(screen.getByRole('link', { name: 'Yetenek bağla' })).toHaveAttribute('href', '/connect');
+    expect(screen.getAllByLabelText('Kilitli: gerekli yetenek bağlı değil').length).toBeGreaterThan(0);
+    expect(calls.some(call => call.path.startsWith('/api/inbox/'))).toBe(false);
+  });
+
+  it('names an either-or requirement in words and marks whether it is connected', async () => {
+    const outreach = { ...legacyModules.modules.find(m => m.blueprint.id === 'outreach')!, blueprint: { ...legacyModules.modules.find(m => m.blueprint.id === 'outreach')!.blueprint, requirements: ['mailbox|sms_line|whatsapp_cloud', 'Serbest not'] } };
+    const data = { ...legacyModules, modules: legacyModules.modules.map(m => m.blueprint.id === 'outreach' ? outreach : m), availability: { outreach: { ready: false, missing: ['mailbox|sms_line|whatsapp_cloud'] } } };
+    mockFetch(answers({ 'GET /api/workspace/modules': data }));
+    renderAt('/modules/outreach');
+    const label = await screen.findByText('E-posta kutusu, SMS hattı veya WhatsApp Business');
+    expect(label.closest('li')?.querySelector('[aria-label="Bağlı değil"]')).not.toBeNull();
+    expect(screen.getByText('Serbest not').closest('li')?.querySelector('[aria-label]')).toBeNull();
   });
 
   it('creates an arbitrary blueprint and navigates to its actual persisted module', async () => {
@@ -65,6 +140,25 @@ describe('modular agent center', () => {
     expect(write?.path).toBe('/api/workspace/modules/orchard');
     expect(write?.body).toEqual({ blueprint: custom });
     expect(calls.filter(call => ['POST', 'DELETE', 'PATCH'].includes(call.method))).toHaveLength(0);
+  });
+
+  it('chooses a custom blueprint’s requirements from capability groups and kinds, not free text', async () => {
+    const user = userEvent.setup();
+    const custom = { ...blueprint, id: 'kargo-takibi', name: 'Kargo takibi', description: '', workflow: [], requirements: ['messaging', 'sms_line'] };
+    const calls = mockFetch(answers({ 'PUT /api/workspace/modules/kargo-takibi': registry([{ ...module, blueprint: custom }]) }));
+    renderAt('/modules');
+    await user.click(await screen.findByRole('button', { name: 'Blueprint oluştur' }));
+    const dialog = screen.getByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Modül adı'), 'Kargo takibi');
+    await user.click(within(dialog).getByText('İş akışı · Gereken yetenekler'));
+    await user.click(within(dialog).getByRole('button', { name: 'Mesajlaşma' }));
+    expect(within(dialog).getByRole('button', { name: 'Mesajlaşma' })).toHaveAttribute('aria-pressed', 'true');
+    await user.selectOptions(within(dialog).getByLabelText('Belirli bir tür ekle'), 'sms_line');
+    const chosen = within(dialog).getByRole('list', { name: 'Seçilen gereksinimler' });
+    expect(chosen).toHaveTextContent('Mesajlaşma');
+    expect(chosen).toHaveTextContent('SMS hattı');
+    await user.click(within(dialog).getByRole('button', { name: 'Oluştur ve ekle' }));
+    await waitFor(() => expect(calls.find(call => call.method === 'PUT')?.body).toEqual({ blueprint: { ...custom, version: '1.0.0', builtin: false } }));
   });
 
   it('persists an agent and a reusable capability binding with the revision stamp', async () => {

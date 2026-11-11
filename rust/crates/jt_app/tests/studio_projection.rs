@@ -111,7 +111,7 @@ async fn ledger_export_is_tenant_filtered_and_redacted() {
         .append(
             ledger_entry(
                 &w.ctx,
-                "inbox.commission",
+                "inbox.quote.sent",
                 "journey",
                 "elsewhere",
                 json!({}),
@@ -126,7 +126,7 @@ async fn ledger_export_is_tenant_filtered_and_redacted() {
         .unwrap();
     assert_eq!(out.content.lines().count(), 8);
     assert!(!out.content.contains("never-export"));
-    assert!(!out.content.contains("commission"));
+    assert!(!out.content.contains("inbox.quote"));
     assert!(out.content.contains("evidence-6"));
     let other = support::world().await;
     assert_eq!(
@@ -236,7 +236,7 @@ fn ledger_entry(
 async fn approval_and_unknown_outcome_show_actionable_reason() {
     use jt_app::usecases::studio::{control, work};
     let w = support::world().await;
-    w.policy(true, 0).await;
+    w.approval(true).await;
     let out = overview(&w.d, &w.ctx, query()).await.unwrap();
     assert_eq!(out.slots[0].state, jt_studio::SlotState::Ready);
     assert!(

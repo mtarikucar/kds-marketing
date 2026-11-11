@@ -21,6 +21,7 @@
 //! The provider adapters and the platform's provider apps have their own module,
 //! [`connectors`].
 
+pub mod ads;
 pub mod billing;
 pub mod bridges;
 pub mod calls;
@@ -1073,6 +1074,23 @@ pub trait BudgetRepo: Send + Sync {
         limit: u32,
         before: Option<(OffsetDateTime, BudgetSpendId)>,
     ) -> Result<Vec<BudgetSpend>, AppError>;
+    /// What was spent at `from` or later and before `to`, summed per budget item, module and ad
+    /// campaign (design 2026-11-10 S6): one slice for each combination that has spend. A spend
+    /// recorded by hand has no module.
+    async fn spend_slices(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<SpendSlice>, AppError>;
+}
+
+/// One slice of [`BudgetRepo::spend_slices`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpendSlice {
+    pub budget_item_id: BudgetItemId,
+    pub module: Option<String>,
+    pub campaign_id: Option<uuid::Uuid>,
+    pub amount: i64,
 }
 
 /// How often an agent checks in unless the workspace says otherwise: once a day.
@@ -1688,6 +1706,8 @@ pub trait TenantRepos: Send + Sync {
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     /// The materials library (`ports::materials`).
     fn studio_projects(&mut self) -> &mut dyn production_projects::ProjectRepo;
+    /// The workspace's ad campaigns (design 2026-11-10 §8).
+    fn ads(&mut self) -> &mut dyn ads::AdsRepo;
     fn studio_productions(&mut self)
     -> &mut dyn crate::ports::material_productions::ProductionRepo;
     fn studio_materials(&mut self) -> &mut dyn crate::ports::materials::MaterialRepo;
@@ -1713,7 +1733,6 @@ pub trait TenantRepos: Send + Sync {
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;
     fn quotes(&mut self) -> &mut dyn QuoteRepo;
     fn appointments(&mut self) -> &mut dyn AppointmentRepo;
-    fn commissions(&mut self) -> &mut dyn CommissionRepo;
     fn erasure(&mut self) -> &mut dyn ErasureRepo;
     fn mail_cursors(&mut self) -> &mut dyn MailCursorRepo;
     fn attribution(&mut self) -> &mut dyn AttributionRepo;

@@ -74,6 +74,9 @@ impl TenantRepos for MemTenant {
     fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
         self
     }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self
+    }
     fn studio_productions(
         &mut self,
     ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
@@ -148,9 +151,6 @@ impl TenantRepos for MemTenant {
         self
     }
     fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
-        self
-    }
-    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
         self
     }
     fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {

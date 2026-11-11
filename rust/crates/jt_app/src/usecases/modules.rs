@@ -6,10 +6,26 @@ use crate::{
     error::AppError,
     ports::{ApiKeyStatus, TenantRepos},
 };
-use jt_capability::{CapabilityId, StoredStatus};
+use jt_capability::{CapabilityId, StoredStatus, missing_requirements};
 use jt_tenancy::{AgentConnectionId, MembershipStatus, Permission};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The strategy: the one module every workspace has and cannot remove.
+pub const STRATEGY: &str = "strategy";
+/// The four modules the Growth Studio was split into (design
+/// `2026-11-10-uc-modul-ve-panel-iskeleti-design.md` §4.4).
+pub const CONTENT: &str = "content";
+pub const SOCIAL: &str = "social";
+pub const ADS: &str = "ads";
+/// The library `content`, `social` and `ads` share: installed with any of them (B3).
+pub const MATERIALS: &str = "materials";
+/// The modules that bring the materials library with them.
+pub const NEEDS_MATERIALS: &[&str] = &[CONTENT, SOCIAL, ADS];
+/// Removing one of these stops its automation, and the gate refuses its use cases while it is
+/// removed (S25). The other builtin modules keep the older rule: removal is navigation only.
+pub const INSTALL_GATED: &[&str] = &[CONTENT, SOCIAL, ADS, MATERIALS];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +59,16 @@ pub struct WorkspaceModule {
 pub struct ModulesOut {
     pub modules: Vec<WorkspaceModule>,
     pub catalog: Vec<Blueprint>,
+    /// Per module id: whether the workspace's connected capabilities meet its requirements
+    /// (spec 2026-11-10-module-capability-gating-design.md).
+    pub availability: BTreeMap<String, Availability>,
+}
+/// Whether a module's capability requirements are met, and which are not.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Availability {
+    pub ready: bool,
+    /// The unmet requirement expressions, in their canonical text.
+    pub missing: Vec<String>,
 }
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -56,11 +82,11 @@ pub struct UpdateInput {
     pub revision: u32,
 }
 #[derive(Default, Serialize, Deserialize)]
-struct Registry {
+pub(crate) struct Registry {
     #[serde(default)]
     legacy: bool,
     #[serde(default)]
-    modules: Vec<WorkspaceModule>,
+    pub(crate) modules: Vec<WorkspaceModule>,
 }
 
 /// Builtin screens are an adapter catalog, not an allowlist for tenant-defined disciplines.
@@ -70,7 +96,7 @@ pub fn catalog() -> Vec<Blueprint> {
             "inbox",
             "Gelen kutusu",
             "Tüm görüşmelerin ortak merkezi.",
-            vec![],
+            vec!["messaging"],
             vec!["Görüşmeyi incele", "Yanıtla ve takip et"],
         ),
         (
@@ -85,11 +111,54 @@ pub fn catalog() -> Vec<Blueprint> {
             ],
         ),
         (
-            "growth-studio",
-            "Büyüme stüdyosu",
-            "Materyalden üretime ve yayın hazırlığına.",
-            vec!["Yayın hesabı veya içerik üretim aracı"],
-            vec!["Materyalleri topla", "Üretimi hazırla", "Yayını planla"],
+            CONTENT,
+            "İçerik oluşturma",
+            "Hedeften yayına hazır içerik paketine.",
+            vec![],
+            // The agent's working guide for an area (design 2026-11-10 §6.2): it reports each
+            // step by its number, 1 to 14, and the area page shows them under the same names.
+            vec![
+                "Amacı belirle: hedef cümlesinden ve onaylı stratejiden bu içeriğin tek amacını çıkar.",
+                "Hedef kitleyi tanımla: stratejideki kitlelerden bu içeriğin seslendiğini seç, içerik için daralt.",
+                "Platformu ve biçimi seç: alan açılırken seçildiyse ona uy; seçilmediyse bağlı hesaplara ve stratejiye göre belirle.",
+                "Konu araştırması: konuyu araştır, dayandığın kaynakları kısa bir liste olarak not et.",
+                "Fikir ve yaklaşım: içeriğin fikrini ve anlatım biçimini bir cümleyle yaz.",
+                "Ana mesaj: izleyenin aklında kalacak tek mesajı bir cümleyle yaz.",
+                "Başlık ve açılış: başlığı ve ilk cümleyi ya da ilk kareyi yaz.",
+                "Metin ya da senaryo: açıklama metnini ya da senaryoyu yaz; yer, tarih ve kişi bilgisi kullanılan materyalle çelişmesin.",
+                "Materyali üret ya da topla: alanın materyallerini kullan ya da görseli kendin üretip alana ekle; gerçek çekim gerekiyorsa iste ve alanı bırak.",
+                "Düzenleme ve tasarım: görseli düzenle ve tasarla; ara çıktıyı not et.",
+                "Platforma uyarla: her platform sürümünü kendi biçimine, ölçüsüne ve dosya sayısına göre hazırla.",
+                "Paylaşım bilgileri: her sürümün açıklamasını, başlığını, etiketlerini ve bağlantısını yaz.",
+                "Son kontrol: materyallerin paylaşım iznini ve metnin materyalle uyumunu denetle; teslimde aynı denetim uygulanır.",
+                "Paketle: bütün sürümleri tek pakette teslim et; tutulan sürüm olursa bulguyu düzeltip yeniden teslim et.",
+            ],
+        ),
+        (
+            SOCIAL,
+            "Sosyal medya yönetimi",
+            "Hazır içerikleri planla ve paylaş; hesapların performansını izle.",
+            vec!["social_account"],
+            vec!["Paketi al", "Zamanı seç", "Paylaş", "Sonucu ölç"],
+        ),
+        (
+            ADS,
+            "Reklam yönetimi",
+            "Hedef ve bütçeden yayındaki reklama.",
+            vec!["ads"],
+            vec![
+                "Hedefi ve bütçeyi al",
+                "Kampanyayı planla",
+                "Kur ve izle",
+                "İyileştir",
+            ],
+        ),
+        (
+            MATERIALS,
+            "Materyal kütüphanesi",
+            "Fotoğraf, video ve biten içeriklerin ortak deposu.",
+            vec![],
+            vec!["Materyali yükle", "Etiketle ve izin ver", "Kullanıma sun"],
         ),
         (
             "people",
@@ -109,14 +178,14 @@ pub fn catalog() -> Vec<Blueprint> {
             "outreach",
             "Kampanyalar",
             "İzinli erişim ve takip akışları.",
-            vec!["İletişim kanalı"],
+            vec!["mailbox|sms_line|whatsapp_cloud"],
             vec!["Kitleyi seç", "İçeriği hazırla", "Sonuçları izle"],
         ),
         (
             "calls",
             "Aramalar",
             "Görüşme senaryoları ve arama takibi.",
-            vec!["Telefon erişimi"],
+            vec!["telephony"],
             vec!["Senaryoyu hazırla", "Görüşmeyi yürüt", "Sonucu kaydet"],
         ),
     ]
@@ -166,17 +235,21 @@ fn validate_blueprint(b: &Blueprint, id: &str) -> Result<(), AppError> {
     }
     Ok(())
 }
-async fn load(repos: &mut dyn TenantRepos) -> Result<Registry, AppError> {
-    let mut r: Registry = repos
-        .workspace()
-        .module_registry()
-        .await?
+/// A stored registry (`None`: the workspace has no row) with the builtin catalog applied: every
+/// builtin blueprint is present and current, a builtin the catalog no longer has is dropped, only
+/// the strategy is required, and the materials library is installed whenever a module that needs
+/// it is (B3).
+pub(crate) fn resolve(data: Option<serde_json::Value>) -> Result<Registry, AppError> {
+    let mut r: Registry = data
         .map(serde_json::from_value)
         .transpose()
         .map_err(|_| AppError::internal("invalid stored module registry"))?
         .unwrap_or_default();
-    for b in catalog() {
-        let required = matches!(b.id.as_str(), "inbox" | "strategy");
+    let builtins = catalog();
+    r.modules
+        .retain(|m| !m.blueprint.builtin || builtins.iter().any(|b| b.id == m.blueprint.id));
+    for b in builtins {
+        let required = b.id == STRATEGY;
         if let Some(m) = r.modules.iter_mut().find(|m| m.blueprint.id == b.id) {
             m.blueprint = b;
             m.required = required;
@@ -193,18 +266,95 @@ async fn load(repos: &mut dyn TenantRepos) -> Result<Registry, AppError> {
             });
         }
     }
+    let needed = r
+        .modules
+        .iter()
+        .any(|m| m.installed && NEEDS_MATERIALS.contains(&m.blueprint.id.as_str()));
+    if needed && let Some(m) = r.modules.iter_mut().find(|m| m.blueprint.id == MATERIALS) {
+        m.installed = true;
+    }
     Ok(r)
 }
-fn out(r: Registry) -> ModulesOut {
+async fn load(repos: &mut dyn TenantRepos) -> Result<Registry, AppError> {
+    resolve(repos.workspace().module_registry().await?)
+}
+/// Whether module `id` is installed in a stored registry (`None`: the workspace has no row). Pure:
+/// the catalog, the legacy flag and the materials dependency decide, as they do for [`list`].
+pub fn installed_in(data: Option<&serde_json::Value>, id: &str) -> Result<bool, AppError> {
+    Ok(resolve(data.cloned())?
+        .modules
+        .iter()
+        .any(|m| m.installed && m.blueprint.id == id))
+}
+/// The Studio lanes stopped because their module is removed (S25): the organic lane with social
+/// media, the paid lane with advertising. What `StudioControl::removed` is read from.
+pub fn removed_lanes(
+    data: Option<&serde_json::Value>,
+) -> Result<BTreeSet<jt_strategy::LaneKind>, AppError> {
+    let r = resolve(data.cloned())?;
+    let installed = |id: &str| {
+        r.modules
+            .iter()
+            .any(|m| m.installed && m.blueprint.id == id)
+    };
+    let mut lanes = BTreeSet::new();
+    if !installed(SOCIAL) {
+        lanes.insert(jt_strategy::LaneKind::Organic);
+    }
+    if !installed(ADS) {
+        lanes.insert(jt_strategy::LaneKind::Paid);
+    }
+    Ok(lanes)
+}
+/// Whether module `id` is installed in the workspace of `repos`.
+pub async fn installed(repos: &mut dyn TenantRepos, id: &str) -> Result<bool, AppError> {
+    installed_in(repos.workspace().module_registry().await?.as_ref(), id)
+}
+/// The workspace's capabilities as (kind key, stored status), what requirements are judged by.
+async fn capability_states(
+    repos: &mut dyn TenantRepos,
+) -> Result<Vec<(String, StoredStatus)>, AppError> {
+    Ok(repos
+        .capabilities()
+        .list(Default::default())
+        .await?
+        .into_iter()
+        .map(|c| (c.kind_key, c.status))
+        .collect())
+}
+fn availability(b: &Blueprint, caps: &[(String, StoredStatus)]) -> Availability {
+    let states: Vec<(&str, StoredStatus)> = caps.iter().map(|(k, s)| (k.as_str(), *s)).collect();
+    let missing = missing_requirements(b.requirements.iter().map(String::as_str), &states);
+    Availability {
+        ready: missing.is_empty(),
+        missing,
+    }
+}
+/// The unmet requirements of module `id` in the workspace of `repos`: empty when it is ready or
+/// unknown (a module the registry does not hold gates nothing).
+pub async fn missing_for(repos: &mut dyn TenantRepos, id: &str) -> Result<Vec<String>, AppError> {
+    let Some(b) = catalog().into_iter().find(|b| b.id == id) else {
+        return Ok(Vec::new());
+    };
+    let caps = capability_states(repos).await?;
+    Ok(availability(&b, &caps).missing)
+}
+fn out(r: Registry, caps: &[(String, StoredStatus)]) -> ModulesOut {
     ModulesOut {
         catalog: r.modules.iter().map(|m| m.blueprint.clone()).collect(),
+        availability: r
+            .modules
+            .iter()
+            .map(|m| (m.blueprint.id.clone(), availability(&m.blueprint, caps)))
+            .collect(),
         modules: r.modules,
     }
 }
 pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<ModulesOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    Ok(out(load(repos.as_mut()).await?))
+    let caps = capability_states(repos.as_mut()).await?;
+    Ok(out(load(repos.as_mut()).await?, &caps))
 }
 async fn save(
     repos: &mut dyn TenantRepos,
@@ -241,6 +391,7 @@ pub async fn install(
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     repos.workspace().lock().await?;
     let mut r = load(repos.as_mut()).await?;
+    let caps = capability_states(repos.as_mut()).await?;
     if let Some(m) = r.modules.iter_mut().find(|m| m.blueprint.id == id) {
         if let Some(mut b) = input.blueprint {
             // Exported portable definitions omit the authoritative builtin marker.
@@ -257,7 +408,7 @@ pub async fn install(
             m.installed = true;
             m.revision += 1;
         } else {
-            return Ok(out(r));
+            return Ok(out(r, &caps));
         }
     } else {
         if r.modules.len() >= 100 {
@@ -275,9 +426,28 @@ pub async fn install(
             revision: 1,
         });
     }
+    if NEEDS_MATERIALS.contains(&id)
+        && let Some(m) = r
+            .modules
+            .iter_mut()
+            .find(|m| m.blueprint.id == MATERIALS && !m.installed)
+    {
+        m.installed = true;
+        m.revision += 1;
+    }
     save(repos.as_mut(), ctx, &r, "modules.installed", id).await?;
     repos.commit().await?;
-    Ok(out(r))
+    resume_or_pause(deps, ctx, id).await;
+    Ok(out(r, &caps))
+}
+/// After `ads` was installed or removed: the bound ad sets and the campaigns Jeeta built follow
+/// at their provider, as they do after a brake. Best effort; the scheduler's reconciliation and
+/// the campaign watch retry what this could not do.
+async fn resume_or_pause(deps: &Deps, ctx: &Ctx, id: &str) {
+    if id == ADS {
+        let _ = super::studio::control::reconcile_bindings(deps, ctx.workspace_id).await;
+        let _ = super::ads::watch::watch_all(deps, ctx.workspace_id, ctx.now).await;
+    }
 }
 async fn validate_config(repos: &mut dyn TenantRepos, c: &ModuleConfig) -> Result<(), AppError> {
     if !valid_text(&c.brief, 8000, false) || c.agent_ids.len() > 50 || c.capability_ids.len() > 100
@@ -344,6 +514,7 @@ pub async fn update(
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     repos.workspace().lock().await?;
     let mut r = load(repos.as_mut()).await?;
+    let caps = capability_states(repos.as_mut()).await?;
     let m = r
         .modules
         .iter_mut()
@@ -354,19 +525,24 @@ pub async fn update(
     }
     validate_config(repos.as_mut(), &input.config).await?;
     if m.config == input.config {
-        return Ok(out(r));
+        return Ok(out(r, &caps));
     }
     m.config = input.config;
     m.revision += 1;
     save(repos.as_mut(), ctx, &r, "modules.configured", id).await?;
     repos.commit().await?;
-    Ok(out(r))
+    Ok(out(r, &caps))
 }
 pub async fn remove(deps: &Deps, ctx: &Ctx, id: &str) -> Result<ModulesOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     repos.workspace().lock().await?;
     let mut r = load(repos.as_mut()).await?;
+    let caps = capability_states(repos.as_mut()).await?;
+    let needed = id == MATERIALS
+        && r.modules
+            .iter()
+            .any(|m| m.installed && NEEDS_MATERIALS.contains(&m.blueprint.id.as_str()));
     let m = r
         .modules
         .iter_mut()
@@ -376,11 +552,18 @@ pub async fn remove(deps: &Deps, ctx: &Ctx, id: &str) -> Result<ModulesOut, AppE
         return Err(invalid("module", "required modules cannot be removed"));
     }
     if !m.installed {
-        return Ok(out(r));
+        return Ok(out(r, &caps));
+    }
+    if needed {
+        return Err(invalid(
+            "module",
+            "the materials library is needed by an installed module",
+        ));
     }
     m.installed = false;
     m.revision += 1;
     save(repos.as_mut(), ctx, &r, "modules.removed", id).await?;
     repos.commit().await?;
-    Ok(out(r))
+    resume_or_pause(deps, ctx, id).await;
+    Ok(out(r, &caps))
 }

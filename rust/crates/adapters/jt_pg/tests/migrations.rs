@@ -37,8 +37,10 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 /// posting policy of `0022_studio_posts`, the templates, campaigns, enrollments and sends of
 /// `0026_outreach`, the rep profiles, rules and assignment log of `0027_distribution`, and the
 /// mail files of `0028_mail_files` and the material intelligence and production tables of
-/// `0029` and `0030`, production projects of `0031`, and workspace modules of `0032`.
-const TABLES_AFTER_ALL: i64 = 104;
+/// `0029` and `0030`, production projects of `0031`, workspace modules of `0032`, the account
+/// snapshots of `0037_social_accounts` and the ad campaigns of `0040_ads_campaigns`; less the
+/// three commission tables of `0008` that `0033_drop_commissions` drops.
+const TABLES_AFTER_ALL: i64 = 103;
 
 /// The tables before `0028_mail_files` adds `mail_files`.
 const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
@@ -46,8 +48,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0032_workspace_modules`.
-const MIGRATIONS: i64 = 32;
+/// Migrations `0001_foundation` through `0040_ads_campaigns`.
+const MIGRATIONS: i64 = 40;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -259,6 +261,14 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0040_ads_campaigns",
+        "0039_general_ad_budget",
+        "0038_lane_approval_to_connections",
+        "0037_social_accounts",
+        "0036_production_areas",
+        "0035_module_permissions",
+        "0034_split_growth_studio",
+        "0033_drop_commissions",
         "0032_workspace_modules",
         "0031_production_projects",
         "0030_material_productions",
@@ -1341,6 +1351,9 @@ async fn studio_migration_up_down_up() {
         include_str!("../../../../migrations/0030_material_productions.up.sql"),
         include_str!("../../../../migrations/0031_production_projects.up.sql"),
         include_str!("../../../../migrations/0032_workspace_modules.up.sql"),
+        include_str!("../../../../migrations/0033_drop_commissions.up.sql"),
+        include_str!("../../../../migrations/0037_social_accounts.up.sql"),
+        include_str!("../../../../migrations/0040_ads_campaigns.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1369,10 +1382,38 @@ async fn outreach_down(pool: &PgPool) {
     assert_eq!(table_count(pool).await, TABLES_BEFORE_OUTREACH);
 }
 
-/// Revert the independent module registry and the project trigger extension before restoring
-/// historical schemas. Narrower library-side-table checks intentionally retain these tables
-/// in TABLES_AFTER_ALL-based counts.
+/// Restore the commission tables, then revert the independent module registry and the project
+/// trigger extension before restoring historical schemas. Narrower library-side-table checks
+/// intentionally retain these tables in TABLES_AFTER_ALL-based counts.
 async fn project_tables_down(pool: &PgPool) {
+    // Newest first: the lane approval record on `studio_control`, then the account snapshots
+    // (they reference `capabilities`) and the pause columns on the posting policy.
+    for down in [
+        include_str!("../../../../migrations/0040_ads_campaigns.down.sql"),
+        include_str!("../../../../migrations/0039_general_ad_budget.down.sql"),
+        include_str!("../../../../migrations/0038_lane_approval_to_connections.down.sql"),
+        include_str!("../../../../migrations/0037_social_accounts.down.sql"),
+    ] {
+        try_run(pool, down).await.unwrap();
+    }
+    try_run(
+        pool,
+        include_str!("../../../../migrations/0036_production_areas.down.sql"),
+    )
+    .await
+    .unwrap();
+    try_run(
+        pool,
+        include_str!("../../../../migrations/0035_module_permissions.down.sql"),
+    )
+    .await
+    .unwrap();
+    // The registries first go back to the single Growth Studio entry, so that the registry's own
+    // down judges what it seeded.
+    let split_down = include_str!("../../../../migrations/0034_split_growth_studio.down.sql");
+    try_run(pool, split_down).await.unwrap();
+    let commissions_down = include_str!("../../../../migrations/0033_drop_commissions.down.sql");
+    try_run(pool, commissions_down).await.unwrap();
     let modules_down = include_str!("../../../../migrations/0032_workspace_modules.down.sql");
     try_run(pool, modules_down).await.unwrap();
     let down = include_str!("../../../../migrations/0031_production_projects.down.sql");
@@ -2625,4 +2666,1173 @@ async fn mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachm
     }
     try_run(&db.pool, &up).await.unwrap();
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
+}
+
+#[tokio::test]
+async fn drop_commissions_up_and_down_are_repeatable() {
+    const TABLES: [(&str, &str); 3] = [
+        ("commissions", "commissions_ws"),
+        ("commission_default", "commission_default_ws"),
+        ("commission_user_rates", "commission_user_rates_ws"),
+    ];
+    let db = TestDb::new().await; // already migrated up, 0033 included
+    let up = include_str!("../../../../migrations/0033_drop_commissions.up.sql");
+    let down = include_str!("../../../../migrations/0033_drop_commissions.down.sql");
+    let present = |table: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("select to_regclass($1) is not null")
+                .bind(format!("public.{table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    for (table, _) in TABLES {
+        assert!(!present(table).await, "{table} is gone after 0033");
+    }
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    for _ in 0..2 {
+        sqlx::raw_sql(down).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL + 3);
+        assert!(index_exists(&db.pool, "commissions_queue_idx").await);
+        for (table, policy) in TABLES {
+            let forced: bool = sqlx::query_scalar(
+                "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1 and relnamespace='public'::regnamespace",
+            )
+            .bind(table)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert!(forced, "{table} forces row-level security again");
+            let policies: i64 = sqlx::query_scalar(
+                "select count(*) from pg_policies where tablename=$1 and policyname=$2",
+            )
+            .bind(table)
+            .bind(policy)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+            assert_eq!(policies, 1, "{table} has its one tenant policy");
+        }
+    }
+    for _ in 0..2 {
+        sqlx::raw_sql(up).execute(&db.pool).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for (table, _) in TABLES {
+            assert!(!present(table).await, "{table} is dropped again");
+        }
+    }
+}
+
+/// Inserts a bare active workspace named `name`.
+async fn bare_workspace(pool: &PgPool, name: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query("insert into workspaces (id, name, slug, status) values ($1, $2, $3, 'active')")
+        .bind(id)
+        .bind(name)
+        .bind(format!("{name}-{}", id.simple()))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// The stored module registry of workspace `ws`, if it has a row.
+async fn registry(pool: &PgPool, ws: Uuid) -> Option<serde_json::Value> {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    let data = sqlx::query_scalar("select data from workspace_modules where workspace_id = $1")
+        .bind(ws)
+        .fetch_optional(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    data
+}
+
+/// Stores `data` as the module registry of workspace `ws`.
+async fn set_registry(pool: &PgPool, ws: Uuid, data: serde_json::Value) {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into workspace_modules (workspace_id, data) values ($1, $2) \
+         on conflict (workspace_id) do update set data = excluded.data",
+    )
+    .bind(ws)
+    .bind(data)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// A stored registry entry of builtin module `id`, as the application saves one.
+fn module_entry(id: &str, installed: bool, brief: &str) -> serde_json::Value {
+    serde_json::json!({
+        "blueprint": {"id": id, "name": id, "description": "saved", "version": "1.0",
+                      "requirements": ["social_account"], "workflow": ["one"], "builtin": true},
+        "installed": installed, "required": false,
+        "config": {"brief": brief, "agent_ids": [], "capability_ids": []}, "revision": 3
+    })
+}
+
+/// The ids of a registry's entries with their `installed` flags, in stored order.
+fn installed_of(data: &serde_json::Value) -> Vec<(String, bool)> {
+    data["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["blueprint"]["id"].as_str().unwrap().to_owned(),
+                m["installed"].as_bool().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// 0034: a stored `growth-studio` entry becomes the four modules with its flag and
+/// configuration, a non-legacy or rowless workspace keeps its inbox, a pristine legacy registry
+/// is untouched; the down gives the older code back what it knows; up → down → up is stable.
+#[tokio::test]
+async fn split_growth_studio_round_trip() {
+    use serde_json::json;
+    let db = TestDb::new().await; // already migrated up, 0034 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0034_split_growth_studio.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0034_split_growth_studio.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let pool = &db.pool;
+
+    // As the code before 0034 left them.
+    let legacy = bare_workspace(pool, "legacy").await;
+    set_registry(pool, legacy, json!({"legacy": true, "modules": []})).await;
+    let saved = bare_workspace(pool, "saved").await; // a legacy workspace that saved its registry
+    set_registry(
+        pool,
+        saved,
+        json!({"legacy": true, "modules": [
+            module_entry("inbox", true, ""),
+            module_entry("growth-studio", true, "our brief"),
+            module_entry("people", false, ""),
+        ]}),
+    )
+    .await;
+    let removed = bare_workspace(pool, "removed").await; // it removed the Growth Studio
+    set_registry(
+        pool,
+        removed,
+        json!({"legacy": false, "modules": [
+            module_entry("inbox", true, ""),
+            module_entry("growth-studio", false, "kept brief"),
+        ]}),
+    )
+    .await;
+    let rowless = bare_workspace(pool, "rowless").await; // registered after 0032, never saved
+    let custom = bare_workspace(pool, "custom").await; // only a custom blueprint was installed
+    let custom_entry = json!({
+        "blueprint": {"id": "workshop", "name": "Atölye", "description": "", "version": "1",
+                      "requirements": [], "workflow": [], "builtin": false},
+        "installed": true, "required": false,
+        "config": {"brief": "", "agent_ids": [], "capability_ids": []}, "revision": 1
+    });
+    set_registry(
+        pool,
+        custom,
+        json!({"legacy": false, "modules": [custom_entry]}),
+    )
+    .await;
+
+    run(&up).await;
+
+    // A pristine legacy registry needs nothing: every builtin reads as installed for it.
+    assert_eq!(
+        registry(pool, legacy).await.unwrap(),
+        json!({"legacy": true, "modules": []})
+    );
+    // The entry becomes four, in its place, with its flag and configuration.
+    let after = registry(pool, saved).await.unwrap();
+    assert_eq!(
+        installed_of(&after),
+        [
+            ("inbox".to_owned(), true),
+            ("content".to_owned(), true),
+            ("social".to_owned(), true),
+            ("ads".to_owned(), true),
+            ("materials".to_owned(), true),
+            ("people".to_owned(), false),
+        ]
+    );
+    for index in 1..=4 {
+        let entry = &after["modules"][index];
+        assert_eq!(entry["config"]["brief"], "our brief");
+        assert_eq!(entry["revision"], 1);
+        assert_eq!(entry["blueprint"]["builtin"], true);
+        assert_eq!(entry["required"], false);
+    }
+    assert_eq!(after["modules"][0], module_entry("inbox", true, ""));
+    // A removed Growth Studio stays removed, four times.
+    let after_removed = registry(pool, removed).await.unwrap();
+    assert_eq!(
+        installed_of(&after_removed),
+        [
+            ("inbox".to_owned(), true),
+            ("content".to_owned(), false),
+            ("social".to_owned(), false),
+            ("ads".to_owned(), false),
+            ("materials".to_owned(), false),
+        ]
+    );
+    assert_eq!(after_removed["modules"][2]["config"]["brief"], "kept brief");
+    // The inbox was installed for everyone because it was required: it stays installed.
+    let after_rowless = registry(pool, rowless).await.unwrap();
+    assert_eq!(after_rowless["legacy"], false);
+    assert_eq!(installed_of(&after_rowless), [("inbox".to_owned(), true)]);
+    let after_custom = registry(pool, custom).await.unwrap();
+    assert_eq!(
+        installed_of(&after_custom),
+        [("workshop".to_owned(), true), ("inbox".to_owned(), true)]
+    );
+    // The application reads these rows as the modules they describe.
+    for (data, id, expected) in [
+        (&after, "social", true),
+        (&after, "materials", true),
+        (&after, "people", false),
+        (&after_removed, "ads", false),
+        (&after_removed, "inbox", true),
+        (&after_rowless, "inbox", true),
+        (&after_rowless, "content", false),
+    ] {
+        assert_eq!(
+            jt_app::usecases::modules::installed_in(Some(data), id).unwrap(),
+            expected,
+            "{id}"
+        );
+    }
+
+    // Again: nothing changes.
+    let snapshot = |pool: PgPool| async move {
+        let mut rows = Vec::new();
+        for ws in [legacy, saved, removed, rowless, custom] {
+            rows.push(registry(&pool, ws).await);
+        }
+        rows
+    };
+    let first = snapshot(pool.clone()).await;
+    run(&up).await;
+    assert_eq!(snapshot(pool.clone()).await, first);
+
+    run(&down).await;
+
+    assert_eq!(
+        registry(pool, legacy).await.unwrap(),
+        json!({"legacy": true, "modules": []})
+    );
+    let back = registry(pool, saved).await.unwrap();
+    assert_eq!(
+        installed_of(&back),
+        [
+            ("inbox".to_owned(), true),
+            ("people".to_owned(), false),
+            ("growth-studio".to_owned(), true),
+        ]
+    );
+    assert_eq!(back["modules"][2]["config"]["brief"], "our brief");
+    let back_removed = registry(pool, removed).await.unwrap();
+    assert_eq!(
+        installed_of(&back_removed),
+        [
+            ("inbox".to_owned(), true),
+            ("growth-studio".to_owned(), false),
+        ]
+    );
+    assert_eq!(back_removed["modules"][1]["config"]["brief"], "kept brief");
+    // What the up seeded is gone: no row again, and the custom blueprint alone again.
+    assert_eq!(registry(pool, rowless).await, None);
+    assert_eq!(
+        registry(pool, custom).await.unwrap(),
+        json!({"legacy": false, "modules": [custom_entry]})
+    );
+    // Down twice is a no-op.
+    let reverted = snapshot(pool.clone()).await;
+    run(&down).await;
+    assert_eq!(snapshot(pool.clone()).await, reverted);
+
+    // Up again gives what the first up gave.
+    run(&up).await;
+    let second = snapshot(pool.clone()).await;
+    assert_eq!(second[0], first[0]);
+    for (again, before) in second.iter().zip(&first).skip(1) {
+        let (again, before) = (again.as_ref().unwrap(), before.as_ref().unwrap());
+        let mut left = installed_of(again);
+        let mut right = installed_of(before);
+        left.sort();
+        right.sort();
+        assert_eq!(left, right);
+    }
+}
+
+/// 0034's down leaves alone what a workspace did after the up: an inbox entry it saved, and a
+/// module it installed on its own.
+#[tokio::test]
+async fn split_growth_studio_down_keeps_what_a_workspace_saved() {
+    use serde_json::json;
+    let db = TestDb::new().await;
+    let down = std::fs::read_to_string(migrations_dir().join("0034_split_growth_studio.down.sql"))
+        .unwrap();
+    let pool = &db.pool;
+    // Registered after 0034, it installed social media (the library came with it) and the inbox,
+    // and the application saved the registry with its full blueprints.
+    let ws = bare_workspace(pool, "after").await;
+    set_registry(
+        pool,
+        ws,
+        json!({"legacy": false, "modules": [
+            module_entry("inbox", true, "inbox brief"),
+            module_entry("social", true, "social brief"),
+            module_entry("materials", true, ""),
+            module_entry("ads", false, ""),
+        ]}),
+    )
+    .await;
+    sqlx::raw_sql(&down).execute(pool).await.unwrap();
+    let back = registry(pool, ws).await.unwrap();
+    assert_eq!(
+        installed_of(&back),
+        [
+            ("inbox".to_owned(), true),
+            ("growth-studio".to_owned(), true),
+        ]
+    );
+    assert_eq!(
+        back["modules"][0],
+        module_entry("inbox", true, "inbox brief")
+    );
+    // Its configuration is that of the first of the four present: social media here.
+    assert_eq!(back["modules"][1]["config"]["brief"], "social brief");
+}
+
+const MODULE_PERMISSIONS_UP: &str =
+    include_str!("../../../../migrations/0035_module_permissions.up.sql");
+const MODULE_PERMISSIONS_DOWN: &str =
+    include_str!("../../../../migrations/0035_module_permissions.down.sql");
+
+async fn permission_fixture(db: &TestDb, keys: &[&str]) -> (jt_tenancy::WorkspaceId, Uuid, Uuid) {
+    let (ws, owner) = db.seed_workspace("module-permissions").await;
+    let role = Uuid::now_v7();
+    let key = Uuid::now_v7();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("insert into roles (id, workspace_id, key, name, permissions, is_system) values ($1,$2,'custom','Custom',$3,false)")
+        .bind(role).bind(ws.0).bind(keys).execute(tx.conn()).await.unwrap();
+    sqlx::query("insert into api_keys (id, workspace_id, name, prefix, key_hash, scopes, issued_by, status) values ($1,$2,'test','test',$3,$4,$5,'active')")
+        .bind(key).bind(ws.0).bind(key.to_string()).bind(keys).bind(owner.0).execute(tx.conn()).await.unwrap();
+    tx.commit().await.unwrap();
+    (ws, role, key)
+}
+
+async fn assert_stored_permissions(
+    db: &TestDb,
+    fixture: (jt_tenancy::WorkspaceId, Uuid, Uuid),
+    expected: &[&str],
+) {
+    let (ws, role, key) = fixture;
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let roles: Vec<String> = sqlx::query_scalar("select permissions from roles where id=$1")
+        .bind(role)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    let scopes: Vec<String> = sqlx::query_scalar("select scopes from api_keys where id=$1")
+        .bind(key)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(roles, expected);
+    assert_eq!(scopes, expected);
+    tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_permissions_round_trip_roles_and_api_keys() {
+    let db = TestDb::new().await;
+    let worker = permission_fixture(&db, &["studio.work"]).await;
+    let none = permission_fixture(&db, &["workspace.read", "unknown.future"]).await;
+    let both = permission_fixture(
+        &db,
+        &[
+            "workspace.read",
+            "studio.work",
+            "ledger.read",
+            "studio.manage",
+            "content.work",
+            "studio.work",
+        ],
+    )
+    .await;
+    let works = ["content.work", "social.work", "ads.work", "materials.work"];
+    let expanded = [
+        "workspace.read",
+        "content.work",
+        "social.work",
+        "ads.work",
+        "materials.work",
+        "ledger.read",
+        "content.manage",
+        "social.manage",
+        "ads.manage",
+    ];
+    for _ in 0..2 {
+        try_run(&db.pool, MODULE_PERMISSIONS_UP).await.unwrap();
+    }
+    assert_stored_permissions(&db, worker, &works).await;
+    assert_stored_permissions(&db, none, &["workspace.read", "unknown.future"]).await;
+    assert_stored_permissions(&db, both, &expanded).await;
+    for _ in 0..2 {
+        try_run(&db.pool, MODULE_PERMISSIONS_DOWN).await.unwrap();
+    }
+    assert_stored_permissions(&db, worker, &["studio.work"]).await;
+    assert_stored_permissions(&db, none, &["workspace.read", "unknown.future"]).await;
+    assert_stored_permissions(
+        &db,
+        both,
+        &[
+            "workspace.read",
+            "ledger.read",
+            "studio.work",
+            "studio.manage",
+        ],
+    )
+    .await;
+    for _ in 0..2 {
+        try_run(&db.pool, MODULE_PERMISSIONS_UP).await.unwrap();
+    }
+    assert_stored_permissions(&db, worker, &works).await;
+    assert_stored_permissions(&db, none, &["workspace.read", "unknown.future"]).await;
+    assert_stored_permissions(
+        &db,
+        both,
+        &[
+            "workspace.read",
+            "ledger.read",
+            "content.work",
+            "social.work",
+            "ads.work",
+            "materials.work",
+            "content.manage",
+            "social.manage",
+            "ads.manage",
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn partial_new_permissions_are_dropped_on_down() {
+    let db = TestDb::new().await;
+    // Every incomplete nonempty subset must fail closed for both kinds of grant.
+    for keys in [
+        vec!["content.work", "social.work", "ads.work", "materials.work"],
+        vec!["content.manage", "social.manage", "ads.manage"],
+    ] {
+        for mask in 1..(1 << keys.len()) - 1 {
+            let mut partial = vec!["workspace.read"];
+            partial.extend(
+                keys.iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) != 0)
+                    .map(|(_, key)| *key),
+            );
+            let fixture = permission_fixture(&db, &partial).await;
+            for _ in 0..2 {
+                try_run(&db.pool, MODULE_PERMISSIONS_DOWN).await.unwrap();
+            }
+            assert_stored_permissions(&db, fixture, &["workspace.read"]).await;
+            try_run(&db.pool, MODULE_PERMISSIONS_UP).await.unwrap();
+            assert_stored_permissions(&db, fixture, &["workspace.read"]).await;
+        }
+    }
+}
+
+const SOCIAL_ACCOUNTS_UP: &str = include_str!("../../../../migrations/0037_social_accounts.up.sql");
+const SOCIAL_ACCOUNTS_DOWN: &str =
+    include_str!("../../../../migrations/0037_social_accounts.down.sql");
+const LANE_APPROVAL_UP: &str =
+    include_str!("../../../../migrations/0038_lane_approval_to_connections.up.sql");
+const LANE_APPROVAL_DOWN: &str =
+    include_str!("../../../../migrations/0038_lane_approval_to_connections.down.sql");
+
+/// Inserts a connection of `kind` for `ws` whose policy is `policy`.
+async fn insert_connection(pool: &PgPool, ws: Uuid, kind: &str, policy: serde_json::Value) -> Uuid {
+    let id = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into capabilities (id, workspace_id, kind_key, name, reach, status, policy, \
+         created_at, updated_at) values ($1, $2, $3, $3, 'connector', 'verified', $4, now(), now())",
+    )
+    .bind(id)
+    .bind(ws)
+    .bind(kind)
+    .bind(policy)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+/// The stored policy of connection `id`.
+async fn connection_policy(pool: &PgPool, id: Uuid) -> serde_json::Value {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    let policy = sqlx::query_scalar("select policy from capabilities where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    policy
+}
+
+/// Stores `lanes` as the lanes of the Studio control of `ws`.
+async fn set_lanes(pool: &PgPool, ws: Uuid, lanes: serde_json::Value) {
+    let data = serde_json::json!({
+        "workspace_id": ws, "brake_engaged": false, "revision": 3, "lanes": lanes,
+    });
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into studio_control (workspace_id, data) values ($1, $2) \
+         on conflict (workspace_id) do update set data = excluded.data",
+    )
+    .bind(ws)
+    .bind(data)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// The stored Studio control document of `ws`.
+async fn control_data(pool: &PgPool, ws: Uuid) -> serde_json::Value {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    let data = sqlx::query_scalar("select data from studio_control where workspace_id = $1")
+        .bind(ws)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    data
+}
+
+#[tokio::test]
+async fn social_accounts_migration_is_repeatable_and_its_down_refuses_a_paused_account() {
+    let db = TestDb::new().await; // already migrated up, 0037 included
+    let ws = bare_workspace(&db.pool, "social-accounts").await;
+    let account = insert_connection(&db.pool, ws, "instagram", serde_json::json!({})).await;
+    let columns = [
+        ("studio_posting_policy", "paused_capability_ids"),
+        ("studio_posting_policy", "revision"),
+        ("studio_posting_policy", "provider_scheduling"),
+    ];
+    let snapshots = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>(
+                "select to_regclass('public.social_account_days') is not null",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    for _ in 0..2 {
+        try_run(&db.pool, SOCIAL_ACCOUNTS_UP).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert!(snapshots().await);
+        for column in columns {
+            assert!(column_exists(&db.pool, column).await, "{column:?}");
+        }
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class \
+             where relname='social_account_days' and relnamespace='public'::regnamespace",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced);
+        let policies: i64 = sqlx::query_scalar(
+            "select count(*) from pg_policies where tablename='social_account_days'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, 1);
+    }
+
+    // A snapshot is an observation: it goes with the table. A pause is a person's choice: the
+    // rollback refuses while one stands, and leaves everything as it was.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into social_account_days (workspace_id, capability_id, day, data, read_at) \
+         values ($1, $2, '2026-11-09', $3, now())",
+    )
+    .bind(ws)
+    .bind(account)
+    .bind(serde_json::json!({"workspace_id": ws, "capability_id": account, "followers": 12}))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into studio_posting_policy (workspace_id, data, tz, floor_days, debounce_minutes, \
+         horizon_days, quiet_start_hour, quiet_end_hour, paused_capability_ids) \
+         values ($1, '{}', 'UTC', 4, 30, 30, 0, 8, $2)",
+    )
+    .bind(ws)
+    .bind(vec![account])
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        let refused = try_run(&db.pool, SOCIAL_ACCOUNTS_DOWN).await.unwrap_err();
+        assert!(refused.to_string().contains("down refused"), "{refused}");
+        assert!(snapshots().await);
+        for column in columns {
+            assert!(column_exists(&db.pool, column).await, "{column:?}");
+        }
+    }
+
+    // The pause released by a person, the platform's scheduler switched on: refused for that.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "update studio_posting_policy set paused_capability_ids = '{}', \
+         provider_scheduling = true where workspace_id = $1",
+    )
+    .bind(ws)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let refused = try_run(&db.pool, SOCIAL_ACCOUNTS_DOWN).await.unwrap_err();
+    assert!(
+        refused.to_string().contains("platform''s scheduler")
+            || refused.to_string().contains("platform's scheduler"),
+        "{refused}"
+    );
+    assert!(snapshots().await);
+    // Switched off again: the down runs, twice, and the up brings the shape back.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "update studio_posting_policy set provider_scheduling = false where workspace_id = $1",
+    )
+    .bind(ws)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, SOCIAL_ACCOUNTS_DOWN).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 1);
+        assert!(!snapshots().await);
+        for column in columns {
+            assert!(!column_exists(&db.pool, column).await, "{column:?}");
+        }
+    }
+    try_run(&db.pool, SOCIAL_ACCOUNTS_UP).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    let (paused, revision): (Vec<Uuid>, i64) = {
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let row = sqlx::query_as(
+            "select paused_capability_ids, revision from studio_posting_policy where workspace_id = $1",
+        )
+        .bind(ws)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        row
+    };
+    assert!(paused.is_empty());
+    assert_eq!(revision, 0);
+}
+
+/// Design 2026-11-10 B35, step 2 Review Focus 5: a workspace that had a lane's approval switched
+/// on keeps it, connection by connection, and the rollback puts back exactly what was moved.
+#[tokio::test]
+async fn lane_approval_moves_to_the_connections_and_back() {
+    use serde_json::json;
+    let db = TestDb::new().await; // already migrated up, 0038 included
+    let flag = |policy: &serde_json::Value| policy.get("requires_human_approval").cloned();
+
+    // Organic approval on, paid off: two social accounts (one already asking for approval by a
+    // person's own choice, with a cap of its own), an ad account and a mailbox.
+    let organic = bare_workspace(&db.pool, "lane-organic").await;
+    let instagram = insert_connection(
+        &db.pool,
+        organic,
+        "instagram",
+        json!({"requires_human_approval": false, "daily_ops_cap": 5}),
+    )
+    .await;
+    let x = insert_connection(
+        &db.pool,
+        organic,
+        "x",
+        json!({"requires_human_approval": true, "daily_ops_cap": 2}),
+    )
+    .await;
+    let organic_ads = insert_connection(&db.pool, organic, "meta_ads", json!({})).await;
+    let mailbox = insert_connection(&db.pool, organic, "mailbox", json!({})).await;
+    // Paid approval on, with a brake on the organic lane; an ad account whose policy is empty.
+    let paid = bare_workspace(&db.pool, "lane-paid").await;
+    let ads = insert_connection(&db.pool, paid, "meta_ads", json!({})).await;
+    let paid_page = insert_connection(&db.pool, paid, "facebook_page", json!({})).await;
+    // Organic approval on and no connection yet.
+    let empty = bare_workspace(&db.pool, "lane-empty").await;
+    // No approval anywhere; and a workspace whose control holds no lane at all.
+    let off = bare_workspace(&db.pool, "lane-off").await;
+    let off_page = insert_connection(&db.pool, off, "linkedin_page", json!({})).await;
+    let bare = bare_workspace(&db.pool, "lane-bare").await;
+    let bare_tiktok = insert_connection(&db.pool, bare, "tiktok", json!({})).await;
+
+    // The state before 0038.
+    try_run(&db.pool, LANE_APPROVAL_DOWN).await.unwrap();
+    assert!(!column_exists(&db.pool, ("studio_control", "lane_approval_moved")).await);
+    let before = [
+        (
+            organic,
+            json!({"organic": {"brake_engaged": false, "requires_human_approval": true},
+                   "paid": {"brake_engaged": false, "requires_human_approval": false}}),
+        ),
+        (
+            paid,
+            json!({"organic": {"brake_engaged": true, "requires_human_approval": false},
+                   "paid": {"brake_engaged": false, "requires_human_approval": true}}),
+        ),
+        (
+            empty,
+            json!({"organic": {"brake_engaged": false, "requires_human_approval": true}}),
+        ),
+        (
+            off,
+            json!({"organic": {"brake_engaged": false, "requires_human_approval": false}}),
+        ),
+        (bare, json!({})),
+    ];
+    for (ws, lanes) in &before {
+        set_lanes(&db.pool, *ws, lanes.clone()).await;
+    }
+
+    for _ in 0..2 {
+        try_run(&db.pool, LANE_APPROVAL_UP).await.unwrap();
+        // The lane's connections ask for approval; nothing else of their policy moved.
+        assert_eq!(
+            connection_policy(&db.pool, instagram).await,
+            json!({"requires_human_approval": true, "daily_ops_cap": 5})
+        );
+        assert_eq!(
+            connection_policy(&db.pool, x).await,
+            json!({"requires_human_approval": true, "daily_ops_cap": 2})
+        );
+        assert_eq!(
+            connection_policy(&db.pool, ads).await,
+            json!({"requires_human_approval": true})
+        );
+        // Not the other lane's, not another kind's, not another workspace's.
+        for untouched in [organic_ads, mailbox, paid_page, off_page, bare_tiktok] {
+            assert_eq!(connection_policy(&db.pool, untouched).await, json!({}));
+        }
+        // No lane holds the switch any more; its brake and the rest of the control stand.
+        assert_eq!(
+            control_data(&db.pool, organic).await,
+            json!({"workspace_id": organic, "brake_engaged": false, "revision": 3,
+                   "lanes": {"organic": {"brake_engaged": false},
+                             "paid": {"brake_engaged": false}}})
+        );
+        assert_eq!(
+            control_data(&db.pool, paid).await["lanes"],
+            json!({"organic": {"brake_engaged": true}, "paid": {"brake_engaged": false}})
+        );
+        assert_eq!(
+            control_data(&db.pool, empty).await["lanes"],
+            json!({"organic": {"brake_engaged": false}})
+        );
+        assert_eq!(
+            control_data(&db.pool, off).await["lanes"],
+            json!({"organic": {"brake_engaged": false}})
+        );
+        assert_eq!(control_data(&db.pool, bare).await["lanes"], json!({}));
+    }
+
+    // After the migration a person releases one connection the migration flagged, and asks for
+    // approval on one it never touched: both are that person's, and the rollback keeps them.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("update capabilities set policy = policy || $2 where id = $1")
+        .bind(ads)
+        .bind(json!({"requires_human_approval": false}))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    sqlx::query("update capabilities set policy = policy || $2 where id = $1")
+        .bind(off_page)
+        .bind(json!({"requires_human_approval": true}))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    for _ in 0..2 {
+        try_run(&db.pool, LANE_APPROVAL_DOWN).await.unwrap();
+        assert!(!column_exists(&db.pool, ("studio_control", "lane_approval_moved")).await);
+        // Each lane's switch is back where it was on, and every entry carries the field again.
+        for (ws, lanes) in &before[..4] {
+            assert_eq!(control_data(&db.pool, *ws).await["lanes"], *lanes, "{ws}");
+        }
+        assert_eq!(control_data(&db.pool, bare).await["lanes"], json!({}));
+        assert_eq!(control_data(&db.pool, organic).await["revision"], json!(3));
+        // The flag the migration set is cleared; the one a person had set stays.
+        assert_eq!(
+            connection_policy(&db.pool, instagram).await,
+            json!({"requires_human_approval": false, "daily_ops_cap": 5})
+        );
+        assert_eq!(
+            flag(&connection_policy(&db.pool, x).await),
+            Some(json!(true))
+        );
+        assert_eq!(
+            flag(&connection_policy(&db.pool, ads).await),
+            Some(json!(false))
+        );
+        assert_eq!(
+            flag(&connection_policy(&db.pool, off_page).await),
+            Some(json!(true))
+        );
+        for untouched in [organic_ads, mailbox, paid_page, bare_tiktok] {
+            assert_eq!(connection_policy(&db.pool, untouched).await, json!({}));
+        }
+    }
+
+    // Up once more: the same move, from the restored state.
+    try_run(&db.pool, LANE_APPROVAL_UP).await.unwrap();
+    assert!(column_exists(&db.pool, ("studio_control", "lane_approval_moved")).await);
+    for id in [instagram, x, ads, off_page] {
+        assert_eq!(
+            flag(&connection_policy(&db.pool, id).await),
+            Some(json!(true)),
+            "{id}"
+        );
+    }
+    for untouched in [organic_ads, mailbox, paid_page, bare_tiktok] {
+        assert_eq!(connection_policy(&db.pool, untouched).await, json!({}));
+    }
+    for ws in [organic, paid, empty, off] {
+        let lanes = control_data(&db.pool, ws).await["lanes"].clone();
+        for (lane, entry) in lanes.as_object().unwrap() {
+            assert!(
+                entry.get("requires_human_approval").is_none(),
+                "{ws} {lane}"
+            );
+        }
+    }
+    let moved: Option<serde_json::Value> = {
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let moved = sqlx::query_scalar(
+            "select lane_approval_moved from studio_control where workspace_id = $1",
+        )
+        .bind(empty)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        moved
+    };
+    // A lane that was on with no connection is recorded too: the rollback knows it was on.
+    assert_eq!(moved, Some(json!({"organic": []})));
+}
+
+const GENERAL_BUDGET_UP: &str =
+    include_str!("../../../../migrations/0039_general_ad_budget.up.sql");
+const GENERAL_BUDGET_DOWN: &str =
+    include_str!("../../../../migrations/0039_general_ad_budget.down.sql");
+
+/// Inserts a budget item of `ws` as the tables stood before 0039.
+async fn insert_budget_item(
+    pool: &PgPool,
+    ws: Uuid,
+    kind: &str,
+    period: &str,
+    retired: bool,
+) -> Uuid {
+    let id = Uuid::now_v7();
+    let unit = if kind == "agent_hours" {
+        serde_json::json!({"kind": "minutes"})
+    } else {
+        serde_json::json!({"kind": "currency", "value": "TRY"})
+    };
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query(
+        "insert into budget_items (id, workspace_id, name, kind, unit, cap, period, created_at, \
+         retired_at) values ($1, $2, $3, $3, $4, 1000, $5, now(), \
+         case when $6 then now() end)",
+    )
+    .bind(id)
+    .bind(ws)
+    .bind(kind)
+    .bind(unit)
+    .bind(period)
+    .bind(retired)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    id
+}
+
+async fn is_general(pool: &PgPool, id: Uuid) -> bool {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    let general = sqlx::query_scalar("select general from budget_items where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    general
+}
+
+/// Design 2026-11-10 B37: the one ad budget a workspace already used becomes its general ad
+/// budget; with none or several a person chooses; and the table keeps the rules from then on.
+#[tokio::test]
+async fn general_ad_budget_migration_marks_the_only_ad_budget_and_keeps_the_rules() {
+    let db = TestDb::new().await; // already migrated up, 0039 included
+    try_run(&db.pool, GENERAL_BUDGET_DOWN).await.unwrap();
+    let columns = [
+        ("budget_items", "general"),
+        ("budget_spend_entries", "module"),
+        ("budget_spend_entries", "campaign_id"),
+    ];
+    for column in columns {
+        assert!(!column_exists(&db.pool, column).await, "{column:?}");
+    }
+    // One periodic ad budget; one beside a retired one; two; a total one; a cash item.
+    let one = bare_workspace(&db.pool, "general-one").await;
+    let only = insert_budget_item(&db.pool, one, "ad_budget", "monthly", false).await;
+    let cash = insert_budget_item(&db.pool, one, "cash", "monthly", false).await;
+    let after_retired = bare_workspace(&db.pool, "general-retired").await;
+    let retired = insert_budget_item(&db.pool, after_retired, "ad_budget", "weekly", true).await;
+    let live = insert_budget_item(&db.pool, after_retired, "ad_budget", "weekly", false).await;
+    let two = bare_workspace(&db.pool, "general-two").await;
+    let first = insert_budget_item(&db.pool, two, "ad_budget", "monthly", false).await;
+    let second = insert_budget_item(&db.pool, two, "ad_budget", "daily", false).await;
+    let total = bare_workspace(&db.pool, "general-total").await;
+    let lifetime = insert_budget_item(&db.pool, total, "ad_budget", "total", false).await;
+
+    try_run(&db.pool, GENERAL_BUDGET_UP).await.unwrap();
+    for column in columns {
+        assert!(column_exists(&db.pool, column).await, "{column:?}");
+    }
+    assert!(index_exists(&db.pool, "budget_items_one_general").await);
+    for (id, general) in [
+        (only, true),
+        (live, true),
+        (cash, false),
+        (retired, false),
+        (first, false),
+        (second, false),
+        (lifetime, false),
+    ] {
+        assert_eq!(is_general(&db.pool, id).await, general, "{id}");
+    }
+
+    // A person takes the mark off; running the up again does not put it back.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("update budget_items set general = false where id = $1")
+        .bind(only)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    try_run(&db.pool, GENERAL_BUDGET_UP).await.unwrap();
+    assert!(!is_general(&db.pool, only).await);
+    assert!(is_general(&db.pool, live).await);
+
+    // The table's rules: only a periodic ad budget in a currency, and one live one a workspace.
+    for (sql, id, code) in [
+        (
+            "update budget_items set general = true where id = $1",
+            cash,
+            "23514",
+        ),
+        (
+            "update budget_items set general = true where id = $1",
+            lifetime,
+            "23514",
+        ),
+    ] {
+        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+        let e = sqlx::query(sql)
+            .bind(id)
+            .execute(tx.conn())
+            .await
+            .unwrap_err();
+        assert_eq!(e.as_database_error().unwrap().code().as_deref(), Some(code));
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("update budget_items set general = true where id = $1")
+        .bind(first)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let e = sqlx::query("update budget_items set general = true where id = $1")
+        .bind(second)
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.as_database_error().unwrap().code().as_deref(),
+        Some("23505")
+    );
+    drop(tx);
+    // A retired general item does not block a new one.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("update budget_items set general = true where id = $1")
+        .bind(retired)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    // A spend's module is one of the five that spend.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let spend = "insert into budget_spend_entries (id, workspace_id, budget_item_id, at, amount, \
+                 source, module) values ($1, $2, $3, now(), 5, '{\"kind\":\"agent\"}', $4)";
+    sqlx::query(spend)
+        .bind(Uuid::now_v7())
+        .bind(one)
+        .bind(only)
+        .bind("ads")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let e = sqlx::query(spend)
+        .bind(Uuid::now_v7())
+        .bind(one)
+        .bind(only)
+        .bind("strategy")
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.as_database_error().unwrap().code().as_deref(),
+        Some("23514")
+    );
+    drop(tx);
+
+    // Down, twice: the mark, the rules and the spend's module go; the items stay.
+    for _ in 0..2 {
+        try_run(&db.pool, GENERAL_BUDGET_DOWN).await.unwrap();
+        for column in columns {
+            assert!(!column_exists(&db.pool, column).await, "{column:?}");
+        }
+        assert!(!index_exists(&db.pool, "budget_items_one_general").await);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let items: i64 =
+        sqlx::query_scalar("select count(*) from budget_items where workspace_id = $1")
+            .bind(two)
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(items, 2);
+    try_run(&db.pool, GENERAL_BUDGET_UP).await.unwrap();
+    assert!(is_general(&db.pool, only).await);
+}
+
+/// `0040_ads_campaigns`: repeatable, and its down refuses while a campaign is stored (a
+/// campaign is a record of money that may be running at an ad platform).
+#[tokio::test]
+async fn ads_campaigns_migration_is_repeatable_and_its_down_refuses_a_stored_campaign() {
+    const UP: &str = include_str!("../../../../migrations/0040_ads_campaigns.up.sql");
+    const DOWN: &str = include_str!("../../../../migrations/0040_ads_campaigns.down.sql");
+    let db = TestDb::new().await; // already migrated up, 0040 included
+    let present = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("select to_regclass('public.ads_campaigns') is not null")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    for _ in 0..2 {
+        try_run(&db.pool, UP).await.unwrap();
+        assert!(present().await);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for index in ["ads_campaigns_open", "ads_campaigns_closed"] {
+            assert!(index_exists(&db.pool, index).await, "{index}");
+        }
+    }
+    let ws = bare_workspace(&db.pool, "ads-down").await;
+    let id = Uuid::now_v7();
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into ads_campaigns (workspace_id, id, revision, data, start_at) \
+         values ($1, $2, 1, $3, now())",
+    )
+    .bind(ws)
+    .bind(id)
+    .bind(serde_json::json!({"workspace_id": ws, "id": id, "revision": 1}))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    // The document names its own row: one that says otherwise is refused by the table.
+    let wrong = sqlx::query(
+        "insert into ads_campaigns (workspace_id, id, revision, data, start_at) \
+         values ($1, $2, 1, $3, now())",
+    )
+    .bind(ws)
+    .bind(Uuid::now_v7())
+    .bind(serde_json::json!({"workspace_id": ws, "id": id, "revision": 1}))
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    assert_eq!(
+        wrong.as_database_error().unwrap().code().as_deref(),
+        Some("23514")
+    );
+    drop(tx);
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into ads_campaigns (workspace_id, id, revision, data, start_at) \
+         values ($1, $2, 1, $3, now())",
+    )
+    .bind(ws)
+    .bind(id)
+    .bind(serde_json::json!({"workspace_id": ws, "id": id, "revision": 1}))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        let refused = try_run(&db.pool, DOWN).await.unwrap_err();
+        assert!(refused.to_string().contains("down refused"), "{refused}");
+        assert!(present().await);
+    }
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query("delete from ads_campaigns where id = $1")
+        .bind(id)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        try_run(&db.pool, DOWN).await.unwrap();
+        assert!(!present().await);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 1);
+    }
+    try_run(&db.pool, UP).await.unwrap();
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
 }

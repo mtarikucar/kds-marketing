@@ -7,8 +7,8 @@ use jt_app::{
     usecases::{
         Deps,
         inbox::{
-            JourneyId, MergeId, PersonId, TaskId, commissions, dictionaries, journeys, merge,
-            people, schema, tasks,
+            JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, schema,
+            tasks,
         },
     },
 };
@@ -22,7 +22,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "inbox.people.erase",
             description: "Permanently erase personal data, retain anonymous financial references. Requires confirm: true. [risk: DESTRUCTIVE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("people.erase")).expect("inbox schema"),
             run: people_erase,
         },
@@ -32,324 +32,294 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           business (the business's own contact point), individual (a private \
                           person: promotion never overrides it) or unknown. Outreach reads it for \
                           the business-recipient basis. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("people.set_kind")).expect("inbox schema"),
             run: people_set_kind,
         },
         ToolDef {
-            use_case: "inbox.commissions.list",
-            description: "commissions.list for workspace commissions. [risk: READ]",
-            permission: Permission::InboxWork,
-            schema: || Schema::try_from(schema::tool("commissions.list")).expect("inbox schema"),
-            run: commissions_list,
-        },
-        ToolDef {
-            use_case: "inbox.commissions.approve",
-            description: "commissions.approve for workspace commissions. [risk: WRITE]",
-            permission: Permission::InboxManage,
-            schema: || Schema::try_from(schema::tool("commissions.approve")).expect("inbox schema"),
-            run: commissions_approve,
-        },
-        ToolDef {
-            use_case: "inbox.commissions.pay",
-            description: "commissions.pay for workspace commissions. [risk: WRITE]",
-            permission: Permission::InboxManage,
-            schema: || Schema::try_from(schema::tool("commissions.pay")).expect("inbox schema"),
-            run: commissions_pay,
-        },
-        ToolDef {
-            use_case: "inbox.commission_rates.set",
-            description: "commission_rates.set for workspace commissions. [risk: WRITE]",
-            permission: Permission::InboxManage,
-            schema: || {
-                Schema::try_from(schema::tool("commission_rates.set")).expect("inbox schema")
-            },
-            run: commission_rates_set,
-        },
-        ToolDef {
             use_case: "inbox.quotes.send",
             description: "quotes.send for an internal journey. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("quotes.send")).expect("inbox schema"),
             run: quotes_send,
         },
         ToolDef {
             use_case: "inbox.quotes.accept",
             description: "quotes.accept for an internal journey. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("quotes.accept")).expect("inbox schema"),
             run: quotes_accept,
         },
         ToolDef {
             use_case: "inbox.quotes.list",
             description: "quotes.list for an internal journey. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("quotes.list")).expect("inbox schema"),
             run: quotes_list,
         },
         ToolDef {
             use_case: "inbox.appointments.book",
             description: "appointments.book for an internal journey. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("appointments.book")).expect("inbox schema"),
             run: appointments_book,
         },
         ToolDef {
             use_case: "inbox.appointments.cancel",
             description: "appointments.cancel for an internal journey. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("appointments.cancel")).expect("inbox schema"),
             run: appointments_cancel,
         },
         ToolDef {
             use_case: "inbox.appointments.held",
             description: "appointments.held for an internal journey. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("appointments.held")).expect("inbox schema"),
             run: appointments_held,
         },
         ToolDef {
             use_case: "inbox.consent.record",
             description: "consent.record for a workspace person. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("consent.record")).expect("inbox schema"),
             run: consent_record,
         },
         ToolDef {
             use_case: "inbox.consent.list",
             description: "consent.list for a workspace person. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("consent.list")).expect("inbox schema"),
             run: consent_list,
         },
         ToolDef {
             use_case: "inbox.suppressions.add",
             description: "suppressions.add for a workspace person. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("suppressions.add")).expect("inbox schema"),
             run: suppressions_add,
         },
         ToolDef {
             use_case: "inbox.suppressions.remove",
             description: "suppressions.remove for a workspace person. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("suppressions.remove")).expect("inbox schema"),
             run: suppressions_remove,
         },
         ToolDef {
             use_case: "inbox.send",
             description: "send for a workspace person. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("send")).expect("inbox schema"),
             run: send,
         },
         ToolDef {
             use_case: "inbox.pending",
             description: "Read the executor-visible inbox queues. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("pending")).expect("inbox schema"),
             run: pending,
         },
         ToolDef {
             use_case: "inbox.context",
             description: "Read recent conversation context and strategy guidance. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("context")).expect("inbox schema"),
             run: context,
         },
         ToolDef {
             use_case: "inbox.conversations.list",
             description: "conversations.list for workspace conversations. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("conversations.list")).expect("inbox schema"),
             run: conversations_list,
         },
         ToolDef {
             use_case: "inbox.conversations.get",
             description: "conversations.get for workspace conversations. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("conversations.get")).expect("inbox schema"),
             run: conversations_get,
         },
         ToolDef {
             use_case: "inbox.messages.list",
             description: "messages.list for workspace conversations. An outbound message that failed, or whose outcome is unknown, carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list\"); null otherwise. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("messages.list")).expect("inbox schema"),
             run: messages_list,
         },
         ToolDef {
             use_case: "inbox.take_over",
             description: "take_over for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("take_over")).expect("inbox schema"),
             run: take_over,
         },
         ToolDef {
             use_case: "inbox.hand_to_agent",
             description: "hand_to_agent for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("hand_to_agent")).expect("inbox schema"),
             run: hand_to_agent,
         },
         ToolDef {
             use_case: "inbox.snooze",
             description: "snooze for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("snooze")).expect("inbox schema"),
             run: snooze,
         },
         ToolDef {
             use_case: "inbox.unsnooze",
             description: "unsnooze for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("unsnooze")).expect("inbox schema"),
             run: unsnooze,
         },
         ToolDef {
             use_case: "inbox.close",
             description: "close for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("close")).expect("inbox schema"),
             run: close,
         },
         ToolDef {
             use_case: "inbox.reply",
             description: "reply for workspace conversations. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("reply")).expect("inbox schema"),
             run: reply,
         },
         ToolDef {
             use_case: "inbox.merges.list",
             description: "List merge suggestions and their decisions. [risk: READ]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("merges.list")).expect("inbox schema"),
             run: merges_list,
         },
         ToolDef {
             use_case: "inbox.merges.apply",
             description: "Apply a merge keeping the selected person; two open journeys conflict. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("merges.apply")).expect("inbox schema"),
             run: merges_apply,
         },
         ToolDef {
             use_case: "inbox.merges.undo",
             description: "Undo a merge within 30 days, requiring confirm: true and unchanged aggregates. [risk: DESTRUCTIVE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("merges.undo")).expect("inbox schema"),
             run: merges_undo,
         },
         ToolDef {
             use_case: "inbox.merges.refuse",
             description: "Refuse a pending merge suggestion. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("merges.refuse")).expect("inbox schema"),
             run: merges_refuse,
         },
         ToolDef {
             use_case: "inbox.tasks.create",
             description: "Create a follow-up task with a due time and optional assignee. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("tasks.create")).expect("inbox schema"),
             run: tasks_create,
         },
         ToolDef {
             use_case: "inbox.tasks.complete",
             description: "Complete a follow-up task. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("tasks.complete")).expect("inbox schema"),
             run: tasks_complete,
         },
         ToolDef {
             use_case: "inbox.tasks.list",
             description: "List tasks in the due_24h, overdue or all queue, optionally filtered by assignee. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("tasks.list")).expect("inbox schema"),
             run: tasks_list,
         },
         ToolDef {
             use_case: "inbox.notes.add",
             description: "Add a journey note; its text is excluded from the ledger. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("notes.add")).expect("inbox schema"),
             run: notes_add,
         },
         ToolDef {
             use_case: "inbox.status_labels.set",
             description: "Replace workspace display-label overrides for the nine fixed journey stages. Unknown keys or blank labels are VALIDATION. An empty map restores default labels. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("status_labels.set")).expect("inbox schema"),
             run: status_labels_set,
         },
         ToolDef {
             use_case: "inbox.people.search",
             description: "Search workspace people. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("people.search")).expect("inbox schema"),
             run: people_search,
         },
         ToolDef {
             use_case: "inbox.people.get",
             description: "Read a person, identities, open journey and conversations; merged aliases resolve to their keeper. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("people.get")).expect("inbox schema"),
             run: people_get,
         },
         ToolDef {
             use_case: "inbox.people.create",
             description: "Match normalized identities or create a person and initial journey atomically; conflicting identities return a merge suggestion. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("people.create")).expect("inbox schema"),
             run: people_create,
         },
         ToolDef {
             use_case: "inbox.identities.add",
             description: "Add a normalized identity; collisions suggest a merge without stealing the identity. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("identities.add")).expect("inbox schema"),
             run: identities_add,
         },
         ToolDef {
             use_case: "inbox.journeys.open",
             description: "Open a journey. An open journey conflicts; Lost requires explicit reopen, Won starts Repeat. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("journeys.open")).expect("inbox schema"),
             run: journeys_open,
         },
         ToolDef {
             use_case: "inbox.events.report",
             description: "Report an allowed event with a required workspace-unique idempotency key. The reducer and all effects commit atomically; repeats suppress effects. Reopening requires a human owner or manager with inbox.manage. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("events.report")).expect("inbox schema"),
             run: events_report,
         },
         ToolDef {
             use_case: "inbox.lost_reasons.list",
             description: "Read the workspace lost-reason dictionary. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("lost_reasons.list")).expect("inbox schema"),
             run: lost_reasons_list,
         },
         ToolDef {
             use_case: "inbox.lost_reasons.set",
             description: "Set a lost-reason label and active flag; the last active reason cannot be deactivated. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("lost_reasons.set")).expect("inbox schema"),
             run: lost_reasons_set,
         },
         ToolDef {
             use_case: "inbox.journeys.get",
             description: "Read a journey, latest 50 events, tasks and notes. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("journeys.get")).expect("inbox schema"),
             run: journeys_get,
         },
         ToolDef {
             use_case: "inbox.journeys.assign_owner",
-            description: "Assign an active workspace member as commission owner; null clears the owner. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            description: "Assign an active workspace member as the journey owner; null clears the owner. [risk: WRITE]",
+            permissions: &[Permission::InboxManage],
             schema: || {
                 Schema::try_from(schema::tool("journeys.assign_owner")).expect("inbox schema")
             },
@@ -358,42 +328,42 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "inbox.public.hide",
             description: "Hide a comment on its platform (hidden: true) or show it again (false); a hidden comment is not owed. The agent may. Refused on marketplace questions (hide_unsupported) and while comments are not enabled. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.hide")).expect("inbox schema"),
             run: public_hide,
         },
         ToolDef {
             use_case: "inbox.public.delete",
             description: "Delete a comment on its platform. Humans only (agent_cannot_delete), requires confirm: true and inbox.manage. [risk: DESTRUCTIVE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: || Schema::try_from(schema::tool("public.delete")).expect("inbox schema"),
             run: public_delete,
         },
         ToolDef {
             use_case: "inbox.public.mark_handled",
             description: "Mark 1 to 100 owed comments or questions handled (no_reply_needed, spam, duplicate, answered_elsewhere), all or none; tells no provider. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.mark_handled")).expect("inbox schema"),
             run: public_mark_handled,
         },
         ToolDef {
             use_case: "inbox.public.report",
             description: "Report a marketplace question to its marketplace where it takes reports (report_unsupported elsewhere); a reported question is not owed. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.report")).expect("inbox schema"),
             run: public_report,
         },
         ToolDef {
             use_case: "inbox.public.approve",
             description: "Approve a held reply (humans only: human_required), optionally with an edited text, which is checked first; the reply is fenced again and sent. Refused when its item can no longer take it. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.approve")).expect("inbox schema"),
             run: public_approve,
         },
         ToolDef {
             use_case: "inbox.public.discard",
             description: "Discard a held reply: a human, or the agent connection that drafted it (not_the_drafter otherwise). [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.discard")).expect("inbox schema"),
             run: public_discard,
         },
@@ -664,27 +634,6 @@ fn appointments_held<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFu
         let id: uuid::Uuid = take_id(&mut raw, "appointment_id")?;
         let _: NoArgs = args(raw)?;
         to_json(&appointments::held(deps, ctx, id).await?)
-    })
-}
-
-fn commissions_list<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
-    Box::pin(async move { to_json(&commissions::list(deps, ctx, args(raw)?).await?) })
-}
-fn commission_rates_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
-    Box::pin(async move { to_json(&commissions::set_rate(deps, ctx, args(raw)?).await?) })
-}
-fn commissions_approve<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
-    Box::pin(async move {
-        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
-        let _: NoArgs = args(raw)?;
-        to_json(&commissions::approve(deps, ctx, id).await?)
-    })
-}
-fn commissions_pay<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
-    Box::pin(async move {
-        let id: uuid::Uuid = take_id(&mut raw, "commission_id")?;
-        let _: NoArgs = args(raw)?;
-        to_json(&commissions::pay(deps, ctx, id).await?)
     })
 }
 

@@ -48,6 +48,8 @@
 mod calls;
 pub use calls::MemCalls;
 mod capability;
+mod module_gate;
+pub use module_gate::ModulesReadyGate;
 mod compliance;
 mod connector;
 mod devices;
@@ -95,6 +97,7 @@ mod erasure;
 mod studio;
 pub use studio::MemStudio;
 
+pub mod ads;
 mod material_productions;
 mod materials;
 mod production_projects;

@@ -1,20 +1,17 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  BookText,
   Bot,
   Compass,
   Home,
   Plus,
   Layers,
+  Lock,
   ChevronDown,
-  Activity,
-  Inbox,
   KeyRound,
   LogOut,
   Menu,
   Plug,
-  ShieldCheck,
   Users,
   Wallet,
   type LucideIcon,
@@ -41,14 +38,15 @@ import {
   SheetTrigger,
   ThemeToggle,
   cn,
+  PageFrameContext,
   toast,
 } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
 import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
-import { useModules, modulePath, moduleVisibleTo } from '@/lib/modules';
+import { useModules, modulePath, moduleReady, moduleVisibleTo } from '@/lib/modules';
 
-type NavItem = { to: string; label: string; Icon: LucideIcon };
+type NavItem = { to: string; label: string; Icon: LucideIcon; locked?: boolean };
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const { t, i18n } = useTranslation();
@@ -58,20 +56,17 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const core: NavItem[] = [
     { to: '/', label: t('nav.home'), Icon: Home },
-    { to: '/inbox', label: t('nav.inbox'), Icon: Inbox },
     { to: '/strategy', label: t('nav.strategy'), Icon: Compass },
   ];
   const management: NavItem[] = [
+    { to: '/budget', label: t('nav.budget'), Icon: Wallet },
+    { to: '/users', label: t('nav.users'), Icon: Users },
+    { to: '/api-keys', label: t('nav.apiKeys'), Icon: KeyRound },
     { to: '/capabilities', label: t('nav.capabilities'), Icon: Plug },
     { to: '/agents', label: t('nav.agents'), Icon: Bot },
-    { to: '/activity', label: tr ? 'İş takibi' : 'Activity', Icon: Activity },
-    { to: '/budget', label: t('nav.budget'), Icon: Wallet },
-    { to: '/team', label: t('nav.team'), Icon: Users },
-    { to: '/roles', label: t('nav.roles'), Icon: ShieldCheck },
-    { to: '/api-keys', label: t('nav.apiKeys'), Icon: KeyRound },
-    { to: '/ledger', label: t('nav.ledger'), Icon: BookText },
   ];
-  const link = ({ to, label, Icon }: NavItem) => (
+  const lockedLabel = tr ? 'Kilitli: gerekli yetenek bağlı değil' : 'Locked: its capability is not connected';
+  const link = ({ to, label, Icon, locked }: NavItem) => (
     <NavLink key={to} to={to} end={to === '/'} onClick={onNavigate}
       className={({ isActive }) => cn(
         'relative flex min-h-11 items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors md:min-h-9',
@@ -82,6 +77,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
       )}>
       <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 break-words [overflow-wrap:anywhere]">{label}</span>
+      {locked && <Lock className="ms-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label={lockedLabel} />}
     </NavLink>
   );
   return <>
@@ -91,7 +87,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
       {modules.isPending && <p className="px-3 py-2 text-xs text-muted-foreground" role="status">{t('common.loading')}</p>}
       {modules.isError && <button className="px-3 py-2 text-left text-xs text-destructive underline" onClick={() => void modules.refetch()}>{tr ? 'Modüller yüklenemedi. Yeniden dene' : 'Modules unavailable. Retry'}</button>}
       {modules.data?.modules.filter(m => m.installed && !m.required && moduleVisibleTo(m, me)).map(m => ({
-        to: modulePath(m), label: m.blueprint.name, Icon: Layers,
+        to: modulePath(m), label: m.blueprint.name, Icon: Layers, locked: !moduleReady(modules.data, m.blueprint.id),
       })).map(link)}
       {link({ to: '/modules', label: tr ? 'Modül ekle' : 'Add module', Icon: Plus })}
     </div>
@@ -151,9 +147,24 @@ function WorkspaceSwitcher({ me }: { me: MeOut }) {
 }
 
 /** The signed-in frame: header (workspace, status, language, theme, sign out), menu, page. */
+/**
+ * Every other page: no outer margin, the page title as a full-width bar under the header (the
+ * first PageHeader, drawn edge to edge with a bottom rule), the content using the full width with
+ * a 16px gutter so text never touches the sidebar's rule.
+ */
+const PAGE_FRAME = 'gap-5 px-4 pb-5 [&:not(:has([data-page-header]))]:pt-4';
+
+/** Workspace screens that fill the whole content area edge to edge, under the 61px header. */
+function isFullBleed(pathname: string): boolean {
+  if (pathname === '/' || pathname === '/inbox' || pathname.startsWith('/inbox/')) return true;
+  // The prospect pool and a prospect in it; its research tasks are an ordinary page.
+  return pathname === '/prospects' || (pathname.startsWith('/prospects/') && pathname !== '/prospects/tasks');
+}
+
 export function Shell() {
   const { t } = useTranslation();
   const session = useSession();
+  const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -193,7 +204,7 @@ export function Shell() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 sm:px-8">
+        <header className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3">
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="sm" className="h-10 w-10 px-0 md:hidden" aria-label={t('nav.label')}><Menu className="h-5 w-5" aria-hidden="true" /></Button>
@@ -224,12 +235,14 @@ export function Shell() {
           </div>
         </header>
 
-        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="mx-auto flex w-full min-w-0 max-w-[1536px] flex-col gap-6">
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1">
+          <div className={cn('flex w-full min-w-0 flex-col', !isFullBleed(pathname) && PAGE_FRAME)}>
             {current ? (
               // Keyed by workspace: a switch mounts every page afresh, so no local state (an open
               // editor, a half-typed form) carries over and is saved into the other workspace.
-              <Outlet key={me.current_workspace ?? 'none'} />
+              <PageFrameContext.Provider value={!isFullBleed(pathname)}>
+                <Outlet key={me.current_workspace ?? 'none'} />
+              </PageFrameContext.Provider>
             ) : me.memberships.length > 0 ? (
               <EmptyState
                 headingLevel="h1"

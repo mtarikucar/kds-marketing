@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { getModules, type Blueprint, type WorkspaceModule } from '@/api/modules';
+import type { Permission } from '@/api/types';
+import { getModules, type Blueprint, type ModulesOut, type WorkspaceModule } from '@/api/modules';
 import { useSession } from '@/auth/useSession';
 
 export const modulesKey = (workspaceId: string | null | undefined) => ['workspace-modules', workspaceId] as const;
@@ -8,7 +9,7 @@ export function useModules() {
   return useQuery({ queryKey: modulesKey(workspaceId), queryFn: getModules, enabled: !!workspaceId });
 }
 const BUILTIN_PATHS: Record<string, string> = {
-  inbox: '/inbox', strategy: '/strategy', 'growth-studio': '/studio', people: '/people',
+  inbox: '/inbox', strategy: '/strategy', content: '/content', social: '/social', ads: '/ads', materials: '/materials', people: '/people',
   prospects: '/prospects', outreach: '/outreach', calls: '/calls',
 };
 export function modulePath(module: WorkspaceModule | Blueprint): string {
@@ -18,6 +19,13 @@ export function modulePath(module: WorkspaceModule | Blueprint): string {
     : `/modules/${encodeURIComponent(blueprint.id)}`;
 }
 export function moduleSettingsPath(id: string): string { return `/modules/${encodeURIComponent(id)}`; }
+/** The module's unmet capability requirements; empty when it is ready or was not judged. */
+export function moduleMissing(data: ModulesOut | undefined, id: string): string[] {
+  return data?.availability?.[id]?.missing ?? [];
+}
+export function moduleReady(data: ModulesOut | undefined, id: string): boolean {
+  return moduleMissing(data, id).length === 0;
+}
 export function lines(value: string): string[] { return value.split('\n').map(line => line.trim()).filter(Boolean); }
 /** Export only portable definitions. Workspace IDs, credentials and agent assignments never travel. */
 export function portableBlueprint(blueprint: Blueprint): Omit<Blueprint, 'builtin'> {
@@ -46,6 +54,10 @@ export function moduleVisibleTo(module: WorkspaceModule | Blueprint, me: import(
   const blueprint = 'blueprint' in module ? module.blueprint : module;
   const membership = me?.memberships.find(m => m.workspace_id === me.current_workspace);
   if (!blueprint.builtin) return true;
-  const permission = ({ prospects: 'prospects.work', outreach: 'outreach.work' } as const)[blueprint.id as 'prospects' | 'outreach'];
+  const permissions: Record<string, Permission> = {
+    prospects: 'prospects.work', outreach: 'outreach.work',
+    content: 'content.work', social: 'social.work', ads: 'ads.work', materials: 'materials.work',
+  };
+  const permission = permissions[blueprint.id];
   return !permission || !!membership?.permissions.includes(permission);
 }

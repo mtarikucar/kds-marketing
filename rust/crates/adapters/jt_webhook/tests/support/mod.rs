@@ -339,6 +339,9 @@ impl TenantRepos for FailingTenant {
     fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
         self.0.studio_projects()
     }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self.0.ads()
+    }
     fn studio_productions(
         &mut self,
     ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
@@ -401,9 +404,6 @@ impl TenantRepos for FailingTenant {
     }
     fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
         self.0.appointments()
-    }
-    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
-        self.0.commissions()
     }
     fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
         self.0.erasure()

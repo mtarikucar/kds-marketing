@@ -1,3 +1,4 @@
+import { StrategyLearned } from './StrategyLearned';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -198,7 +199,7 @@ function ApprovedTab({
   }
   return (
     <BriefGroupContext.Provider value={{ group, setGroup }}>
-    <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
+    <div className="-mx-4 flex flex-col gap-6 border-t border-border bg-surface px-4 py-5">
       <Card className="rounded-none border-0 bg-transparent shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex items-center gap-2">
@@ -300,7 +301,7 @@ function DraftTab({
   return (
     <BriefGroupContext.Provider value={{ group, setGroup }}>
     <EditRequestContext.Provider value={editRequest}>
-    <div className="flex flex-col gap-6 border-t-2 border-foreground bg-surface px-4 py-6 sm:px-8">
+    <div className="-mx-4 flex flex-col gap-6 border-t border-border bg-surface px-4 py-5">
       <Card className="rounded-none border-0 bg-transparent shadow-none">
         <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -434,6 +435,7 @@ export function StrategyPage() {
           </Tabs>
         )}
       </QueryState>
+      <StrategyLearned />
       <VersionsSheet open={versionsOpen} onOpenChange={setVersionsOpen} />
     </>
   );

@@ -121,6 +121,14 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0030_material_productions` | Revisioned image-production tasks and source provenance in `studio_material_productions`, with tenant isolation and FORCE RLS (102 tables). |
 | `0031_production_projects` | Tenant-scoped production projects with revisioned JSON records and FORCE RLS (103 tables). Adds the `project` package-request trigger used by the existing post scheduler. Down inspects all tenants and refuses while any project or project-trigger request remains. |
 | `0032_workspace_modules` | Tenant-scoped, revisioned declarative module registry in `workspace_modules` with FORCE RLS (104 tables). Existing workspaces retain their installed sections; new workspaces start with Inbox and Strategy. Down refuses while a registry contains configuration beyond the migration seed. |
+| `0033_drop_commissions` | Komisyonlar üründen çıkarıldı (2026-11-10): `0008`'in üç komisyon tablosu (`commissions`, `commission_default`, `commission_user_rates`) düşer (101 tablo). Down tabloları `0008`'deki tanımıyla boş olarak yeniden kurar; silinen satırlar geri gelmez. |
+| `0034_split_growth_studio` | Büyüme stüdyosu dört modüle ayrıldı (2026-11-10): kayıtlı modül kayıtlarındaki `growth-studio` girdisi, kurulu olup olmadığı ve ayarlarıyla birlikte `content`, `social`, `ads`, `materials` girdilerine dönüşür; gelen kutusu zorunlu modül olmaktan çıktığı için `legacy` olmayan ya da hiç kaydı olmayan çalışma alanları onu kurulu bir girdi olarak korur. Tablo eklemez (101 tablo). Down dört girdiyi tek `growth-studio` girdisine geri toplar, up'ın eklediği varsayılan gelen kutusu girdisini ve boş kalan kayıtları kaldırır; çalışma alanının sonradan kaydettiği girdilere dokunmaz. |
+| `0035_module_permissions` | `studio.work` ve `studio.manage` modül başına ayrıldı: rollerde ve API anahtarı kapsamlarında `studio.work` yerine `content.work`, `social.work`, `ads.work`, `materials.work`; `studio.manage` yerine `content.manage`, `social.manage`, `ads.manage`. Down yalnızca tam kümeyi eski izne geri toplar; eksik bir küme genişletilmez, kaldırılır. |
+| `0036_production_areas` | Üretim alanı ne zaman başladığını ve geçerli paketinin ne zaman teslim edildiğini bilir (2026-11-10, İçerik oluşturma): `studio_production_projects` tablosuna `start_at` (boş olamaz) ve `done_at` sütunları, ikisini alan belgesine bağlayan iki CHECK, üretim hattının iki listesi için `production_areas_open` dizini ve belgedeki zamanı okuyan `production_area_time(jsonb)` işlevi. Eski alanlar oluşturuldukları anda başlar, paketsizdir. `studio_material_policy.ai_standalone` (varsayılan açık): ajanın ürettiği görsel tek başına içerik olabilir mi. Geri alma, bir alanda paket, talep (claim), "Olmamış" notu ya da tutulan teslim varken ve bir çalışma alanı ayarı kapatmışken reddeder; böyle bir kayıt yoksa sütunları, dizini ve işlevi kaldırır. |
+| `0037_social_accounts` | Sosyal medya yönetimi (2026-11-10): `social_account_days` (bağlı her sosyal hesabın platformunun o gün söylediği sayılar; hesap ve gün başına tek satır, günün ilk başarılı okuması kalır; hesap aynı çalışma alanınındır, bileşik yabancı anahtar; zorunlu RLS; 102 tablo). `studio_posting_policy` tablosuna `paused_capability_ids` (kişinin paylaşımını duraklattığı hesaplar), `revision` (ayarların değişim sayacı) ve `provider_scheduling` (paylaşım platformun kendi zamanlayıcısına bırakılsın mı; varsayılan kapalı) sütunları. Geri alma, bir hesap duraklatılmışken ya da bir çalışma alanı platform zamanlayıcısını açmışken reddeder; yoksa üç sütunu ve tabloyu kaldırır (anlık görüntüler gözlemdir, platformdan yeniden okunur). |
+| `0038_lane_approval_to_connections` | Şeridin kendi "insan onayı ister" ayarı kalktı (2026-11-10, S18/B35): ayarı açık olan çalışma alanında o şeridin bugünkü bağlantılarının hepsi kendi `policy.requires_human_approval` işaretini alır (organik şerit: sosyal hesaplar; ücretli şerit: reklam hesabı), böylece dün insan bekleyen paylaşım bugün de bekler; ayar şerit kayıtlarından silinir. Göçten sonra yapılan bağlantı her bağlantı gibi işaretsiz başlar. `studio_control.lane_approval_moved` yalnızca geri alma içindir (hangi şeridin ayarı açıktı, göç hangi bağlantıları işaretledi); uygulama okumaz. Geri alma, kayıttaki şeritlerin ayarını geri açar, göçün işaretlediği bağlantıların işaretini kaldırır (kişinin kendi koyduğu işarete dokunmaz), her şerit kaydına alanı geri yazar ve sütunu kaldırır. Tablo eklemez. |
+| `0039_general_ad_budget` | Bütçe (2026-11-10, B37): `budget_items.general` (çalışma alanının genel reklam bütçesi; yalnızca para birimli, dönemi `total` olmayan bir `ad_budget` kalemi, çalışma alanı başına en çok bir canlı kalem: `budget_items_general_rule` CHECK ve `budget_items_one_general` kısmi tekil dizini). Sütun geldiği anda tam bir uygun canlı kalemi olan çalışma alanında o kalem işaretlenir; hiç yoksa ya da birden çoksa kişi Bütçe'de seçer. `budget_spend_entries.module` (`ads`, `inbox`, `outreach`, `calls`, `social`; elle girilen harcamada boş) ve `campaign_id`. Geri alma işareti, kuralı, dizini ve iki sütunu kaldırır; kalemler ve harcama kayıtları kalır. Tablo eklemez. |
+| `0040_ads_campaigns` | Reklam yönetimi (2026-11-10, §8): `ads_campaigns` (kampanya başına tek belge: hedef, bütçe, plan, sağlayıcıda kurulanlar, ajanın hamleleri, günlük sonuçlar; `start_at` açık kampanyaları, `closed_at` bitenleri sıralar; zorunlu RLS; 103 tablo). Geri alma, saklı bir kampanya varken reddeder (kampanya paranın kaydıdır ve sağlayıcıda çalışıyor olabilir); yoksa tabloyu kaldırır. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -199,7 +207,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
 | `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
-| `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz. Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
+| `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz: aday havuzundaki «Mesaj gönder» de (e-posta ve SMS) bu dayanağa dayandığı için rızası olmayan bir adaya gitmez (`403` `IZIN_YOK`). Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:
@@ -412,6 +420,7 @@ Her başarısız çağrı, panelden de MCP'den de aynı yapıyı döndürür:
 | `CONFLICT` | 409 | mevcut durumla çelişki (ör. aynı hesap iki kez) |
 | `VALIDATION` | 422 | girdi kurala uymuyor (`details.field` ya da `details.gaps`) |
 | `STRATEGY_REQUIRED` | 409 | kapılı bir iş onaylı strateji ister |
+| `CAPABILITY_REQUIRED` | 409 | modülün gerektirdiği yetenek bağlı değil (`details.module`, `details.missing`) |
 | `WORKSPACE_INACTIVE` | 423 | alan etkin değil (`details.status`) |
 | `HOST_NOT_ALLOWED` | 403 | dışarıya izinsiz bir adrese gidilmek istendi |
 | `UPSTREAM_UNAVAILABLE` | 503 | sağlayıcı meşgul ya da ulaşılamıyor; yalnız `details.retryable: true` ise yeniden denenebilir |
@@ -436,6 +445,146 @@ başlatan tek satır `inbox.send`. Alanın kendi müşterilerinin yazışmaları
 beklemez (sahip kararı, 2026-11-03): diğer bütün `inbox.*` satırları kapıdan muaftır, alan durumu denetimi
 (`WORKSPACE_INACTIVE`) ise silme ve engelleme listesi dahil her gelen kutusu satırında aynen sürer. Ayrıntı:
 [Inbox outside the strategy gate](#inbox-outside-the-strategy-gate-2026-11-03).
+
+## Büyüme stüdyosunun dört modüle ayrılması (2026-11-10)
+
+Tasarım: `docs/superpowers/specs/2026-11-10-uc-modul-ve-panel-iskeleti-design.md`; yapım planları
+`docs/superpowers/plans/2026-11-10-step*.md`. Bu README'nin eski bölümlerinde geçen `studio.work` ve
+`studio.manage`, aşağıdaki modül izinlerinin karşılığıdır; işlem adları (`studio.*`), panel yolları
+(`/api/studio/...`) ve MCP araç adları (`jeeta.studio.*`) değişmedi.
+
+- **Modüller.** `growth-studio` yerine dört yerleşik modül: `content` (İçerik oluşturma), `social` (Sosyal
+  medya yönetimi), `ads` (Reklam yönetimi) ve üçünün ortak deposu `materials` (Materyal kütüphanesi).
+  Zorunlu tek modül `strategy`'dir; gelen kutusu sıradan bir modüldür ve yeni bir çalışma alanı yalnızca
+  stratejiyle başlar. `content`, `social` ya da `ads` kurulunca `materials` da kurulur ve onlardan biri
+  kuruluyken kaldırılamaz.
+- **Her işlemin modülü.** `jt_app::gate::studio_module` her `studio.*` işlemini bir modüle bağlar: kütüphane
+  işlemleri ile içerik teslimi ve denetimi (`piece_submit`, `slot_materials`, `material_check_release`)
+  `materials`; üretim alanları, türev üretim, özel gün takvimi ve materyal kuralları `content`; paylaşım
+  istekleri, planlı paylaşımlar, yuva okuma ve iptal, TikTok ekranı `social`; reklam seti bağlama ve bütçe
+  hamlesi `ads`. Hiçbir modüle ait olmayanlar: `overview`, `pending`, `learned`, `ledger`,
+  `ledger_export`, `judgment_record`, `trend_record`, `hypothesis_propose`, `brake`, `approve`. Kişi
+  kayıtları (`inbox.people.*`) gelen kutusunu beklemez.
+- **Kurulu olmayan modül.** Bu dört modülden biri kurulu değilse işlemleri panelde ve MCP'de
+  `409 MODULE_NOT_INSTALLED` (`details.module`) döner; yasal yükümlülükler ve durdurma işlemleri açık kalır.
+  Kaldırılan modülün işi durur, verisi kalır: `social` kurulu değilken organik şerit, `ads` kurulu değilken
+  ücretli şerit frenlenmiş gibi okunur (`StudioControl::removed`; kayda yazılmaz), bağlı reklam setleri
+  sağlayıcıda duraklatılır; modül yeniden kurulunca kimse bir freni kaldırmadan iş devam eder. Gelen
+  kutusunun ücretli gönderimleri bu kuraldan etkilenmez: ortak harcama kapısı, Stüdyo zincirine ait
+  olmayan bir rezervasyonda yalnızca insanın frenine bakar.
+- **İzinler.** İş izni modül başınadır (yukarıdaki tablo). Birden çok modüle hizmet eden okumalar
+  (`overview`, `pending`, `learned`, günlük) modül iş izinlerinden herhangi biriyle; `overview` ve `pending`
+  ayrıca `social.manage`, `ads.manage` ya da `budget.manage` ile; `brake` bu üç yönetim izninden biriyle;
+  `approve` hedefe göre `social.manage` ya da `ads.manage` ile çalışır (şeridin kendi onay ayarı ve
+  `studio.policy_set` 2026-11-10'da kalktı; aşağıda "Sosyal medya yönetimi"). Tek izin
+  isteyen bir işlem reddi `details.permission` ile, birkaç izinden birini isteyen `details.permissions` ile
+  bildirir.
+- **Test dünyaları.** `TestDb::seed_workspace` her yerleşik modülü kurulu bırakır (kayıt öncesinden kalma
+  bir çalışma alanı gibi); `TestDb::seed_new_workspace` kayıt akışının bıraktığı hali verir (yalnızca
+  strateji). Stüdyo fixture'ları `jt_testkit::studio_contract::install_all_modules` çağırır.
+
+## Üretim alanı ve içerik paketi (İçerik oluşturma, 2026-11-10)
+
+Tasarım §5.4 ve §6; plan `docs/superpowers/plans/2026-11-10-step1-content-creation.md`. Bir **üretim
+alanı** tek bir içerik işidir: bir cümlelik hedef ve başlama saatinden, denetimden geçmiş bir
+**içerik paketine** kadar. İşi yalnızca ajan yapar; Jeeta hiçbir model ya da medya servisi çağırmaz,
+alanı ajana verir, ajanın yerini tutar ve teslim edileni denetler. Kimse paketi onaylamaz.
+
+**Kayıt.** Alan, bugünkü üretim projesidir (`studio_production_projects`, tek belge); yeni alanların
+hepsi varsayılanlıdır, eski belge hatasız okunur. `start_at` (yoksa `created_at`), `opened_by`
+(`{"kind":"human"}` ya da `{"kind":"system","trigger":"olay"|"calendar"|"floor","key":…}`), `hints`
+(açan kişinin seçtiği biçimler ve hesaplar), `claim` (ajanın tutuşu; belgede yalnızca belirtecin özeti
+durur), `progress` (`step` 1–14, `note`), `packages` (eskiden yeniye; sonuncusu geçerli paket; belge
+son 20 paketi tutar, her teslim günlükte kalır), `redo` (yanıtlanmamış "Olmamış" notu), `refused`
+(art arda ret sayısı) ve `refusal` (son reddedilen teslim ve nedenleri). Her yanıttaki
+`state: {state, step, note, starts_at}` o anın izdüşümüdür, saklanmaz.
+
+**Durum**, ilk tutan kural: arşivde → `archived`; art arda üç ret → `held`; açık çekim talebi →
+`waiting_material`; süresi dolmamış talep → `working`; geçerli paket var, "Olmamış" notu yok →
+`done`; değilse `queued`. Ajan yoklamada `queued` olup saati gelmiş alanı görür. Bir alan, istenen
+çekim beklenirken ya da "Olmamış" notu dururken bitmiş sayılmaz (`done_at` boştur).
+
+**İşlemler.**
+
+| İşlem | Kim | Ne yapar |
+|---|---|---|
+| `studio.project_create` | insan, `content.manage` | `brief` (hedef; 1–2000 karakter) zorunlu; `title` boşsa hedefin ilk 60 karakteri; `start_at` boşsa şimdi (en çok bir yıl sonrası); `formats`, `capability_ids` isteğe bağlı |
+| `studio.project_list` | `content.work` | `scope=open`: bitmemiş alanlar, başlama saatine göre (en çok 200); `scope=done`: bitenler, yeniden eskiye, 50'şer, `done_before` / `next_done_before` ile; `scope` yoksa eski davranış |
+| `content.area_claim` | ajan, `content.work` | Saati gelmiş, sırada bekleyen alanı alır; `claim_token` yalnızca bu yanıtta döner. Bir alanda tek canlı talep: aynı anda isteyen iki ajandan biri reddedilir |
+| `content.area_progress` | talebin ajanı | Hangi adımda olduğunu bildirir; talep 30 dakika uzar |
+| `content.area_release` | talebin ajanı | Alanı bırakır (durduğu ya da istediği çekimi beklediği için) |
+| `content.area_deliver` | talebin ajanı; onaylı strateji ister | Platform sürümlerini tek pakette teslim eder (aşağıda) |
+| `content.area_redo` | insan, `content.manage`; yalnızca panel | "Olmamış": ne değişeceğini yazar. Not, kişinin gördüğü pakete bağlıdır (`package_revision`): ajan o sırada adım bildirse de kabul edilir, araya yeni paket girdiyse `409` |
+| `content.delivery_accept` | insan, `content.manage`; yalnızca panel; onaylı strateji ister | Tutulan alanda, yalnızca metin denetimine takılan teslimi olduğu gibi kabul eder |
+
+Alanda çalışan (`content.work`) materyal ekler (`studio.project_materials`), gerçek çekim ister
+(`studio.project_request`) ve talebi yanıtlar (`studio.project_request_update`); alandan kaynak
+çıkarmak `content.manage` ister.
+
+**Teslim ve denetim.** Bir sürüm: `format`, isteğe bağlı `capability_id` (hangi hesap için), `text`
+(en çok 5.000 karakter), `title` (160), `tags` (en çok 30, her biri 100), `link` (genel http/https
+adresi), `material_ids` (1–10, yinelenmez), `hypothesis_id`, `content_type`; bir pakette 1–12 sürüm.
+Biçimi bozuk teslim `VALIDATION` (`details.field = "versions[n].alan"`) döner ve ret sayılmaz. Her
+sürüm için: materyaller alanın materyalidir (kaynak ya da alanda üretilmiş), canlıdır ve paylaşılabilir
+(materyal kapısı, `jt_studio::eligibility`); metin, başlık ve etiketler doğruluk denetiminden geçer
+(`jt_studio::truth::check_caption`); hedef onaylı stratejinin hipotezlerinden biridir; hesap verilmişse
+canlı bir sosyal hesaptır ve biçimi alır. Bir sürümün ayrı bir konusu yoktur: materyalleri tek bir
+olaydan geliyorsa o olaydan, hiçbirinden ya da birkaçından geliyorsa belirli bir şeyden söz etmez.
+Sürümlerin hepsi geçer ya da hiçbiri saklanmaz. Ret `409 CONFLICT`,
+`details: {"reason":"package_refused","versions":[{"index":n,"findings":[{"kind":"material"|"text","code":…}]}]}`
+döner, `refused` sayacını artırır ve alanda `refusal` olarak saklanır. Kabul edilen paket talebi
+bitirir; ajanın alanı alırken gördüğü "Olmamış" notunu yanıtlar, sonradan yazılanı bırakır. Teslim
+`request_key` ile yinelenir (ret dahil).
+
+**Üç ret ve insanın kabulü (B9, B45).** Art arda üç ret alanı tutar: talep ölür, ana sayfaya
+`content_area_held` düşer. Alan sayfası tutulan sürümleri ve nedenlerini gösterir. İnsan ya not yazıp
+ajana geri gönderir (`content.area_redo`; sayaç ve tutulan teslim silinir), ya alanı arşivler, ya da
+nedenlerin hepsi metin bulgusuysa teslimi olduğu gibi kabul eder (`content.delivery_accept`).
+Kabulde denetimler yeniden çalışır; materyal kapısının tuttuğu (paylaşım izni yok, silinmiş, alana
+ait değil), hesabın ya da hedefin tuttuğu hiçbir şey kabul edilmez (`409`, `not_releasable`). Kabul
+eden kişi ve kabul edilen bulgular pakette (`released`) ve günlükte durur.
+
+**Ajanın ürettiği görsel (B39).** Ajan görseli kendi araçlarıyla üretir, `studio.file_upload` ile
+yükler, `studio.material_add` ile kütüphaneye ekler (`genel: true`, `origin: ai_generated`,
+`quality: publishable`, `depicts: []`, `share: shareable`) ve alana bağlar. İçinde kişi, ad ya da logo
+olmayan böyle bir görsel, **belirli bir şeyden söz etmeyen** bir sürümün tek materyali olabilir; bir
+olaydan söz eden içerikte eskisi gibi yalnızca destek görselidir, ve genel bir metinde onaylı bir olayın
+adı, yeri ya da müşterisi geçerse sürüm tutulur. Kural çalışma alanı ayarıdır
+(`MaterialPolicy.ai_standalone`, varsayılan açık; `studio.material_policy_set` bu alan verilmezse
+ayara dokunmaz); kapalıyken her içerikte en az bir gerçek çekim bulunur (2026-11-03 tasarımının D10
+kuralı). Sunucu görsele bakmaz: ajanın "ben ürettim" dediği görselin neyi gösterdiğini denetleyemez.
+
+**İş listesi.** `content_area {project_id, expected_revision, redo_note}` ajana (`content.work`),
+saati gelmiş sıradaki alan için; ipucu, sistemi hiç görmemiş bir ajanın neyi okuyup neyi hangi sırayla
+çağıracağını yazar, 14 adım modülün `workflow` alanındadır (`jeeta.modules.list`).
+`content_material_request {project_id, request_id}` insana (`content.work`), açık çekim talebi için.
+`content_area_held {project_id}` insana (`content.manage`). `studio_project` türü kalktı. Bir modülün
+ajan işleri yalnızca modül kuruluyken ve, modüle ajan atanmışsa (`config.agent_ids`), yalnızca atanan
+ajana listelenir; atama yoksa izni olan her ajana (B34). Bu kural dört modülün bütün iş türleri için
+geçerlidir.
+
+**Sistemin açtığı alan.** `content::open_by_system(repos, ctx, trigger, key, goal, sources, start_at)`
+çağıranın işlemi içinde, `key` başına bir kez alan açar (kimlik `planner::stable_id`); dışa açık değildir,
+Adım 2 planlayıcının tetikleyicilerini buna çevirir.
+
+## Modül yetenek kilidi (2026-11-10)
+
+Bir modül, gerektirdiği yetenek bağlanmadan açılmaz (sahip kararı; tasarım:
+`docs/superpowers/specs/2026-11-10-module-capability-gating-design.md`). Blueprint'in her `requirements`
+satırı, `|` ile birleşen yetenek türü ya da grup anahtarlarıdır (`messaging`,
+`mailbox|sms_line|whatsapp_cloud`); hepsi karşılanmalıdır, satır içindeki herhangi biri yeter. Ayrıştırılamayan
+satır kilitlemeyen bir nottur. Bir satırı yalnız `verified` ya da `unreachable` durumdaki yetenek karşılar
+(`declared` ve `retired` sayılmaz). Yerleşik gereksinimler: Gelen kutusu `messaging`, Sosyal medya yönetimi
+`social_account`, Reklam yönetimi `ads`, Kampanyalar `mailbox|sms_line|whatsapp_cloud`, Aramalar `telephony`;
+Strateji, İçerik oluşturma, Materyal kütüphanesi, Kişiler ve Aday havuzu hiçbir şey beklemez.
+
+`GET /api/workspace/modules` (ve `jeeta.modules.list`) her modül için `availability: {ready, missing}` döner.
+`check_gate`, alan durumu ve strateji denetiminden sonra `inbox.*` (kişi kayıtları `inbox.people.*` hariç),
+her `studio.*` işleminin kendi modülü, `outreach.*` ve `calls.*` (ses köprüsünün `calls.bridge.*` satırları
+hariç) için modülün hazır olmasını ister; değilse panel ve MCP aynı
+`409 CAPABILITY_REQUIRED` cevabını verir. Kilit hiçbir zaman şunları durdurmaz: kişi silme, izin ve engelleme
+kayıtları, stüdyo freni, kampanyayı duraklatma/durdurma, aramayı bitirme/aktarma (`jt_app::gate::CAPABILITY_EXEMPT`).
+Webhook'lar, gelen olay işleme ve zamanlanmış işler kapıdan geçmez.
 
 Strateji kayıtlı bir istişareyle kurulur; ajan ya da panel aynı adımları izler (`jeeta.strategy.get`
 açıklaması ajana bu sırayı söyler):
@@ -648,8 +797,13 @@ Sistem rollerinin izinleri:
 | `budget.manage` (bütçe kalemi açma, düzenleme, emekliye ayırma) | ✓ | ✓ | — |
 | `inbox.work` (gelen kutusunda çalışma) | ✓ | ✓ | ✓ |
 | `inbox.manage` (kayıp nedenleri ve yetkili yolculuk işlemleri) | ✓ | ✓ | — |
-| `studio.work` (stüdyoda çalışma) | ✓ | ✓ | — |
-| `studio.manage` (stüdyoyu yönetme) | ✓ | ✓ | — |
+| `materials.work` (materyal kütüphanesinde çalışma) | ✓ | ✓ | — |
+| `content.work` (içerik oluşturmada çalışma) | ✓ | ✓ | — |
+| `content.manage` (üretim alanı açma ve değiştirme) | ✓ | ✓ | — |
+| `social.work` (sosyal medya yönetiminde çalışma) | ✓ | ✓ | — |
+| `social.manage` (paylaşımı planlama kararları, TikTok paylaşım ekranı) | ✓ | ✓ | — |
+| `ads.work` (reklam yönetiminde çalışma) | ✓ | ✓ | — |
+| `ads.manage` (bütçe hamlesi ve reklam kararları) | ✓ | ✓ | — |
 | `calls.work` (arama yapma ve görüşme kaydını görme) | ✓ | ✓ | ✓ |
 | `calls.manage` (arama politikasını yönetme, görüşmenin numarasını görme) | ✓ | ✓ | — |
 | `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
@@ -658,7 +812,7 @@ Sistem rollerinin izinleri:
 | `prospects.work` (aday havuzunda çalışma) | ✓ | ✓ | — |
 | `prospects.manage` (aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri) | ✓ | ✓ | — |
 | `outreach.work` (e-posta kampanyalarında çalışma) | ✓ | ✓ | — |
-| `outreach.manage` (kampanyaları onaylama, iptal etme, ayarlar; işletme alıcısı dayanağını yalnızca sahip, avukat onayıyla açar) | ✓ | ✓ | — |
+| `outreach.manage` (kampanyaları onaylama, iptal etme, ayarlar; işletme alıcısı dayanağını yalnızca sahip, avukat onayıyla, kanal kanal açar) | ✓ | ✓ | — |
 
 `calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
 verebilmek için taşır.
@@ -980,6 +1134,234 @@ mesajlaşma, reklam bütçesi ve potansiyel müşteri formları; NetGSM bağlant
 raporları (OAuth yok); X bağlantı, OAuth, yayın ve sayaçlar.
 
 `SendReceipt`, `provider_id` yanında sağlayıcı bildirdiğinde en küçük para birimi cinsinden `cost_minor: Option<i64>` taşır; NetGSM gönderim yanıtındaki `cost_minor` okunur, bildirilmeyen tutar (Meta dahil) `None` kalır.
+
+## Sosyal medya yönetimi (2026-11-10)
+
+Tasarım §7; plan `docs/superpowers/plans/2026-11-10-step2-social-media.md`. Bitmiş içerik insan
+beklemeden yayınlanır: modülün ajanı her platform sürümüne bir hesap ve bir saat verir; planlamayı,
+denetimi ve yayını bugünkü paylaşım motoru yapar. Modül kendi başına hiçbir şey yayınlamaz.
+
+**İşlemler.**
+
+| İşlem | Kim | Ne yapar |
+|---|---|---|
+| `social.versions_waiting` (`GET /api/social/packages`) | `social.work` | Saat bekleyen sürümleri olan bitmiş paketler; her sürümde şu an gidebileceği hesaplar (duraklatılmış hesap listede yoktur) |
+| `social.version_schedule` (`POST /api/social/versions/schedule`) | ajan ya da insan, `social.work`; onaylı strateji ister | `{project_id, version_id, capability_id, publish_at, request_key}`: sürümü o hesapta o saate planlar. Tek işlemde planlı paylaşımı kurar (`posts_propose` ile aynı sınırlar: sessiz saatler, günlük tavan, aralık, ufuk, hazırlık süresi) ve sürümü yuvanın içeriği yapar (materyal kapısı ve doğruluk denetimi yeniden çalışır). Bir sürüm bir kez planlanır: aynı `request_key` aynı yanıtı verir, başka anahtar `409 version_already_scheduled` |
+| `social.accounts_list` (`GET /api/social/accounts`) | `social.work` | Bağlı sosyal hesaplar (emekli olanlar hariç), ada göre: duraklatıldı mı, platformun son söylediği sayılar, sıradaki planlı paylaşım |
+| `social.account_get` (`GET /api/social/accounts/{capability_id}?from=&until=`) | `social.work` | Bir hesabın dönemi (varsayılan son 30 gün, en çok 366): gün gün sayılar, sıradaki paylaşımlar, çıkan paylaşımlar ve her birinin ulaştığı, dönem toplamları |
+| `social.account_pause` (`POST /api/social/accounts/{capability_id}/pause`) | insan, `social.manage`; yalnızca panel | `{paused, expected_revision}`: bir hesabın paylaşımını duraklatır ya da sürdürür |
+
+**Sayılar asla uydurulmaz.** Platformun vermediği sayı her yerde `null`'dır, sıfır değil: hesabın beş
+sayısı (`followers`, `reach`, `views`, `engagement`, `profile_visits`), bir paylaşımın ulaştığı
+(`reach`, `views`, `engagement`) ve dönem toplamları (içinde hiç sayı olmayan toplam `null`). Okunamayan
+gün satırsız kalır (boşluk), sıfır yazılmaz.
+
+**Hesabın günlük sayıları.** `studio_measure` işi (6 saatte bir), `social` kurulu çalışma alanlarında,
+bugünün satırı olmayan her canlı sosyal hesap için `InsightsReader::account_metrics` çağırır ve
+günün ilk başarılı okumasını `social_account_days`'e yazar (ham sayaçlarla birlikte). Duraklatılmış,
+okuma izni olmayan ya da kimlik bilgisi kullanılamayan hesap okunmaz; başarısız okuma bir sonraki
+çalışmada yeniden denenir. Satırlar 400 gün tutulur.
+
+**Sıradaki paylaşım ne bekliyor.** `upcoming[].state`: `ready` (saatinde çıkar), `waiting_person`
+(`waits_for`: `tiktok_screen` — TikTok'un paylaşım ekranı; `approval` — bağlantının kendi onay ayarı),
+`held` (içeriği yok, denetim tutuyor, hesap duraklatılmış ya da şerit frenli). `held_at_provider`:
+paylaşım platformun kendi zamanlayıcısında bekliyor. Panelde onay bekleyen paylaşım hesabın
+sayfasından ve ana sayfadaki işten açılır (`/social?slot=…`), "Onayla" o sürümü serbest bırakır.
+
+**Duraklatma (§7.6).** Duraklatılmış hesaba yeni paylaşım planlanmaz (`account_paused`), planlı olanı
+saatinde gönderilmez (başarısız sayılmaz), günlük sayıları okunmaz; sürdürülünce, süresi geçmemiş
+planlı paylaşım çıkar. Duraklatan ve sürdüren günlüğe yazılır (`social.account.paused`,
+`social.account.resumed`). Ayarların her değişimi `revision`'ı artırır; duraklatma gördüğü
+`revision`'ı söyler (`409`: ayarlar değişmiş).
+
+**Onay (S18, B35).** Yayın öncesi onay yoktur. Şeridin "insan onayı ister" ayarı ve `studio.policy_set`
+kalktı. Kalan tek onay bağlantının kendi ayarıdır (`policy.requires_human_approval`, Yetenekler ve
+bağlantılar): açıksa o hesaba gidecek paylaşım ana sayfada onay bekler. `studio.approve` bunun,
+TikTok ekranının ve bütçe hamlelerinin onayıdır.
+
+**"Olmamış" ve tetikleyiciler.** `content.area_redo`, paketin yayınlanmamış planlı paylaşımlarını geri
+çeker (`studio.slot_cancel`, neden `content_redo`); sürüm yeniden saat bekler. `content` kuruluyken
+planlayıcının olay, takvim ve taban tetikleyicileri paylaşım isteği yazmak yerine üretim alanı açar
+(`content::open_by_system`); kurulu değilken eski yol sürer (paylaşım isteği → `studio.posts_propose`
+→ `studio.piece_submit`).
+
+**İş listesi.** `social_schedule {project_id, version_id}` ajana (`social.work`), saat bekleyen her
+sürüm için.
+
+### Platformun kendi zamanlayıcısı (§7.3, B47)
+
+Çalışma alanı ayarıdır (`PostingSettings.provider_scheduling`, Sosyal medya → Ayarlar → Takvim ve
+saat), **varsayılan kapalı**: kapalıyken her paylaşımı saatinde Jeeta gönderir. Açıkken, platformu
+tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına bırakılır.
+
+- **Hangi paylaşım.** Bugün yalnızca Facebook Sayfası: metin, bağlantı ve tek görselli gönderi
+  (`jt_meta::schedule`; 15 dakika ile 29 gün arası önceden). Hikâye, video, çoklu görsel ve başka her
+  platform Jeeta'da kalır (`Publisher::schedule_window` → `None`).
+- **Nasıl.** Bırakma, yuvanın tek yayın denemesidir, erken yapılır (`publish::hold_ahead`,
+  `claim_publication_held`): gönderimle aynı yetki, aynı talep çiti, aynı harcama rezervasyonu;
+  denetimler paylaşımın saatine göre yapılır (hesabın saatleri, materyal kapısı, bağlantının onayı).
+  Günlük işlem tavanı paylaşımın çıkacağı günde sayılır. Deneme `held_until` ile saklanır
+  (`PublishAttempt::is_held`). Bırakma çağrısı başarısız olursa bu başarısız bir yayındır; yuva
+  yeniden gönderilmez (motorun kuralı: hiçbir sonuç yeniden denenmez).
+- **Sonuç.** Saatinden sonra `studio_publish_recover` platforma sorar (`Publisher::scheduled`): çıktı
+  → yayın kaydı; platformda artık yok → başarısız; saatinden 30 dakika sonra hâlâ bekliyor ya da
+  okunamıyor → bilinmeyen sonuç, bir insan bakar.
+- **Geri çekme.** Jeeta'nın göndermeyeceği her durumda platformdaki paylaşım geri çekilir
+  (`Publisher::withdraw`). `studio_publish` işi her dakika, göndermeden önce bakar
+  (`publish::withdraw_stopped`): fren, modülün kaldırılması, hesabın duraklatılması, bağlantının
+  onayının açılması, paylaşım izninin geri alınması, stratejinin kalkması, yuvanın değişmesi. Geri
+  çekilen paylaşım iptal edilir (`studio.publish.withdrawn`) ve içerik paketinin sürümüyse yeniden saat
+  bekler: durdurma kalkınca ajan yeni saat verir. Kişinin kendi eylemleri ("Olmamış", yuva iptali)
+  önce platformdan geri çeker; platform doğrulamazsa eylem reddedilir (`409 withdraw_unconfirmed`) ve
+  hiçbir şey değişmez. Platformda bekleyen paylaşımın içeriği değiştirilemez (`409 held_at_provider`).
+- **Sınırlar.** Saatine iki dakikadan az kalmış paylaşım geri çekilmez (çıkıyor; çıkmış paylaşım asla
+  silinmez). Platformun reddettiği geri çekme bilinmeyen sonuç olarak kaydedilir
+  (`studio.publish.withdraw_unconfirmed`) ve yuva bir daha gönderilmez; geçici hata bir sonraki
+  dakikada yeniden denenir.
+- **Doğrulanmadı.** Facebook çağrıları belgelenmiş biçimlerle yazıldı ve sahte Graph sunucusuna karşı
+  sınandı; gerçek bir Sayfa'da çalıştırılmadı. Belgeler tek görselli zamanlamanın yanıtını ve
+  zamanlanmış gönderinin silinmesini her uygulamaya açık olarak garanti etmiyor. Ayar bu yüzden
+  kapalı gelir; açmadan önce kendi Sayfa'nda bir paylaşımın zamanlandığını ve geri çekildiğini gör.
+
+**Bir sürümün yolu hiç kapanmaz (B53).** Paylaşım motoru yalnızca organik sıklığı
+(`hypotheses[n].cadence.organic`, haftada sıfırdan çok paylaşım ve en az bir içerik türü) olan bir
+hipotez için paylaşım planlar. Bu alanı ne panel ne de istişare sorar; bu yüzden `strategy.submit`,
+strateji paylaşım yapıyorsa (`cadence.per_week` > 0), organik sıklık adlandırmamış her canlı hipoteze
+varsayılanı yazar: `{slots_per_week: per_week, content_types: [{key: "general", 0–10000}]}`. Kendi
+sıklığını adlandıran hipotez olduğu gibi kalır; `slots_per_week: 0` "bu hipotez paylaşım yapmaz"
+demektir. Paketteki sürümün `content_type` alanı etikettir: strateji o türü hipotez için
+adlandırmıyorsa paylaşım hipotezin ilk türüyle planlanır (`content_type_unknown` ile geri çevrilmez).
+`social.versions_waiting`, hiçbir hesabın alamadığı sürümde nedeni verir (`blocked`):
+`no_approved_strategy`, `no_connected_account`, `account_paused`, `its_account_unavailable`,
+`format_not_supported`, `channel_not_in_strategy`, `hypothesis_does_not_post`. Panel aynı nedeni
+"Hazır paketler"de gösterir; sosyal modülün durum satırı onaylı stratejide paylaşım yapan hipotez
+yoksa bunu söyler. Bu sürümden önce onaylanmış bir strateji yeniden onaya sunulunca tamamlanır.
+
+**Uçtan uca akış testleri.** `jt_meta/tests/ad_campaign_flow.rs` ve `social_post_flow.rs`,
+uygulamanın kendi kullanım durumlarını (bellekte) gerçek Meta bağlayıcısına bağlar ve yerel sahte
+Graph sunucusuna karşı koşar: hedeften çalışan reklama, okumaya, durdurmaya ve bitirmeye; üretim
+alanından ajanın zamanladığı ve yayıncının Sayfa'ya gönderdiği paylaşıma. Gerçek bir çalıştırma
+değildir (sahte sunucu Meta'nın belgelerinin söylediğini yanıtlar), ama iki tarafın birbirine
+uymadığı bir adım burada düşer.
+
+## Bütçe: genel reklam bütçesi, modül bazında harcama, durdurma (2026-11-10)
+
+Tasarım §9; plan `docs/superpowers/plans/2026-11-10-step3-budget-and-ads.md`.
+
+**Genel reklam bütçesi (B37).** Bir bütçe kalemi `general` işaretlenebilir (`budget.items.create` /
+`update`, alan `general`): para birimli, dönemi `total` olmayan bir `ad_budget`; çalışma alanında en
+çok bir tane (`409 general_exists`); tavanı onaylı stratejinin ücretli şerit tavanını aşamaz
+(ikisi kalemin dönemine getirilir: gün × 7 = hafta, gün × 30 = ay; `422 above_strategy_cap`,
+`details.cap` en çok ne olabileceğini söyler). Reklam kampanyaları bu kalemden çeker; kampanyaların
+gerçek harcaması bu kaleme yazılır.
+
+**Modül bazında harcama (S6).** `budget.breakdown` (`GET /api/budget/breakdown?from=&until=`,
+`jeeta.budget.breakdown`; `budget.manage` ya da bir modülün iş izni): her canlı kalem için dönemde
+modül modül (`ads`, `inbox`, `outreach`, `calls`, `social`) ve reklamda kampanya kampanya harcama;
+hiçbir modülün yapmadığı (elle girilen) harcama `unattributed_minor`. Üç kayıt birlikte okunur:
+harcama kayıtları (`module`, `campaign_id`), kesinleşmiş harcama rezervasyonları (mesaj, paylaşım) ve
+bağlı reklam setlerinin günlük harcaması. Dönem verilmezse ayın başından şu ana.
+Genel reklam bütçesinin satırı ayrıca `held_minor` taşır: açık reklam kampanyalarının şu an tuttuğu
+(harcanmamış bütçeleri; başka kampanya alamaz), dönemden bağımsız; tutulan yoksa alan gelmez.
+Aday havuzundan atılan ilk mesajlar gelen kutusunun gönderim yolundan gider ve `inbox` altında
+sayılır; `outreach` yalnızca kampanya adımları ve test gönderimleridir.
+
+**Durdurma (S7, B36).** `budget.stop` (`POST /api/budget/stop`, yalnızca panel, `budget.manage`,
+insan): `{scope: "all" | {"module": "<id>"}, stopped, expected_revision}`. Yalnızca harcama durur;
+para harcamayan iş sürer. Reklamı (ya da tümünü) durdurmak ücretli şeridin frenidir: bağlı reklam
+setleri ve Jeeta'nın kurduğu kampanyalar sağlayıcıda duraklatılır. Diğer modüller (`inbox`,
+`outreach`, `calls`, `social`) tek harcama kapısında reddedilir (`spend_stopped`,
+`reserve_connector_spend`); arama başlatılmadan önce reddedilir. "Tümünü sürdür" çalışma alanı
+frenini de kaldırır; tek tek durdurulan modül durdurulmuş kalır. Yanıt durma durumudur:
+`{revision, all, modules, paused: [{module, title, state: "paused" | "pausing"}]}`. Her değişiklik
+günlükte (`budget.stop`). `studio.brake` olduğu gibi kalır (ajan çalışanı durdurabilir).
+
+## Reklam yönetimi (2026-11-10)
+
+Tasarım §8. Bir hedef ve bütçeden, ajanın izleyip iyileştirdiği çalışan reklama. Ajan yalnızca karar
+verir: tek bir yapılandırılmış plan teslim eder. Jeeta planı denetler, kampanyanın bütün bütçesini
+her sınıra karşı tutar ve kampanyayı sağlayıcıda (ilk sürümde Meta) kendisi kurar: önce duraklatılmış,
+bütçe sağlayıcının kendi toplam bütçesi olarak (B32).
+
+**İşlemler.**
+
+| İşlem | Kim | Ne yapar |
+|---|---|---|
+| `ads.campaigns_list`, `ads.campaign_get` | `ads.work` | Açık (başlama saatine göre) ya da biten (yeniden eskiye, 50'şer) kampanyalar; biri: planı, sağlayıcıda kurulanlar, hamleler, reklam başına günlük sayılar, materyaller |
+| `ads.campaign_open` | insan, `ads.manage`; yalnızca panel | `{request_key, goal, budget_minor, start_at, title?, account?, end_at?}`. Onay beklemez (S20). Genel reklam bütçesi yoksa (`no_general_ad_budget`), onaylı stratejide ücretli şerit yoksa (`no_paid_lane`) ya da bütçe genel bütçede kalandan fazlaysa (`above_general_budget`, `details.left`) reddedilir |
+| `ads.campaign_propose` | ajan, `ads.work`; yalnızca MCP; onaylı strateji ister | Öneri: bir insan onaylayana dek hiçbir şey harcamaz (S24), yedi günde kendiliğinden kapanır (B16); haftada en çok bir öneri (`proposal_limit`) |
+| `ads.campaign_approve`, `ads.campaign_decline` | insan, `ads.manage`; yalnızca panel | Öneriyi onaylar (para denetimiyle; yedi günü geçmişse `proposal_expired`) ya da nedeniyle reddeder |
+| `ads.campaign_claim`, `ads.campaign_release` | ajan, `ads.work` | Plan bekleyen (ya da reklamı reddedilmiş) kampanyayı 30 dakikalığına alır; bırakır |
+| `ads.plan_submit` | talebin ajanı; onaylı strateji ister | Planı teslim eder (aşağıda) |
+| `ads.campaign_move` | `ads.work`; onaylı strateji ister | Kurulmuş kampanyanın reklamlarını değiştirir: `pause_ad`, `resume_ad`, `add_ad` (en çok 6), `fix_ad` (sağlayıcının reddettiği reklamın yerine yenisi), `none`; her biri nedeni ve sonucuyla kampanyada kalır. Tutmayan yeni reklam `409 move_refused` |
+| `ads.campaign_pause` | `ads.work` | Kampanyayı nedeniyle durdurur; sağlayıcıda hemen duraklatılır. Ajan çalışanı durdurabilir |
+| `ads.campaign_resume`, `ads.campaign_end`, `ads.campaign_update` | insan, `ads.manage`; yalnızca panel | Sürdürür (para denetimiyle; bütçenin durdurduğu kampanya `stopped_by_budget`), bitirir, bütçeyi ya da bitiş tarihini değiştirir (yalnızca kurulmadan önce: `already_built`) |
+| `ads.ad_preview` | `ads.work` | Kurulmuş bir reklamın sağlayıcıdaki önizleme çerçevesi (`{html}`) |
+
+**Durum**, ilk tutan kural: bitti → `ended`; reddedildi → `declined`; onaylanmamış öneri: yedi günü
+geçti → `expired`, değilse `proposed`; üç plan reddi ya da sağlayıcının kesin reddettiği kurulum →
+`held`; durduruldu → `paused`; kuruldu: etkinleştirilmedi → `building`, bir reklam reddedildi →
+`rejected`, çalışan reklamların hepsi etkin → `live`, değilse `in_review`; canlı talep → `planning`;
+değilse `queued`.
+
+**Para (P4).** Kampanya bütçesi toplamdır. Kampanya açıldığı (ya da öneri onaylandığı) andan
+itibaren harcanmamış bütçesi tutulur; açma, onay, plan, sürdürme ve etkinleştirme aynı kapıdan geçer
+(`ads::check_money`, tek işlemde): bir insanın durdurması; genel reklam bütçesinin dönemindeki kalanı
+(dönem harcaması + açık kampanyaların tuttuğu); stratejinin ücretli şerit tavanı; reklam hesabının
+kendi tavanı. Bağlı reklam setlerinin bütçe hamleleri de kampanyaların tuttuğunu görür. Sağlayıcı
+bütçeyi kampanyanın ömür boyu bütçesi olarak alır: Jeeta ne yaparsa yapsın ondan fazlasını harcayamaz.
+
+**Plan.** Kapalı şema (bilinmeyen alan reddedilir): reklam hesabı, sonuç (`link_click` + site ya da
+`lead_form` + form), kitle (ülkeler, yaş 18–65, cinsiyet, ilgi alanları; geniş kitlede (`broad`, Meta Advantage+) alt yaş
+18–25, üst yaş 65 olmak zorundadır, çünkü Meta o kitlede üst yaşı kabul etmez), yerleşimler, bitiş (başlangıçtan
+24 saat–90 gün sonra), 1–6 reklam (tek görsel, metinler, eylem çağrısı, Facebook Sayfası). Biçimi bozuk
+plan `VALIDATION` döner ve ret sayılmaz. Kural bozan plan bütün bulgularıyla reddedilir
+(`409 plan_refused`): özel reklam kategorisi (B33), AB ülkesi (`eu_targeting_needs_payer`), canlı
+olmayan hesap ya da sayfa, hesabın para birimi bütçeninkinden farklı (B24), bütçe hesabın en düşük
+günlük bütçesi × gün sayısının altında, gelen kutusu kurulu değilken form (B25), onaylı stratejide
+olmayan hipotez, canlı ve paylaşılabilir olmayan görsel, doğruluk denetiminden geçmeyen metin (B10).
+Art arda üç ret kampanyayı insana bırakır.
+
+**Kurulum (B11).** `ads::build`: kampanya (toplam bütçe) → form → reklam seti → her reklam için görsel,
+kreatif, reklam (hepsi duraklatılmış) → etkinleştirme. Her nesnenin adı kampanyanın kimliğini taşır
+(`jeeta:<kampanya>:campaign`, `:adset`, `:creative:<n>:<kuşak>`, `:ad:<n>:<kuşak>`), sağlayıcı kimliği
+bir sonraki adımdan önce kaydedilir ve oluşturmadan önce o adla aranıp varsa benimsenir: kaybolan bir
+yanıt ikinci bir nesne oluşturmaz. Sağlayıcının kesin reddettiği adım kurulumu söylediğiyle bitirir
+(kampanya `held`); başka her hata kurulumu olduğu yerde bırakır, sonraki çalışma oradan sürer.
+Durdurulmuş ya da bir sınırı aşan kampanya etkinleştirilmez.
+
+**İzleme.** `studio_control` işi her çalışmasında: süresi dolan öneriler kapanır; kurulumlar sürer;
+bir insan harcamayı durdurmuşken ya da genel reklam bütçesinin dönemi tükenmişken çalışan her kampanya
+durur, bitince kendiliğinden sürer (B31); sağlayıcı durdurmayı izler. Saatte bir her kurulmuş kampanya
+okunur: reklamların durumu ve inceleme notu, reklam başına günlük sayılar (sağlayıcının vermediği sayı
+boştur, sıfır değil), yeni harcama genel reklam bütçesine yazılır (`module: ads`, `campaign_id`);
+bitiş tarihi geçen ya da bütçesi harcanan kampanya biter. Sonuç, kampanyanın amacının sayısıdır:
+form kampanyasında yalnızca `lead`, site kampanyasında yalnızca `link_click`.
+
+**Biten kampanya sağlayıcıda susana kadar izlenir (B51).** Bir kampanya bittiğinde (insan, bütçe ya da
+bitiş tarihi) sağlayıcıda duraklatılır. Sağlayıcı o an yanıt vermezse kampanya Jeeta'da biter ama
+`state.note = provider_still_running` taşır: izleme duraklatmayı sağlayıcı onaylayana dek her
+çalışmasında yeniden dener ve o zamana kadar kampanyanın harcanmamış bütçesi tutulmaya devam eder
+(sağlayıcı hâlâ harcayabilir; başka bir kampanya o parayı alamaz). Bitişten sonraki 48 saat boyunca
+kampanya saatte bir okunmaya devam eder (`SETTLE_WINDOW`): son okuma ile bitiş arasındaki ve
+sağlayıcının geç bildirdiği harcama bütçeye yazılır. 48 saatten sonra bildirilen harcama yazılmaz.
+Reklam yönetimi modülü kaldırılırsa çalışan her kampanya sağlayıcıda durdurulur (`module_removed`),
+modül yeniden kurulunca kendiliğinden sürer.
+
+**Etkin olmayan çalışma alanı (B52).** Çalışma alanı etkin değilken (ödemesi bekliyor ya da askıya
+alınmış) paneli kapalıdır; kimse reklamı göremez ya da durduramaz. `studio_control` işi o alanlarda
+yalnızca şunu yapar: Jeeta'nın kurduğu kampanyalar sağlayıcıda durdurulur (`workspace_inactive`),
+harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendiliğinden sürerler.
+
+**İş listesi.** `ads_campaign_plan {campaign_id, expected_revision, rejected}` ve
+`ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
+`ads_campaign_held` reklamı yöneten insana.
+
+**Bu sürümde olmayanlar.** Kurulmuş kampanyanın bütçesi ve bitiş tarihi değiştirilemez (bitirip yenisi
+açılır). Kampanya sonuçları stratejinin öğrenme kayıtlarına yazılmaz. Lead formu için ad araması
+yoktur: kaybolan bir yanıttan sonra ikinci bir form oluşabilir (form para harcamaz). Gerçek Meta
+çalıştırması yapılmadı: sağlayıcı çağrıları `jt_meta` içinde sahte Graph sunucusuna karşı sınandı;
+ilk gerçek kampanya sahibinin kendi hesabında, küçük bütçeyle ve o anki açık onayıyla yapılır (B38).
 
 ## Zamanlanmış işler
 
@@ -1314,7 +1696,7 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | Yolculuk aç | `POST /api/inbox/people/{person_id}/journeys` | `jeeta.inbox.journeys_open` | WRITE / `inbox.work` |
 | Yolculuk, son 50 olay, görevler, notlar | `GET /api/inbox/journeys/{journey_id}` | `jeeta.inbox.journeys_get` | READ / `inbox.work` |
 | Yolculuk olayı | `POST /api/inbox/journeys/{journey_id}/events` | `jeeta.inbox.events_report` | WRITE / `inbox.work` |
-| Komisyon sahibi ata/kaldır | `POST /api/inbox/journeys/{journey_id}/owner` | `jeeta.inbox.journeys_assign_owner` | WRITE / `inbox.manage` |
+| Süreç sahibi ata/kaldır | `POST /api/inbox/journeys/{journey_id}/owner` | `jeeta.inbox.journeys_assign_owner` | WRITE / `inbox.manage` |
 | Kayıp nedenlerini oku | `GET /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_list` | READ / `inbox.work` |
 | Kayıp nedeni düzenle | `PUT /api/inbox/lost-reasons` | `jeeta.inbox.lost_reasons_set` | WRITE / `inbox.manage` |
 | Durum etiketlerini düzenle | `PUT /api/inbox/status-labels` | `jeeta.inbox.status_labels_set` | WRITE / `inbox.manage` |
@@ -1490,7 +1872,7 @@ when the keeper has changed since the merge.
 | `replied`, connected `call_made` | New/Unreachable → Contacted; reset failed attempts. Reply also makes conversation Theirs. |
 | Failed `call_made` | Count attempts; default third failure enters Unreachable only at rank ≤ 1. |
 | `appointment_booked`, `meeting_held`, `quote_sent`, `quote_accepted` | Advance to Appointment, Met, Quoted, Pending respectively without regressing a later stage. |
-| `won` | Close journey and open tasks; consume CommissionDue and snapshot the human owner’s commission in the same transaction. |
+| `won` | Close journey and open tasks. |
 | `lost` | Snapshot active loss-reason label; close conversations and cancel open tasks. |
 | `snoozed` | Snooze conversation until the given instant. |
 | `reopened` | Human owner/manager with inbox.manage: Lost → Contacted; clear closure, loss and attempts. |
@@ -1568,10 +1950,11 @@ EXPLAIN regression verifies the indexed lookup and a schema test checks up → d
 
 ### M2b connector port prerequisites
 
-`SmsSender::send` takes `commercial: bool`: NetGSM sends `iysfilter="11"` for commercial SMS
-to individuals and `"0"` for informational messages; `"12"` for business recipients is not used yet.
-M2a reply callers explicitly pass `false`; commercial
-consent enforcement is supplied by the later M2b use cases.
+`SmsSender::send` takes `filter: SmsConsentFilter` (a `commercial: bool` until 2026-11-10): NetGSM
+sends `iysfilter="0"` for `None` (informational messages and replies), `"11"` for `Individual` (a
+commercial SMS resting on the recipient's consent) and `"12"` for `Business` (a commercial SMS to
+a merchant, resting on the business-recipient basis). The outbox row decides it at claim time from
+its intent and the basis in its fence snapshot (`replies::sms_filter`); a caller never names it.
 
 `MailSender` accepts a typed `MailMessage` with recipient, subject, text, stable Message-ID,
 thread headers and `Attachment` values. Credentials remain a separate argument. Attachment
@@ -1594,8 +1977,7 @@ provider job ID. Unknown submissions are not automatically polled or resent.
 
 Compliance repository getters on `TenantRepos` share the transaction with inbound event inserts,
 mailbox cursor updates, journey changes and ledger writes. `consents` preserves effective history
-while updating only synchronization state; suppression inserts are idempotent; commissions are
-unique per journey. `commission_default` and `commission_user_rates` store independent rate settings.
+while updating only synchronization state; suppression inserts are idempotent.
 `erasure` records first requests and channel-scoped identity hashes for replay protection.
 
 `attribution().insert_once` preserves the first acquisition record on replay or later touches.
@@ -1657,16 +2039,21 @@ suppression insertion is idempotent; removal removes only the selected reason/ch
 Applied merge aliases contribute their immutable consent/suppression history to the survivor.
 Undo excludes that alias again; compliance mutations advance the person edit guard.
 
-`send` takes `{channel,text,intent:"commercial",request_key?}` and selects the single verified,
+`send` takes `{channel,text,intent:"commercial",request_key?,subject?}` and selects the single verified,
 configured capability for that channel; ambiguous capability or recipient selection is refused.
+`subject` (at most 998 bytes, one line) is the subject of an email that starts a thread; without it
+the mail reads "Re:", and on every other channel it is refused (`VALIDATION`, `field: "subject"`).
 It creates an outbound conversation without manufacturing inbound activity. Both enqueue and
 provider fences read current consent and suppression; missing permission or suppression returns
 FORBIDDEN `IZIN_YOK`, ledgered without message/identity text. Reply intent keeps its same-conversation
-24-hour inbound window. Commercial sends require consent; WhatsApp, Messenger and Instagram
+24-hour inbound window. Commercial sends require consent, or the business-recipient basis on a
+channel the owner opened (see "Email outreach" below); WhatsApp, Messenger and Instagram
 also require an open provider 24-hour window at enqueue and send time, otherwise returning
-VALIDATION `provider_window_closed`. Templates and message-tag sends are deferred to M2c.
-SMS and email commercial sends have no inbound-window requirement. SMS commercial sends use
-`iysfilter=1`; Reply uses 0. Both send/reply share the 24-hour workspace request-key response cache
+VALIDATION `provider_window_closed`, whatever the basis. Templates and message-tag sends are
+deferred to M2c, so a first message on those channels is written by a person in the provider's
+own app (the panel's hand-off, see "The prospect pool"). SMS and email commercial sends have no
+inbound-window requirement. A commercial SMS goes out with `iysfilter=11` on consent and `12` on
+the business-recipient basis; Reply uses 0. Both send/reply share the 24-hour workspace request-key response cache
 and existing outbox recovery, including never automatically retrying unknown sends.
 
 The `inbox@2` consumer reclaims deferred consent callbacks. NetGSM adapter decisions use the
@@ -1760,38 +2147,13 @@ Attachment bytes and personal location/text are excluded from ledger entries. Th
 appointments; external calendar availability, OAuth, events and public booking remain deferred.
 
 
-## M2b human commissions
+## M2b commissions (removed) and person erasure
 
-The release has **106 MCP tools**, including **46 inbox tools**. Commissions are part of the
-inbox (`/inbox/commissions` in the panel), with shared strict request schemas on both surfaces:
-
-| Use case | MCP tool | HTTP route | Permission |
-| --- | --- | --- | --- |
-| `inbox.commissions.list` | `jeeta.inbox.commissions_list` | GET `/api/inbox/commissions?state&payee` | `inbox.work` |
-| `inbox.commissions.approve` | `jeeta.inbox.commissions_approve` | POST `/api/inbox/commissions/{id}/approve` | `inbox.manage`, owner/manager authority |
-| `inbox.commissions.pay` | `jeeta.inbox.commissions_pay` | POST `/api/inbox/commissions/{id}/pay` | `inbox.manage`, owner/manager authority |
-| `inbox.commission_rates.set` | `jeeta.inbox.commission_rates_set` | PUT `/api/inbox/commission-rates` | `inbox.manage` |
-
-All four operations require an active workspace (and, until 2026-11-03, an approved strategy). MCP approval/payment
-uses the issuer's owner/manager authority and effective `inbox.manage` scope. Payment records a
-human payment decision; it does not transfer funds. Only Pending → Approved → Paid is allowed;
-repeated or out-of-order decisions return CONFLICT and do not duplicate ledger entries.
-
-Won consumes CommissionDue inside the journey/event/effects/ledger transaction. Its payee is the
-active human journey owner at that instant, independent of the reporting actor or conversation
-executor. `commission_user_rates` overrides `commission_default`, including a zero override;
-a missing default means zero basis points. PUT accepts `{user_id?, rate_bp}`: omit/null user_id
-for the workspace default, or name an active member for an override. Rates are unsigned 16-bit
-basis points (100 = 1%). The amount uses integer round-half-even; unrepresentable amounts return
-VALIDATION and roll back Won. Amount, currency, rate and payee remain fixed after later rate or
-owner changes. Same-key Won repeats produce one commission; another key on Won returns terminal
-CONFLICT. Workspace locking serializes Won, rate changes and commission decisions.
-
-Without an active owner, the snapshot is NoPayee and can never be approved or paid. Existing open
-tasks close on Won; a new unassigned follow-up task remains open and due immediately. Assigning
-an owner later does not rewrite that financial snapshot. The panel lists state/payee filters,
-shows snapshot rates and amounts, and offers only permitted next actions and future-rate settings.
-
+M2b shipped human commissions (four use cases, MCP tools and routes, a `CommissionDue` effect on
+Won and the panel page `/inbox/commissions`). They were removed on 2026-11-10 by owner decision:
+the use cases, tools, routes, port, repository and page are gone, Won now only closes the journey
+and its open tasks, and `0033_drop_commissions` drops the three tables. The journey owner remains
+(assignment and distribution use it). A later commissions feature would be a separate module.
 
 ### Person erasure and replay protection
 
@@ -1801,7 +2163,7 @@ shows snapshot rates and amounts, and offers only permitted next actions and fut
 this action on the selected person's page and conversation, with a typed confirmation dialog:
 `SİL` in Turkish, `ERASE` in English. Dismissal/reopening clears the typed confirmation.
 The operation is atomic and repeatable: it keeps the person as `silinmiş kişi` with
-`erased_at`, keeps journey/event/commission IDs and financial amounts, and removes identities
+`erased_at`, keeps journey/event IDs and financial amounts, and removes identities
 while retaining tenant-scoped hashes of their normalized, account-scoped values.
 
 Erasure clears personal message/note/event text, task titles, quote file references,
@@ -1830,8 +2192,6 @@ counted by its `event_consumption.outcome = 'erased_identity_drop'`, without rec
 Manual creation and identity attachment reject these hashes as well. Erased journeys reject
 new tasks, notes and reports with `CONFLICT` / `person_erased`; repeat erasure scrubs any late
 legacy writes. Scrubbed mail status evidence still reconciles uncertain sends.
-
-The commissions panel formats amounts using the currency's minor units (including JPY and KWD).
 
 ## M2b lead-gen intake and attribution
 
@@ -1895,7 +2255,8 @@ item already so is `unchanged`. Marking handled (1 to 100 items, all or none) te
 ## M2b panel and architecture completion
 
 The inbox has **46 tools**, of which **16** are new in M2b: consent/suppression/commercial send
-(5), quotes/internal appointments (6), commissions/rates (4), and person erasure (1).
+(5), quotes/internal appointments (6), commissions/rates (4, removed 2026-11-10), and person
+erasure (1).
 Together with M1b's 60 tools, the release has **106**. Catalog rows, panel HTTP routes, MCP
 registry entries and shared input schemas have exact-set parity checks. Every inbox row but
 `inbox.send` bypasses the strategy gate (since 2026-11-03; at M2b only `inbox.pending` and
@@ -1917,7 +2278,7 @@ cancel a booking or mark it held. `journeys.get` now includes persisted `appoint
 surfaces so those actions remain available after reloading. A booking remains recorded when its
 ICS notification is refused or unavailable; the panel shows that outcome explicitly. Cancellation
 remains available on a closed journey. Input times use the browser's local timezone and are sent
-as RFC3339 instants. The commission page and mailbox/optional İYS connection forms retain their
+as RFC3339 instants. The mailbox/optional İYS connection forms retain their
 existing permission checks and secret-clearing lifecycle. Panel strings and forms have TR/EN parity.
 
 `mail_crate_has_no_direct_dns_or_connect` is a **supplementary source scan**, backed by the mail
@@ -1925,7 +2286,7 @@ adapter's real socket tests (including a public hostname resolving into private 
 timeouts). Dependency allowlists keep domain/application code independent of mail libraries;
 only `jt_mail` uses the mail protocol libraries and its sockets come from authorized outbound
 egress. Tests also cover commercial consent at both fences, identity replay after erasure,
-and duplicate Won events/commission creation.
+and duplicate Won events.
 
 Q4 retention keeps a `silinmiş kişi` tombstone and accounting IDs/amounts; it scrubs personal
 content and masks append-only ledger payloads at read time. Migration 0008's conditional CHECK
@@ -1959,7 +2320,7 @@ MCP surfaces simply hid what it had brought in.
   `intent: commercial` only, and may open a conversation no customer started: outreach.
 - **Exempt:** the other 45 inbox rows: conversations, messages, reply, snooze, close, take over
   and hand to agent, people (create, get, search, erase), identities, journeys and their events,
-  notes, tasks, consent, suppressions, merges, quotes, appointments, commissions and rates, status
+  notes, tasks, consent, suppressions, merges, quotes, appointments, status
   labels, lost reasons, pending and context.
 - **Unchanged:** the workspace-status check. Every inbox row, erasure and suppressions included,
   answers `WORKSPACE_INACTIVE` unless the workspace is active.
@@ -2112,6 +2473,17 @@ never values. Gated by the strategy, except do-not-contact and erasure, which ru
 status (an objection is always recordable); `prospects.work` (`prospects.manage` where noted),
 which the rep role does not hold.
 
+In the panel (since 2026-11-10) the pool is one screen, the list on the left and the open prospect
+beside it (`/prospects/{id}`), and a prospect's first contact is one action, "Mesaj gönder", built
+from the rows below and adding no use case: it qualifies a new prospect, promotes it
+(`prospects.promote`), then either sends through the workspace's own account (`inbox.send` with
+`intent: "commercial"`, email with a subject or SMS, fenced as any commercial send) or, for
+WhatsApp and Instagram, where no API may start a conversation, records a journey note that begins
+`↗ WhatsApp: ` or `↗ Instagram: ` with the text and opens `wa.me` / `ig.me` for the person to
+send it there. The prospect page reads its stage and its timeline from the pool's ledger, the
+journey's events and those notes; such a note counts as contact. The bulk "promote" action is gone
+from the panel; `prospects.promote` itself is unchanged for agents and keys.
+
 | Use case | Panel | MCP | Risk | Notes |
 |---|---|---|---|---|
 | `prospects.playbook` | `GET /api/prospects/playbook` | `jeeta.prospects.playbook` | READ | the playbook (Appendix A, versioned) and the workspace's ICP, rubric digest, caps, remaining per task, retention and blocklist rules |
@@ -2183,8 +2555,12 @@ locked**: campaigns can be prepared, but a launch, a resume, an approval that st
 dispatcher (`outreach_dispatch`, every minute) and a test email refuse while
 `JEETA_OUTREACH_ENABLED` is off (`403 outreach_disabled_on_platform`), and every send is fenced
 again at claim. Outreach reaches consented people only, unless a human owner turned on the
-business-recipient basis (email only) with the counsel's confirmation recorded, and it counts
-only while the switch is on. Every email carries the opt-out footer and an RFC 8058 one-click
+business-recipient basis with the counsel's confirmation recorded, and it counts
+only while the switch is on. The basis is opened channel by channel (`b2b_basis`: `email`, `sms`,
+`whats_app`, `instagram_dm`, `messenger` since 2026-11-10; before that email only; any other
+channel is refused `channel_not_allowed`). A campaign itself still sends email only; the other
+channels serve `inbox.send`, which is what the pool's "Mesaj gönder" calls.
+Every email carries the opt-out footer and an RFC 8058 one-click
 unsubscribe (one place, `replies::enqueue_in`), honoured by the public routes `/u/…` (the
 suppression, a withdrawal, the sequence stopped `unsubscribed`, whatever the workspace's status) and
 by an emailed `unsubscribe` to the mailbox; a campaign with click tracking on gets `/c/…` redirects
@@ -2216,7 +2592,7 @@ and `promoted_not_contacted` to keys with `outreach.work`. Gated by the strategy
 | `outreach.test_send` | `POST /api/outreach/campaigns/{campaign_id}/test` | `jeeta.outreach.test_send` | WRITE | body `{}` (or `{step, to}`); one step to the caller's own login address only (`403 not_a_members_login_address` for any other), through the outbox with the footer; locked like every send |
 | `outreach.report` | `GET /api/outreach/report` | `jeeta.outreach.report` | READ | `?campaign_id&from&to&group_by` (`campaign`, `step`, `template`); computed at read time over `[from, to)` |
 | `outreach.settings_get` | `GET /api/outreach/settings` | `jeeta.outreach.settings_get` | READ | the policy, `sender_identity_complete`, `platform_enabled`, `b2b_channels_in_force` |
-| `outreach.settings_set` | `PUT /api/outreach/settings` | `jeeta.outreach.settings_set` | WRITE | `outreach.manage`; the business basis and the İYS lookup's waiver need a human owner and `legal_ack` |
+| `outreach.settings_set` | `PUT /api/outreach/settings` | `jeeta.outreach.settings_set` | WRITE | `outreach.manage`; the business basis (a list of messaging channels) and the İYS lookup's waiver need a human owner and `legal_ack` |
 
 #### The voice bridge (voice V1)
 
@@ -2421,6 +2797,10 @@ and migration **0009**, with no new migration or permission seed.
 | `studio.policy_set` | `PUT /api/studio/policy` | `studio.manage` | Required |
 | `studio.approve` | `POST /api/studio/approvals` | `studio.manage`, owner/manager human | Required |
 
+> 2026-11-10: `studio.policy_set` and the lane's `requires_human_approval` were removed (design
+> S18, B35; migration `0038_lane_approval_to_connections`). The approval that remains is each
+> connection's own `policy.requires_human_approval`; the text below describes the earlier state.
+
 All three still require an **active workspace**, including direct application calls.
 Owners and managers have `studio.work` and `studio.manage`; reps have neither.
 Agent authority is the intersection of issuer permissions and connection scopes.
@@ -2615,6 +2995,12 @@ no public operation and no migration. Existing `studio.pending` and
 | `studio_publish` | 1 minute | `jeeta.jobs.studio_publish` |
 | `studio_publish_recover` | 1 minute | `jeeta.jobs.studio_publish_recover` |
 
+Since 2026-11-10 `studio_publish` does three things in order, each on its own: it takes back from
+their platforms the held posts Jeeta would no longer send, leaves with a platform's scheduler what
+it can hold (only where the workspace switched that on), then sends what is due; and
+`studio_publish_recover` also asks a platform about a post left with its scheduler ("Platformun kendi
+zamanlayıcısı" above).
+
 Publication checks the active workspace, current strategy/hypothesis/channel/group,
 capability access and policy, revision-bound consent when required, and the brake.
 Capability changes serialize on the capability row; group removals share the short
@@ -2689,7 +3075,9 @@ optional `hypothesis_id`/`lane`; intervals are half-open. Judgments require a
 nonempty list of same-hypothesis measurement IDs, text and an idempotency key.
 They are typed ledger entries and never change measured results or confidence.
 
-`studio_measure` runs every six hours under its advisory lock. It reads each
+`studio_measure` runs every six hours under its advisory lock. Since 2026-11-10 it also reads,
+once a day, what each live social account's platform says of the account (`social_account_days`,
+"Sosyal medya yönetimi" above). It reads each
 publication's 24-hour, 72-hour and seven-day windows independently, including
 windows due after Measured, strategy archive or hypothesis retirement. Historical
 reads still require an active workspace and the original connected account with
@@ -2879,7 +3267,7 @@ external ad-set binding and daily-budget moves. The server remains authoritative
 permissions, revision fences, paid eligibility and budget caps. Organic stays visible
 when blocked; paid actions require the connected account and selected strategy lane.
 No ad creation, independent calendar/trend screen, installation or commission feature
-is added. Existing inbox commissions remain at `/inbox/commissions`.
+is added.
 
 Verification targets: `studio_projection` (also named `studio_views` by the plan),
 `studio_http`, `studio_mcp`, behavioral `twin_parity`, and `StudioPage.test.tsx`, plus
@@ -3553,7 +3941,8 @@ changes require `studio.manage`. Agents get nine MCP twins (`project_list`, `pro
 `project_create`, `project_update`, `project_materials`, `project_request`,
 `project_request_update`, `project_publication`, `project_schedule`); requesting a derivative
 remains a human owner/manager decision in the panel. The complete MCP registry has 231 tools,
-55 in Studio and four for workspace modules. `work.pending`/`work.checkin` expose projects needing materials or output planning.
+55 in Studio, four for content areas and four for workspace modules. `work.pending`/`work.checkin`
+expose production areas as described under "Üretim alanı ve içerik paketi".
 
 Source attachments record their material revision. A changed source must be explicitly
 reattached before generation or scheduling. Brief edits and source removal/refresh invalidate

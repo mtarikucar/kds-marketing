@@ -7,7 +7,9 @@ use crate::{
     error::{AppError, ErrorCode},
     ports::{
         TenantRepos,
-        connectors::{ListUnsubscribe, MailMessage, PUBLIC_ITEM_GONE, SendReceipt},
+        connectors::{
+            ListUnsubscribe, MailMessage, PUBLIC_ITEM_GONE, SendReceipt, SmsConsentFilter,
+        },
         inbox::OutboxRow,
     },
     usecases::{
@@ -144,6 +146,10 @@ pub struct SendInput {
     pub intent: SendIntent,
     #[serde(default)]
     pub request_key: Option<String>,
+    /// The subject of an email that starts a thread (without one it reads "Re:", an answer's
+    /// subject); refused on every other channel.
+    #[serde(default)]
+    pub subject: Option<String>,
 }
 
 pub async fn send(
@@ -163,7 +169,7 @@ pub async fn send(
         text: input.text,
         intent: input.intent,
         request_key: input.request_key,
-        subject: None,
+        subject: input.subject,
         in_reply_to: None,
         references: vec![],
         item_id: None,
@@ -1124,6 +1130,25 @@ fn with_footer(
     })
 }
 
+/// The İYS filter an SMS goes out under: none for a reply; for a commercial message the
+/// merchant filter when the claim's fence let it through on the business-recipient basis, the
+/// individual one otherwise (a consent, or a send claimed before fences recorded their basis).
+fn sms_filter(row: &OutboxRow) -> SmsConsentFilter {
+    if row.intent.get("kind") != Some(&json!(SendIntent::Commercial)) {
+        return SmsConsentFilter::None;
+    }
+    let basis = row
+        .fence_snapshot
+        .as_ref()
+        .and_then(|f| f.get("basis"))
+        .and_then(Value::as_str);
+    if basis == Some(CommercialBasis::BusinessRecipient.key()) {
+        SmsConsentFilter::Business
+    } else {
+        SmsConsentFilter::Individual
+    }
+}
+
 /// At claim, a commercial email must carry its unsubscribe addresses (spec D62): one queued
 /// before the footer rule, or by a path that skipped it, is refused (`footer_missing`), never
 /// sent bare.
@@ -1363,7 +1388,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     };
-    let spend = crate::usecases::studio::budget::reserve_metered(
+    let spend = crate::usecases::studio::budget::reserve_metered_for(
         r.as_mut(),
         &cap,
         None,
@@ -1374,6 +1399,14 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         }),
         format!("outbox:{id}"),
         ctx.now,
+        // Which module spends (design 2026-11-10 S6): a campaign's step or test, else the inbox.
+        Some(
+            if row.intent.get("outreach").is_some() || row.intent.get("outreach_test").is_some() {
+                "outreach"
+            } else {
+                "inbox"
+            },
+        ),
     )
     .await?;
     if let Some(spend) = &spend {
@@ -1551,7 +1584,7 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 &p.recipient,
                 &p.message.body,
                 Some(&id.to_string()),
-                p.row.intent["kind"] == "commercial",
+                sms_filter(&p.row),
             )
             .await
     } else {

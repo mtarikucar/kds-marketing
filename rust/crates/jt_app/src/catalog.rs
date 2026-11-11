@@ -246,7 +246,6 @@ pub static CATALOG: &[UseCase] = &[
     twin("studio.trend_record", GateMode::Gated, "jeeta.studio.trend_record", ("POST", "/api/studio/trends"), Write),
     twin("studio.hypothesis_propose", GateMode::Gated, "jeeta.studio.hypothesis_propose", ("POST", "/api/studio/hypotheses/proposals"), Write),
     twin("studio.brake", Exempt, "jeeta.studio.brake", ("POST", "/api/studio/brake"), Write),
-    twin("studio.policy_set", GateMode::Gated, "jeeta.studio.policy_set", ("PUT", "/api/studio/policy"), Write),
     twin("studio.approve", GateMode::Gated, "jeeta.studio.approve", ("POST", "/api/studio/approvals"), Write),
     // The TikTok posting screen: a human's alone (TikTok's Content Sharing Guidelines), so no agent tool.
     panel_only("studio.tiktok_posting", GateMode::Gated, ("GET", "/api/studio/slots/{slot_id}/tiktok"), Read),
@@ -256,6 +255,34 @@ pub static CATALOG: &[UseCase] = &[
     // The materials library (spec 2026-11-03 §5.2): exempt from the strategy gate (D35), never
     // from the workspace-status check.
     // Production projects prepare media before strategy approval; only scheduling is gated.
+    twin("content.area_claim", Exempt, "jeeta.content.area_claim", ("POST", "/api/content/areas/{project_id}/claim"), Write),
+    twin("content.area_progress", Exempt, "jeeta.content.area_progress", ("POST", "/api/content/areas/{project_id}/progress"), Write),
+    twin("content.area_release", Exempt, "jeeta.content.area_release", ("POST", "/api/content/areas/{project_id}/release"), Write),
+    twin("content.area_deliver", GateMode::Gated, "jeeta.content.area_deliver", ("POST", "/api/content/areas/{project_id}/delivery"), Write),
+    panel_only("content.area_redo", Exempt, ("POST", "/api/content/areas/{project_id}/redo"), Write),
+    panel_only("content.delivery_accept", GateMode::Gated, ("POST", "/api/content/areas/{project_id}/delivery/accept"), Write),
+    twin("social.version_schedule", GateMode::Gated, "jeeta.social.version_schedule", ("POST", "/api/social/versions/schedule"), Write),
+    twin("social.versions_waiting", Exempt, "jeeta.social.versions_waiting", ("GET", "/api/social/packages"), Read),
+    twin("social.accounts_list", Exempt, "jeeta.social.accounts_list", ("GET", "/api/social/accounts"), Read),
+    twin("social.account_get", Exempt, "jeeta.social.account_get", ("GET", "/api/social/accounts/{capability_id}"), Read),
+    panel_only("social.account_pause", Exempt, ("POST", "/api/social/accounts/{capability_id}/pause"), Write),
+    // Reklam yönetimi (design 2026-11-10 §8). A person's decisions are panel-only; an agent
+    // proposes through its tool alone.
+    twin("ads.campaigns_list", Exempt, "jeeta.ads.campaigns_list", ("GET", "/api/ads/campaigns"), Read),
+    panel_only("ads.campaign_open", Exempt, ("POST", "/api/ads/campaigns"), Spend),
+    twin("ads.campaign_get", Exempt, "jeeta.ads.campaign_get", ("GET", "/api/ads/campaigns/{campaign_id}"), Read),
+    panel_only("ads.campaign_update", GateMode::Gated, ("PATCH", "/api/ads/campaigns/{campaign_id}"), Write),
+    mcp_only("ads.campaign_propose", GateMode::Gated, "jeeta.ads.campaign_propose", Write),
+    panel_only("ads.campaign_approve", GateMode::Gated, ("POST", "/api/ads/campaigns/{campaign_id}/approve"), Spend),
+    panel_only("ads.campaign_decline", Exempt, ("POST", "/api/ads/campaigns/{campaign_id}/decline"), Write),
+    twin("ads.campaign_claim", Exempt, "jeeta.ads.campaign_claim", ("POST", "/api/ads/campaigns/{campaign_id}/claim"), Write),
+    twin("ads.campaign_release", Exempt, "jeeta.ads.campaign_release", ("POST", "/api/ads/campaigns/{campaign_id}/release"), Write),
+    twin("ads.plan_submit", GateMode::Gated, "jeeta.ads.plan_submit", ("POST", "/api/ads/campaigns/{campaign_id}/plan"), Spend),
+    twin("ads.campaign_move", GateMode::Gated, "jeeta.ads.campaign_move", ("POST", "/api/ads/campaigns/{campaign_id}/moves"), Write),
+    twin("ads.campaign_pause", Exempt, "jeeta.ads.campaign_pause", ("POST", "/api/ads/campaigns/{campaign_id}/pause"), Write),
+    panel_only("ads.campaign_resume", GateMode::Gated, ("POST", "/api/ads/campaigns/{campaign_id}/resume"), Spend),
+    panel_only("ads.campaign_end", Exempt, ("POST", "/api/ads/campaigns/{campaign_id}/end"), Write),
+    twin("ads.ad_preview", Exempt, "jeeta.ads.ad_preview", ("GET", "/api/ads/campaigns/{campaign_id}/ads/{index}/preview"), Read),
     twin("studio.project_list", Exempt, "jeeta.studio.project_list", ("GET", "/api/studio/projects"), Read),
     twin("studio.project_create", Exempt, "jeeta.studio.project_create", ("POST", "/api/studio/projects"), Write),
     twin("studio.project_get", Exempt, "jeeta.studio.project_get", ("GET", "/api/studio/projects/{project_id}"), Read),
@@ -359,10 +386,6 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.appointments.book", Exempt, "jeeta.inbox.appointments_book", ("POST", "/api/inbox/journeys/{journey_id}/appointments"), Write),
     twin("inbox.appointments.cancel", Exempt, "jeeta.inbox.appointments_cancel", ("POST", "/api/inbox/appointments/{id}/cancel"), Write),
     twin("inbox.appointments.held", Exempt, "jeeta.inbox.appointments_held", ("POST", "/api/inbox/appointments/{id}/held"), Write),
-    twin("inbox.commissions.list", Exempt, "jeeta.inbox.commissions_list", ("GET", "/api/inbox/commissions"), Read),
-    twin("inbox.commissions.approve", Exempt, "jeeta.inbox.commissions_approve", ("POST", "/api/inbox/commissions/{id}/approve"), Write),
-    twin("inbox.commissions.pay", Exempt, "jeeta.inbox.commissions_pay", ("POST", "/api/inbox/commissions/{id}/pay"), Write),
-    twin("inbox.commission_rates.set", Exempt, "jeeta.inbox.commission_rates_set", ("PUT", "/api/inbox/commission-rates"), Write),
     // Comments and marketplace questions (spec 2026-10-30 §7.1): answering customers is not
     // planned growth work, so no strategy is needed (owner decision 2026-11-03).
     twin("inbox.public.hide", Exempt, "jeeta.inbox.public_hide", ("POST", "/api/inbox/items/{item_id}/hide"), Write),
@@ -439,6 +462,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("budget.items.retire", Exempt, "jeeta.budget.items_retire", ("POST", "/api/budget/items/{budget_item_id}/retire"), Destructive),
     twin("budget.spend.record", Exempt, "jeeta.budget.spend_record", ("POST", "/api/budget/items/{budget_item_id}/spend"), Spend),
     twin("budget.spend.list", Exempt, "jeeta.budget.spend_list", ("GET", "/api/budget/items/{budget_item_id}/spend"), Read),
+    // Bütçe's spend by module and its stop switches (design 2026-11-10 §9). Stopping is a
+    // person's decision: it has no tool.
+    twin("budget.breakdown", Exempt, "jeeta.budget.breakdown", ("GET", "/api/budget/breakdown"), Read),
+    panel_only("budget.stop", Exempt, ("POST", "/api/budget/stop"), Write),
     // Connecting accounts: exempt from the strategy gate (the consultation needs the accounts),
     // not from the status check (a workspace awaiting payment connects nothing). The provider's
     // OAuth callback is the signed-in owner's browser coming back: panel only.

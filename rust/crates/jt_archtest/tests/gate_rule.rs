@@ -80,10 +80,6 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.appointments.book",
     "inbox.appointments.cancel",
     "inbox.appointments.held",
-    "inbox.commissions.list",
-    "inbox.commissions.approve",
-    "inbox.commissions.pay",
-    "inbox.commission_rates.set",
     // Comments and marketplace questions: moderating, marking handled, reporting, and approving
     // or discarding a held answer are answering customers too.
     "inbox.public.hide",
@@ -96,6 +92,25 @@ const EXEMPT_INBOX: &[&str] = &[
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
+    "content.area_claim",
+    "content.area_progress",
+    "content.area_release",
+    "content.area_redo",
+    "social.versions_waiting",
+    "social.accounts_list",
+    "social.account_get",
+    "social.account_pause",
+    // Reading a campaign, a person's own decisions that need no strategy, the agent's hold and
+    // a stop are exempt; whatever commits or spends is gated.
+    "ads.campaigns_list",
+    "ads.campaign_get",
+    "ads.campaign_open",
+    "ads.campaign_decline",
+    "ads.campaign_claim",
+    "ads.campaign_release",
+    "ads.campaign_pause",
+    "ads.campaign_end",
+    "ads.ad_preview",
     // Modules describe the work area and its assignments; configuration precedes strategy.
     // Explicit identities keep any future executable module action gated by default.
     "modules.list",
@@ -352,7 +367,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 53);
+    assert_eq!(rows.len(), 49);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

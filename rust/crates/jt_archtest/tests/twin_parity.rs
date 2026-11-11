@@ -60,9 +60,19 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 /// The panel's router merged with the MCP endpoint's over `db`, as `jeeta serve` builds them:
-/// the strategy gate answered from the database.
+/// the strategy gate answered from the database, every module held ready (the capability lock
+/// has its own test, [`a_locked_module_refuses_over_both_transports_and_opens_when_connected`]).
 fn app(db: &TestDb, deps: &Deps) -> Router {
-    let gate = Arc::new(PgStrategyGate::new(db.pool.clone()));
+    app_with_gate(
+        deps,
+        Arc::new(jt_testkit::fakes::ModulesReadyGate(Arc::new(
+            PgStrategyGate::new(db.pool.clone()),
+        ))),
+    )
+}
+
+/// The same router with `gate` as it is: the database's gate checks module capabilities too.
+fn app_with_gate(deps: &Deps, gate: Arc<dyn jt_app::gate::StrategyGate>) -> Router {
     let panel = AppState {
         deps: deps.clone(),
         gate: gate.clone(),
@@ -294,8 +304,13 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "budget.manage",
             "inbox.work",
             "inbox.manage",
-            "studio.work",
-            "studio.manage",
+            "content.work",
+            "social.work",
+            "ads.work",
+            "materials.work",
+            "content.manage",
+            "social.manage",
+            "ads.manage",
             "calls.work",
             "calls.manage",
             "calls.bridge",
@@ -2184,10 +2199,7 @@ async fn panel_mcp_consumer_effect_parity() {
                 .unwrap()
             }
         };
-        assert_eq!(
-            output["effects"],
-            json!([{"commission_due":{"amount_minor":12500,"currency":"TRY"}}, "close_tasks"])
-        );
+        assert_eq!(output["effects"], json!(["close_tasks"]));
         let response = send(
             &app,
             panel(
@@ -2214,31 +2226,12 @@ async fn panel_mcp_consumer_effect_parity() {
         assert_eq!(human["status_labels"]["new"], "Yeni");
         assert_eq!(human["journey"]["status"], "won");
         let tasks = human["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.len(), 1);
         let closed = tasks
             .iter()
             .find(|t| t["id"] == original_task["id"])
             .unwrap();
         assert_eq!(closed["status"], "done");
-        let mut r = deps.uow.tenant(ws).await.unwrap();
-        let commission = r
-            .commissions()
-            .by_journey(journey.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            commission.commission.state,
-            jt_inbox::CommissionState::NoPayee
-        );
-        assert_eq!(commission.commission.payee, None);
-        let followup = tasks
-            .iter()
-            .find(|t| t["id"] == json!(commission.id))
-            .unwrap();
-        assert_eq!(followup["status"], "open");
-        assert_eq!(followup["assignee"], Value::Null);
-        drop(r);
         assert_eq!(human["events"].as_array().unwrap().len(), 1);
         let mut state = human["journey"].clone();
         for key in ["id", "person_id", "updated_at"] {
@@ -2947,275 +2940,6 @@ async fn inbox_quotes_and_appointments_have_http_mcp_parity() {
     assert_eq!(human["code"], "NOT_FOUND");
     assert_eq!(human, agent["structuredContent"]);
 }
-
-#[tokio::test]
-async fn inbox_commissions_have_http_mcp_parity_and_atomic_won() {
-    async fn ok(response: Response) -> Value {
-        let status = response.status();
-        let body = json_body(response).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        body
-    }
-    let db = TestDb::new().await;
-    let (ws, user) = db.seed_workspace("commission-parity").await;
-    let mut deps = deps(&db);
-    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
-    let app = app(&db, &deps);
-    let cookie = sign_in(&app, user).await;
-    approve_inbox_strategy(&app, &cookie).await;
-    let key = issue_key(&app, &cookie).await;
-    let session = mcp_session(&app, &key).await;
-    for input in [
-        json!({"rate_bp":1000}),
-        json!({"user_id":user,"rate_bp":100}),
-    ] {
-        let human = ok(send(
-            &app,
-            panel(
-                Method::PUT,
-                "/api/inbox/commission-rates",
-                Some(&cookie),
-                Some(input.clone()),
-            ),
-        )
-        .await)
-        .await;
-        assert_eq!(
-            human,
-            call_tool(
-                &app,
-                &key,
-                &session,
-                "jeeta.inbox.commission_rates_set",
-                input
-            )
-            .await
-        );
-    }
-    let mut commission_ids = vec![];
-    for n in 0..3 {
-        let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Commission example","identities":[{"channel":"email","value":format!("commission-{n}@example.test")}],"source":"form"})))).await).await;
-        let mut r = deps.uow.tenant(ws).await.unwrap();
-        let j = r
-            .journeys()
-            .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
-            .await
-            .unwrap()
-            .unwrap();
-        drop(r);
-        let base = format!("/api/inbox/journeys/{}", j.id);
-        if n != 2 {
-            ok(send(
-                &app,
-                panel(
-                    Method::POST,
-                    &format!("{base}/owner"),
-                    Some(&cookie),
-                    Some(json!({"user_id":user})),
-                ),
-            )
-            .await)
-            .await;
-        }
-        let won = json!({"kind":"won","idempotency_key":format!("won-{n}"),"payload":{"product":"Private product","amount_minor":150,"currency":"TRY"}});
-        ok(send(
-            &app,
-            panel(
-                Method::POST,
-                &format!("{base}/events"),
-                Some(&cookie),
-                Some(won.clone()),
-            ),
-        )
-        .await)
-        .await;
-        let mut args = won.clone();
-        args["journey_id"] = json!(j.id);
-        assert_eq!(
-            call_tool(&app, &key, &session, "jeeta.inbox.events_report", args).await["duplicate"],
-            true
-        );
-        let mut terminal = won;
-        terminal["idempotency_key"] = json!(format!("terminal-{n}"));
-        let human = json_body(
-            send(
-                &app,
-                panel(
-                    Method::POST,
-                    &format!("{base}/events"),
-                    Some(&cookie),
-                    Some(terminal.clone()),
-                ),
-            )
-            .await,
-        )
-        .await;
-        terminal["journey_id"] = json!(j.id);
-        let agent = tool_result(&app, &key, &session, "jeeta.inbox.events_report", terminal).await;
-        assert_eq!(human["code"], "CONFLICT");
-        assert_eq!(human["details"]["reason"], "terminal");
-        assert_eq!(human, agent["structuredContent"]);
-        let mut r = deps.uow.tenant(ws).await.unwrap();
-        let row = r.commissions().by_journey(j.id).await.unwrap().unwrap();
-        assert_eq!(row.commission.rate_bp, if n == 2 { 1000 } else { 100 });
-        assert_eq!(row.commission.amount_minor, if n == 2 { 15 } else { 2 });
-        if n == 2 {
-            assert_eq!(row.commission.state, jt_inbox::CommissionState::NoPayee);
-            let tasks = r.tasks().list(j.id).await.unwrap();
-            assert_eq!(tasks.len(), 1);
-            assert_eq!(tasks[0].assignee, None);
-            assert_eq!(tasks[0].status, jt_inbox::TaskStatus::Open);
-        }
-        commission_ids.push(row.id);
-    }
-    for (query, args, count) in [
-        (String::new(), json!({}), 3),
-        (
-            format!("?state=pending&payee={user}"),
-            json!({"state":"pending","payee":user}),
-            2,
-        ),
-        ("?state=no_payee".into(), json!({"state":"no_payee"}), 1),
-    ] {
-        let human = ok(send(
-            &app,
-            panel(
-                Method::GET,
-                &format!("/api/inbox/commissions{query}"),
-                Some(&cookie),
-                None,
-            ),
-        )
-        .await)
-        .await;
-        assert_eq!(human.as_array().unwrap().len(), count);
-        assert_eq!(
-            human,
-            call_tool(&app, &key, &session, "jeeta.inbox.commissions_list", args).await
-        );
-    }
-    // NoPayee can never be approved or paid; Pending cannot be paid directly.
-    for (id, action) in [
-        (commission_ids[2], "approve"),
-        (commission_ids[2], "pay"),
-        (commission_ids[0], "pay"),
-    ] {
-        let human = json_body(
-            send(
-                &app,
-                panel(
-                    Method::POST,
-                    &format!("/api/inbox/commissions/{id}/{action}"),
-                    Some(&cookie),
-                    None,
-                ),
-            )
-            .await,
-        )
-        .await;
-        let agent = tool_result(
-            &app,
-            &key,
-            &session,
-            &format!("jeeta.inbox.commissions_{action}"),
-            json!({"commission_id":id}),
-        )
-        .await;
-        assert_eq!(human["code"], "CONFLICT");
-        assert_eq!(human, agent["structuredContent"]);
-    }
-    // Separate commissions allow each surface to perform the same strict transition once.
-    for (action, state) in [("approve", "approved"), ("pay", "paid")] {
-        let human = ok(send(
-            &app,
-            panel(
-                Method::POST,
-                &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
-                Some(&cookie),
-                None,
-            ),
-        )
-        .await)
-        .await;
-        let agent = call_tool(
-            &app,
-            &key,
-            &session,
-            &format!("jeeta.inbox.commissions_{action}"),
-            json!({"commission_id":commission_ids[1]}),
-        )
-        .await;
-        assert_eq!(human["state"], state);
-        for field in [
-            "workspace_id",
-            "payee",
-            "amount_minor",
-            "rate_bp",
-            "currency",
-            "state",
-            "created_at",
-        ] {
-            assert_eq!(human[field], agent[field], "{field}");
-        }
-        let human = json_body(
-            send(
-                &app,
-                panel(
-                    Method::POST,
-                    &format!("/api/inbox/commissions/{}/{action}", commission_ids[0]),
-                    Some(&cookie),
-                    None,
-                ),
-            )
-            .await,
-        )
-        .await;
-        let agent = tool_result(
-            &app,
-            &key,
-            &session,
-            &format!("jeeta.inbox.commissions_{action}"),
-            json!({"commission_id":commission_ids[0]}),
-        )
-        .await;
-        assert_eq!(human["code"], "CONFLICT");
-        assert_eq!(human, agent["structuredContent"]);
-    }
-    // A snapshot failure after apply_transition rolls back the event, journey and commission.
-    let person = ok(send(&app,panel(Method::POST,"/api/inbox/people",Some(&cookie),Some(json!({"display_name":"Overflow example","identities":[{"channel":"email","value":"overflow@example.test"}],"source":"form"})))).await).await;
-    let mut r = deps.uow.tenant(ws).await.unwrap();
-    let j = r
-        .journeys()
-        .open_for(serde_json::from_value(person["person"]["id"].clone()).unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    drop(r);
-    call_tool(
-        &app,
-        &key,
-        &session,
-        "jeeta.inbox.commission_rates_set",
-        json!({"rate_bp":65535}),
-    )
-    .await;
-    let error = tool_result(&app,&key,&session,"jeeta.inbox.events_report",json!({"journey_id":j.id,"kind":"won","idempotency_key":"overflow","payload":{"product":"Private product","amount_minor":i64::MAX,"currency":"TRY"}})).await;
-    assert_eq!(error["structuredContent"]["code"], "VALIDATION");
-    let mut r = deps.uow.tenant(ws).await.unwrap();
-    assert_eq!(
-        r.journeys().get(j.id).await.unwrap().unwrap().status,
-        jt_inbox::JourneyStatus::New
-    );
-    assert!(
-        r.journeys()
-            .event_by_key("overflow")
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(r.commissions().by_journey(j.id).await.unwrap().is_none());
-}
-
 #[tokio::test]
 async fn inbox_erasure_has_http_mcp_parity() {
     let db = TestDb::new().await;
@@ -3412,24 +3136,7 @@ async fn studio_controls_have_schema_error_effect_and_actor_parity() {
     let cookie = sign_in(&app, user).await;
     let key = issue_key(&app, &cookie).await;
     let session = mcp_session(&app, &key).await;
-    // Brake is available before strategy; policy is not. Status gating remains independent.
-    let blocked = json!({"lane":"organic","requires_human_approval":true,"expected_revision":0});
-    let human = json_body(
-        send(
-            &app,
-            panel(
-                Method::PUT,
-                "/api/studio/policy",
-                Some(&cookie),
-                Some(blocked.clone()),
-            ),
-        )
-        .await,
-    )
-    .await;
-    let agent = tool_result(&app, &key, &session, "jeeta.studio.policy_set", blocked).await;
-    assert_eq!(human, agent["structuredContent"]);
-    assert_eq!(human["code"], "STRATEGY_REQUIRED");
+    // The brake is available before a strategy is approved.
     let human = json_body(
         send(
             &app,
@@ -3471,26 +3178,6 @@ async fn studio_controls_have_schema_error_effect_and_actor_parity() {
     let agent = tool_result(&app, &key, &session, "jeeta.studio.brake", stale).await;
     assert_eq!(human, agent["structuredContent"]);
     approve_inbox_strategy(&app, &cookie).await;
-    let body = json!({"lane":"organic","requires_human_approval":true,"expected_revision":2});
-    let human = json_body(
-        send(
-            &app,
-            panel(Method::PUT, "/api/studio/policy", Some(&cookie), Some(body)),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(human["lanes"]["organic"]["requires_human_approval"], true);
-    let agent = call_tool(
-        &app,
-        &key,
-        &session,
-        "jeeta.studio.policy_set",
-        json!({"lane":"organic","requires_human_approval":false,"expected_revision":3}),
-    )
-    .await;
-    assert_eq!(agent["lanes"]["organic"]["requires_human_approval"], false);
-    assert_eq!(agent["revision"], 4);
     // Build immutable work under the same real tenant transaction used by both surfaces.
     let mut r = deps.uow.tenant(ws).await.unwrap();
     let version = r.strategy().current_approved().await.unwrap().unwrap();
@@ -3597,13 +3284,7 @@ async fn studio_controls_have_schema_error_effect_and_actor_parity() {
             Method::POST,
             "/api/studio/brake",
             "jeeta.studio.brake",
-            json!({"engaged":true,"expected_revision":4,"extra":true}),
-        ),
-        (
-            Method::PUT,
-            "/api/studio/policy",
-            "jeeta.studio.policy_set",
-            json!({"lane":"paid","requires_human_approval":true,"expected_revision":4,"extra":true}),
+            json!({"engaged":true,"expected_revision":2,"extra":true}),
         ),
         (
             Method::POST,
@@ -4307,6 +3988,7 @@ async fn studio_budget_cap_http_409_mcp_parity() {
         .await
         .unwrap();
     let item = jt_capability::BudgetItem {
+        general: false,
         id: jt_capability::BudgetItemId::new_v7(),
         workspace_id: ws,
         name: "paid cap".into(),
@@ -5697,4 +5379,937 @@ async fn inbox_public_rows_have_http_mcp_parity() {
     assert_eq!(agent["isError"], json!(true));
     assert_eq!(human, agent["structuredContent"]);
     assert_eq!(human["details"]["reason"], "reply_not_held");
+}
+
+/// Spec 2026-11-10-module-capability-gating-design.md: with the database's gate as `jeeta serve`
+/// wires it, a module without its connected capability refuses the same way over the panel and
+/// MCP, a legal duty stays open, and connecting a channel opens the module on both.
+#[tokio::test]
+async fn a_locked_module_refuses_over_both_transports_and_opens_when_connected() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("locked-inbox").await;
+    let deps = deps(&db);
+    let app = app_with_gate(&deps, Arc::new(PgStrategyGate::new(db.pool.clone())));
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let list = || {
+        panel(
+            Method::GET,
+            "/api/inbox/conversations?queue=ours",
+            Some(&cookie),
+            None,
+        )
+    };
+
+    let resp = send(&app, list()).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let human = json_body(resp).await;
+    assert_eq!(human["code"], "CAPABILITY_REQUIRED");
+    assert_eq!(
+        human["details"],
+        json!({"module": "inbox", "missing": ["messaging"]})
+    );
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.conversations_list",
+        json!({"queue": "ours"}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(agent["structuredContent"]["code"], human["code"]);
+    assert_eq!(agent["structuredContent"]["details"], human["details"]);
+
+    // The module list says why, and strategy never waits for a capability.
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/workspace/modules", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let modules = json_body(resp).await;
+    assert_eq!(
+        modules["availability"]["inbox"],
+        json!({"ready": false, "missing": ["messaging"]})
+    );
+    assert_eq!(
+        modules["availability"]["strategy"],
+        json!({"ready": true, "missing": []})
+    );
+
+    // A legal duty is never locked: erasing a person the workspace does not hold is a plain 404,
+    // not the capability lock.
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!(
+                "/api/inbox/people/{}/erase",
+                jt_capability::CapabilityId::new_v7()
+            ),
+            Some(&cookie),
+            Some(json!({"confirm": true})),
+        ),
+    )
+    .await;
+    assert_ne!(json_body(resp).await["code"], "CAPABILITY_REQUIRED");
+
+    // A connected (verified) mailbox opens the inbox on both transports.
+    let mut mailbox = jt_capability::Capability::new(
+        jt_capability::CapabilityId::new_v7(),
+        ws,
+        jt_capability::NewCapability {
+            kind_key: "mailbox".into(),
+            name: "Satış".into(),
+            ..Default::default()
+        },
+        deps.clock.now(),
+    )
+    .unwrap();
+    mailbox.status = jt_capability::StoredStatus::Verified;
+    let mut r = deps.uow.tenant(ws).await.unwrap();
+    r.capabilities().insert(mailbox, None).await.unwrap();
+    r.commit().await.unwrap();
+    assert_eq!(send(&app, list()).await.status(), StatusCode::OK);
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.conversations_list",
+        json!({"queue": "ours"}),
+    )
+    .await;
+}
+
+/// Design 2026-11-10-uc-modul-ve-panel-iskeleti-design.md S25: with the database's gate as
+/// `jeeta serve` wires it, a module that is not installed refuses its use cases the same way
+/// over the panel and MCP, the reads that belong to no single module stay open, and installing
+/// the module opens it on both; removing it closes it again and keeps its records.
+#[tokio::test]
+async fn a_removed_module_refuses_over_both_transports_and_opens_when_installed() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_new_workspace("removed-materials").await;
+    let deps = deps(&db);
+    let app = app_with_gate(&deps, Arc::new(PgStrategyGate::new(db.pool.clone())));
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let list = || panel(Method::GET, "/api/studio/materials", Some(&cookie), None);
+    let refused = json!({"module": "materials"});
+
+    // A new workspace has the strategy and nothing else.
+    let resp = send(&app, list()).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let human = json_body(resp).await;
+    assert_eq!(human["code"], "MODULE_NOT_INSTALLED");
+    assert_eq!(human["details"], refused);
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.materials_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(agent["structuredContent"]["code"], human["code"]);
+    assert_eq!(agent["structuredContent"]["details"], human["details"]);
+
+    // Installing it opens it on both transports.
+    let module = |method: Method| {
+        panel(
+            method,
+            "/api/workspace/modules/materials",
+            Some(&cookie),
+            Some(json!({})),
+        )
+    };
+    assert_eq!(
+        send(&app, module(Method::PUT)).await.status(),
+        StatusCode::OK
+    );
+    let resp = send(&app, list()).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(json_body(resp).await, json!([]));
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.materials_list",
+        json!({}),
+    )
+    .await;
+    assert_ne!(agent["isError"], json!(true));
+
+    // A module that needs the library brings it and keeps it.
+    let social = |method: Method| {
+        panel(
+            method,
+            "/api/workspace/modules/social",
+            Some(&cookie),
+            Some(json!({})),
+        )
+    };
+    assert_eq!(
+        send(&app, social(Method::PUT)).await.status(),
+        StatusCode::OK
+    );
+    let resp = send(&app, module(Method::DELETE)).await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(json_body(resp).await["details"]["field"], "module");
+    assert_eq!(send(&app, list()).await.status(), StatusCode::OK);
+    assert_eq!(
+        send(&app, social(Method::DELETE)).await.status(),
+        StatusCode::OK
+    );
+
+    // Removing it closes it again, on both.
+    assert_eq!(
+        send(&app, module(Method::DELETE)).await.status(),
+        StatusCode::OK
+    );
+    let resp = send(&app, list()).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(resp).await["details"], refused);
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.materials_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(agent["structuredContent"]["code"], "MODULE_NOT_INSTALLED");
+}
+
+/// A production area on both transports (design 2026-11-10 §6): a person opens it on the panel,
+/// both sides list it the same, working it is the agent's (the panel answers `FORBIDDEN` where the
+/// tool works), a refused delivery and an accepted one read the same from either side, and
+/// "Olmamış" is a person's on the panel alone.
+#[tokio::test]
+async fn a_production_area_is_opened_by_a_person_and_worked_by_an_agent_on_both_transports() {
+    async fn ok(response: Response) -> Value {
+        let status = response.status();
+        let body = json_body(response).await;
+        assert!(status.is_success(), "{status}: {body}");
+        body
+    }
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("content-twins").await;
+    let mut d = deps(&db);
+    d.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // The workspace has one confirmed olay, "Atölye": a text may not speak of it beside a visual
+    // that does not come from it.
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    let version = r.strategy().current_approved().await.unwrap().unwrap();
+    let hypothesis = r.hypotheses().list(version.id).await.unwrap().remove(0).id;
+    r.studio_materials()
+        .insert_olay(jt_testkit::studio_contract::confirmed_olay(ws))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    // A person opens the area with one sentence; it is queued and starts now.
+    let area = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/studio/projects",
+            Some(&cookie),
+            Some(json!({"request_key":"twins-area","brief":"Announce the new season"})),
+        ),
+    )
+    .await)
+    .await;
+    let id = area["id"].as_str().unwrap().to_owned();
+    assert_eq!(area["title"], "Announce the new season");
+    assert_eq!(area["opened_by"], json!({"kind":"human"}));
+    assert_eq!(area["state"]["state"], "queued");
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            "/api/studio/projects?scope=open",
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.project_list",
+        json!({"scope":"open"}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["projects"][0]["id"], json!(id));
+
+    // Check-in offers it to the agent; the person's own list does not carry an agent's work.
+    let checkin = call_tool(&app, &key, &session, "jeeta.work.checkin", json!({})).await;
+    let item = checkin["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "content_area")
+        .unwrap_or_else(|| panic!("{checkin}"));
+    assert_eq!(item["project_id"], json!(id));
+    assert!(
+        item["hint"]
+            .as_str()
+            .unwrap()
+            .contains("jeeta.content.area_deliver")
+    );
+    let own = ok(send(
+        &app,
+        panel(Method::GET, "/api/work/pending", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    assert!(
+        !own["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["kind"] == "content_area")
+    );
+
+    // Working the area is the agent's: the panel refuses a person what the tool does.
+    let claim_body = json!({"expected_revision":item["expected_revision"]});
+    let refused = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/content/areas/{id}/claim"),
+            Some(&cookie),
+            Some(claim_body.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(json_body(refused).await["code"], "FORBIDDEN");
+    let mut with_id = claim_body;
+    with_id["project_id"] = json!(id);
+    let claim = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.content.area_claim",
+        with_id.clone(),
+    )
+    .await;
+    let token = claim["claim_token"].as_str().unwrap().to_owned();
+    assert_eq!(claim["project"]["state"]["state"], "working");
+    // The token is the claim's answer alone: no later reading of the area shows it.
+    let shown = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/studio/projects/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert!(!shown.to_string().contains(&token));
+    let again = tool_result(&app, &key, &session, "jeeta.content.area_claim", with_id).await;
+    assert_eq!(again["isError"], json!(true));
+    assert_eq!(again["structuredContent"]["code"], "CONFLICT");
+    let progress = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.content.area_progress",
+        json!({"project_id":id,"claim_token":token,"step":9,"note":"Making the visual"}),
+    )
+    .await;
+    assert_eq!(progress["project"]["state"]["step"], 9);
+
+    // The agent makes a visual, adds it to the area and delivers. A text naming the olay the
+    // visual does not come from is held with the reason, and nothing is stored.
+    let file = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.file_upload",
+        json!({"request_key":"twins-visual","filename":"visual.png","mime":"image/png",
+               "content":{"kind":"bytes_base64","data":"iVBORw0KGgp2aXN1YWw="}}),
+    )
+    .await;
+    let material = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.material_add",
+        json!({"request_key":"twins-material","file_id":file["id"],"genel":true,
+               "origin":{"kind":"ai_generated","generator":"parity-agent"},
+               "quality":"publishable","depicts":[],"share":"shareable"}),
+    )
+    .await;
+    let material_id = material["material"]["id"].clone();
+    let attached = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.project_materials",
+        json!({"project_id":id,"expected_revision":progress["project"]["revision"],
+               "add":[material_id]}),
+    )
+    .await;
+    assert_eq!(attached["sources"][0]["material_id"], material_id);
+    let version = |text: &str| {
+        json!({"format":"feed_post","text":text,"material_ids":[material_id],
+               "hypothesis_id":hypothesis})
+    };
+    let held = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.content.area_deliver",
+        json!({"project_id":id,"claim_token":token,"request_key":"twins-held",
+               "summary":"One post","versions":[version("Atölye günümüzden bir kare")]}),
+    )
+    .await;
+    assert_eq!(held["isError"], json!(true), "{held}");
+    assert_eq!(held["structuredContent"]["code"], "CONFLICT");
+    assert_eq!(
+        held["structuredContent"]["details"]["reason"],
+        "package_refused"
+    );
+    assert_eq!(
+        held["structuredContent"]["details"]["versions"][0]["index"],
+        0
+    );
+    assert_eq!(
+        held["structuredContent"]["details"]["versions"][0]["findings"][0]["code"],
+        "names_other_olay"
+    );
+    let unchanged = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.project_get",
+        json!({"project_id":id}),
+    )
+    .await;
+    assert_eq!(unchanged["project"]["packages"], json!([]));
+    assert_eq!(unchanged["project"]["refused"], 1);
+    let delivered = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.content.area_deliver",
+        json!({"project_id":id,"claim_token":token,"request_key":"twins-delivery",
+               "summary":"One post","versions":[version("Yeni sezon başlıyor")]}),
+    )
+    .await;
+    assert_eq!(delivered["project"]["state"]["state"], "done");
+    assert_eq!(delivered["project"]["refused"], 0);
+    let human = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/studio/projects/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.studio.project_get",
+        json!({"project_id":id}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["project"], delivered["project"]);
+    assert_eq!(
+        human["project"]["packages"][0]["versions"][0]["text"],
+        "Yeni sezon başlıyor"
+    );
+    let done = ok(send(
+        &app,
+        panel(
+            Method::GET,
+            "/api/studio/projects?scope=done",
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(done["projects"][0]["id"], json!(id));
+    assert_eq!(
+        done,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.studio.project_list",
+            json!({"scope":"done"}),
+        )
+        .await
+    );
+
+    // "Olmamış" is a person's, on the panel: the area is queued again with the note, and the
+    // agent's next check-in carries it. No tool says it.
+    let redo = ok(send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/content/areas/{id}/redo"),
+            Some(&cookie),
+            Some(json!({"package_revision":1,"note":"Daha sade olsun"})),
+        ),
+    )
+    .await)
+    .await;
+    assert_eq!(redo["project"]["state"]["state"], "queued");
+    let checkin = call_tool(&app, &key, &session, "jeeta.work.checkin", json!({})).await;
+    let item = checkin["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "content_area")
+        .unwrap();
+    assert_eq!(item["redo_note"], "Daha sade olsun");
+    assert!(
+        !jt_mcp::registry()
+            .iter()
+            .any(|t| t.name.ends_with("area_redo"))
+    );
+}
+
+/// The social module on both transports (design 2026-11-10 §7): the accounts, one account's
+/// page and the versions waiting for a time read the same from the panel and from a tool, with
+/// the same refusals; a number the platform does not give is `null` on both; and pausing an
+/// account is a person's, on the panel alone.
+#[tokio::test]
+async fn social_accounts_read_the_same_on_both_transports_and_pausing_is_the_panels() {
+    use jt_app::ports::posts::{AccountDay, AccountNumbers};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("social-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let capability = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/capabilities",
+                Some(&cookie),
+                Some(json!({"kind_key":"x","name":"Atölye X","external_id":"social-twins"})),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let account = capability["capability"]["id"].as_str().unwrap().to_owned();
+    // What the platform said today: followers, and nothing else.
+    let day = (time::OffsetDateTime::now_utc() + time::Duration::hours(3)).date();
+    let mut r = d.uow.tenant(ws).await.unwrap();
+    assert!(
+        r.studio_posts()
+            .insert_account_day(AccountDay {
+                workspace_id: ws,
+                capability_id: serde_json::from_value(json!(account)).unwrap(),
+                day,
+                numbers: AccountNumbers {
+                    followers: Some(120),
+                    ..Default::default()
+                },
+                raw: [("followers_count".to_owned(), 120)].into(),
+                read_at: time::OffsetDateTime::now_utc(),
+            })
+            .await
+            .unwrap()
+    );
+    r.commit().await.unwrap();
+    let iso = |d: time::Date| format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day());
+    let (from, until) = (
+        iso(day - time::Duration::days(1)),
+        iso(day + time::Duration::days(1)),
+    );
+
+    // The reads answer the same.
+    for (path, tool, args) in [
+        (
+            "/api/social/accounts".to_owned(),
+            "jeeta.social.accounts_list",
+            json!({}),
+        ),
+        (
+            format!("/api/social/accounts/{account}?from={from}&until={until}"),
+            "jeeta.social.account_get",
+            json!({"capability_id":account,"from":from,"until":until}),
+        ),
+        (
+            "/api/social/packages".to_owned(),
+            "jeeta.social.versions_waiting",
+            json!({}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        let status = response.status();
+        let human = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {human}");
+        assert_eq!(
+            human,
+            call_tool(&app, &key, &session, tool, args).await,
+            "{path}"
+        );
+    }
+    let list = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.social.accounts_list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(list[0]["capability_id"], json!(account));
+    assert_eq!(list[0]["kind"], "x");
+    assert_eq!(list[0]["paused"], false);
+    assert_eq!(
+        list[0]["latest"],
+        json!({"day":iso(day),"followers":120,"reach":null,"views":null,"engagement":null,
+               "profile_visits":null}),
+        "a number the platform does not give is null, never zero"
+    );
+    let detail = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.social.account_get",
+        json!({"capability_id":account}),
+    )
+    .await;
+    assert_eq!(detail["days"].as_array().unwrap().len(), 1);
+    assert_eq!(detail["upcoming"], json!([]));
+    assert_eq!(
+        detail["totals"],
+        json!({"posts":0,"reach":null,"views":null,"engagement":null})
+    );
+
+    // The refusals are the same too: a period the wrong way round, an account that is not
+    // there, and a version of no area.
+    let unknown = "00000000-0000-7000-8000-000000000001";
+    for (method, path, body, tool, args, status, code) in [
+        (
+            Method::GET,
+            format!("/api/social/accounts/{account}?from={until}&until={from}"),
+            None,
+            "jeeta.social.account_get",
+            json!({"capability_id":account,"from":until,"until":from}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VALIDATION",
+        ),
+        (
+            Method::GET,
+            format!("/api/social/accounts/{unknown}"),
+            None,
+            "jeeta.social.account_get",
+            json!({"capability_id":unknown}),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        ),
+        (
+            Method::POST,
+            "/api/social/versions/schedule".to_owned(),
+            Some(
+                json!({"project_id":unknown,"version_id":unknown,"capability_id":account,
+                        "publish_at":"2030-01-01T10:00:00Z","request_key":"twins-none"}),
+            ),
+            "jeeta.social.version_schedule",
+            json!({"project_id":unknown,"version_id":unknown,"capability_id":account,
+                   "publish_at":"2030-01-01T10:00:00Z","request_key":"twins-none"}),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        ),
+    ] {
+        let response = send(&app, panel(method, &path, Some(&cookie), body)).await;
+        let got = response.status();
+        let human = json_body(response).await;
+        assert_eq!(got, status, "{path}: {human}");
+        assert_eq!(human["code"], code, "{path}");
+        let agent = tool_result(&app, &key, &session, tool, args).await;
+        assert_eq!(agent["isError"], json!(true), "{tool}: {agent}");
+        assert_eq!(agent["structuredContent"]["code"], code, "{tool}");
+        assert_eq!(
+            agent["structuredContent"]["details"], human["details"],
+            "{tool}"
+        );
+    }
+
+    // Pausing is a person's, on the panel: no tool does it, and both sides then see the pause.
+    assert!(
+        !jt_mcp::registry()
+            .iter()
+            .any(|t| t.name.ends_with("account_pause"))
+    );
+    let pause = |paused: bool, revision: u64| {
+        panel(
+            Method::POST,
+            &format!("/api/social/accounts/{account}/pause"),
+            Some(&cookie),
+            Some(json!({"paused":paused,"expected_revision":revision})),
+        )
+    };
+    let response = send(&app, pause(true, 0)).await;
+    let status = response.status();
+    let settings = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{settings}");
+    assert_eq!(settings["paused_capability_ids"], json!([account]));
+    assert_eq!(settings["revision"], 1);
+    let stale = send(&app, pause(false, 0)).await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(stale).await["code"], "CONFLICT");
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::GET, "/api/social/accounts", Some(&cookie), None),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human[0]["paused"], true);
+    assert_eq!(
+        human,
+        call_tool(
+            &app,
+            &key,
+            &session,
+            "jeeta.social.accounts_list",
+            json!({})
+        )
+        .await
+    );
+    let resumed = json_body(send(&app, pause(false, 1)).await).await;
+    assert_eq!(resumed["paused_capability_ids"], json!([]));
+    assert_eq!(resumed["revision"], 2);
+}
+
+/// Bütçe and Reklam yönetimi on both transports (design 2026-11-10 §8, §9): spend by module
+/// and the campaigns read the same from the panel and from a tool, with the same refusals; an
+/// agent proposes through its tool alone; and stopping spending, like opening a campaign, is a
+/// person's, on the panel alone.
+#[tokio::test]
+async fn spend_and_ad_campaigns_read_the_same_on_both_transports_and_decisions_are_the_panels() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("ads-twins").await;
+    let d = deps(&db);
+    let app = app(&db, &d);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    // A cash item with a spend a person recorded by hand.
+    let item = json_body(
+        send(
+            &app,
+            panel(
+                Method::POST,
+                "/api/budget/items",
+                Some(&cookie),
+                Some(
+                    json!({"name":"Kasa","kind":"cash","unit":{"kind":"currency","value":"TRY"},
+                            "cap":100000,"period":"monthly"}),
+                ),
+            ),
+        )
+        .await,
+    )
+    .await;
+    let item_id = item["item"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(item["item"]["general"], false);
+    let spent = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/budget/items/{item_id}/spend"),
+            Some(&cookie),
+            Some(json!({"amount":250,"reference":"fatura"})),
+        ),
+    )
+    .await;
+    assert_eq!(spent.status(), StatusCode::CREATED);
+
+    // The reads answer the same.
+    for (path, tool, args) in [
+        ("/api/budget/breakdown", "jeeta.budget.breakdown", json!({})),
+        ("/api/ads/campaigns", "jeeta.ads.campaigns_list", json!({})),
+        (
+            "/api/ads/campaigns?scope=closed",
+            "jeeta.ads.campaigns_list",
+            json!({"scope":"closed"}),
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, path, Some(&cookie), None)).await;
+        let status = response.status();
+        let human = json_body(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {human}");
+        assert_eq!(
+            human,
+            call_tool(&app, &key, &session, tool, args).await,
+            "{path}"
+        );
+    }
+    let breakdown = call_tool(&app, &key, &session, "jeeta.budget.breakdown", json!({})).await;
+    assert_eq!(
+        breakdown["items"],
+        json!([{"item_id": item_id, "modules": [], "unattributed_minor": 250}])
+    );
+    assert_eq!(breakdown["stop"]["all"], false);
+
+    // The refusals are the same: a campaign that is not there, a period the wrong way round.
+    let unknown = "00000000-0000-7000-8000-000000000001";
+    for (path, tool, args, status, code) in [
+        (
+            format!("/api/ads/campaigns/{unknown}"),
+            "jeeta.ads.campaign_get",
+            json!({"campaign_id":unknown}),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        ),
+        (
+            "/api/budget/breakdown?from=2026-02-01T00:00:00Z&until=2026-01-01T00:00:00Z".to_owned(),
+            "jeeta.budget.breakdown",
+            json!({"from":"2026-02-01T00:00:00Z","until":"2026-01-01T00:00:00Z"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "VALIDATION",
+        ),
+    ] {
+        let response = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        let got = response.status();
+        let human = json_body(response).await;
+        assert_eq!(got, status, "{path}: {human}");
+        assert_eq!(human["code"], code, "{path}");
+        let agent = tool_result(&app, &key, &session, tool, args).await;
+        assert_eq!(agent["isError"], json!(true), "{tool}: {agent}");
+        assert_eq!(agent["structuredContent"]["code"], code, "{tool}");
+        assert_eq!(
+            agent["structuredContent"]["details"], human["details"],
+            "{tool}"
+        );
+    }
+
+    // Without a general ad budget nothing is opened or proposed, on either side.
+    let open = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/ads/campaigns",
+            Some(&cookie),
+            Some(
+                json!({"request_key":"twins-open","goal":"Yeni sezon","budget_minor":1000,
+                        "start_at":"2030-01-01T10:00:00Z"}),
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(open.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(open).await["details"]["reason"],
+        "no_general_ad_budget"
+    );
+    let proposed = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.ads.campaign_propose",
+        json!({"request_key":"twins-propose","goal":"Yeni sezon","budget_minor":1000,
+               "start_at":"2030-01-01T10:00:00Z","reason":"İlgi var"}),
+    )
+    .await;
+    assert_eq!(proposed["isError"], json!(true), "{proposed}");
+    assert_eq!(
+        proposed["structuredContent"]["details"]["reason"],
+        "no_general_ad_budget"
+    );
+
+    // A person's decisions have no tool, and an agent's proposal no route.
+    for name in [
+        "campaign_open",
+        "campaign_approve",
+        "campaign_decline",
+        "campaign_resume",
+        "campaign_end",
+        "campaign_update",
+    ] {
+        assert!(
+            !jt_mcp::registry()
+                .iter()
+                .any(|t| t.name == format!("jeeta.ads.{name}")),
+            "{name}"
+        );
+    }
+    assert!(!jt_mcp::registry().iter().any(|t| t.name.ends_with(".stop")));
+    assert!(
+        !jt_panel_http::ROUTES
+            .iter()
+            .any(|(_, path)| path.ends_with("/propose"))
+    );
+
+    // Stopping a module's spending is the panel's; both sides then read it stopped.
+    let stop = |scope: Value, stopped: bool, revision: &Value| {
+        panel(
+            Method::POST,
+            "/api/budget/stop",
+            Some(&cookie),
+            Some(json!({"scope":scope,"stopped":stopped,"expected_revision":revision})),
+        )
+    };
+    let response = send(
+        &app,
+        stop(
+            json!({"module":"inbox"}),
+            true,
+            &breakdown["stop"]["revision"],
+        ),
+    )
+    .await;
+    let status = response.status();
+    let state = json_body(response).await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["modules"], json!(["inbox"]));
+    let stale = send(
+        &app,
+        stop(json!("all"), true, &breakdown["stop"]["revision"]),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let human = json_body(
+        send(
+            &app,
+            panel(Method::GET, "/api/budget/breakdown", Some(&cookie), None),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(human["stop"]["modules"], json!(["inbox"]));
+    assert_eq!(
+        human,
+        call_tool(&app, &key, &session, "jeeta.budget.breakdown", json!({})).await
+    );
+    let all = json_body(send(&app, stop(json!("all"), true, &state["revision"])).await).await;
+    assert_eq!(all["all"], true);
+    assert_eq!(all["modules"], json!(["ads", "inbox"]));
 }
