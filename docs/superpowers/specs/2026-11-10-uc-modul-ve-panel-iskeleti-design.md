@@ -808,7 +808,7 @@ onayla ve belirlediği küçük bir bütçeyle yapılır.
 |---|---|---|
 | A2 | Platformların zamanlayıcı ve ölçü desteği | Ek B.1, B.2 |
 | A3 | Meta'da oluşturma için gereken izinler ve kesin sınır özelliği | Ek B.3 |
-| A5 | TikTok ve X belgelerinin başka bir ağdan doğrulanması | 2026-11-11: X'in satırları X'in kendi belge deposundan, TikTok'un reklam satırı TikTok'un resmi SDK deposundan okundu; TikTok'un gönderi ve ölçü satırları yalnızca arama aracıyla denetlendi (Ek B). TikTok'un o sayfaları, TikTok adımı planlanırken bir kez daha okunur |
+| A5 | TikTok ve X belgelerinin başka bir ağdan doğrulanması | 2026-11-11: X'in satırları X'in kendi belge deposundan, TikTok'un gönderi ve ölçü satırları sayfaların kendisinden (bir sayfa okuma hizmetiyle), TikTok'un reklam satırındaki alan ve değer adları resmi SDK deposundan okundu (Ek B). Açık kalan tek şey TikTok reklam satırındaki değerlerin anlamı: o başvuru sayfası okunamadı, anlamlar arama sonucuna dayanır |
 | A6 | "Kaldırılınca durur" kuralının Gelen kutusu, Kampanyalar ve Aramalar'a uygulanması | Bu çalışmanın dışında; ayrı iş |
 | A7 | Kendi kendine sürekli çalışan ajan işçisi ve güvenlik sınırı | Bu çalışmanın dışında; Adım 1'den sonra ayrı tasarım |
 | A4 | Jeeta dışından yapılan paylaşımların hesap sayfasında görünmesi | Bu çalışmada yok; hesap ölçüleri onları zaten kapsar |
@@ -855,10 +855,14 @@ yoldan denetlendi; her satır hangisine dayandığını söyler:
   (`github.com/tiktok/tiktok-business-api-sdk`, commit `f809c396`) istek gövdeleri ve tanım
   dosyaları alan ve değer adlarını verir; değerlerin açıklaması orada boştur. Adlar buradan,
   anlamları arama sonucundandır.
-- **Arama ile doğrulandı (TikTok gönderi ve ölçüleri).** Bu uçları taşıyan resmi bir depo yok.
-  Satırlar, arama aracının yalnızca resmi alan adlarından döndürdüğü sonuçlara dayanır; gönderi
-  ucunun istek gövdesinin tam alan listesi böyle alındı. TikTok adımı planlanırken bu sayfalar
-  kendisinden bir kez daha okunmalıdır.
+- **Belgeden doğrulandı (TikTok gönderi ve ölçüleri).** Bu uçları taşıyan resmi bir depo yok;
+  satırlar önce yalnızca arama aracıyla denetlenmişti. Aynı gün `developers.tiktok.com`'daki
+  sayfaların kendisi bir sayfa okuma hizmetiyle okundu (istek bu makineden çıkmaz): doğrudan
+  gönderi başvurusu, paylaşım kılavuzu, kullanıcı bilgisi, video listesi, video sorgusu ve video
+  nesnesi. Satırlar sayfalarla aynıdır; sayfaların "son güncelleme" tarihleri Kaynaklar'da.
+- **Arama ile doğrulandı (yalnızca TikTok reklam değerlerinin anlamı).** `business-api.tiktok.com`
+  başvuru sayfaları tarayıcıda çizilen bir uygulamadır ve okunamadı; yalnızca belge sitesinin
+  giriş sayfası ve oradaki duyuru okunabildi.
 
 ### B.1 Platformun kendi zamanlayıcısı (§7.3)
 
@@ -867,7 +871,7 @@ yoldan denetlendi; her satır hangisine dayandığını söyler:
 | Facebook Sayfası | **Evet** | `published=false` ve `scheduled_publish_time` (gönderi, fotoğraf, video); Reels için `video_state=SCHEDULED`. En az 10 dakika sonrası; üst sınır için Meta'nın sayfaları 30 ve 75 gün diyor, Reels'te 29 gün. Tasarım 29 günü esas alır. Hikâye zamanlanamaz. Zamanlanmış gönderi API ile değiştirilebilir ve silinebilir (yalnızca uygulamanın kendi oluşturdukları) |
 | Instagram | **Hayır** | Yayın ucunda zamanlama parametresi yok; belgeler yalnızca uygulama tarafında zamanlamadan söz ediyor |
 | LinkedIn | **Hayır** | Oluştururken kabul edilen tek durum `PUBLISHED` |
-| TikTok | **Hayır** (arama ile doğrulandı) | Doğrudan gönderinin (`POST /v2/post/publish/video/init/`, kapsam `video.publish`) istek gövdesinin tamamı: `post_info` {`privacy_level` (zorunlu; `creator_info/query` yanıtındaki seçeneklerden biri), `title`, `disable_duet`, `disable_stitch`, `disable_comment`, `video_cover_timestamp_ms`, `brand_content_toggle`, `brand_organic_toggle`, `is_aigc`} ve `source_info` {`source`, `video_url`, `video_size`, `chunk_size`, `total_chunk_count`}. Zamanlama alanı yok; TikTok'un kendi yazısı zamanlamayı üçüncü taraf aracın yaptığını söylüyor. Denetimden geçmemiş uygulama yalnızca "yalnızca ben" görünürlüğünde ve günde en çok 5 kullanıcı için gönderir; hesap başına günlük gönderi sınırı vardır (yaklaşık 15) |
+| TikTok | **Hayır** (belgeden doğrulandı) | Doğrudan gönderinin (`POST /v2/post/publish/video/init/`, kapsam `video.publish`, kullanıcı belirteci başına dakikada 6 istek) istek gövdesinin tamamı: `post_info` {`privacy_level` (zorunlu; `creator_info/query` yanıtındaki seçeneklerden biri), `title`, `disable_duet`, `disable_stitch`, `disable_comment`, `video_cover_timestamp_ms`, `brand_content_toggle`, `brand_organic_toggle`, `is_aigc`} ve `source_info` {`source`, `video_url`, `video_size`, `chunk_size`, `total_chunk_count`}. Zamanlama alanı yok. Denetimden geçmemiş uygulama yalnızca `SELF_ONLY` görünürlüğünde, gizli hesaplara ve 24 saatte en çok 5 kullanıcı için gönderir; her uygulama için ortak olan hesap başına günlük gönderi sınırı vardır (genellikle yaklaşık 15). Paylaşım kılavuzu, görünürlüğü ve etkileşim ayarlarını kullanıcının varsayılansız, kendisinin seçmesini ve gönderimden önce açık onay vermesini zorunlu tutuyor (§7.4'ün dayanağı); "kendi yönettiğiniz hesaplara içerik yüklemeye yarayan araç"ı kabul edilmeyen kullanım sayıyor |
 | X | **Hayır** (belgeden doğrulandı) | `POST /2/tweets` gövdesinin (`CreatePostsRequest`) API tanımındaki 17 alanının tamamı: `text`, `media`, `poll`, `reply`, `quote_tweet_id`, `reply_settings`, `community_id`, `card_uri`, `clip`, `direct_message_deep_link`, `edit_options`, `for_super_followers_only`, `geo`, `made_with_ai`, `nullcast`, `paid_partnership`, `share_with_followers`. Zamanlama alanı yok; tanımda zamanlanmış diye geçen yollar yalnızca canlı yayın ve arama içindir (`/2/broadcasts/scheduled`, `/2/calls/scheduled`). Zamanlanmış gönderi yalnızca Reklam API'sinde var (`POST accounts/:account_id/scheduled_tweets`; `scheduled_at` zorunlu, en çok bir yıl sonrası) |
 
 Uygulama notu (2026-11-10, B47): kurulan ilk sürüm Facebook Sayfası'nın metin ve bağlantı
@@ -889,7 +893,7 @@ yetenek olarak tasarlanır ki sonradan destekleyen platform aynı yoldan eklensi
 | Facebook Sayfası | `followers_count`; `page_follows`, `page_daily_follows` | `page_media_view`, `page_total_media_view_unique` | `page_post_engagements` | `page_views_total` | Sorgu başına 90 gün; 100 beğeninin altındaki sayfalarda ölçü yok |
 | Instagram | `followers_count`; `follows_and_unfollows` (100 takipçinin altında yok) | `reach`, `views` | `accounts_engaged`, `total_interactions` | `profile_links_taps` | Veri 48 saate kadar gecikebilir |
 | LinkedIn | Toplam takipçi ve günlük kazanım | `impressionCount`, `uniqueImpressionsCount` | `engagement`, tıklama, beğeni, yorum, paylaşım | Sayfa görüntülenmesi | Son 12 ay |
-| TikTok | Yalnızca anlık: `follower_count` (`GET /v2/user/info/`, kapsam `user.info.stats`; ayrıca `following_count`, `likes_count`, `video_count`). Günlük değişim verilmez (arama ile doğrulandı) | Hesap düzeyinde yok; video başına `view_count` (`/v2/video/list/`, `/v2/video/query/`, kapsam `video.list`) | Hesap düzeyinde yalnızca toplam `likes_count`; video başına `like_count`, `comment_count`, `share_count` | — | Video sorgusu istek başına en çok 20 video |
+| TikTok | Yalnızca anlık: `follower_count` (`GET /v2/user/info/`, kapsam `user.info.stats`; ayrıca `following_count`, `likes_count`, `video_count`). Günlük değişim verilmez (belgeden doğrulandı) | Hesap düzeyinde yok; video başına `view_count` (`/v2/video/list/`, `/v2/video/query/`, kapsam `video.list`) | Hesap düzeyinde yalnızca toplam `likes_count`; video başına `like_count`, `comment_count`, `share_count` | — | Liste sayfa başına en çok 20 video (varsayılan 10); sorgu istek başına en çok 20 video kimliği |
 | X | Yalnızca anlık: kullanıcının `public_metrics.followers_count` alanı (yanında `following_count`, `post_count`, `like_count`, `listed_count`, `media_count`). Günlük değişim verilmez (belgeden doğrulandı) | Hesap düzeyinde yok; gönderi başına `public_metrics.impression_count` | Gönderi başına `public_metrics` (`like_count`, `repost_count`, `reply_count`, `quote_count`, `bookmark_count`); `non_public_metrics`, `organic_metrics` ve `promoted_metrics` yalnızca kullanıcı yetkisiyle, kendi gönderileri için | — | Açık olmayan, organik ve tanıtılan ölçüler yalnızca son 30 günde oluşturulan gönderiler için |
 
 Dikkat edilecekler:
@@ -927,14 +931,14 @@ Dikkat edilecekler:
 
 | Platform | Oluşturma için gereken | Kesin toplam sınır |
 |---|---|---|
-| TikTok | Geliştirici uygulaması incelemesi; reklamveren yetkilendirmesi (ikincil kaynaktan) | Kampanyada ve reklam grubunda `budget` ve `budget_mode`; değerleri `BUDGET_MODE_TOTAL`, `BUDGET_MODE_DAY`, `BUDGET_MODE_DYNAMIC_DAILY_BUDGET`, `BUDGET_MODE_INFINITE`. Reklam grubunda `schedule_type` (`SCHEDULE_START_END`, `SCHEDULE_FROM_NOW`), `schedule_start_time`, `schedule_end_time`. Adlar resmi SDK deposundan; `BUDGET_MODE_TOTAL`'ın kampanyanın ya da reklam grubunun toplam sınırı olduğu arama ile doğrulandı |
+| TikTok | Geliştirici uygulaması incelemesi; reklamveren yetkilendirmesi (ikincil kaynaktan) | Kampanyada ve reklam grubunda `budget` ve `budget_mode`; değerleri `BUDGET_MODE_TOTAL`, `BUDGET_MODE_DAY`, `BUDGET_MODE_DYNAMIC_DAILY_BUDGET`, `BUDGET_MODE_INFINITE`. Reklam grubunda `schedule_type` (`SCHEDULE_START_END`, `SCHEDULE_FROM_NOW`), `schedule_start_time`, `schedule_end_time`. Adlar resmi SDK deposundan; `BUDGET_MODE_TOTAL`'ın kampanyanın ya da reklam grubunun toplam sınırı olduğu arama ile doğrulandı (başvuru sayfası okunamadı). Belge sitesinin duyurusu: 2027-01-01'den başlayarak `/campaign/create/`, `/adgroup/create/` ve `/ad/create/`, satış, uygulama tanıtımı ve form amaçlarında eski elle kurulan (arama dışı) kampanyaları desteklemeyecek; bunlar "Upgraded Smart+" API'lerine taşınmalı. TikTok reklam adımı Smart+ uçlarıyla planlanmalıdır |
 | LinkedIn | Reklam API'si başvurusu; geliştirme kademesinde en çok 5 reklam hesabı, sınırsızı ayrıca istenir | `totalBudget`: "toplam bütçeden fazlası harcanmaz"; günlük bütçe günde %150'ye kadar aşabilir |
 | X | Uygulama başına reklam API'si erişim formu (ikincil kaynaktan) | Kampanyada `total_budget_amount_local_micro` ("kampanyaya ayrılan toplam bütçe") ve `daily_budget_amount_local_micro` (mikro birim; günlük, toplamdan büyük olamaz); satır öğesinin toplamı kampanyanınkini aşamaz. Genel bakış kampanyanın "bütçe harcanana kadar" sürebildiğini söylüyor; toplamdan fazlasının harcanmayacağını açıkça söyleyen bir cümle başvuruda da genel bakışta da yok (belgeden doğrulandı, kesinlik açık) |
 | Google | Geliştirici belirteci kademeleri; üretim için en az "Explorer", sınırsızı için denetim | Toplam bütçe: "toplam bütçeden fazlası tahsil edilmez" |
 
 Sonuç: "toplam bütçe" her platformda var; kesin sınır olduğu X dışında belgelerde açıkça yazıyor
 (TikTok için bu, arama sonucuna dayanır). B32 bu yüzden platformdan bağımsız bir kuraldır; X
-eklenirken kesinliği gerçek hesapta denenmeli, TikTok eklenirken sayfasından okunmalıdır.
+eklenirken kesinliği gerçek hesapta denenmeli, TikTok eklenirken Smart+ başvurusundan okunmalıdır.
 
 ### Kaynaklar
 
@@ -969,13 +973,14 @@ https://github.com/tiktok/tiktok-business-api-sdk, commit `f809c396520df2d7b201a
 - `README.md`, `java_sdk/docs/CampaignCreateBody.md`, `java_sdk/docs/AdgroupCreateBody.md`
 - `yml_files/smart_plus_campaign_create.yml`, `yml_files/smart_plus_adgroup_create.yml` (değer listeleri)
 - https://business-api.tiktok.com/portal/docs/create-an-ad-group/v1.3 (anlamlar; arama aracıyla)
+- https://business-api.tiktok.com/portal/docs (giriş sayfası ve 2027-01-01 duyurusu; okundu)
 
-TikTok gönderi ve ölçüleri (2026-11-11, arama aracıyla; sayfaların kendisi okunamadı):
+TikTok gönderi ve ölçüleri (2026-11-11, sayfaların kendisi okundu; parantezde sayfanın son
+güncelleme tarihi):
 
-- https://developers.tiktok.com/docs/en/content-posting-api-reference-direct-post
-- https://developers.tiktok.com/docs/en/content-sharing-guidelines
-- https://developers.tiktok.com/blog/effortless-sharing-with-direct-post
-- https://developers.tiktok.com/docs/en/tiktok-api-v2-get-user-info
-- https://developers.tiktok.com/docs/en/tiktok-api-scopes
-- https://developers.tiktok.com/docs/en/tiktok-api-v2-video-list
-- https://developers.tiktok.com/docs/en/tiktok-api-v2-video-query
+- https://developers.tiktok.com/docs/en/content-posting-api-reference-direct-post (2026-10-27)
+- https://developers.tiktok.com/docs/en/content-sharing-guidelines (2026-08-04)
+- https://developers.tiktok.com/docs/en/tiktok-api-v2-get-user-info (2026-11-04)
+- https://developers.tiktok.com/docs/en/tiktok-api-v2-video-list (2026-08-04)
+- https://developers.tiktok.com/docs/en/tiktok-api-v2-video-query (2026-08-24)
+- https://developers.tiktok.com/docs/en/tiktok-api-v2-video-object (2026-08-24)
