@@ -1,0 +1,47 @@
+{
+  "about": "An agent's outbound call that goes as planned: the bridge dials, the person answers and hears the opening, the agent listens and answers twice, then records the outcome; the closing plays and the bridge hangs up. Times are seconds after the call was placed; the bridge acknowledges every command it takes.",
+  "plan": {
+    "opening": "Merhaba, ben Acme'nin dijital asistanıyım. Randevunuz için arıyorum.",
+    "goal": "Perşembe randevusunu teyit etmek",
+    "holding": ["Bir saniye, kontrol ediyorum.", "Hemen bakıyorum."],
+    "fallback": ["Bağlantıda bir gecikme var, lütfen bekleyin.", "Sizi en kısa sürede geri arayacağız."],
+    "closing": "Teşekkürler, iyi günler.",
+    "max_duration_s": 300,
+    "language": "tr",
+    "disclose_assistant": true
+  },
+  "script": [
+    { "t": 0, "agent": "place" },
+    { "t": 1, "bridge": "poll", "expect": ["dial"] },
+    { "t": 2, "bridge": "events", "events": [{ "kind": "ringing" }] },
+    { "t": 5, "bridge": "events", "events": [{ "kind": "answered" }] },
+    { "t": 5, "bridge": "poll", "expect": ["play"] },
+    { "t": 8, "bridge": "events", "events": [{ "kind": "said", "seq": "$last", "tts_ms": 380 }] },
+    { "t": 10, "bridge": "events", "events": [
+      { "kind": "utterance", "text": "Evet, buyurun.", "is_final": false },
+      { "kind": "utterance", "text": "Evet, buyurun.", "is_final": true, "confidence": 0.91, "stt_ms": 210 }
+    ] },
+    { "t": 11, "agent": "listen", "after_seq": 1, "expect": ["utterance"] },
+    { "t": 13, "agent": "say", "text": "Perşembe 14:00 randevunuzu teyit ediyorum, uygun mu?" },
+    { "t": 13, "bridge": "poll", "expect": ["say"] },
+    { "t": 17, "bridge": "events", "events": [{ "kind": "said", "seq": "$last", "tts_ms": 420 }] },
+    { "t": 19, "bridge": "events", "events": [
+      { "kind": "utterance", "text": "Evet, uygun.", "is_final": true, "confidence": 0.88, "stt_ms": 190 }
+    ] },
+    { "t": 20, "agent": "listen", "after_seq": 3, "expect": ["utterance"] },
+    { "t": 22, "agent": "end", "input": { "outcome": "appointment", "summary": "Perşembe 14:00 teyit edildi." } },
+    { "t": 22, "bridge": "poll", "expect": ["play", "hangup"] },
+    { "t": 26, "bridge": "events", "events": [
+      { "kind": "said", "seq": "$last", "tts_ms": 300 },
+      { "kind": "hangup", "cause": "normal" }
+    ] }
+  ],
+  "expect": {
+    "state": "ended",
+    "end_cause": "agent_ended",
+    "duration_s": 17,
+    "turns": ["event:answered", "say:script", "utterance", "say:agent", "utterance", "say:script"],
+    "ledger": ["calls.placed", "calls.answered", "calls.ended"],
+    "call_made": [true]
+  }
+}

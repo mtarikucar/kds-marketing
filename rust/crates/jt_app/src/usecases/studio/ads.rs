@@ -142,7 +142,7 @@ pub(crate) async fn validate_paid_or_organic_chain(
             supported_kinds: if lane == LaneKind::Paid {
                 &["meta_ads"]
             } else {
-                &["x", "facebook_page", "instagram"]
+                super::chain::ORGANIC_KINDS
             },
             lane,
         },

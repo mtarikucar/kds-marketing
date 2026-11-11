@@ -1,0 +1,6 @@
+# Everything here runs on the Linux host (Asterisk configs, Dockerfiles, systemd units, scripts)
+# and reaches it as a `git archive`, which on a Windows checkout with core.autocrlf=true would
+# otherwise carry CRLF line endings.
+* text=auto eol=lf
+# The listen tests' audio: G.711 A-law bytes, never text.
+*.alaw binary

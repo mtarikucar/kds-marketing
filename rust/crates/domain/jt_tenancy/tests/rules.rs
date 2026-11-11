@@ -18,7 +18,7 @@ fn email_rejects_garbage() {
 }
 
 #[test]
-fn owner_and_manager_have_all_permissions_rep_reads_and_works_inbox() {
+fn owner_and_manager_have_all_permissions_rep_reads_works_inbox_and_calls() {
     assert_eq!(
         SystemRole::Owner.permissions().len(),
         Permission::all().len()
@@ -29,9 +29,13 @@ fn owner_and_manager_have_all_permissions_rep_reads_and_works_inbox() {
     );
     assert_eq!(
         SystemRole::Rep.permissions(),
-        [Permission::WorkspaceRead, Permission::InboxWork]
-            .into_iter()
-            .collect()
+        [
+            Permission::WorkspaceRead,
+            Permission::InboxWork,
+            Permission::CallsWork
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -71,8 +75,42 @@ fn capabilities_and_budget_permissions_belong_to_owner_and_manager_only() {
             "inbox.manage",
             "studio.work",
             "studio.manage",
+            "calls.work",
+            "calls.manage",
+            "calls.bridge",
+            "devices.work",
+            "devices.bridge",
         ]
     );
+}
+
+#[test]
+fn calls_bridge_is_owner_and_manager_only() {
+    // A voice bridge's key is issued with `calls.bridge` alone; only who holds it may issue it.
+    let p = Permission::CallsBridge;
+    assert_eq!(p.key(), "calls.bridge");
+    assert_eq!(Permission::parse("calls.bridge"), Some(p));
+    assert_eq!(serde_json::to_value(p).unwrap(), "calls.bridge");
+    assert!(SystemRole::Owner.permissions().contains(&p));
+    assert!(SystemRole::Manager.permissions().contains(&p));
+    assert!(!SystemRole::Rep.permissions().contains(&p));
+}
+
+#[test]
+fn devices_permissions_are_owner_and_manager_only() {
+    // A device bridge's key is issued with `devices.bridge` alone; only who holds it may issue it.
+    for (p, key) in [
+        (Permission::DevicesWork, "devices.work"),
+        (Permission::DevicesBridge, "devices.bridge"),
+    ] {
+        assert_eq!(p.key(), key);
+        assert_eq!(Permission::parse(key), Some(p));
+        assert_eq!(serde_json::to_value(p).unwrap(), key);
+        assert!(Permission::all().contains(&p), "{key}");
+        assert!(SystemRole::Owner.permissions().contains(&p), "{key}");
+        assert!(SystemRole::Manager.permissions().contains(&p), "{key}");
+        assert!(!SystemRole::Rep.permissions().contains(&p), "{key}");
+    }
 }
 
 #[test]
@@ -215,6 +253,11 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             Permission::InboxManage,
             Permission::StudioWork,
             Permission::StudioManage,
+            Permission::CallsWork,
+            Permission::CallsManage,
+            Permission::CallsBridge,
+            Permission::DevicesWork,
+            Permission::DevicesBridge,
         ]),
     });
     // A custom lead may neither demote nor remove a manager.
@@ -226,9 +269,10 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
         can_remove_member(&lead(), false, &SystemRole::Manager.permissions()),
         exceeds
     );
-    // Rep now holds InboxWork too: a lead without it cannot change or remove that member.
+    // Rep now holds InboxWork and CallsWork too: a lead without them cannot change or remove that
+    // member.
     let missing_work = Err(TenancyError::ExceedsOwnAuthority {
-        missing: BTreeSet::from([Permission::InboxWork]),
+        missing: BTreeSet::from([Permission::InboxWork, Permission::CallsWork]),
     });
     assert_eq!(
         can_grant_role(&lead(), &change(SystemRole::Rep, SystemRole::Rep)),
@@ -240,6 +284,7 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
     );
     let mut inbox_lead = lead();
     inbox_lead.permissions.insert(Permission::InboxWork);
+    inbox_lead.permissions.insert(Permission::CallsWork);
     assert_eq!(
         can_grant_role(&inbox_lead, &change(SystemRole::Rep, SystemRole::Rep)),
         Ok(())
@@ -297,7 +342,11 @@ fn a_member_whose_authority_exceeds_the_actors_is_not_the_actors_to_change() {
             &change(SystemRole::Manager, SystemRole::Rep)
         ),
         Err(TenancyError::ExceedsOwnAuthority {
-            missing: BTreeSet::from([Permission::WorkspaceRead, Permission::InboxWork]),
+            missing: BTreeSet::from([
+                Permission::WorkspaceRead,
+                Permission::InboxWork,
+                Permission::CallsWork,
+            ]),
         })
     );
 }
@@ -342,6 +391,11 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
             Permission::InboxManage,
             Permission::StudioWork,
             Permission::StudioManage,
+            Permission::CallsWork,
+            Permission::CallsManage,
+            Permission::CallsBridge,
+            Permission::DevicesWork,
+            Permission::DevicesBridge,
         ]),
     });
     assert_eq!(
@@ -355,7 +409,7 @@ fn a_role_granted_or_defined_never_exceeds_the_actors_own_permissions() {
     assert_eq!(
         can_grant_role(&lead, &grant(SystemRole::Rep, false)),
         Err(TenancyError::ExceedsOwnAuthority {
-            missing: BTreeSet::from([Permission::InboxWork])
+            missing: BTreeSet::from([Permission::InboxWork, Permission::CallsWork])
         })
     );
     assert_eq!(

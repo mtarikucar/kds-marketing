@@ -20,6 +20,7 @@ pub struct Slot {
     pub id: SlotId,
     pub chain: Chain,
     pub capability_id: CapabilityId,
+    #[serde(with = "crate::time_compat")]
     pub scheduled_at: OffsetDateTime,
     pub state: SlotState,
     pub revision: u64,
@@ -47,6 +48,26 @@ pub enum RetirementReason {
     StrategyArchived,
     WeekEnded,
     MeasurementsComplete,
+    /// A slot of the weekly quotas, planned or ready, that olay-driven publishing replaced
+    /// (spec 2026-11-03 D34): retired once, its evidence kept.
+    Replanned,
+    /// A planned post not sent by the end of its grace (spec D28).
+    MissedGrace,
+}
+
+impl RetirementReason {
+    /// Its stable code, its serde name.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::HypothesisRetired => "hypothesis_retired",
+            Self::StrategyArchived => "strategy_archived",
+            Self::WeekEnded => "week_ended",
+            Self::MeasurementsComplete => "measurements_complete",
+            Self::Replanned => "replanned",
+            Self::MissedGrace => "missed_grace",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub enum SlotEvent {
@@ -131,7 +152,9 @@ pub fn transition_slot(
             let allowed = match reason {
                 RetirementReason::Cancelled
                 | RetirementReason::HypothesisRetired
-                | RetirementReason::StrategyArchived => {
+                | RetirementReason::StrategyArchived
+                | RetirementReason::Replanned
+                | RetirementReason::MissedGrace => {
                     matches!(slot.state, SlotState::Planned | SlotState::Ready)
                 }
                 RetirementReason::WeekEnded => slot.state == SlotState::Planned,

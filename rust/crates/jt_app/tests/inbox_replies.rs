@@ -1,7 +1,7 @@
 mod support;
 use jt_app::{
     ports::{UnitOfWork, connectors::SendReceipt},
-    usecases::inbox::{people, replies},
+    usecases::inbox::{conversations, people, replies},
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
 use jt_connector::{Credential, Provider};
@@ -15,9 +15,19 @@ async fn setup() -> (World, ConversationId, Arc<ScriptedConnector>) {
     setup_channel("whatsapp_cloud").await
 }
 async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnector>) {
+    setup_channel_with(kind, true).await
+}
+/// [`setup_channel`] in a workspace with an approved strategy only when `approved`; without one
+/// no SMS price is set up either (the SMS fixture prices its line in the strategy's budget).
+async fn setup_channel_with(
+    kind: &str,
+    approved: bool,
+) -> (World, ConversationId, Arc<ScriptedConnector>) {
     let mut w = world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
-    w.approve_strategy().await;
+    if approved {
+        w.approve_strategy().await;
+    }
     let connector = Arc::new(ScriptedConnector::new(match kind {
         "mailbox" => Provider::Mail,
         "sms_line" => Provider::Netgsm,
@@ -87,7 +97,9 @@ async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnec
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
-    jt_testkit::flows::price_sms(&w.deps, w.ws).await;
+    if approved {
+        jt_testkit::flows::price_sms(&w.deps, w.ws).await;
+    }
     (w, id, connector)
 }
 fn input(key: Option<&str>) -> replies::ReplyInput {
@@ -127,6 +139,65 @@ async fn successful_send_atomically_records_replied() {
         }
         _ => panic!("messaging sender expected"),
     }
+}
+
+#[tokio::test]
+async fn a_failed_send_shows_the_provider_reason_and_the_ledger_keeps_only_its_kind() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::permanent(
+        "HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list",
+    )));
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "failed");
+    let reason = "permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list";
+    assert_eq!(
+        w.uow.snapshot().inbox.outbox[0].last_error.as_deref(),
+        Some(reason)
+    );
+    let page = conversations::messages(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        conversations::MessagesInput {
+            cursor: None,
+            limit: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].message.status, MsgStatus::Failed);
+    assert_eq!(page.items[0].failure_reason.as_deref(), Some(reason));
+    let shown = serde_json::to_value(&page).unwrap();
+    assert_eq!(shown["items"][0]["failure_reason"], reason);
+    assert_eq!(shown["items"][0]["status"], "failed");
+    // The append-only ledger keeps the stable kind, never the provider's prose.
+    let results = w.entries("inbox.reply.result");
+    assert_eq!(results.last().unwrap().payload["reason"], "permanent");
+}
+
+#[tokio::test]
+async fn a_failure_reason_is_bounded_and_single_line() {
+    let (w, id, c) = setup().await;
+    c.push_send_text(Err(jt_connector::ConnectorError::transient(format!(
+        "line one\nline two {}",
+        "x".repeat(400)
+    ))));
+    replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    let stored = w.uow.snapshot().inbox.outbox[0].last_error.clone().unwrap();
+    assert!(
+        stored.starts_with("transient: meta: line one line two"),
+        "{stored}"
+    );
+    assert_eq!(
+        stored.chars().count(),
+        jt_app::usecases::failure::MAX_FAILURE_CHARS
+    );
+    assert!(!stored.chars().any(char::is_control));
 }
 
 async fn queued(w: &World, id: ConversationId) -> uuid::Uuid {
@@ -512,10 +583,8 @@ async fn uncertain_and_definite_failures_have_no_success_effect() {
     }
 }
 
-#[tokio::test]
-async fn recovery_rechecks_strategy_approval() {
-    let (w, id, c) = setup().await;
-    queued(&w, id).await;
+/// Archives the workspace's approved strategy.
+async fn archive_strategy(w: &World) {
     let version = w
         .uow
         .tenant(w.ws)
@@ -536,20 +605,162 @@ async fn recovery_rechecks_strategy_approval() {
     )
     .await
     .unwrap();
-    c.push_send_text(accepted());
-    let report = jt_app::usecases::jobs::run_outbox_recover(
+}
+async fn recover(w: &World) -> jt_app::usecases::jobs::JobReport {
+    jt_app::usecases::jobs::run_outbox_recover(
         &w.deps,
         w.owner_ctx.now + time::Duration::minutes(6),
     )
-    .await;
+    .await
+}
+
+/// Answering a customer never waits for a marketing strategy (owner decision of 2026-11-03).
+#[tokio::test]
+async fn a_reply_needs_no_strategy() {
+    let (w, id, c) = setup_channel_with("whatsapp_cloud", false).await;
+    c.push_send_text(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    let s = w.uow.snapshot();
+    assert_eq!(s.inbox.outbox[0].state, "sent");
+    // The send records the use case that queued it, whose gate a recovery honours again.
+    assert_eq!(s.inbox.outbox[0].intent["use_case"], "inbox.reply");
+    assert_eq!(c.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn recovery_sends_a_reply_after_the_strategy_is_archived() {
+    let (w, id, c) = setup().await;
+    queued(&w, id).await;
+    archive_strategy(&w).await;
+    c.push_send_text(accepted());
+    let report = recover(&w).await;
     assert_eq!(report.failed, 0);
+    assert_eq!(c.calls().len(), 1);
+    assert_eq!(w.uow.snapshot().inbox.outbox[0].state, "sent");
+}
+
+/// A send queued by a gated use case (`inbox.send`, outreach) meets the strategy again when it is
+/// recovered, and so does one queued before sends recorded their use case: then every send was
+/// queued behind the gate.
+#[tokio::test]
+async fn recovery_rechecks_the_strategy_of_a_send_queued_by_a_gated_use_case() {
+    for use_case in [Some("inbox.send"), None] {
+        let (w, id, c) = setup().await;
+        let queued = queued(&w, id).await;
+        // No use case queues a reply-intent send that `inbox.send` recorded, nor one recording
+        // nothing: write the queued row's intent directly.
+        w.uow.edit(|s| {
+            let row = s.inbox.outbox.iter_mut().find(|r| r.id == queued).unwrap();
+            match use_case {
+                Some(use_case) => row.intent["use_case"] = json!(use_case),
+                None => {
+                    row.intent.as_object_mut().unwrap().remove("use_case");
+                }
+            }
+        });
+        archive_strategy(&w).await;
+        c.push_send_text(accepted());
+        let report = recover(&w).await;
+        assert_eq!(report.failed, 0, "{use_case:?}");
+        assert!(c.calls().is_empty(), "{use_case:?}");
+        let s = w.uow.snapshot();
+        assert_eq!(s.inbox.outbox[0].state, "refused", "{use_case:?}");
+        assert_eq!(
+            s.inbox.outbox[0].last_error.as_deref(),
+            Some("strategy_required"),
+            "{use_case:?}"
+        );
+    }
+}
+
+/// A metered send (an SMS line here) reserves its spend in the approved strategy's budget frame,
+/// so without a strategy it is refused before anything is queued, rather than left queued until
+/// a strategy is approved and then sent late.
+#[tokio::test]
+async fn a_metered_reply_without_a_strategy_is_refused_before_it_is_queued() {
+    let (w, id, c) = setup_channel_with("sms_line", false).await;
+    c.push_send_text(accepted());
+    let e = replies::reply(&w.deps, &w.owner_ctx, id, input(None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "strategy_required", "{e:?}");
     assert!(c.calls().is_empty());
     let s = w.uow.snapshot();
-    assert_eq!(s.inbox.outbox[0].state, "refused");
-    assert_eq!(
-        s.inbox.outbox[0].last_error.as_deref(),
-        Some("strategy_required")
-    );
+    assert!(s.inbox.outbox.is_empty());
+    assert!(s.inbox.messages.is_empty());
+}
+
+/// An email conversation in a workspace with no strategy, its customer consenting to commercial
+/// mail, and its last inbound message `ago` before now in conversation `state`.
+async fn mail_conversation(
+    ago: time::Duration,
+    state: ConvState,
+) -> (World, ConversationId, Arc<ScriptedConnector>) {
+    let (w, id, c) = setup_channel_with("mailbox", false).await;
+    let person = w.uow.snapshot().inbox.people[0].id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.consents()
+        .insert(Consent {
+            id: ConsentId::new_v7(),
+            person_id: person,
+            channel: Channel::Email,
+            kind: ConsentKind::Explicit,
+            source: ConsentSource::Customer,
+            at: w.owner_ctx.now - time::Duration::days(60),
+            sync_state: SyncState::Pending,
+            attempts: 0,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let at = w.owner_ctx.now - ago;
+    w.uow.edit(|s| {
+        let c = s
+            .inbox
+            .conversations
+            .iter_mut()
+            .find(|c| c.id == id)
+            .unwrap();
+        c.last_inbound_at = Some(at);
+        c.state = state;
+    });
+    (w, id, c)
+}
+fn commercial() -> replies::ReplyInput {
+    serde_json::from_value(json!({"text":"An offer","intent":"commercial"})).unwrap()
+}
+
+/// A commercial message is outreach unless the customer is still talking: without a strategy it
+/// is refused once the customer's last message is older than the answering window, or the
+/// conversation is closed, whatever the channel (email has no provider window of its own).
+#[tokio::test]
+async fn a_commercial_reply_without_a_strategy_needs_a_customer_still_talking() {
+    let quiet = replies::ANSWERING_WINDOW + time::Duration::days(1);
+    for (ago, state) in [
+        (quiet, ConvState::Ours),
+        (time::Duration::hours(2), ConvState::Closed),
+    ] {
+        let (w, id, c) = mail_conversation(ago, state.clone()).await;
+        c.push_mail(accepted());
+        let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial())
+            .await
+            .unwrap_err();
+        assert_eq!(e.details["reason"], "strategy_required", "{state:?}: {e:?}");
+        assert!(c.calls().is_empty(), "{state:?}");
+        assert!(w.uow.snapshot().inbox.outbox.is_empty(), "{state:?}");
+    }
+    // Inside the window, on an open conversation, it answers the customer: no strategy needed,
+    // well past the 24 hours a reply-intent message is held to.
+    let (w, id, c) = mail_conversation(time::Duration::days(3), ConvState::Theirs).await;
+    c.push_mail(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial())
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    assert_eq!(c.calls().len(), 1);
 }
 
 #[tokio::test]
@@ -1100,6 +1311,65 @@ async fn late_receipt_after_closure_and_reopen_preserves_newer_attempts() {
     assert_eq!(after, before);
     assert_eq!(after.status, JourneyStatus::Unreachable);
     assert_eq!(after.unreachable_attempts, 3);
+}
+
+#[tokio::test]
+async fn mail_reply_without_subject_answers_the_original_subject() {
+    use jt_connector::{EventKind, InboundEvent, InboundEventId};
+    let (w, id, c) = setup_channel("mailbox").await;
+    let capability = w.uow.snapshot().inbox.conversations[0].capability_id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.messages()
+        .insert_if_new(Message {
+            id: MessageId::new_v7(),
+            workspace_id: w.ws,
+            conversation_id: id,
+            direction: Direction::Inbound,
+            author: Author::Customer,
+            body: "Help please".into(),
+            external_id: Some("<original@example.com>".into()),
+            status: MsgStatus::Received,
+            cost_minor: None,
+            at: w.owner_ctx.now,
+        })
+        .await
+        .unwrap();
+    r.inbound_events()
+        .insert_if_new(
+            InboundEvent {
+                id: InboundEventId::new_v7(),
+                workspace_id: w.ws,
+                capability_id: Some(capability),
+                provider: Provider::Mail,
+                external_id: "imap:account:INBOX:1:7".into(),
+                kind: EventKind::Message,
+                payload: json!({"from":"ada@example.com", "subject":"Help\r\n needed", "text":"Help please", "message_id":"<original@example.com>"}),
+                received_at: w.owner_ctx.now,
+                processed_at: None,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    c.push_mail(accepted());
+    replies::reply(&w.deps, &w.owner_ctx, id, input(Some("mail-subject")))
+        .await
+        .unwrap();
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendMail { message, .. } => {
+            assert_eq!(message.subject, "Re: Help needed");
+            assert_eq!(
+                message.in_reply_to.as_deref(),
+                Some("<original@example.com>")
+            );
+            assert_eq!(
+                message.references,
+                vec!["<original@example.com>".to_owned()]
+            );
+        }
+        other => panic!("mail expected: {other:?}"),
+    }
 }
 
 #[tokio::test]

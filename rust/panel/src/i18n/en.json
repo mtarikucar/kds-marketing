@@ -18,7 +18,8 @@
     "copyFailed": "Could not copy; select the text and copy it by hand.",
     "actions": "Actions",
     "none": "—",
-    "loadError": "Could not load. Please try again."
+    "loadError": "Could not load. Please try again.",
+    "refreshFailed": "Could not refresh: showing what was read last."
   },
   "kit": {
     "close": "Close",
@@ -50,7 +51,9 @@
     "capabilities": "Capabilities",
     "budget": "Budget",
     "inbox": "Inbox",
-    "studio": "Growth studio"
+    "studio": "Growth studio",
+    "people": "People",
+    "calls": "Calls"
   },
   "shell": {
     "workspace": "Workspace",
@@ -65,7 +68,7 @@
   },
   "status": {
     "workspace": {
-      "pending_payment": "Awaiting payment",
+      "pending_payment": "Awaiting activation",
       "active": "Active",
       "suspended": "Suspended"
     },
@@ -122,6 +125,15 @@
     "studio": {
       "work": "Work in the studio",
       "manage": "Manage the studio"
+    },
+    "calls": {
+      "work": "Place calls and read the call log",
+      "manage": "Manage the call policy",
+      "bridge": "Act as the voice bridge (the bridge's key only)"
+    },
+    "devices": {
+      "work": "Use phones",
+      "bridge": "Act as the device bridge (the bridge's key only)"
     }
   },
   "roleNames": {
@@ -272,14 +284,14 @@
       "hypotheses": "Hypotheses: {{count}}."
     },
     "inactive": {
-      "pending_payment": "Your workspace becomes active once payment is received.",
+      "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
       "active": "Your workspace is active.",
       "suspended": "Your workspace is suspended. Contact us for details."
     },
     "agent": {
       "title": "Agent",
       "lastSeen": "Last seen",
-      "never": "No agent has connected yet.",
+      "never": "Create an API key to connect an agent such as Claude; the steps are on the keys page.",
       "interval": "Expected check-in interval",
       "editInterval": "Change the interval",
       "intervalLabel": "Interval (minutes)",
@@ -287,10 +299,12 @@
       "intervalSaved": "Check-in interval updated.",
       "overdueTitle": "The agent is overdue",
       "overdueBody": "The agent has not checked in within the expected interval; pending work is waiting.",
-      "schedulerNote": "The agent's scheduler is the tenant's responsibility: Jeeta never wakes the agent; you set up the schedule that runs it at regular intervals.",
+      "schedulerNote": "Jeeta does not wake the agent: you (or the agent's own scheduler) run it at regular intervals.",
       "onTime": "The agent is checking in on time.",
       "hours": "{{count}} h",
-      "minutes": "{{count}} min"
+      "minutes": "{{count}} min",
+      "neverTitle": "No agent connected yet",
+      "connectLink": "Connect an agent"
     },
     "pending": {
       "title": "Pending work",
@@ -310,7 +324,9 @@
       "reply_due": "Conversation awaiting reply",
       "reopen_question": "Decision to reopen a lost journey",
       "merge_suggested": "Contact merge suggestion",
-      "task_due": "Task due"
+      "task_due": "Task due",
+      "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
+      "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again."
     }
   },
   "team": {
@@ -395,7 +411,16 @@
       "scopesHint": "If you choose none, the key carries all of your permissions.",
       "submit": "Create key",
       "plaintextTitle": "Your new key",
-      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again."
+      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again.",
+      "plaintextDescription": "Copy the key now; the steps to connect an agent are below."
+    },
+    "connect": {
+      "title": "Connect an agent",
+      "url": "MCP address",
+      "claudeCode": "In Claude Code, run this command:",
+      "command": "Claude Code command",
+      "needKey": "Create a key to connect; the ready-made command appears when you do.",
+      "otherClients": "Other MCP clients connect with this address, the streamable HTTP transport and an “Authorization: Bearer <key>” header. claude.ai connectors (OAuth) are not supported yet."
     }
   },
   "agents": {
@@ -475,7 +500,7 @@
       "activated": "Activated",
       "revoked": "Revoked",
       "pending": "Awaiting confirmation",
-      "confirm": "Transfer confirmed",
+      "confirm": "Confirm transfer",
       "code": "Activation code",
       "reissue": "Reissue code",
       "revoke": "Revoke activation",
@@ -668,7 +693,27 @@
       "noSection": "No section",
       "text": "Text",
       "recorded": "Entry recorded."
-    }
+    },
+    "gaps": {
+      "product": "Name the product in the Identity section.",
+      "segment": "Add at least one segment to the Audience section.",
+      "segmentKey": "Audience: segment {{n}} has an invalid or duplicate key.",
+      "channel": "Add at least one channel to the Channels section.",
+      "channelUnavailable": "Channels: channel {{n}} has no connected account. Connect it or choose “Any channel”.",
+      "budget": "Check the budget frame: every lane needs a kind, cap and currency; paid channels need a paid lane.",
+      "cadence": "Cadence: the channel mix may only use the strategy's channels, each once, with shares summing to 100.",
+      "hypothesis": "Add at least one active hypothesis.",
+      "hypothesisField": "Hypothesis {{n}}: the {{field}} is required.",
+      "hypothesisFields": {
+        "title": "title",
+        "angle": "angle",
+        "metric": "metric"
+      },
+      "hypothesisSegment": "Hypothesis {{n}}: its segment is not in the audience.",
+      "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
+      "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
+    },
+    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected."
   },
   "capabilities": {
     "title": "Capabilities",
@@ -685,6 +730,7 @@
       "community": "Community",
       "ads": "Ads",
       "calendar": "Calendar",
+      "marketplace": "Marketplaces",
       "device": "Devices",
       "agent_connection": "Agent connections",
       "computer_access": "Computer access",
@@ -695,6 +741,7 @@
       "facebook_page": "Facebook page",
       "x": "X",
       "linkedin_page": "LinkedIn page",
+      "linkedin_member": "LinkedIn profile",
       "tiktok": "TikTok",
       "pinterest": "Pinterest",
       "youtube": "YouTube",
@@ -706,6 +753,7 @@
       "mailbox": "Mailbox",
       "webchat": "Web chat",
       "netgsm_pbx": "NetGSM PBX",
+      "voice_bridge": "Voice bridge",
       "discord": "Discord",
       "reddit": "Reddit",
       "review_google": "Google reviews",
@@ -716,6 +764,8 @@
       "google_ads": "Google ads",
       "google_calendar": "Google Calendar",
       "outlook_calendar": "Outlook calendar",
+      "trendyol": "Trendyol store",
+      "hepsiburada": "Hepsiburada store",
       "phone": "Phone",
       "computer": "Computer",
       "printer": "Printer",
@@ -866,6 +916,21 @@
       "memberAdded": "Member added.",
       "memberRemoved": "Member removed."
     },
+    "pbx": {
+      "title": "PBX call policy",
+      "saved": "PBX policy saved.",
+      "recording": "Record calls at the PBX",
+      "recordingHint": "Turn on only with the KVKK recording announcement in place: recording must start after the caller has heard it.",
+      "mode": "How calls are placed",
+      "modes": {
+        "originate": "From the extension",
+        "linkup": "From the rep's phone"
+      },
+      "modeHints": {
+        "originate": "The rep's extension rings first; once answered, the customer is called.",
+        "linkup": "The rep's own phone number rings first; once answered, the customer is called."
+      }
+    },
     "connector": {
       "label": "Connection",
       "actionsLabel": "Connection actions",
@@ -882,13 +947,21 @@
         "expired": "The access token has expired"
       },
       "errorKinds": {
-        "auth": "login refused",
-        "permission": "no permission",
-        "throttle": "provider busy",
-        "transient": "a temporary problem",
-        "permanent": "a permanent problem",
-        "unknown": "an unknown problem"
+        "auth": "sign-in refused: check the user name or code and the password",
+        "permission": "the account lacks permission: check its permissions at the provider",
+        "throttle": "the provider is busy: try again in a few minutes",
+        "transient": "could not reach the provider: check the server name and connection, then retry",
+        "permanent": "the provider rejected the details: check the user code, password, sender header and server names",
+        "unknown": "the provider's answer did not say whether it worked: probe again in a moment"
       },
+      "measureReconnect": "Measurement: reconnect; this connection's permissions do not read its results.",
+      "commentsLine": "Comments: {{status}}",
+      "comments": {
+        "off": "off (waiting for Meta’s approval)",
+        "reconnect": "reconnect to turn them on",
+        "on": "on"
+      },
+      "reasonLine": "The provider said: {{reason}}",
       "probeDialog": {
         "title": "Probe: {{name}}",
         "description": "The system made a small trial call to the provider with the credentials.",
@@ -916,7 +989,97 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook address",
       "verifyTokenHint": "The verify token is set in the dashboard of the platform's Meta app; it is not shown here.",
-      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is."
+      "metaMissing": "The platform's Meta app is not configured yet; the Meta webhook address appears once it is.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook address",
+      "tiktokHelp": "Enter it as the callback URL of the platform's TikTok app in TikTok's developer portal (the app's Webhooks). Jeeta acts on: {{events}}; other events are kept for the agent."
+    },
+    "bridge": {
+      "title": "Voice bridge",
+      "extension": "Extension",
+      "stt": "Speech to text",
+      "tts": "Text to speech",
+      "version": "Version",
+      "lines": "Calls at once",
+      "codecs": "Codecs",
+      "heartbeat": "Last registered",
+      "never": "The bridge has not registered yet.",
+      "hint": "Only the bridge's own registration verifies it, never evidence. Setup:"
+    },
+    "phone": {
+      "title": "Device bridge",
+      "status": "Status",
+      "states": {
+        "online": "Online",
+        "unlisted": "Offline: the bridge no longer lists this phone (unplugged, or not ready in adb)",
+        "stale": "Verification lapsed: no registration listed it in the last minute"
+      },
+      "seen": "last seen {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "OS version",
+      "computer": "Computer",
+      "version": "Bridge version",
+      "unicode": "Unicode text",
+      "yes": "Yes",
+      "no": "No",
+      "unicodeHint": "To type Turkish letters or emoji, install ADBKeyBoard on the phone <b>and enable it as an input method</b>: installed alone, it is not used.",
+      "commands": "Commands",
+      "never": "No device bridge has registered this phone yet.",
+      "hint": "Only its bridge's registrations verify a phone, never evidence. Setup:",
+      "log": {
+        "title": "Recent commands",
+        "empty": "No command has been sent to this phone yet.",
+        "args": "Arguments",
+        "result": "Result",
+        "noResult": "No result.",
+        "reason": "Failed: {{reason}}",
+        "file": "Open the file (the link works for 10 minutes)",
+        "statuses": {
+          "queued": "Queued",
+          "leased": "Running",
+          "done": "Done",
+          "failed": "Failed",
+          "expired": "Expired",
+          "canceled": "Canceled"
+        },
+        "reasons": {
+          "device_offline": "the phone is offline",
+          "element_not_found": "no such element on the screen",
+          "unicode_unsupported": "the phone cannot type text outside ASCII",
+          "unsupported_on_platform": "not possible on this platform",
+          "unsupported_by_bridge": "the bridge does not run this command",
+          "adb_error": "adb error",
+          "screen_busy": "the screen kept moving",
+          "timeout": "the phone did not answer in time",
+          "bridge_error": "bridge error",
+          "file_not_found": "the file is no longer stored",
+          "unknown": "an unknown reason"
+        },
+        "fileGone": "The file is no longer stored (files are kept 7 days).",
+        "fileBlocked": "The browser blocked the new tab: allow pop-ups for this site and try again."
+      },
+      "pair": {
+        "title": "Connect a phone",
+        "body": "An Android phone plugged into a computer by USB is connected by the Jeeta device bridge program on that computer. Pairing gives the program its key.",
+        "open": "Pair a bridge",
+        "dialogTitle": "Pair a device bridge",
+        "dialogDescription": "Creates a key for one computer, with the one permission a bridge needs (devices.bridge).",
+        "defaultName": "Device bridge",
+        "nameHint": "Name it after the computer, e.g. Workshop PC.",
+        "keyDescription": "Copy the key now; the three steps to run the bridge are below.",
+        "stepsLabel": "Bridge setup",
+        "step1": "On the computer the phone is plugged into, install adb (Android SDK Platform-Tools). On the phone, turn on Developer options and USB debugging, connect it by USB and allow this computer when the phone asks.",
+        "step2": "Put the program jeeta-device-bridge.exe in a folder (where to get it: section 4 of docs/operations/device-bridge.md), and beside it a file named jeeta-device-bridge.toml with this content:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "You can leave the key out of the file and set it in the JEETA_DEVICE_BRIDGE_KEY environment variable instead.",
+        "step3": "Run jeeta-device-bridge.exe. Within about 15 seconds each phone it sees appears under Devices on this page, verified. To start it at every logon:",
+        "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
+      }
     }
   },
   "connect": {
@@ -942,14 +1105,16 @@
       "tls": "TLS mode"
     },
     "title": "Connect an account",
-    "description": "Connect your provider accounts to the workspace. For Meta and X you sign in at the provider; for NetGSM you enter your credentials.",
+    "description": "Connect your provider accounts to the workspace. For Meta, X, TikTok and LinkedIn you sign in at the provider; for NetGSM you enter your credentials.",
     "open": "Connect an account",
     "kindsLabel": "Kind of account to connect",
     "chooseKind": "Choose the kind of account to connect first.",
     "providers": {
+      "linkedin": "LinkedIn",
       "mail": "Email",
       "meta": "Meta",
       "netgsm": "NetGSM",
+      "tiktok": "TikTok",
       "x": "X"
     },
     "forCapability": "For {{name}}",
@@ -962,6 +1127,14 @@
       "reconnectBody": "This account's login will be renewed: sign in at the provider with the same account again.",
       "reconnectSubmit": "Reconnect",
       "firstBindsNote": "This capability is not bound to an account yet: the first account you choose at the provider becomes this capability, and the others you choose are added as new capabilities."
+    },
+    "whatsapp": {
+      "choice": "Which number are you connecting?",
+      "businessApp": "A number I already use in the WhatsApp Business app on my phone",
+      "businessAppHint": "The app keeps working on the phone: what you write there shows in Jeeta too. If you allow it, your contacts and up to 180 days of one-to-one chats are shared once within 24 hours of connecting; past messages are owed no reply. Keep the app open on the phone while connecting. Meta may not offer this connection in every country: if it refuses, the reason shows here.",
+      "cloudApi": "A new Cloud API number",
+      "cloudApiHint": "The number is used through Jeeta only; it does not work alongside a WhatsApp app on a phone.",
+      "notEnabled": "The platform's WhatsApp Embedded Signup configuration is not set yet; this connection opens once the operator sets it."
     },
     "credentials": {
       "title": "Credentials",
@@ -984,7 +1157,11 @@
       "externalId": "Account id",
       "externalIdHint": "The provider's id of the page or the WhatsApp phone number.",
       "externalIdOptional": "Account id (optional)",
-      "submit": "Save the token and probe"
+      "submit": "Save the token and probe",
+      "title": "Connect with an access token"
+    },
+    "secret": {
+      "show": "Show {{field}}"
     },
     "result": {
       "verified": "The connection was probed and verified.",
@@ -1004,6 +1181,7 @@
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",
     "expires": "Access ends: {{at}}",
+    "together": "One account; connected together: {{kinds}}",
     "none": "This account reaches nothing that can be connected.",
     "confirm": "Connect the selected",
     "connected": "Accounts connected: {{count}}.",
@@ -1152,6 +1330,8 @@
     "noJourney": "No journey to show.",
     "agentExecutor": "Executor: Agent",
     "humanExecutor": "Executor: {{user}}",
+    "you": "You",
+    "teamMember": "Team member",
     "unassignedExecutor": "Executor: Unassigned human",
     "takeOver": "Take over",
     "handBack": "Hand back to agent",
@@ -1170,7 +1350,7 @@
     "connected": "Call connected",
     "notConnected": "Call not connected",
     "product": "Product",
-    "amount": "Amount (minor units)",
+    "amount": "Amount",
     "currency": "Currency",
     "lostReason": "Lost reason",
     "chooseReason": "Choose a reason",
@@ -1206,7 +1386,8 @@
       "human": "Human",
       "agent": "Agent",
       "system": "System",
-      "customer": "Customer"
+      "customer": "Customer",
+      "business_app": "Business · WhatsApp Business app"
     },
     "delivery": {
       "received": "Received",
@@ -1215,7 +1396,9 @@
       "delivered": "Delivered",
       "failed": "Failed",
       "unknown": "Delivery uncertain; do not resend.",
-      "refused": "Send refused: {{reason}}"
+      "refused": "Send refused: {{reason}}",
+      "failedBecause": "Not sent: {{reason}}",
+      "unknownBecause": "Delivery is uncertain; do not resend ({{reason}})."
     },
     "status": {
       "new": "New",
@@ -1380,6 +1563,88 @@
         "held": "Held",
         "cancelled": "Cancelled"
       }
+    },
+    "public": {
+      "surface": {
+        "private": "DM",
+        "comment": "Comment",
+        "question": "Question",
+        "relay": "Amazon"
+      },
+      "owed": "{{count}} waiting",
+      "heldCount": "{{count}} awaiting approval",
+      "deadlineLeft": "{{time}} left",
+      "deadlinePassed": "Deadline passed",
+      "time": {
+        "days": "{{days}} d {{hours}} h",
+        "hours": "{{hours}} h {{minutes}} min",
+        "minutes": "{{minutes}} min"
+      },
+      "approvals": "Awaiting approval",
+      "approvalFor": "Reply awaiting approval",
+      "noApprovals": "No reply awaits approval.",
+      "items": "Comments and questions",
+      "subject": {
+        "post": "Post",
+        "product": "Product"
+      },
+      "author": {
+        "us": "Us",
+        "them": "Customer",
+        "other": "Someone else"
+      },
+      "answer": {
+        "awaiting": "Waiting",
+        "pending": "In the platform's review",
+        "answered": "Answered",
+        "answeredElsewhere": "Answered elsewhere",
+        "rejected": "Rejected: {{reason}}",
+        "handled": "No reply needed",
+        "expired": "Expired"
+      },
+      "moderation": {
+        "hidden": "Hidden",
+        "deleted": "Deleted",
+        "removed": "Removed",
+        "reported": "Reported"
+      },
+      "actions": {
+        "reply": "Reply",
+        "hide": "Hide",
+        "unhide": "Show",
+        "handled": "No reply needed",
+        "report": "Report",
+        "delete": "Delete"
+      },
+      "delete": {
+        "title": "Delete the comment",
+        "description": "The comment is deleted on the platform for good.",
+        "confirm": "Type “{{phrase}}” to confirm.",
+        "phrase": "DELETE",
+        "submit": "Delete for good"
+      },
+      "held": {
+        "title": "Draft awaiting approval",
+        "text": "Draft text",
+        "approve": "Approve",
+        "edit": "Edit and approve",
+        "save": "Approve and send",
+        "cancel": "Cancel",
+        "discard": "Discard"
+      },
+      "composer": {
+        "target": "Answering",
+        "visibility": "Who sees the reply",
+        "public": "Public",
+        "private": "Private (DM)",
+        "privateLeft": "Private reply allowed: {{time}}, once",
+        "label": "Your reply",
+        "count": "{{count}} / {{max}}",
+        "send": "Send the reply",
+        "noOwed": "No comment or question is waiting for a reply."
+      },
+      "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
+      "approvalNote": "On this account the agent's replies wait for your approval."
     }
   },
   "studio": {
@@ -1430,6 +1695,7 @@
     "requiresApproval": "Require human approval",
     "savePolicy": "Save policy",
     "reconnect": "Check connection",
+    "connectorReconnect": "The account's permissions do not read its results: reconnect it to measure.",
     "connectorUnavailable": "Connector unsupported or needs reconnection.",
     "braked": "Brake engaged; new execution held.",
     "noStrategy": "Approve a strategy first.",
@@ -1443,9 +1709,7 @@
     "close": "Close",
     "emptyToday": "No pending work.",
     "text": "Content text",
-    "upload": "Upload file",
     "submit": "Submit content",
-    "uploaded": "File ready",
     "brandRules": "Brand rules",
     "evidence": "Evidence",
     "trend": "Trend signals",
@@ -1464,7 +1728,8 @@
     "arm": "Content arm",
     "budgetMove": "Change daily budget",
     "binding": "Bound ad set",
-    "dailyBudget": "Daily budget (minor units)",
+    "dailyBudget": "Daily budget",
+    "invalidBudget": "The daily budget could not be read. Enter an amount above zero, e.g. 1,500 or 1500.50.",
     "currency": "Currency",
     "budgetHelp": "Externally created sets. Daily budget is not actual spend.",
     "queued": "Queued",
@@ -1489,7 +1754,132 @@
     "success": "Saved.",
     "loading": "Loading…",
     "entryHypothesis": "Hypothesis for entry",
-    "minorUnits": "minor units"
+    "minorUnits": "minor units",
+    "publishFailed": "Not published: {{reason}}",
+    "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
+    "notResent": "Jeeta does not send this post again. Cancel it to clear it from Today.",
+    "budgetState": {
+      "queued": "Queued",
+      "sending": "Sending",
+      "succeeded": "Applied",
+      "failed": "Not applied",
+      "unknown": "Budget outcome unknown",
+      "refused": "Refused",
+      "cancelled": "Cancelled"
+    },
+    "preview": "Draft awaiting approval",
+    "publishTo": "Publishes to",
+    "scheduledFor": "Scheduled for",
+    "noDraft": "The agent has not submitted a draft yet.",
+    "media": "Media in the draft",
+    "mediaImage": "Image {{n}}: {{name}}",
+    "uploadedFile": "Uploaded file",
+    "processing": "The provider is processing the post; it may take a few minutes to appear.",
+    "postLink": "View the published post",
+    "tiktok": {
+      "screen": "Post to TikTok",
+      "loading": "Reading the TikTok account…",
+      "postingAs": "Posting to {{nickname}}",
+      "postingAsUser": "Posting to {{nickname}} (@{{username}})",
+      "cannotPost": "This TikTok account cannot post right now. Try again later.",
+      "preview": "Preview of the post",
+      "video": "Video to post",
+      "photo": "Photo {{n}} to post",
+      "noPreview": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
+      "tooLong": "This video is {{length}} s long; this account can post videos of up to {{max}} s.",
+      "caption": "Caption",
+      "captionHelp": "You can edit the caption and its hashtags before posting.",
+      "captionCount": "{{count}} / {{max}}",
+      "privacy": "Who can view this post",
+      "privacyPlaceholder": "Select who can view this post",
+      "privacyLevel": {
+        "PUBLIC_TO_EVERYONE": "Everyone",
+        "MUTUAL_FOLLOW_FRIENDS": "Friends",
+        "FOLLOWER_OF_CREATOR": "Followers",
+        "SELF_ONLY": "Only me"
+      },
+      "interactions": "Allow users to",
+      "comment": "Comment",
+      "duet": "Duet",
+      "stitch": "Stitch",
+      "interactionOff": "Turned off in this account's TikTok settings",
+      "disclose": "Disclose commercial content",
+      "discloseHelp": "Indicate whether this content promotes yourself, a brand, a product or a service.",
+      "yourBrand": "Your brand",
+      "yourBrandHelp": "You are promoting yourself or your own business.",
+      "brandedContent": "Branded content",
+      "brandedContentHelp": "You are promoting another brand or a third party.",
+      "promotionalLabel": "Your photo/video will be labeled as 'Promotional content'",
+      "paidLabel": "Your photo/video will be labeled as 'Paid partnership'",
+      "commercialRequired": "You need to indicate if your content promotes yourself, a third party, or both.",
+      "brandedNotPrivate": "Branded content visibility cannot be set to private.",
+      "declarationMusic": "By posting, you agree to TikTok's <music>Music Usage Confirmation</music>.",
+      "declarationBranded": "By posting, you agree to TikTok's <branded>Branded Content Policy</branded> and <music>Music Usage Confirmation</music>.",
+      "post": "Post to TikTok",
+      "posting": "Posting…",
+      "processing": "After it is published, it may take a few minutes for the post to be processed and appear on the TikTok profile.",
+      "approved": "Posted from this screen: it is sent to TikTok at {{time}}, or right away once that time has passed.",
+      "status": {
+        "waiting": "Post status: waiting for its scheduled time",
+        "due": "Post status: its scheduled time has passed; it is being sent to TikTok…",
+        "sending": "Post status: sending to TikTok…",
+        "processing": "Post status: TikTok is processing the post…",
+        "published": "Post status: published on TikTok",
+        "failed": "Post status: not published ({{reason}})"
+      },
+      "viewPost": "View the post on TikTok",
+      "refused": {
+        "tiktok_cannot_post_now": "This TikTok account cannot post right now. Try again later.",
+        "tiktok_privacy_not_chosen": "Select who can view this post.",
+        "tiktok_privacy_not_offered": "This account no longer offers that privacy option. Choose again.",
+        "tiktok_branded_content_private": "Branded content visibility cannot be set to private.",
+        "tiktok_commercial_unspecified": "You need to indicate if your content promotes yourself, a third party, or both.",
+        "tiktok_commercial_not_disclosed": "Turn on the commercial content disclosure to choose your brand or branded content.",
+        "tiktok_interaction_disabled": "An interaction you allowed is turned off in this account's TikTok settings.",
+        "tiktok_photo_interaction": "Photo posts offer comments only.",
+        "tiktok_video_too_long": "This video is longer than this account can post.",
+        "tiktok_title_too_long": "The caption is too long for TikTok.",
+        "tiktok_media_unsupported": "This post has no media TikTok can take: one MP4 video or 1 to 35 photos.",
+        "tiktok_creator_info_unavailable": "The TikTok account could not be read. Check its connection.",
+        "tiktok_reconnect_for_drafts": "Reconnect TikTok to enable drafts.",
+        "tiktok_draft_settings": "A draft carries only what TikTok takes for it: a video nothing but the file, photos their caption."
+      },
+      "accountCounters": "TikTok account counters",
+      "counter": {
+        "follower_count": "Followers",
+        "following_count": "Following",
+        "likes_count": "Likes",
+        "video_count": "Videos",
+        "view_count": "Views",
+        "like_count": "Likes",
+        "comment_count": "Comments",
+        "share_count": "Shares"
+      },
+      "recentVideos": "Recent videos",
+      "noRecentVideos": "No public videos yet.",
+      "untitled": "Untitled video",
+      "postCounters": "The post's TikTok counters",
+      "liveCounters": "Read live from TikTok",
+      "measuredCounters": "From the latest measurement ({{time}})",
+      "noCounters": "TikTok gives no counters for this post yet; a post only its creator can see has none.",
+      "mode": "How to send it",
+      "modeDirect": "Post directly",
+      "modeDraft": "Send to TikTok as a draft (finish in the TikTok app)",
+      "reconnectForDrafts": "Reconnect TikTok to enable drafts.",
+      "draftHelp": "TikTok will send a notification to your TikTok inbox: open it to finish editing and post. Who can view the post, comments, Duet, Stitch and the commercial content disclosure are chosen there.",
+      "draftNoCaption": "A video draft takes no caption: you write it in TikTok when you finish the post.",
+      "sendDraft": "Send to TikTok drafts",
+      "draftSent": "Sent: once TikTok has processed it, a notification in your TikTok inbox lets you finish editing and post it.",
+      "approvedDraft": "Approved on this screen: it is sent to your TikTok drafts at {{time}}, or right away once that time has passed.",
+      "draftStatus": {
+        "due": "Post status: its scheduled time has passed; it is being sent to your TikTok drafts…",
+        "sending": "Post status: sending to your TikTok drafts…",
+        "processing": "Post status: TikTok is processing the draft…",
+        "sent": "Post status: sent to your TikTok drafts"
+      },
+      "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
+      "noCover": "No preview"
+    }
   },
   "billing": {
     "title": "Payment and activation",
@@ -1504,14 +1894,17 @@
     "price": "One-time price",
     "bank": "Bank transfer instructions",
     "reference": "Workspace payment reference",
-    "amount": "Amount paid (minor units)",
+    "amount": "Amount paid ({{currency}})",
+    "amountHint": "Enter the amount you transferred; the fee is {{price}}. Example: 14,900 or 14900.00.",
     "paidAt": "Payment time",
     "report": "Send bank transfer notification",
+    "reported": "Your transfer notification was received: {{amount}}, {{paidAt}}. Once the operator matches it with the bank record you will receive an activation code to enter on this page. If anything is wrong, correct the form and send it again.",
     "code": "Enter the activation code",
     "activate": "Activate workspace",
     "codeHelp": "Any current owner can redeem the code. It expires after 72 hours and locks after 5 failed attempts. Ask the operator to reissue an expired, lost or locked code. Reissue invalidates the previous code.",
     "ownerOnly": "Only a current workspace owner can report payment or activate access.",
-    "invalidEvidence": "Enter a positive amount and a payment time that is not in the future.",
+    "invalidAmount": "The amount could not be read. Enter an amount above zero, e.g. 14,900 or 14900.50.",
+    "invalidPaidAt": "Choose the payment time; it cannot be in the future.",
     "revoked": "Activation revoked",
     "grandfathered": "Grandfathered permanent entitlement",
     "paidEntitlement": "Paid entitlement"
@@ -1540,14 +1933,735 @@
     "agentRecent": "Agent connected recently",
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
-    "suspendedChecks": "This step is not checked while the workspace is suspended."
+    "suspendedChecks": "This step is not checked while the workspace is suspended.",
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts."
   },
   "providerSetup": {
     "title": "Provider application setup",
     "missing": "Provider application is not configured",
+    "productNotEnabled": "This needs a provider product the platform's application has not been approved for yet (LinkedIn pages: the Community Management API). The operator enables it once the provider approves.",
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
-    "expires": "Access expires at"
+    "expires": "Access expires at",
+    "businessApp": {
+      "title": "Sharing from the WhatsApp Business app",
+      "contacts": "Contacts",
+      "history": "Chat history",
+      "until": "Last time to ask: {{at}}",
+      "states": {
+        "due": "Not asked yet",
+        "requesting": "Being asked",
+        "requested": "Asked: it arrives from the phone if you allow it",
+        "refused": "Meta refused",
+        "unknown": "The request's outcome is unknown; it is not asked again",
+        "expired": "The 24-hour window closed; to share, disconnect the number in the WhatsApp Business app and connect it here again"
+      }
+    }
+  },
+  "gates": {
+    "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",
+    "strategyLink": "Go to strategy",
+    "inactiveBody": "This opens once the workspace is active.",
+    "inactiveLink": "Payment and activation"
+  },
+  "people": {
+    "title": "People",
+    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet.",
+    "search": "Search by name or company",
+    "empty": "No people yet.",
+    "noMatch": "No matching people.",
+    "emptyBody": "Inbound messages, forms and imported leads are listed here.",
+    "added": "Added {{at}}",
+    "range": "{{first}}–{{last}}",
+    "previous": "Previous",
+    "next": "Next",
+    "unnamed": "Unnamed person",
+    "unnamedOn": "{{channel}} contact",
+    "erased": "Erased person",
+    "channels": {
+      "whats_app": "WhatsApp",
+      "instagram_dm": "Instagram",
+      "messenger": "Messenger",
+      "sms": "SMS",
+      "email": "Email",
+      "webchat": "Web chat",
+      "phone": "Phone"
+    }
+  },
+  "failure": {
+    "recipientNotAllowed": "the recipient is not on the Meta test number's allowed list. Add the number as a recipient in Meta under WhatsApp → API Setup, or connect a real WhatsApp number.",
+    "windowClosed": "more than 24 hours have passed since the customer's last message; only an approved template can be sent now.",
+    "reconnect": "the account's sign-in expired or was refused; reconnect it on the Connect page.",
+    "permission": "the account lacks the permission for this; grant the requested permissions or reconnect it.",
+    "throttled": "the provider asked us to slow down; try again a little later.",
+    "configuration": "the account's sending settings could not be read; check and reconnect it.",
+    "xCredits": "the X API has no credits; add credits in the X developer console (console.x.com).",
+    "xDuplicate": "X does not publish the same text twice; change the text and try again.",
+    "tiktokUnaudited": "TikTok has not audited this app yet, so it posts only to a private TikTok account. Until the audit passes, make the account private in TikTok (Settings and privacy → Privacy → Private account), then cancel this post and plan it again.",
+    "tiktokPrivacy": "the privacy chosen for this post is not offered for this TikTok account (an app TikTok has not audited may post as \"Only me\" only); cancel it and post it again with a privacy the posting screen offers.",
+    "tiktokCap": "the TikTok account reached its daily limit of posts, or of drafts waiting in its inbox, through apps; try again tomorrow, or post from the TikTok app.",
+    "tiktokAppCap": "the platform's TikTok app reached its daily limit of users posting through it (TikTok's cap for apps); try again tomorrow.",
+    "tiktokBanned": "TikTok does not let this account post at the moment; check the account in the TikTok app.",
+    "tiktokDomain": "TikTok pulls photos only from a domain verified for the app; verify the media domain in TikTok's developer portal (URL properties), or post a video.",
+    "tiktokSpam": "TikTok flagged the post as spam or risky and will not publish it; change the caption before posting again.",
+    "tiktokMedia": "TikTok refused the media (its format, length, frame rate or picture size); check it against TikTok's requirements and post it again."
+  },
+  "calls": {
+    "title": "Calls",
+    "description": "Calls reps place through the PBX, and how they went. Numbers are masked.",
+    "empty": "No calls yet",
+    "emptyBody": "When a rep calls, the call is listed here.",
+    "noPermission": "Seeing calls needs the calls permission.",
+    "columns": {
+      "started": "Started",
+      "direction": "Direction",
+      "number": "Number",
+      "purpose": "Purpose",
+      "state": "State",
+      "duration": "Duration",
+      "outcome": "Outcome",
+      "who": "Who"
+    },
+    "directions": {
+      "inbound": "Inbound",
+      "outbound": "Outbound"
+    },
+    "purposes": {
+      "service": "Service",
+      "commercial": "Commercial",
+      "callback": "Callback"
+    },
+    "purposeHints": {
+      "service": "An existing customer: a won journey, an appointment or quote in the last 180 days, or an open appointment.",
+      "commercial": "Sales or promotion: needs İYS consent for phone calls.",
+      "callback": "Calling back someone who called in the last 7 days."
+    },
+    "states": {
+      "planned": "Planned",
+      "dialing": "Dialing",
+      "ringing": "Ringing",
+      "live": "In call",
+      "holding": "Holding",
+      "ending": "Ending",
+      "ended": "Ended"
+    },
+    "outcomes": {
+      "connected": "Talked",
+      "no_answer": "No answer",
+      "voicemail": "Voicemail",
+      "refused_by_customer": "Customer refused",
+      "appointment": "Appointment booked",
+      "callback_requested": "Asked for a callback",
+      "other": "Other"
+    },
+    "causes": {
+      "caller_hangup": "The other side hung up",
+      "agent_ended": "Ended",
+      "agent_timeout": "The agent did not answer",
+      "max_duration": "Maximum duration reached",
+      "no_answer": "No answer",
+      "busy": "Busy",
+      "failed": "Failed",
+      "transferred": "Transferred",
+      "bridge_offline": "The line is not connected",
+      "refused": "Refused",
+      "caller_silent": "The other side stayed silent"
+    },
+    "modes": {
+      "human": "Rep (extension {{ext}})",
+      "agent": "Agent"
+    },
+    "refusals": {
+      "workspace_inactive": "the workspace is not active",
+      "strategy_required": "an approved strategy is required",
+      "bridge_offline": "the PBX is not connected and verified",
+      "bridge_busy": "this extension is in another call",
+      "person_erased": "the person was erased",
+      "person_merged": "the person was merged into another",
+      "no_phone_identity": "the person has no phone number",
+      "suppressed": "the person blocked phone contact",
+      "journey_lost": "the person's journey is lost",
+      "consent_missing": "a commercial call needs İYS phone consent",
+      "no_relationship": "a service call needs an existing relationship",
+      "no_recent_inbound": "a callback needs an inbound call in the last 7 days",
+      "outside_work_hours": "outside the PBX's working hours",
+      "daily_ops_cap": "the daily call limit is reached",
+      "budget_exhausted": "the budget has no minute left",
+      "disclosure_missing": "the opening lacks the assistant disclosure"
+    },
+    "place": {
+      "open": "Place a call",
+      "title": "Place a call",
+      "description": "Your extension rings first; once you answer, the person is called.",
+      "target": "Person or phone",
+      "targetHint": "The person's id, or a phone number one of your people holds.",
+      "extension": "Your extension",
+      "extensionHint": "Your extension at the PBX, e.g. 101.",
+      "purpose": "Purpose of the call",
+      "submit": "Call",
+      "placed": "Call started: your extension is ringing.",
+      "refused": "The call could not be placed: {{reason}}."
+    },
+    "detail": {
+      "title": "Call",
+      "turns": "Call flow",
+      "noTurns": "Nothing was recorded on this call's flow.",
+      "event": "Line: {{name}}",
+      "latency": "{{s}} s",
+      "speakers": {
+        "counterpart": "Other side",
+        "agent": "Agent",
+        "script": "Script",
+        "line": "Line"
+      },
+      "endCause": "End cause",
+      "summary": "Summary",
+      "outcome": "Outcome",
+      "endTitle": "Close the call",
+      "end": "Record the outcome",
+      "ended": "The call was closed.",
+      "latencyTitle": "Latency (p50 / p95)",
+      "latency_perceived": "First sound",
+      "latency_content": "First sound of the reply",
+      "latency_agent": "Agent's reply time",
+      "latency_barge_in_stop": "Stopping on barge-in",
+      "latencyValue": "{{p50}} / {{p95}} ms",
+      "alerts": {
+        "perceived_p95_over_1s": "First sound p95 above 1 second",
+        "content_p95_over_3s": "Reply p95 above 3 seconds",
+        "barge_in_p95_over_300ms": "Stopping on barge-in p95 above 300 ms"
+      }
+    },
+    "policy": {
+      "title": "Call policy",
+      "saved": "Call policy saved.",
+      "holdingHint": "One holding phrase per line (at most 5).",
+      "openingHint": "Played as soon as the call is answered; left empty, nothing is played.",
+      "closingHint": "Played before the call is hung up when the plan brings no closing; left empty, every plan must bring its own.",
+      "phrasesHint": "One sentence per line (at most 5). The bridge plays these on its own while the agent thinks.",
+      "phrases": {
+        "acknowledgements": "Acknowledgements (≈0.6 s)",
+        "fillers": "Fillers (≈2.7 s)",
+        "long_wait": "Long wait (≈8 s)",
+        "not_heard": "When not heard",
+        "still_there": "When the other side stays silent",
+        "fault": "Technical problem"
+      },
+      "fields": {
+        "greeting_inbound": "Inbound greeting",
+        "voicemail_text": "Voicemail sentence",
+        "recording_announcement": "Recording announcement (KVKK)",
+        "disclosure_sentence": "Assistant disclosure sentence",
+        "disclose_assistant": "The agent must disclose it is an assistant in every opening",
+        "holding_default": "Default holding phrases",
+        "max_duration_s": "Maximum call duration (s)",
+        "slow_agent_s": "Until the first holding phrase (s)",
+        "holding_again_s": "Until the second holding phrase (s)",
+        "fallback_after_s": "Until a fallback line (s)",
+        "caller_silence_s": "Other side's silence reported after (s)",
+        "caller_silence_close_s": "Other side's silence closes after (s)",
+        "estimated_minor_per_minute": "Estimated tariff per minute (minor units)",
+        "handoff_extension": "Transfer extension",
+        "opening_outbound": "Business opening on outbound calls",
+        "transcript_notice": "Transcription notice",
+        "closing": "Closing when the plan brings none"
+      }
+    }
+  },
+  "materials": {
+    "tab": "Materials",
+    "studioTab": "Studio",
+    "views": {
+      "upload": "Upload",
+      "olays": "Events",
+      "calendar": "Calendar",
+      "shoots": "Shot list"
+    },
+    "back": "Back",
+    "genel": "General (tied to no event)",
+    "genelShelf": "General materials",
+    "genelHelp": "Materials tied to no event. Used only in content that names no specific date, place or event.",
+    "noMaterials": "No materials here yet.",
+    "noPermission": "No share permission",
+    "erased": "Deleted",
+    "ai": "AI image",
+    "freedBadge": "Usable as general",
+    "suggestedBadge": "Tags suggested",
+    "suggested": "suggested",
+    "untitledPhoto": "Untitled photo",
+    "untitledVideo": "Untitled video",
+    "kind": {
+      "workshop": "Workshop",
+      "order": "Order / project",
+      "season": "Season collection",
+      "special_day": "Special day",
+      "product_shoot": "Product shoot",
+      "other": "Other"
+    },
+    "share": {
+      "shareable": "Shareable",
+      "not_shareable": "Not shareable",
+      "product_only": "Product only (faces and names hidden)"
+    },
+    "tags": {
+      "productGroups": "Product group",
+      "doors": "Sales door",
+      "contentTypes": "Content type",
+      "quality": "Quality",
+      "depicts": "What it shows"
+    },
+    "productGroup": {
+      "figur": "Figure",
+      "diorama_tablo": "Diorama panel",
+      "anlamli_yer_maket": "Meaningful place / model",
+      "sezon_urunu": "Seasonal product",
+      "atolye": "Workshop",
+      "pazaryeri": "Marketplace"
+    },
+    "door": {
+      "kisiye_ozel": "Personalised",
+      "toplu_siparis": "Bulk order",
+      "ortaklik": "Partnership"
+    },
+    "contentType": {
+      "bitmis_urun": "Finished product",
+      "once_sonra": "Before / after",
+      "uretim_baski": "Production / print",
+      "boyama": "Painting",
+      "paketleme": "Packing",
+      "teslim_tepki": "Delivery / reaction",
+      "atolye_ani": "Workshop moment"
+    },
+    "quality": {
+      "publishable": "Publishable",
+      "needs_crop": "Needs a crop",
+      "unusable": "Unusable",
+      "none": "Not set"
+    },
+    "depicts": {
+      "face": "Face",
+      "name": "Name",
+      "child": "Child",
+      "client_logo": "Client logo",
+      "corporate_ref": "Corporate reference"
+    },
+    "role": {
+      "anchor": "Anchor material",
+      "support": "Supporting visual"
+    },
+    "finding": {
+      "erased": "This material was deleted.",
+      "share_unset": "No share permission was given.",
+      "not_shareable": "This material is marked not shareable.",
+      "sensitive_needs_human": "It shows something that needs permission; an owner or manager must give the share permission.",
+      "product_only_shows_person": "Marked product only, but it shows a face, a name or a child, or names a person; nothing hides them yet.",
+      "quality": "Its quality is not marked “publishable”.",
+      "olay_missing": "Its event was not found.",
+      "olay_unconfirmed": "Its event is not confirmed yet.",
+      "out_of_season": "Outside the season window.",
+      "use_archive": "Last season's material: usable only as last year's content (archive).",
+      "archive_not_season": "Only season or special-day material can be used as an archive.",
+      "not_freed": "It was not made “usable as general” for general content.",
+      "other_olay": "This material belongs to another event.",
+      "genel_generic_only": "A general material can only be used in content about no specific event.",
+      "ai_not_anchor": "An AI image cannot anchor content; it can only be a supporting visual.",
+      "ai_olay_past": "The event is over, so this AI image can no longer announce it.",
+      "no_material": "This piece rests on no material.",
+      "no_eligible_material": "This piece shows no eligible anchor material.",
+      "names_other_olay": "The text names another event's title, place or client.",
+      "names_material_context": "In general content, the text names the title, place or client of the material's event.",
+      "date_outside_olay": "The text's date is outside the event's days.",
+      "date_in_generic": "In general content, the text names a day of the material's event.",
+      "archive_year_missing": "In last year's content, the event's year is missing from the text.",
+      "client_named_product_only": "The client is named although the material is product-only.",
+      "unknown": "The material check holds this piece ({{code}})."
+    },
+    "error": {
+      "owner_or_manager_human": "Only an owner or manager can decide this, in the panel.",
+      "human_required": "A person must decide this in the panel.",
+      "share_required": "Choose the share permission.",
+      "olay_or_genel": "Choose an event, or make the material general.",
+      "file_has_material": "This file is already in the library.",
+      "duplicate_material_file": "These bytes are already a material in the library (or were one, then deleted): one photo is one material.",
+      "material_erased": "This material was deleted; it cannot change.",
+      "genel_stays_freed": "A general material stays usable as general; move it to an event first to take that back.",
+      "ai_material": "Only a real material can be made usable as general.",
+      "already_confirmed": "This event is already confirmed.",
+      "already_resolved": "This request is already closed.",
+      "closes_itself": "This request closes itself once its condition holds.",
+      "not_a_monday": "A week starts on a Monday.",
+      "request_key_taken": "This request was already added.",
+      "depicts_required": "An AI image must say what it shows.",
+      "not_a_material": "Every visual of a piece must be a material of the library.",
+      "no_eligible_material": "This piece shows no eligible anchor material.",
+      "subject_required": "Choose what the piece is about.",
+      "material_refused": "One of the chosen materials cannot be used here:",
+      "out_of_range": "The year must be between 2000 and 2100.",
+      "revision_changed": "The piece changed while you looked; refresh and try again.",
+      "slot_not_ready": "Only a ready piece can be published with its text as it is.",
+      "hard_findings_not_releasable": "Material problems cannot be released: change the material or the piece.",
+      "no_caption_findings": "There is no text finding to release.",
+      "findings_changed": "The findings changed while you looked; refresh and look again.",
+      "stale": "This record changed while you looked; refresh and try again.",
+      "story_image_jpeg_only": "A story image must be a JPEG: save the photo as JPEG and upload it again.",
+      "story_image_too_large": "A story image can be at most 8 MB: upload a smaller JPEG.",
+      "story_video_too_large": "A story video can be at most 100 MB: make the video smaller and upload it again.",
+      "story_video_length": "A story video must last 3 to 60 seconds: trim the video and upload it again.",
+      "story_video_length_unknown": "The video's length could not be read: export it again as MP4 and upload it.",
+      "story_video_not_fast_start": "The video is not set up to start fast: export it with the 'fast start / optimize for web' option and upload it again."
+    },
+    "invalid": {
+      "media": "The file was refused: it must be JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
+      "title": "The title must be 1–120 characters.",
+      "dates": "The end cannot be before the start; an event lasts at most 366 days.",
+      "place": "The place can be at most 120 characters.",
+      "notes": "Notes can be at most 2000 characters.",
+      "client": "The client / organisation can be at most 120 characters.",
+      "occasion": "A season or special day needs its calendar day; other types take none.",
+      "window": "Enter both window dates, at most 120 days apart, within the year.",
+      "key": "A key holds only lowercase letters, digits and underscores (at most 40).",
+      "name": "The name must be 1–120 characters.",
+      "lead_days": "The lead can be at most 90 days.",
+      "policy": "The lead can be at most 90 days, reuse and recap at most 365.",
+      "text": "The text must be 1–500 characters.",
+      "week_start": "A week must start on a Monday.",
+      "year": "The year must be between 2000 and 2100.",
+      "people": "The people list is invalid (at most 50).",
+      "binding": "A real material becomes general only by being made usable as general.",
+      "share": "Only a person can give this share permission.",
+      "revision": "The record changed; refresh and try again.",
+      "request_key": "The request key is invalid; refresh the page and try again."
+    },
+    "upload": {
+      "intro": "Add photos and videos from a workshop, an order or a special day. Each file uploads at once; then you choose the event and the share permission once for all of them.",
+      "camera": "Take with camera",
+      "gallery": "Choose from gallery",
+      "files": "Chosen files",
+      "status": {
+        "refused": "Refused",
+        "uploading": "Uploading…",
+        "uploaded": "Uploaded",
+        "failed": "Upload failed",
+        "added": "Added",
+        "add_failed": "Not added"
+      },
+      "refusedHelp": "Upload JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
+      "retry": "Try again",
+      "olay": "Which event is it from?",
+      "suggested": "Suggested by the capture date",
+      "otherOlays": "Other events",
+      "newOlay": "Create a new event",
+      "createdOlay": "New event created: {{title}}",
+      "genel": "General (tied to no event)",
+      "genelHelp": "Only an owner or manager can choose this. The material becomes usable as general and is used only in content about no specific event.",
+      "permission": "Share permission (required)",
+      "permissionByManager": "An owner or manager gives the share permission; the materials will wait for their decision.",
+      "tags": "Tags (optional)",
+      "waitUploads": "You can add them once the uploads finish.",
+      "submit_one": "Add {{count}} material",
+      "submit_other": "Add {{count}} materials",
+      "problem": {
+        "olay": "Choose an event, create a new one, or choose general.",
+        "permission": "Choose the share permission.",
+        "title": "Write the event's title.",
+        "dates": "Enter the event's date; the end cannot be before the start.",
+        "occasion": "For a season or special day, choose its calendar day."
+      },
+      "done_one": "{{count}} material added.",
+      "done_other": "{{count}} materials added.",
+      "doneNoPermission": "They become usable once an owner or manager gives the share permission.",
+      "openOlay": "Open the event",
+      "again": "New upload",
+      "serverSuggests": "By its capture date, this material may belong to “{{title}}”.",
+      "moveThere": "Move it to that event",
+      "moved": "Moved to “{{title}}”."
+    },
+    "olay": {
+      "kind": "Type",
+      "title": "Title",
+      "startsOn": "Date (start)",
+      "endsOn": "End (if it lasted several days)",
+      "occasion": "Calendar day",
+      "chooseOccasion": "Choose",
+      "place": "Place",
+      "organization": "Client / organisation",
+      "notes": "Notes",
+      "oneDayHint": "Leave the end empty for a one-day event.",
+      "awaiting": "Awaiting confirmation",
+      "confirm": "Confirm",
+      "proposedHelp": "An agent proposed this event. Its materials are not used until an owner or manager confirms it.",
+      "new": "New event",
+      "edit": "Edit",
+      "create": "Create the event",
+      "save": "Save",
+      "empty": "No events yet. You can create one while uploading materials.",
+      "count_one": "{{count}} material",
+      "count_other": "{{count}} materials",
+      "materials_one": "Materials ({{count}})",
+      "materials_other": "Materials ({{count}})",
+      "shoots": "Shot list for this event",
+      "upload": "Upload materials to this event",
+      "since": "Added: {{at}}"
+    },
+    "review": {
+      "open_one": "{{count}} material awaiting review",
+      "open_other": "{{count}} materials awaiting review",
+      "title": "Awaiting review",
+      "help": "Materials whose share permission, quality or tags await a person's decision."
+    },
+    "editor": {
+      "origin": "Origin",
+      "real": "Real footage",
+      "aiBy": "AI ({{generator}})",
+      "binding": "Event",
+      "unknownOlay": "Unknown event",
+      "captured": "Taken",
+      "added": "Added",
+      "erasedHelp": "This material was deleted: its file is gone, its title and tags cleared. Its record stays only to show where it was used.",
+      "tags": "Tags and quality",
+      "suggestedHelp": "These tags are an agent's suggestion; no one has reviewed them yet. Check and confirm them.",
+      "confirmTags": "Confirm the tags",
+      "saveTags": "Save the tags",
+      "permission": "Share permission",
+      "permissionByPerson": "{{permission}} — given by a person ({{at}})",
+      "permissionByAgent": "{{permission}} — given by an agent, AI image ({{at}})",
+      "permissionManagerOnly": "Only an owner or manager can change the share permission.",
+      "savePermission": "Save the permission",
+      "free": "Usable as general",
+      "freeHelp": "A material usable as general may also appear in content about no specific event; never in another event's content.",
+      "freedAt": "Usable as general ({{at}})",
+      "makeFree": "Make usable as general",
+      "unfree": "Take back",
+      "genelStaysFreed": "A general material stays usable as general; move it to an event first to take that back.",
+      "bind": "Move to another event",
+      "bindHelp": "If the material was tied to the wrong event, choose the right one.",
+      "bindTo": "Event",
+      "move": "Move",
+      "delete": "Delete the material",
+      "deleteHelp": "The file is deleted; this cannot be undone.",
+      "deleteTitle": "Delete this material?",
+      "deleteKvkk": "As KVKK requires, the file itself (its bytes) is deleted and its title, tags and people are cleared. Its record stays as evidence of the content it was used in.",
+      "deleteUsed": "Posts already published stay on their provider: remove them yourself from the “Where it was used” links.",
+      "deleteConfirm": "Delete",
+      "deleteCancel": "Cancel"
+    },
+    "people": {
+      "title": "People shown",
+      "help": "The people the material shows. When a person's data is erased, the materials showing them are erased too (KVKK).",
+      "none": "No one added.",
+      "unnamed": "Person",
+      "remove": "Remove",
+      "search": "Search people (name or company)",
+      "add": "Add {{name}}",
+      "save": "Save the people"
+    },
+    "usedIn": {
+      "title": "Where it was used",
+      "none": "Not used in any content yet.",
+      "openSlot": "Open the content",
+      "post": "Published post ({{at}})",
+      "postNoLink": "Published ({{at}}, post {{id}})"
+    },
+    "calendar": {
+      "year": "Year",
+      "needsDates": "Dates needed",
+      "undated_one": "{{count}} day of {{year}} has no dates; its material is not used until they're entered.",
+      "undated_other": "{{count}} days of {{year}} have no dates; their material is not used until they're entered.",
+      "off": "Off",
+      "edited": "Edited",
+      "leadIs": "Prepared {{days}} days ahead",
+      "leadIsDefault": "Prepared {{days}} days ahead (default)",
+      "edit": "Edit",
+      "enterDates": "Enter the dates",
+      "add": "Add a day",
+      "key": "Key",
+      "keyHelp": "Lowercase letters, digits and underscores, e.g. kulup_kurulus_gunu",
+      "name": "Name",
+      "kind": "Type",
+      "start": "Window start",
+      "end": "Window end",
+      "lead": "Lead (days)",
+      "leadDefault": "Default",
+      "enabled": "On",
+      "save": "Save",
+      "cancel": "Cancel",
+      "managerOnly": "Only an owner or manager can change the calendar.",
+      "problem": {
+        "key": "A key holds only lowercase letters, digits and underscores (at most 40).",
+        "name": "Write the name.",
+        "window": "Enter both window dates; the end cannot be before the start.",
+        "lead": "The lead must be 0 to 90 days."
+      }
+    },
+    "policy": {
+      "title": "Material rules",
+      "lead": "Lead (days)",
+      "leadHelp": "How many days before a season or event materials are asked for.",
+      "reuse": "Reuse gap (days)",
+      "reuseHelp": "The same material is not shown again within this many days.",
+      "recap": "Recap period (days)",
+      "recapHelp": "For this many days after an event ends, it comes first for recap content.",
+      "save": "Save the rules",
+      "invalid": "Lead must be 0–90, reuse and recap 0–365 whole days."
+    },
+    "shoot": {
+      "add": "Add to the shot list",
+      "addSubmit": "Add to the list",
+      "thisWeek": "This week",
+      "older": "Earlier weeks",
+      "nothingThisWeek": "No open requests this week.",
+      "showClosed": "Show closed ones too",
+      "week": "Week of {{day}}",
+      "done": "Done",
+      "dismiss": "Not needed",
+      "openOlay": "Open the event",
+      "openCalendar": "Go to the calendar",
+      "reason": {
+        "slot_unfilled": "No eligible material for a piece",
+        "season_ahead": "A season is coming",
+        "season_dates_missing": "Calendar dates missing",
+        "olay_upcoming": "Upcoming event",
+        "requested": "Added request"
+      },
+      "status": {
+        "open": "Open",
+        "done": "Done",
+        "dismissed": "Not needed"
+      }
+    },
+    "hold": {
+      "title": "The material check is holding this content",
+      "noDetails": "The material check holds this content.",
+      "fixMaterial": "Fix the material (its permission, its event) or the content; these cannot be released.",
+      "fixCaption": "Fix the text; or an owner or manager may let it go out as it is.",
+      "openMaterial": "Open the material",
+      "shoots_one": "{{count}} open request on the shot list.",
+      "shoots_other": "{{count}} open requests on the shot list.",
+      "openShoots": "Open the shot list",
+      "release": "Publish the text as it is",
+      "releaseTitle": "Publish the text as it is?",
+      "releaseHelp": "These findings are released for this revision of the content only. If the text or the findings change, the check runs again.",
+      "releaseConfirm": "Publish as it is"
+    },
+    "slot": {
+      "title": "Materials",
+      "subject": "What is the content about?",
+      "subjectOlay": "Event: {{title}}",
+      "subjectArchive": "Last year's season: {{title}}",
+      "subjectGeneric": "No specific event (general)",
+      "matchesNeed": "matches the need",
+      "none": "No eligible material for this content.",
+      "upload": "Upload materials",
+      "refused_one": "{{count}} material not usable",
+      "refused_other": "{{count}} materials not usable",
+      "pick": "Choose what the content is about and at least one material.",
+      "story": "A story shares no text: only the picture goes out. Choose one JPEG (at most 8 MB) or one MP4 of 3–60 seconds."
+    }
+  },
+  "posts": {
+    "tab": "Posts",
+    "views": {
+      "plan": "Plan",
+      "week": "Weekly summary",
+      "settings": "Posting settings"
+    },
+    "format": {
+      "story": "Story",
+      "feed_post": "Post",
+      "carousel": "Carousel",
+      "reel": "Reel",
+      "tiktok_video": "TikTok video"
+    },
+    "trigger": {
+      "olay": "New olay materials",
+      "calendar": "Upcoming special day",
+      "floor": "No post for a while"
+    },
+    "materials_one": "{{count}} material",
+    "materials_other": "{{count}} materials",
+    "requests": {
+      "title": "Requests for the agent to plan",
+      "help": "Studio asks the connected agent for a posting plan for new materials, upcoming special days and channels that have gone without a post. A request nobody answers within 7 days closes and its materials are asked for again.",
+      "empty": "No request is waiting.",
+      "best": "Suggested format: {{format}}",
+      "expires": "Last day: {{at}}",
+      "oneChannel": "One post: {{channel}}",
+      "window": "Period: {{range}}"
+    },
+    "plan": {
+      "title": "Planned posts",
+      "empty": "No planned post. As you upload materials, Studio asks the agent for a plan.",
+      "publishAt": "Goes out: {{at}}",
+      "prepFrom": "Preparation: {{at}}",
+      "graceUntil": "At the latest: {{at}}",
+      "open": "Open in Studio",
+      "tz": "Times are in the {{tz}} time zone.",
+      "state": {
+        "waiting": "Preparation not started",
+        "preparing": "Being prepared",
+        "ready": "Ready"
+      },
+      "subject": {
+        "olay": "About an olay",
+        "archive": "Last year's olay",
+        "generic": "General"
+      }
+    },
+    "week": {
+      "title": "{{from}} – {{until}}",
+      "prev": "Previous week",
+      "next": "Next week",
+      "current": "This week",
+      "published": "Published",
+      "planned": "Planned",
+      "cancelled": "Not published",
+      "scores": "What works",
+      "none": "None.",
+      "view": "Open the post",
+      "oldPlan": "Old weekly plan",
+      "reason": {
+        "cancelled": "Cancelled",
+        "hypothesis_retired": "Hypothesis retired",
+        "strategy_archived": "Strategy archived",
+        "week_ended": "Week ended",
+        "measurements_complete": "Measurement complete",
+        "replanned": "Moved to the new planning",
+        "missed_grace": "Not prepared in time"
+      },
+      "scoreFormat": "Format",
+      "scoreKind": "Olay type",
+      "scoreHypothesis": "Hypothesis",
+      "scoreMean": "Engagement",
+      "scorePosts": "Posts",
+      "generic": "General",
+      "noScores": "No measured post yet."
+    },
+    "settings": {
+      "title": "Posting settings",
+      "help": "No approval needed: the material check, the truth check and these limits are the safety.",
+      "format": "Format",
+      "lead": "Preparation (hours before)",
+      "grace": "Grace (hours)",
+      "feedCap": "Daily post limit (per channel)",
+      "feedSpacing": "At least between posts (hours)",
+      "storyCap": "Daily story limit",
+      "storySpacing": "At least between stories (minutes)",
+      "tiktokCap": "Daily TikTok video limit",
+      "quietFrom": "Quiet hours start",
+      "quietUntil": "Quiet hours end",
+      "floor": "Days without a post",
+      "floorHelp": "When a channel goes this many days without a post, Studio asks for one general post.",
+      "debounce": "Upload settling time (minutes)",
+      "debounceHelp": "A plan is asked for this long after materials stop being added to an olay: 20 photos make one request.",
+      "horizon": "Planning horizon (days)",
+      "tz": "Time zone",
+      "storyNote": "Stories go out on Instagram only: one JPEG (at most 8 MB) or one MP4 of 3–60 seconds, without text. Facebook Page stories are not there yet.",
+      "save": "Save settings",
+      "saved": "Saved.",
+      "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
+      "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
+      "managerOnly": "Only an owner or manager changes these settings."
+    }
   }
 }

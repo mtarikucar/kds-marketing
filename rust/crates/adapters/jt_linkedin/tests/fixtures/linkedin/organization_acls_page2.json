@@ -1,0 +1,15 @@
+{
+  "paging": {
+    "start": 3,
+    "count": 50,
+    "links": []
+  },
+  "elements": [
+    {
+      "state": "APPROVED",
+      "role": "ADMINISTRATOR",
+      "roleAssignee": "urn:li:person:a1B2c3D4e5",
+      "organizationTarget": "urn:li:organization:90000002"
+    }
+  ]
+}

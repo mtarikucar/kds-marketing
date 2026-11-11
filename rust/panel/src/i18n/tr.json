@@ -18,7 +18,8 @@
     "copyFailed": "Kopyalanamadı; metni elle seçip kopyalayın.",
     "actions": "İşlemler",
     "none": "—",
-    "loadError": "Yüklenemedi. Lütfen yeniden deneyin."
+    "loadError": "Yüklenemedi. Lütfen yeniden deneyin.",
+    "refreshFailed": "Yenilenemedi: en son okunan gösteriliyor."
   },
   "kit": {
     "close": "Kapat",
@@ -50,7 +51,9 @@
     "capabilities": "Kabiliyetler",
     "budget": "Bütçe",
     "inbox": "Gelen kutusu",
-    "studio": "Büyüme stüdyosu"
+    "studio": "Büyüme stüdyosu",
+    "people": "Kişiler",
+    "calls": "Aramalar"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -65,7 +68,7 @@
   },
   "status": {
     "workspace": {
-      "pending_payment": "Ödeme bekleniyor",
+      "pending_payment": "Etkinleştirme bekliyor",
       "active": "Etkin",
       "suspended": "Askıda"
     },
@@ -122,6 +125,15 @@
     "studio": {
       "work": "Stüdyoda çalış",
       "manage": "Stüdyoyu yönet"
+    },
+    "calls": {
+      "work": "Arama yapma ve görüşme kaydını görme",
+      "manage": "Arama politikasını yönetme",
+      "bridge": "Ses köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
+    },
+    "devices": {
+      "work": "Telefonları kullanma",
+      "bridge": "Cihaz köprüsü olarak çalışma (yalnızca köprünün anahtarı)"
     }
   },
   "roleNames": {
@@ -272,14 +284,14 @@
       "hypotheses": "Hipotez sayısı: {{count}}."
     },
     "inactive": {
-      "pending_payment": "Ödeme alındığında çalışma alanınız etkinleşecek.",
+      "pending_payment": "Ödeme onaylanıp etkinleştirme kodu girildiğinde çalışma alanınız açılır.",
       "active": "Çalışma alanınız etkin.",
       "suspended": "Çalışma alanınız askıya alındı. Ayrıntı için bizimle iletişime geçin."
     },
     "agent": {
       "title": "Ajan",
       "lastSeen": "Son görülme",
-      "never": "Henüz hiçbir ajan bağlanmadı.",
+      "never": "Claude gibi bir ajanı bağlamak için bir API anahtarı oluşturun; bağlantı adımları anahtar sayfasında.",
       "interval": "Beklenen yoklama aralığı",
       "editInterval": "Aralığı değiştir",
       "intervalLabel": "Aralık (dakika)",
@@ -287,10 +299,12 @@
       "intervalSaved": "Yoklama aralığı güncellendi.",
       "overdueTitle": "Ajan gecikti",
       "overdueBody": "Ajan beklenen aralık içinde yoklama yapmadı; bekleyen işler bekliyor.",
-      "schedulerNote": "Ajan zamanlayıcısı kiracının sorumluluğudur: Jeeta ajanı uyandırmaz, ajanı düzenli aralıklarla çalıştıracak zamanlamayı siz kurarsınız.",
+      "schedulerNote": "Jeeta ajanı kendisi uyandırmaz: ajanın düzenli aralıklarla çalışmasını siz (ya da ajanın kendi zamanlayıcısı) sağlarsınız.",
       "onTime": "Ajan zamanında yoklama yapıyor.",
       "hours": "{{count}} sa",
-      "minutes": "{{count}} dk"
+      "minutes": "{{count}} dk",
+      "neverTitle": "Henüz ajan bağlanmadı",
+      "connectLink": "Ajanı bağla"
     },
     "pending": {
       "title": "Bekleyen işler",
@@ -310,7 +324,9 @@
       "reply_due": "Yanıt bekleyen konuşma",
       "reopen_question": "Kaybedilen yolculuğu yeniden açma kararı",
       "merge_suggested": "Kişi birleştirme önerisi",
-      "task_due": "Zamanı gelen görev"
+      "task_due": "Zamanı gelen görev",
+      "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir.",
+      "phone_offline": "{{name}} hiçbir cihaz köprüsünde görünmüyor: bir köprü onu yeniden listeleyene kadar ona komut gönderilemez."
     }
   },
   "team": {
@@ -395,7 +411,16 @@
       "scopesHint": "Hiçbirini seçmezseniz anahtar sizin tüm izinlerinizi taşır.",
       "submit": "Anahtar oluştur",
       "plaintextTitle": "Yeni anahtarınız",
-      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz."
+      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz.",
+      "plaintextDescription": "Anahtarı şimdi kopyalayın; aşağıda ajanı bağlama adımları var."
+    },
+    "connect": {
+      "title": "Ajanı bağlama",
+      "url": "MCP adresi",
+      "claudeCode": "Claude Code'da bu komutu çalıştırın:",
+      "command": "Claude Code komutu",
+      "needKey": "Bağlanmak için bir anahtar oluşturun; oluşturunca hazır komut gösterilir.",
+      "otherClients": "Başka MCP istemcileri: bu adres, “streamable HTTP” taşıması ve “Authorization: Bearer <anahtar>” başlığıyla bağlanır. claude.ai bağlayıcıları (OAuth) henüz desteklenmiyor."
     }
   },
   "agents": {
@@ -475,7 +500,7 @@
       "activated": "Etkinleştirildi",
       "revoked": "Geri alındı",
       "pending": "Onay bekliyor",
-      "confirm": "Havale doğrulandı",
+      "confirm": "Havaleyi onayla",
       "code": "Etkinleştirme kodu",
       "reissue": "Kodu yeniden oluştur",
       "revoke": "Etkinleştirmeyi geri al",
@@ -668,7 +693,27 @@
       "noSection": "Bölüm yok",
       "text": "Metin",
       "recorded": "Kayıt eklendi."
-    }
+    },
+    "gaps": {
+      "product": "Kimlik bölümünde ürünü yazın.",
+      "segment": "Kitle bölümüne en az bir segment ekleyin.",
+      "segmentKey": "Kitle: {{n}}. segmentin anahtarı geçersiz ya da başka bir segmentle aynı.",
+      "channel": "Kanallar bölümüne en az bir kanal ekleyin.",
+      "channelUnavailable": "Kanallar: {{n}}. kanal için bağlı hesap yok. Hesabı bağlayın ya da “Herhangi bir kanal” seçin.",
+      "budget": "Bütçe çerçevesini kontrol edin: her şerit için tür, tavan ve para birimi gerekli; ücretli kanallar açıksa ücretli bir şerit de gerekli.",
+      "cadence": "Sıklık: kanal dağılımı yalnızca stratejinin kanallarını içermeli, her kanal bir kez yazılmalı ve paylar toplamı 100 olmalı.",
+      "hypothesis": "En az bir etkin hipotez ekleyin.",
+      "hypothesisField": "{{n}}. hipotez: {{field}} gerekli.",
+      "hypothesisFields": {
+        "title": "başlık",
+        "angle": "açı",
+        "metric": "ölçüt"
+      },
+      "hypothesisSegment": "{{n}}. hipotez: seçilen segment kitlede yok.",
+      "hypothesisChannel": "{{n}}. hipotez: bu kanal için bağlı hesap yok.",
+      "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
+    },
+    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin."
   },
   "capabilities": {
     "title": "Kabiliyetler",
@@ -685,6 +730,7 @@
       "community": "Topluluk",
       "ads": "Reklam",
       "calendar": "Takvim",
+      "marketplace": "Pazar yerleri",
       "device": "Cihazlar",
       "agent_connection": "Ajan bağlantıları",
       "computer_access": "Bilgisayar erişimi",
@@ -695,6 +741,7 @@
       "facebook_page": "Facebook sayfası",
       "x": "X",
       "linkedin_page": "LinkedIn sayfası",
+      "linkedin_member": "LinkedIn kişisel hesap",
       "tiktok": "TikTok",
       "pinterest": "Pinterest",
       "youtube": "YouTube",
@@ -706,6 +753,7 @@
       "mailbox": "E-posta kutusu",
       "webchat": "Web sohbeti",
       "netgsm_pbx": "NetGSM santrali",
+      "voice_bridge": "Ses köprüsü",
       "discord": "Discord",
       "reddit": "Reddit",
       "review_google": "Google yorumları",
@@ -716,6 +764,8 @@
       "google_ads": "Google reklamları",
       "google_calendar": "Google Takvim",
       "outlook_calendar": "Outlook takvimi",
+      "trendyol": "Trendyol mağazası",
+      "hepsiburada": "Hepsiburada mağazası",
       "phone": "Telefon",
       "computer": "Bilgisayar",
       "printer": "Yazıcı",
@@ -866,6 +916,21 @@
       "memberAdded": "Üye eklendi.",
       "memberRemoved": "Üye çıkarıldı."
     },
+    "pbx": {
+      "title": "Santral çağrı politikası",
+      "saved": "Santral politikası kaydedildi.",
+      "recording": "Görüşmeleri santralde kaydet",
+      "recordingHint": "Yalnızca KVKK kayıt duyurusu yerindeyse açın: kayıt, arayan duyuruyu duyduktan sonra başlamalıdır.",
+      "mode": "Arama yöntemi",
+      "modes": {
+        "originate": "Dahiliden ara",
+        "linkup": "Temsilcinin telefonundan ara"
+      },
+      "modeHints": {
+        "originate": "Önce temsilcinin dahilisi çalar; açınca müşteri aranır.",
+        "linkup": "Önce temsilcinin kendi telefon numarası çalar; açınca müşteri aranır."
+      }
+    },
     "connector": {
       "label": "Bağlantı",
       "actionsLabel": "Bağlantı işlemleri",
@@ -882,13 +947,21 @@
         "expired": "Erişim jetonunun süresi doldu"
       },
       "errorKinds": {
-        "auth": "giriş reddedildi",
-        "permission": "izin yok",
-        "throttle": "sağlayıcı yoğun",
-        "transient": "geçici bir sorun",
-        "permanent": "kalıcı bir sorun",
-        "unknown": "bilinmeyen bir sorun"
+        "auth": "giriş reddedildi: kullanıcı adını/kodunu ve parolayı kontrol edin",
+        "permission": "hesabın bu işlem için izni yok: sağlayıcıda izinleri kontrol edin",
+        "throttle": "sağlayıcı şu an yoğun: birkaç dakika sonra yeniden deneyin",
+        "transient": "sağlayıcıya ulaşılamadı: sunucu adını ve bağlantıyı kontrol edip yeniden deneyin",
+        "permanent": "sağlayıcı bilgileri kabul etmedi: kullanıcı kodu, parola, mesaj başlığı ve sunucu adlarını kontrol edin",
+        "unknown": "sağlayıcının yanıtından işin olup olmadığı anlaşılmadı: biraz sonra yeniden yoklayın"
       },
+      "measureReconnect": "Ölçüm: yeniden bağlanın; bu bağlantının izinleri sonuçları okumaya yetmiyor.",
+      "commentsLine": "Yorumlar: {{status}}",
+      "comments": {
+        "off": "kapalı (Meta onayı bekleniyor)",
+        "reconnect": "yeniden bağlanın",
+        "on": "açık"
+      },
+      "reasonLine": "Sağlayıcının yanıtı: {{reason}}",
       "probeDialog": {
         "title": "Yoklama: {{name}}",
         "description": "Sistem sağlayıcıya kimlik bilgileriyle küçük bir deneme çağrısı yaptı.",
@@ -916,7 +989,97 @@
       "metaTitle": "Meta",
       "metaUrl": "Meta webhook adresi",
       "verifyTokenHint": "Doğrulama anahtarı platformun Meta uygulamasının panelinde ayarlıdır; burada gösterilmez.",
-      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür."
+      "metaMissing": "Platformun Meta uygulaması henüz yapılandırılmadı; Meta webhook adresi o zaman görünür.",
+      "tiktokTitle": "TikTok",
+      "tiktokUrl": "TikTok webhook adresi",
+      "tiktokHelp": "Bunu platformun TikTok uygulamasının geri çağırma adresi (callback URL) olarak TikTok geliştirici portalına girin (uygulamanın Webhooks bölümü). Jeeta şu olaylara göre işlem yapar: {{events}}; diğer olaylar ajan için saklanır."
+    },
+    "bridge": {
+      "title": "Ses köprüsü",
+      "extension": "Dahili",
+      "stt": "Konuşmadan metne",
+      "tts": "Metinden konuşmaya",
+      "version": "Sürüm",
+      "lines": "Aynı anda arama",
+      "codecs": "Kodekler",
+      "heartbeat": "Son kayıt",
+      "never": "Köprü henüz kaydolmadı.",
+      "hint": "Yalnızca köprünün kendi kaydı doğrular; kanıtla doğrulanmaz. Kurulum:"
+    },
+    "phone": {
+      "title": "Cihaz köprüsü",
+      "status": "Durum",
+      "states": {
+        "online": "Çevrimiçi",
+        "unlisted": "Çevrimdışı: köprü bu telefonu artık listelemiyor (çıkarılmış ya da adb'de hazır değil)",
+        "stale": "Doğrulama eskidi: son bir dakikada hiçbir kayıt onu listelemedi"
+      },
+      "seen": "son görülme {{ago}}",
+      "platform": "Platform",
+      "platforms": {
+        "android": "Android",
+        "ios": "iOS"
+      },
+      "model": "Model",
+      "os": "İşletim sistemi sürümü",
+      "computer": "Bilgisayar",
+      "version": "Köprü sürümü",
+      "unicode": "Unicode metin",
+      "yes": "Evet",
+      "no": "Hayır",
+      "unicodeHint": "Türkçe harf ya da emoji yazmak için telefona ADBKeyBoard'u kurun <b>ve giriş yöntemi olarak etkinleştirin</b>: yalnızca kurulu olması yetmez.",
+      "commands": "Komutlar",
+      "never": "Bu telefonu henüz hiçbir cihaz köprüsü kaydetmedi.",
+      "hint": "Telefonu yalnızca köprüsünün kayıtları doğrular; kanıtla doğrulanmaz. Kurulum:",
+      "log": {
+        "title": "Son komutlar",
+        "empty": "Bu telefona henüz komut gönderilmedi.",
+        "args": "Parametreler",
+        "result": "Sonuç",
+        "noResult": "Sonuç yok.",
+        "reason": "Başarısız: {{reason}}",
+        "file": "Dosyayı aç (bağlantı 10 dakika geçerli)",
+        "statuses": {
+          "queued": "Sırada",
+          "leased": "Çalışıyor",
+          "done": "Tamamlandı",
+          "failed": "Başarısız",
+          "expired": "Süresi doldu",
+          "canceled": "İptal edildi"
+        },
+        "reasons": {
+          "device_offline": "telefon çevrimdışı",
+          "element_not_found": "ekranda böyle bir öğe yok",
+          "unicode_unsupported": "telefon ASCII dışındaki metni yazamıyor",
+          "unsupported_on_platform": "bu platformda yapılamıyor",
+          "unsupported_by_bridge": "köprü bu komutu çalıştırmıyor",
+          "adb_error": "adb hatası",
+          "screen_busy": "ekran durmadan hareket ediyordu",
+          "timeout": "telefon zamanında yanıt vermedi",
+          "bridge_error": "köprü hatası",
+          "file_not_found": "dosya artık saklanmıyor",
+          "unknown": "bilinmeyen bir neden"
+        },
+        "fileGone": "Dosya artık saklanmıyor (dosyalar 7 gün saklanır).",
+        "fileBlocked": "Tarayıcı yeni sekmeyi engelledi: bu site için açılır pencerelere izin verip yeniden deneyin."
+      },
+      "pair": {
+        "title": "Telefon bağlayın",
+        "body": "USB ile bir bilgisayara takılı Android telefonu, o bilgisayarda çalışan Jeeta cihaz köprüsü programı bağlar. Eşleştirme, programa anahtarını verir.",
+        "open": "Köprü eşleştir",
+        "dialogTitle": "Cihaz köprüsü eşleştir",
+        "dialogDescription": "Tek bir bilgisayar için, köprünün ihtiyaç duyduğu tek izinle (devices.bridge) bir anahtar oluşturur.",
+        "defaultName": "Cihaz köprüsü",
+        "nameHint": "Bilgisayarın adını verin, ör. Atölye bilgisayarı.",
+        "keyDescription": "Anahtarı şimdi kopyalayın; köprüyü çalıştırmanın üç adımı aşağıda.",
+        "stepsLabel": "Köprü kurulumu",
+        "step1": "Telefonun takılı olacağı bilgisayara adb'yi (Android SDK Platform-Tools) kurun. Telefonda Geliştirici seçeneklerini ve USB hata ayıklamayı açın, telefonu USB ile bağlayın ve telefon sorduğunda bu bilgisayara izin verin.",
+        "step2": "jeeta-device-bridge.exe programını bir klasöre koyun (nereden alınacağı: docs/operations/device-bridge.md, 4. bölüm); yanına da şu içerikle jeeta-device-bridge.toml adlı bir dosya oluşturun:",
+        "configLabel": "jeeta-device-bridge.toml",
+        "keyEnv": "Anahtarı dosyaya yazmak yerine JEETA_DEVICE_BRIDGE_KEY ortam değişkenine de koyabilirsiniz.",
+        "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon yaklaşık 15 saniye içinde bu sayfada, Cihazlar altında doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
+        "ownKey": "Her bilgisayardaki köprünün kendi anahtarı olmalı: Jeeta köprüleri anahtarlarından ayırt eder ve çalışan başka bir köprünün tuttuğu telefonu reddeder. Başka bir bilgisayar için yeniden eşleştirin."
+      }
     }
   },
   "connect": {
@@ -942,14 +1105,16 @@
       "tls": "TLS modu"
     },
     "title": "Hesap bağla",
-    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta ve X için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
+    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta, X, TikTok ve LinkedIn için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
     "open": "Hesap bağla",
     "kindsLabel": "Bağlanacak hesap türü",
     "chooseKind": "Önce bağlanacak hesap türünü seçin.",
     "providers": {
+      "linkedin": "LinkedIn",
       "mail": "E-posta",
       "meta": "Meta",
       "netgsm": "NetGSM",
+      "tiktok": "TikTok",
       "x": "X"
     },
     "forCapability": "{{name}} için",
@@ -962,6 +1127,14 @@
       "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
       "reconnectSubmit": "Yeniden bağla",
       "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
+    },
+    "whatsapp": {
+      "choice": "Hangi numarayı bağlıyorsunuz?",
+      "businessApp": "Telefonda WhatsApp Business uygulamasında kullandığım numara",
+      "businessAppHint": "Uygulama telefonda çalışmaya devam eder: telefondan yazdıklarınız da Jeeta'da görünür. İzin verirseniz kişileriniz ve son 180 güne kadarki birebir sohbetleriniz bağlantıdan sonraki 24 saat içinde bir kez aktarılır; geçmiş mesajlara yanıt beklenmez. Bağlanırken uygulamayı telefonda açık tutun. Meta bu bağlantıyı her ülke için sunmayabilir: reddederse nedeni burada görünür.",
+      "cloudApi": "Yeni bir Cloud API numarası",
+      "cloudApiHint": "Numara yalnızca Jeeta üzerinden kullanılır; telefondaki bir WhatsApp uygulamasıyla birlikte çalışmaz.",
+      "notEnabled": "Platformun WhatsApp Embedded Signup yapılandırması henüz ayarlanmadı; işletmen ayarlayınca bu bağlantı açılır."
     },
     "credentials": {
       "title": "Kimlik bilgileri",
@@ -984,7 +1157,11 @@
       "externalId": "Hesap kimliği",
       "externalIdHint": "Sayfanın ya da WhatsApp telefon numarasının sağlayıcıdaki kimliği.",
       "externalIdOptional": "Hesap kimliği (isteğe bağlı)",
-      "submit": "Jetonu kaydet ve yokla"
+      "submit": "Jetonu kaydet ve yokla",
+      "title": "Erişim jetonuyla bağla"
+    },
+    "secret": {
+      "show": "{{field}} değerini göster"
     },
     "result": {
       "verified": "Bağlantı yoklandı ve doğrulandı.",
@@ -1004,6 +1181,7 @@
     "externalId": "Kimlik: {{id}}",
     "scopes": "İzinler: {{scopes}}",
     "expires": "Erişimin bitişi: {{at}}",
+    "together": "Aynı hesap; birlikte bağlanır: {{kinds}}",
     "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
     "confirm": "Seçilenleri bağla",
     "connected": "Bağlanan hesap sayısı: {{count}}.",
@@ -1152,6 +1330,8 @@
     "noJourney": "Gösterilecek yolculuk yok.",
     "agentExecutor": "Yürütücü: Ajan",
     "humanExecutor": "Yürütücü: {{user}}",
+    "you": "Siz",
+    "teamMember": "Ekip üyesi",
     "unassignedExecutor": "Yürütücü: Atanmamış insan",
     "takeOver": "Devral",
     "handBack": "Ajana bırak",
@@ -1170,7 +1350,7 @@
     "connected": "Görüşme gerçekleşti",
     "notConnected": "Görüşme gerçekleşmedi",
     "product": "Ürün",
-    "amount": "Tutar (kuruş / alt birim)",
+    "amount": "Tutar",
     "currency": "Para birimi",
     "lostReason": "Kayıp nedeni",
     "chooseReason": "Bir neden seçin",
@@ -1206,7 +1386,8 @@
       "human": "İnsan",
       "agent": "Ajan",
       "system": "Sistem",
-      "customer": "Müşteri"
+      "customer": "Müşteri",
+      "business_app": "İşletme · WhatsApp Business uygulaması"
     },
     "delivery": {
       "received": "Alındı",
@@ -1215,7 +1396,9 @@
       "delivered": "Teslim edildi",
       "failed": "Gönderilemedi",
       "unknown": "Teslim durumu belirsiz; tekrar göndermeyin.",
-      "refused": "Gönderim reddedildi: {{reason}}"
+      "refused": "Gönderim reddedildi: {{reason}}",
+      "failedBecause": "Gönderilemedi: {{reason}}",
+      "unknownBecause": "Teslim durumu belirsiz; tekrar göndermeyin ({{reason}})."
     },
     "status": {
       "new": "Yeni",
@@ -1380,6 +1563,88 @@
         "held": "Yapıldı",
         "cancelled": "İptal edildi"
       }
+    },
+    "public": {
+      "surface": {
+        "private": "DM",
+        "comment": "Yorum",
+        "question": "Soru",
+        "relay": "Amazon"
+      },
+      "owed": "{{count}} bekleyen",
+      "heldCount": "{{count}} onay bekliyor",
+      "deadlineLeft": "{{time}} kaldı",
+      "deadlinePassed": "Süre doldu",
+      "time": {
+        "days": "{{days}} gün {{hours}} sa",
+        "hours": "{{hours}} sa {{minutes}} dk",
+        "minutes": "{{minutes}} dk"
+      },
+      "approvals": "Onay bekleyenler",
+      "approvalFor": "Onay bekleyen yanıt",
+      "noApprovals": "Onay bekleyen yanıt yok.",
+      "items": "Yorumlar ve sorular",
+      "subject": {
+        "post": "Gönderi",
+        "product": "Ürün"
+      },
+      "author": {
+        "us": "Biz",
+        "them": "Müşteri",
+        "other": "Başka biri"
+      },
+      "answer": {
+        "awaiting": "Bekliyor",
+        "pending": "Platform incelemesinde",
+        "answered": "Yanıtlandı",
+        "answeredElsewhere": "Başka yerden yanıtlandı",
+        "rejected": "Reddedildi: {{reason}}",
+        "handled": "Yanıt gerekmiyor",
+        "expired": "Süresi doldu"
+      },
+      "moderation": {
+        "hidden": "Gizli",
+        "deleted": "Silindi",
+        "removed": "Kaldırıldı",
+        "reported": "Bildirildi"
+      },
+      "actions": {
+        "reply": "Yanıtla",
+        "hide": "Gizle",
+        "unhide": "Göster",
+        "handled": "Yanıt gerekmiyor",
+        "report": "Bildir",
+        "delete": "Sil"
+      },
+      "delete": {
+        "title": "Yorumu sil",
+        "description": "Yorum platformda kalıcı olarak silinir.",
+        "confirm": "Onaylamak için “{{phrase}}” yazın.",
+        "phrase": "SİL",
+        "submit": "Kalıcı olarak sil"
+      },
+      "held": {
+        "title": "Onay bekleyen taslak",
+        "text": "Taslak metni",
+        "approve": "Onayla",
+        "edit": "Düzenle ve onayla",
+        "save": "Onayla ve gönder",
+        "cancel": "İptal",
+        "discard": "Vazgeç"
+      },
+      "composer": {
+        "target": "Yanıtlanan",
+        "visibility": "Yanıtın görünürlüğü",
+        "public": "Herkese açık",
+        "private": "Özel (DM)",
+        "privateLeft": "Özel yanıt hakkı: {{time}}, bir kez",
+        "label": "Yanıtınız",
+        "count": "{{count}} / {{max}}",
+        "send": "Yanıtı gönder",
+        "noOwed": "Yanıt bekleyen yorum ya da soru yok."
+      },
+      "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
+      "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
     }
   },
   "studio": {
@@ -1430,6 +1695,7 @@
     "requiresApproval": "İnsan onayı iste",
     "savePolicy": "Politikayı kaydet",
     "reconnect": "Bağlantıyı kontrol et",
+    "connectorReconnect": "Hesabın izinleri sonuçları okumaya yetmiyor: ölçmek için hesabı yeniden bağlayın.",
     "connectorUnavailable": "Bağlayıcı desteklenmiyor veya yeniden bağlanmalı.",
     "braked": "Fren etkin; yeni işlem durduruldu.",
     "noStrategy": "Önce bir strateji onaylayın.",
@@ -1443,9 +1709,7 @@
     "close": "Kapat",
     "emptyToday": "Bekleyen iş yok.",
     "text": "İçerik metni",
-    "upload": "Dosya yükle",
     "submit": "İçeriği teslim et",
-    "uploaded": "Dosya hazır",
     "brandRules": "Marka kuralları",
     "evidence": "Kanıt",
     "trend": "Trend sinyalleri",
@@ -1464,7 +1728,8 @@
     "arm": "İçerik kolu",
     "budgetMove": "Günlük bütçeyi değiştir",
     "binding": "Bağlı reklam seti",
-    "dailyBudget": "Günlük bütçe (kuruş / alt birim)",
+    "dailyBudget": "Günlük bütçe",
+    "invalidBudget": "Günlük bütçe okunamadı. Sıfırdan büyük bir tutar yazın, ör. 1.500 ya da 1500,50.",
     "currency": "Para birimi",
     "budgetHelp": "Dışarıda oluşturulmuş setler. Günlük bütçe, gerçekleşen harcama değildir.",
     "queued": "Sırada",
@@ -1489,7 +1754,132 @@
     "success": "Kaydedildi.",
     "loading": "Yükleniyor…",
     "entryHypothesis": "Değerlendirilen hipotez",
-    "minorUnits": "alt birim"
+    "minorUnits": "alt birim",
+    "publishFailed": "Yayınlanamadı: {{reason}}",
+    "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
+    "notResent": "Jeeta bu paylaşımı yeniden göndermez. Bugün'den kaldırmak için iptal edin.",
+    "budgetState": {
+      "queued": "Sırada",
+      "sending": "Gönderiliyor",
+      "succeeded": "Uygulandı",
+      "failed": "Uygulanamadı",
+      "unknown": "Bütçe sonucu belirsiz",
+      "refused": "Reddedildi",
+      "cancelled": "İptal edildi"
+    },
+    "preview": "Onaya sunulan taslak",
+    "publishTo": "Yayınlanacağı yer",
+    "scheduledFor": "Yayın zamanı",
+    "noDraft": "Ajan henüz bir taslak teslim etmedi.",
+    "media": "Taslaktaki medya",
+    "mediaImage": "Görsel {{n}}: {{name}}",
+    "uploadedFile": "Yüklenmiş dosya",
+    "processing": "Sağlayıcı paylaşımı işliyor; görünmesi birkaç dakika sürebilir.",
+    "postLink": "Yayınlanan paylaşımı gör",
+    "tiktok": {
+      "screen": "TikTok'ta paylaş",
+      "loading": "TikTok hesabı okunuyor…",
+      "postingAs": "{{nickname}} hesabında paylaşılacak",
+      "postingAsUser": "{{nickname}} (@{{username}}) hesabında paylaşılacak",
+      "cannotPost": "Bu TikTok hesabı şu anda paylaşım yapamıyor. Daha sonra yeniden deneyin.",
+      "preview": "Paylaşımın önizlemesi",
+      "video": "Paylaşılacak video",
+      "photo": "Paylaşılacak fotoğraf {{n}}",
+      "noPreview": "Bu paylaşımda TikTok'un alabileceği medya yok: bir MP4 video ya da 1-35 fotoğraf.",
+      "tooLong": "Bu video {{length}} sn; bu hesap en fazla {{max}} sn'lik video paylaşabilir.",
+      "caption": "Açıklama",
+      "captionHelp": "Açıklamayı ve etiketlerini paylaşmadan önce düzenleyebilirsiniz.",
+      "captionCount": "{{count}} / {{max}}",
+      "privacy": "Bu paylaşımı kimler görebilir",
+      "privacyPlaceholder": "Paylaşımı kimlerin görebileceğini seçin",
+      "privacyLevel": {
+        "PUBLIC_TO_EVERYONE": "Herkes",
+        "MUTUAL_FOLLOW_FRIENDS": "Arkadaşlar",
+        "FOLLOWER_OF_CREATOR": "Takipçiler",
+        "SELF_ONLY": "Yalnızca ben"
+      },
+      "interactions": "Kullanıcıların şunlara izin ver",
+      "comment": "Yorum",
+      "duet": "Düet",
+      "stitch": "Birleştirme (Stitch)",
+      "interactionOff": "Bu hesabın TikTok ayarlarında kapalı",
+      "disclose": "Ticari içeriği belirt",
+      "discloseHelp": "Bu içeriğin sizi, bir markayı, bir ürünü ya da hizmeti tanıtıp tanıtmadığını belirtin.",
+      "yourBrand": "Kendi markanız",
+      "yourBrandHelp": "Kendinizi ya da kendi işletmenizi tanıtıyorsunuz.",
+      "brandedContent": "Markalı içerik",
+      "brandedContentHelp": "Başka bir markayı ya da üçüncü bir tarafı tanıtıyorsunuz.",
+      "promotionalLabel": "Fotoğrafınız/videonuz 'Tanıtım içeriği' olarak etiketlenecek",
+      "paidLabel": "Fotoğrafınız/videonuz 'Ücretli ortaklık' olarak etiketlenecek",
+      "commercialRequired": "İçeriğinizin sizi mi, üçüncü bir tarafı mı yoksa ikisini birden mi tanıttığını belirtmeniz gerekir.",
+      "brandedNotPrivate": "Markalı içeriğin görünürlüğü 'Yalnızca ben' olamaz.",
+      "declarationMusic": "Paylaşarak TikTok'un <music>Müzik Kullanım Onayı</music>'nı kabul etmiş olursunuz.",
+      "declarationBranded": "Paylaşarak TikTok'un <branded>Markalı İçerik Politikası</branded>'nı ve <music>Müzik Kullanım Onayı</music>'nı kabul etmiş olursunuz.",
+      "post": "TikTok'ta paylaş",
+      "posting": "Paylaşılıyor…",
+      "processing": "Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.",
+      "approved": "Bu ekrandan paylaşıldı: {{time}} saatinde, o saat geçtiyse hemen TikTok'a gönderilir.",
+      "status": {
+        "waiting": "Paylaşım durumu: planlanan saati bekliyor",
+        "due": "Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…",
+        "sending": "Paylaşım durumu: TikTok'a gönderiliyor…",
+        "processing": "Paylaşım durumu: TikTok paylaşımı işliyor…",
+        "published": "Paylaşım durumu: TikTok'ta yayınlandı",
+        "failed": "Paylaşım durumu: yayınlanamadı ({{reason}})"
+      },
+      "viewPost": "Paylaşımı TikTok'ta gör",
+      "refused": {
+        "tiktok_cannot_post_now": "Bu TikTok hesabı şu anda paylaşım yapamıyor. Daha sonra yeniden deneyin.",
+        "tiktok_privacy_not_chosen": "Paylaşımı kimlerin görebileceğini seçin.",
+        "tiktok_privacy_not_offered": "Bu hesap artık bu gizlilik seçeneğini sunmuyor. Yeniden seçin.",
+        "tiktok_branded_content_private": "Markalı içeriğin görünürlüğü 'Yalnızca ben' olamaz.",
+        "tiktok_commercial_unspecified": "İçeriğinizin sizi mi, üçüncü bir tarafı mı yoksa ikisini birden mi tanıttığını belirtmeniz gerekir.",
+        "tiktok_commercial_not_disclosed": "Kendi markanızı ya da markalı içeriği seçmek için ticari içerik bildirimini açın.",
+        "tiktok_interaction_disabled": "İzin verdiğiniz bir etkileşim bu hesabın TikTok ayarlarında kapalı.",
+        "tiktok_photo_interaction": "Fotoğraf paylaşımlarında yalnızca yorum açılabilir.",
+        "tiktok_video_too_long": "Bu video, bu hesabın paylaşabileceğinden uzun.",
+        "tiktok_title_too_long": "Açıklama TikTok için fazla uzun.",
+        "tiktok_media_unsupported": "Bu paylaşımda TikTok'un alabileceği medya yok: bir MP4 video ya da 1-35 fotoğraf.",
+        "tiktok_creator_info_unavailable": "TikTok hesabı okunamadı. Bağlantısını kontrol edin.",
+        "tiktok_reconnect_for_drafts": "Taslakları açmak için TikTok'u yeniden bağlayın.",
+        "tiktok_draft_settings": "Taslak yalnızca TikTok'un aldığını taşır: video yalnızca dosyayı, fotoğraflar açıklamalarını."
+      },
+      "accountCounters": "TikTok hesabının sayaçları",
+      "counter": {
+        "follower_count": "Takipçi",
+        "following_count": "Takip edilen",
+        "likes_count": "Beğeni",
+        "video_count": "Video",
+        "view_count": "İzlenme",
+        "like_count": "Beğeni",
+        "comment_count": "Yorum",
+        "share_count": "Paylaşım"
+      },
+      "recentVideos": "Son videolar",
+      "noRecentVideos": "Henüz herkese açık video yok.",
+      "untitled": "Başlıksız video",
+      "postCounters": "Paylaşımın TikTok sayaçları",
+      "liveCounters": "TikTok'tan canlı okundu",
+      "measuredCounters": "Son ölçümden ({{time}})",
+      "noCounters": "TikTok bu paylaşım için henüz sayaç vermiyor; yalnızca paylaşanın görebildiği bir paylaşımın sayacı olmaz.",
+      "mode": "Nasıl gönderilsin",
+      "modeDirect": "Doğrudan paylaş",
+      "modeDraft": "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)",
+      "reconnectForDrafts": "Taslakları açmak için TikTok'u yeniden bağlayın.",
+      "draftHelp": "TikTok, TikTok gelen kutunuza bir bildirim gönderir: düzenlemeyi bitirip paylaşmak için onu açın. Paylaşımı kimlerin görebileceği, yorum, Düet, Birleştirme ve ticari içerik bildirimi orada seçilir.",
+      "draftNoCaption": "Video taslağı açıklama almaz: açıklamayı paylaşımı tamamlarken TikTok'ta yazarsınız.",
+      "sendDraft": "TikTok taslaklarına gönder",
+      "draftSent": "Gönderildi: TikTok işledikten sonra TikTok gelen kutunuzdaki bir bildirimle düzenlemeyi bitirip paylaşabilirsiniz.",
+      "approvedDraft": "Bu ekrandan onaylandı: {{time}} saatinde, o saat geçtiyse hemen TikTok taslaklarınıza gönderilir.",
+      "draftStatus": {
+        "due": "Paylaşım durumu: planlanan saat geçti; TikTok taslaklarınıza gönderiliyor…",
+        "sending": "Paylaşım durumu: TikTok taslaklarınıza gönderiliyor…",
+        "processing": "Paylaşım durumu: TikTok taslağı işliyor…",
+        "sent": "Paylaşım durumu: TikTok taslaklarınıza gönderildi"
+      },
+      "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
+      "noCover": "Önizleme yok"
+    }
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
@@ -1504,14 +1894,17 @@
     "price": "Tek seferlik ücret",
     "bank": "Banka ve havale talimatları",
     "reference": "Çalışma alanı ödeme referansı",
-    "amount": "Ödenen tutar (kuruş)",
+    "amount": "Ödenen tutar ({{currency}})",
+    "amountHint": "Havale ettiğiniz tutarı yazın; ücret {{price}}. Örnek: 14.900 ya da 14900,00.",
     "paidAt": "Ödeme zamanı",
     "report": "Havale bildirimini gönder",
+    "reported": "Havale bildiriminiz alındı: {{amount}}, {{paidAt}}. İşletmen banka kaydıyla karşılaştırıp onayladığında size bir etkinleştirme kodu iletilecek; kodu bu sayfada gireceksiniz. Bilgi hatalıysa formu düzeltip yeniden gönderebilirsiniz.",
     "code": "Etkinleştirme kodunu gir",
     "activate": "Çalışma alanını etkinleştir",
     "codeHelp": "Kodu mevcut sahiplerden herhangi biri kullanabilir. Kod 72 saat geçerlidir; 5 hatalı denemeden sonra kilitlenir. Süresi dolan, kaybolan veya kilitlenen kod için işletmenden yeni kod isteyin. Yeni kod eskisini geçersiz kılar.",
     "ownerOnly": "Ödeme bildirimi ve etkinleştirme için mevcut çalışma alanı sahibi gerekir.",
-    "invalidEvidence": "Pozitif bir tutar ve gelecekte olmayan bir ödeme zamanı girin.",
+    "invalidAmount": "Tutar okunamadı. Sıfırdan büyük bir tutar yazın, ör. 14.900 ya da 14900,50.",
+    "invalidPaidAt": "Ödeme zamanını seçin; gelecekte bir zaman olamaz.",
     "revoked": "Etkinleştirme geri alındı",
     "grandfathered": "Önceden tanınmış kalıcı erişim hakkı",
     "paidEntitlement": "Ödemeye dayalı erişim hakkı"
@@ -1540,14 +1933,735 @@
     "agentRecent": "Ajan yakın zamanda bağlandı",
     "agentNeeded": "Ajanın güncel bağlantısı yok. İşlerin ilerlemesi için kendi ajan zamanlayıcınız çalışmalıdır.",
     "agents": "Ajanları görüntüle",
-    "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez."
+    "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
+    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz."
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
     "missing": "Sağlayıcı uygulaması yapılandırılmadı",
+    "productNotEnabled": "Bu, platform uygulamasının henüz onay almadığı bir sağlayıcı ürünü gerektiriyor (LinkedIn sayfaları için Community Management API). Sağlayıcı onaylayınca işletmen açar.",
     "help": "Bu dönüş adreslerini sağlayıcı uygulamasına kaydedin. Uygulama bilgilerini ve webhook doğrulamasını işletmen yapılandırır.",
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",
-    "expires": "Erişim bitiş zamanı"
+    "expires": "Erişim bitiş zamanı",
+    "businessApp": {
+      "title": "WhatsApp Business uygulamasından aktarım",
+      "contacts": "Kişiler",
+      "history": "Sohbet geçmişi",
+      "until": "Son istek zamanı: {{at}}",
+      "states": {
+        "due": "Henüz istenmedi",
+        "requesting": "İsteniyor",
+        "requested": "İstendi: izin verirseniz telefondan gelir",
+        "refused": "Meta reddetti",
+        "unknown": "İsteğin sonucu bilinmiyor; yeniden istenmez",
+        "expired": "24 saatlik süre doldu; aktarım için numarayı WhatsApp Business uygulamasından ayırıp burada yeniden bağlayın"
+      }
+    }
+  },
+  "gates": {
+    "strategyBody": "Bu bölüm, onaylı bir strateji olunca açılır. Stratejiyi ajanınızla ya da strateji sayfasından hazırlayıp onaylayın.",
+    "strategyLink": "Stratejiye git",
+    "inactiveBody": "Bu bölüm, çalışma alanı etkinleşince açılır.",
+    "inactiveLink": "Ödeme ve etkinleştirme"
+  },
+  "people": {
+    "title": "Kişiler",
+    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil.",
+    "search": "Ada ya da şirkete göre ara",
+    "empty": "Henüz kişi yok.",
+    "noMatch": "Eşleşen kişi yok.",
+    "emptyBody": "Gelen mesajlar, formlar ve içe aktarılan lead'ler burada listelenir.",
+    "added": "Eklenme: {{at}}",
+    "range": "{{first}}–{{last}} arası",
+    "previous": "Önceki",
+    "next": "Sonraki",
+    "unnamed": "Adsız kişi",
+    "unnamedOn": "{{channel}} kişisi",
+    "erased": "Silinmiş kişi",
+    "channels": {
+      "whats_app": "WhatsApp",
+      "instagram_dm": "Instagram",
+      "messenger": "Messenger",
+      "sms": "SMS",
+      "email": "E-posta",
+      "webchat": "Web sohbeti",
+      "phone": "Telefon"
+    }
+  },
+  "failure": {
+    "recipientNotAllowed": "alıcı, Meta test numarasının izinli alıcıları arasında değil. Numarayı Meta'da WhatsApp → API Setup'ta alıcı olarak ekleyin ya da gerçek bir WhatsApp numarası bağlayın.",
+    "windowClosed": "müşterinin son mesajının üzerinden 24 saatten fazla geçti; artık yalnızca onaylı bir şablonla yazılabilir.",
+    "reconnect": "hesabın oturumu sona erdi ya da reddedildi; hesabı Hesap bağla sayfasından yeniden bağlayın.",
+    "permission": "hesabın bu işlem için izni yok; bağlantıda istenen izinleri verin ya da hesabı yeniden bağlayın.",
+    "throttled": "sağlayıcı gönderimleri yavaşlatmamızı istedi; biraz sonra tekrar deneyin.",
+    "configuration": "hesabın gönderim ayarları okunamadı; hesabı kontrol edip yeniden bağlayın.",
+    "xCredits": "X API kredisi yok; X developer console'dan (console.x.com) kredi yükleyin.",
+    "xDuplicate": "X aynı metni ikinci kez yayınlamıyor; metni değiştirip yeniden deneyin.",
+    "tiktokUnaudited": "TikTok bu uygulamayı henüz denetlemedi; bu yüzden yalnızca gizli bir TikTok hesabına paylaşım yapabilir. Denetim tamamlanana kadar hesabı TikTok'ta gizli yapın (Ayarlar ve gizlilik → Gizlilik → Gizli hesap), sonra bu gönderiyi iptal edip yeniden planlayın.",
+    "tiktokPrivacy": "bu gönderi için seçilen gizlilik bu TikTok hesabına sunulmuyor (TikTok'un denetlemediği bir uygulama yalnızca \"Sadece ben\" olarak paylaşabilir); gönderiyi iptal edip paylaşım ekranının sunduğu bir gizlilikle yeniden paylaşın.",
+    "tiktokCap": "TikTok hesabı uygulamalar üzerinden günlük paylaşım sınırına ya da gelen kutusunda bekleyen taslak sınırına ulaştı; yarın tekrar deneyin ya da TikTok uygulamasından paylaşın.",
+    "tiktokAppCap": "platformun TikTok uygulaması, üzerinden paylaşım yapan kullanıcılar için günlük sınırına ulaştı (TikTok'un uygulamalara koyduğu sınır); yarın tekrar deneyin.",
+    "tiktokBanned": "TikTok bu hesabın şu anda paylaşım yapmasına izin vermiyor; hesabı TikTok uygulamasında kontrol edin.",
+    "tiktokDomain": "TikTok fotoğrafları yalnızca uygulama için doğrulanmış bir alan adından çeker; medya alan adını TikTok geliştirici portalında (URL properties) doğrulayın ya da video paylaşın.",
+    "tiktokSpam": "TikTok gönderiyi spam ya da riskli olarak işaretledi ve yayınlamayacak; yeniden paylaşmadan önce açıklamayı değiştirin.",
+    "tiktokMedia": "TikTok medyayı kabul etmedi (biçimi, süresi, kare hızı ya da resim boyutu); TikTok'un gereksinimlerine göre kontrol edip yeniden paylaşın."
+  },
+  "calls": {
+    "title": "Aramalar",
+    "description": "Temsilcilerin santralden yaptığı aramalar ve sonuçları. Numaralar maskelenir.",
+    "empty": "Henüz arama yok",
+    "emptyBody": "Bir temsilci aradığında görüşme burada listelenir.",
+    "noPermission": "Aramaları görmek için arama izni gerekiyor.",
+    "columns": {
+      "started": "Başlangıç",
+      "direction": "Yön",
+      "number": "Numara",
+      "purpose": "Amaç",
+      "state": "Durum",
+      "duration": "Süre",
+      "outcome": "Sonuç",
+      "who": "Kim"
+    },
+    "directions": {
+      "inbound": "Gelen",
+      "outbound": "Giden"
+    },
+    "purposes": {
+      "service": "Hizmet",
+      "commercial": "Ticari",
+      "callback": "Geri arama"
+    },
+    "purposeHints": {
+      "service": "Mevcut müşteri: kazanılmış yolculuk, son 180 günde randevu ya da teklif, ya da açık randevu.",
+      "commercial": "Satış ya da tanıtım: İYS'de telefonla arama izni gerekir.",
+      "callback": "Son 7 günde arayan birine dönüş."
+    },
+    "states": {
+      "planned": "Planlandı",
+      "dialing": "Aranıyor",
+      "ringing": "Çalıyor",
+      "live": "Görüşmede",
+      "holding": "Beklemede",
+      "ending": "Kapanıyor",
+      "ended": "Bitti"
+    },
+    "outcomes": {
+      "connected": "Görüşüldü",
+      "no_answer": "Cevap yok",
+      "voicemail": "Sesli mesaj",
+      "refused_by_customer": "Müşteri reddetti",
+      "appointment": "Randevu alındı",
+      "callback_requested": "Geri arama istedi",
+      "other": "Diğer"
+    },
+    "causes": {
+      "caller_hangup": "Karşı taraf kapattı",
+      "agent_ended": "Sonlandırıldı",
+      "agent_timeout": "Ajan yanıt vermedi",
+      "max_duration": "Azami süre doldu",
+      "no_answer": "Cevap yok",
+      "busy": "Meşgul",
+      "failed": "Başarısız",
+      "transferred": "Aktarıldı",
+      "bridge_offline": "Hat bağlı değil",
+      "refused": "Reddedildi",
+      "caller_silent": "Karşı taraf sessiz kaldı"
+    },
+    "modes": {
+      "human": "Temsilci (dahili {{ext}})",
+      "agent": "Ajan"
+    },
+    "refusals": {
+      "workspace_inactive": "çalışma alanı etkin değil",
+      "strategy_required": "onaylı bir strateji gerekiyor",
+      "bridge_offline": "santral bağlı ve doğrulanmış değil",
+      "bridge_busy": "bu dahili şu an başka bir görüşmede",
+      "person_erased": "kişi silinmiş",
+      "person_merged": "kişi başka bir kişiyle birleştirilmiş",
+      "no_phone_identity": "kişinin telefon numarası yok",
+      "suppressed": "kişi telefonla aranmayı engellemiş",
+      "journey_lost": "kişinin yolculuğu kaybedildi olarak kapalı",
+      "consent_missing": "ticari arama için İYS arama izni yok",
+      "no_relationship": "hizmet araması için mevcut bir müşteri ilişkisi yok",
+      "no_recent_inbound": "geri arama için son 7 günde gelen bir arama yok",
+      "outside_work_hours": "santralin çalışma saatleri dışında",
+      "daily_ops_cap": "günlük arama sınırına ulaşıldı",
+      "budget_exhausted": "bütçede bir dakikalık pay kalmadı",
+      "disclosure_missing": "açılış cümlesi asistan bildirimini içermiyor"
+    },
+    "place": {
+      "open": "Arama yap",
+      "title": "Arama yap",
+      "description": "Önce sizin dahiliniz çalar; açınca kişi aranır.",
+      "target": "Kişi ya da telefon",
+      "targetHint": "Kişinin kimliği ya da kişilerden birinin telefon numarası.",
+      "extension": "Dahiliniz",
+      "extensionHint": "Santraldeki dahili numaranız, ör. 101.",
+      "purpose": "Aramanın amacı",
+      "submit": "Ara",
+      "placed": "Arama başlatıldı: dahiliniz çalıyor.",
+      "refused": "Arama yapılamadı: {{reason}}."
+    },
+    "detail": {
+      "title": "Görüşme",
+      "turns": "Görüşme akışı",
+      "noTurns": "Bu görüşmede kayıtlı bir akış yok.",
+      "event": "Hat: {{name}}",
+      "latency": "{{s}} sn",
+      "speakers": {
+        "counterpart": "Karşı taraf",
+        "agent": "Ajan",
+        "script": "Senaryo",
+        "line": "Hat"
+      },
+      "endCause": "Bitiş nedeni",
+      "summary": "Özet",
+      "outcome": "Sonuç",
+      "endTitle": "Görüşmeyi kapat",
+      "end": "Sonucu kaydet",
+      "ended": "Görüşme kapatıldı.",
+      "latencyTitle": "Gecikme (p50 / p95)",
+      "latency_perceived": "İlk ses",
+      "latency_content": "Cevabın ilk sesi",
+      "latency_agent": "Ajanın cevap süresi",
+      "latency_barge_in_stop": "Söz kesmede susma",
+      "latencyValue": "{{p50}} / {{p95}} ms",
+      "alerts": {
+        "perceived_p95_over_1s": "İlk ses p95 1 saniyenin üstünde",
+        "content_p95_over_3s": "Cevap p95 3 saniyenin üstünde",
+        "barge_in_p95_over_300ms": "Söz kesmede susma p95 300 ms'nin üstünde"
+      }
+    },
+    "policy": {
+      "title": "Arama politikası",
+      "saved": "Arama politikası kaydedildi.",
+      "holdingHint": "Her satır bir bekleme cümlesi (en çok 5).",
+      "openingHint": "Arama açılınca hemen çalınır; boş bırakılırsa çalınmaz.",
+      "closingHint": "Plan bir kapanış cümlesi getirmediğinde arama kapatılmadan önce çalınır; boş bırakılırsa her plan kendi kapanışını getirmek zorundadır.",
+      "phrasesHint": "Her satıra bir cümle (en çok 5). Köprü bunları ajan düşünürken kendi başına çalar.",
+      "phrases": {
+        "acknowledgements": "Onay sesleri (≈0,6 sn)",
+        "fillers": "Bekleme cümleleri (≈2,7 sn)",
+        "long_wait": "Uzun bekleme cümlesi (≈8 sn)",
+        "not_heard": "Duyulamadığında",
+        "still_there": "Karşı taraf sessiz kaldığında",
+        "fault": "Teknik sorun cümlesi"
+      },
+      "fields": {
+        "greeting_inbound": "Gelen arama karşılama cümlesi",
+        "voicemail_text": "Sesli mesaj cümlesi",
+        "recording_announcement": "Kayıt duyurusu (KVKK)",
+        "disclosure_sentence": "Asistan bildirimi cümlesi",
+        "disclose_assistant": "Ajanın her açılışta asistan olduğunu söylemesi zorunlu",
+        "holding_default": "Varsayılan bekleme cümleleri",
+        "max_duration_s": "Azami görüşme süresi (sn)",
+        "slow_agent_s": "İlk bekleme cümlesine kadar (sn)",
+        "holding_again_s": "İkinci bekleme cümlesine kadar (sn)",
+        "fallback_after_s": "Yedek cümleye kadar (sn)",
+        "caller_silence_s": "Karşı taraf sessizliği bildirimi (sn)",
+        "caller_silence_close_s": "Karşı taraf sessizliğinde kapanış (sn)",
+        "estimated_minor_per_minute": "Dakika başı tahmini ücret (kuruş)",
+        "handoff_extension": "Aktarma dahilisi",
+        "opening_outbound": "Giden aramada işletmenin açılış cümlesi",
+        "transcript_notice": "Yazıya dökme bildirimi",
+        "closing": "Planda kapanış yoksa kapanış cümlesi"
+      }
+    }
+  },
+  "materials": {
+    "tab": "Materyaller",
+    "studioTab": "Stüdyo",
+    "views": {
+      "upload": "Yükle",
+      "olays": "Olaylar",
+      "calendar": "Takvim",
+      "shoots": "Çekim listesi"
+    },
+    "back": "Geri",
+    "genel": "Genel (belirli bir olaya bağlı değil)",
+    "genelShelf": "Genel materyaller",
+    "genelHelp": "Hiçbir olaya bağlı olmayan materyaller. Yalnızca belirli bir tarihten, yerden veya olaydan söz etmeyen içerikte kullanılır.",
+    "noMaterials": "Burada henüz materyal yok.",
+    "noPermission": "Paylaşım izni yok",
+    "erased": "Silindi",
+    "ai": "Yapay zekâ görseli",
+    "freedBadge": "Genel kullanılabilir",
+    "suggestedBadge": "Etiketler öneri",
+    "suggested": "öneri",
+    "untitledPhoto": "Adsız fotoğraf",
+    "untitledVideo": "Adsız video",
+    "kind": {
+      "workshop": "Atölye",
+      "order": "Sipariş / proje",
+      "season": "Sezon koleksiyonu",
+      "special_day": "Özel gün",
+      "product_shoot": "Ürün çekimi",
+      "other": "Diğer"
+    },
+    "share": {
+      "shareable": "Paylaşılabilir",
+      "not_shareable": "Paylaşılamaz",
+      "product_only": "Sadece ürün (yüz ve isimler gizli)"
+    },
+    "tags": {
+      "productGroups": "Ürün grubu",
+      "doors": "Satış kapısı",
+      "contentTypes": "İçerik türü",
+      "quality": "Kalite",
+      "depicts": "Görünenler"
+    },
+    "productGroup": {
+      "figur": "Figür",
+      "diorama_tablo": "Diorama tablo",
+      "anlamli_yer_maket": "Anlamlı yer / maket",
+      "sezon_urunu": "Sezon ürünü",
+      "atolye": "Atölye",
+      "pazaryeri": "Pazaryeri"
+    },
+    "door": {
+      "kisiye_ozel": "Kişiye özel",
+      "toplu_siparis": "Toplu sipariş",
+      "ortaklik": "Ortaklık"
+    },
+    "contentType": {
+      "bitmis_urun": "Bitmiş ürün",
+      "once_sonra": "Önce / sonra",
+      "uretim_baski": "Üretim / baskı",
+      "boyama": "Boyama",
+      "paketleme": "Paketleme",
+      "teslim_tepki": "Teslim / tepki",
+      "atolye_ani": "Atölye anı"
+    },
+    "quality": {
+      "publishable": "Yayınlanabilir",
+      "needs_crop": "Kırpılmalı",
+      "unusable": "Kullanılamaz",
+      "none": "Belirtilmedi"
+    },
+    "depicts": {
+      "face": "Yüz",
+      "name": "İsim",
+      "child": "Çocuk",
+      "client_logo": "Müşteri logosu",
+      "corporate_ref": "Kurumsal referans"
+    },
+    "role": {
+      "anchor": "Dayanak materyal",
+      "support": "Destek görseli"
+    },
+    "finding": {
+      "erased": "Bu materyal silindi.",
+      "share_unset": "Paylaşım izni verilmedi.",
+      "not_shareable": "Bu materyal paylaşılamaz olarak işaretli.",
+      "sensitive_needs_human": "Materyalde izin gerektiren bir şey görünüyor; paylaşım iznini sahip veya yönetici vermeli.",
+      "product_only_shows_person": "Sadece ürün izinli, ama materyalde bir yüz, isim veya çocuk görünüyor ya da bir kişi bağlı; bunlar henüz gizlenemiyor.",
+      "quality": "Kalitesi “yayınlanabilir” olarak işaretlenmedi.",
+      "olay_missing": "Bağlı olduğu olay bulunamadı.",
+      "olay_unconfirmed": "Bağlı olduğu olay henüz onaylanmadı.",
+      "out_of_season": "Sezon penceresinin dışında.",
+      "use_archive": "Geçen sezonun materyali: yalnızca geçen yılın içeriği (arşiv) olarak kullanılabilir.",
+      "archive_not_season": "Arşiv olarak yalnızca sezon veya özel gün materyali kullanılabilir.",
+      "not_freed": "Genel içerikte kullanmak için “genel kullanılabilir” yapılmadı.",
+      "other_olay": "Bu materyal başka bir olaya ait.",
+      "genel_generic_only": "Genel materyal yalnızca belirli bir olaydan söz etmeyen içerikte kullanılabilir.",
+      "ai_not_anchor": "Yapay zekâ görseli içeriğin dayanağı olamaz; yalnızca destek görseli olabilir.",
+      "ai_olay_past": "Olay bittiği için bu yapay zekâ görseli artık duyuruda kullanılamaz.",
+      "no_material": "Bu parça hiçbir materyale dayanmıyor.",
+      "no_eligible_material": "Bu parçada kullanılabilir bir dayanak materyal yok.",
+      "names_other_olay": "Metin başka bir olayın adını, yerini veya müşterisini anıyor.",
+      "names_material_context": "Genel içerikte metin, materyalin geldiği olayın adını, yerini veya müşterisini anıyor.",
+      "date_outside_olay": "Metindeki tarih olayın günlerinin dışında.",
+      "date_in_generic": "Genel içerikte metin, materyalin olay gününü anıyor.",
+      "archive_year_missing": "Geçen yılın içeriğinde olayın yılı metinde geçmiyor.",
+      "client_named_product_only": "Sadece ürün izinli materyalde müşterinin adı geçiyor.",
+      "unknown": "Materyal kontrolü bu parçayı tutuyor ({{code}})."
+    },
+    "error": {
+      "owner_or_manager_human": "Bu kararı yalnızca sahip veya yönetici panelden verebilir.",
+      "human_required": "Bu kararı bir kişi panelden vermeli.",
+      "share_required": "Paylaşım iznini seçin.",
+      "olay_or_genel": "Bir olay seçin ya da materyali genel yapın.",
+      "file_has_material": "Bu dosya zaten kütüphanede.",
+      "duplicate_material_file": "Bu dosyanın aynısı kütüphanede zaten bir materyal (ya da bir materyaldi ve silindi): bir fotoğraf tek bir materyaldir.",
+      "material_erased": "Bu materyal silindi; değiştirilemez.",
+      "genel_stays_freed": "Genel bir materyal genel kullanılabilir kalır; geri almak için önce bir olaya taşıyın.",
+      "ai_material": "Yalnızca gerçek bir materyal genel kullanılabilir yapılır.",
+      "already_confirmed": "Bu olay zaten onaylanmış.",
+      "already_resolved": "Bu istek zaten kapatılmış.",
+      "closes_itself": "Bu istek, koşulu sağlanınca kendiliğinden kapanır.",
+      "not_a_monday": "Bir hafta pazartesi başlar.",
+      "request_key_taken": "Bu istek zaten eklenmiş.",
+      "depicts_required": "Yapay zekâ görselinde nelerin göründüğü belirtilmeli.",
+      "not_a_material": "İçeriğin her görseli kütüphanedeki bir materyal olmalı.",
+      "no_eligible_material": "Bu içerik kullanılabilir bir dayanak materyal göstermiyor.",
+      "subject_required": "İçeriğin neyle ilgili olduğunu seçin.",
+      "material_refused": "Seçilen materyallerden biri burada kullanılamaz:",
+      "out_of_range": "Yıl 2000 ile 2100 arasında olmalı.",
+      "revision_changed": "İçerik siz bakarken değişti; yenileyip tekrar deneyin.",
+      "slot_not_ready": "Yalnızca hazır bir içeriğin metni bu hâliyle yayınlanabilir.",
+      "hard_findings_not_releasable": "Materyal sorunları bırakılamaz: materyali veya içeriği değiştirin.",
+      "no_caption_findings": "Bırakılacak bir metin bulgusu yok.",
+      "findings_changed": "Bulgular siz bakarken değişti; yenileyip tekrar bakın.",
+      "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin.",
+      "story_image_jpeg_only": "Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.",
+      "story_image_too_large": "Hikâye görseli en çok 8 MB olabilir: daha küçük bir JPEG yükleyin.",
+      "story_video_too_large": "Hikâye videosu en çok 100 MB olabilir: videoyu küçültüp yeniden yükleyin.",
+      "story_video_length": "Hikâye videosu 3 ile 60 saniye arasında olmalı: videoyu kırpıp yeniden yükleyin.",
+      "story_video_length_unknown": "Videonun süresi okunamadı: videoyu MP4 olarak yeniden dışa aktarıp yükleyin.",
+      "story_video_not_fast_start": "Video hızlı başlatmaya uygun değil: videoyu 'fast start / web için optimize' seçeneğiyle dışa aktarın ve yeniden yükleyin."
+    },
+    "invalid": {
+      "media": "Dosya kabul edilmedi: JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) olmalı.",
+      "title": "Başlık 1–120 karakter olmalı.",
+      "dates": "Bitiş tarihi başlangıçtan önce olamaz; bir olay en çok 366 gün sürer.",
+      "place": "Yer en çok 120 karakter olabilir.",
+      "notes": "Notlar en çok 2000 karakter olabilir.",
+      "client": "Müşteri / kurum adı en çok 120 karakter olabilir.",
+      "occasion": "Sezon veya özel gün için takvimden bir gün seçin; diğer türlerde gün seçilmez.",
+      "window": "Pencerenin iki tarihi de girilmeli, en çok 120 gün sürmeli ve yılın içinde olmalı.",
+      "key": "Anahtar yalnızca küçük harf, rakam ve alt çizgi içerir (en çok 40).",
+      "name": "Ad 1–120 karakter olmalı.",
+      "lead_days": "Hazırlık süresi en çok 90 gün olabilir.",
+      "policy": "Hazırlık en çok 90, tekrar ve özet en çok 365 gün olabilir.",
+      "text": "Metin 1–500 karakter olmalı.",
+      "week_start": "Hafta bir pazartesi günü başlamalı.",
+      "year": "Yıl 2000 ile 2100 arasında olmalı.",
+      "people": "Kişi listesi geçersiz (en çok 50 kişi).",
+      "binding": "Gerçek bir materyal ancak genel kullanılabilir yapılarak genel olur.",
+      "share": "Bu paylaşım iznini yalnızca bir kişi verebilir.",
+      "revision": "Kayıt değişti; yenileyip tekrar deneyin.",
+      "request_key": "İstek anahtarı geçersiz; sayfayı yenileyip tekrar deneyin."
+    },
+    "upload": {
+      "intro": "Atölyeden, siparişten veya özel günden fotoğraf ve video ekleyin. Her dosya hemen yüklenir; sonra hepsi için bir kez olayı ve paylaşım iznini seçersiniz.",
+      "camera": "Kamerayla çek",
+      "gallery": "Galeriden seç",
+      "files": "Seçilen dosyalar",
+      "status": {
+        "refused": "Kabul edilmedi",
+        "uploading": "Yükleniyor…",
+        "uploaded": "Yüklendi",
+        "failed": "Yüklenemedi",
+        "added": "Eklendi",
+        "add_failed": "Eklenemedi"
+      },
+      "refusedHelp": "JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) yükleyin.",
+      "retry": "Tekrar dene",
+      "olay": "Hangi olaydan?",
+      "suggested": "Çekim tarihine göre önerilen",
+      "otherOlays": "Diğer olaylar",
+      "newOlay": "Yeni olay oluştur",
+      "createdOlay": "Yeni olay oluşturuldu: {{title}}",
+      "genel": "Genel (belirli bir olaya bağlı değil)",
+      "genelHelp": "Yalnızca sahip veya yönetici seçebilir. Materyal genel kullanılabilir olur ve yalnızca belirli bir olaydan söz etmeyen içerikte kullanılır.",
+      "permission": "Paylaşım izni (zorunlu)",
+      "permissionByManager": "Paylaşım iznini sahip veya yönetici verir; materyaller onların kararını bekleyecek.",
+      "tags": "Etiketler (isteğe bağlı)",
+      "waitUploads": "Yüklemeler bitince ekleyebilirsiniz.",
+      "submit_one": "{{count}} materyali ekle",
+      "submit_other": "{{count}} materyali ekle",
+      "problem": {
+        "olay": "Bir olay seçin, yeni bir olay oluşturun ya da genel seçin.",
+        "permission": "Paylaşım iznini seçin.",
+        "title": "Olayın başlığını yazın.",
+        "dates": "Olayın tarihini girin; bitiş başlangıçtan önce olamaz.",
+        "occasion": "Sezon veya özel gün için takvimden günü seçin."
+      },
+      "done_one": "{{count}} materyal eklendi.",
+      "done_other": "{{count}} materyal eklendi.",
+      "doneNoPermission": "Paylaşım iznini sahip veya yönetici verdiğinde kullanılabilir olacaklar.",
+      "openOlay": "Olayı aç",
+      "again": "Yeni yükleme",
+      "serverSuggests": "Çekim tarihine göre bu materyal “{{title}}” olayına ait olabilir.",
+      "moveThere": "Bu olaya taşı",
+      "moved": "“{{title}}” olayına taşındı."
+    },
+    "olay": {
+      "kind": "Tür",
+      "title": "Başlık",
+      "startsOn": "Tarih (başlangıç)",
+      "endsOn": "Bitiş (birden çok gün sürdüyse)",
+      "occasion": "Takvimdeki gün",
+      "chooseOccasion": "Seçin",
+      "place": "Yer",
+      "organization": "Müşteri / kurum",
+      "notes": "Notlar",
+      "oneDayHint": "Tek günlük bir olay için bitiş tarihini boş bırakın.",
+      "awaiting": "Onay bekliyor",
+      "confirm": "Onayla",
+      "proposedHelp": "Bu olayı bir ajan önerdi. Sahip veya yönetici onaylayana kadar materyalleri kullanılmaz.",
+      "new": "Yeni olay",
+      "edit": "Düzenle",
+      "create": "Olayı oluştur",
+      "save": "Kaydet",
+      "empty": "Henüz olay yok. Materyal yüklerken yeni bir olay oluşturabilirsiniz.",
+      "count_one": "{{count}} materyal",
+      "count_other": "{{count}} materyal",
+      "materials_one": "Materyaller ({{count}})",
+      "materials_other": "Materyaller ({{count}})",
+      "shoots": "Bu olay için çekim listesi",
+      "upload": "Bu olaya materyal yükle",
+      "since": "Eklendi: {{at}}"
+    },
+    "review": {
+      "open_one": "İncelenmeyi bekleyen {{count}} materyal",
+      "open_other": "İncelenmeyi bekleyen {{count}} materyal",
+      "title": "İncelenmeyi bekleyenler",
+      "help": "Paylaşım izni, kalitesi veya etiketleri bir kişinin kararını bekleyen materyaller."
+    },
+    "editor": {
+      "origin": "Kaynak",
+      "real": "Gerçek çekim",
+      "aiBy": "Yapay zekâ ({{generator}})",
+      "binding": "Olay",
+      "unknownOlay": "Bilinmeyen olay",
+      "captured": "Çekildiği an",
+      "added": "Eklendiği an",
+      "erasedHelp": "Bu materyal silindi: dosyası kaldırıldı, başlığı ve etiketleri temizlendi. Kaydı yalnızca nerede kullanıldığını göstermek için duruyor.",
+      "tags": "Etiketler ve kalite",
+      "suggestedHelp": "Bu etiketler bir ajanın önerisi; henüz kimse gözden geçirmedi. Kontrol edip onaylayın.",
+      "confirmTags": "Etiketleri onayla",
+      "saveTags": "Etiketleri kaydet",
+      "permission": "Paylaşım izni",
+      "permissionByPerson": "{{permission}} — bir kişi verdi ({{at}})",
+      "permissionByAgent": "{{permission}} — ajan verdi, yapay zekâ görseli ({{at}})",
+      "permissionManagerOnly": "Paylaşım iznini yalnızca sahip veya yönetici değiştirebilir.",
+      "savePermission": "İzni kaydet",
+      "free": "Genel kullanılabilir",
+      "freeHelp": "Genel kullanılabilir bir materyal, belirli bir olaydan söz etmeyen içerikte de kullanılabilir; başka bir olayın içeriğinde asla.",
+      "freedAt": "Genel kullanılabilir ({{at}})",
+      "makeFree": "Genel kullanılabilir yap",
+      "unfree": "Geri al",
+      "genelStaysFreed": "Genel bir materyal genel kullanılabilir kalır; geri almak için önce bir olaya taşıyın.",
+      "bind": "Başka olaya taşı",
+      "bindHelp": "Materyal yanlış olaya bağlandıysa doğru olayı seçin.",
+      "bindTo": "Olay",
+      "move": "Taşı",
+      "delete": "Materyali sil",
+      "deleteHelp": "Dosya silinir; bu geri alınamaz.",
+      "deleteTitle": "Materyal silinsin mi?",
+      "deleteKvkk": "KVKK gereği dosyanın kendisi (baytları) silinir; başlığı, etiketleri ve kişileri temizlenir. Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır.",
+      "deleteUsed": "Sağlayıcıda yayınlanmış gönderiler silinmez: onları “Kullanıldığı yerler” bağlantılarından kendiniz kaldırın.",
+      "deleteConfirm": "Sil",
+      "deleteCancel": "Vazgeç"
+    },
+    "people": {
+      "title": "Görünen kişiler",
+      "help": "Materyalde görünen kişiler. Bir kişinin verileri silinirse onun göründüğü materyaller de silinir (KVKK).",
+      "none": "Kişi eklenmedi.",
+      "unnamed": "Kişi",
+      "remove": "Çıkar",
+      "search": "Kişi ara (ad veya şirket)",
+      "add": "{{name}} ekle",
+      "save": "Kişileri kaydet"
+    },
+    "usedIn": {
+      "title": "Kullanıldığı yerler",
+      "none": "Henüz bir içerikte kullanılmadı.",
+      "openSlot": "İçeriği aç",
+      "post": "Yayınlanan gönderi ({{at}})",
+      "postNoLink": "Yayınlandı ({{at}}, gönderi {{id}})"
+    },
+    "calendar": {
+      "year": "Yıl",
+      "needsDates": "Tarih girilmeli",
+      "undated_one": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günün materyali kullanılmaz.",
+      "undated_other": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günlerin materyali kullanılmaz.",
+      "off": "Kapalı",
+      "edited": "Düzenlendi",
+      "leadIs": "{{days}} gün önceden hazırlık",
+      "leadIsDefault": "{{days}} gün önceden hazırlık (varsayılan)",
+      "edit": "Düzenle",
+      "enterDates": "Tarihleri gir",
+      "add": "Yeni gün ekle",
+      "key": "Anahtar",
+      "keyHelp": "Küçük harf, rakam ve alt çizgi; ör. kulup_kurulus_gunu",
+      "name": "Ad",
+      "kind": "Tür",
+      "start": "Pencere başlangıcı",
+      "end": "Pencere bitişi",
+      "lead": "Hazırlık (gün)",
+      "leadDefault": "Varsayılan",
+      "enabled": "Açık",
+      "save": "Kaydet",
+      "cancel": "Vazgeç",
+      "managerOnly": "Takvimi yalnızca sahip veya yönetici değiştirebilir.",
+      "problem": {
+        "key": "Anahtar yalnızca küçük harf, rakam ve alt çizgi içerir (en çok 40).",
+        "name": "Adı yazın.",
+        "window": "Pencerenin iki tarihini de girin; bitiş başlangıçtan önce olamaz.",
+        "lead": "Hazırlık 0 ile 90 gün arasında olmalı."
+      }
+    },
+    "policy": {
+      "title": "Materyal kuralları",
+      "lead": "Hazırlık (gün)",
+      "leadHelp": "Bir sezon veya olaydan kaç gün önce materyal istenir.",
+      "reuse": "Tekrar aralığı (gün)",
+      "reuseHelp": "Aynı materyal bu kadar gün içinde yeniden gösterilmez.",
+      "recap": "Özet süresi (gün)",
+      "recapHelp": "Bir olay bittikten sonra bu kadar gün özet içeriğinde öncelik alır.",
+      "save": "Kuralları kaydet",
+      "invalid": "Hazırlık 0–90, tekrar ve özet 0–365 gün arasında tam sayı olmalı."
+    },
+    "shoot": {
+      "add": "Çekim listesine ekle",
+      "addSubmit": "Listeye ekle",
+      "thisWeek": "Bu hafta",
+      "older": "Önceki haftalar",
+      "nothingThisWeek": "Bu hafta açık istek yok.",
+      "showClosed": "Kapananları da göster",
+      "week": "Hafta: {{day}}",
+      "done": "Yapıldı",
+      "dismiss": "Gerek yok",
+      "openOlay": "Olayı aç",
+      "openCalendar": "Takvime git",
+      "reason": {
+        "slot_unfilled": "Bir içerik için uygun materyal yok",
+        "season_ahead": "Sezon yaklaşıyor",
+        "season_dates_missing": "Takvimde tarih eksik",
+        "olay_upcoming": "Yaklaşan olay",
+        "requested": "Eklenen istek"
+      },
+      "status": {
+        "open": "Açık",
+        "done": "Yapıldı",
+        "dismissed": "Gerek yok"
+      }
+    },
+    "hold": {
+      "title": "Materyal kontrolü bu içeriği durduruyor",
+      "noDetails": "Materyal kontrolü bu içeriği tutuyor.",
+      "fixMaterial": "Materyali (izni, olayı) ya da içeriği düzeltin; bu sorunlar bırakılamaz.",
+      "fixCaption": "Metni düzeltin; ya da sahip veya yönetici metni bu hâliyle yayınlamaya izin verebilir.",
+      "openMaterial": "Materyali aç",
+      "shoots_one": "Çekim listesinde {{count}} açık istek var.",
+      "shoots_other": "Çekim listesinde {{count}} açık istek var.",
+      "openShoots": "Çekim listesini aç",
+      "release": "Metni bu hâliyle yayınla",
+      "releaseTitle": "Metin bu hâliyle yayınlansın mı?",
+      "releaseHelp": "Bu bulgular yalnızca bu içerik sürümü için bırakılır. Metin veya bulgular değişirse kontrol yeniden yapılır.",
+      "releaseConfirm": "Yayınlanabilir"
+    },
+    "slot": {
+      "title": "Materyaller",
+      "subject": "İçerik neyle ilgili?",
+      "subjectOlay": "Olay: {{title}}",
+      "subjectArchive": "Geçen yılın sezonu: {{title}}",
+      "subjectGeneric": "Belirli bir olay değil (genel)",
+      "matchesNeed": "ihtiyaca uygun",
+      "none": "Bu içerik için kullanılabilir materyal yok.",
+      "upload": "Materyal yükle",
+      "refused_one": "Kullanılamayan {{count}} materyal",
+      "refused_other": "Kullanılamayan {{count}} materyal",
+      "pick": "İçeriğin konusunu ve en az bir materyal seçin.",
+      "story": "Hikâyede metin paylaşılmaz: yalnız görsel gider. Tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4 seçin."
+    }
+  },
+  "posts": {
+    "tab": "Paylaşımlar",
+    "views": {
+      "plan": "Plan",
+      "week": "Haftalık özet",
+      "settings": "Paylaşım ayarları"
+    },
+    "format": {
+      "story": "Hikâye",
+      "feed_post": "Gönderi",
+      "carousel": "Kaydırmalı gönderi",
+      "reel": "Reels",
+      "tiktok_video": "TikTok videosu"
+    },
+    "trigger": {
+      "olay": "Yeni olay materyalleri",
+      "calendar": "Yaklaşan özel gün",
+      "floor": "Uzun süredir gönderi yok"
+    },
+    "materials_one": "{{count}} materyal",
+    "materials_other": "{{count}} materyal",
+    "requests": {
+      "title": "Ajanın planlayacağı istekler",
+      "help": "Studio, yeni materyaller, yaklaşan özel günler ve uzun süredir gönderi olmayan kanallar için bağlı ajandan bir paylaşım planı ister. Ajan 7 gün içinde yanıtlamazsa istek kapanır ve materyaller yeniden istenir.",
+      "empty": "Bekleyen istek yok.",
+      "best": "Önerilen biçim: {{format}}",
+      "expires": "Son gün: {{at}}",
+      "oneChannel": "Tek gönderi: {{channel}}",
+      "window": "Dönem: {{range}}"
+    },
+    "plan": {
+      "title": "Planlanan paylaşımlar",
+      "empty": "Planlanmış paylaşım yok. Materyal yükledikçe Studio ajandan plan ister.",
+      "publishAt": "Yayın: {{at}}",
+      "prepFrom": "Hazırlık: {{at}}",
+      "graceUntil": "En geç: {{at}}",
+      "open": "Studio'da aç",
+      "tz": "Saatler {{tz}} saat dilimine göredir.",
+      "state": {
+        "waiting": "Hazırlık başlamadı",
+        "preparing": "Hazırlanıyor",
+        "ready": "Hazır"
+      },
+      "subject": {
+        "olay": "Olay hakkında",
+        "archive": "Geçen yılın olayı",
+        "generic": "Genel"
+      }
+    },
+    "week": {
+      "title": "{{from}} – {{until}}",
+      "prev": "Önceki hafta",
+      "next": "Sonraki hafta",
+      "current": "Bu hafta",
+      "published": "Yayınlananlar",
+      "planned": "Planlananlar",
+      "cancelled": "Yayınlanmayanlar",
+      "scores": "Ne işe yarıyor",
+      "none": "Yok.",
+      "view": "Gönderiyi aç",
+      "oldPlan": "Eski haftalık plan",
+      "reason": {
+        "cancelled": "İptal edildi",
+        "hypothesis_retired": "Hipotez kaldırıldı",
+        "strategy_archived": "Strateji arşivlendi",
+        "week_ended": "Hafta bitti",
+        "measurements_complete": "Ölçüm tamamlandı",
+        "replanned": "Yeni planlamaya geçildi",
+        "missed_grace": "Zamanında hazırlanamadı"
+      },
+      "scoreFormat": "Biçim",
+      "scoreKind": "Olay türü",
+      "scoreHypothesis": "Hipotez",
+      "scoreMean": "Etkileşim",
+      "scorePosts": "Paylaşım",
+      "generic": "Genel",
+      "noScores": "Henüz ölçülmüş paylaşım yok."
+    },
+    "settings": {
+      "title": "Paylaşım ayarları",
+      "help": "Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
+      "format": "Biçim",
+      "lead": "Hazırlık (saat önce)",
+      "grace": "Gecikme payı (saat)",
+      "feedCap": "Günlük gönderi sınırı (kanal başına)",
+      "feedSpacing": "Gönderiler arası en az (saat)",
+      "storyCap": "Günlük hikâye sınırı",
+      "storySpacing": "Hikâyeler arası en az (dakika)",
+      "tiktokCap": "Günlük TikTok videosu sınırı",
+      "quietFrom": "Sessiz saatler başlangıcı",
+      "quietUntil": "Sessiz saatler bitişi",
+      "floor": "Gönderisiz gün sınırı",
+      "floorHelp": "Bir kanalda bu kadar gün gönderi olmazsa Studio tek bir genel paylaşım ister.",
+      "debounce": "Yükleme bekleme süresi (dakika)",
+      "debounceHelp": "Bir olaya materyal eklemek bittikten bu kadar sonra plan istenir: 20 fotoğraf tek istek olur.",
+      "horizon": "Planlama ufku (gün)",
+      "tz": "Saat dilimi",
+      "storyNote": "Hikâyeler yalnız Instagram'da yayınlanır: tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4, metin gitmez. Facebook sayfası hikâyeleri henüz yok.",
+      "save": "Ayarları kaydet",
+      "saved": "Kaydedildi.",
+      "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
+      "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
+      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
+    }
   }
 }

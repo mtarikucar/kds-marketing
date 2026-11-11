@@ -21,7 +21,9 @@ use jt_tenancy::{Email, MembershipId, RoleDef, RoleId, UserId, WorkspaceId, Work
 use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
-use crate::repos::{api_keys, capabilities, ledger, map_sqlx, memberships, roles, workspaces};
+use crate::repos::{
+    api_keys, calls, capabilities, ledger, map_sqlx, memberships, roles, workspaces,
+};
 use crate::tx::{PlatformTx, TenantTx, UserTx};
 
 /// Opens repo bundles on a pool. Clones share the pool.
@@ -115,6 +117,22 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self
+    }
+
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self
+    }
+
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self
+    }
+
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self
+    }
+
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self
     }
@@ -174,6 +192,15 @@ impl TenantRepos for PgTenantRepos {
         self
     }
     fn outbox(&mut self) -> &mut dyn OutboxRepo {
+        self
+    }
+    fn public_items(&mut self) -> &mut dyn PublicItemRepo {
+        self
+    }
+    fn public_subjects(&mut self) -> &mut dyn PublicSubjectRepo {
+        self
+    }
+    fn public_cursors(&mut self) -> &mut dyn PublicCursorRepo {
         self
     }
 
@@ -532,11 +559,30 @@ impl PlatformRepos for PgPlatformRepos {
         capabilities::by_external(&mut self.tx, kind_keys, external_id).await
     }
 
+    async fn capabilities_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        capabilities::by_business_account(&mut self.tx, waba_id).await
+    }
+
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        capabilities::holding(&mut self.tx, kind_keys, external_id).await
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
     ) -> Result<Vec<WorkspaceId>, AppError> {
         capabilities::workspaces_with_verified(&mut self.tx, kind_keys).await
+    }
+
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        calls::workspaces_with_live_agent_calls(&mut self.tx).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

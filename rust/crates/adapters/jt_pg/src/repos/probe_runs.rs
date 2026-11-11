@@ -19,7 +19,8 @@ use super::{map_sqlx, same_workspace};
 use crate::uow::PgTenantRepos;
 
 /// The columns every read selects.
-const COLUMNS: &str = "id, workspace_id, capability_id, at, ok, error_kind, latency_ms, facts";
+const COLUMNS: &str =
+    "id, workspace_id, capability_id, at, ok, error_kind, reason, latency_ms, facts";
 
 #[derive(sqlx::FromRow)]
 struct RunRecord {
@@ -29,6 +30,7 @@ struct RunRecord {
     at: OffsetDateTime,
     ok: bool,
     error_kind: Option<String>,
+    reason: Option<String>,
     latency_ms: i32,
     facts: serde_json::Value,
 }
@@ -42,6 +44,7 @@ impl RunRecord {
             at: self.at,
             ok: self.ok,
             error_kind: self.error_kind,
+            reason: self.reason,
             latency_ms: u32::try_from(self.latency_ms)
                 .map_err(|_| AppError::internal("stored probe_runs.latency_ms is negative"))?,
             facts: self.facts,
@@ -57,7 +60,8 @@ impl ProbeRunRepo for PgTenantRepos {
         ensure_capability(self.tx.conn(), ws, run.capability_id).await?;
         let done = sqlx::query(
             "insert into probe_runs (id, workspace_id, capability_id, at, ok, error_kind, \
-             latency_ms, facts) values ($1, $2, $3, $4, $5, $6, $7, $8) on conflict do nothing",
+             reason, latency_ms, facts) values ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             on conflict do nothing",
         )
         .bind(run.id.as_uuid())
         .bind(ws.as_uuid())
@@ -65,6 +69,7 @@ impl ProbeRunRepo for PgTenantRepos {
         .bind(run.at)
         .bind(run.ok)
         .bind(&run.error_kind)
+        .bind(&run.reason)
         .bind(i32::try_from(run.latency_ms).unwrap_or(i32::MAX))
         .bind(&run.facts)
         .execute(self.tx.conn())

@@ -18,6 +18,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
             "facebook_page",
             "x",
             "linkedin_page",
+            "linkedin_member",
             "tiktok",
             "pinterest",
             "youtube",
@@ -35,7 +36,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
             "webchat",
         ],
     ),
-    (KindGroup::Telephony, &["netgsm_pbx"]),
+    (KindGroup::Telephony, &["netgsm_pbx", "voice_bridge"]),
     (
         KindGroup::Community,
         &["discord", "reddit", "review_google", "review_facebook"],
@@ -48,6 +49,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
         KindGroup::Calendar,
         &["google_calendar", "outlook_calendar"],
     ),
+    (KindGroup::Marketplace, &["trendyol", "hepsiburada"]),
     (
         KindGroup::Device,
         &[
@@ -118,7 +120,7 @@ fn every_kind_key_is_unique_and_parses() {
         .collect();
     let actual: Vec<(KindGroup, &str)> = KINDS.iter().map(|k| (k.group, k.key)).collect();
     assert_eq!(actual, expected);
-    assert_eq!(KINDS.len(), 49);
+    assert_eq!(KINDS.len(), 53);
 
     let keys: BTreeSet<&str> = KINDS.iter().map(|k| k.key).collect();
     assert_eq!(keys.len(), KINDS.len(), "kind keys must be unique");
@@ -168,6 +170,7 @@ fn every_kind_key_is_unique_and_parses() {
             "community",
             "ads",
             "calendar",
+            "marketplace",
             "device",
             "agent_connection",
             "computer_access",
@@ -199,20 +202,24 @@ fn default_reach_per_group() {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Marketplace => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
             }
         };
         assert_eq!(g.default_reach(), expected, "{}", g.key());
-        for k in kinds_in_group(*g) {
+        // The voice bridge is the one kind reached otherwise than its group: like a device (a
+        // phone, with a heartbeat too, is a device already).
+        for k in kinds_in_group(*g).filter(|k| k.key != "voice_bridge") {
             assert_eq!(k.default_reach(), expected, "{}", k.key);
         }
     }
+    assert_eq!(kind("voice_bridge").default_reach(), Reach::Device);
     let count = |r: Reach| KINDS.iter().filter(|k| k.default_reach() == r).count();
-    assert_eq!(count(Reach::Connector), 25);
-    assert_eq!(count(Reach::Device), 9);
+    assert_eq!(count(Reach::Connector), 28);
+    assert_eq!(count(Reach::Device), 10);
     assert_eq!(count(Reach::Agent), 15);
 
     // A new capability takes its kind's reach, starts declared and unverified.
@@ -246,10 +253,46 @@ fn default_reach_per_group() {
     assert_eq!(Reach::parse("Agent"), None);
 }
 
+/// A seller's marketplace account (spec 2026-10-30-inbox-comments-marketplace-design.md §5.2): an
+/// account reached through a connector, like the social and messaging accounts.
+#[test]
+fn marketplace_group_is_reached_by_connector() {
+    assert_eq!(
+        KindGroup::parse("marketplace"),
+        Some(KindGroup::Marketplace)
+    );
+    assert_eq!(KindGroup::Marketplace.default_reach(), Reach::Connector);
+    for key in ["trendyol", "hepsiburada"] {
+        let k = kind(key);
+        assert_eq!(k.group, KindGroup::Marketplace, "{key}");
+        assert_eq!(k.default_reach(), Reach::Connector, "{key}");
+        assert_eq!(k.heartbeat(), None, "{key}");
+        assert!(!k.requires_key_detail(), "{key}");
+        let c = declared(key);
+        assert_eq!(c.reach, Reach::Connector, "{key}");
+        assert_eq!(c.status, StoredStatus::Declared, "{key}");
+    }
+}
+
+/// The agent answers marketplace questions on its own, like comments (owner's delegate,
+/// 2026-10-30, spec §2 D7): no kind starts with "requires human approval" on; an owner turns it on
+/// per capability. The content checks of the inbox's public fence hold either way.
+#[test]
+fn marketplace_kinds_answer_without_approval_by_default() {
+    for key in ["trendyol", "hepsiburada", "instagram", "facebook_page"] {
+        let policy = kind(key).default_policy();
+        assert!(!policy.requires_human_approval, "{key}");
+    }
+    for k in KINDS {
+        assert_eq!(k.default_policy(), Policy::default(), "{}", k.key);
+    }
+}
+
 #[test]
 fn effective_status_goes_stale_after_policy_age() {
+    // A device without a heartbeat (a phone has one: `a_bridge_kind_is_verified_by_its_heartbeat`).
     let verified_at = |at: Option<OffsetDateTime>| {
-        let mut c = declared("phone");
+        let mut c = declared("computer");
         c.status = StoredStatus::Verified;
         c.last_verified_at = at;
         c
@@ -563,6 +606,7 @@ fn budget_link_rules() {
         "whatsapp_cloud",
         "mailbox",
         "netgsm_pbx",
+        "voice_bridge",
         "review_google",
         "google_calendar",
         "phone",
@@ -571,13 +615,15 @@ fn budget_link_rules() {
         "adb",
         "notion",
         "other",
+        "trendyol",
+        "hepsiburada",
     ] {
         assert_eq!(linkable(key), [Cash], "{key}");
     }
 
     // Across the whole list: how many kinds each budget kind can feed.
     let feeds = |b: BudgetKind| -> usize { KINDS.iter().filter(|k| can_link_budget(k, b)).count() };
-    assert_eq!(feeds(Cash), 45, "every kind but the agent connections");
+    assert_eq!(feeds(Cash), 49, "every kind but the agent connections");
     assert_eq!(feeds(AdBudget), 4);
     assert_eq!(feeds(SmsBudget), 1);
     assert_eq!(feeds(AgentQuota), 4);
@@ -1426,11 +1472,16 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "access",
             "account",
             "asset",
+            "bridge",
+            "business_app",
+            "call_mode",
+            "device",
             "facts",
             "health",
             "iys",
             "provider",
-            "reconnect_required"
+            "reconnect_required",
+            "recording_allowed"
         ]
     );
     assert_eq!(check_reserved_public_keys(&json!({})), Ok(()));
@@ -1498,4 +1549,72 @@ fn a_meta_ad_account_is_held_by_its_number() {
         "act_1234"
     );
     assert_eq!(META_AD_ACCOUNT_PREFIX, "act_");
+}
+
+#[test]
+fn a_bridge_kind_is_verified_by_its_heartbeat() {
+    // The voice bridge and a phone (its device bridge lists it) report a heartbeat, and only
+    // they: stale a minute after it, unreachable ten minutes after it.
+    let bridged = ["voice_bridge", "phone"];
+    for key in bridged {
+        let beat = kind(key)
+            .heartbeat()
+            .expect("a bridge's kind has a heartbeat");
+        assert_eq!(beat.stale_after, Duration::seconds(60), "{key}");
+        assert_eq!(beat.unreachable_after, Duration::minutes(10), "{key}");
+        let c = declared(key);
+        assert_eq!(c.reach, Reach::Device, "{key}");
+        assert_eq!(c.status, StoredStatus::Declared, "{key}");
+    }
+    for k in KINDS.iter().filter(|k| !bridged.contains(&k.key)) {
+        assert_eq!(k.heartbeat(), None, "{}", k.key);
+    }
+    for key in bridged {
+        heartbeat_holds(key);
+    }
+}
+
+/// How a verification of a capability of kind `key`, which has a heartbeat, holds.
+fn heartbeat_holds(key: &str) {
+    let beat_at = |at: Option<OffsetDateTime>, max_age_days: u16| {
+        let mut c = declared(key);
+        c.status = StoredStatus::Verified;
+        c.last_verified_at = at;
+        c.policy.verify_max_age_days = max_age_days;
+        effective_status(&c, NOW)
+    };
+    // Its last heartbeat, not its policy, says how long a verification holds: a minute is still
+    // fresh, a second more is stale, whatever `verify_max_age_days` (0 included) says.
+    for days in [DEFAULT_VERIFY_MAX_AGE_DAYS, 0] {
+        assert_eq!(beat_at(Some(NOW), days), EffectiveStatus::Verified);
+        assert_eq!(
+            beat_at(Some(NOW - Duration::seconds(60)), days),
+            EffectiveStatus::Verified
+        );
+        assert_eq!(
+            beat_at(Some(NOW - Duration::seconds(61)), days),
+            EffectiveStatus::Stale
+        );
+        assert_eq!(
+            beat_at(Some(NOW - Duration::days(1)), days),
+            EffectiveStatus::Stale
+        );
+        // A heartbeat ahead of `now` (clock skew) is fresh; none at all is not.
+        assert_eq!(
+            beat_at(Some(NOW + Duration::seconds(5)), days),
+            EffectiveStatus::Verified
+        );
+        assert_eq!(beat_at(None, days), EffectiveStatus::Stale);
+    }
+    // Every other stored status reads as stored.
+    let mut c = declared(key);
+    c.last_verified_at = Some(NOW);
+    for (stored, effective) in [
+        (StoredStatus::Declared, EffectiveStatus::Declared),
+        (StoredStatus::Unreachable, EffectiveStatus::Unreachable),
+        (StoredStatus::Retired, EffectiveStatus::Retired),
+    ] {
+        c.status = stored;
+        assert_eq!(effective_status(&c, NOW), effective);
+    }
 }

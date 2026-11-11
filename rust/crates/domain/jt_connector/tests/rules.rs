@@ -51,6 +51,11 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("netgsm_pbx", Provider::Netgsm),
     ("x", Provider::X),
     ("mailbox", Provider::Mail),
+    ("tiktok", Provider::Tiktok),
+    ("linkedin_member", Provider::Linkedin),
+    ("linkedin_page", Provider::Linkedin),
+    ("trendyol", Provider::Trendyol),
+    ("hepsiburada", Provider::Hepsiburada),
 ];
 
 #[test]
@@ -94,7 +99,19 @@ fn provider_for_every_connector_kind() {
 
     // Keys: stable, round trip through `parse` and serde, case-sensitive.
     let keys: Vec<&str> = Provider::all().iter().map(Provider::key).collect();
-    assert_eq!(keys, ["meta", "netgsm", "x", "mail"]);
+    assert_eq!(
+        keys,
+        [
+            "meta",
+            "netgsm",
+            "x",
+            "mail",
+            "tiktok",
+            "linkedin",
+            "trendyol",
+            "hepsiburada"
+        ]
+    );
     for p in Provider::all() {
         assert_eq!(Provider::parse(p.key()), Some(*p));
         assert_eq!(serde_json::to_value(p).unwrap(), json!(p.key()));
@@ -138,8 +155,6 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
     }
 
     let pinned: BTreeSet<&str> = [
-        "linkedin_page",
-        "tiktok",
         "pinterest",
         "youtube",
         "google_business",
@@ -443,6 +458,181 @@ fn meta_signature_constant_time_examples() {
     assert!(!meta_signature_ok(b"", body, &empty_key_sig));
 }
 
+/// TikTok signs `"{t}.{raw body}"` with the client secret and sends `TikTok-Signature:
+/// t=<unix seconds>,s=<hex>` (<https://developers.tiktok.com/doc/webhooks-verification>): the
+/// signature must match in constant time and its timestamp lie within the tolerance of now.
+#[test]
+fn tiktok_signature_covers_the_timestamp_and_the_raw_body() {
+    let secret = b"tiktok-client-secret-for-tests";
+    let body = br#"{"client_key":"tiktok-test-key","event":"authorization.removed","create_time":1792682935,"user_openid":"open-id-test","content":"{\"reason\": 1 }"}"#;
+    // NOW is 1792683000; signed a minute earlier. Reference value computed outside this crate.
+    let hex = "2c8b664e11bbe8b6959dd5f6b0f3deb148aa8aad35feee4d4417aa99e3607b8e";
+    assert_eq!(
+        hex,
+        hmac_hex(secret, &[b"1792682940.".as_slice(), body].concat())
+    );
+    let good = format!("t=1792682940,s={hex}");
+    let tolerance = TIKTOK_SIGNATURE_TOLERANCE;
+    assert_eq!(tolerance, Duration::minutes(5));
+    assert!(tiktok_signature_ok(secret, body, &good, NOW, tolerance));
+    // The parts in either order, with spaces around them.
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &format!(" s={hex} , t=1792682940 "),
+        NOW,
+        tolerance
+    ));
+
+    // Another secret; the body changed by one byte or a trailing newline; another timestamp.
+    assert!(!tiktok_signature_ok(
+        b"tiktok-client-secret-for-test",
+        body,
+        &good,
+        NOW,
+        tolerance
+    ));
+    let mut changed = body.to_vec();
+    changed[20] = b'X';
+    assert!(!tiktok_signature_ok(
+        secret, &changed, &good, NOW, tolerance
+    ));
+    let mut with_newline = body.to_vec();
+    with_newline.push(b'\n');
+    assert!(!tiktok_signature_ok(
+        secret,
+        &with_newline,
+        &good,
+        NOW,
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &format!("t=1792682941,s={hex}"),
+        NOW,
+        tolerance
+    ));
+
+    // A valid signature whose timestamp is too old, or too far ahead, is refused (a replay);
+    // the edges of the tolerance pass.
+    let signed_at = OffsetDateTime::from_unix_timestamp(1792682940).unwrap();
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at + tolerance,
+        tolerance
+    ));
+    assert!(tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at - tolerance,
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at + tolerance + Duration::seconds(1),
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        signed_at - tolerance - Duration::seconds(1),
+        tolerance
+    ));
+    assert!(!tiktok_signature_ok(
+        secret,
+        body,
+        &good,
+        NOW + Duration::days(1),
+        tolerance
+    ));
+
+    // Malformed headers are refused, never panicked on.
+    let upper = hex.to_ascii_uppercase();
+    for bad in [
+        String::new(),
+        hex.to_owned(),
+        format!("sha256={hex}"),
+        "t=1792682940".to_owned(),
+        format!("s={hex}"),
+        format!("t=,s={hex}"),
+        format!("t=-1792682940,s={hex}"),
+        format!("t=+1792682940,s={hex}"),
+        format!("t=1792682940.0,s={hex}"),
+        format!("t=99999999999999999999,s={hex}"),
+        format!("t=1792682940,t=1792682940,s={hex}"),
+        format!("T=1792682940,S={hex}"),
+        format!("t=1792682940;s={hex}"),
+        format!("t=1792682940,s={upper}"),
+        format!("t=1792682940,s={}", &hex[..63]),
+        format!("t=1792682940,s={hex}0"),
+        format!("t=1792682940,s=sha256={hex}"),
+    ] {
+        assert!(
+            !tiktok_signature_ok(secret, body, &bad, NOW, tolerance),
+            "{bad:?}"
+        );
+    }
+    // One digit changed, each position in turn.
+    for i in 0..hex.len() {
+        let mut flipped = hex.as_bytes().to_vec();
+        flipped[i] = if flipped[i] == b'0' { b'1' } else { b'0' };
+        let flipped = format!("t=1792682940,s={}", String::from_utf8(flipped).unwrap());
+        assert!(
+            !tiktok_signature_ok(secret, body, &flipped, NOW, tolerance),
+            "digit {i}"
+        );
+    }
+
+    // Why a header is refused, for the operator's log (never the values).
+    let check = |header: &str, now| tiktok_signature_check(secret, body, header, now, tolerance);
+    assert_eq!(check(&good, NOW), Ok(()));
+    assert_eq!(
+        check("t=1792682940", NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682940,s={upper}"), NOW),
+        Err(TiktokSignatureError::Malformed)
+    );
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    assert_eq!(
+        check(&good, NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Stale)
+    );
+    // A stale timestamp is told only of a signature that matches: a forged one is a mismatch.
+    assert_eq!(
+        check(&format!("t=1792682941,s={hex}"), NOW + Duration::hours(1)),
+        Err(TiktokSignatureError::Mismatch)
+    );
+    for (e, reason) in [
+        (TiktokSignatureError::Malformed, "malformed"),
+        (TiktokSignatureError::Mismatch, "mismatch"),
+        (TiktokSignatureError::Stale, "stale"),
+    ] {
+        assert_eq!(e.reason(), reason);
+    }
+
+    // An unset (empty) client secret verifies nothing, even a signature made with the empty key.
+    let empty = hmac_hex(b"", &[b"1792682940.".as_slice(), body].concat());
+    assert!(!tiktok_signature_ok(
+        b"",
+        body,
+        &format!("t=1792682940,s={empty}"),
+        NOW,
+        tolerance
+    ));
+}
+
 /// Meta's webhook verification echoes the challenge only for the platform's verify token: an
 /// exact, constant-time match; an unset (empty) token matches nothing.
 #[test]
@@ -648,6 +838,23 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
             vec!["iys-pass-SECRET"],
             vec!["8503001144", "654321"],
         ),
+        (
+            Credential::TrendyolSeller {
+                seller_id: "123456".to_owned(),
+                api_key: "ty-key-SECRET".to_owned(),
+                api_secret: "ty-secret-SECRET".to_owned(),
+            },
+            vec!["ty-key-SECRET", "ty-secret-SECRET"],
+            vec!["123456"],
+        ),
+        (
+            Credential::HepsiburadaMerchant {
+                merchant_id: "a1b2c3d4-0000-4000-8000-000000000001".to_owned(),
+                service_key: "hb-service-key-SECRET".to_owned(),
+            },
+            vec!["hb-service-key-SECRET"],
+            vec!["a1b2c3d4-0000-4000-8000-000000000001"],
+        ),
     ]
 }
 
@@ -663,7 +870,9 @@ fn credential_debug_is_masked() {
             "whatsapp_cloud",
             "netgsm_sms",
             "netgsm_pbx",
-            "netgsm_iys"
+            "netgsm_iys",
+            "trendyol_seller",
+            "hepsiburada_merchant"
         ]),
         "one credential of each variant"
     );
@@ -757,6 +966,75 @@ fn credential_public_facts_never_contain_secrets() {
     assert_eq!(
         no_expiry.redact_for_public(),
         json!({ "kind": "oauth", "expires_at": null, "scopes": [] })
+    );
+}
+
+/// A marketplace seller's own API credentials (spec 2026-10-30-inbox-comments-marketplace-design.md
+/// §5.3): sealed whole, shown by the seller or merchant id only.
+#[test]
+fn marketplace_credentials_mask_and_redact() {
+    let trendyol = Credential::TrendyolSeller {
+        seller_id: "123456".to_owned(),
+        api_key: "ty-key-SECRET".to_owned(),
+        api_secret: "ty-secret-SECRET".to_owned(),
+    };
+    // The seller's service key for Jeeta as its integrator (task H0).
+    let hepsiburada = Credential::HepsiburadaMerchant {
+        merchant_id: "m-42".to_owned(),
+        service_key: "hb-service-key-SECRET".to_owned(),
+    };
+    assert_eq!(trendyol.kind(), "trendyol_seller");
+    assert_eq!(hepsiburada.kind(), "hepsiburada_merchant");
+    assert_eq!(
+        format!("{trendyol:?}"),
+        "TrendyolSeller { seller_id: \"123456\", api_key: ***, api_secret: *** }"
+    );
+    assert_eq!(
+        format!("{hepsiburada:?}"),
+        "HepsiburadaMerchant { merchant_id: \"m-42\", service_key: *** }"
+    );
+    assert_eq!(
+        trendyol.redact_for_public(),
+        json!({ "kind": "trendyol_seller", "seller_id": "123456" })
+    );
+    assert_eq!(
+        hepsiburada.redact_for_public(),
+        json!({ "kind": "hepsiburada_merchant", "merchant_id": "m-42" })
+    );
+    // Sealed, tagged by kind, and read back; a blob missing a secret does not read.
+    assert_eq!(
+        serde_json::to_value(&trendyol).unwrap(),
+        json!({
+            "kind": "trendyol_seller", "seller_id": "123456",
+            "api_key": "ty-key-SECRET", "api_secret": "ty-secret-SECRET"
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(&hepsiburada).unwrap(),
+        json!({
+            "kind": "hepsiburada_merchant", "merchant_id": "m-42",
+            "service_key": "hb-service-key-SECRET"
+        })
+    );
+    for cred in [&trendyol, &hepsiburada] {
+        let sealed = serde_json::to_value(cred).unwrap();
+        assert_eq!(&serde_json::from_value::<Credential>(sealed).unwrap(), cred);
+        assert!(!cred.expires_soon(NOW, Duration::days(10_000)));
+    }
+    let read = |v: Value| serde_json::from_value::<Credential>(v);
+    assert!(read(json!({ "kind": "trendyol_seller", "seller_id": "1", "api_key": "k" })).is_err());
+    assert!(read(json!({ "kind": "hepsiburada_merchant", "merchant_id": "1" })).is_err());
+    assert_eq!(
+        read(json!({
+            "kind": "trendyol_seller", "seller_id": "1", "api_key": "k", "api_secret": "s",
+            "later_field": true
+        }))
+        .unwrap(),
+        Credential::TrendyolSeller {
+            seller_id: "1".to_owned(),
+            api_key: "k".to_owned(),
+            api_secret: "s".to_owned(),
+        }
     );
 }
 
@@ -1107,6 +1385,11 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
         (EventKind::LeadGen, "lead_gen"),
         (EventKind::CallEvent, "call_event"),
         (EventKind::Consent, "consent"),
+        (EventKind::Comment, "comment"),
+        (EventKind::Question, "question"),
+        (EventKind::History, "history"),
+        (EventKind::ContactSync, "contact_sync"),
+        (EventKind::AccountUpdate, "account_update"),
     ];
     for (kind, key) in &known {
         assert_eq!(kind.key(), *key);
@@ -1131,6 +1414,233 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
             serde_json::from_value::<EventKind>(json!(other)).unwrap(),
             kind
         );
+    }
+}
+
+/// A comment and a marketplace question are events of their own (spec §6.3), not messages.
+#[test]
+fn comment_and_question_event_kinds_round_trip() {
+    for (kind, key) in [
+        (EventKind::Comment, "comment"),
+        (EventKind::Question, "question"),
+    ] {
+        assert_eq!(kind.key(), key);
+        assert_eq!(EventKind::parse(key), kind);
+        assert_ne!(kind, EventKind::Message);
+        let event: InboundEvent = serde_json::from_value(json!({
+            "id": InboundEventId::new_v7(), "workspace_id": ws(), "provider": "trendyol",
+            "external_id": "q:1:open:", "kind": key
+        }))
+        .unwrap();
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.provider, Provider::Trendyol);
+        assert_eq!(serde_json::to_value(&event).unwrap()["kind"], json!(key));
+    }
+    assert_eq!(
+        EventKind::parse("comments"),
+        EventKind::Unknown("comments".to_owned())
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comment grants
+// ---------------------------------------------------------------------------------------------
+
+/// The scopes Facebook Login asks for today (`jt_meta::FACEBOOK_SCOPES` at this change): no
+/// comment permission among them.
+const FACEBOOK_SCOPES_TODAY: &[&str] = &[
+    "pages_show_list",
+    "pages_manage_posts",
+    "pages_read_engagement",
+    "business_management",
+    "pages_messaging",
+    "pages_manage_metadata",
+    "instagram_basic",
+    "instagram_manage_messages",
+    "instagram_content_publish",
+    "whatsapp_business_management",
+    "whatsapp_business_messaging",
+    "ads_read",
+    "read_insights",
+    "instagram_manage_insights",
+    "leads_retrieval",
+    "ads_management",
+];
+
+/// The scopes Instagram Login asks for today (`jt_meta::INSTAGRAM_SCOPES` at this change, with
+/// its insights since spec D29).
+const INSTAGRAM_SCOPES_TODAY: &[&str] = &[
+    "instagram_business_basic",
+    "instagram_business_content_publish",
+    "instagram_business_manage_insights",
+];
+
+#[test]
+fn comment_grant_matrix() {
+    let none = CommentGrant::default();
+    let all = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: true,
+        private_reply: true,
+    };
+    assert!(!none.enabled());
+    assert!(all.enabled());
+    for (read, reply, enabled) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, true),
+    ] {
+        let grant = CommentGrant {
+            read,
+            reply,
+            ..CommentGrant::default()
+        };
+        assert_eq!(grant.enabled(), enabled);
+    }
+    assert_eq!(
+        FACEBOOK_COMMENT_SCOPES,
+        [
+            "instagram_manage_comments",
+            "pages_manage_engagement",
+            "pages_read_user_content"
+        ]
+    );
+    assert_eq!(
+        INSTAGRAM_COMMENT_SCOPES,
+        [
+            "instagram_business_manage_comments",
+            "instagram_business_manage_messages"
+        ]
+    );
+    let with = |base: &[&'static str], more: &[&'static str]| -> Vec<&'static str> {
+        base.iter().chain(more).copied().collect()
+    };
+
+    // Today's grants light nothing up, on any kind.
+    for kind in [
+        "facebook_page",
+        "instagram",
+        "messenger",
+        "instagram_dm",
+        "trendyol",
+        "x",
+    ] {
+        assert_eq!(comment_grant(kind, FACEBOOK_SCOPES_TODAY), none, "{kind}");
+        assert_eq!(comment_grant(kind, INSTAGRAM_SCOPES_TODAY), none, "{kind}");
+        assert_eq!(comment_grant(kind, &[]), none, "{kind}");
+    }
+    // Today's Facebook Login plus the comment scopes it would ask for: everything.
+    let facebook_login = with(FACEBOOK_SCOPES_TODAY, FACEBOOK_COMMENT_SCOPES);
+    assert_eq!(comment_grant("facebook_page", &facebook_login), all);
+    assert_eq!(comment_grant("instagram", &facebook_login), all);
+    // Instagram Login plus its comment scopes: everything on Instagram.
+    let instagram_login = with(INSTAGRAM_SCOPES_TODAY, INSTAGRAM_COMMENT_SCOPES);
+    assert_eq!(comment_grant("instagram", &instagram_login), all);
+    assert_eq!(comment_grant("facebook_page", &instagram_login), none);
+
+    // A Page token: read, reply and hide need both engagement scopes; deleting others' comments
+    // needs pages_read_user_content, a private reply pages_messaging.
+    let engagement = ["pages_read_engagement", "pages_manage_engagement"];
+    let page_only = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: false,
+        private_reply: false,
+    };
+    assert_eq!(comment_grant("facebook_page", &engagement), page_only);
+    assert_eq!(
+        comment_grant(
+            "facebook_page",
+            &with(&engagement, &["pages_read_user_content"])
+        ),
+        CommentGrant {
+            delete_others: true,
+            ..page_only
+        }
+    );
+    assert_eq!(
+        comment_grant("facebook_page", &with(&engagement, &["pages_messaging"])),
+        CommentGrant {
+            private_reply: true,
+            ..page_only
+        }
+    );
+    for half in [
+        &["pages_read_engagement"][..],
+        &[
+            "pages_manage_engagement",
+            "pages_read_user_content",
+            "pages_messaging",
+        ][..],
+    ] {
+        assert_eq!(comment_grant("facebook_page", half), none, "{half:?}");
+    }
+
+    // Instagram through Facebook Login: instagram_manage_comments; a private reply also
+    // instagram_manage_messages.
+    let ig_only = CommentGrant {
+        read: true,
+        reply: true,
+        hide: true,
+        delete_others: true,
+        private_reply: false,
+    };
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &["instagram_basic", "instagram_manage_comments"]
+        ),
+        ig_only
+    );
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &["instagram_manage_comments", "instagram_manage_messages"]
+        ),
+        all
+    );
+    // Instagram Login: instagram_business_manage_comments; a private reply also
+    // instagram_business_manage_messages.
+    assert_eq!(
+        comment_grant("instagram", &["instagram_business_manage_comments"]),
+        ig_only
+    );
+    assert_eq!(
+        comment_grant(
+            "instagram",
+            &[
+                "instagram_business_manage_comments",
+                "instagram_business_manage_messages"
+            ]
+        ),
+        all
+    );
+    // One login's messages scope does not give the other login's private reply.
+    for mixed in [
+        &[
+            "instagram_business_manage_comments",
+            "instagram_manage_messages",
+        ][..],
+        &[
+            "instagram_manage_comments",
+            "instagram_business_manage_messages",
+        ][..],
+    ] {
+        assert_eq!(comment_grant("instagram", mixed), ig_only, "{mixed:?}");
+    }
+    // Messages alone read no comment.
+    assert_eq!(
+        comment_grant("instagram", &["instagram_business_manage_messages"]),
+        none
+    );
+
+    // Marketplaces and every other kind: not a comment kind at all.
+    for kind in ["trendyol", "hepsiburada", "mailbox", "x", ""] {
+        assert_eq!(comment_grant(kind, &facebook_login), none, "{kind}");
+        assert_eq!(comment_grant(kind, &instagram_login), none, "{kind}");
     }
 }
 

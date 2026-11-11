@@ -1,6 +1,9 @@
 //! The closed list of capability kinds (spec §6.2), their groups and how each is reached.
 
 use serde::{Deserialize, Serialize};
+use time::Duration;
+
+use crate::Policy;
 
 /// How the system reaches a capability (spec §6.1 "ulaşım yolu").
 ///
@@ -53,6 +56,9 @@ pub enum KindGroup {
     Community,
     Ads,
     Calendar,
+    /// A seller's marketplace store, whose customers ask questions on its products (spec
+    /// 2026-10-30-inbox-comments-marketplace-design.md §5.2).
+    Marketplace,
     Device,
     AgentConnection,
     ComputerAccess,
@@ -66,6 +72,7 @@ const ALL_GROUPS: &[KindGroup] = &[
     KindGroup::Community,
     KindGroup::Ads,
     KindGroup::Calendar,
+    KindGroup::Marketplace,
     KindGroup::Device,
     KindGroup::AgentConnection,
     KindGroup::ComputerAccess,
@@ -82,6 +89,7 @@ impl KindGroup {
             KindGroup::Community => "community",
             KindGroup::Ads => "ads",
             KindGroup::Calendar => "calendar",
+            KindGroup::Marketplace => "marketplace",
             KindGroup::Device => "device",
             KindGroup::AgentConnection => "agent_connection",
             KindGroup::ComputerAccess => "computer_access",
@@ -100,8 +108,9 @@ impl KindGroup {
     }
 
     /// How a capability of this group is reached unless said otherwise: accounts (social,
-    /// messaging, telephony, community, ads, calendar) through a connector, devices as devices,
-    /// and agent connections, computer access and third-party tools through the agent.
+    /// messaging, telephony, community, ads, calendar, marketplace) through a connector, devices
+    /// as devices, and agent connections, computer access and third-party tools through the
+    /// agent.
     pub fn default_reach(&self) -> Reach {
         match self {
             KindGroup::SocialAccount
@@ -109,7 +118,8 @@ impl KindGroup {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Marketplace => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
@@ -146,6 +156,31 @@ pub fn canonical_external_id(kind_key: &str, id: &str) -> String {
 /// The key of the third-party kind that stands for any other tool; it needs a `key_detail`.
 const OTHER_THIRD_PARTY: &str = "other";
 
+/// The key of the voice bridge: the sidecar that is the workspace's phone line for agent calls.
+const VOICE_BRIDGE: &str = "voice_bridge";
+
+/// The key of a phone: a physical phone the device bridge on the PC it is plugged into keeps
+/// alive (spec 2026-10-28-device-bridge-design.md §5.2).
+const PHONE: &str = "phone";
+
+/// How the bridges' heartbeat holds (spec 2026-10-28-device-bridge-design.md §3): a bridge
+/// registers every 15 seconds, so a minute (four missed registrations) leaves what it keeps
+/// alive stale, and ten minutes unreachable.
+const BRIDGE_HEARTBEAT: Heartbeat = Heartbeat {
+    stale_after: Duration::seconds(60),
+    unreachable_after: Duration::minutes(10),
+};
+
+/// How a kind proves it is alive by reporting itself on a schedule, instead of by a probe or the
+/// agent's evidence: its verification goes stale once the last report is older than
+/// `stale_after`, and its capability is marked unreachable once it is older than
+/// `unreachable_after` (a scheduled job does that).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Heartbeat {
+    pub stale_after: Duration,
+    pub unreachable_after: Duration,
+}
+
 const fn k(group: KindGroup, key: &'static str) -> CapabilityKind {
     CapabilityKind { group, key }
 }
@@ -158,6 +193,8 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::SocialAccount, "facebook_page"),
     k(KindGroup::SocialAccount, "x"),
     k(KindGroup::SocialAccount, "linkedin_page"),
+    // A LinkedIn member's own feed (personal posts), beside the organization pages.
+    k(KindGroup::SocialAccount, "linkedin_member"),
     k(KindGroup::SocialAccount, "tiktok"),
     k(KindGroup::SocialAccount, "pinterest"),
     k(KindGroup::SocialAccount, "youtube"),
@@ -169,6 +206,9 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Messaging, "mailbox"),
     k(KindGroup::Messaging, "webchat"),
     k(KindGroup::Telephony, "netgsm_pbx"),
+    // The voice bridge (spec 2026-10-27-agent-voice-calls-design.md §6): reached like a device,
+    // verified by its own heartbeat ([`CapabilityKind::heartbeat`]).
+    k(KindGroup::Telephony, VOICE_BRIDGE),
     k(KindGroup::Community, "discord"),
     k(KindGroup::Community, "reddit"),
     k(KindGroup::Community, "review_google"),
@@ -181,7 +221,13 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::Ads, "google_ads"),
     k(KindGroup::Calendar, "google_calendar"),
     k(KindGroup::Calendar, "outlook_calendar"),
-    k(KindGroup::Device, "phone"),
+    // A seller's store on a marketplace, connected with the seller's own API credentials; its
+    // external id is the seller (merchant) id they are bound to.
+    k(KindGroup::Marketplace, "trendyol"),
+    k(KindGroup::Marketplace, "hepsiburada"),
+    // A phone (spec 2026-10-28-device-bridge-design.md §5.2): verified by its device bridge's
+    // heartbeat ([`CapabilityKind::heartbeat`]).
+    k(KindGroup::Device, PHONE),
     k(KindGroup::Device, "computer"),
     k(KindGroup::Device, "printer"),
     k(KindGroup::Device, "printer_3d"),
@@ -213,9 +259,33 @@ impl CapabilityKind {
         KINDS.iter().find(|k| k.key == key)
     }
 
-    /// How a capability of this kind is reached: its group's [`KindGroup::default_reach`].
+    /// How a capability of this kind is reached: its group's [`KindGroup::default_reach`], except
+    /// that a kind with a [`Heartbeat`] (the voice bridge, a phone) is reached like a device: no
+    /// connector adapter holds its credentials, and only its bridge's reports verify it.
     pub fn default_reach(&self) -> Reach {
-        self.group.default_reach()
+        if self.heartbeat().is_some() {
+            Reach::Device
+        } else {
+            self.group.default_reach()
+        }
+    }
+
+    /// How a capability of this kind reports itself, when it does: the voice bridge, and a phone
+    /// (its device bridge lists it), each registered every 15 seconds, go stale a minute after
+    /// their last report and unreachable ten minutes after it. Only those reports verify them:
+    /// `capability.verify` refuses them.
+    pub fn heartbeat(&self) -> Option<Heartbeat> {
+        matches!(self.key, VOICE_BRIDGE | PHONE).then_some(BRIDGE_HEARTBEAT)
+    }
+
+    /// The policy a capability of this kind starts with when it is first created: today
+    /// [`Policy::default`] for every kind. The marketplace kinds answer without a human's
+    /// approval like every other account (the owner's delegate, 2026-10-30: the AI completes
+    /// processes, and Hepsiburada's one-business-day deadline makes holding answers by default
+    /// risky); an owner turns "requires human approval" on per capability. The one place a
+    /// kind's own default would go.
+    pub fn default_policy(&self) -> Policy {
+        Policy::default()
     }
 
     /// Whether a capability of this kind needs a `key_detail` naming the tool: only the

@@ -11,7 +11,7 @@ import { formatMoney } from '@/lib/format';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
 import { Badge, Button, Callout, Input, PageHeader } from '@/components/ui';
-import { columnClass, selectClass, useInboxKey, useInboxMutation } from './InboxShared';
+import { columnClass, selectClass, useInboxKey, useInboxMutation, useMemberName } from './InboxShared';
 
 export function InboxCommissions() {
   const { t, i18n } = useTranslation();
@@ -35,6 +35,7 @@ export function InboxCommissions() {
     enabled: allowed && can(session.data, 'workspace.read'),
   });
   const members = team.data?.filter(m => m.status === 'active' && m.user_id) ?? [];
+  const memberName = useMemberName();
   const approve = useInboxMutation(api.approveCommission);
   const pay = useInboxMutation(api.payCommission);
   const save = useInboxMutation(() => api.setCommissionRate({ user_id: rateUser || null, rate_bp: Number(rate) }));
@@ -68,7 +69,7 @@ export function InboxCommissions() {
               <strong>{formatMoney(row.amount_minor, row.currency, i18n.language)}</strong>
               <Badge>{t(`inbox.commissions.state.${row.state}`)}</Badge>
             </div>
-            <p>{t('inbox.commissions.payee')}: {row.payee ? team.data?.find(m => m.user_id === row.payee)?.display_name || row.payee : t('inbox.commissions.unassigned')}</p>
+            <p>{t('inbox.commissions.payee')}: {row.payee ? memberName(row.payee) : t('inbox.commissions.unassigned')}</p>
             <p>{t('inbox.commissions.snapshotRate', { rate: row.rate_bp / 100 })}</p>
             {row.state === 'no_payee' && <p>{t('inbox.commissions.noPayeeHelp')}</p>}
             {decide && row.payee && row.state === 'pending' && <Button size="sm" loading={approve.isPending} disabled={pay.isPending} onClick={() => approve.mutate(row.id)}>{t('inbox.commissions.approve')}</Button>}

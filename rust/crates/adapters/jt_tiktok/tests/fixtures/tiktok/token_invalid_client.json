@@ -1,0 +1,5 @@
+{
+  "error": "invalid_client",
+  "error_description": "Client key or secret is incorrect.",
+  "log_id": "20261027000000TEST0002"
+}

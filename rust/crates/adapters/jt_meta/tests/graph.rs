@@ -7,13 +7,15 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::connectors::{
-    AdBudgetWriter, Connector, InsightsReader, InstagramApp, LeadGenFetcher, MessagingSender,
-    OAuthApp, OAuthProvider, PublishRequest, Publisher,
+    AdBudgetWriter, AppSync, Connector, InsightsReader, InstagramApp, LeadGenFetcher,
+    MessagingSender, OAuthApp, OAuthFlow, OAuthProvider, PublishRequest, Publisher,
 };
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{
+    ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, Provider,
+};
 use jt_meta::{
-    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_SCOPES, META_HOSTS, MetaBases, MetaConnector,
-    PAGE_SUBSCRIBED_FIELDS,
+    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES, META_HOSTS,
+    MetaBases, MetaConnector, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
 use jt_outbound::FIXED_HOSTS;
 use serde_json::{Value, json};
@@ -72,6 +74,29 @@ fn public(kind: &str, account: Option<&str>) -> Value {
         p["external_id"] = json!(account);
     }
     p
+}
+
+/// [`public`] of a capability of `kind` holding [`PAGE`], connected through Facebook Login whose
+/// grant held `scopes`: the use cases record them with the Page token (`access.scopes`).
+fn granted(kind: &str, scopes: &[&str]) -> Value {
+    let mut p = public(kind, Some(PAGE));
+    p["access"] = json!({ "kind": "page_token", "page_id": PAGE, "app": "meta", "scopes": scopes });
+    p
+}
+
+/// A Facebook Login user token granted `scopes`.
+fn user_cred_granted(scopes: &[&str]) -> Credential {
+    Credential::OAuth {
+        access_token: USER_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    }
+}
+
+/// The fields a page is subscribed to with its lead-gen submissions.
+fn fields_with_leadgen() -> String {
+    format!("{PAGE_MESSAGING_FIELDS},{PAGE_LEADGEN_FIELD}")
 }
 
 fn redirect() -> Url {
@@ -193,7 +218,8 @@ async fn authorize_urls_carry_scopes_or_config_id() {
             ("response_type".into(), "code".into()),
             (
                 "scope".into(),
-                "instagram_business_basic,instagram_business_content_publish".into()
+                "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights"
+                    .into()
             ),
             ("state".into(), "state-2".into()),
         ]
@@ -644,6 +670,10 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 media_urls: vec![Url::parse("https://cdn.test/a.jpg").unwrap()],
                 link: None,
                 media: vec![],
+                privacy: None,
+                tiktok: None,
+                format: None,
+                media_mimes: vec![],
             },
         )
         .await
@@ -960,7 +990,7 @@ async fn probe_returns_account_id_per_kind() {
         .await;
     assert_eq!(
         p.facts,
-        json!({ "account_id": "17841400000000009", "username": "test.studio" })
+        json!({ "account_id": "17841400000000009", "username": "test.studio", "insights": true })
     );
 
     // WhatsApp: the number as Graph names it, read with its token.
@@ -1086,21 +1116,23 @@ async fn on_connected_subscribes_page_fields() {
             .on_connected(&page_cred(), &public(kind, Some(PAGE)))
             .await
             .unwrap();
-        assert_eq!(facts, json!({ "subscribed": true }), "{kind}");
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": false }),
+            "{kind}"
+        );
     }
     let calls = m.requests("POST", "/fb/v19.0/1234567890/subscribed_apps");
     assert_eq!(calls.len(), 3);
     for call in &calls {
-        assert_eq!(
-            call.param("subscribed_fields"),
-            Some(PAGE_SUBSCRIBED_FIELDS)
-        );
+        assert_eq!(call.param("subscribed_fields"), Some(PAGE_MESSAGING_FIELDS));
         assert_graph_auth(call, PAGE_TOKEN);
     }
     assert_eq!(
-        PAGE_SUBSCRIBED_FIELDS,
-        "messages,message_echoes,messaging_postbacks,message_reactions,leadgen"
+        PAGE_MESSAGING_FIELDS,
+        "messages,message_echoes,messaging_postbacks,message_reactions"
     );
+    assert_eq!(PAGE_LEADGEN_FIELD, "leadgen");
     // Kinds without a connection step do nothing.
     m.clear();
     for (cred, kind) in [
@@ -1132,6 +1164,175 @@ async fn on_connected_subscribes_page_fields() {
 }
 
 #[tokio::test]
+async fn on_connected_subscribes_leadgen_only_when_the_grant_holds_leads_retrieval() {
+    let r = rig().await;
+    let m = &r.mock;
+    let page = "/fb/v19.0/1234567890/subscribed_apps";
+    let me = "/fb/v19.0/me/subscribed_apps";
+    for path in [page, me] {
+        m.on("POST", path, ok(json!({ "success": true })));
+    }
+    let leads = ["pages_messaging", "leads_retrieval"];
+    let mut stale_asset = public("messenger", Some(PAGE));
+    stale_asset["asset"] = json!({ "page_id": PAGE, "granted_scopes": leads });
+    for (cred, p, path, leadgen) in [
+        // A Page token: the scopes of the grant it came from, recorded with it.
+        (page_cred(), granted("messenger", &leads), page, true),
+        (page_cred(), granted("facebook_page", &leads), page, true),
+        (page_cred(), granted("instagram_dm", &leads), page, true),
+        (
+            page_cred(),
+            granted("messenger", &["pages_messaging"]),
+            page,
+            false,
+        ),
+        // A pasted Page token: its grant is not known. An earlier connection's asset facts
+        // outlive the token they came with, so they are not its grant.
+        (page_cred(), public("messenger", Some(PAGE)), page, false),
+        (page_cred(), stale_asset, page, false),
+        // A Facebook Login token: its own scopes decide, whatever is recorded beside it.
+        (
+            user_cred_granted(&leads),
+            public("messenger", None),
+            me,
+            true,
+        ),
+        (user_cred(), public("messenger", None), me, false),
+        (user_cred(), granted("messenger", &leads), me, false),
+    ] {
+        m.clear();
+        let facts = r.meta.on_connected(&cred, &p).await.unwrap();
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": leadgen }),
+            "{p}"
+        );
+        let call = m.request("POST", path);
+        let fields = if leadgen {
+            fields_with_leadgen()
+        } else {
+            PAGE_MESSAGING_FIELDS.to_owned()
+        };
+        assert_eq!(
+            call.param("subscribed_fields"),
+            Some(fields.as_str()),
+            "{p}"
+        );
+        assert_graph_auth(&call, if path == page { PAGE_TOKEN } else { USER_TOKEN });
+    }
+}
+
+#[tokio::test]
+async fn on_connected_subscribes_the_messaging_fields_alone_when_leadgen_is_refused() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    let p = granted("messenger", &["pages_messaging", "leads_retrieval"]);
+    // Meta refuses the whole subscription for the lead-gen field (seen live: HTTP 403, #200), and
+    // accepts the messaging fields asked again without it.
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r.meta.on_connected(&page_cred(), &p).await.unwrap();
+    assert_eq!(facts, json!({ "subscribed": true, "leadgen": false }));
+    let calls = m.requests("POST", path);
+    let fields: Vec<Option<&str>> = calls.iter().map(|c| c.param("subscribed_fields")).collect();
+    let with_leadgen = fields_with_leadgen();
+    assert_eq!(
+        fields,
+        [Some(with_leadgen.as_str()), Some(PAGE_MESSAGING_FIELDS)]
+    );
+    for call in &calls {
+        assert_graph_auth(call, PAGE_TOKEN);
+    }
+
+    // Asked again once only: when the messaging fields are refused in turn, that is the error.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.on(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_permission")),
+    );
+    let e = r.meta.on_connected(&page_cred(), &p).await.unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert!(e.reason().unwrap().contains("pages_messaging"), "{e}");
+    assert_eq!(m.requests("POST", path).len(), 2);
+    // A refusal naming the lead-gen field again is not followed by a third request.
+    m.set(
+        "POST",
+        path,
+        status(403, graph_fixture(m, "error_leadgen_permission")),
+    );
+    m.clear();
+    let e = r.meta.on_connected(&page_cred(), &p).await.unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert_eq!(m.requests("POST", path).len(), 2);
+}
+
+#[tokio::test]
+async fn on_connected_keeps_every_other_failure_of_the_subscription() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    let leads = granted("facebook_page", &["pages_messaging", "leads_retrieval"]);
+    let without = granted("facebook_page", &["pages_messaging"]);
+    for (p, reply, kind, reason) in [
+        // Another permission is missing: dropping the lead-gen field would not help.
+        (
+            &leads,
+            status(403, graph_fixture(m, "error_permission")),
+            "permission",
+            Some(
+                "HTTP 403 OAuthException (#200): (#200) Requires pages_messaging permission to manage the object",
+            ),
+        ),
+        (
+            &leads,
+            status(400, graph_fixture(m, "error_token_expired")),
+            "auth",
+            None,
+        ),
+        (
+            &leads,
+            status(400, graph_fixture(m, "error_invalid_parameter")),
+            "permanent",
+            None,
+        ),
+        (
+            &leads,
+            ok(json!({ "success": false })),
+            "permanent",
+            Some("the page subscription was not accepted"),
+        ),
+        // The lead-gen field was not asked for: a refusal naming it is the error, not asked again.
+        (
+            &without,
+            status(403, graph_fixture(m, "error_leadgen_permission")),
+            "permission",
+            None,
+        ),
+    ] {
+        m.set("POST", path, reply);
+        m.clear();
+        let e = r.meta.on_connected(&page_cred(), p).await.unwrap_err();
+        assert_eq!(e.kind(), kind, "{e}");
+        if let Some(reason) = reason {
+            assert_eq!(e.reason(), Some(reason));
+        }
+        assert_eq!(m.requests("POST", path).len(), 1, "asked once: {e}");
+    }
+}
+
+#[tokio::test]
 async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
     let r = rig().await;
     let m = &r.mock;
@@ -1145,6 +1346,11 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         "/fb/v19.0/5555555555/register",
         ok(json!({ "success": true })),
     );
+    m.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
     let facts = r
         .meta
         .on_connected(
@@ -1153,19 +1359,45 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         )
         .await
         .unwrap();
-    assert_eq!(facts, json!({ "subscribed": true, "registered": true }));
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": true,
+            "callback_override": true,
+            "on_business_app": false,
+            "registered": true,
+        })
+    );
     let register = m.request("POST", "/fb/v19.0/5555555555/register");
     assert_eq!(
         register.json(),
         json!({ "messaging_product": "whatsapp", "pin": "000000" })
     );
     assert_graph_auth(&register, WA_TOKEN);
-    assert_graph_auth(
-        &m.request("POST", "/fb/v19.0/4444444444/subscribed_apps"),
-        WA_TOKEN,
+    // The plain subscription first, then the override to this instance's own hook, with its
+    // verify token, as form fields.
+    let subscriptions = m.requests("POST", "/fb/v19.0/4444444444/subscribed_apps");
+    assert_eq!(subscriptions.len(), 2, "{subscriptions:#?}");
+    assert_eq!(subscriptions[0].json(), json!({}));
+    assert_eq!(
+        subscriptions[1].form(),
+        vec![
+            (
+                "override_callback_uri".to_owned(),
+                "https://panel.test/hooks/meta".to_owned()
+            ),
+            ("verify_token".to_owned(), "verify-test".to_owned()),
+        ]
     );
+    for subscription in &subscriptions {
+        assert_graph_auth(subscription, WA_TOKEN);
+    }
+    let asked = m.request("GET", "/fb/v19.0/5555555555");
+    assert_eq!(asked.param("fields"), Some("is_on_biz_app,platform_type"));
+    assert_graph_auth(&asked, WA_TOKEN);
 
-    // Without the account's id there is nothing to subscribe; a refused registration is a fact.
+    // Without the account's id there is nothing to subscribe nor to override; a number Graph
+    // says nothing about is registered, and a refused registration is a fact.
     let r = rig().await;
     r.mock.on(
         "POST",
@@ -1177,8 +1409,154 @@ async fn on_connected_subscribes_and_registers_whatsapp_best_effort() {
         .on_connected(&wa_cred(None), &public("whatsapp_cloud", Some(PHONE)))
         .await
         .unwrap();
-    assert_eq!(facts, json!({ "subscribed": false, "registered": false }));
-    assert_eq!(r.mock.recorded().len(), 1);
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": false,
+            "callback_override": false,
+            "on_business_app": null,
+            "registered": false,
+        })
+    );
+    assert_eq!(r.mock.recorded().len(), 2);
+}
+
+/// A number on the WhatsApp Business app is never registered (Meta's onboarding page: skip the
+/// registration), whether Graph says it is on the app or it was connected through the app's
+/// sign-in; a refused override leaves the subscription standing.
+#[tokio::test]
+async fn on_connected_never_registers_a_number_on_the_business_app() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        status(400, json!({ "error": { "code": 100, "type": "OAuthException", "message": "(#100) Invalid parameter" } })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": true, "platform_type": "CLOUD_API" })),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &wa_cred(Some("4444444444")),
+            &public("whatsapp_cloud", Some(PHONE)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({
+            "subscribed": true,
+            "callback_override": false,
+            "on_business_app": true,
+            "registered": false,
+        })
+    );
+    assert!(
+        m.requests("POST", "/fb/v19.0/5555555555/register")
+            .is_empty()
+    );
+
+    // Connected through the business app's sign-in: not registered, though Graph tells nothing.
+    let r = rig().await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    let mut through_app = public("whatsapp_cloud", Some(PHONE));
+    through_app["asset"] =
+        json!({ "waba_id": "4444444444", "onboarding": "whatsapp_business_app" });
+    let facts = r
+        .meta
+        .on_connected(&wa_cred(Some("4444444444")), &through_app)
+        .await
+        .unwrap();
+    assert_eq!(facts["registered"], false);
+    assert_eq!(facts["on_business_app"], Value::Null);
+    assert!(
+        r.mock
+            .requests("POST", "/fb/v19.0/5555555555/register")
+            .is_empty()
+    );
+}
+
+/// Meta's explicit answer wins over how the number was connected: a number Graph says is not on
+/// the business app is registered, though it came through the app's sign-in.
+#[tokio::test]
+async fn on_connected_registers_a_number_graph_says_is_not_on_the_app() {
+    let r = rig().await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/5555555555",
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/5555555555/register",
+        ok(json!({ "success": true })),
+    );
+    let mut through_app = public("whatsapp_cloud", Some(PHONE));
+    through_app["asset"] =
+        json!({ "waba_id": "4444444444", "onboarding": "whatsapp_business_app" });
+    let facts = r
+        .meta
+        .on_connected(&wa_cred(Some("4444444444")), &through_app)
+        .await
+        .unwrap();
+    assert_eq!(facts["on_business_app"], false);
+    assert_eq!(facts["registered"], true);
+    assert_eq!(
+        r.mock
+            .requests("POST", "/fb/v19.0/5555555555/register")
+            .len(),
+        1
+    );
+}
+
+/// The override needs a public base URL and a verify token: without either, the WABA keeps the
+/// app's callback.
+#[tokio::test]
+async fn on_connected_overrides_nothing_without_a_verify_token() {
+    let mut apps = TestApps::default();
+    if let Some(meta) = apps.meta.as_mut() {
+        meta.verify_token = "  ".into();
+    }
+    let r = rig_with(apps).await;
+    r.mock.on(
+        "POST",
+        "/fb/v19.0/4444444444/subscribed_apps",
+        ok(json!({ "success": true })),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &wa_cred(Some("4444444444")),
+            &public("whatsapp_cloud", Some(PHONE)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts["subscribed"], true);
+    assert_eq!(facts["callback_override"], false);
+    assert_eq!(
+        r.mock
+            .requests("POST", "/fb/v19.0/4444444444/subscribed_apps")
+            .len(),
+        1
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1191,6 +1569,10 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         media_urls: media.iter().map(|m| Url::parse(m).unwrap()).collect(),
         link: link.map(|l| Url::parse(l).unwrap()),
         media: vec![],
+        privacy: None,
+        tiktok: None,
+        format: None,
+        media_mimes: vec![],
     }
 }
 
@@ -1347,6 +1729,402 @@ async fn facebook_publish_feed_photos_and_video() {
     assert!(m.recorded().is_empty());
 }
 
+/// A Studio medium's URL: the file store's signed URL, which names no file type.
+const SIGNED_A: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000a?workspace=w&signature=s";
+const SIGNED_B: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000b?workspace=w&signature=s";
+
+/// `request` with the type of each medium, in order, as the file store names it.
+fn typed(mut request: PublishRequest, mimes: &[&str]) -> PublishRequest {
+    request.media_mimes = mimes.iter().map(|m| (*m).to_owned()).collect();
+    request
+}
+
+/// A video is told from its type, not its URL: Studio's signed URLs have no file ending.
+#[tokio::test]
+async fn a_signed_video_url_is_a_video_by_its_type() {
+    let p = public("instagram", Some(IG));
+    let container = |m: &Mock, id: &str| {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media_publish",
+            ok(json!({ "id": "900" })),
+        );
+        m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    };
+    // A reel.
+    let r = rig().await;
+    container(&r.mock, "800");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "REELS", "video_url": SIGNED_A, "caption": "Reel" })
+    );
+    // A story's video.
+    let r = rig().await;
+    container(&r.mock, "801");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "video_url": SIGNED_A })
+    );
+    // An image stays an image.
+    let r = rig().await;
+    container(&r.mock, "802");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Foto", &[SIGNED_A], None), &["image/jpeg"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "image_url": SIGNED_A, "caption": "Foto" })
+    );
+    // A carousel's video item is a video.
+    let r = rig().await;
+    let m = &r.mock;
+    for id in ["810", "811", "812"] {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+    }
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "900" })),
+    );
+    m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(
+                post("Kaydır", &[SIGNED_A, SIGNED_B], None),
+                &["image/jpeg", "video/mp4"],
+            ),
+        )
+        .await
+        .unwrap();
+    let items: Vec<Value> = m
+        .requests("POST", "/fb/v19.0/17841400000000001/media")
+        .iter()
+        .map(Recorded::json)
+        .collect();
+    assert_eq!(
+        items[..2],
+        [
+            json!({ "image_url": SIGNED_A, "is_carousel_item": true }),
+            json!({ "media_type": "VIDEO", "video_url": SIGNED_B, "is_carousel_item": true }),
+        ]
+    );
+}
+
+/// On a Facebook Page a signed video URL goes to the Page's videos, by its type.
+#[tokio::test]
+async fn a_signed_video_url_on_a_page_is_a_video_by_its_type() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/1234567890/videos",
+        ok(json!({ "id": "77" })),
+    );
+    r.meta
+        .publish(
+            &page_cred(),
+            &public("facebook_page", Some(PAGE)),
+            &typed(post("Video", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/1234567890/videos").json()["file_url"],
+        json!(SIGNED_A)
+    );
+    assert!(m.requests("POST", "/fb/v19.0/1234567890/photos").is_empty());
+}
+
+/// `request` as an Instagram story (its planned post's format).
+fn story(mut request: PublishRequest) -> PublishRequest {
+    request.format = Some(jt_app::ports::connectors::PostFormat::Story);
+    request
+}
+
+/// A story is one `STORIES` container of one image or one video, without a caption (the Content
+/// Publishing API documents none for stories), read until FINISHED, then published; with a Page
+/// token on the Graph API.
+#[tokio::test]
+async fn ig_story_is_one_stories_container_without_a_caption_on_the_graph_api() {
+    let r = rig().await;
+    let m = &r.mock;
+    let p = public("instagram", Some(IG));
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "700" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "701" })),
+    );
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    let receipt = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(post(
+                "Hikâyede metin gitmez",
+                &["https://cdn.test/yeni.jpg"],
+                Some("https://kahve.test"),
+            )),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "701");
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "image_url": "https://cdn.test/yeni.jpg" })
+    );
+    assert_eq!(m.requests("GET", "/fb/v19.0/700").len(), 2);
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .json(),
+        json!({ "creation_id": "700" })
+    );
+}
+
+/// With an Instagram Login token a story goes to graph.instagram.com the same way; a video is
+/// its `video_url`.
+#[tokio::test]
+async fn ig_story_video_goes_through_instagram_login() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media",
+        ok(json!({ "id": "9300000000" })),
+    );
+    m.on(
+        "GET",
+        "/ig/9300000000",
+        ok(json!({ "status_code": "FINISHED", "id": "9300000000" })),
+    );
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media_publish",
+        ok(json!({ "id": "9400000000" })),
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    let p = public("instagram", Some("17841400000000009"));
+    let receipt = r
+        .meta
+        .publish(
+            &ig_login_cred(),
+            &p,
+            &story(post("", &["https://cdn.test/yeni.mp4"], None)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "9400000000");
+    assert_eq!(
+        m.request("POST", "/ig/17841400000000009/media").json(),
+        json!({ "media_type": "STORIES", "video_url": "https://cdn.test/yeni.mp4" })
+    );
+    for call in m.recorded() {
+        assert!(call.path.starts_with("/ig/"), "{}", call.line());
+        assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN), "{}", call.line());
+    }
+}
+
+/// A video container is read longer than an image one (Meta suggests reading once a minute for up
+/// to five minutes): past the image's 30 reads, 7 more, `video_interval` apart, before giving up.
+#[tokio::test]
+async fn a_video_container_is_waited_for_longer_than_an_image_one() {
+    let p = public("instagram", Some(IG));
+    // A reel finishing on its 35th read is published.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "880" })),
+    );
+    for _ in 0..34 {
+        m.on(
+            "GET",
+            "/fb/v19.0/880",
+            ok(json!({ "status_code": "IN_PROGRESS" })),
+        );
+    }
+    m.on(
+        "GET",
+        "/fb/v19.0/880",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "881" })),
+    );
+    m.on("GET", "/fb/v19.0/881", ok(json!({ "id": "881" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.requests("GET", "/fb/v19.0/880").len(), 35);
+    // A video story never finishing: 37 reads, then a transient failure and no publish.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "882" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/882",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    let e = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "transient");
+    assert_eq!(m.requests("GET", "/fb/v19.0/882").len(), 37);
+    assert!(
+        m.requests("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .is_empty()
+    );
+}
+
+/// A post is read back by its id alone (`GET /{id}?fields=id`): how an observed story, which has
+/// no counters, is confirmed; on either login path.
+#[tokio::test]
+async fn a_post_is_read_back_by_its_id_alone() {
+    use jt_app::ports::connectors::Publisher;
+    let r = rig().await;
+    let m = &r.mock;
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    r.meta
+        .read_back(&page_cred(), &public("instagram", Some(IG)), "701")
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/701").param("fields"),
+        Some("id")
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    r.meta
+        .read_back(
+            &ig_login_cred(),
+            &public("instagram", Some("17841400000000009")),
+            "9400000000",
+        )
+        .await
+        .unwrap();
+    // Another id, or nothing: not confirmed.
+    m.on("GET", "/fb/v19.0/702", ok(json!({ "id": "703" })));
+    assert!(
+        r.meta
+            .read_back(&page_cred(), &public("instagram", Some(IG)), "702")
+            .await
+            .is_err()
+    );
+}
+
+/// A story is one medium; a Facebook Page's stories are not built: both refused, nothing sent.
+#[tokio::test]
+async fn a_story_of_two_media_or_on_a_page_is_refused_before_anything_is_sent() {
+    let r = rig().await;
+    let m = &r.mock;
+    let two = story(post(
+        "",
+        &["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"],
+        None,
+    ));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("instagram", Some(IG)), &two)
+                .await
+        ),
+        "permanent"
+    );
+    let page = story(post("", &["https://cdn.test/a.jpg"], None));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("facebook_page", Some(PAGE)), &page)
+                .await
+        ),
+        "permanent"
+    );
+    assert!(m.recorded().is_empty());
+}
+
 #[tokio::test]
 async fn ig_publish_polls_until_finished_and_gives_up_after_limit() {
     let r = rig().await;
@@ -1485,6 +2263,8 @@ async fn ig_publish_polls_until_finished_and_gives_up_after_limit() {
     .with_container_poll(ContainerPoll {
         interval: StdDuration::from_millis(40),
         attempts: 3,
+        video_interval: StdDuration::from_millis(40),
+        video_attempts: 0,
     });
     r.mock.on(
         "POST",
@@ -1828,6 +2608,76 @@ async fn whatsapp_send_body() {
         ),
         "throttle"
     );
+}
+
+#[tokio::test]
+async fn sender_name_reads_the_profile_by_kind() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/2000000000000001",
+        ok(json!({ "name": " Ada Messenger ", "id": "2000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/3000000000000001",
+        ok(json!({ "username": "ada.ig", "id": "3000000000000001" })),
+    );
+    m.on(
+        "GET",
+        "/ig/3000000000000002",
+        ok(json!({ "name": "Ada IG", "username": "ada.ig" })),
+    );
+    let name = |cred: Credential, kind: &'static str, sender: &'static str| {
+        let meta = &r.meta;
+        async move {
+            meta.sender_name(&cred, &public(kind, Some(PAGE)), sender)
+                .await
+        }
+    };
+    assert_eq!(
+        name(page_cred(), "messenger", "2000000000000001")
+            .await
+            .unwrap(),
+        Some("Ada Messenger".into())
+    );
+    let asked = m.request("GET", "/fb/v19.0/2000000000000001");
+    assert_eq!(asked.param("fields"), Some("name"));
+    assert_graph_auth(&asked, PAGE_TOKEN);
+    // Instagram through the Page: the username stands in for a missing name.
+    assert_eq!(
+        name(page_cred(), "instagram_dm", "3000000000000001")
+            .await
+            .unwrap(),
+        Some("ada.ig".into())
+    );
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/3000000000000001")
+            .param("fields"),
+        Some("name,username")
+    );
+    // An Instagram Login token reads graph.instagram.com.
+    assert_eq!(
+        name(ig_login_cred(), "instagram_dm", "3000000000000002")
+            .await
+            .unwrap(),
+        Some("Ada IG".into())
+    );
+    // WhatsApp and other kinds: no name, no call; a bad sender id is refused before a call.
+    m.clear();
+    assert_eq!(
+        name(wa_cred(None), "whatsapp_cloud", "905551111111")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(name(page_cred(), "meta_ads", "1").await.unwrap(), None);
+    assert_eq!(
+        kind_of(name(page_cred(), "messenger", "../me").await),
+        "permanent"
+    );
+    assert!(m.recorded().is_empty());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2529,4 +3379,878 @@ async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
         let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
         assert_eq!(context.timezone, expected);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The WhatsApp Business app's sign-in (coexistence)
+// ---------------------------------------------------------------------------------------------
+
+/// The Meta app with its WhatsApp Embedded Signup configuration.
+fn coexistence_apps() -> TestApps {
+    let mut apps = TestApps::default();
+    if let Some(meta) = apps.meta.as_mut() {
+        meta.whatsapp_config_id = Some("wa-config-test".into());
+        meta.login_config_id = Some("login-config-test".into());
+    }
+    apps
+}
+
+#[tokio::test]
+async fn the_business_app_sign_in_opens_embedded_signup_with_its_extras() {
+    let r = rig_with(coexistence_apps()).await;
+    let app = OAuthApp::Meta(coexistence_apps().meta.unwrap());
+    let url = r
+        .meta
+        .authorize_url_for(
+            &app,
+            &redirect(),
+            "state-1",
+            None,
+            Some(OAuthFlow::WhatsappBusinessApp),
+        )
+        .unwrap();
+    assert_eq!(url.host_str(), Some("www.facebook.com"));
+    assert_eq!(url.path(), "/v19.0/dialog/oauth");
+    let q: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    let get = |k: &str| q.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    assert_eq!(get("client_id"), Some(META_APP_ID));
+    assert_eq!(get("config_id"), Some("wa-config-test"));
+    assert_eq!(get("response_type"), Some("code"));
+    assert_eq!(get("override_default_response_type"), Some("true"));
+    assert_eq!(get("state"), Some("state-1"));
+    assert_eq!(get("redirect_uri"), Some(redirect().as_str()));
+    assert_eq!(get("scope"), None);
+    let extras: Value = serde_json::from_str(get("extras").unwrap()).unwrap();
+    assert_eq!(
+        extras,
+        json!({
+            "setup": {},
+            "featureType": "whatsapp_business_app_onboarding",
+            "sessionInfoVersion": "3",
+        })
+    );
+    // Without a flow it is Facebook Login as before (its own configuration, no extras).
+    let plain = r
+        .meta
+        .authorize_url_for(&app, &redirect(), "state-1", None, None)
+        .unwrap();
+    assert!(
+        plain.as_str().contains("config_id=login-config-test"),
+        "{plain}"
+    );
+    assert!(!plain.as_str().contains("extras"), "{plain}");
+
+    // No WhatsApp configuration, or another app: refused, nothing built.
+    let bare = OAuthApp::Meta(meta_app());
+    let refused = r.meta.authorize_url_for(
+        &bare,
+        &redirect(),
+        "s",
+        None,
+        Some(OAuthFlow::WhatsappBusinessApp),
+    );
+    assert_eq!(kind_of(refused), "permanent");
+    let instagram = OAuthApp::Instagram(InstagramApp {
+        app_id: "ig".into(),
+        app_secret: "ig-secret".into(),
+        comment_scopes: false,
+    });
+    let refused = r.meta.authorize_url_for(
+        &instagram,
+        &redirect(),
+        "s",
+        None,
+        Some(OAuthFlow::WhatsappBusinessApp),
+    );
+    assert_eq!(kind_of(refused), "permanent");
+    assert!(r.mock.recorded().is_empty());
+}
+
+/// The business app's code is exchanged once, for the business's token as it is: no
+/// `fb_exchange_token`, no `/me/permissions`.
+#[tokio::test]
+async fn the_business_app_code_is_exchanged_for_the_token_as_it_is() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/oauth/access_token",
+        ok(json!({ "access_token": "EAAB-business-test", "token_type": "bearer", "expires_in": 5_184_000 })),
+    );
+    let app = OAuthApp::Meta(coexistence_apps().meta.unwrap());
+    let before = OffsetDateTime::now_utc();
+    let cred = r
+        .meta
+        .exchange_for(
+            &app,
+            &redirect(),
+            "code-1",
+            None,
+            Some(OAuthFlow::WhatsappBusinessApp),
+        )
+        .await
+        .unwrap();
+    let Credential::OAuth {
+        access_token,
+        expires_at,
+        refresh_token,
+        scopes,
+    } = cred
+    else {
+        panic!("an OAuth credential");
+    };
+    assert_eq!(access_token, "EAAB-business-test");
+    assert_eq!(refresh_token, None);
+    assert!(scopes.is_empty());
+    let expires_at = expires_at.unwrap();
+    assert!(expires_at >= before + Duration::days(59), "{expires_at}");
+    let exchange = m.request("GET", "/fb/v19.0/oauth/access_token");
+    assert_eq!(exchange.param("code"), Some("code-1"));
+    assert_eq!(exchange.param("client_id"), Some(META_APP_ID));
+    assert_eq!(exchange.param("redirect_uri"), Some(redirect().as_str()));
+    assert_eq!(exchange.param("fb_exchange_token"), None);
+    assert_eq!(m.recorded().len(), 1, "{:#?}", m.recorded());
+}
+
+/// The numbers the sign-in shared: the accounts `debug_token` grants (asked with the app's own
+/// token), each account's numbers, and whether each is on the business app.
+#[tokio::test]
+async fn the_business_app_numbers_come_from_the_shared_accounts() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": {
+            "app_id": META_APP_ID,
+            "is_valid": true,
+            "expires_at": 1_900_000_000,
+            "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+            "granular_scopes": [
+                { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+                { "scope": "whatsapp_business_messaging", "target_ids": ["4444444444", "4444444445"] },
+            ],
+        }})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [{
+            "id": PHONE,
+            "display_phone_number": "+90 850 000 00 00",
+            "verified_name": "Test Atölye",
+            "quality_rating": "GREEN",
+        }]})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444445/phone_numbers",
+        status(400, json!({ "error": { "code": 200, "type": "OAuthException", "message": "(#200) no access" } })),
+    );
+    m.on(
+        "GET",
+        &format!("/fb/v19.0/{PHONE}"),
+        ok(json!({ "id": PHONE, "is_on_biz_app": true, "platform_type": "CLOUD_API" })),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let assets = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1, "{assets:?}");
+    let number = &assets[0];
+    assert_eq!(number.kind_key, "whatsapp_cloud");
+    assert_eq!(number.external_id, PHONE);
+    assert_eq!(number.name, "Test Atölye");
+    assert_eq!(
+        number.public,
+        json!({
+            "waba_id": "4444444444",
+            "display_phone_number": "+90 850 000 00 00",
+            "verified_name": "Test Atölye",
+            "quality_rating": "GREEN",
+            "onboarding": "whatsapp_business_app",
+            "is_on_biz_app": true,
+            "platform_type": "CLOUD_API",
+        })
+    );
+    assert_eq!(
+        number.credential,
+        Credential::WhatsAppCloud {
+            phone_number_id: PHONE.into(),
+            token: "EAAB-business-test".into(),
+            waba_id: Some("4444444444".into()),
+            expires_at: Some(OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap()),
+        }
+    );
+    // `debug_token` is asked with the app's own token (and its proof), the business token
+    // inspected in the query only.
+    let debugged = m.request("GET", "/fb/v19.0/debug_token");
+    assert_eq!(debugged.param("input_token"), Some("EAAB-business-test"));
+    assert_graph_auth(&debugged, &format!("{META_APP_ID}|{META_APP_SECRET}"));
+    assert_graph_auth(
+        &m.request("GET", "/fb/v19.0/4444444444/phone_numbers"),
+        "EAAB-business-test",
+    );
+    // The plain listing is not run.
+    assert!(m.requests("GET", "/fb/v19.0/me/accounts").is_empty());
+}
+
+/// A shared number Graph says is not on the business app is offered as a plain Cloud API number:
+/// it is not tagged as onboarded beside the app, so it is registered and shares nothing.
+#[tokio::test]
+async fn a_shared_number_graph_says_is_not_on_the_app_is_not_tagged() {
+    let r = rig_with(coexistence_apps()).await;
+    let m = &r.mock;
+    m.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": {
+            "is_valid": true,
+            "granular_scopes": [
+                { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+            ],
+        }})),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [{ "id": PHONE, "display_phone_number": "+90 850 000 00 00" }] })),
+    );
+    m.on(
+        "GET",
+        &format!("/fb/v19.0/{PHONE}"),
+        ok(json!({ "id": PHONE, "is_on_biz_app": false, "platform_type": "CLOUD_API" })),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let assets = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap();
+    assert_eq!(assets.len(), 1, "{assets:?}");
+    assert_eq!(assets[0].public["onboarding"], Value::Null);
+    assert_eq!(assets[0].public["is_on_biz_app"], false);
+}
+
+/// A sign-in that shared no account, or an account without a number, is refused: the owner is
+/// told it shared nothing.
+#[tokio::test]
+async fn a_business_app_sign_in_that_shared_nothing_is_refused() {
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": { "is_valid": true, "granular_scopes": [] } })),
+    );
+    let refused = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await;
+    assert_eq!(kind_of(refused), "permanent");
+
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        ok(json!({ "data": { "granular_scopes": [
+            { "scope": "whatsapp_business_management", "target_ids": ["4444444444"] },
+        ]}})),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/4444444444/phone_numbers",
+        ok(json!({ "data": [] })),
+    );
+    let refused = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await;
+    assert_eq!(kind_of(refused), "permanent");
+}
+
+/// A refusal of `debug_token` never repeats the business token it inspected, nor the app's.
+#[tokio::test]
+async fn a_refused_debug_token_never_echoes_a_token() {
+    let r = rig_with(coexistence_apps()).await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/debug_token",
+        status(
+            400,
+            json!({ "error": {
+                "code": 100,
+                "type": "OAuthException",
+                "message": format!(
+                    "bad input_token EAAB-business-test for {META_APP_ID}|{META_APP_SECRET}"
+                ),
+            }}),
+        ),
+    );
+    let business = Credential::OAuth {
+        access_token: "EAAB-business-test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec![],
+    };
+    let e = r
+        .meta
+        .list_assets_for(&business, Some(OAuthFlow::WhatsappBusinessApp))
+        .await
+        .unwrap_err();
+    let reason = e.reason().unwrap_or_default().to_owned();
+    assert!(!reason.contains("EAAB-business-test"), "{reason}");
+    assert!(!reason.contains(META_APP_SECRET), "{reason}");
+}
+
+/// The one-time sharing of the app's contacts and history: `POST /{number}/smb_app_data`, the
+/// receipt the answer's `request_id`; another kind asks nothing.
+#[tokio::test]
+async fn app_sync_asks_smb_app_data_once_per_request() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/5555555555/smb_app_data",
+        ok(json!({ "messaging_product": "whatsapp", "request_id": "req-1" })),
+    );
+    let p = public("whatsapp_cloud", Some(PHONE));
+    let receipt = r
+        .meta
+        .request_app_sync(&wa_cred(Some("4444444444")), &p, AppSync::Contacts)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "req-1");
+    let receipt = r
+        .meta
+        .request_app_sync(&wa_cred(Some("4444444444")), &p, AppSync::History)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "req-1");
+    let asked = m.requests("POST", "/fb/v19.0/5555555555/smb_app_data");
+    assert_eq!(
+        asked.iter().map(Recorded::json).collect::<Vec<_>>(),
+        [
+            json!({ "messaging_product": "whatsapp", "sync_type": "smb_app_state_sync" }),
+            json!({ "messaging_product": "whatsapp", "sync_type": "history" }),
+        ]
+    );
+    for request in &asked {
+        assert_graph_auth(request, WA_TOKEN);
+    }
+    // Another kind asks nothing.
+    assert_eq!(
+        r.meta
+            .request_app_sync(
+                &page_cred(),
+                &public("messenger", Some(PAGE)),
+                AppSync::History
+            )
+            .await
+            .unwrap(),
+        None
+    );
+    // Meta took it without naming its id: taken all the same, its id unknown.
+    m.set(
+        "POST",
+        "/fb/v19.0/5555555555/smb_app_data",
+        ok(json!({ "messaging_product": "whatsapp" })),
+    );
+    let receipt = r
+        .meta
+        .request_app_sync(&wa_cred(None), &p, AppSync::History)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.provider_id, "");
+    // Meta answered, but neither took nor refused it (a server error, a transient Graph error):
+    // the request may have been taken, and Meta takes it once, so its outcome is unknown. A
+    // throttle took nothing, and an explicit refusal stays one.
+    for (answer, kind) in [
+        (status(500, json!({})), "unknown"),
+        (
+            status(
+                503,
+                json!({ "error": { "code": 2, "is_transient": true, "message": "m" } }),
+            ),
+            "unknown",
+        ),
+        (
+            status(
+                400,
+                json!({ "error": { "code": 100, "type": "OAuthException", "message": "(#100) bad" } }),
+            ),
+            "permanent",
+        ),
+        (status(429, json!({})), "throttle"),
+    ] {
+        m.set("POST", "/fb/v19.0/5555555555/smb_app_data", answer);
+        let out = r
+            .meta
+            .request_app_sync(&wa_cred(None), &p, AppSync::History)
+            .await;
+        assert_eq!(kind_of(out), kind);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Comment scopes behind the platform flags (plan 2026-10-30-inbox-comments-marketplace-plan.md,
+// task M3; spec §8.1)
+// ---------------------------------------------------------------------------------------------
+
+fn scope_of(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(k, _)| k == "scope")
+        .map(|(_, v)| v.into_owned())
+}
+
+#[tokio::test]
+async fn authorize_url_omits_comment_scopes_when_flag_off() {
+    let r = rig().await;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Meta(meta_app()), &redirect(), "state-1", None)
+        .unwrap();
+    // Byte for byte the URL of before the flag.
+    assert_eq!(
+        url.as_str(),
+        format!(
+            "https://www.facebook.com/v19.0/dialog/oauth?client_id={META_APP_ID}&redirect_uri={}&state=state-1&response_type=code&scope={}",
+            url::form_urlencoded::byte_serialize(redirect().as_str().as_bytes())
+                .collect::<String>(),
+            url::form_urlencoded::byte_serialize(FACEBOOK_SCOPES.join(",").as_bytes())
+                .collect::<String>(),
+        )
+    );
+    let ig = r
+        .meta
+        .authorize_url(
+            &OAuthApp::Instagram(instagram_app()),
+            &redirect(),
+            "s",
+            None,
+        )
+        .unwrap();
+    assert_eq!(scope_of(&ig), Some(INSTAGRAM_SCOPES.join(",")));
+}
+
+#[tokio::test]
+async fn authorize_url_appends_comment_scopes_when_flag_on() {
+    let r = rig().await;
+    let mut meta = meta_app();
+    meta.comment_scopes = true;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Meta(meta), &redirect(), "state-1", None)
+        .unwrap();
+    let expected: Vec<&str> = FACEBOOK_SCOPES
+        .iter()
+        .chain(FACEBOOK_COMMENT_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url), Some(expected.join(",")));
+}
+
+#[tokio::test]
+async fn login_config_url_unchanged_by_the_flag() {
+    let r = rig().await;
+    let mut off = meta_app();
+    off.login_config_id = Some("cfg-test".into());
+    let mut on = off.clone();
+    on.comment_scopes = true;
+    let url = |app: jt_app::ports::connectors::MetaApp| {
+        r.meta
+            .authorize_url(&OAuthApp::Meta(app), &redirect(), "s", None)
+            .unwrap()
+    };
+    // The login configuration in Meta's dashboard is what grants them.
+    assert_eq!(url(off).as_str(), url(on).as_str());
+}
+
+#[tokio::test]
+async fn instagram_authorize_appends_its_comment_scopes_when_flag_on() {
+    let r = rig().await;
+    let mut instagram = instagram_app();
+    instagram.comment_scopes = true;
+    let url = r
+        .meta
+        .authorize_url(&OAuthApp::Instagram(instagram), &redirect(), "s", None)
+        .unwrap();
+    let expected: Vec<&str> = INSTAGRAM_SCOPES
+        .iter()
+        .chain(INSTAGRAM_COMMENT_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url), Some(expected.join(",")));
+}
+
+/// Facebook Login's scopes with the comment ones, as a grant holding them records them.
+fn comment_grant_scopes() -> Vec<&'static str> {
+    FACEBOOK_SCOPES
+        .iter()
+        .chain(FACEBOOK_COMMENT_SCOPES)
+        .copied()
+        .collect()
+}
+
+#[tokio::test]
+async fn page_subscription_without_grant_is_exactly_todays_fields() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, ok(json!({ "success": true })));
+    // Today's scopes: messages and leads, no comments.
+    let p = granted("facebook_page", FACEBOOK_SCOPES);
+    let facts = r.meta.on_connected(&page_cred(), &p).await.unwrap();
+    assert_eq!(facts, json!({ "subscribed": true, "leadgen": true }));
+    let with_leadgen = fields_with_leadgen();
+    assert_eq!(
+        m.request("POST", path).param("subscribed_fields"),
+        Some(with_leadgen.as_str())
+    );
+}
+
+#[tokio::test]
+async fn page_subscription_with_grant_adds_feed() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, ok(json!({ "success": true })));
+    // Every kind on the page asks for the same union: Meta replaces the fields on each call.
+    for kind in ["facebook_page", "messenger", "instagram_dm"] {
+        m.clear();
+        let facts = r
+            .meta
+            .on_connected(&page_cred(), &granted(kind, &comment_grant_scopes()))
+            .await
+            .unwrap();
+        assert_eq!(
+            facts,
+            json!({ "subscribed": true, "leadgen": true, "feed": true }),
+            "{kind}"
+        );
+        let fields = format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen());
+        assert_eq!(
+            m.request("POST", path).param("subscribed_fields"),
+            Some(fields.as_str()),
+            "{kind}"
+        );
+    }
+    assert_eq!(PAGE_FEED_FIELD, "feed");
+}
+
+/// Graph refusing the subscription for want of the permission of `field`.
+fn refuses_field(field: &str) -> Reply {
+    status(
+        403,
+        json!({ "error": {
+            "message": format!("(#200) To subscribe to the {field} field, one of these permissions is needed: pages_read_user_content"),
+            "type": "OAuthException",
+            "code": 200,
+        }}),
+    )
+}
+
+#[tokio::test]
+async fn refused_feed_is_dropped_and_retried() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, refuses_field("feed"));
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r
+        .meta
+        .on_connected(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({ "subscribed": true, "leadgen": true, "feed": false })
+    );
+    let asked: Vec<Option<String>> = m
+        .requests("POST", path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some(format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen())),
+            Some(fields_with_leadgen()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn refused_leadgen_and_feed_both_dropped() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = "/fb/v19.0/1234567890/subscribed_apps";
+    m.on("POST", path, refuses_field("leadgen"));
+    m.on("POST", path, refuses_field("feed"));
+    m.on("POST", path, ok(json!({ "success": true })));
+    let facts = r
+        .meta
+        .on_connected(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        json!({ "subscribed": true, "leadgen": false, "feed": false })
+    );
+    let asked: Vec<Option<String>> = m
+        .requests("POST", path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some(format!("{},{PAGE_FEED_FIELD}", fields_with_leadgen())),
+            Some(format!("{PAGE_MESSAGING_FIELDS},{PAGE_FEED_FIELD}")),
+            Some(PAGE_MESSAGING_FIELDS.to_owned()),
+        ]
+    );
+}
+
+/// An Instagram Login token granted its scopes and `extra`.
+fn ig_login_granted(extra: &[&str]) -> Credential {
+    Credential::OAuth {
+        access_token: IG_LOGIN_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: INSTAGRAM_SCOPES
+            .iter()
+            .chain(extra)
+            .map(|s| (*s).to_owned())
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn instagram_login_subscribes_comment_fields_with_grant() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = format!("/ig/{IG}/subscribed_apps");
+    m.on("POST", &path, ok(json!({ "success": true })));
+    // Comments only.
+    let facts = r
+        .meta
+        .on_connected(
+            &ig_login_granted(&["instagram_business_manage_comments"]),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts, json!({ "subscribed": true }));
+    let call = m.request("POST", &path);
+    assert_eq!(
+        call.param("subscribed_fields"),
+        Some("comments,live_comments")
+    );
+    assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN));
+    // With the messages scope, its messages too.
+    m.clear();
+    r.meta
+        .on_connected(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("POST", &path).param("subscribed_fields"),
+        Some("comments,live_comments,messages")
+    );
+    // Best effort: a refusal is a fact, not the error.
+    m.set(
+        "POST",
+        &path,
+        status(403, graph_fixture(m, "error_permission")),
+    );
+    let facts = r
+        .meta
+        .on_connected(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram", Some(IG)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(facts, json!({ "subscribed": false }));
+}
+
+#[tokio::test]
+async fn probe_reports_comment_grant_facts() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/me",
+        ok(json!({ "id": PAGE, "name": "Kahve" })),
+    );
+    r.mock.on(
+        "GET",
+        "/fb/v19.0/me/subscribed_apps",
+        ok(json!({ "data": [] })),
+    );
+    let p = r
+        .meta
+        .probe(
+            &page_cred(),
+            &granted("facebook_page", &comment_grant_scopes()),
+        )
+        .await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(
+        p.facts["comments"],
+        json!({ "read": true, "reply": true, "hide": true, "delete_others": true, "private_reply": true })
+    );
+    // Without the grant the facts are today's: no comments.
+    let p = r
+        .meta
+        .probe(&page_cred(), &granted("facebook_page", FACEBOOK_SCOPES))
+        .await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(p.facts.get("comments"), None);
+}
+
+#[tokio::test]
+async fn instagram_login_assets_add_instagram_dm_with_messages_scope() {
+    let r = rig().await;
+    r.mock.on(
+        "GET",
+        "/ig/me",
+        ok(json!({ "user_id": IG, "username": "kahve" })),
+    );
+    let kinds = |assets: Vec<jt_app::ports::connectors::Asset>| -> Vec<String> {
+        assets.into_iter().map(|a| a.kind_key).collect()
+    };
+    assert_eq!(
+        kinds(r.meta.list_assets(&ig_login_cred()).await.unwrap()),
+        ["instagram"]
+    );
+    assert_eq!(
+        kinds(
+            r.meta
+                .list_assets(&ig_login_granted(INSTAGRAM_COMMENT_SCOPES))
+                .await
+                .unwrap()
+        ),
+        ["instagram", "instagram_dm"]
+    );
+}
+
+#[tokio::test]
+async fn instagram_login_dm_send_goes_to_graph_instagram() {
+    let r = rig().await;
+    let path = format!("/ig/{IG}/messages");
+    r.mock.on(
+        "POST",
+        &path,
+        ok(json!({ "recipient_id": "9990001", "message_id": "m_ig" })),
+    );
+    let receipt = r
+        .meta
+        .send_text(
+            &ig_login_granted(INSTAGRAM_COMMENT_SCOPES),
+            &public("instagram_dm", Some(IG)),
+            "9990001",
+            "Merhaba",
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.provider_id, "m_ig");
+    let call = r.mock.request("POST", &path);
+    assert_eq!(
+        call.json(),
+        json!({ "recipient": { "id": "9990001" }, "message": { "text": "Merhaba" } })
+    );
+    assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN));
+    // Without the messages scope: refused, nothing sent.
+    r.mock.clear();
+    let e = r
+        .meta
+        .send_text(
+            &ig_login_granted(&["instagram_business_manage_comments"]),
+            &public("instagram_dm", Some(IG)),
+            "9990001",
+            "Merhaba",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "permission");
+    assert!(r.mock.recorded().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Insights through Instagram Login (spec D29)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn instagram_login_asks_for_insights_whatever_the_flags() {
+    assert!(INSTAGRAM_SCOPES.contains(&INSTAGRAM_INSIGHTS_SCOPE));
+    assert_eq!(
+        INSTAGRAM_INSIGHTS_SCOPE,
+        "instagram_business_manage_insights"
+    );
+    // Still no comment permission among the scopes asked for without the flags.
+    for kind in ["facebook_page", "instagram"] {
+        assert!(
+            !jt_connector::comment_grant(kind, FACEBOOK_SCOPES).enabled(),
+            "{kind}"
+        );
+        assert!(
+            !jt_connector::comment_grant(kind, INSTAGRAM_SCOPES).enabled(),
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn instagram_login_probe_says_whether_insights_are_granted() {
+    let r = rig().await;
+    r.mock
+        .on("GET", "/ig/me", ok(graph_fixture(&r.mock, "ig_me")));
+    // A grant of before the insights scope: the probe says so, the account is still reached.
+    let earlier = Credential::OAuth {
+        access_token: IG_LOGIN_TOKEN.into(),
+        refresh_token: None,
+        expires_at: Some(OffsetDateTime::now_utc() + Duration::days(50)),
+        scopes: vec![
+            "instagram_business_basic".into(),
+            "instagram_business_content_publish".into(),
+        ],
+    };
+    let p = r.meta.probe(&earlier, &public("instagram", None)).await;
+    assert!(p.ok, "{p:?}");
+    assert_eq!(p.facts["insights"], json!(false));
+    let p = r
+        .meta
+        .probe(&ig_login_cred(), &public("instagram", None))
+        .await;
+    assert_eq!(p.facts["insights"], json!(true));
 }

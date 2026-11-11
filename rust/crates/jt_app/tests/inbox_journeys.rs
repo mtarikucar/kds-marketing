@@ -318,3 +318,27 @@ async fn status_labels_require_manage_preserve_policy_and_ledger_only_keys() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn journey_read_separates_overrides_from_effective_labels() {
+    let (w, id) = setup().await;
+    let out = journeys::get(&w.deps, &w.owner_ctx, id).await.unwrap();
+    assert_eq!(out.status_labels.len(), 9);
+    assert_eq!(out.status_labels["contacted"], "İletişim kuruldu");
+    assert!(out.status_label_overrides.is_empty());
+    dictionaries::set_status_labels(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({"labels":{"contacted":"İlk temas bekleniyor"}})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let out = journeys::get(&w.deps, &w.owner_ctx, id).await.unwrap();
+    assert_eq!(out.status_labels.len(), 9);
+    assert_eq!(out.status_labels["contacted"], "İlk temas bekleniyor");
+    assert_eq!(out.status_labels["won"], "Kazanıldı");
+    assert_eq!(
+        serde_json::to_value(&out.status_label_overrides).unwrap(),
+        json!({"contacted":"İlk temas bekleniyor"})
+    );
+}

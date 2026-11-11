@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "unaudited_client_can_only_post_to_private_accounts",
+    "message": "Unaudited clients can only post to a private account.",
+    "log_id": "20261027000000TEST0020"
+  }
+}

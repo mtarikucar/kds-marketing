@@ -41,7 +41,10 @@ describe('ApiKeysPage create dialog', () => {
 
     expect(await within(dialog).findByDisplayValue('jt_cd34_ornek_duz_metin')).toBeInTheDocument();
     expect(within(dialog).getByText(tr.apiKeys.dialog.plaintextWarning)).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: tr.common.copy })).toBeInTheDocument();
+    // The key first, then the agent connection: the MCP address and the ready Claude Code command.
+    expect(within(dialog).getAllByRole('button', { name: tr.common.copy }).length).toBe(3);
+    expect(within(dialog).getByLabelText(tr.apiKeys.connect.url)).toHaveValue(`${window.location.origin}/mcp`);
+    expect((within(dialog).getByLabelText(tr.apiKeys.connect.command) as HTMLInputElement).value).toContain('claude mcp add --transport http jeeta');
     const post = calls.find((c) => c.method === 'POST');
     expect(post?.body).toEqual({ name: 'Yeni anahtar', scopes: ['ledger.read'] });
     expect(post?.headers.get('x-requested-with')).toBe('jeeta-panel');
@@ -80,7 +83,7 @@ it('key_is_shown_once_and_not_logged', async()=>{
   expect(await screen.findByDisplayValue(secret)).toBeInTheDocument();
   expect(copy).not.toHaveBeenCalled();
   expect(JSON.stringify(client.getMutationCache().getAll().map(m=>m.state))).not.toContain(secret);
-  await user.click(within(dialog).getByRole('button',{name:tr.common.copy}));
+  await user.click(within(dialog).getAllByRole('button',{name:tr.common.copy})[0]);
   expect(copy).toHaveBeenCalledWith(secret);
   await act(()=>router.navigate('/onboarding'));
   await act(()=>router.navigate('/api-keys'));

@@ -1,0 +1,6 @@
+List of devices attached
+0a1b2c3d               device product:fog_tr model:220333QAG device:fog transport_id:1
+emulator-5554          device product:sdk_gphone64_x86_64 model:sdk_gphone64_x86_64 device:emu64xa transport_id:2
+R58N0TEST0A            unauthorized transport_id:3
+TESTOFFLINE01          offline transport_id:4
+

@@ -6,10 +6,17 @@ import { activateBilling, reportPayment, type ReportPayment } from '@/api/billin
 import { getWorkspace } from '@/api/workspace';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
+import { MoneyInput } from '@/components/forms';
 import { Button, Callout, Card, CardContent, Field, Input, PageHeader } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
-import { formatMoney } from '@/lib/format';
+import { formatDateTime, formatMoney } from '@/lib/format';
 import { billingStage, useBilling } from './billing/queries';
+
+/** `date` as a `datetime-local` value (`2026-10-26T15:04`) in the browser's own timezone. */
+function localMinute(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
 
 export function BillingPage() {
   const session = useSession();
@@ -22,8 +29,10 @@ function BillingForm() {
   const session = useSession();
   const billing = useBilling('billing');
   const workspace = useQuery({queryKey:['workspace',session.data?.current_workspace],queryFn:getWorkspace});
-  const [amount, setAmount] = useState('');
-  const [paidAt, setPaidAt] = useState('');
+  // Prefilled with the configured price and the current minute; both stay editable evidence.
+  const [amount, setAmount] = useState<number | null>(null);
+  const [paidAt, setPaidAt] = useState(() => localMinute(new Date()));
+  const prefilled = useRef(false);
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,6 +46,9 @@ function BillingForm() {
   }, []);
   const owner = workspace.data?.my_role === 'owner' && workspace.data.my_permissions.includes('team.manage');
   const data = billing.data;
+  useEffect(() => {
+    if (data && !prefilled.current) { prefilled.current = true; setAmount(data.price_minor); }
+  }, [data]);
   const canReport = owner && data?.workspace_status !== 'suspended';
   const canActivate = owner && data?.workspace_status === 'pending_payment' && !!data.entitlement && !data.entitlement.revoked_at;
 
@@ -51,10 +63,13 @@ function BillingForm() {
         // Discard the reference-bearing response; refetch only while this page still exists.
         await activateBilling(submitted, controller.current.signal);
       } else {
-        const amountMinor = Number(amount);
+        const amountMinor = amount;
         const instant = new Date(paidAt);
-        if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || !paidAt || !Number.isFinite(instant.getTime()) || instant.getTime() > Date.now()) {
-          setError(t('billing.invalidEvidence')); return;
+        if (amountMinor === null || !Number.isSafeInteger(amountMinor) || amountMinor <= 0) {
+          setError(t('billing.invalidAmount')); return;
+        }
+        if (!paidAt || !Number.isFinite(instant.getTime()) || instant.getTime() > Date.now()) {
+          setError(t('billing.invalidPaidAt')); return;
         }
         const evidence = {reference:data.payment_reference,amount_minor:amountMinor,paid_at:instant.toISOString()};
         const previous = lastReport.current;
@@ -85,13 +100,14 @@ function BillingForm() {
         <div><dt>{t('billing.bank')}</dt><dd className="whitespace-pre-wrap">{data.bank_instructions}</dd></div>
       </dl>
       <Field label={t('billing.reference')}>{ids=><Input id={ids.id} readOnly value={data.payment_reference}/>}</Field>
+      {data.payment && !data.payment.confirmed && <Callout tone="success">{t('billing.reported',{amount:formatMoney(data.payment.amount_minor,data.payment.currency,i18n.language),paidAt:formatDateTime(data.payment.paid_at,i18n.language)})}</Callout>}
       {data.payment?.confirmed && <p>{t('onboarding.paymentConfirmed')}</p>}
       {data.entitlement && <p>{t(data.entitlement.revoked_at?'billing.revoked':data.entitlement.source==='grandfathered'?'billing.grandfathered':'billing.paidEntitlement')}</p>}
       {!owner && <Callout tone="info">{t('billing.ownerOnly')}</Callout>}
       {error && <Callout tone="danger">{error}</Callout>}
-      {canReport && (!data.entitlement || data.entitlement.revoked_at) && <form onSubmit={event=>void submit(event,false)} className="space-y-4" autoComplete="off">
-        <Field label={t('billing.amount')}>{ids=><Input id={ids.id} type="number" min={1} step={1} required value={amount} onChange={event=>setAmount(event.target.value)}/>}</Field>
-        <Field label={t('billing.paidAt')}>{ids=><Input id={ids.id} type="datetime-local" required value={paidAt} onChange={event=>setPaidAt(event.target.value)}/>}</Field>
+      {canReport && (!data.entitlement || data.entitlement.revoked_at) && <form onSubmit={event=>void submit(event,false)} className="space-y-4" autoComplete="off" noValidate>
+        <Field label={t('billing.amount',{currency:data.price_currency})} hint={t('billing.amountHint',{price:formatMoney(data.price_minor,data.price_currency,i18n.language)})}>{ids=><MoneyInput id={ids.id} describedBy={ids.describedBy} currency={data.price_currency} minor={amount} onChange={setAmount} required/>}</Field>
+        <Field label={t('billing.paidAt')}>{ids=><Input id={ids.id} type="datetime-local" required max={localMinute(new Date())} value={paidAt} onChange={event=>setPaidAt(event.target.value)}/>}</Field>
         <Button type="submit" disabled={busy}>{t('billing.report')}</Button>
       </form>}
       {canActivate && <form onSubmit={event=>void submit(event,true)} className="space-y-4" autoComplete="off">

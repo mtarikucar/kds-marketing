@@ -17,7 +17,8 @@ use axum::extract::State;
 use jt_app::ports::OAuthPendingId;
 use jt_app::usecases::capabilities::CapabilityOut;
 use jt_app::usecases::connector::{
-    self, ConfirmAssets, ConnectorHealth, HooksOut, ProbeOut, SetCredentials, StartOAuth, StartOut,
+    self, ConfirmAssets, ConnectorHealth, HooksOut, PbxPolicyInput, PbxPolicyOut, ProbeOut,
+    SetCredentials, StartOAuth, StartOut,
 };
 use jt_capability::CapabilityId;
 use serde::Deserialize;
@@ -63,7 +64,9 @@ pub async fn confirm_assets(
 
 /// `200` with the capability the credentials were entered for, after their probe. The body is
 /// [`SetCredentials`]: `{capability_id}` or `{kind_key, name}`, an optional `external_id`, and the
-/// `credential` (`mailbox`, `netgsm_sms`, `netgsm_iys`, `netgsm_pbx` or `meta_token`).
+/// `credential` (`mailbox`, `netgsm_sms`, `netgsm_iys`, `netgsm_pbx`, `meta_token`,
+/// `trendyol_seller` or `hepsiburada_merchant`; a marketplace's external id is its seller or
+/// merchant id).
 /// IYS requires capability_id of an existing live SMS line and matching usercode; its separate
 /// sealed slot leaves the SMS credential untouched, with brand_code in connector_public.iys.
 pub async fn set_credentials(
@@ -73,6 +76,20 @@ pub async fn set_credentials(
 ) -> Result<Json<CapabilityOut>, ApiError> {
     Ok(Json(
         connector::set_credentials(&state.deps, &ctx, body).await?,
+    ))
+}
+
+/// `200` with the PBX capability's call policy after the change. The body is
+/// [`PbxPolicyInput`]: `{call_mode?: "originate" | "linkup", recording_allowed?: bool}`, at least
+/// one; another kind of capability is `409`.
+pub async fn set_pbx_policy(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<CapabilityId>,
+    ApiJson(body): ApiJson<PbxPolicyInput>,
+) -> Result<Json<PbxPolicyOut>, ApiError> {
+    Ok(Json(
+        connector::set_pbx_policy(&state.deps, &ctx, id, body).await?,
     ))
 }
 

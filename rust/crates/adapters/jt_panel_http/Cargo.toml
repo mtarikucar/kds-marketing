@@ -19,6 +19,9 @@ serde_json.workspace = true
 time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+# The device bridge's file upload is read as a stream (`routes::device_bridge::files`).
+async-trait.workspace = true
+futures-util.workspace = true
 
 [dev-dependencies]
 sqlx.workspace = true
@@ -31,7 +34,6 @@ jt_pg.workspace = true
 jt_connector.workspace = true
 jt_testkit = { workspace = true, features = ["panel"] }
 tokio.workspace = true
-async-trait.workspace = true
 
 [lints]
 workspace = true

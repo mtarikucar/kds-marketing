@@ -5,8 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# The webhook gate: providers' callbacks into the system (Meta's signed webhooks, NetGSM's
-# token-guarded callbacks). An inbound HTTP adapter like `jt_panel_http`, so it may use axum; it
+# The webhook gate: providers' callbacks into the system (Meta's and TikTok's signed webhooks,
+# NetGSM's token-guarded callbacks). An inbound HTTP adapter like `jt_panel_http`, so it may use axum; it
 # reaches out nowhere (no HTTP client: the provider adapters it lists are used for their pure
 # body parsers only), and it reaches the database only through `jt_app`'s use cases.
 [dependencies]
@@ -16,6 +16,7 @@ jt_connector.workspace = true
 jt_tenancy.workspace = true
 jt_meta.workspace = true
 jt_netgsm.workspace = true
+jt_tiktok.workspace = true
 axum.workspace = true
 # `LengthLimitError`: telling a body over its limit (413) from one that failed to arrive.
 http-body-util.workspace = true

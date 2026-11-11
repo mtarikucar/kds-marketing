@@ -175,9 +175,10 @@ async fn pending_can_report_suspended_cannot() {
 async fn payment_does_not_satisfy_strategy_gate() {
     let (_, deps, ctx, input) = world().await;
     billing::report_payment(&deps, &ctx, input).await.unwrap();
+    // A gated row (the inbox is not, since 2026-11-03).
     let uc = jt_app::catalog::CATALOG
         .iter()
-        .find(|u| u.id == "inbox.conversations.list")
+        .find(|u| u.id == "studio.overview")
         .unwrap();
     let err = jt_app::gate::check_gate(
         uc,

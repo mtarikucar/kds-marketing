@@ -67,7 +67,14 @@ pub async fn erase(
         )
         .await?;
     }
+    // The materials that show the person, and the olays naming them (spec 2026-11-03 §9.2), in
+    // the same transaction; the materials' bytes go once it is committed (best effort:
+    // `StudioFilesCleanup` deletes an erased material's file too).
+    let files = crate::usecases::studio::library::erase_person(r.as_mut(), ctx, person).await?;
     r.commit().await?;
+    for file in files {
+        let _ = deps.files.delete(ctx.workspace_id, file).await;
+    }
     Ok(json!({"person_id":person,"erased":true}))
 }
 
@@ -89,13 +96,17 @@ pub(crate) async fn check_identity(
     Ok(())
 }
 
-/// Mask recursively on copies only. Shared by both ledger adapters.
+/// Mask recursively on copies only. Shared by both ledger adapters. As 0019's
+/// `inbox_mask_personal`, a public item's envelope loses its `author` and `provider_item` whole,
+/// the providers' names (`username`, `userName`, `customerName`) and a string-valued `message`
+/// (Facebook's comment text; WhatsApp's `message` is an object, masked within).
 pub fn mask_personal(value: &mut Value) {
     match value {
         Value::Object(map) => {
             let cdr = map.get("scenario").and_then(Value::as_str) == Some("cdr");
             for (key, value) in map {
                 if (cdr && key == "source")
+                    || (key == "message" && value.is_string())
                     || matches!(
                         key.as_str(),
                         "name"
@@ -137,6 +148,15 @@ pub fn mask_personal(value: &mut Value) {
                             | "crm_id"
                             | "internal_num"
                             | "destination"
+                            | "author"
+                            | "provider_item"
+                            | "username"
+                            | "userName"
+                            | "customerName"
+                            | "thread"
+                            | "phone_number"
+                            | "full_name"
+                            | "first_name"
                     )
                 {
                     *value = json!("");
@@ -175,7 +195,10 @@ pub(crate) async fn check_person(
 }
 
 /// Identity candidates in provider payloads, normalized in the capability's namespace.
-/// Shared by intake and the in-memory erasure inventory.
+/// Shared by intake and the in-memory erasure inventory. A public item's envelope names its
+/// author at `public/author/id` (or, unnamed, as the one-off person of its item), in the
+/// namespace of the item's surface (a comment routed to a direct-message sibling is its
+/// surface's: `super::public::surface_kind`), scoped to the capability's account (spec §6.6).
 pub fn event_identities(
     cap: Option<&jt_capability::Capability>,
     payload: &Value,
@@ -208,6 +231,16 @@ pub fn event_identities(
         ("/sender/id", namespace),
         ("/recipient/id", namespace),
         ("/status/recipient_id", Some(IdentityChannel::Phone)),
+        // A number onboarded beside the WhatsApp Business app: its shared history (the thread is
+        // the customer's number), what the business wrote from the app, and the app's contacts.
+        ("/thread", Some(IdentityChannel::Phone)),
+        ("/history_message/from", Some(IdentityChannel::Phone)),
+        ("/history_message/to", Some(IdentityChannel::Phone)),
+        ("/echo/to", Some(IdentityChannel::Phone)),
+        (
+            "/state_sync/contact/phone_number",
+            Some(IdentityChannel::Phone),
+        ),
     ] {
         let (Some(channel), Some(candidate)) =
             (channel, payload.pointer(path).and_then(Value::as_str))
@@ -231,6 +264,29 @@ pub fn event_identities(
             };
             out.push((channel, v));
         }
+    }
+    // An author the provider does not name is the one-off person of its item (as intake keys it).
+    let author = payload
+        .pointer("/public/author/id")
+        .and_then(Value::as_str)
+        .filter(|a| !a.trim().is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let id = payload.pointer("/public/external_id")?.as_str()?;
+            match payload.pointer("/public/kind")?.as_str()? {
+                "comment" => Some(format!("c:{id}")),
+                "question" => Some(format!("q:{id}")),
+                _ => None,
+            }
+        });
+    if let Some(cap) = cap
+        && let Some(author) = author.as_deref()
+        && let Some(channel) =
+            jt_inbox::public_channel_for_kind(super::public::surface_kind(&cap.kind_key))
+        && let Some(account) = cap.external_id.as_deref().filter(|a| !a.is_empty())
+        && let Ok(v) = normalise(channel.identity_channel(), author)
+    {
+        out.push((channel.identity_channel(), scope_opaque(account, &v)));
     }
     out
 }

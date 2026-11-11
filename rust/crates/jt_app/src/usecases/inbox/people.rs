@@ -33,6 +33,8 @@ pub struct SearchInput {
     #[serde(default)]
     pub q: String,
     pub limit: Option<u32>,
+    /// People to skip first (paging an empty query through the whole workspace).
+    pub offset: Option<u32>,
 }
 #[derive(Debug, Serialize)]
 pub struct CreateOut {
@@ -53,7 +55,11 @@ pub async fn search(deps: &Deps, ctx: &Ctx, input: SearchInput) -> Result<Vec<Pe
         .tenant(ctx.workspace_id)
         .await?
         .people()
-        .search(&input.q, input.limit.unwrap_or(50))
+        .search(
+            &input.q,
+            input.limit.unwrap_or(50),
+            input.offset.unwrap_or(0),
+        )
         .await
 }
 pub async fn get(deps: &Deps, ctx: &Ctx, id: PersonId) -> Result<PersonOut, AppError> {
@@ -88,13 +94,28 @@ pub async fn create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<Create
 
 /// Reuse inside the consumer's transaction. `own_identity` is the index of the message sender's
 /// identity in `input.identities`, never a client-controlled preferred person. Acquire the
-/// workspace lock before matching so simultaneous first contacts cannot create extra people.
+/// workspace lock before matching so simultaneous first contacts cannot create extra people. A
+/// person created here starts with an initial journey.
 pub(crate) async fn match_or_create(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     input: CreateInput,
     own_identity: Option<usize>,
+) -> Result<CreateOut, AppError> {
+    match_or_create_with(deps, ctx, r, input, own_identity, true).await
+}
+
+/// [`match_or_create`], a person it creates starting with a journey only when `open_journey`:
+/// a commenter or a marketplace asker is a person without one until buying intent shows (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md D4).
+pub(crate) async fn match_or_create_with(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    input: CreateInput,
+    own_identity: Option<usize>,
+    open_journey: bool,
 ) -> Result<CreateOut, AppError> {
     if input.identities.is_empty() {
         return Err(invalid("identities", "at least one identity is required"));
@@ -151,8 +172,10 @@ pub(crate) async fn match_or_create(
             updated_at: ctx.now,
         };
         r.people().insert(person.clone()).await?;
-        let journey = super::journeys::initial(deps, ctx, person.id, input.source);
-        r.journeys().insert_initial(journey).await?;
+        if open_journey {
+            let journey = super::journeys::initial(deps, ctx, person.id, input.source);
+            r.journeys().insert_initial(journey).await?;
+        }
         record(
             r,
             ctx,
@@ -233,7 +256,8 @@ async fn normalize(r: &mut dyn TenantRepos, input: &IdentityInput) -> Result<Str
         .find(id)
         .await?
         .ok_or_else(|| AppError::not_found("no such capability"))?;
-    if channel_for_kind(&capability.kind_key).map(Channel::identity_channel) != Some(input.channel)
+    if conversation_channel(&capability.kind_key).map(Channel::identity_channel)
+        != Some(input.channel)
     {
         return Err(invalid(
             "capability_id",
@@ -361,6 +385,53 @@ pub async fn add_identity(
     };
     r.commit().await?;
     Ok(out)
+}
+
+/// Links identity `value` (normalised and scoped already; `display` as received) on `channel`
+/// to `person` inside the caller's transaction, which holds the workspace lock: `"added"` when
+/// nobody held it (ledger `inbox.identity.added`), `"merge_suggested"` when another person does
+/// (it stays theirs), `"held"` when the person holds it already, `"erased"` for an erased
+/// identity (nothing written).
+pub(crate) async fn link_identity(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    person: PersonId,
+    channel: IdentityChannel,
+    value: String,
+    display: String,
+) -> Result<&'static str, AppError> {
+    match super::erasure::check_identity(r, channel, &value).await {
+        Err(e) if e.details["reason"] == "erased_identity" => return Ok("erased"),
+        Err(e) => return Err(e),
+        Ok(()) => {}
+    }
+    let person = resolve(r, person).await?;
+    match r.people().find_by_identity(channel, &value).await? {
+        Some(other) if other.id == person.id => Ok("held"),
+        Some(other) => {
+            suggest(deps, ctx, r, &person, &other, false).await?;
+            Ok("merge_suggested")
+        }
+        None => {
+            let input = IdentityInput {
+                channel,
+                value: display,
+                capability_id: None,
+            };
+            insert_identity(deps, ctx, r, person.id, &input, value).await?;
+            record(
+                r,
+                ctx,
+                "inbox.identity.added",
+                "person",
+                person.id,
+                json!({"channel": channel}),
+            )
+            .await?;
+            Ok("added")
+        }
+    }
 }
 
 /// Prefer the message sender. Without that match, a single unambiguous person can be reused.

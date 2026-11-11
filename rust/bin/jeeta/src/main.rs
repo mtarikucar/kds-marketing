@@ -10,6 +10,7 @@
 
 mod config;
 mod connectors;
+mod net;
 mod ops;
 mod recovery;
 mod scheduler;

@@ -5,10 +5,17 @@ import { connectorHooks } from '@/api/connectors';
 import { useSession } from '@/auth/useSession';
 import { CopyField } from '@/components/CopyField';
 import { QueryState } from '@/components/QueryState';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui';
+import { Card, CardContent, Disclosure } from '@/components/ui';
 
 /** The hooks API carries the configured public base URL, including its path prefix. */
 export function ProviderSetup() {
+  const {t}=useTranslation();
+  // Platform-operator material: tenants never configure provider apps, so it stays folded away
+  // (and, being unmounted while closed, fetches nothing).
+  return <Card><CardContent className="pt-4"><Disclosure title={t('providerSetup.title')}><ProviderSetupBody/></Disclosure></CardContent></Card>;
+}
+
+function ProviderSetupBody() {
   const {t}=useTranslation();
   const client=useQueryClient();
   const workspace=useSession().data?.current_workspace;
@@ -16,12 +23,12 @@ export function ProviderSetup() {
   useEffect(()=>()=>{client.removeQueries({queryKey:['connectors','setup',workspace],exact:true});},[client,workspace]);
   const url=hooks.data?.meta?.url ?? hooks.data?.netgsm[0]?.url;
   const base=url?.replace(/\/hooks\/(?:meta|netgsm)(?:\/.*)?$/, '');
-  return <Card><CardHeader><CardTitle>{t('providerSetup.title')}</CardTitle></CardHeader><CardContent className="space-y-4">
+  return <div className="space-y-4">
     <p>{t('providerSetup.help')}</p>
     <QueryState query={hooks}>{hooks.data && <>
-      {base && base!==url && ['meta','instagram','x'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
+      {base && base!==url && ['meta','instagram','x','tiktok','linkedin'].map(provider=><CopyField key={provider} label={t('providerSetup.callback',{provider})} value={`${base}/oauth/callback/${provider}`}/>)}
       {hooks.data.meta && <CopyField label={t('capabilities.hooks.metaUrl')} value={hooks.data.meta.url}/>}
       {hooks.data.netgsm.map(hook=><CopyField key={hook.purpose} label={t(`capabilities.hooks.purposes.${hook.purpose}`)} value={hook.url}/>)}
     </>}</QueryState>
-  </CardContent></Card>;
+  </div>;
 }

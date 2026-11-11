@@ -13,13 +13,26 @@
 //!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
 //!   `connector_public.reconnect_required`);
 //! - `VerifyCapability` (2): each capability reached through an agent or a device that reads
-//!   `declared` or `stale` (a lapsed verification is asked for again);
+//!   `declared` or `stale` (a lapsed verification is asked for again), but one of a kind verified
+//!   by its heartbeat (a voice bridge, a phone);
+//! - `VoiceBridgeOffline` (2): each voice bridge that reads `declared`, `stale` or `unreachable`:
+//!   only its own registration verifies it, so no evidence is asked for;
+//! - `PhoneOffline` (2): each phone that reads `declared`, `stale` or `unreachable`: only its
+//!   device bridge's registration verifies it, so no evidence is asked for either. Each kind
+//!   verified by its heartbeat has its own item ([`offline_item`]), so a phone is never reported
+//!   as a voice bridge;
 //! - `ConnectConnector` (2): each capability reached through a connector that reads `declared`
 //!   (M1b sets connectors up);
 //! - `InboundEvents` (2): inbound events (webhooks, polls) not yet acknowledged, with how many
 //!   (counted up to [`INBOUND_EVENTS_COUNT_CAP`]: a count of the cap means at least that many),
 //!   only for a caller who may acknowledge them ([`events::ACK_PERMISSION`]): anyone else would
 //!   see an item they could never clear;
+//! - `StudioShootRequest` (3): each open request of the çekim listesi, for a caller with
+//!   `studio.work`, with or without an approved strategy (the materials library needs none);
+//! - `StudioPostRequest` (2): each open package request (olay-driven publishing), for a
+//!   caller with `studio.work` while a strategy is approved;
+//! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
+//!   only from its preparation start;
 //! - `DeclareFirstCapability` (3): no capability that is not retired.
 //!
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
@@ -40,7 +53,7 @@
 //! the caller seen at its own time, so an agent that was late is not told it is overdue by the
 //! very call that ends its lateness.
 
-use jt_capability::{CapabilityId, EffectiveStatus, Reach};
+use jt_capability::{Capability, CapabilityId, EffectiveStatus, Reach};
 use jt_ledger::Actor;
 use jt_strategy::{Gap, StrategyVersionId};
 use jt_tenancy::{AgentConnectionId, Permission};
@@ -48,7 +61,9 @@ use serde::Serialize;
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
+use super::calls::bridge::VOICE_BRIDGE_KIND;
 use super::capabilities::CapabilityOut;
+use super::devices::PHONE_KIND;
 use super::strategy::{self, StrategyOut};
 use super::{Deps, agents, connector, events, invalid, ledger_entry};
 use crate::catalog::status_exemption;
@@ -66,6 +81,9 @@ pub const CHECKIN_LEDGER_RESOLUTION: Duration = Duration::hours(1);
 /// The most unprocessed inbound events `InboundEvents` counts; past it the count reads as the cap
 /// ("at least this many"), so asking what is pending never counts a whole backlog.
 pub const INBOUND_EVENTS_COUNT_CAP: u32 = 1_000;
+
+/// How soon an owed item's deadline makes it an `AnswerDeadline` item.
+pub const ANSWER_DEADLINE_WINDOW: Duration = Duration::hours(24);
 
 const CHECKIN: &str = CHECKIN_ACTION;
 
@@ -132,6 +150,16 @@ pub enum WorkKind {
     StudioBudgetMove {
         budget_move_id: jt_studio::BudgetMoveId,
     },
+    /// An open request of the çekim listesi: a material Studio needs and has not got (spec
+    /// 2026-11-03 §4.6). Listed with or without an approved strategy, as the library is.
+    StudioShootRequest {
+        shoot_request_id: jt_studio::ShootRequestId,
+    },
+    /// An open package request (spec 2026-11-03 D23): plan posts from its materials. Listed
+    /// with an approved strategy only, as `studio.posts_propose` needs one.
+    StudioPostRequest {
+        post_request_id: jt_studio::PackageRequestId,
+    },
     /// A visible conversation needs a reply.
     ReplyDue {
         conversation_id: jt_inbox::ConversationId,
@@ -142,6 +170,27 @@ pub enum WorkKind {
     },
     /// A visible contact has a merge suggestion.
     MergeSuggested { merge_id: jt_inbox::MergeId },
+    /// An owed comment or question of a visible conversation is due within
+    /// [`ANSWER_DEADLINE_WINDOW`] (spec §3.11): the soonest first.
+    AnswerDeadline {
+        conversation_id: jt_inbox::ConversationId,
+        item_id: Option<jt_inbox::PublicItemId>,
+        #[serde(with = "time::serde::rfc3339")]
+        deadline: OffsetDateTime,
+    },
+    /// A held reply waits for a human's approval (human callers only).
+    ApproveReply {
+        outbox_id: uuid::Uuid,
+        conversation_id: jt_inbox::ConversationId,
+        #[serde(with = "time::serde::rfc3339::option")]
+        deadline: Option<OffsetDateTime>,
+    },
+    /// The platform takes comments, but this Meta capability's grant lacks the comment
+    /// permissions: reconnect it.
+    EnableComments {
+        capability_id: CapabilityId,
+        name: String,
+    },
     /// An open task has reached its due time.
     TaskDue { task_id: jt_inbox::TaskId },
     /// Start the consultation, or continue the open draft's.
@@ -169,6 +218,23 @@ pub enum WorkKind {
     /// Read and acknowledge the inbound events not yet processed: `count` of them, counted up to
     /// [`INBOUND_EVENTS_COUNT_CAP`].
     InboundEvents { count: u32 },
+    /// A voice bridge has not registered within its heartbeat, or never has: agent calls through
+    /// it are refused until it does. `last_seen_at` is its last heartbeat.
+    VoiceBridgeOffline {
+        capability_id: CapabilityId,
+        name: String,
+        #[serde(with = "time::serde::rfc3339::option")]
+        last_seen_at: Option<OffsetDateTime>,
+    },
+    /// A phone its device bridge has not listed within its heartbeat, or never has: commands for
+    /// it are refused (`device_offline`) until a bridge lists it again. `last_seen_at` is the last
+    /// registration that listed it.
+    PhoneOffline {
+        capability_id: CapabilityId,
+        name: String,
+        #[serde(with = "time::serde::rfc3339::option")]
+        last_seen_at: Option<OffsetDateTime>,
+    },
 }
 
 impl WorkKind {
@@ -179,9 +245,14 @@ impl WorkKind {
             WorkKind::StudioSlot { .. } => "studio.slot_get",
             WorkKind::StudioApproval { .. } => "studio.approve",
             WorkKind::StudioBudgetMove { .. } => "studio.pending",
+            WorkKind::StudioShootRequest { .. } => "studio.shoot_list",
+            WorkKind::StudioPostRequest { .. } => "studio.posts_propose",
             WorkKind::ReplyDue { .. } => "inbox.reply",
             WorkKind::ReopenQuestion { .. } => "inbox.events.report",
             WorkKind::MergeSuggested { .. } => "inbox.merges.apply",
+            WorkKind::AnswerDeadline { .. } => "inbox.reply",
+            WorkKind::ApproveReply { .. } => "inbox.public.approve",
+            WorkKind::EnableComments { .. } => "connector.reconnect",
             WorkKind::TaskDue { .. } => "inbox.tasks.complete",
             WorkKind::ConsultStrategy => "strategy.start_consultation",
             WorkKind::ApproveStrategy => "strategy.approve",
@@ -190,6 +261,8 @@ impl WorkKind {
             WorkKind::ConnectConnector { .. } => "connector.start_oauth",
             WorkKind::ReconnectConnector { .. } => "connector.reconnect",
             WorkKind::InboundEvents { .. } => "events.ack",
+            WorkKind::VoiceBridgeOffline { .. } => "calls.bridge.register",
+            WorkKind::PhoneOffline { .. } => "devices.bridge.register",
         }
     }
 }
@@ -263,6 +336,19 @@ async fn pending_as_seen(
     } else {
         None
     };
+    let shoots: Vec<jt_studio::ShootRequest> = if ctx.permissions.contains(&Permission::StudioWork)
+        && status_exemption("studio.shoot_list").allows(status)
+    {
+        repos
+            .studio_materials()
+            .list_shoot_requests()
+            .await?
+            .into_iter()
+            .filter(|q| q.status == jt_studio::ShootStatus::Open)
+            .collect()
+    } else {
+        Vec::new()
+    };
     drop(repos);
 
     let state = strategy_state(&strategy);
@@ -292,7 +378,45 @@ async fn pending_as_seen(
             priority: 3,
             hint: "Complete the due journey task.".into(),
         }));
+        // `public_due` is soonest deadline first.
+        items.extend(p.public_due.into_iter().filter_map(|d| {
+            let deadline = d
+                .deadline
+                .filter(|at| *at - ctx.now <= ANSWER_DEADLINE_WINDOW)?;
+            Some(WorkItem {
+                kind: WorkKind::AnswerDeadline {
+                    conversation_id: d.conversation_id,
+                    item_id: Some(d.item_id),
+                    deadline,
+                },
+                priority: 1,
+                hint: "Answer the item with jeeta.inbox.reply before its deadline; after it the \
+                       platform takes no answer."
+                    .into(),
+            })
+        }));
+        items.extend(p.approvals.into_iter().map(|a| {
+            WorkItem {
+                priority: if a
+                    .deadline
+                    .is_some_and(|at| at - ctx.now <= ANSWER_DEADLINE_WINDOW)
+                {
+                    1
+                } else {
+                    2
+                },
+                kind: WorkKind::ApproveReply {
+                    outbox_id: a.outbox_id,
+                    conversation_id: a.conversation_id,
+                    deadline: a.deadline,
+                },
+                hint:
+                    "Read the held reply, then approve it (an edit is fenced again) or discard it."
+                        .into(),
+            }
+        }));
     }
+    items.extend(enable_comment_items(deps, &capabilities));
     if let Some(p) = studio {
         items.extend(p.slots.into_iter().map(|s| WorkItem {
             kind: WorkKind::StudioSlot {
@@ -301,6 +425,18 @@ async fn pending_as_seen(
             },
             priority: if s.overdue { 1 } else { 2 },
             hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+        }));
+        items.extend(p.post_requests.into_iter().map(|q| {
+            WorkItem {
+                kind: WorkKind::StudioPostRequest {
+                    post_request_id: q.id,
+                },
+                priority: 2,
+                hint: "Plan posts from the request's materials (jeeta.studio.post_requests) and \
+                   answer it with jeeta.studio.posts_propose: each post's format, channel, \
+                   time, materials, subject and hypothesis, within the caps."
+                    .into(),
+            }
         }));
         items.extend(p.approvals.into_iter().map(|target| WorkItem {
             kind: WorkKind::StudioApproval { target },
@@ -323,6 +459,19 @@ async fn pending_as_seen(
             },
         }));
     }
+    items.extend(shoots.into_iter().map(|q| {
+        WorkItem {
+            kind: WorkKind::StudioShootRequest {
+                shoot_request_id: q.id,
+            },
+            priority: 3,
+            hint:
+                "Studio needs this material (jeeta.studio.shoot_list). You cannot shoot it: tell \
+               the owner, or add an AI supporting visual (jeeta.studio.material_add); a real \
+               photo or video is the owner's."
+                    .into(),
+        }
+    }));
     items.extend(capability_items(&capabilities));
     items.extend(inbound_items(inbound));
     items.retain(|item| actionable(&item.kind));
@@ -472,13 +621,61 @@ fn strategy_items(state: &StrategyState, may_approve: bool) -> Vec<WorkItem> {
     .collect()
 }
 
+/// The item of capability `c`, of a kind verified by its heartbeat, while it reads `declared`,
+/// `stale` or `unreachable` (its bridge does not report it): each such kind has its own, cleared
+/// by its own bridge's registration. `None` for any other kind.
+pub fn offline_item(c: &Capability) -> Option<WorkItem> {
+    let (name, last_seen_at) = (c.name.clone(), c.last_verified_at);
+    let (kind, hint) = match c.kind_key.as_str() {
+        VOICE_BRIDGE_KIND => (
+            WorkKind::VoiceBridgeOffline {
+                capability_id: c.id,
+                name,
+                last_seen_at,
+            },
+            "The voice bridge has not registered in the last minute (or never has), so agent \
+             calls through it are refused: ask the operator to check the jeeta-voice-bridge \
+             service on the server (docs/operations/voice-bridge.md). It cannot be verified by \
+             evidence.",
+        ),
+        PHONE_KIND => (
+            WorkKind::PhoneOffline {
+                capability_id: c.id,
+                name,
+                last_seen_at,
+            },
+            "No device bridge has listed this phone in the last minute (or ever), so commands for \
+             it are refused (device_offline): ask the owner to check that it is plugged into the \
+             PC, unlocked, with USB debugging allowed, and that the jeeta-device-bridge program \
+             runs there. It cannot be verified by evidence; retire it with \
+             jeeta.capability.retire if it is no longer used.",
+        ),
+        _ => return None,
+    };
+    Some(WorkItem {
+        kind,
+        priority: 2,
+        hint: hint.to_owned(),
+    })
+}
+
 /// The capabilities' items, in their order: each agent or device capability to verify, each
-/// connector to connect; and, when none is live, declaring the first.
+/// connector to connect, each capability verified by its heartbeat that does not report (a voice
+/// bridge, a phone: [`offline_item`]); and, when none is live, declaring the first.
 fn capability_items(capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
     let mut items = Vec::new();
     for out in capabilities {
         let c = &out.capability;
         let status = out.effective_status;
+        if c.kind().is_some_and(|k| k.heartbeat().is_some()) {
+            if matches!(
+                status,
+                EffectiveStatus::Declared | EffectiveStatus::Stale | EffectiveStatus::Unreachable
+            ) {
+                items.extend(offline_item(c));
+            }
+            continue;
+        }
         match c.reach {
             Reach::Agent | Reach::Device
                 if matches!(status, EffectiveStatus::Declared | EffectiveStatus::Stale) =>
@@ -601,4 +798,33 @@ async fn version_in_force(
     repos: &mut dyn TenantRepos,
 ) -> Result<Option<StrategyVersionId>, AppError> {
     Ok(repos.strategy().current_approved().await?.map(|v| v.id))
+}
+
+/// The Meta surface capabilities (Facebook Pages, Instagram accounts) not retired whose platform
+/// comment flag is on for their login but whose grant lacks the comment permissions
+/// ([`super::inbox::public::CommentStatus::Reconnect`]): an `EnableComments` item each. With the
+/// flags off, none.
+fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<WorkItem> {
+    capabilities
+        .iter()
+        .map(|out| &out.capability)
+        .filter(|c| {
+            matches!(c.kind_key.as_str(), "facebook_page" | "instagram")
+                && c.status != jt_capability::StoredStatus::Retired
+        })
+        .filter(|c| {
+            super::inbox::public::comment_status(deps.apps.as_ref(), c)
+                == Some(super::inbox::public::CommentStatus::Reconnect)
+        })
+        .map(|c| WorkItem {
+            kind: WorkKind::EnableComments {
+                capability_id: c.id,
+                name: c.name.clone(),
+            },
+            priority: 3,
+            hint: "Comments are on for this platform, but this account's grant lacks the comment \
+                   permissions: ask a human to reconnect it (jeeta.connector.reconnect)."
+                .into(),
+        })
+        .collect()
 }

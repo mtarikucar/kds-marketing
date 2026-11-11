@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "(#200) To subscribe to the leadgen field, one of these permissions is needed: leads_retrieval",
+    "type": "OAuthException",
+    "code": 200,
+    "fbtrace_id": "ATESTTRACE6"
+  }
+}

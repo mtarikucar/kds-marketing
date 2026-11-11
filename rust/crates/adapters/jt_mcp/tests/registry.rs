@@ -27,6 +27,23 @@ const TOOLS: &[&str] = &[
     "jeeta.studio.brake",
     "jeeta.studio.policy_set",
     "jeeta.studio.approve",
+    "jeeta.studio.olays_list",
+    "jeeta.studio.olay_get",
+    "jeeta.studio.olay_create",
+    "jeeta.studio.olay_update",
+    "jeeta.studio.materials_list",
+    "jeeta.studio.material_get",
+    "jeeta.studio.material_add",
+    "jeeta.studio.material_tag",
+    "jeeta.studio.slot_materials",
+    "jeeta.studio.calendar_list",
+    "jeeta.studio.shoot_list",
+    "jeeta.studio.shoot_request",
+    "jeeta.studio.shoot_resolve",
+    "jeeta.studio.post_requests",
+    "jeeta.studio.posts_propose",
+    "jeeta.studio.posts_list",
+    "jeeta.studio.weekly_summary",
     "jeeta.inbox.pending",
     "jeeta.inbox.context",
     "jeeta.inbox.conversations_list",
@@ -53,6 +70,12 @@ const TOOLS: &[&str] = &[
     "jeeta.inbox.commissions_approve",
     "jeeta.inbox.commissions_pay",
     "jeeta.inbox.commission_rates_set",
+    "jeeta.inbox.public_hide",
+    "jeeta.inbox.public_delete",
+    "jeeta.inbox.public_mark_handled",
+    "jeeta.inbox.public_report",
+    "jeeta.inbox.public_approve",
+    "jeeta.inbox.public_discard",
     "jeeta.inbox.people_search",
     "jeeta.inbox.people_get",
     "jeeta.inbox.people_create",
@@ -131,6 +154,21 @@ const TOOLS: &[&str] = &[
     "jeeta.connector.health",
     "jeeta.connector.reconnect",
     "jeeta.connector.hooks",
+    "jeeta.connector.set_pbx_policy",
+    "jeeta.calls.policy_get",
+    "jeeta.calls.policy_set",
+    "jeeta.calls.place",
+    "jeeta.calls.get",
+    "jeeta.calls.list",
+    "jeeta.calls.end",
+    "jeeta.calls.listen",
+    "jeeta.calls.say",
+    "jeeta.calls.transfer",
+    "jeeta.devices.list",
+    "jeeta.devices.observe",
+    "jeeta.devices.act",
+    "jeeta.devices.command_get",
+    "jeeta.devices.commands",
     "jeeta.events.pending",
     "jeeta.events.ack",
     "jeeta.events.list",
@@ -141,7 +179,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 125);
+    assert_eq!(TOOLS.len(), 163);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -447,6 +485,49 @@ fn requires_nothing(schema: &Value) -> bool {
 }
 
 /// The `required` property names of an object schema.
+#[test]
+fn start_oauth_offers_every_kind_an_oauth_provider_serves() {
+    let specs = registry();
+    let start = specs
+        .iter()
+        .find(|s| s.name == "jeeta.connector.start_oauth")
+        .unwrap();
+    let schema = start.input_schema.clone().to_value();
+    let kinds: BTreeSet<&str> = schema["properties"]["kind_key"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| k.as_str().unwrap())
+        .collect();
+    let expected: BTreeSet<&str> = [
+        jt_connector::Provider::Meta,
+        jt_connector::Provider::X,
+        jt_connector::Provider::Tiktok,
+        jt_connector::Provider::Linkedin,
+    ]
+    .iter()
+    .flat_map(|p| p.kinds().iter().copied())
+    .collect();
+    assert_eq!(kinds, expected);
+    for kind in [
+        "tiktok",
+        "linkedin_member",
+        "linkedin_page",
+        "x",
+        "instagram",
+    ] {
+        assert!(kinds.contains(kind), "{kind}");
+        assert!(start.description.contains(kind), "{kind}");
+    }
+    assert!(!kinds.contains("sms_line") && !kinds.contains("mailbox"));
+    // The one sign-in variant: a number already in the WhatsApp Business app.
+    assert_eq!(
+        schema["properties"]["flow"]["enum"],
+        serde_json::json!(["whatsapp_business_app"])
+    );
+    assert!(start.description.contains("whatsapp_business_app"));
+}
+
 fn required(schema: &Value) -> BTreeSet<&str> {
     schema["required"]
         .as_array()
@@ -543,6 +624,11 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
                 Permission::CapabilitiesManage,
                 Risk::Read
             ),
+            (
+                "jeeta.connector.set_pbx_policy",
+                Permission::CapabilitiesManage,
+                Risk::Write
+            ),
         ]
     );
     // No tool completes an OAuth flow: only the owner's browser, on the panel, does.
@@ -591,7 +677,9 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
             "netgsm_sms",
             "netgsm_iys",
             "netgsm_pbx",
-            "meta_token"
+            "meta_token",
+            "trendyol_seller",
+            "hepsiburada_merchant"
         ])
     );
     assert_eq!(

@@ -17,6 +17,9 @@ impl StrategyTransitionHook for StudioTransition {
         change: &StrategyChange,
     ) -> Result<(), AppError> {
         repos.studio_control().lock_control().await?;
-        repos.studio().apply_transition(change).await
+        let unsent = super::posts::unsent_posts(repos).await?;
+        repos.studio().apply_transition(change).await?;
+        // The posts of the slots it retired record why (spec 2026-11-03 D54).
+        super::posts::retire_posts_after(repos, &unsent, change.current.is_none(), change.at).await
     }
 }

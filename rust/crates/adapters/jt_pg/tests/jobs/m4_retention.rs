@@ -82,6 +82,7 @@ async fn raw_bodies_and_probe_runs_obey_thirty_day_boundaries() {
                 at,
                 ok: true,
                 error_kind: None,
+                reason: None,
                 latency_ms: 1,
                 facts: json!({}),
             };

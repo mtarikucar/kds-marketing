@@ -1,9 +1,10 @@
 //! The production implementations of the service ports: the system clock, UUIDv7 ids, random
-//! tokens and Argon2id password hashing, plus the stand-ins for a process without provider apps
-//! or adapters ([`NoPlatformApps`], [`EmptyConnectorRegistry`]). Tests use the deterministic fakes
-//! of `jt_testkit`.
+//! tokens, Argon2id password hashing and the bridges' in-process signals ([`LocalBridgeSignals`]),
+//! plus the stand-ins for a process without provider apps or adapters ([`NoPlatformApps`],
+//! [`EmptyConnectorRegistry`]). Tests use the deterministic fakes of `jt_testkit`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use argon2::Argon2;
 use argon2::password_hash::{Error as Argon2Error, PasswordHasher as _, PasswordVerifier as _};
@@ -11,12 +12,13 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use time::OffsetDateTime;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 use jt_connector::Provider;
 
 use crate::error::AppError;
+use crate::ports::bridges::{BridgeSignals, BridgeWatch, SignalKey};
 use crate::ports::connectors::{
     AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
     InstagramApp, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, MetaApp,
@@ -152,6 +154,44 @@ impl PasswordHasher for Argon2Hasher {
     }
 }
 
+/// [`BridgeSignals`] within this process: one `tokio::sync::watch` channel per key being
+/// watched, its value counting the signals. A watch subscribes before its poll reads, so it sees
+/// any signal sent after that; a channel nobody watches any more is dropped at the next signal.
+/// Process-local like `OpsSignals`: with several server instances a signal reaches only this
+/// one's polls, and the others find what was committed at their next read.
+#[derive(Debug, Default)]
+pub struct LocalBridgeSignals {
+    channels: Mutex<HashMap<SignalKey, watch::Sender<u64>>>,
+}
+
+impl BridgeSignals for LocalBridgeSignals {
+    fn watch(&self, key: SignalKey) -> BridgeWatch {
+        let mut rx = {
+            let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+            channels
+                .entry(key)
+                .or_insert_with(|| watch::channel(0).0)
+                .subscribe()
+        };
+        Box::pin(async move {
+            // The sender lives while this receiver does (it is dropped only once nobody
+            // watches), so this ends only with a signal.
+            let _ = rx.changed().await;
+        })
+    }
+
+    fn notify(&self, key: SignalKey) {
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = channels.get(&key) {
+            if tx.receiver_count() == 0 {
+                channels.remove(&key);
+            } else {
+                tx.send_modify(|n| *n = n.wrapping_add(1));
+            }
+        }
+    }
+}
+
 /// No provider app configured and no public address: every app is `None`, so no kind can be
 /// connected by OAuth, and no webhook URL can be shown. (The binary reads the real configuration
 /// from the environment; this stands for "nothing configured" where no configuration is read.)
@@ -238,6 +278,7 @@ impl ConnectorRegistry for EmptyConnectorRegistry {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use jt_tenancy::WorkspaceId;
     use time::Duration;
 
     use super::*;
@@ -362,6 +403,46 @@ mod tests {
             assert!(registry.consent(provider).is_none());
             assert!(registry.delivery_reports(provider).is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn bridge_signals_wake_the_watches_begun_before_them_only_on_their_key() {
+        use std::time::Duration as StdDuration;
+        let signals = LocalBridgeSignals::default();
+        let key = |workspace_id, topic| SignalKey {
+            workspace_id,
+            topic,
+        };
+        let (ws, other) = (WorkspaceId::new_v7(), WorkspaceId::new_v7());
+        let calls = key(ws, "calls");
+        // A signal sent after the watch began, before it is awaited, is not lost.
+        let watch = signals.watch(calls);
+        signals.notify(calls);
+        tokio::time::timeout(StdDuration::from_secs(1), watch)
+            .await
+            .expect("woken");
+        // Another workspace's signal, or another topic's in the same workspace, wakes nothing
+        // here; a signal sent before the watch began does not count.
+        signals.notify(calls);
+        let watch = signals.watch(calls);
+        signals.notify(key(other, "calls"));
+        signals.notify(key(ws, "other"));
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(50), watch)
+                .await
+                .is_err()
+        );
+        // Several watches wake together; once none is left the key's channel is dropped.
+        let (a, b) = (signals.watch(calls), signals.watch(calls));
+        signals.notify(calls);
+        tokio::time::timeout(StdDuration::from_secs(1), async {
+            a.await;
+            b.await;
+        })
+        .await
+        .expect("both woken");
+        signals.notify(calls);
+        assert!(signals.channels.lock().unwrap().is_empty());
     }
 
     #[test]

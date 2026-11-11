@@ -1,13 +1,20 @@
 import { isApiError } from '@/api/client';
 import { ProviderSetup } from './ProviderSetup';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, LogIn } from 'lucide-react';
+import { CheckCircle2, Eye, EyeOff, LogIn } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getCapability } from '@/api/capabilities';
 import { reconnectConnector, setCredentials, startOAuth } from '@/api/connectors';
-import { PROVIDERS, type Capability, type CapabilityOut, type CredentialInput, type Provider } from '@/api/types';
+import {
+  PROVIDERS,
+  type Capability,
+  type CapabilityOut,
+  type CredentialInput,
+  type OAuthFlow,
+  type Provider,
+} from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -21,16 +28,21 @@ import {
   CardTitle,
   Disclosure,
   Field,
+  IconButton,
   Input,
+  Label,
   PageHeader,
+  RadioGroup,
+  RadioGroupItem,
   cn,
 } from '@/components/ui';
 import { browser, providerUrl } from '@/lib/browser';
 import { kindLabel } from '@/lib/capabilities';
 import {
-  PROVIDER_KINDS,
   PROVIDER_NAMES,
+  connectableKinds,
   connectsByOAuth,
+  isConnectable,
   isErrorKind,
   netgsmCredentialKind,
   providerOf,
@@ -54,7 +66,7 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
         >
           <h2 className="text-sm font-semibold text-foreground">{t(`connect.providers.${provider}`)}</h2>
           <div className="flex flex-wrap gap-2">
-            {PROVIDER_KINDS[provider].map((kind) => {
+            {connectableKinds(provider).map((kind) => {
               const active = kind === value;
               return (
                 <button
@@ -81,7 +93,13 @@ function KindPicker({ value, onChange }: { value: string | null; onChange: (kind
   );
 }
 
-/** One text field of a form, labelled; a secret is a password field, never autofilled. */
+/**
+ * One text field of a form, labelled. These are a provider's credentials, never the panel's
+ * sign-in: neither the browser nor a password manager may fill them, or a saved panel e-mail and
+ * password would quietly become the provider's. So a secret is not a password field but a text
+ * field masked by CSS (`.secret-masked`), with a button to show it, and it is read-only until
+ * it has focus, so nothing fills it while the owner is not in it.
+ */
 function TextField({
   label,
   hint,
@@ -95,26 +113,138 @@ function TextField({
   onChange: (next: string) => void;
   secret?: boolean;
 }) {
+  const { t } = useTranslation();
+  const [shown, setShown] = useState(false);
+  const [locked, setLocked] = useState(secret);
   return (
     <Field label={label} hint={hint}>
-      {(ids) => (
-        <Input
-          id={ids.id}
-          aria-describedby={ids.describedBy}
-          type={secret ? 'password' : 'text'}
-          autoComplete={secret ? 'new-password' : 'off'}
-          spellCheck={false}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
+      {(ids) => {
+        const input = (
+          <Input
+            id={ids.id}
+            aria-describedby={ids.describedBy}
+            type="text"
+            className={secret && !shown ? 'secret-masked' : undefined}
+            readOnly={secret && locked}
+            onFocus={secret ? () => setLocked(false) : undefined}
+            onBlur={secret ? () => setLocked(true) : undefined}
+            autoComplete={secret ? 'new-password' : 'off'}
+            autoCapitalize="off"
+            autoCorrect="off"
+            data-1p-ignore="true"
+            data-lpignore="true"
+            data-bwignore="true"
+            data-form-type="other"
+            spellCheck={false}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        );
+        if (!secret) return input;
+        return (
+          <div className="flex items-center gap-2">
+            {input}
+            <IconButton
+              variant="outline"
+              aria-label={t('connect.secret.show', { field: label })}
+              aria-pressed={shown}
+              onClick={() => setShown((s) => !s)}
+            >
+              {shown ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </IconButton>
+          </div>
+        );
+      }}
     </Field>
   );
 }
 
 /**
+ * A credentials form that is not a `<form>`: a form holding a password-like field after a user
+ * field is what password managers fill as a sign-in. It submits as a form would, by its button
+ * or by Enter in one of its text fields.
+ */
+function CredentialForm({
+  label,
+  onSubmit,
+  className,
+  children,
+}: {
+  label: string;
+  onSubmit: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' || e.defaultPrevented || e.nativeEvent.isComposing) return;
+    if (!(e.target instanceof HTMLInputElement)) return;
+    e.preventDefault();
+    onSubmit();
+  };
+  return (
+    <div role="form" aria-label={label} className={className} onKeyDown={onKeyDown}>
+      {children}
+    </div>
+  );
+}
+
+/** Which WhatsApp number a new `whatsapp_cloud` connection is: one already in the WhatsApp Business app, or a new Cloud API one. */
+type WhatsAppNumber = 'business_app' | 'cloud_api';
+
+/**
+ * The explicit choice of a new WhatsApp connection: a number the business already uses in the
+ * WhatsApp Business app on its phone (Meta's coexistence sign-in, the app keeps working), or a new
+ * Cloud API number. Nothing is chosen for the owner.
+ */
+function WhatsAppNumberChoice({
+  value,
+  onChange,
+}: {
+  value: WhatsAppNumber | null;
+  onChange: (next: WhatsAppNumber) => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  const options: { value: WhatsAppNumber; label: string; hint: string }[] = [
+    { value: 'business_app', label: t('connect.whatsapp.businessApp'), hint: t('connect.whatsapp.businessAppHint') },
+    { value: 'cloud_api', label: t('connect.whatsapp.cloudApi'), hint: t('connect.whatsapp.cloudApiHint') },
+  ];
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-sm font-medium text-foreground">{t('connect.whatsapp.choice')}</legend>
+      <RadioGroup
+        value={value ?? ''}
+        onValueChange={(next) => onChange(next as WhatsAppNumber)}
+        aria-label={t('connect.whatsapp.choice')}
+        className="flex flex-col gap-3"
+      >
+        {options.map((option) => (
+          <div key={option.value} className="flex items-start gap-2">
+            <RadioGroupItem
+              value={option.value}
+              id={`${id}-${option.value}`}
+              aria-describedby={`${id}-${option.value}-hint`}
+              className="mt-0.5"
+            />
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor={`${id}-${option.value}`} className="font-normal">
+                {option.label}
+              </Label>
+              <p id={`${id}-${option.value}-hint`} className="text-caption text-muted-foreground">
+                {option.hint}
+              </p>
+            </div>
+          </div>
+        ))}
+      </RadioGroup>
+    </fieldset>
+  );
+}
+
+/**
  * Sends the browser to a provider's sign-in page: a new flow for `kind`, or a reconnection of
- * `capability` when it names its account. Nothing is asked for here; the provider asks.
+ * `capability` when it names its account. Nothing is asked for here; the provider asks. A new
+ * WhatsApp connection asks first which number it is ([`WhatsAppNumberChoice`]).
  */
 function OAuthPanel({ kind, capability }: { kind: string; capability: Capability | null }) {
   const { t } = useTranslation();
@@ -124,10 +254,13 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
   // becomes it.
   const bound = capability !== null;
   const reconnecting = bound && capability.status !== 'declared';
+  const choosesNumber = kind === 'whatsapp_cloud' && !bound;
+  const [number, setNumber] = useState<WhatsAppNumber | null>(null);
+  const flow: OAuthFlow | undefined = choosesNumber && number === 'business_app' ? 'whatsapp_business_app' : undefined;
   const [redirecting, setRedirecting] = useState(false);
   const start = useMutation({
     mutationFn: async () => {
-      const out = bound ? await reconnectConnector(capability.id) : await startOAuth(kind);
+      const out = bound ? await reconnectConnector(capability.id) : await startOAuth(kind, flow);
       const url = providerUrl(out.authorize_url);
       if (!url) throw new Error('the provider address is not an https address');
       rememberStart(out, bound ? capability.id : null);
@@ -148,12 +281,25 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
         {capability !== null && capability.external_id === null && (
           <Callout tone="info">{t('connect.oauth.firstBindsNote')}</Callout>
         )}
-        {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? <Callout tone="warning">{t('providerSetup.missing')}</Callout> : <ErrorCallout error={start.error} />}
+        {choosesNumber && <WhatsAppNumberChoice value={number} onChange={setNumber} />}
+        {isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_app_not_configured' ? (
+          <Callout tone="warning">{t('providerSetup.missing')}</Callout>
+        ) : isApiError(start.error) && start.error.code === 'CONFLICT' && start.error.details.reason === 'provider_product_not_enabled' ? (
+          <Callout tone="warning">
+            {flow ? t('connect.whatsapp.notEnabled') : t('providerSetup.productNotEnabled')}
+          </Callout>
+        ) : (
+          <ErrorCallout error={start.error} />
+        )}
         {redirecting ? (
           <p className="text-sm text-muted-foreground">{t('capabilities.connector.redirecting')}</p>
         ) : (
           <div>
-            <Button onClick={() => start.mutate()} loading={start.isPending}>
+            <Button
+              onClick={() => start.mutate()}
+              loading={start.isPending}
+              disabled={choosesNumber && number === null}
+            >
               <LogIn className="h-4 w-4" aria-hidden="true" />
               {reconnecting
                 ? t('connect.oauth.reconnectSubmit')
@@ -166,6 +312,51 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
   );
 }
 
+const SHARING_STATES = ['due', 'requesting', 'requested', 'refused', 'unknown', 'expired'] as const;
+type SharingState = (typeof SHARING_STATES)[number];
+
+function isSharingState(value: unknown): value is SharingState {
+  return typeof value === 'string' && (SHARING_STATES as readonly string[]).includes(value);
+}
+
+/**
+ * Where the one-time sharing of a WhatsApp Business app's contacts and history stands
+ * (`connector_public.business_app`), with Meta's reason when it refused.
+ */
+function BusinessAppSharing({ sharing }: { sharing: unknown }) {
+  const { t } = useTranslation();
+  if (!sharing || typeof sharing !== 'object') return null;
+  const record = sharing as Record<string, unknown>;
+  const until = typeof record.sync_until === 'string' ? record.sync_until : null;
+  return (
+    <div className="flex flex-col gap-1 text-sm" data-business-app="">
+      <p className="font-medium text-foreground">{t('providerSetup.businessApp.title')}</p>
+      <ul className="flex flex-col gap-1">
+        {(['contacts', 'history'] as const).map((key) => {
+          const entry = record[key] as { state?: unknown; reason?: unknown } | undefined;
+          const state: SharingState = isSharingState(entry?.state) ? entry.state : 'due';
+          const reason = typeof entry?.reason === 'string' ? entry.reason : null;
+          return (
+            <li key={key}>
+              {t(`providerSetup.businessApp.${key}`)}: {t(`providerSetup.businessApp.states.${state}`)}
+              {reason && (
+                <span className="block break-words text-caption text-muted-foreground" data-probe-reason="">
+                  {reason}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {until && (
+        <p className="text-caption text-muted-foreground">
+          {t('providerSetup.businessApp.until', { at: until })}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /** Public access metadata is useful both immediately after a probe and on a later visit. */
 function ConnectorAccess({ capability }: { capability: Capability }) {
   const { t } = useTranslation();
@@ -175,13 +366,16 @@ function ConnectorAccess({ capability }: { capability: Capability }) {
       <Callout tone="warning">{t('providerSetup.reconnect')}</Callout>}
     {typeof access?.expires_at === 'string' &&
       <p>{t('providerSetup.expires')}: <time dateTime={access.expires_at}>{access.expires_at}</time></p>}
+    {capability.kind_key === 'whatsapp_cloud' && <BusinessAppSharing sharing={capability.connector_public.business_app} />}
   </>;
 }
 
 /** The probe's outcome as the capability carries it after its credentials were entered. */
 function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void }) {
   const { t } = useTranslation();
-  const health = out.capability.connector_public.health as { ok?: unknown; error_kind?: unknown } | undefined;
+  const health = out.capability.connector_public.health as
+    | { ok?: unknown; error_kind?: unknown; reason?: unknown }
+    | undefined;
   let callout: ReactNode;
   if (out.effective_status === 'verified') {
     callout = <Callout tone="success">{t('connect.result.verified')}</Callout>;
@@ -189,7 +383,16 @@ function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void 
     const reason = isErrorKind(health.error_kind)
       ? t(`capabilities.connector.errorKinds.${health.error_kind}`)
       : t('capabilities.connector.errorKinds.unknown');
-    callout = <Callout tone="warning">{t('connect.result.failed', { reason })}</Callout>;
+    callout = (
+      <Callout tone="warning">
+        <p>{t('connect.result.failed', { reason })}</p>
+        {typeof health.reason === 'string' && health.reason && (
+          <p className="mt-1 break-words text-caption" data-probe-reason="">
+            {t('capabilities.connector.reasonLine', { reason: health.reason })}
+          </p>
+        )}
+      </Callout>
+    );
   } else {
     callout = <Callout tone="info">{t('connect.result.pending')}</Callout>;
   }
@@ -219,9 +422,12 @@ function Result({ out, onAnother }: { out: CapabilityOut; onAnother: () => void 
 /**
  * Credentials entered by hand and probed at once. Secrets live in this form's state only: the
  * mutation is dropped as soon as it answers, and the form is emptied, so no cache holds them.
+ * Enter submits without passing the button's disabled state, so `mutate` itself refuses a
+ * second submission while one is in flight.
  */
 function useCredentialsMutation(onDone: (out: CapabilityOut) => void) {
   const queryClient = useQueryClient();
+  const inFlight = useRef(false);
   const mutation = useMutation({
     mutationFn: setCredentials,
     gcTime: 0,
@@ -230,8 +436,16 @@ function useCredentialsMutation(onDone: (out: CapabilityOut) => void) {
       mutation.reset();
       await invalidateCapabilities(queryClient);
     },
+    onSettled: () => {
+      inFlight.current = false;
+    },
   });
-  return mutation;
+  const mutate = (input: Parameters<typeof setCredentials>[0]) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    mutation.mutate(input);
+  };
+  return { ...mutation, mutate };
 }
 
 /** The target of the credentials: the existing capability, or a new one of `kind` named `name`. */
@@ -274,8 +488,7 @@ function NetgsmForm({
     (shape === 'netgsm_sms'
       ? form.usercode.trim() !== '' && form.msgheader.trim() !== ''
       : form.username.trim() !== '');
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const onSubmit = () => {
     if (complete) save.mutate({ ...target(kind, capability, form.name), credential });
   };
   return (
@@ -285,7 +498,7 @@ function NetgsmForm({
         <CardDescription>{t('connect.credentials.body')}</CardDescription>
       </CardHeader>
       <CardContent>
-        <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate autoComplete="off">
+        <CredentialForm label={t('connect.credentials.title')} className="flex flex-col gap-4" onSubmit={onSubmit}>
           <ErrorCallout error={save.error} />
           {capability === null && (
             <TextField
@@ -315,11 +528,11 @@ function NetgsmForm({
             </>
           )}
           <div>
-            <Button type="submit" loading={save.isPending} disabled={!complete}>
+            <Button type="button" loading={save.isPending} disabled={!complete} onClick={onSubmit}>
               {t('connect.credentials.submit')}
             </Button>
           </div>
-        </form>
+        </CredentialForm>
         {shape === 'netgsm_sms' && <div className="mt-4">
           {capability ? <IysForm capability={capability} /> : <p className="text-sm text-muted-foreground">{t('connect.iys.first')}</p>}
         </div>}
@@ -336,22 +549,21 @@ function IysForm({ capability }: { capability: Capability }) {
   const [saved, setSaved] = useState(false);
   const save = useCredentialsMutation(() => { setForm(empty); setSaved(true); });
   const complete = form.usercode.trim() !== '' && form.password !== '' && form.brand_code.trim() !== '';
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     if (complete) save.mutate({ capability_id: capability.id, credential: {
       kind: 'netgsm_iys', usercode: form.usercode.trim(), password: form.password, brand_code: form.brand_code.trim(),
     } });
   };
   return <Disclosure title={t('connect.iys.title')}>
     {saved ? <Callout tone="success">{t('connect.iys.saved')}</Callout> :
-      <form className="flex flex-col gap-4" onSubmit={submit} autoComplete="off">
+      <CredentialForm label={t('connect.iys.title')} className="flex flex-col gap-4" onSubmit={submit}>
         <p className="text-sm text-muted-foreground">{t('connect.iys.body')}</p>
         <ErrorCallout error={save.error} />
         <TextField label={t('connect.iys.usercode')} value={form.usercode} onChange={(usercode) => setForm((f) => ({ ...f, usercode }))} />
         <TextField label={t('connect.iys.password')} value={form.password} secret onChange={(password) => setForm((f) => ({ ...f, password }))} />
         <TextField label={t('connect.iys.brandCode')} value={form.brand_code} onChange={(brand_code) => setForm((f) => ({ ...f, brand_code }))} />
-        <Button type="submit" loading={save.isPending} disabled={!complete}>{t('connect.iys.submit')}</Button>
-      </form>}
+        <Button type="button" loading={save.isPending} disabled={!complete} onClick={submit}>{t('connect.iys.submit')}</Button>
+      </CredentialForm>}
   </Disclosure>;
 }
 
@@ -363,8 +575,7 @@ function MailboxForm({ capability, onDone }: { capability: Capability | null; on
   const [tls, setTls] = useState<'implicit' | 'start_tls'>('implicit');
   const save = useCredentialsMutation((out) => { setForm(empty); onDone(out); });
   const complete = Object.entries(form).every(([key, value]) => (key === 'name' && capability !== null) || value.trim() !== '');
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     if (!complete) return;
     save.mutate({ ...target('mailbox', capability, form.name), credential: {
       kind: 'mailbox', smtp_host: form.smtp_host.trim(), smtp_port: tls === 'implicit' ? 465 : 587,
@@ -373,15 +584,15 @@ function MailboxForm({ capability, onDone }: { capability: Capability | null; on
     } });
   };
   return <Card><CardHeader><CardTitle>{t('connect.mail.title')}</CardTitle><CardDescription>{t('connect.mail.body')}</CardDescription></CardHeader>
-    <CardContent><form className="flex flex-col gap-4" onSubmit={submit} autoComplete="off">
+    <CardContent><CredentialForm label={t('connect.mail.title')} className="flex flex-col gap-4" onSubmit={submit}>
       <ErrorCallout error={save.error} />
       {(Object.keys(empty) as (keyof typeof empty)[]).filter((key) => key !== 'name' || capability === null).map((key) =>
         <TextField key={key} label={t(`connect.mail.${key}`)} value={form[key]} secret={key === 'password'} onChange={(value) => setForm((f) => ({ ...f, [key]: value }))} />)}
       <Field label={t('connect.mail.tls')}>{(ids) => <select id={ids.id} className="rounded-md border border-border bg-surface p-2" value={tls} onChange={(e) => setTls(e.target.value as typeof tls)}>
         <option value="implicit">TLS (SMTP 465 / IMAP 993)</option><option value="start_tls">STARTTLS (SMTP 587 / IMAP 143)</option>
       </select>}</Field>
-      <Button type="submit" loading={save.isPending} disabled={!complete}>{t('connect.credentials.submit')}</Button>
-    </form></CardContent></Card>;
+      <Button type="button" loading={save.isPending} disabled={!complete} onClick={submit}>{t('connect.credentials.submit')}</Button>
+    </CredentialForm></CardContent></Card>;
 }
 
 /** A Meta access token pasted by hand: an advanced way in, kept out of sight until asked for. */
@@ -407,8 +618,7 @@ function TokenForm({
     (capability !== null || form.name.trim() !== '') &&
     form.token.trim() !== '' &&
     (!needsAccount || form.externalId.trim() !== '');
-  const onSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const onSubmit = () => {
     if (!complete) return;
     const externalId = form.externalId.trim();
     save.mutate({
@@ -418,7 +628,7 @@ function TokenForm({
     });
   };
   return (
-    <form className="flex flex-col gap-4" onSubmit={onSubmit} noValidate autoComplete="off">
+    <CredentialForm label={t('connect.token.title')} className="flex flex-col gap-4" onSubmit={onSubmit}>
       <p className="text-sm text-muted-foreground">{t('connect.token.body')}</p>
       <ErrorCallout error={save.error} />
       {capability === null && (
@@ -439,15 +649,15 @@ function TokenForm({
         />
       )}
       <div>
-        <Button type="submit" variant="outline" loading={save.isPending} disabled={!complete}>
+        <Button type="button" variant="outline" loading={save.isPending} disabled={!complete} onClick={onSubmit}>
           {t('connect.token.submit')}
         </Button>
       </div>
-    </form>
+    </CredentialForm>
   );
 }
 
-/** How `kind` connects: by signing in (Meta, X; Meta also by a pasted token), or by credentials (NetGSM). */
+/** How `kind` connects: by signing in (Meta, X, TikTok, LinkedIn; Meta also by a pasted token), or by credentials (NetGSM). */
 function ConnectKind({
   kind,
   capability,
@@ -485,7 +695,7 @@ export function ConnectPage() {
   const [params] = useSearchParams();
   const capabilityId = params.get('capability');
   const requested = params.get('kind');
-  const [chosen, setChosen] = useState<string | null>(requested && providerOf(requested) ? requested : null);
+  const [chosen, setChosen] = useState<string | null>(requested && isConnectable(requested) ? requested : null);
   const [done, setDone] = useState<CapabilityOut | null>(null);
   const existing = useQuery({
     queryKey: [...CAPABILITIES_KEY, 'one', capabilityId],

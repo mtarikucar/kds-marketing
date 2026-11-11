@@ -1,0 +1,44 @@
+{
+  "about": "An agent's call whose agent falls silent after the person speaks: the timers play the holding phrases (4 s and 10 s into each wait), the fallback lines (every 20 s) and, once those are spent, the closing and the hangup. Times are seconds after the call was placed; the bridge acknowledges every command it takes.",
+  "plan": {
+    "opening": "Merhaba, ben Acme'nin dijital asistanıyım. Randevunuz için arıyorum.",
+    "goal": "Perşembe randevusunu teyit etmek",
+    "holding": ["Bir saniye, kontrol ediyorum.", "Hemen bakıyorum."],
+    "fallback": ["Bağlantıda bir gecikme var, lütfen bekleyin.", "Sizi en kısa sürede geri arayacağız."],
+    "closing": "Teşekkürler, iyi günler.",
+    "max_duration_s": 300,
+    "language": "tr",
+    "disclose_assistant": true
+  },
+  "script": [
+    { "t": 0, "agent": "place" },
+    { "t": 1, "bridge": "poll", "expect": ["dial"] },
+    { "t": 2, "bridge": "events", "events": [{ "kind": "ringing" }] },
+    { "t": 5, "bridge": "events", "events": [{ "kind": "answered" }] },
+    { "t": 5, "bridge": "poll", "expect": ["play"] },
+    { "t": 8, "bridge": "events", "events": [{ "kind": "said", "seq": "$last", "tts_ms": 380 }] },
+    { "t": 10, "bridge": "events", "events": [
+      { "kind": "utterance", "text": "Ne zaman uygun olur?", "is_final": true, "confidence": 0.86, "stt_ms": 230 }
+    ] },
+    { "t": 11, "until": 70, "timers": true },
+    { "t": 70, "bridge": "poll", "expect": ["play", "play", "play", "play", "play", "play", "play", "play", "play", "hangup"] },
+    { "t": 74, "bridge": "events", "events": [
+      { "kind": "said", "seq": "$last", "tts_ms": 300 },
+      { "kind": "hangup", "cause": "normal" }
+    ] }
+  ],
+  "expect": {
+    "state": "ended",
+    "end_cause": "agent_timeout",
+    "duration_s": 69,
+    "turns": [
+      "event:answered", "say:script", "utterance",
+      "holding", "holding", "fallback",
+      "holding", "holding", "fallback",
+      "holding", "holding", "say:script",
+      "event:hangup"
+    ],
+    "ledger": ["calls.placed", "calls.answered", "calls.ended"],
+    "call_made": [true]
+  }
+}

@@ -2,7 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
-import { inboxAnswers, inboxMe, conversation, context, journey, merge } from '@/test/inbox';
+import { USER_ID, WS_ID } from '@/test/fixtures';
+import { inboxAnswers, inboxMe, conversation, context, journey, merge, person } from '@/test/inbox';
+import i18n from '@/i18n/config';
+import { kindLabel, kindsInGroup } from '@/lib/capabilities';
+
+/** What the server sends as `status_labels`: the fixed Turkish defaults, all nine stages. */
+const turkishDefaults = {
+  new: 'Yeni',
+  contacted: 'İletişim kuruldu',
+  unreachable: 'Ulaşılamadı',
+  appointment: 'Randevu',
+  met: 'Görüşüldü',
+  quoted: 'Teklif verildi',
+  pending: 'Beklemede',
+  won: 'Kazanıldı',
+  lost: 'Kaybedildi',
+};
 
 async function openConversation(answers = inboxAnswers) {
   const calls = mockFetch(answers);
@@ -12,7 +28,7 @@ async function openConversation(answers = inboxAnswers) {
 }
 
 describe('Inbox', () => {
-  it('renders the workspace status label returned by journeys.get', async () => {
+  it('renders the workspace status label override returned by journeys.get', async () => {
     await openConversation({
       ...inboxAnswers,
       'GET /api/inbox/journeys/journey-1': {
@@ -20,11 +36,73 @@ describe('Inbox', () => {
         events: [],
         tasks: [],
         notes: [],
-        status_labels: { contacted: 'İlk temas bekleniyor' },
+        status_labels: { ...turkishDefaults, contacted: 'İlk temas bekleniyor' },
+        status_label_overrides: { contacted: 'İlk temas bekleniyor' },
       },
     });
     const panel = await screen.findByRole('complementary', { name: 'Yolculuk' });
     expect(within(panel).getByText('İlk temas bekleniyor')).toBeInTheDocument();
+  });
+
+  it('shows the English stage name in the English panel, not the Turkish server default', async () => {
+    await i18n.changeLanguage('en');
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/journeys/journey-1': {
+        journey,
+        events: [],
+        tasks: [],
+        notes: [],
+        status_labels: turkishDefaults,
+        status_label_overrides: {},
+      },
+    });
+    renderAt('/inbox/conv-1');
+    const panel = await screen.findByRole('complementary', { name: 'Journey' });
+    expect(await within(panel).findByText('Contacted')).toBeInTheDocument();
+    expect(within(panel).queryByText('İletişim kuruldu')).not.toBeInTheDocument();
+  });
+
+  it("keeps the workspace's own stage label in the English panel", async () => {
+    await i18n.changeLanguage('en');
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/journeys/journey-1': {
+        journey,
+        events: [],
+        tasks: [],
+        notes: [],
+        status_labels: { ...turkishDefaults, contacted: 'Waiting for first reply' },
+        status_label_overrides: { contacted: 'Waiting for first reply' },
+      },
+    });
+    renderAt('/inbox/conv-1');
+    const panel = await screen.findByRole('complementary', { name: 'Journey' });
+    expect(await within(panel).findByText('Waiting for first reply')).toBeInTheDocument();
+    expect(within(panel).queryByText('Contacted')).not.toBeInTheDocument();
+  });
+
+  it("explains why a reply was not sent, in the owner's words", async () => {
+    const failed = {
+      id: 'message-2',
+      conversation_id: 'conv-1',
+      workspace_id: WS_ID,
+      direction: 'outbound',
+      author: { human: USER_ID },
+      body: 'Merhaba!',
+      status: 'failed',
+      external_id: null,
+      cost_minor: null,
+      at: '2026-10-23T10:05:00Z',
+      failure_reason: 'permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list',
+    };
+    const listed = inboxAnswers['GET /api/inbox/conversations/conv-1/messages'] as { items: unknown[] };
+    await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/conversations/conv-1/messages': { items: [...listed.items, failed], next_cursor: null },
+    });
+    const messages = await screen.findByRole('list', { name: 'Mesajlar' });
+    expect(within(messages).getByText(/^Gönderilemedi: alıcı, Meta test numarasının izinli alıcıları/)).toBeInTheDocument();
   });
 
   it('human_holder_does_not_disable_panel_reply', async () => {
@@ -40,6 +118,23 @@ describe('Inbox', () => {
         intent: 'reply',
         request_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
+    );
+  });
+
+  it('leaves an empty mail subject to the server, which answers the original one', async () => {
+    const calls = await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/conversations/conv-1': { ...conversation, kind_key: 'mailbox' },
+    });
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: 'Yanıtınız' }), 'Teşekkürler.');
+    await user.click(screen.getByRole('button', { name: 'Yanıt gönder' }));
+    await waitFor(() => expect(calls.find((c) => c.path.endsWith('/reply'))?.body).not.toHaveProperty('subject'));
+    await user.type(screen.getByRole('textbox', { name: 'E-posta konusu' }), 'Teklifiniz');
+    await user.type(screen.getByRole('textbox', { name: 'Yanıtınız' }), 'Ekte.');
+    await user.click(screen.getByRole('button', { name: 'Yanıt gönder' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path.endsWith('/reply')).slice(-1)[0]?.body).toMatchObject({ subject: 'Teklifiniz' }),
     );
   });
 
@@ -76,7 +171,7 @@ describe('Inbox', () => {
     }
     await user.selectOptions(select, 'won');
     await user.type(within(form).getByLabelText('Ürün'), 'Danışmanlık');
-    await user.type(within(form).getByLabelText('Tutar (kuruş / alt birim)'), '12500');
+    await user.type(within(form).getByLabelText('Tutar'), '125');
     await send('won', { product: 'Danışmanlık', amount_minor: 12500, currency: 'TRY' });
     await user.selectOptions(select, 'lost');
     await user.selectOptions(within(form).getByLabelText('Kayıp nedeni'), 'fiyat');
@@ -287,7 +382,7 @@ it('Inbox search opens person conversations', async () => {
   expect(await screen.findByRole('heading', { name: 'Deniz Örnek' })).toBeVisible();
   expect(
     screen
-      .getAllByRole('link', { name: /Deniz Örnek.*whatsapp_cloud/ })
+      .getAllByRole('link', { name: /Deniz Örnek.*WhatsApp/ })
       .some((link) => link.getAttribute('href') === '/inbox/conv-1'),
   ).toBe(true);
 });
@@ -328,13 +423,131 @@ it('Inbox timeline preserves event actors and historical lost-reason labels', as
       reason_label: 'Eski fiyat etiketi',
       at: '2026-10-23T10:02:00Z',
     },
+    { id: 'event-4', source: { human: USER_ID }, kind: 'reopened', reason_label: null, at: '2026-10-23T10:03:00Z' },
+    { id: 'event-5', source: { human: 'user-9' }, kind: 'reopened', reason_label: null, at: '2026-10-23T10:04:00Z' },
   ];
   await openConversation({
     ...inboxAnswers,
+    'GET /api/team': [
+      ...(inboxAnswers['GET /api/team'] as object[]),
+      {
+        membership_id: 'member-2',
+        user_id: 'user-2',
+        email: 'cem@alpha.example',
+        display_name: null,
+        role_key: 'rep',
+        role_name: 'Rep',
+        status: 'removed',
+        created_at: '2026-10-23T10:00:00Z',
+      },
+    ],
     'GET /api/inbox/journeys/journey-1': { journey, events, tasks: [], notes: [] },
   });
   expect(await screen.findByText('Eski fiyat etiketi')).toBeVisible();
   expect(screen.getByText('Sistem')).toBeVisible();
   expect(screen.getByText('Ajan', { exact: true })).toBeVisible();
-  expect(screen.getByText('İnsan · user-2')).toBeVisible();
+  // A human is named, never shown as an id: a member (even a former one), you, or "team member".
+  expect(await screen.findByText('İnsan · cem@alpha.example')).toBeVisible();
+  expect(screen.getByText('İnsan · Siz')).toBeVisible();
+  expect(screen.getByText('İnsan · Ekip üyesi')).toBeVisible();
+  expect(document.body.textContent).not.toContain('user-2');
+});
+
+it('Inbox names an unnamed contact by its channel and the end of its id, never by a uuid', async () => {
+  const unnamed = { ...person, display_name: '', first_touch: { ...person.first_touch, source: { channel: 'messenger' } } };
+  const messenger = { ...conversation, kind_key: 'messenger' };
+  const identity = {
+    id: 'identity-1',
+    workspace_id: WS_ID,
+    person_id: person.id,
+    channel: 'messenger',
+    value_normalized: '1175657112297652:27325092857145601',
+    value_display: '27325092857145601',
+    active: true,
+    first_seen_at: '2026-10-23T10:00:00Z',
+  };
+  await openConversation({
+    ...inboxAnswers,
+    'GET /api/inbox/conversations': { items: [messenger], next_cursor: null },
+    'GET /api/inbox/conversations/conv-1': messenger,
+    'GET /api/inbox/conversations/conv-1/context': { ...context, person: unnamed },
+    'GET /api/inbox/people/person-1': { person: unnamed, identities: [identity], open_journey: journey, conversations: [messenger] },
+  });
+  const thread = await screen.findByRole('heading', { level: 2, name: 'Messenger kişisi · …5601' });
+  expect(thread).toBeVisible();
+  expect(await screen.findByRole('link', { name: /Messenger kişisi · …5601/ })).toBeVisible();
+  expect(document.body.textContent).not.toContain(person.id);
+});
+
+describe('The inbox list, with comments and questions', () => {
+  const HOUR = 3_600_000;
+  const inHours = (hours: number) => new Date(Date.now() + hours * HOUR).toISOString();
+  const publicConversation = {
+    ...conversation,
+    id: 'conv-2',
+    capability_id: 'cap-ig',
+    kind_key: 'instagram',
+    executor: 'agent',
+    surface: 'public',
+    channel: 'instagram_comment',
+    owed_items: 2,
+    next_deadline: null,
+    held_replies: 0,
+  };
+  const rows = [
+    { ...conversation, id: 'conv-dm', surface: 'private', channel: 'whats_app', owed_items: 0, next_deadline: null, held_replies: 0 },
+    { ...publicConversation, id: 'conv-q', kind_key: 'trendyol', channel: 'trendyol_question', next_deadline: inHours(1), owed_items: 1 },
+    { ...publicConversation, id: 'conv-c', next_deadline: inHours(30), held_replies: 1 },
+  ];
+
+  it('list_shows_surface_badges', async () => {
+    mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: rows, next_cursor: null } });
+    renderAt('/inbox');
+    await screen.findAllByText('Deniz Örnek');
+    expect(screen.getByText('DM')).toBeInTheDocument();
+    expect(screen.getByText('Soru')).toBeInTheDocument();
+    expect(screen.getByText('Yorum')).toBeInTheDocument();
+    expect(screen.getByText('1 bekleyen')).toBeInTheDocument();
+    expect(screen.getByText('1 onay bekliyor')).toBeInTheDocument();
+  });
+
+  it('deadline_countdown_turns_red_under_two_hours', async () => {
+    mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: rows, next_cursor: null } });
+    renderAt('/inbox');
+    await screen.findAllByText('Deniz Örnek');
+    const deadlines = screen.getAllByTestId('deadline');
+    expect(deadlines.map((d) => d.dataset.urgent)).toEqual(['true', 'false']);
+    expect(deadlines[0]).toHaveTextContent(/^\d+ dk kaldı$/);
+    expect(deadlines[1]).toHaveTextContent(/^1 gün \d+ sa kaldı$/);
+  });
+
+  it('approvals_queue_lists_held_replies', async () => {
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/inbox/pending': {
+        ours: [],
+        reopen_questions: [],
+        merges: [],
+        tasks_due: [],
+        public_due: [],
+        approvals: [{ outbox_id: 'held-1', conversation_id: 'conv-2', item_id: '1', deadline: inHours(5) }],
+      },
+    });
+    renderAt('/inbox');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Onay bekleyenler' }));
+    const approval = await screen.findByTestId('approval');
+    expect(approval).toHaveAttribute('href', '/inbox/conv-2');
+    expect(within(approval).getByTestId('deadline')).toHaveTextContent(/kaldı$/);
+  });
+
+  it('marketplace_kinds_have_labels', () => {
+    const kinds = kindsInGroup('marketplace').map((k) => k.key);
+    expect(kinds).toEqual(['trendyol', 'hepsiburada']);
+    for (const lang of ['tr', 'en']) {
+      const t = i18n.getFixedT(lang);
+      for (const key of kinds) expect(kindLabel(t, key)).not.toBe(`capabilities.kinds.${key}`);
+      expect(t('capabilities.groups.marketplace')).not.toBe('capabilities.groups.marketplace');
+    }
+  });
 });

@@ -1,0 +1,42 @@
+Current Input Method Manager state:
+  Input Methods: mMethodMapUpdateCount=22
+  mCurMethodId=com.preff.kb.xm/com.preff.kb.LatinIME
+  mCurClient=ClientState{d799155 uid=1000 pid=28025 displayId=0} mCurSeq=386
+  mCurPerceptible=true
+  mCurFocusedWindow=android.os.BinderProxy@6c3e45c softInputMode=STATE_UNSPECIFIED|ADJUST_PAN|IS_FORWARD_NAVIGATION client=ClientState{d799155 uid=1000 pid=28025 displayId=0}
+  mCurId=com.preff.kb.xm/com.preff.kb.LatinIME mHaveConnection=true mBoundToMethod=true mVisibleBound=true
+  mCurToken=android.os.Binder@2dbc04c
+  mCurTokenDisplayId=0
+  mCurHostInputToken=null
+  mCurIntent=Intent { act=android.view.InputMethod cmp=com.preff.kb.xm/com.preff.kb.LatinIME (has extras) }
+  mCurMethod=com.android.server.inputmethod.IInputMethodInvoker@b2115a4
+  mEnabledSession=SessionState{uid 1000 pid 28025 method e056536 session ae6bc37 channel ClientState{d799155 uid=1000 pid=28025 displayId=0} (server)}
+  mShowRequested=true mShowExplicitlyRequested=true mShowForced=false mInputShown=true
+  mInFullscreenMode=false
+  mSystemReady=true mInteractive=true
+ 
+Input method client state for android.view.inputmethod.InputMethodManager@e987f59:
+  mService=com.android.internal.view.IInputMethodManager$Stub$Proxy@591871e
+  mMainLooper=Looper (main, tid 2) {555dbff}
+  mFallbackInputConnection=RemoteInputConnectionImpl{connection=android.view.inputmethod.BaseInputConnection@4d08dcc finished=false mParentInputMethodManager.isActive()=true mServedView=null}
+  mActive=true mRestartOnNextWindowFocus=true mBindSequence=386 mCurId=com.preff.kb.xm/com.preff.kb.LatinIME
+  mFullscreenMode=false
+  mCurMethod=com.android.internal.view.IInputMethodSession$Stub$Proxy@b9cd77e
+  mCurRootView=android.view.ViewRootImpl@e6aca07
+  mServedView=miuix.androidbasewidget.widget.ClearableEditText{d7904c7 VFED..CL. .F...... 81,0-632,80 #1020009 android:id/input aid=1073741824}
+  mNextServedView=miuix.androidbasewidget.widget.ClearableEditText{d7904c7 VFED..CL. .F...... 81,0-632,80 #1020009 android:id/input aid=1073741824}
+  mServedConnecting=false
+  mCurrentTextBoxAttribute:
+    inputType=0x1 imeOptions=0x3 privateImeOptions=null
+    actionLabel=null actionId=0
+    initialSelStart=17 initialSelEnd=17 initialCapsMode=0x0
+    hintText=null label=null
+    packageName=com.android.settings autofillId=1073741824 fieldId=16908297 fieldName=null
+    extras=Bundle[{android.support.text.emoji.emojiCompat_metadataVersion=12, android.support.text.emoji.emojiCompat_replaceAll=false, hand_writing_keyboard_type=1}]
+    hintLocales=null
+    contentMimeTypes=null
+  mServedInputConnection=RemoteInputConnectionImpl{connection=androidx.emoji2.viewsintegration.EmojiInputConnection@4e454df finished=false mParentInputMethodManager.isActive()=true mServedView=miuix.androidbasewidget.widget.ClearableEditText{d7904c7 VFED..CL. .F...... 81,0-632,80 #1020009 android:id/input aid=1073741824}}
+  mServedInputConnectionHandler=null
+  mCompletions=null
+  mCursorRect=Rect(0, 0 - 0, 0)
+  mCursorSelStart=17 mCursorSelEnd=17 mCursorCandStart=-1 mCursorCandEnd=-1

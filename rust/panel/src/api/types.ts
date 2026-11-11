@@ -22,7 +22,12 @@ export type Permission =
   | 'inbox.work'
   | 'inbox.manage'
   | 'studio.work'
-  | 'studio.manage';
+  | 'studio.manage'
+  | 'calls.work'
+  | 'calls.manage'
+  | 'calls.bridge'
+  | 'devices.work'
+  | 'devices.bridge';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -34,6 +39,11 @@ export const PERMISSIONS: readonly Permission[] = [
   'inbox.manage',
   'studio.work',
   'studio.manage',
+  'calls.work',
+  'calls.manage',
+  'calls.bridge',
+  'devices.work',
+  'devices.bridge',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -448,6 +458,7 @@ export const KIND_GROUPS = [
   'community',
   'ads',
   'calendar',
+  'marketplace',
   'device',
   'agent_connection',
   'computer_access',
@@ -461,6 +472,7 @@ export const KINDS = [
   { group: 'social_account', key: 'facebook_page' },
   { group: 'social_account', key: 'x' },
   { group: 'social_account', key: 'linkedin_page' },
+  { group: 'social_account', key: 'linkedin_member' },
   { group: 'social_account', key: 'tiktok' },
   { group: 'social_account', key: 'pinterest' },
   { group: 'social_account', key: 'youtube' },
@@ -472,6 +484,7 @@ export const KINDS = [
   { group: 'messaging', key: 'mailbox' },
   { group: 'messaging', key: 'webchat' },
   { group: 'telephony', key: 'netgsm_pbx' },
+  { group: 'telephony', key: 'voice_bridge' },
   { group: 'community', key: 'discord' },
   { group: 'community', key: 'reddit' },
   { group: 'community', key: 'review_google' },
@@ -482,6 +495,8 @@ export const KINDS = [
   { group: 'ads', key: 'google_ads' },
   { group: 'calendar', key: 'google_calendar' },
   { group: 'calendar', key: 'outlook_calendar' },
+  { group: 'marketplace', key: 'trendyol' },
+  { group: 'marketplace', key: 'hepsiburada' },
   { group: 'device', key: 'phone' },
   { group: 'device', key: 'computer' },
   { group: 'device', key: 'printer' },
@@ -753,7 +768,11 @@ export type WorkKind =
   | { kind: 'reply_due'; conversation_id: string }
   | { kind: 'reopen_question'; conversation_id: string }
   | { kind: 'merge_suggested'; merge_id: string }
-  | { kind: 'task_due'; task_id: string };
+  | { kind: 'task_due'; task_id: string }
+  /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
+  | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
+  /** A phone no device bridge has listed within its heartbeat; `last_seen_at` is the last listing. */
+  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -792,8 +811,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x' | 'mail';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail' | 'tiktok' | 'linkedin';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {
@@ -841,7 +860,7 @@ export interface ProbeResultPublic {
   latency_ms: number;
   /** `jt_connector::ConnectorError` kind of a failure. */
   error_kind: string | null;
-  /** Redacted by the server; for logs and agents, not shown. */
+  /** The provider's reason, redacted by the server; shown under the kind's sentence. */
   error_reason: string | null;
   facts: unknown;
 }
@@ -868,10 +887,36 @@ export interface NetgsmHook {
   url: string;
 }
 
-/** `jt_app::usecases::connector::HooksOut`; `meta` is `null` while the platform has no Meta app. */
+/** `jt_app::usecases::connector::TiktokHook`: the TikTok app's callback URL and the events acted on. */
+export interface TiktokHook {
+  url: string;
+  events: string[];
+}
+
+/**
+ * `jt_app::usecases::connector::HooksOut`; `meta` and `tiktok` are `null` while the platform has
+ * no Meta or TikTok app (`tiktok` is absent from a server that predates TikTok's webhooks).
+ */
 export interface HooksOut {
   meta: MetaHook | null;
   netgsm: NetgsmHook[];
+  tiktok?: TiktokHook | null;
+}
+
+/** `jt_app::usecases::connector::PbxCallMode`. */
+export type PbxCallMode = 'originate' | 'linkup';
+
+/** `jt_app::usecases::connector::PbxPolicyInput`: at least one field. */
+export interface PbxPolicyInput {
+  call_mode?: PbxCallMode;
+  recording_allowed?: boolean;
+}
+
+/** `jt_app::usecases::connector::PbxPolicyOut`. */
+export interface PbxPolicyOut {
+  capability_id: Uuid;
+  call_mode: PbxCallMode;
+  recording_allowed: boolean;
 }
 
 /** `jt_app::usecases::connector::ConnectorHealth`. */
@@ -885,14 +930,33 @@ export interface ConnectorHealth {
   last_probe_at: Rfc3339 | null;
   ok: boolean | null;
   error_kind: string | null;
+  /** The last failed probe's line, `kind: provider: reason` (≤ 300 chars, redacted); `null` after a success. */
+  reason: string | null;
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
+  /**
+   * Whether it takes its comments or questions (`jt_app::usecases::inbox::public::CommentStatus`):
+   * `off` until Meta approved them, `reconnect` when this account's grant lacks them; `null` for a
+   * kind without comments. Absent from a server older than it.
+   */
+  comments?: CommentStatus | null;
+  /**
+   * Whether Studio can read its counters with its grant (`MeasureStatus`), for a kind Studio
+   * publishes to: `reconnect` when the grant lacks the read scope; `null` for another kind.
+   */
+  measure?: 'on' | 'reconnect' | null;
 }
+
+export type CommentStatus = 'off' | 'reconnect' | 'on';
 
 // Inbox: Rust domain serde enums are externally tagged, not `{ kind: … }` objects.
 export type InboxQueue = 'ours' | 'unassigned' | 'snoozed' | 'all';
 export type InboxSource = { channel: string } | 'meta_ads' | 'import' | 'form' | 'repeat';
 export type InboxActor = 'system' | 'agent' | { human: Uuid };
+/** Who wrote a message: an actor of the workspace, the customer, or the business itself from the WhatsApp Business app on its phone. */
+export type InboxAuthor = InboxActor | 'customer' | 'business_app';
+/** A variant of a provider's sign-in: `whatsapp_business_app` connects a number already in the WhatsApp Business app. */
+export type OAuthFlow = 'whatsapp_business_app';
 export interface InboxPerson {
   id: Uuid;
   workspace_id: Uuid;
@@ -904,6 +968,8 @@ export interface InboxPerson {
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }
+/** Where a conversation happens: a direct one, comments or questions in public, or mail a marketplace relays. */
+export type InboxSurface = 'private' | 'public' | 'relay';
 export interface InboxConversationRow {
   id: Uuid;
   workspace_id: Uuid;
@@ -917,13 +983,19 @@ export interface InboxConversationRow {
   last_outbound_at: Rfc3339 | null;
   created_at: Rfc3339;
   updated_at: Rfc3339;
+  /** The view's computed fields (inbox.conversations.list/get); absent on rows read elsewhere. */
+  surface?: InboxSurface;
+  channel?: string | null;
+  owed_items?: number;
+  next_deadline?: Rfc3339 | null;
+  held_replies?: number;
 }
 export interface InboxMessage {
   id: Uuid;
   workspace_id: Uuid;
   conversation_id: Uuid;
   direction: 'inbound' | 'outbound';
-  author: InboxActor | 'customer';
+  author: InboxAuthor;
   body: string;
   external_id: string | null;
   status:
@@ -936,6 +1008,106 @@ export interface InboxMessage {
     | { refused: { reason: string } };
   cost_minor: number | null;
   at: Rfc3339;
+  /** For a failed or uncertain outbound message, the recorded `kind: provider reason`. */
+  failure_reason?: string | null;
+  /** On a public conversation: the comment or question the message is, or our reply answers. */
+  item?: { item_id: Uuid; kind: PublicKind; answer_state: PublicAnswerKey; visibility: Visibility | null };
+}
+export type PublicKind = 'comment' | 'question';
+export type Visibility = 'public' | 'private';
+export type PublicAnswerKey = 'awaiting' | 'pending' | 'answered' | 'rejected' | 'handled' | 'expired';
+export type PublicModeration = 'visible' | 'hidden' | 'deleted' | 'removed' | 'reported';
+export type HandledReason = 'no_reply_needed' | 'spam' | 'duplicate' | 'answered_elsewhere';
+export type ReportReason = 'spam' | 'offensive' | 'personal_data' | 'irrelevant' | 'other';
+export type PublicAnswer =
+  | { state: 'awaiting' }
+  | { state: 'pending'; message_id: Uuid }
+  | { state: 'answered'; by: 'us' | 'elsewhere'; message_id: Uuid | null; at: Rfc3339 }
+  | { state: 'rejected'; reason: string; message_id: Uuid | null; at: Rfc3339 }
+  | { state: 'handled'; by: unknown; reason: HandledReason; at: Rfc3339 }
+  | { state: 'expired'; at: Rfc3339 };
+/** One comment or question of a public conversation: ids, states and times only (its text is its message's). */
+export interface PublicItem {
+  id: Uuid;
+  workspace_id: Uuid;
+  capability_id: Uuid;
+  conversation_id: Uuid;
+  message_id: Uuid;
+  subject_id: Uuid | null;
+  kind: PublicKind;
+  external_id: string;
+  parent_external_id: string | null;
+  root_external_id: string;
+  created_at: Rfc3339;
+  taken_at?: Rfc3339 | null;
+  deadline: Rfc3339 | null;
+  private_reply_until: Rfc3339 | null;
+  live: boolean;
+  answer: PublicAnswer;
+  moderation: PublicModeration;
+  private_reply_message_id: Uuid | null;
+  agent_answers: number;
+  checked_at: Rfc3339 | null;
+  updated_at: Rfc3339;
+}
+/** The post or product an item is on. */
+export interface PublicSubject {
+  id: Uuid;
+  kind: 'post' | 'product';
+  external_id: string;
+  title: string;
+  url: string | null;
+  image_url: string | null;
+  facts: Record<string, unknown>;
+  publication_id: Uuid | null;
+}
+export interface PublicRules {
+  public: { min: number; max: number };
+  private: { window_s: number; max_chars: number } | null;
+  one_answer: boolean;
+  moderated: boolean;
+  hide: boolean;
+  delete: boolean;
+  report: boolean;
+  marketplace: boolean;
+}
+export interface PublicThreadEntry {
+  author: 'us' | 'them' | 'other';
+  text: string;
+  at: Rfc3339;
+  external_id: string | null;
+}
+/** What `inbox.context` adds for a comment or question conversation. */
+export interface PublicContext {
+  channel: string;
+  rules: PublicRules;
+  approval_required: boolean;
+  hint: string;
+  items: {
+    item: PublicItem;
+    subject: PublicSubject | null;
+    thread: PublicThreadEntry[];
+    private_reply_until: Rfc3339 | null;
+    owed: boolean;
+  }[];
+}
+export interface PublicDue {
+  conversation_id: Uuid;
+  item_id: Uuid;
+  channel: string;
+  awaiting_since: Rfc3339;
+  deadline: Rfc3339 | null;
+}
+/** A held reply waiting for a human's approval. */
+export interface HeldReply {
+  outbox_id: Uuid;
+  conversation_id: Uuid;
+  item_id: Uuid | null;
+  deadline: Rfc3339 | null;
+}
+export interface ModerationOut {
+  item: PublicItem;
+  outcome: 'applied' | 'unchanged' | 'skipped';
 }
 export type JourneyStatus =
   | 'new'
@@ -1012,7 +1184,10 @@ export interface InboxNote {
 }
 export interface InboxJourneyOut {
   appointments: InboxAppointment[];
+  /** All nine stages: the fixed Turkish defaults extended by the workspace's overrides. */
   status_labels: Record<JourneyStatus, string>;
+  /** Only the labels the workspace set itself; the panel shows its own language for the rest. */
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   journey: InboxJourney;
   events: InboxEvent[];
   tasks: InboxTask[];
@@ -1020,6 +1195,7 @@ export interface InboxJourneyOut {
 }
 export interface InboxContext {
   status_labels: Record<JourneyStatus, string>;
+  status_label_overrides: Partial<Record<JourneyStatus, string>>;
   person: InboxPerson;
   journey: InboxJourney | null;
   events: InboxEvent[];
@@ -1027,6 +1203,8 @@ export interface InboxContext {
   recent_conversations: { conversation: InboxConversationRow; messages: InboxMessage[] }[];
   strategy_guidance: { summary: Identity; segments: Segment[]; hypotheses: Hypothesis[] } | null;
   prohibitions: string[];
+  /** For a comment or question conversation only. */
+  public?: PublicContext;
 }
 export interface InboxPersonOut {
   person: InboxPerson;
@@ -1073,6 +1251,9 @@ export interface InboxPendingOut {
   reopen_questions: InboxConversationRow[];
   merges: InboxMerge[];
   tasks_due: InboxTask[];
+  public_due?: PublicDue[];
+  /** Held replies; listed to human callers only. */
+  approvals?: HeldReply[];
 }
 export interface InboxReplyOut {
   message_id: Uuid;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { confirmPayment, listPayments, reissueCode, revokeActivation } from '@/api/platform';
+import { confirmPayment, listPayments, listWorkspaces, reissueCode, revokeActivation } from '@/api/platform';
 import type { ActivationDelivery, PlatformPayment, WorkspaceStatus } from '@/api/types';
 import { QueryState } from '@/components/QueryState';
 import { WorkspaceStatusBadge } from '@/components/StatusBadges';
@@ -15,6 +15,9 @@ export function PaymentsPage() {
   const {t,i18n}=useTranslation(); const client=useQueryClient();
   // Decrypted references are page-scoped; never persist this query.
   const payments=useQuery({queryKey:PLATFORM_PAYMENTS_KEY,queryFn:({signal})=>listPayments(signal),gcTime:0});
+  // Names and owners so the operator knows whose transfer this is; the id stays for exact matching.
+  const workspaces=useQuery({queryKey:PLATFORM_WORKSPACES_KEY,queryFn:listWorkspaces});
+  const named=(id: string)=>workspaces.data?.find(w=>w.id===id);
   // Only component memory holds delivery. No mutation cache, query cache, storage or telemetry.
   const [delivery,setDelivery]=useState<(ActivationDelivery & {payment: string}) | null>(null);
   const [statuses,setStatuses]=useState<Record<string,WorkspaceStatus>>({});
@@ -60,8 +63,8 @@ export function PaymentsPage() {
       {payments.data?.map(row=><section key={row.payment_id} className="space-y-4 rounded-lg border border-border bg-surface p-5">
         <h2 className="font-medium">{row.reference}</h2>
         <dl className="grid gap-2 sm:grid-cols-2">
-          <div><dt>{t('platform.payments.workspace')}</dt><dd className="font-mono text-caption">{row.workspace_id}</dd></div>
-          <div><dt>{t('platform.payments.amount')}</dt><dd>{formatMoney(row.amount_minor,row.currency,i18n.language)} · {row.currency}</dd></div>
+          <div><dt>{t('platform.payments.workspace')}</dt><dd>{named(row.workspace_id) && <span className="block font-medium">{named(row.workspace_id)!.name}{named(row.workspace_id)!.owner_email && <span className="font-normal text-muted-foreground"> · {named(row.workspace_id)!.owner_email}</span>}</span>}<span className="font-mono text-caption text-muted-foreground">{row.workspace_id}</span></dd></div>
+          <div><dt>{t('platform.payments.amount')}</dt><dd>{formatMoney(row.amount_minor,row.currency,i18n.language)}</dd></div>
           <div><dt>{t('platform.payments.paidAt')}</dt><dd>{formatDateTime(row.paid_at,i18n.language)}</dd></div>
           <div><dt>{t('platform.payments.state')}</dt><dd>{t(row.entitlement?.revoked_at?'platform.payments.revoked':row.entitlement?.activated_at?'platform.payments.activated':row.entitlement?'platform.payments.confirmed':'platform.payments.pending')}</dd></div>
         </dl>
@@ -69,7 +72,7 @@ export function PaymentsPage() {
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy} onClick={()=>void issue(row,false)}>{t('platform.payments.confirm')}</Button>
           <Button variant="outline" disabled={busy || !row.entitlement || !!row.entitlement.activated_at || !!row.entitlement.revoked_at} onClick={()=>void issue(row,true)}>{t('platform.payments.reissue')}</Button>
-          <Button variant="outline" disabled={busy} onClick={()=>{setRevoking(row);setReason('');}}>{t('platform.payments.revoke')}</Button>
+          <Button variant="outline" disabled={busy || !row.entitlement || !!row.entitlement.revoked_at} onClick={()=>{setRevoking(row);setReason('');}}>{t('platform.payments.revoke')}</Button>
         </div>
         {delivery?.payment===row.payment_id && <div className="space-y-2 rounded-md border border-border p-4" role="status">
           <h3>{t('platform.payments.code')}</h3><output aria-label={t('platform.payments.code')} className="block font-mono text-h2">{delivery.code}</output>

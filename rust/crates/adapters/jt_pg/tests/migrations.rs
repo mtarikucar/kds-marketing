@@ -29,11 +29,54 @@ const TABLES_AFTER_CAPABILITIES: i64 = 20;
 /// Tables after `0005_connectors`, which adds `inbound_events`, `oauth_pending` and
 /// `probe_runs`.
 const TABLES_AFTER_CONNECTORS: i64 = 23;
-/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest.
-const TABLES_AFTER_ALL: i64 = 67;
+/// Tables after M4 Task 1: 62 M3 tables plus four billing tables and one manifest; then the four
+/// call tables of `0015_voice_calls`, the bridge's event notes of `0016_voice_bridge`, the
+/// device commands and device files of `0017_device_bridge`, the public items, their
+/// subjects and the poll cursors of `0019_inbox_public`; then the materials library's seven
+/// of `0021_studio_materials` and the planned posts, package requests and posting policy of
+/// `0022_studio_posts`.
+const TABLES_AFTER_ALL: i64 = 87;
 
-/// Migrations `0001_foundation` through `0012_m4_grandfathered_backfill`.
-const MIGRATIONS: i64 = 12;
+/// Migrations `0001_foundation` through `0019_inbox_public`, `0021_studio_materials`,
+/// `0022_studio_posts`, `0023_oauth_flow`, `0024_whatsapp_erasure` and
+/// `0025_inbox_public_erasure`.
+const MIGRATIONS: i64 = 24;
+
+/// The migration versions. `0020` and `0026` to `0028` belong to parallel branches (the
+/// prospect pool, its outreach, distribution and mail files): each adds its version here
+/// when it merges.
+fn versions() -> Vec<i64> {
+    (1..=19).chain([21, 22, 23, 24, 25]).collect()
+}
+
+/// The tables of `0019_inbox_public`, each with its one row-level policy.
+const INBOX_PUBLIC_TABLES: [(&str, &str); 3] = [
+    ("public_subjects", "public_subjects_ws"),
+    ("public_items", "public_items_ws"),
+    ("public_cursors", "public_cursors_ws"),
+];
+
+/// The indexes of `public_items` (`0019_inbox_public`).
+const INBOX_PUBLIC_INDEXES: [&str; 6] = [
+    "public_items_owed",
+    "public_items_deadline",
+    "public_items_thread",
+    "public_items_reconcile",
+    "public_items_conversation",
+    "public_items_message",
+];
+
+/// The key `0019_inbox_public` adds to `conversations` for its items' composite foreign key.
+const CONVERSATION_CAPABILITY_KEY: &str = "conversations_id_capability_key";
+
+/// Whether a constraint named `name` exists.
+async fn constraint_exists(pool: &PgPool, name: &str) -> bool {
+    sqlx::query_scalar("select exists(select 1 from pg_constraint where conname = $1)")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
@@ -48,6 +91,21 @@ const CONNECTOR_INDEXES: [&str; 3] = [
     "capabilities_connected_account_idx",
     "inbound_events_raw_received_idx",
     "inbound_events_history_idx",
+];
+
+/// The indexes of `device_commands` and `device_files` (`0017_device_bridge`): the queue a bridge
+/// reads, the expiry sweep, a phone's command log, and the files' retention sweep.
+const DEVICE_BRIDGE_INDEXES: [&str; 4] = [
+    "device_commands_queue",
+    "device_commands_due",
+    "device_commands_log",
+    "device_files_expiry",
+];
+
+/// The tables of `0017_device_bridge`, each with its one row-level policy.
+const DEVICE_BRIDGE_TABLES: [(&str, &str); 2] = [
+    ("device_commands", "device_commands_ws"),
+    ("device_files", "device_files_ws"),
 ];
 
 /// The column `0005_connectors` adds to a table of an earlier migration: a budget item's
@@ -172,6 +230,18 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0025_inbox_public_erasure",
+        "0024_whatsapp_erasure",
+        "0023_oauth_flow",
+        "0022_studio_posts",
+        "0021_studio_materials",
+        "0019_inbox_public",
+        "0018_tiktok_webhooks",
+        "0017_device_bridge",
+        "0016_voice_bridge",
+        "0015_voice_calls",
+        "0014_social_providers",
+        "0013_probe_reason",
         "0012_m4_grandfathered_backfill",
         "0011_m4_activation_codes",
         "0010_m4_billing",
@@ -258,7 +328,8 @@ async fn every_migration_has_a_down_file() {
         .map(|n| n.split('_').next().unwrap().parse().unwrap())
         .collect();
     versions.sort();
-    assert_eq!(versions, (1..=12).collect::<Vec<_>>());
+    assert_eq!(versions, self::versions());
+    assert_eq!(versions.len() as i64, MIGRATIONS);
     let ups: Vec<&String> = names.iter().filter(|n| n.ends_with(".up.sql")).collect();
     assert_eq!(
         ups.len() as i64,
@@ -430,9 +501,522 @@ async fn backfill_adds_the_new_permissions_to_old_system_roles_only() {
     }
 }
 
+/// `0023_oauth_flow` keeps a flow's sign-in variant: its up and its down are repeatable, the check
+/// takes only a known variant (or none), and its down forgets the flows that ran a variant (each
+/// would otherwise be completed as the app's own sign-in) and keeps the others.
+#[tokio::test]
+async fn oauth_flow_migration_is_repeatable_and_its_down_drops_the_variant_flows() {
+    let db = TestDb::new().await; // already migrated up, 0023 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0023_oauth_flow.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0023_oauth_flow.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let (ws, owner) = db.seed_workspace("oauth-flow").await;
+    let insert = |flow: Option<&'static str>| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,flow,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,'meta','whatsapp_cloud','meta',$3,$4,$5,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(flow)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let flows = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from oauth_pending")
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            n
+        }
+    };
+
+    for _ in 0..2 {
+        run(&up).await;
+    }
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    assert_eq!(insert(None).await, None);
+    assert_eq!(insert(Some("whatsapp_business_app")).await, None);
+    assert_eq!(insert(Some("another")).await.as_deref(), Some("23514"));
+    assert_eq!(flows().await, 2);
+
+    for _ in 0..2 {
+        run(&down).await;
+        assert!(!column_exists(&db.pool, ("oauth_pending", "flow")).await);
+    }
+    // The variant's flow went with the column; the app's own sign-in stays.
+    assert_eq!(flows().await, 1);
+    run(&up).await;
+    assert!(column_exists(&db.pool, ("oauth_pending", "flow")).await);
+}
+
+/// `0023_oauth_flow` is the WhatsApp Business app coexistence's migration, and the code before it
+/// cannot read what the feature leaves: once a message the business wrote from the app, or a
+/// capability's sharing of the app's data, is stored, its down is refused and changes nothing.
+#[tokio::test]
+async fn oauth_flow_down_is_refused_once_the_business_app_left_data() {
+    use jt_app::ports::UnitOfWork;
+    let down = std::fs::read_to_string(migrations_dir().join("0023_oauth_flow.down.sql")).unwrap();
+    for case in ["message", "capability"] {
+        let db = TestDb::new().await;
+        let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+        let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+        let cap = f.capability().await;
+        let person = f.insert_person("App").await;
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        if case == "message" {
+            let c = t
+                .conversations()
+                .upsert_on_inbound(f.conversation(person.id, cap))
+                .await
+                .unwrap();
+            let mut m = f.message(c.id);
+            m.direction = jt_inbox::Direction::Outbound;
+            m.author = jt_inbox::Author::BusinessApp;
+            t.messages().insert_if_new(m).await.unwrap();
+        } else {
+            let mut c = t.capabilities().find(cap).await.unwrap().unwrap();
+            c.connector_public =
+                serde_json::json!({ "business_app": { "contacts": { "state": "due" } } });
+            t.capabilities().update(c).await.unwrap();
+        }
+        t.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("oauth flow rollback refused"),
+            "{case}: {refused}"
+        );
+        assert!(
+            column_exists(&db.pool, ("oauth_pending", "flow")).await,
+            "{case}"
+        );
+    }
+}
+
+/// `0024_whatsapp_erasure` lets erasure find a person in the WhatsApp Business app's events:
+/// its up and its down are repeatable, and its down is refused, changing nothing, once such an
+/// event is stored (events are never deleted, and the older functions could not find the person
+/// in it).
+#[tokio::test]
+async fn whatsapp_erasure_migration_is_repeatable_and_its_down_refuses_stored_app_events() {
+    let db = TestDb::new().await; // already migrated up, 0024 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0024_whatsapp_erasure.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await }
+    };
+    // Whether the erasure functions are this migration's: the mask takes a thread.
+    let current = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>(
+                "select inbox_mask_personal('{\"thread\":\"905321234567\"}')",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+                == serde_json::json!({ "thread": "" })
+        }
+    };
+    let (ws, _) = db.seed_workspace("whatsapp-erasure").await;
+    let insert = |kind: &'static str, payload: serde_json::Value| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query(
+                "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)                  values($1,$2,'meta',$3,$4,$5,now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(Uuid::now_v7().to_string())
+            .bind(kind)
+            .bind(payload)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+
+    assert!(current().await);
+    // A Messenger echo is not the app's: the down still runs, twice over, and the up again.
+    insert(
+        "message_echo",
+        serde_json::json!({ "messaging": { "mid": "m" } }),
+    )
+    .await;
+    for _ in 0..2 {
+        run(&down).await.unwrap();
+        assert!(!current().await);
+    }
+    for _ in 0..2 {
+        run(&up).await.unwrap();
+        assert!(current().await);
+    }
+    // Each of the app's events refuses the down, which then changes nothing.
+    for (kind, payload) in [
+        ("history", serde_json::json!({ "thread": "905321234567" })),
+        ("contact_sync", serde_json::json!({ "state_sync": {} })),
+        (
+            "message_echo",
+            serde_json::json!({ "echo": { "to": "905321234567" } }),
+        ),
+    ] {
+        let fresh = TestDb::new().await;
+        let (ws, _) = fresh.seed_workspace("app-event").await;
+        let mut tx = TenantTx::begin(&fresh.pool, ws).await.unwrap();
+        sqlx::query(
+            "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)              values($1,$2,'meta','app-event',$3,$4,now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(ws.as_uuid())
+        .bind(kind)
+        .bind(payload)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&fresh.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("whatsapp erasure rollback refused"),
+            "{kind}: {refused}"
+        );
+        let still: serde_json::Value =
+            sqlx::query_scalar("select inbox_mask_personal('{\"thread\":\"x\"}')")
+                .fetch_one(&fresh.pool)
+                .await
+                .unwrap();
+        assert_eq!(still, serde_json::json!({ "thread": "" }), "{kind}");
+    }
+}
+
+/// `0018_tiktok_webhooks` lets inbound events be TikTok's; its up and its down are repeatable,
+/// and its down is refused, changing nothing, once a TikTok event is stored (events are never
+/// deleted, so the narrower check could not hold it).
+#[tokio::test]
+async fn tiktok_webhooks_migration_is_repeatable_and_its_down_refuses_stored_events() {
+    let db = TestDb::new().await; // already migrated up, 0018 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0018_tiktok_webhooks.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0018_tiktok_webhooks.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await }
+    };
+    let check = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select pg_get_constraintdef(oid) from pg_constraint \
+                 where conname = 'inbound_events_provider_check'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let (ws, _) = db.seed_workspace("tiktok-hooks").await;
+    let insert = |provider: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at) \
+                 values($1,$2,$3,$4,'authorization.removed','{}',now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(provider)
+            .bind(Uuid::now_v7().to_string())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+
+    // Without TikTok events the down narrows the check, twice over; the up widens it again.
+    assert!(check().await.contains("'tiktok'"));
+    for _ in 0..2 {
+        run(&down).await.unwrap();
+        let narrowed = check().await;
+        assert!(!narrowed.contains("tiktok"), "{narrowed}");
+        assert!(narrowed.contains("'mail'"), "{narrowed}");
+        assert_eq!(insert("tiktok").await.as_deref(), Some("23514"));
+    }
+    for _ in 0..2 {
+        run(&up).await.unwrap();
+        assert!(check().await.contains("'tiktok'"));
+    }
+    assert_eq!(insert("tiktok").await, None);
+    assert_eq!(insert("unknown").await.as_deref(), Some("23514"));
+
+    // With one stored, the down is refused and leaves the check and the event as they were.
+    let refused = run(&down).await.unwrap_err().to_string();
+    assert!(
+        refused.contains("tiktok webhooks rollback refused"),
+        "{refused}"
+    );
+    assert!(check().await.contains("'tiktok'"));
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let kept: i64 =
+        sqlx::query_scalar("select count(*) from inbound_events where provider = 'tiktok'")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(kept, 1);
+}
+
+#[tokio::test]
+async fn device_bridge_migration_is_repeatable_and_grants_only_the_system_owner_and_manager() {
+    let db = TestDb::new().await; // already migrated up, 0017 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0017_device_bridge.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0017_device_bridge.down.sql")).unwrap();
+    let run = |sql: &str| {
+        let pool = db.pool.clone();
+        let sql = sql.to_owned();
+        async move { sqlx::raw_sql(&sql).execute(&pool).await.unwrap() }
+    };
+    let as_strings =
+        |keys: &[&str]| -> Vec<String> { keys.iter().map(|k| (*k).to_owned()).collect() };
+    let keys = ["devices.work", "devices.bridge"];
+    let base = ["workspace.read", "team.manage"];
+
+    // A second workspace holds a custom role keyed like a system one: only `is_system` tells
+    // them apart.
+    let (ws, other_ws) = (Uuid::now_v7(), Uuid::now_v7());
+    let (owner, manager, rep, custom, custom_manager) = (
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+        Uuid::now_v7(),
+    );
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    for (id, name) in [(ws, "devices"), (other_ws, "other")] {
+        sqlx::query(
+            "insert into workspaces (id, name, slug, status) values ($1, $2, $3, 'active')",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(format!("{name}-{}", id.simple()))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let roles: [(Uuid, Uuid, &str, bool, Vec<&str>); 5] = [
+        (owner, ws, "owner", true, base.to_vec()),
+        // Already granted one of the two (say, by hand): it is not granted twice.
+        (
+            manager,
+            ws,
+            "manager",
+            true,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (rep, ws, "rep", true, vec!["workspace.read"]),
+        (
+            custom,
+            ws,
+            "analyst",
+            false,
+            [&base[..], &["devices.work"]].concat(),
+        ),
+        (
+            custom_manager,
+            other_ws,
+            "manager",
+            false,
+            vec!["workspace.read"],
+        ),
+    ];
+    for (id, workspace, key, is_system, permissions) in &roles {
+        sqlx::query(
+            "insert into roles (id, workspace_id, key, name, permissions, is_system) \
+             values ($1, $2, $3, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(workspace)
+        .bind(key)
+        .bind(permissions)
+        .bind(is_system)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    // Up, twice: the system owner and manager gain exactly the missing keys, once, in order.
+    for _ in 0..2 {
+        run(&up).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        for role in [owner, manager] {
+            assert_eq!(
+                role_permissions(&db.pool, role).await,
+                as_strings(&[&base[..], &keys[..]].concat())
+            );
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Down, twice: the two tables go, and the two keys leave the system owner and manager only.
+    for _ in 0..2 {
+        run(&down).await;
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 2);
+        for index in DEVICE_BRIDGE_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        for role in [owner, manager] {
+            assert_eq!(role_permissions(&db.pool, role).await, as_strings(&base));
+        }
+        assert_eq!(role_permissions(&db.pool, rep).await, ["workspace.read"]);
+        assert_eq!(
+            role_permissions(&db.pool, custom).await,
+            as_strings(&[&base[..], &["devices.work"]].concat())
+        );
+        assert_eq!(
+            role_permissions(&db.pool, custom_manager).await,
+            ["workspace.read"]
+        );
+    }
+
+    // Up again: the tables are back, with their indexes, forced row-level security and one policy
+    // each.
+    run(&up).await;
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    for index in DEVICE_BRIDGE_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    for (table, policy) in DEVICE_BRIDGE_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: i64 = sqlx::query_scalar(
+            "select count(*) from pg_policies where schemaname = current_schema() \
+             and tablename = $1 and policyname = $2",
+        )
+        .bind(table)
+        .bind(policy)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, 1, "{table}");
+    }
+}
+
 #[tokio::test]
 async fn migration_round_trip_23_36_23_36() {
     let db = TestDb::new().await;
+    // Newest first: the planned posts reference the materials library and the Studio tables,
+    // the materials library the Studio tables, the public items and the call tables the inbox
+    // tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0022_studio_posts.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_studio_materials.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0019_inbox_public.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0018_tiktok_webhooks.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -549,6 +1133,50 @@ async fn attribution_0007_up_down_up_preserves_unrelated_rows() {
 
 async fn compliance_round_trip_preserving_people() {
     let db = TestDb::new().await;
+    // Newest first: the planned posts reference the materials library and the Studio tables, the
+    // materials library the Studio tables.
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0022_studio_posts.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0021_studio_materials.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0019_inbox_public.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0018_tiktok_webhooks.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0017_device_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0016_voice_bridge.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0015_voice_calls.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     sqlx::raw_sql(include_str!("../../../../migrations/0009_studio.down.sql"))
         .execute(&db.pool)
         .await
@@ -592,16 +1220,36 @@ async fn studio_migration_up_down_up() {
     let (ws, _) = db.seed_workspace("studio-roundtrip").await;
     let up = include_str!("../../../../migrations/0009_studio.up.sql");
     let down = include_str!("../../../../migrations/0009_studio.down.sql");
+    // The materials library references the Studio tables, the planned posts both, public
+    // subjects Studio publications: reverted first, newest first, and applied again last.
+    let materials_up = include_str!("../../../../migrations/0021_studio_materials.up.sql");
+    let materials_down = include_str!("../../../../migrations/0021_studio_materials.down.sql");
+    let posts_up = include_str!("../../../../migrations/0022_studio_posts.up.sql");
+    let posts_down = include_str!("../../../../migrations/0022_studio_posts.down.sql");
+    let public_up = include_str!("../../../../migrations/0019_inbox_public.up.sql");
+    let public_down = include_str!("../../../../migrations/0019_inbox_public.down.sql");
     let id = Uuid::now_v7();
     let h = Uuid::now_v7();
     let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("insert into strategy_versions(id,workspace_id,number,status,sections,created_by_component,created_at) values($1,$2,1,'draft','{}','test','2026-10-24T00:00:00Z')").bind(id).bind(ws.as_uuid()).execute(tx.conn()).await.unwrap();
     sqlx::query("insert into strategy_hypotheses(version_id,workspace_id,hypothesis_id,title,segment_key,angle,channel,metric,prior_confidence,state,position) values($1,$2,$3,'keep','all','help','any','reply',0.7,'added',0)").bind(id).bind(ws.as_uuid()).bind(h).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
-    for sql in [up, down, down, up, up] {
+    for sql in [
+        posts_down,
+        materials_down,
+        up,
+        public_down,
+        down,
+        down,
+        up,
+        up,
+        public_up,
+        materials_up,
+        posts_up,
+    ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
-    assert_eq!(table_count(&db.pool).await, 67);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let saved: (String,f32,serde_json::Value) = sqlx::query_as("select title,prior_confidence,cadence from strategy_hypotheses where workspace_id = $1 and hypothesis_id = $2").bind(ws.as_uuid()).bind(h).fetch_one(tx.conn()).await.unwrap();
     assert_eq!(saved, ("keep".into(), 0.7, serde_json::json!({})));
@@ -614,4 +1262,369 @@ async fn studio_migration_up_down_up() {
     assert!(!bypass);
     let forced: bool = sqlx::query_scalar("select relrowsecurity and relforcerowsecurity from pg_class where relname='studio_learning_applications'").fetch_one(tx.conn()).await.unwrap();
     assert!(forced);
+}
+
+/// Runs `sql` on `pool`, answering the error's text when it fails.
+async fn try_sql(pool: &PgPool, sql: &str) -> Result<(), String> {
+    sqlx::raw_sql(sql)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The definition of the check constraint `name`.
+async fn check_definition(pool: &PgPool, name: &str) -> String {
+    sqlx::query_scalar("select pg_get_constraintdef(oid) from pg_constraint where conname = $1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// A person, an `instagram` capability, a conversation and an inbound message in a new workspace
+/// (`ids` = workspace, capability, conversation, message), through the repos.
+async fn inbox_rows(db: &TestDb) -> (jt_tenancy::WorkspaceId, Uuid, Uuid, Uuid) {
+    let uow = std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone()));
+    let f = jt_testkit::inbox_contract::Fixture::new(uow.clone()).await;
+    let cap = f.account("instagram", "ig-1").await;
+    let p = f.insert_person("Commenter").await;
+    let c = f.public_conversation(p.id, cap).await;
+    let m = f.comment_message(c.id, "c1", 0).await;
+    (f.ws, cap.as_uuid(), c.id.as_uuid(), m.as_uuid())
+}
+
+/// The three tables of `0019_inbox_public` force row-level security, each under its one policy;
+/// the indexes of `public_items` exist.
+#[tokio::test]
+async fn public_tables_force_rls_with_one_policy() {
+    let db = TestDb::new().await;
+    for (table, policy) in INBOX_PUBLIC_TABLES {
+        let forced: bool = sqlx::query_scalar(
+            "select relrowsecurity and relforcerowsecurity from pg_class where relname = $1",
+        )
+        .bind(table)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert!(forced, "{table}");
+        let policies: Vec<String> = sqlx::query_scalar(
+            "select policyname::text from pg_policies where schemaname = current_schema() \
+             and tablename = $1",
+        )
+        .bind(table)
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(policies, [policy], "{table}");
+    }
+    for index in INBOX_PUBLIC_INDEXES {
+        assert!(index_exists(&db.pool, index).await, "{index}");
+    }
+    // A tenant sees only its own items.
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,kind,\
+         external_id,root_external_id,created_at,answer,updated_at) \
+         values ($1,$2,$3,$4,$5,'comment','c1','c1',now(),'{\"state\":\"awaiting\"}',now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(Uuid::now_v7())
+    .bind(cap)
+    .bind(conversation)
+    .bind(message)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (other, _) = db.seed_workspace("other-public").await;
+    let mut tx = TenantTx::begin(&db.pool, other).await.unwrap();
+    let seen: i64 = sqlx::query_scalar("select count(*) from public_items")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(seen, 0);
+    tx.rollback().await.unwrap();
+}
+
+/// `answer_state` is derived from the stored answer's `state` tag and cannot be written.
+#[tokio::test]
+async fn answer_state_is_generated() {
+    let db = TestDb::new().await;
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let id = Uuid::now_v7();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,kind,\
+         external_id,root_external_id,created_at,answer,updated_at) \
+         values ($1,$2,$3,$4,$5,'question','q1','q1',now(),$6,now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(id)
+    .bind(cap)
+    .bind(conversation)
+    .bind(message)
+    .bind(serde_json::json!({"state": "pending", "message_id": message}))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    let state: String = sqlx::query_scalar("select answer_state from public_items where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(state, "pending");
+    tx.commit().await.unwrap();
+    for refused in [
+        "update public_items set answer_state = 'answered' where id = $1",
+        "update public_items set answer = '{\"state\":\"lost\"}' where id = $1",
+        "update public_items set answer = '{\"by\":\"us\"}' where id = $1",
+    ] {
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        let e = sqlx::query(refused).bind(id).execute(tx.conn()).await;
+        assert!(e.is_err(), "{refused}");
+        tx.rollback().await.unwrap();
+    }
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("update public_items set answer = '{\"state\":\"expired\",\"at\":\"2026-10-30T10:00:00Z\"}' where id = $1")
+        .bind(id)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let state: String = sqlx::query_scalar("select answer_state from public_items where id = $1")
+        .bind(id)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(state, "expired");
+    tx.rollback().await.unwrap();
+}
+
+/// A reply held for approval is an outbox row of its own state.
+#[tokio::test]
+async fn outbox_accepts_held() {
+    let db = TestDb::new().await;
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let insert = |state: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let done = sqlx::query(
+                "insert into outbox (workspace_id,id,conversation_id,message_id,capability_id,intent,\
+                 expected_generation,state,created_at,updated_at) \
+                 values ($1,$2,$3,$4,$5,'{}',0,$6,now(),now())",
+            )
+            .bind(ws.as_uuid())
+            .bind(Uuid::now_v7())
+            .bind(conversation)
+            .bind(message)
+            .bind(cap)
+            .bind(state)
+            .execute(tx.conn())
+            .await;
+            match done {
+                Ok(_) => tx.commit().await.map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+    };
+    insert("held").await.unwrap();
+    assert!(insert("waiting").await.is_err());
+}
+
+/// `0019_inbox_public` repeats, and its down refuses, changing nothing, while a row needs the wider
+/// checks: a marketplace inbound event (events are never deleted) or a reply held for approval.
+/// Without such rows it narrows both checks back and drops the three tables.
+#[tokio::test]
+async fn inbox_public_down_refuses_while_rows_need_the_wider_checks() {
+    let db = TestDb::new().await; // already migrated up, 0019 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0019_inbox_public.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0019_inbox_public.down.sql")).unwrap();
+    // The marketplaces' providers are allowed or not; TikTok's stays either way (0018 owns it).
+    let wide = |definition: String| {
+        ["'mail'", "'tiktok'", "'trendyol'", "'hepsiburada'"]
+            .iter()
+            .all(|p| definition.contains(p))
+    };
+    let narrow = |definition: String| {
+        definition.contains("'mail'")
+            && definition.contains("'tiktok'")
+            && !definition.contains("'trendyol'")
+            && !definition.contains("'hepsiburada'")
+    };
+    let has_held = |definition: &str| definition.contains("'held'");
+
+    // Up again, twice: nothing changes.
+    for _ in 0..2 {
+        try_sql(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert!(wide(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+        assert!(has_held(
+            &check_definition(&db.pool, "outbox_state_check").await
+        ));
+        assert!(constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
+    }
+    // Down twice, without rows that need the wider checks: they narrow and the tables go.
+    for _ in 0..2 {
+        try_sql(&db.pool, &down).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL - 3);
+        assert!(narrow(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+        assert!(!has_held(
+            &check_definition(&db.pool, "outbox_state_check").await
+        ));
+        for index in INBOX_PUBLIC_INDEXES {
+            assert!(!index_exists(&db.pool, index).await, "{index}");
+        }
+        assert!(!constraint_exists(&db.pool, CONVERSATION_CAPABILITY_KEY).await);
+    }
+    for _ in 0..2 {
+        try_sql(&db.pool, &up).await.unwrap();
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+
+    // A held reply refuses the down.
+    let (ws, cap, conversation, message) = inbox_rows(&db).await;
+    let held = Uuid::now_v7();
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into outbox (workspace_id,id,conversation_id,message_id,capability_id,intent,\
+         expected_generation,state,created_at,updated_at) \
+         values ($1,$2,$3,$4,$5,'{}',0,'held',now(),now())",
+    )
+    .bind(ws.as_uuid())
+    .bind(held)
+    .bind(conversation)
+    .bind(message)
+    .bind(cap)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let e = try_sql(&db.pool, &down).await.unwrap_err();
+    assert!(e.contains("held for approval"), "{e}");
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    assert!(has_held(
+        &check_definition(&db.pool, "outbox_state_check").await
+    ));
+    // Once it is approved or discarded, the down goes through; up brings everything back.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query("update outbox set state = 'refused' where workspace_id = $1 and id = $2")
+        .bind(ws.as_uuid())
+        .bind(held)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    try_sql(&db.pool, &down).await.unwrap();
+    try_sql(&db.pool, &up).await.unwrap();
+
+    // A marketplace event refuses it for good: events are never deleted.
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    sqlx::query(
+        "insert into inbound_events (id,workspace_id,provider,external_id,kind,payload,received_at) \
+         values ($1,$2,'trendyol','q:1:open:','question','{}',now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(ws.as_uuid())
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        let e = try_sql(&db.pool, &down).await.unwrap_err();
+        assert!(e.contains("marketplace events"), "{e}");
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+        assert!(wide(
+            check_definition(&db.pool, "inbound_events_provider_check").await
+        ));
+    }
+}
+
+/// `0025_inbox_public_erasure` puts the erasure additions of `0019_inbox_public` and
+/// `0024_whatsapp_erasure` in one definition: once migrated up, the mask blanks a public item's
+/// author and the provider's copy of it as well as a WhatsApp Business app thread; its down puts
+/// back 0024's mask (the app's keys only), and both repeat.
+#[tokio::test]
+async fn inbox_public_erasure_joins_both_additions_and_repeats() {
+    let db = TestDb::new().await; // already migrated up, 0025 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0025_inbox_public_erasure.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0025_inbox_public_erasure.down.sql")).unwrap();
+    let mask = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, serde_json::Value>("select inbox_mask_personal($1)")
+                .bind(serde_json::json!({
+                    "thread": "905321234567",
+                    "public": {"author": {"id": "5150"}, "text": "Fiyat?"},
+                    "provider_item": {"id": "c-1"}
+                }))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let joined = serde_json::json!({
+        "thread": "", "public": {"author": "", "text": ""}, "provider_item": ""
+    });
+    let whatsapp_only = serde_json::json!({
+        "thread": "", "public": {"author": {"id": "5150"}, "text": ""},
+        "provider_item": {"id": "c-1"}
+    });
+    assert_eq!(mask().await, joined);
+    for _ in 0..2 {
+        sqlx::raw_sql(&down).execute(&db.pool).await.unwrap();
+        assert_eq!(mask().await, whatsapp_only);
+    }
+    for _ in 0..2 {
+        sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
+        assert_eq!(mask().await, joined);
+    }
+}
+
+/// `0025_inbox_public_erasure`'s down is refused, changing nothing, once a comment or a question
+/// is stored: the older functions it would put back could not find its author.
+#[tokio::test]
+async fn inbox_public_erasure_down_refuses_stored_public_items() {
+    for kind in ["comment", "question"] {
+        let db = TestDb::new().await;
+        let down =
+            std::fs::read_to_string(migrations_dir().join("0025_inbox_public_erasure.down.sql"))
+                .unwrap();
+        let (ws, _) = db.seed_workspace("public-event").await;
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        sqlx::query(
+            "insert into inbound_events(id,workspace_id,provider,external_id,kind,payload,received_at)              values($1,$2,'meta','public-event',$3,$4,now())",
+        )
+        .bind(Uuid::now_v7())
+        .bind(ws.as_uuid())
+        .bind(kind)
+        .bind(serde_json::json!({"public": {"kind": kind, "author": {"id": "5150"}}}))
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        let refused = sqlx::raw_sql(&down)
+            .execute(&db.pool)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("inbox public erasure rollback refused"),
+            "{refused}"
+        );
+        // Nothing changed: the joined mask still blanks a public item's author.
+        let masked: serde_json::Value =
+            sqlx::query_scalar("select inbox_mask_personal('{\"author\":{\"id\":\"5150\"}}')")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(masked, serde_json::json!({"author": ""}), "{kind}");
+    }
 }

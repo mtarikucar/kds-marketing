@@ -1,9 +1,12 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Bot, MessageCircle, Settings, User } from 'lucide-react';
+import type { TFunction } from 'i18next';
+import { Bot, MessageCircle, Settings, Smartphone, User } from 'lucide-react';
 import { useSession } from '@/auth/useSession';
-import type { InboxActor } from '@/api/types';
+import { listTeam } from '@/api/team';
+import type { InboxAuthor } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
+import { can } from '@/lib/roles';
 
 export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm';
 export const columnClass =
@@ -29,6 +32,34 @@ export function useInboxMutation<T = void>(
     },
   });
 }
+const HOUR = 3_600_000;
+
+/** A time left, in days and hours, hours and minutes, or minutes. */
+export function durationText(t: TFunction, ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return t('inbox.public.time.days', { days, hours });
+  if (hours > 0) return t('inbox.public.time.hours', { hours, minutes: minutes % 60 });
+  return t('inbox.public.time.minutes', { minutes });
+}
+
+/** A deadline as its time left, red under two hours (spec §9); "passed" once it is. */
+export function Deadline({ at }: { at: string }) {
+  const { t } = useTranslation();
+  const left = new Date(at).getTime() - Date.now();
+  const urgent = left < 2 * HOUR;
+  return (
+    <span
+      data-testid="deadline"
+      data-urgent={urgent ? 'true' : 'false'}
+      className={`text-xs font-medium ${urgent ? 'text-danger' : 'text-muted-foreground'}`}
+    >
+      {left <= 0 ? t('inbox.public.deadlinePassed') : t('inbox.public.deadlineLeft', { time: durationText(t, left) })}
+    </span>
+  );
+}
+
 export function InboxTime({ at }: { at: string }) {
   const { i18n } = useTranslation();
   return (
@@ -37,16 +68,46 @@ export function InboxTime({ at }: { at: string }) {
     </time>
   );
 }
-export function InboxActorLabel({ actor }: { actor: InboxActor | 'customer' }) {
+/** The workspace's members, shared by every inbox view that names one. */
+export function useInboxTeam() {
+  const key = useInboxKey();
+  const session = useSession();
+  return useQuery({
+    queryKey: [...key, 'team'],
+    queryFn: listTeam,
+    enabled: can(session.data, 'workspace.read'),
+  });
+}
+/** A workspace user as shown: "You", a member's name or e-mail, else "Team member"; never an id. */
+export function useMemberName() {
   const { t } = useTranslation();
+  const session = useSession();
+  const team = useInboxTeam();
+  return (userId: string) => {
+    if (userId === session.data?.user_id) return t('inbox.you');
+    const member = team.data?.find((m) => m.user_id === userId);
+    return member?.display_name || member?.email || t('inbox.teamMember');
+  };
+}
+export function InboxActorLabel({ actor }: { actor: InboxAuthor }) {
+  const { t } = useTranslation();
+  const memberName = useMemberName();
   const kind = typeof actor === 'object' ? 'human' : actor;
   const Icon =
-    kind === 'human' ? User : kind === 'agent' ? Bot : kind === 'customer' ? MessageCircle : Settings;
+    kind === 'human'
+      ? User
+      : kind === 'agent'
+        ? Bot
+        : kind === 'customer'
+          ? MessageCircle
+          : kind === 'business_app'
+            ? Smartphone
+            : Settings;
   return (
     <span className="inline-flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
       <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
       {t(`inbox.actor.${kind}`)}
-      {typeof actor === 'object' ? ` · ${actor.human}` : ''}
+      {typeof actor === 'object' ? ` · ${memberName(actor.human)}` : ''}
     </span>
   );
 }

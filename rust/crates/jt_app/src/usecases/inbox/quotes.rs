@@ -107,6 +107,8 @@ pub async fn enqueue(
             subject: None,
             in_reply_to: None,
             references: vec![],
+            item_id: None,
+            visibility: None,
         },
         replies::Purpose::Quote(&quote, key.as_deref()),
     )

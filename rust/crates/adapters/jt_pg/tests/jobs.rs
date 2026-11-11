@@ -336,6 +336,7 @@ fn run(ws: WorkspaceId, capability: CapabilityId, at: OffsetDateTime) -> ProbeRu
         at,
         ok: true,
         error_kind: None,
+        reason: None,
         latency_ms: 10,
         facts: json!({}),
     }

@@ -25,7 +25,14 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 /// - `netgsm`: SMS and the account API (`api.netgsm.com.tr`), WhatsApp
 ///   (`whatsappapi.netgsm.com.tr`), voice files (`sesdosya.netgsm.com.tr`) and the Netsantral
 ///   click-to-call endpoint (`crmsntrl.netgsm.com.tr:9111`, plain http: see the module docs);
-/// - `x`: the X API under both its names (`api.twitter.com`, `api.x.com`).
+/// - `x`: the X API under both its names (`api.twitter.com`, `api.x.com`);
+/// - `tiktok`: the Open API and its token endpoint (`open.tiktokapis.com`) and the video upload
+///   (the host of the `upload_url` the Content Posting API returns: `open-upload.tiktokapis.com`,
+///   or the regional `open-upload-sg.tiktokapis.com`, which it answered with for a Turkish
+///   account);
+/// - `linkedin`: the REST API and OpenID userinfo (`api.linkedin.com`), and the OAuth token
+///   endpoint and media uploads (`www.linkedin.com`, the host of the `uploadUrl` the Images and
+///   Videos APIs return).
 pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("meta", "graph.facebook.com"),
     host("meta", "graph.instagram.com"),
@@ -37,6 +44,11 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("netgsm", "crmsntrl.netgsm.com.tr:9111"),
     host("x", "api.twitter.com"),
     host("x", "api.x.com"),
+    host("tiktok", "open.tiktokapis.com"),
+    host("tiktok", "open-upload.tiktokapis.com"),
+    host("tiktok", "open-upload-sg.tiktokapis.com"),
+    host("linkedin", "api.linkedin.com"),
+    host("linkedin", "www.linkedin.com"),
 ];
 
 /// The endpoints reached over plain `http`, as `(connector, host, port)`: only NetGSM's
@@ -83,6 +95,11 @@ mod tests {
                 ("netgsm", "crmsntrl.netgsm.com.tr:9111"),
                 ("x", "api.twitter.com"),
                 ("x", "api.x.com"),
+                ("tiktok", "open.tiktokapis.com"),
+                ("tiktok", "open-upload.tiktokapis.com"),
+                ("tiktok", "open-upload-sg.tiktokapis.com"),
+                ("linkedin", "api.linkedin.com"),
+                ("linkedin", "www.linkedin.com"),
             ]
         );
         // Every provider host is on the public internet, and the table builds a client.
@@ -106,13 +123,24 @@ mod tests {
             ("netgsm", "https://crmsntrl.netgsm.com.tr:9111/"),
             ("x", "https://api.twitter.com/2/tweets"),
             ("x", "https://api.x.com/2/tweets"),
+            ("tiktok", "https://open.tiktokapis.com/v2/user/info/"),
+            (
+                "tiktok",
+                "https://open-upload.tiktokapis.com/video/?upload_id=1",
+            ),
+            (
+                "tiktok",
+                "https://open-upload-sg.tiktokapis.com/upload/?upload_id=1",
+            ),
+            ("linkedin", "https://api.linkedin.com/rest/posts"),
+            ("linkedin", "https://www.linkedin.com/oauth/v2/accessToken"),
         ] {
             let target = url(allowed);
             assert!(
                 egress.permits(EgressScope::Connector(connector), &target),
                 "{connector}: {allowed}"
             );
-            for other in ["meta", "netgsm", "x", "tiktok"] {
+            for other in ["meta", "netgsm", "x", "tiktok", "linkedin"] {
                 if other != connector {
                     assert!(
                         !egress.permits(EgressScope::Connector(other), &target),
@@ -133,8 +161,12 @@ mod tests {
             // Plain http to an https-only provider host.
             "http://graph.facebook.com/v21.0/me",
             "http://api.x.com/2/tweets",
+            "http://api.linkedin.com/rest/posts",
+            // The browser-only authorize hosts are never reached.
+            "https://www.tiktok.com/v2/auth/authorize/",
+            "https://linkedin.com/oauth/v2/authorization",
         ] {
-            for connector in ["meta", "netgsm", "x"] {
+            for connector in ["meta", "netgsm", "x", "tiktok", "linkedin"] {
                 assert!(
                     !egress.permits(EgressScope::Connector(connector), &url(refused)),
                     "{connector}: {refused}"

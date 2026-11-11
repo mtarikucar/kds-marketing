@@ -1,0 +1,8 @@
+{
+  "data": {},
+  "error": {
+    "code": "spam_risk_too_many_pending_share",
+    "message": "The daily upload cap from the API is reached for the current user.",
+    "log_id": "20261028000000TEST0033"
+  }
+}

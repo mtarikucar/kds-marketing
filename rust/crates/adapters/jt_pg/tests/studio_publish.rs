@@ -323,7 +323,9 @@ async fn publish_and_plan_never_deadlock() {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    // Pause the real planner after it acquires the workspace frame, before slot insertion.
+    // The slot is a planned post (spec 2026-11-03 D20), so the planner leaves it to its grace.
+    jt_testkit::studio_contract::attach_post(&uow, &f).await;
+    // Pause the real planner after it acquires the workspace frame, before it writes.
     let mut blocker = uow.tenant(f.ws).await.unwrap();
     blocker.studio_control().lock_control().await.unwrap();
     let d = Arc::new(d);
@@ -344,7 +346,7 @@ async fn publish_and_plan_never_deadlock() {
     })
     .await
     .expect("planner and publisher must finish without deadlock");
-    assert!(planned.unwrap().unwrap() > 0);
+    planned.unwrap().unwrap();
     assert_eq!(published.unwrap().unwrap(), 1);
 }
 

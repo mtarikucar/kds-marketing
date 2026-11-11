@@ -106,11 +106,20 @@ pub async fn set_status_labels(
     Ok(input)
 }
 
-/// Fixed Turkish defaults with workspace display-label overrides. Keys remain domain statuses.
-pub(crate) async fn effective_status_labels(
+/// Journey stage display labels. Keys remain domain statuses.
+pub(crate) struct StatusLabels {
+    /// Fixed Turkish defaults extended by the workspace's overrides: all nine stages.
+    pub effective: std::collections::BTreeMap<String, String>,
+    /// Only the workspace's own overrides, so the panel can show its own language for the rest.
+    pub overrides: std::collections::BTreeMap<String, String>,
+}
+
+/// Reads the workspace's overrides once and derives both label maps from them.
+pub(crate) async fn status_labels(
     repos: &mut dyn crate::ports::TenantRepos,
-) -> Result<std::collections::BTreeMap<String, String>, AppError> {
-    let mut labels: std::collections::BTreeMap<String, String> = [
+) -> Result<StatusLabels, AppError> {
+    let overrides = repos.workspace_policy().get().await?.inbox.status_labels;
+    let mut effective: std::collections::BTreeMap<String, String> = [
         ("new", "Yeni"),
         ("contacted", "İletişim kuruldu"),
         ("unreachable", "Ulaşılamadı"),
@@ -124,6 +133,9 @@ pub(crate) async fn effective_status_labels(
     .into_iter()
     .map(|(key, label)| (key.into(), label.into()))
     .collect();
-    labels.extend(repos.workspace_policy().get().await?.inbox.status_labels);
-    Ok(labels)
+    effective.extend(overrides.clone());
+    Ok(StatusLabels {
+        effective,
+        overrides,
+    })
 }

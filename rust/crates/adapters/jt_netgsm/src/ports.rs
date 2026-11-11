@@ -81,6 +81,15 @@ impl Telephony for NetgsmConnector {
     async fn hangup(&self, cred: &Credential, call_id: &str) -> Result<(), ConnectorError> {
         santral::hangup(self, cred, call_id).await
     }
+
+    async fn call_records(
+        &self,
+        cred: &Credential,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<InboundEventDraft>, ConnectorError> {
+        NetgsmConnector::call_records(self, cred, from, to).await
+    }
 }
 
 #[async_trait]

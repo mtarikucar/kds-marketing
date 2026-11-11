@@ -135,6 +135,18 @@ impl TenantRepos for SpyTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
+        self.inner.studio_materials()
+    }
+    fn studio_posts(&mut self) -> &mut dyn jt_app::ports::posts::PostRepo {
+        self.inner.studio_posts()
+    }
+    fn calls(&mut self) -> &mut dyn jt_app::ports::calls::CallRepo {
+        self.inner.calls()
+    }
+    fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
+        self.inner.device_commands()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
@@ -196,6 +208,15 @@ impl TenantRepos for SpyTenant {
     }
     fn outbox(&mut self) -> &mut dyn jt_app::ports::inbox::OutboxRepo {
         self.inner.outbox()
+    }
+    fn public_items(&mut self) -> &mut dyn jt_app::ports::inbox::PublicItemRepo {
+        self.inner.public_items()
+    }
+    fn public_subjects(&mut self) -> &mut dyn jt_app::ports::inbox::PublicSubjectRepo {
+        self.inner.public_subjects()
+    }
+    fn public_cursors(&mut self) -> &mut dyn jt_app::ports::inbox::PublicCursorRepo {
+        self.inner.public_cursors()
     }
     fn roles(&mut self) -> &mut dyn RoleRepo {
         self.inner.roles()

@@ -38,7 +38,7 @@ async fn owner_invites_and_invitee_accepts_and_appears_in_list() {
     assert_eq!(memberships[0]["role_key"], "rep");
     assert_eq!(
         memberships[0]["permissions"],
-        json!(["workspace.read", "inbox.work"])
+        json!(["workspace.read", "inbox.work", "calls.work"])
     );
 
     // The owner sees Bob as an active member.

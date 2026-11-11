@@ -15,7 +15,9 @@ impl PgTenantRepos {
         if control.is_braked(LaneKind::Organic) {
             return Ok(None);
         }
-        let row:Option<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.state='ready' and s.scheduled_at <= $2 and ($3::uuid is null or s.id=$3) and a.lane='organic' and not exists(select 1 from studio_publish_attempts p where p.workspace_id=s.workspace_id and p.slot_id=s.id) order by s.scheduled_at,s.id for update of s skip locked limit 1")
+        // A planned post past its grace is never sent (spec 2026-11-03 D28): late, maybe in
+        // the quiet hours.
+        let row:Option<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.state='ready' and s.scheduled_at <= $2 and ($3::uuid is null or s.id=$3) and a.lane='organic' and not exists(select 1 from studio_publish_attempts p where p.workspace_id=s.workspace_id and p.slot_id=s.id) and not exists(select 1 from studio_posts sp where sp.workspace_id=s.workspace_id and sp.slot_id=s.id and sp.grace_until < $2) order by s.scheduled_at,s.id for update of s skip locked limit 1")
             .bind(self.workspace_id().0).bind(now).bind(target.map(|id|id.0)).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"claim due Studio slot"))?;
         let Some(row) = row else { return Ok(None) };
         let slot: Slot = decode(row)?;
@@ -86,8 +88,12 @@ impl PgTenantRepos {
             .studio_record("studio_publish_attempts", id.0)
             .await?
             .ok_or_else(|| AppError::not_found("publish attempt"))?;
+        let reason = outcome.failure_reason();
         let outcome = outcome.into_redacted();
-        let next = old.finish_at(&outcome, observed_at).map_err(invalid)?;
+        let next = old
+            .finish_at(&outcome, observed_at)
+            .map_err(invalid)?
+            .with_failure_reason(reason);
         if old == next {
             return Ok(());
         }
@@ -132,6 +138,55 @@ impl PgTenantRepos {
         self.studio_attempt_ledger(&next, "studio.publish.finished", observed_at)
             .await?;
         Ok(())
+    }
+    pub(super) async fn studio_upgrade_receipt(
+        &mut self,
+        id: PublishAttemptId,
+        receipt: PublishReceipt,
+        at: OffsetDateTime,
+    ) -> Result<bool, AppError> {
+        // The locks of a completion, in its order.
+        StrategyRepo::lock_execution_frame(self).await?;
+        StudioControlRepo::lock_control(self).await?;
+        let old: PublishAttempt = self
+            .studio_record("studio_publish_attempts", id.0)
+            .await?
+            .ok_or_else(|| AppError::not_found("publish attempt"))?;
+        let next = old.upgrade_receipt(&receipt).map_err(invalid)?;
+        if old == next {
+            return Ok(false);
+        }
+        let row: Value = sqlx::query_scalar(
+            "select data from studio_publications where workspace_id=$1 and attempt_id=$2 for update",
+        )
+        .bind(self.workspace_id().0)
+        .bind(id.0)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read publication evidence"))?
+        .ok_or_else(|| AppError::not_found("publication"))?;
+        let publication: Publication = decode(row)?;
+        let upgraded = publication.upgrade_receipt(&receipt).map_err(invalid)?;
+        sqlx::query(
+            "update studio_publications set data=$3,external_id=$4 where workspace_id=$1 and id=$2",
+        )
+        .bind(self.workspace_id().0)
+        .bind(upgraded.id.0)
+        .bind(encode(&upgraded)?)
+        .bind(&upgraded.external_id)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "upgrade publication evidence"))?;
+        sqlx::query("update studio_publish_attempts set data=$3 where workspace_id=$1 and id=$2")
+            .bind(self.workspace_id().0)
+            .bind(id.0)
+            .bind(encode(&next)?)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "upgrade Studio receipt"))?;
+        self.studio_attempt_ledger(&next, "studio.publish.public_id", at)
+            .await?;
+        Ok(true)
     }
     async fn studio_attempt_ledger(
         &mut self,

@@ -24,7 +24,9 @@ export function OnboardingPage() {
   const capabilities = useQuery({queryKey:['capabilities','onboarding',id],queryFn:()=>listCapabilities(),enabled:active && can('workspace.read')});
   const team = useQuery({queryKey:['team','onboarding',id],queryFn:listTeam,enabled:active && can('team.manage')});
   const keys = useQuery({queryKey:['api-keys','onboarding',id],queryFn:listKeys,enabled:active && can('api_keys.manage')});
-  const readable = !!workspace.data && workspace.data.status !== 'suspended';
+  // Suspension is known only once the workspace has loaded; until then nothing is "not checked".
+  const suspended = workspace.data?.status === 'suspended';
+  const readable = !!workspace.data && !suspended;
   const approved = readable && pending.data && typeof pending.data.strategy === 'object' && 'approved' in pending.data.strategy;
   const recent = readable && pending.data?.agent.last_seen_at && !pending.data.agent.overdue;
   return <>
@@ -39,7 +41,8 @@ export function OnboardingPage() {
     <Card><CardContent className="space-y-4 pt-6">
       <h2 className="text-h3">{t('onboarding.strategy')}</h2>
       {readable && pending.data && <p>{t(approved?'onboarding.strategyApproved':'onboarding.strategyPending')}</p>}
-      {readable ? <QueryState query={pending}/> : <p>{t('onboarding.suspendedChecks')}</p>}
+      {readable && <QueryState query={pending}/>}
+      {suspended && <p>{t('onboarding.suspendedChecks')}</p>}
       {workspace.data?.status!=='suspended' && <Link className="text-primary underline" to="/strategy">{t('onboarding.prepare')}</Link>}
     </CardContent></Card>
     <Card><CardContent className="space-y-4 pt-6">
@@ -50,6 +53,7 @@ export function OnboardingPage() {
     </CardContent></Card>
     <Card><CardContent className="space-y-4 pt-6">
       <h2 className="text-h3">{t('onboarding.connector')}</h2>
+      {workspace.data && !active && <p className="text-sm text-muted-foreground">{t('onboarding.connectorAfterActivation')}</p>}
       {active && <QueryState query={capabilities}/>}
       {active && capabilities.data && <p>{t(capabilities.data.some(out=>out.effective_status==='verified' && out.capability.has_sealed_config)?'onboarding.connectorVerified':'onboarding.connectorPending')}</p>}
       {active && can('capabilities.manage') && <Link className="text-primary underline" to="/connect">{t('onboarding.connect')}</Link>}
@@ -57,7 +61,7 @@ export function OnboardingPage() {
     </CardContent></Card>
     <Card><CardContent className="space-y-4 pt-6">
       <h2 className="text-h3">{t('onboarding.agent')}</h2>
-      <Callout tone={recent?'success':'warning'}>{t(!readable?'onboarding.suspendedChecks':recent?'onboarding.agentRecent':'onboarding.agentNeeded')}</Callout>
+      {workspace.data && <Callout tone={recent?'success':'warning'}>{t(suspended?'onboarding.suspendedChecks':recent?'onboarding.agentRecent':'onboarding.agentNeeded')}</Callout>}
       {active && <Link className="text-primary underline" to="/agents">{t('onboarding.agents')}</Link>}
     </CardContent></Card>
   </>;

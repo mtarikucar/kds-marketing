@@ -9,8 +9,8 @@ import { HOOKS_KEY } from './queries';
 /**
  * Where the providers deliver this workspace's events, to paste into each provider's dashboard:
  * the workspace's NetGSM callback URL per purpose (each carries the workspace's hook token, so the
- * page shows it only to who may manage capabilities) and the platform's Meta webhook, whose verify
- * token is never shown.
+ * page shows it only to who may manage capabilities), the platform's Meta webhook, whose verify
+ * token is never shown, and, once the platform's TikTok app is configured, its TikTok webhook.
  */
 export function WebhookPanel() {
   const { t } = useTranslation();
@@ -52,6 +52,15 @@ export function WebhookPanel() {
                     <Callout tone="info">{t('capabilities.hooks.metaMissing')}</Callout>
                   )}
                 </div>
+                {hooks.data.tiktok && (
+                  <div className="flex flex-col gap-2">
+                    <h4 className="text-sm font-medium text-foreground">{t('capabilities.hooks.tiktokTitle')}</h4>
+                    <CopyField label={t('capabilities.hooks.tiktokUrl')} value={hooks.data.tiktok.url} />
+                    <p className="text-caption text-muted-foreground">
+                      {t('capabilities.hooks.tiktokHelp', { events: hooks.data.tiktok.events.join(', ') })}
+                    </p>
+                  </div>
+                )}
               </>
             )}
           </QueryState>

@@ -1,7 +1,7 @@
 //! The platform-wide bundle: operators, their sessions, every workspace and lookups by secret
 //! hash.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
@@ -16,7 +16,7 @@ use jt_tenancy::{Email, MembershipStatus, WorkspaceId, WorkspaceStatus};
 use jt_tenancy::{OperatorId, UserId};
 use time::OffsetDateTime;
 
-use super::state::{MemBundle, MemState, MemTx, exists, unique};
+use super::state::{MemBundle, MemState, MemTx, StoredCapability, exists, unique};
 
 /// A platform-wide bundle.
 pub(super) struct MemPlatform {
@@ -365,6 +365,58 @@ impl PlatformRepos for MemPlatform {
             .map(|s| state.capability_view(s)))
     }
 
+    async fn capabilities_by_business_account(
+        &mut self,
+        waba_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        let state = self.state();
+        // A workspace's chosen holder: a verified one first, then the newest.
+        let rank = |s: &StoredCapability| {
+            let c = &s.capability;
+            (c.status == StoredStatus::Verified, c.created_at, c.id)
+        };
+        let mut chosen: BTreeMap<WorkspaceId, &StoredCapability> = BTreeMap::new();
+        for s in state.capabilities.iter().filter(|s| {
+            let c = &s.capability;
+            matches!(c.status, StoredStatus::Verified | StoredStatus::Unreachable)
+                && s.sealed.is_some()
+                && c.last_verified_at.is_some()
+                && c.kind_key == "whatsapp_cloud"
+                && c.connector_public["asset"]["waba_id"].as_str() == Some(waba_id)
+        }) {
+            let ws = s.capability.workspace_id;
+            if chosen.get(&ws).is_none_or(|best| rank(s) > rank(best)) {
+                chosen.insert(ws, s);
+            }
+        }
+        Ok(chosen
+            .into_values()
+            .map(|s| state.capability_view(s))
+            .collect())
+    }
+
+    async fn capabilities_holding(
+        &mut self,
+        kind_keys: &[&str],
+        external_id: &str,
+    ) -> Result<Vec<Capability>, AppError> {
+        let state = self.state();
+        let mut held: Vec<Capability> = state
+            .capabilities
+            .iter()
+            .filter(|s| {
+                let c = &s.capability;
+                c.status != StoredStatus::Retired
+                    && s.sealed.is_some()
+                    && kind_keys.contains(&c.kind_key.as_str())
+                    && c.external_id.as_deref() == Some(external_id)
+            })
+            .map(|s| state.capability_view(s))
+            .collect();
+        held.sort_by_key(|c| (c.workspace_id, c.id));
+        Ok(held)
+    }
+
     async fn workspaces_with_verified(
         &mut self,
         kind_keys: &[&str],
@@ -380,6 +432,18 @@ impl PlatformRepos for MemPlatform {
                     && kind_keys.contains(&c.kind_key.as_str())
             })
             .map(|s| s.capability.workspace_id)
+            .collect();
+        Ok(ids.into_iter().collect())
+    }
+
+    async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .calls
+            .sessions
+            .iter()
+            .filter(|s| s.mode == jt_calls::CallMode::Agent && s.state.is_live())
+            .map(|s| s.workspace_id)
             .collect();
         Ok(ids.into_iter().collect())
     }

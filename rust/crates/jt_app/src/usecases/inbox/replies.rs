@@ -2,17 +2,19 @@
 //! atomically record the result. An uncertain provider write is never retried.
 use super::record;
 use crate::{
+    catalog::{self, GateMode},
     ctx::Ctx,
     error::{AppError, ErrorCode},
     ports::{
         TenantRepos,
-        connectors::{MailMessage, SendReceipt},
+        connectors::{MailMessage, PUBLIC_ITEM_GONE, SendReceipt},
         inbox::OutboxRow,
     },
     usecases::{
         Deps,
         connector::{adapter_public, open_credential},
-        required,
+        failure, required,
+        studio::budget::is_metered,
     },
 };
 use jt_capability::{Capability, EffectiveStatus, effective_status};
@@ -39,6 +41,14 @@ pub struct ReplyInput {
     pub in_reply_to: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
+    /// The comment or question replied to: required on a public conversation, refused on a
+    /// private one (`item_requires_public_conversation`).
+    #[serde(default)]
+    pub item_id: Option<PublicItemId>,
+    /// In front of everyone (the default) or privately to the item's author; public
+    /// conversations only.
+    #[serde(default)]
+    pub visibility: Option<Visibility>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyOut {
@@ -51,6 +61,34 @@ fn output(row: &OutboxRow) -> ReplyOut {
         message_id: row.message_id,
         state: row.state.clone(),
     }
+}
+/// The subject of a reply to mail whose subject is `original`: "Re: " and the original, its line
+/// breaks and other control characters turned into single spaces, without a second reply prefix
+/// ("Re:", "RE:", "Ynt:", "Aw:"), at most a header line (998 bytes); "Re:" when nothing is known.
+fn reply_subject(original: Option<&str>) -> String {
+    let flat: String = original
+        .unwrap_or_default()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let flat = flat.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "Re:".into();
+    }
+    let lower = flat.to_lowercase();
+    let mut subject = if ["re:", "ynt:", "aw:"].iter().any(|p| lower.starts_with(p)) {
+        flat
+    } else {
+        format!("Re: {flat}")
+    };
+    if subject.len() > 998 {
+        let mut end = 998;
+        while !subject.is_char_boundary(end) {
+            end -= 1;
+        }
+        subject.truncate(end);
+    }
+    subject
 }
 fn refused(reason: impl Into<String>) -> AppError {
     let reason = reason.into();
@@ -128,6 +166,8 @@ pub async fn send(
         subject: None,
         in_reply_to: None,
         references: vec![],
+        item_id: None,
+        visibility: None,
     };
     match enqueue_target(
         deps,
@@ -172,6 +212,55 @@ pub(super) enum Purpose<'a> {
     Appointment(&'a crate::ports::compliance::AppointmentRow),
 }
 
+/// The use case that queues a send for `target` and `purpose`. It is recorded in the send's
+/// intent (`use_case`), so a claim, recovery included, honours that use case's strategy gate again.
+fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
+    match (target, purpose) {
+        (_, Purpose::Quote(..)) => "inbox.quotes.send",
+        (_, Purpose::Appointment(_)) => "inbox.appointments.book",
+        (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
+        (Target::Person(..), Purpose::Reply) => "inbox.send",
+    }
+}
+
+/// The strategy gate of the use case a send's intent records. A send that records none was
+/// queued before sends recorded it, when every send was queued behind the gate: it stays gated.
+fn gate_of(use_case: Option<&str>) -> GateMode {
+    use_case
+        .and_then(catalog::find)
+        .map_or(GateMode::Gated, |uc| uc.gate)
+}
+
+/// The strategy gate a send is held to: its use case's (`gate_of`), but always gated when the
+/// send opens a conversation, which is contact nobody asked for (a quote or a booking mailed on a
+/// channel the customer never wrote on included). Both facts are recorded in the send's intent.
+fn send_gate(use_case: Option<&str>, opens_conversation: bool) -> GateMode {
+    if opens_conversation {
+        GateMode::Gated
+    } else {
+        gate_of(use_case)
+    }
+}
+
+/// The strategy gate queued send `row` is held to again at claim and approval: `send_gate` of the
+/// use case and the conversation opening its intent records.
+fn queued_gate(row: &OutboxRow) -> GateMode {
+    send_gate(
+        row.intent.get("use_case").and_then(Value::as_str),
+        row.intent
+            .get("opens_conversation")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    )
+}
+
+/// How long after the customer's last message a commercial message in a conversation that is not
+/// closed still answers them rather than reaching out to them: seven days, a working week of
+/// back-and-forth (a quote a few days after the question). Later, or once the conversation is
+/// closed, a commercial message is outreach and needs an approved strategy, on every channel.
+/// Meta's channels refuse one outside their 24-hour window anyway; email and SMS have none.
+pub const ANSWERING_WINDOW: Duration = Duration::days(7);
+
 /// Shared phase A: caller owns the workspace lock and commits related business rows atomically.
 pub(super) async fn enqueue_in(
     deps: &Deps,
@@ -199,6 +288,7 @@ pub(super) async fn enqueue_in(
             json!({"field":"text"}),
         ));
     }
+    let use_case = queued_by(&target, &purpose);
     let c = match target {
         Target::Conversation(id) => lock_conversation(r, id).await?,
         Target::Person(person, channel) => {
@@ -250,6 +340,22 @@ pub(super) async fn enqueue_in(
         }
     };
     let id = c.id;
+    let opens_conversation = r.conversations().get(id).await?.is_none();
+    // A comment or question is answered by naming it; a direct message never names one.
+    let public = public_channel_for_kind(&c.kind_key).is_some();
+    if !public && (input.item_id.is_some() || input.visibility.is_some()) {
+        return Err(AppError::validation(
+            "item_id and visibility need a public conversation",
+            json!({"field":"item_id","reason":"item_requires_public_conversation"}),
+        ));
+    }
+    if public && !matches!(purpose, Purpose::Reply) {
+        return Err(AppError::validation(
+            "a public conversation takes replies only",
+            json!({"field":"conversation_id","reason":"public_conversation_takes_replies_only"}),
+        ));
+    }
+    let visibility = input.visibility.unwrap_or_default();
     let j = lock_current_journey(r, c.person_id).await?;
     let author = match ctx.actor {
         Actor::Human { user_id } => Author::Human(user_id),
@@ -257,39 +363,73 @@ pub(super) async fn enqueue_in(
         Actor::System { .. } => Author::System,
     };
     let cap = capability(r, &c).await?;
-    if let Err(error) = fence(
+    let fenced = fence_all(
+        deps,
         r,
         ctx,
-        &c,
-        j.as_ref(),
-        &cap,
-        c.executor_generation,
-        (author, input.intent),
+        Fencing {
+            c: &c,
+            j: j.as_ref(),
+            cap: &cap,
+            generation: c.executor_generation,
+            author,
+            intent: input.intent,
+            text: &text,
+            public: Some((input.item_id, visibility)),
+            count_cap: true,
+            except: None,
+            gate: send_gate(Some(use_case), opens_conversation),
+        },
     )
-    .await
-    {
-        if error.code == ErrorCode::Forbidden {
-            record(
-                r,
-                ctx,
-                "inbox.send.refused",
-                "person",
-                c.person_id,
-                json!({"person_id":c.person_id,"reason":error.message}),
-            )
-            .await?;
+    .await;
+    let fenced = match fenced {
+        Ok(fenced) => fenced,
+        Err(error) => {
+            if error.code == ErrorCode::Forbidden {
+                record(
+                    r,
+                    ctx,
+                    "inbox.send.refused",
+                    "person",
+                    c.person_id,
+                    json!({"person_id":c.person_id,"reason":error.message}),
+                )
+                .await?;
+            }
+            return Err(error);
         }
-        return Err(error);
-    }
+    };
     // Only an accepted send may create a conversation. No inbound time is manufactured.
-    if r.conversations().get(id).await?.is_none() {
+    if opens_conversation {
         r.conversations().insert_for_send(c.clone()).await?;
     }
-    // Validate recipient ambiguity before creating any durable outbound intent.
-    let recipient = recipient(r, &c, &cap).await?;
+    // Validate recipient ambiguity before creating any durable outbound intent. A public reply
+    // goes to its item, never to an identity.
+    let recipient = if public {
+        String::new()
+    } else {
+        recipient(r, &c, &cap).await?
+    };
     let message_id = MessageId::from(deps.ids.uuid());
     let outbox_id = deps.ids.uuid();
-    let mut intent = json!({"kind":input.intent,"request_key":key});
+    let mut intent = json!({
+        "kind": input.intent,
+        "request_key": key,
+        "use_case": use_case,
+        "opens_conversation": opens_conversation,
+    });
+    // An agent's (or the system's) reply on a capability that requires approval waits for a
+    // human (spec §3.7); a human's never does.
+    let mut held = false;
+    if let Some(fenced) = &fenced {
+        intent["public"] = json!({
+            "item_id": fenced.item.id,
+            "visibility": visibility,
+            "target": fenced.target,
+            "drafted_by": ctx.actor,
+        });
+        held = cap.policy.requires_human_approval && !matches!(ctx.actor, Actor::Human { .. });
+    }
     match &purpose {
         Purpose::Reply => {}
         Purpose::Quote(quote, key) => {
@@ -317,8 +457,6 @@ pub(super) async fn enqueue_in(
             }
             Ok(())
         };
-        let subject = input.subject.unwrap_or_else(|| "Re:".into());
-        header(&subject)?;
         let in_reply_to = match input.in_reply_to {
             Some(id) => Some(id),
             None => r
@@ -331,6 +469,17 @@ pub(super) async fn enqueue_in(
                 .and_then(|m| m.external_id)
                 .filter(|id| id.starts_with('<') && id.ends_with('>')),
         };
+        let subject = match input.subject {
+            Some(subject) => subject,
+            None => {
+                let original = match &in_reply_to {
+                    Some(id) => r.inbound_events().mail_subject(cap.id, id).await?,
+                    None => None,
+                };
+                reply_subject(original.as_deref())
+            }
+        };
+        header(&subject)?;
         let mut references = input.references;
         if let Some(id) = &in_reply_to {
             header(id)?;
@@ -400,7 +549,7 @@ pub(super) async fn enqueue_in(
         expected_generation: c.executor_generation,
         fence_snapshot: None,
         conversation_merged: false,
-        state: "queued".into(),
+        state: if held { "held" } else { "queued" }.into(),
         attempts: 0,
         last_error: None,
         created_at: ctx.now,
@@ -439,7 +588,87 @@ pub(super) async fn enqueue_in(
         json!({"conversation_id":id,"message_id":message_id}),
     )
     .await?;
+    if held {
+        record(
+            r,
+            ctx,
+            "inbox.public.held",
+            "outbox",
+            row.id,
+            json!({"conversation_id":id,"message_id":message_id,"item_id":row.intent["public"]["item_id"]}),
+        )
+        .await?;
+    }
     Ok(Enqueued::New(row.id))
+}
+
+/// What one fencing of a reply reads (see [`fence_all`]).
+struct Fencing<'a> {
+    c: &'a Conversation,
+    j: Option<&'a Journey>,
+    cap: &'a Capability,
+    generation: u32,
+    author: Author,
+    intent: SendIntent,
+    text: &'a str,
+    /// On a public conversation, the item named and the reply's visibility.
+    public: Option<(Option<PublicItemId>, Visibility)>,
+    /// Whether the capability's daily cap is counted (at enqueue only: the row itself counts
+    /// afterwards).
+    count_cap: bool,
+    /// The row being claimed or approved, which is not in its own way (`reply_in_flight`).
+    except: Option<Uuid>,
+    /// The strategy gate the send is held to (`send_gate`): at enqueue from its use case, at
+    /// claim and approval from what its intent records.
+    gate: GateMode,
+}
+
+/// Every fence of a reply: on a public conversation commercial intent first (spec §3.6 rule
+/// 1), then the domain fence, then the public fence (rules 2 to 6,
+/// [`super::public::reply_fence`]); what the public fence fenced, `None` on a private
+/// conversation. Run at enqueue, at claim and at approval.
+async fn fence_all(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    f: Fencing<'_>,
+) -> Result<Option<super::public::Fenced>, AppError> {
+    let channel = public_channel_for_kind(&f.c.kind_key);
+    if channel.is_some() && f.intent == SendIntent::Commercial {
+        return Err(super::public::refusal(
+            PublicRefusal::CommercialOnPublicSurface,
+        ));
+    }
+    fence(
+        r,
+        ctx,
+        f.c,
+        f.j,
+        f.cap,
+        f.generation,
+        (f.author, f.intent, f.gate),
+    )
+    .await?;
+    let Some(channel) = channel else {
+        return Ok(None);
+    };
+    let (item_id, visibility) = f.public.unwrap_or((None, Visibility::Public));
+    super::public::reply_fence(
+        deps,
+        ctx,
+        r,
+        f.c,
+        f.cap,
+        channel,
+        item_id,
+        visibility,
+        f.text,
+        matches!(f.author, Author::Agent),
+        f.count_cap,
+        f.except,
+    )
+    .await
+    .map(Some)
 }
 async fn lock_conversation(
     r: &mut dyn TenantRepos,
@@ -472,16 +701,16 @@ async fn fence(
     j: Option<&Journey>,
     cap: &Capability,
     generation: u32,
-    purpose: (Author, SendIntent),
+    purpose: (Author, SendIntent, GateMode),
 ) -> Result<(), AppError> {
-    let (author, intent) = purpose;
+    let (author, intent, gate) = purpose;
     let person = r
         .people()
         .get(c.person_id)
         .await?
         .ok_or_else(|| AppError::not_found("no such person"))?;
     let channel =
-        channel_for_kind(&c.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
+        conversation_channel(&c.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
     let history = super::consent::history(r, c.person_id).await?;
     let consents: Vec<_> = history
         .consents
@@ -517,9 +746,11 @@ async fn fence(
         matches!(author, Author::Agent),
     )
     .map_err(|e| refused(e.to_string()))?;
-    let window_open = c.last_inbound_at.is_some_and(|at| {
-        at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
-    });
+    // A public item's own rules replace the direct-message window (spec §3.6).
+    let window_open = channel.is_public()
+        || c.last_inbound_at.is_some_and(|at| {
+            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= Duration::hours(24)
+        });
     if !window_open {
         if intent == SendIntent::Commercial
             && matches!(
@@ -538,11 +769,23 @@ async fn fence(
             return Err(refused("reply_window_closed"));
         }
     }
-    // Recovery must honor the same workspace gate as the public surfaces.
+    // Recovery must honor the same workspace gate as the public surfaces: the status check for
+    // every send, the strategy for one held to the gate (`send_gate`). Whatever queued it, two
+    // more sends need the strategy: a commercial message to a customer who is no longer talking
+    // (outreach, see ANSWERING_WINDOW), and a metered send, whose spend is reserved in the
+    // approved strategy's budget frame; without one each is refused here, never left queued to be
+    // sent late.
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Err(refused("workspace_inactive"));
     }
-    if r.strategy().current_approved().await?.is_none() {
+    let answering = !matches!(c.state, ConvState::Closed)
+        && c.last_inbound_at.is_some_and(|at| {
+            at <= ctx.now + Duration::minutes(5) && ctx.now - at <= ANSWERING_WINDOW
+        });
+    let outreach = intent == SendIntent::Commercial && !answering;
+    if (gate == GateMode::Gated || outreach || is_metered(cap))
+        && r.strategy().current_approved().await?.is_none()
+    {
         return Err(refused("strategy_required"));
     }
     Ok(())
@@ -642,17 +885,26 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             return Ok(Claim::Done(output(&row)));
         }
     }
-    if let Err(e) = fence(
+    // The whole fence again, the public one included (an item may have been answered, removed
+    // or expired since enqueue); the daily cap counted this row at enqueue.
+    let public = super::public::intent_of(&row.intent)?;
+    if let Err(e) = fence_all(
+        deps,
         r.as_mut(),
         ctx,
-        &c,
-        j.as_ref(),
-        &cap,
-        row.expected_generation,
-        (
-            message.author,
-            serde_json::from_value(row.intent["kind"].clone())?,
-        ),
+        Fencing {
+            c: &c,
+            j: j.as_ref(),
+            cap: &cap,
+            generation: row.expected_generation,
+            author: message.author,
+            intent: serde_json::from_value(row.intent["kind"].clone())?,
+            text: &message.body,
+            public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
+            count_cap: false,
+            except: Some(row.id),
+            gate: queued_gate(&row),
+        },
     )
     .await
     {
@@ -780,14 +1032,24 @@ async fn prepare(
 ) -> Result<(Credential, String, Provider), AppError> {
     let provider =
         provider_for_kind(&cap.kind_key).ok_or_else(|| refused("unsupported_reply_channel"))?;
-    if (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
-        || (cap.kind_key == "mailbox" && deps.connectors.mail_sender(provider).is_none())
-        || (!matches!(cap.kind_key.as_str(), "sms_line" | "mailbox")
-            && deps.connectors.messaging(provider).is_none())
-    {
+    let public = public_channel_for_kind(&cap.kind_key).is_some();
+    let unavailable = if public {
+        deps.connectors.public(provider).is_none()
+    } else {
+        (cap.kind_key == "sms_line" && deps.connectors.sms(provider).is_none())
+            || (cap.kind_key == "mailbox" && deps.connectors.mail_sender(provider).is_none())
+            || (!matches!(cap.kind_key.as_str(), "sms_line" | "mailbox")
+                && deps.connectors.messaging(provider).is_none())
+    };
+    if unavailable {
         return Err(refused("connector_unavailable"));
     }
-    let recipient = recipient(r, c, cap).await?;
+    // A public reply goes to its item (the intent's target), never to an identity.
+    let recipient = if public {
+        String::new()
+    } else {
+        recipient(r, c, cap).await?
+    };
     let sealed = r
         .capabilities()
         .read_sealed(cap.id)
@@ -871,7 +1133,32 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
         Claim::Done(out) => return Ok(out),
         Claim::Ready(p) => p,
     };
-    let result = if p.capability.kind_key == "mailbox" {
+    // A private reply's receipt names its recipient's direct-message id, when the provider does.
+    let mut recipient = None;
+    let result = if let Some(public) = super::public::intent_of(&p.row.intent)? {
+        let surface = deps
+            .connectors
+            .public(p.provider)
+            .ok_or_else(|| AppError::internal("public surface disappeared"))?;
+        let facts = adapter_public(&p.capability);
+        match public.visibility {
+            Visibility::Public => {
+                surface
+                    .reply_public(&p.credential, &facts, &public.target, &p.message.body)
+                    .await
+            }
+            Visibility::Private => surface
+                .reply_private(&p.credential, &facts, &public.target, &p.message.body)
+                .await
+                .map(|receipt| {
+                    recipient = receipt.recipient_id;
+                    SendReceipt {
+                        provider_id: receipt.provider_id,
+                        cost_minor: None,
+                    }
+                }),
+        }
+    } else if p.capability.kind_key == "mailbox" {
         let mail: MailMessage = serde_json::from_value(p.row.intent["mail"].clone())?;
         deps.connectors
             .mail_sender(p.provider)
@@ -902,7 +1189,7 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
             )
             .await
     };
-    record_result(deps, &fresh(deps, &ctx), p.row.id, result).await
+    record_result_for(deps, &fresh(deps, &ctx), p.row.id, result, recipient).await
 }
 
 /// Phase C and acceptance reconciliation. The original journey is retained across a later
@@ -913,10 +1200,21 @@ pub async fn record_result(
     id: Uuid,
     result: Result<SendReceipt, ConnectorError>,
 ) -> Result<ReplyOut, AppError> {
+    record_result_for(deps, ctx, id, result, None).await
+}
+
+/// [`record_result`], with the recipient a private reply's receipt named.
+async fn record_result_for(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: Uuid,
+    result: Result<SendReceipt, ConnectorError>,
+    recipient: Option<String>,
+) -> Result<ReplyOut, AppError> {
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
-    let out = record_result_in(deps, ctx, r.as_mut(), id, result, false).await?;
+    let out = record_result_with(deps, ctx, r.as_mut(), id, result, false, recipient).await?;
     r.commit().await?;
     Ok(out)
 }
@@ -929,6 +1227,22 @@ pub(super) async fn record_result_in(
     id: Uuid,
     result: Result<SendReceipt, ConnectorError>,
     evidence: bool,
+) -> Result<ReplyOut, AppError> {
+    record_result_with(deps, ctx, r, id, result, evidence, None).await
+}
+
+/// [`record_result_in`], with the recipient a private reply's receipt named. A public reply's
+/// receipt answers its item, in this transaction (`super::public::on_receipt`); a public reply
+/// refused because its item is gone ([`PUBLIC_ITEM_GONE`]) fails with `item_removed` and
+/// removes the item.
+async fn record_result_with(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    id: Uuid,
+    result: Result<SendReceipt, ConnectorError>,
+    evidence: bool,
+    recipient: Option<String>,
 ) -> Result<ReplyOut, AppError> {
     let hint = r
         .outbox()
@@ -1093,7 +1407,18 @@ pub(super) async fn record_result_in(
             )
         }
         Err(e) => {
-            row.last_error = Some(e.kind().into());
+            let reason = failure::failure_reason(provider_for_kind(&c.kind_key), &e);
+            tracing::warn!(
+                workspace_id = %ctx.workspace_id,
+                capability_id = %row.capability_id.0,
+                error_kind = e.kind(),
+                http_status = ?failure::http_status(&reason),
+                provider_code = ?failure::provider_code(&reason),
+                "an outbound message could not be sent"
+            );
+            let gone = row.intent.get("public").is_some()
+                && matches!(&e, ConnectorError::Permanent { reason, .. } if reason == PUBLIC_ITEM_GONE);
+            row.last_error = Some(if gone { "item_removed".into() } else { reason });
             if matches!(e, ConnectorError::Unknown { .. }) {
                 row.state = "unknown".into();
                 (MsgStatus::Unknown, None, None)
@@ -1127,7 +1452,225 @@ pub(super) async fn record_result_in(
         .set_status(row.message_id, status, external, cost)
         .await?;
     save_result(r, ctx, &row).await?;
+    if row.intent.get("public").is_some() {
+        match row.state.as_str() {
+            "sent" => super::public::on_receipt(deps, ctx, r, &row, recipient.as_deref()).await?,
+            "failed" if row.last_error.as_deref() == Some("item_removed") => {
+                super::public::on_gone(r, ctx, &row).await?;
+            }
+            _ => {}
+        }
+    }
     Ok(output(&row))
+}
+
+/// The fence refusals of an approval that refuse the held reply itself: its item can no longer
+/// take it (spec D20). Any other refusal (`workspace_inactive`, `capability_down`, the text)
+/// leaves the reply held.
+const ITEM_STATE_REFUSALS: &[&str] = &[
+    "item_removed",
+    "deadline_passed",
+    "already_answered",
+    "item_not_in_conversation",
+    "reply_in_flight",
+    "private_window_closed",
+    "private_reply_used",
+];
+
+/// [`super::public::approve`] inside its transaction (the workspace lock held): the approver's
+/// edited `text` is checked first (`VALIDATION`, the reply still held); then the held row is
+/// fenced again with `approver` as its author on the text (the draft's when `None`) and queued
+/// with its message revised. A fence refusal is the error; an item-state one
+/// ([`ITEM_STATE_REFUSALS`]) also refuses the row and its message with that reason, any other
+/// leaves the reply held (spec D20).
+pub(super) async fn approve_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    id: Uuid,
+    approver: jt_tenancy::UserId,
+    text: Option<String>,
+) -> Result<(), AppError> {
+    let hint = r
+        .outbox()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    let c = lock_conversation(r, hint.conversation_id).await?;
+    let j = lock_current_journey(r, c.person_id).await?;
+    let mut row = r
+        .outbox()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    if row.state != "held" {
+        return Err(not_held());
+    }
+    let message = r
+        .messages()
+        .get(row.message_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such message"))?;
+    let text = match text {
+        Some(text) => required("text", &text)?,
+        None => message.body.clone(),
+    };
+    let edited = text != message.body;
+    let author = Author::Human(approver);
+    let cap = capability(r, &c).await?;
+    let public = super::public::intent_of(&row.intent)?;
+    // The approver's edit first: refused, the draft stays held for another try.
+    if edited
+        && let Some(public) = &public
+        && let Some(channel) = public_channel_for_kind(&c.kind_key)
+        && let Some(refused) =
+            super::public::text_refusal(r, &c, channel, public.visibility, &text).await?
+    {
+        return Err(AppError::validation(
+            refused.to_string(),
+            json!({"field":"text","reason":refused.to_string()}),
+        ));
+    }
+    let fenced = fence_all(
+        deps,
+        r,
+        ctx,
+        Fencing {
+            c: &c,
+            j: j.as_ref(),
+            cap: &cap,
+            // The approver decides for the conversation as it now is: a hand-over since the
+            // draft (a take-over, the response SLA) does not strand it (spec D22).
+            generation: c.executor_generation,
+            author,
+            intent: serde_json::from_value(row.intent["kind"].clone())?,
+            text: &text,
+            public: public.as_ref().map(|p| (Some(p.item_id), p.visibility)),
+            count_cap: false,
+            except: Some(row.id),
+            gate: queued_gate(&row),
+        },
+    )
+    .await;
+    if let Err(e) = fenced {
+        let item_state = e.code == ErrorCode::Forbidden
+            && e.details["reason"]
+                .as_str()
+                .is_some_and(|reason| ITEM_STATE_REFUSALS.contains(&reason));
+        if item_state {
+            row.state = "refused".into();
+            row.last_error = Some(e.message.clone());
+            row.updated_at = ctx.now;
+            r.messages()
+                .set_status(
+                    row.message_id,
+                    MsgStatus::Refused {
+                        reason: e.message.clone(),
+                    },
+                    None,
+                    None,
+                )
+                .await?;
+            save_result(r, ctx, &row).await?;
+            record(
+                r,
+                ctx,
+                "inbox.send.refused",
+                "person",
+                c.person_id,
+                json!({"person_id":c.person_id,"reason":e.message}),
+            )
+            .await?;
+        }
+        return Err(e);
+    }
+    r.messages()
+        .revise_queued(row.message_id, author, &text)
+        .await?;
+    if row.expected_generation != c.executor_generation {
+        r.outbox()
+            .set_expected_generation(row.id, c.executor_generation)
+            .await?;
+        row.expected_generation = c.executor_generation;
+    }
+    row.state = "queued".into();
+    row.updated_at = ctx.now;
+    r.outbox().update(row.clone()).await?;
+    record(
+        r,
+        ctx,
+        "inbox.public.approved",
+        "outbox",
+        row.id,
+        json!({"outbox_id":row.id,"message_id":row.message_id,"edited":edited}),
+    )
+    .await
+}
+
+/// [`super::public::discard`] inside its transaction (the workspace lock held).
+pub(super) async fn discard_in(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    id: Uuid,
+) -> Result<ReplyOut, AppError> {
+    let hint = r
+        .outbox()
+        .get(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    lock_conversation(r, hint.conversation_id).await?;
+    let mut row = r
+        .outbox()
+        .lock(id)
+        .await?
+        .ok_or_else(|| AppError::not_found("no such outbox entry"))?;
+    if row.state != "held" {
+        return Err(not_held());
+    }
+    let drafted = &row.intent["public"]["drafted_by"];
+    let allowed = match &ctx.actor {
+        Actor::Human { .. } => true,
+        Actor::Agent { connection_id, .. } => {
+            drafted["kind"] == "agent" && drafted["connection_id"] == json!(connection_id)
+        }
+        Actor::System { .. } => false,
+    };
+    if !allowed {
+        return Err(refused("not_the_drafter"));
+    }
+    row.state = "refused".into();
+    row.last_error = Some("discarded".into());
+    row.updated_at = ctx.now;
+    r.messages()
+        .set_status(
+            row.message_id,
+            MsgStatus::Refused {
+                reason: "discarded".into(),
+            },
+            None,
+            None,
+        )
+        .await?;
+    save_result(r, ctx, &row).await?;
+    record(
+        r,
+        ctx,
+        "inbox.public.discarded",
+        "outbox",
+        row.id,
+        json!({"outbox_id":row.id,"message_id":row.message_id,"item_id":row.intent["public"]["item_id"]}),
+    )
+    .await?;
+    Ok(output(&row))
+}
+
+/// The refusal of approving or discarding a reply that is not held (any more).
+fn not_held() -> AppError {
+    AppError {
+        code: ErrorCode::Conflict,
+        message: "reply not held".into(),
+        details: json!({"reason":"reply_not_held"}),
+    }
 }
 pub(super) async fn save_result(
     r: &mut dyn TenantRepos,
@@ -1168,7 +1711,9 @@ pub(super) async fn save_result(
         "inbox.reply.result",
         "outbox",
         row.id,
-        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error}),
+        // The failure line stays on the outbox entry, which erasure clears; the append-only
+        // ledger keeps only its kind.
+        json!({"message_id":row.message_id,"state":row.state,"reason":row.last_error.as_deref().map(failure::failure_kind)}),
     )
     .await
 }
@@ -1203,4 +1748,24 @@ pub async fn recover_sending(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<bool, A
     save_result(r.as_mut(), ctx, &row).await?;
     r.commit().await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reply_subject_answers_the_original_once() {
+        assert_eq!(reply_subject(Some("Help\r\n  needed")), "Re: Help needed");
+        assert_eq!(reply_subject(Some("RE: Fiyat")), "RE: Fiyat");
+        assert_eq!(reply_subject(Some("Ynt: Teklif")), "Ynt: Teklif");
+        assert_eq!(reply_subject(Some("  \t ")), "Re:");
+        assert_eq!(reply_subject(None), "Re:");
+        let long = reply_subject(Some(&"ş".repeat(600)));
+        assert!(
+            long.len() <= 998 && long.starts_with("Re: ş"),
+            "{}",
+            long.len()
+        );
+    }
 }

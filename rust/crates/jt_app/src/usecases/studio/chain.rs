@@ -7,7 +7,9 @@ use crate::{
 use chrono::{Datelike, Timelike};
 use jt_capability::{Capability, CapabilityId, EffectiveStatus, effective_status};
 use jt_strategy::{LaneKind, StrategyVersionId};
-use jt_studio::{AdSetBindingId, Chain, ChainContext, PublicationId, StudioPolicy, validate_chain};
+use jt_studio::{
+    AdSetBindingId, Chain, ChainContext, PublicationId, StudioError, StudioPolicy, validate_chain,
+};
 use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use serde_json::json;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -36,6 +38,15 @@ pub struct MeasurementPermit {
     pub chain: Chain,
     pub capability: Capability,
 }
+/// The kinds the organic lane publishes to.
+pub(crate) const ORGANIC_KINDS: &[&str] = &[
+    "x",
+    "instagram",
+    "facebook_page",
+    "tiktok",
+    "linkedin_member",
+    "linkedin_page",
+];
 pub(crate) fn same_account(kind: &str, left: &str, right: &str) -> bool {
     jt_capability::canonical_external_id(kind, left)
         == jt_capability::canonical_external_id(kind, right)
@@ -46,6 +57,20 @@ pub(crate) fn refuse(reason: &str) -> AppError {
         message: reason.into(),
         details: json!({"reason":reason}),
     }
+}
+/// Whether `e` is [`authorize_execution_at`]'s refusal of a target that waits for someone rather
+/// than failed: its approval, a TikTok piece's posting screen ([`StudioPolicy::check_approval`]),
+/// or a piece held by the material gate (spec 2026-11-03 §5.6), which a corrected piece or
+/// material releases. `studio.pending` names each; none is a failed run.
+pub(crate) fn awaits_human(e: &AppError) -> bool {
+    e.code == ErrorCode::Conflict
+        && ([
+            StudioError::ApprovalRequired,
+            StudioError::PostingScreenRequired,
+        ]
+        .iter()
+        .any(|w| e.details["reason"] == w.to_string())
+            || e.details["reason"] == super::materials::MATERIAL_HOLD)
 }
 pub(crate) async fn active(r: &mut dyn TenantRepos) -> Result<WorkspaceId, AppError> {
     let w = r.workspace().get().await?;
@@ -77,11 +102,35 @@ pub(crate) fn capability_access(
             return Err(refuse("access_expired"));
         }
     }
-    let scopes: Vec<_> = access["scopes"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
-    let required: &[&str] = match (c.kind_key.as_str(), write) {
+    let Some(required) = studio_scopes(&c.kind_key, write) else {
+        return Err(refuse("unsupported_studio_capability"));
+    };
+    if lacks_studio_scope(c, required) {
+        return Err(refuse(SCOPE_MISSING));
+    }
+    Ok(())
+}
+/// [`capability_access`]'s refusal of a grant without the scope Studio needs: reconnecting the
+/// account (which asks for it) fixes it.
+pub(crate) const SCOPE_MISSING: &str = "credential_scope_missing";
+/// Whether `c`'s grant lacks every scope of `required` (an empty list needs none).
+fn lacks_studio_scope(c: &Capability, required: &[&str]) -> bool {
+    let scopes = granted_scopes(c);
+    !required.is_empty() && !required.iter().any(|s| scopes.contains(s))
+}
+/// Whether Studio can read the counters of `c`, of a kind it publishes to, with the grant it holds:
+/// `None` for another kind, `Some(false)` when the grant lacks the read scope (a reconnection asks
+/// for it), whatever else the capability's state.
+pub(crate) fn reads_counters(c: &Capability) -> Option<bool> {
+    if !ORGANIC_KINDS.contains(&c.kind_key.as_str()) {
+        return None;
+    }
+    studio_scopes(&c.kind_key, false).map(|required| !lacks_studio_scope(c, required))
+}
+/// The scopes of which Studio needs one to write to (`write`) or read from a capability of
+/// `kind`; `None` for a kind Studio does not use.
+fn studio_scopes(kind: &str, write: bool) -> Option<&'static [&'static str]> {
+    let required: &[&str] = match (kind, write) {
         ("x", true) => &["tweet.write"],
         ("x", false) => &["tweet.read"],
         ("meta_ads", true) => &["ads_management"],
@@ -96,12 +145,37 @@ pub(crate) fn capability_access(
         ],
         ("facebook_page", true) => &["pages_manage_posts"],
         ("facebook_page", false) => &["read_insights", "pages_read_engagement"],
-        _ => return Err(refuse("unsupported_studio_capability")),
+        // A direct post needs `video.publish`, a draft `video.upload` (each checked on the
+        // posting screen, `tiktok::tiktok_post`).
+        ("tiktok", true) => &["video.publish", "video.upload"],
+        // Counters need `video.list` (posts) or `user.info.stats` (the account); a publication's
+        // status (TikTok publishes in the background) is read with `video.publish` or
+        // `video.upload`.
+        ("tiktok", false) => &[
+            "video.list",
+            "user.info.stats",
+            "video.publish",
+            "video.upload",
+        ],
+        ("linkedin_member", true) => &["w_member_social"],
+        // LinkedIn has no read API for a member's posts: reading asks for no scope, and the
+        // adapter answers that it has no counters (measurement records the refusal once).
+        ("linkedin_member", false) => &[],
+        ("linkedin_page", true) => &["w_organization_social"],
+        // Share statistics and follower counts need the admin scope (the page ACL behind
+        // them), not `r_organization_social`.
+        ("linkedin_page", false) => &["rw_organization_admin"],
+        _ => return None,
     };
-    if !required.iter().any(|s| scopes.contains(s)) {
-        return Err(refuse("credential_scope_missing"));
-    }
-    Ok(())
+    Some(required)
+}
+/// The scopes the capability's credential was granted, as the connector use cases recorded them
+/// from the sealed credential (`connector_public.access.scopes`).
+pub(crate) fn granted_scopes(c: &Capability) -> Vec<&str> {
+    c.connector_public["access"]["scopes"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default()
 }
 pub(crate) fn hours(c: &Capability, now: OffsetDateTime) -> Result<(), AppError> {
     if let Some(h) = &c.policy.active_hours {
@@ -192,7 +266,7 @@ pub async fn authorize_execution_at(
             supported_kinds: if lane == LaneKind::Paid {
                 &["meta_ads"]
             } else {
-                &["x", "instagram", "facebook_page"]
+                ORGANIC_KINDS
             },
             lane,
         },
@@ -205,6 +279,8 @@ pub async fn authorize_execution_at(
             .get(&lane)
             .is_some_and(|l| l.requires_human_approval),
         capability_requires_human_approval: c.policy.requires_human_approval,
+        // TikTok's guidelines: a human passes its posting screen whatever the policies above say.
+        posting_screen_required: jt_studio::requires_posting_screen(&c.kind_key),
         approval: None,
     };
     match input.target {
@@ -229,6 +305,9 @@ pub async fn authorize_execution_at(
                 .get_piece(id, s.revision)
                 .await?
                 .ok_or_else(|| AppError::not_found("piece"))?;
+            // The material gate again, now (spec 2026-11-03 §5.6): a permission revoked, a window
+            // passed or an olay changed since submission holds the piece.
+            super::materials::publish_check(r, &s, now).await?;
             StudioPolicy {
                 approval: r.studio().get_approval(input.target, s.revision).await?,
                 ..policy
