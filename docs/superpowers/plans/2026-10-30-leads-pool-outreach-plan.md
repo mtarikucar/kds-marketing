@@ -1637,11 +1637,19 @@ comment; `Permission` union + four keys; `WorkKind` + nine kinds), `App.tsx` rou
 ### Task L9-T1: `make smoke-leads`
 **Files:** `jt_app/tests/smoke_leads.rs`, `rust/Makefile` (`smoke-leads: cargo test --locked -p jt_app --test
 smoke_leads`).
-- [ ] The scripted flow of spec §11 "Smoke", in process (fakes + in-process SMTP/IMAP fixtures as `jt_mail/tests/support`),
+- [x] The scripted flow of spec §11 "Smoke", in process (fakes + in-process SMTP/IMAP fixtures as `jt_mail/tests/support`),
   asserting headers, footer, reply stop, Contacted after our answer, unsubscribe effects and report numbers.
-- [ ] `jt_archtest/tests/leads_rules.rs` gains `playbook_tools_exist_in_the_catalog` (every `jeeta.*` name in
+- [x] `jt_archtest/tests/leads_rules.rs` gains `playbook_tools_exist_in_the_catalog` (every `jeeta.*` name in
   `jt_prospects::playbook::TEXT` is an MCP tool of the registry), now that every tool it names exists.
-- [ ] **Commit** `test(leads): end-to-end smoke`.
+- [x] **Commit** `test(leads): end-to-end smoke`.
+- As built (`f5b9db39`, spec D100–D104): `jt_app/tests/smoke_leads.rs` has two tests, `prospect_to_contacted_through_the_real_mail_adapter`
+  and `with_the_platform_switch_off_nothing_is_sent`. The mail goes through the real `jt_mail::MailConnector` to
+  `jt_mail/tests/support`'s loopback SMTP/IMAP fixtures (included by `#[path]`; `SmtpMode` gained `from`/`to`);
+  the reply comes from the `mail_inbox_poll` job; the standing task comes from `run_research_plan`, the owner
+  from inline distribution. jt_app dev-deps: `jt_outbound` with `test-loopback`, `tokio` `net`/`io-util`,
+  `tokio-rustls` (allowed in `[dev-dependencies]` by `only_mail_names_mail_protocol_libraries`, D100). The
+  archtest also has `jeeta_names_reads_families_and_sentence_ends`. On Windows, four `jt_mail` oversized-reply
+  tests hang locally (they do not reach the changed envelope lines); Linux CI runs them.
 
 ### Task L9-T2: operator runbooks
 **Files:** `docs/operations/leads-outreach.md` (enabling `JEETA_OUTREACH_ENABLED`, SPF/DKIM/DMARC checklist for
@@ -1652,7 +1660,11 @@ migration, the legal checklist of spec §12).
   old key and silently lifts every objection. The runbook says: never rotate the master key without a plan for
   the blocklist; before any key change, count the entries per key fingerprint
   (`BlocklistRepo::key_fingerprints`) and keep the old key available until the owner decides.
-- [ ] **Commit** `docs(operations): leads and outreach runbook`.
+- [x] **Commit** `docs(operations): leads and outreach runbook`.
+- As built (`ef4146d7`): `docs/operations/leads-outreach.md`; the key-fingerprint count is given as the platform-role
+  SQL behind `BlocklistRepo::key_fingerprints` (no tool or route exposes it), and the blocklist export as a
+  `\copy` of the `do_not_contact`/`erased` rows that `0020`'s down refuses on. No tool sets
+  `attachments.retention_days` in this release (the default 180 holds), which the runbook says.
 
 ### Task L9-T3: purge expired request keys (L1 review, spec D33)
 Request keys are kept until a later request reuses the key; nothing deletes an expired one (inbox's included).
