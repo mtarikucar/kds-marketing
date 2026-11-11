@@ -437,5 +437,6 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     nothing about it, for an account with a catalog. Every creative Jeeta builds now declines it
     (B55), so the ad that runs is the one that was planned and checked. Source:
     `developers.facebook.com/documentation/ads-commerce/marketing-api/marketing-api-changelog/version27.0`
-    and `/version26.0`. Not on staging yet: release `d0e0f893` builds creatives without the
-    decline, which matters only for an ad account that has a product catalog.
+    and `/version26.0`. Committed as `fa2da400`; CI run `42967783601` passed all nine jobs;
+    published to staging on 2026-11-11 at 06:14 UTC without a migration (record
+    `ops/staging-fa2da400.md` on `ops/release-dd66e8dc`). Tested against the Graph mock only.
