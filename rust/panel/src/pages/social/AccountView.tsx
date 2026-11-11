@@ -69,6 +69,13 @@ export function AccountView({ account, queryKey, back }: { account: api.SocialAc
             : <span className="inline-block rounded bg-surface-muted px-2 py-1 text-xs">{t(post.state === 'held' ? 'socialAccounts.held' : post.held_at_provider ? 'socialAccounts.atProvider' : 'socialAccounts.byJeeta')}</span>}
         </li>)}</ul>
       </section>
+      {data.at_platform?.some(post => !post.known) && <section aria-label={t('socialAccounts.strays')} className="space-y-2 border-s-2 border-warning bg-warning-subtle p-3 text-sm">
+        <h3 className="font-semibold">{t('socialAccounts.strays')}</h3>
+        <p>{t('socialAccounts.straysHelp')}</p>
+        <ul className="list-disc space-y-1 ps-5">{data.at_platform.filter(post => !post.known).map(post => <li key={post.external_id} className="break-words">
+          <time dateTime={post.publish_at}>{formatDateTime(post.publish_at, i18n.language)}</time>{post.title ? ` · ${post.title}` : ''}
+        </li>)}</ul>
+      </section>}
       <section aria-label={t('socialAccounts.recent')} className="space-y-3">
         <h3 className="font-semibold">{t('socialAccounts.recent')}</h3>
         {!data.recent.length && <p className="text-sm text-muted-foreground">{t('socialAccounts.noRecent')}</p>}

@@ -29,10 +29,10 @@ use jt_app::ports::connectors::{
     DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
     LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
     MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
-    PlatformAppConfig, PolledMail, PostMetrics, PrivateReceipt, PublicPoller, PublicSurface,
-    PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost,
-    Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony, TiktokApp,
-    TiktokCreator, Url, XApp,
+    PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt, PublicPoller,
+    PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
+    RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony,
+    TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -453,6 +453,8 @@ pub struct ScriptedConnector {
     scheduled_calls: Mutex<Vec<PublishReceipt>>,
     /// Withdrawals answer from here; each is a recorded [`ConnectorCall::Withdraw`].
     withdraw: Script<Result<bool, ConnectorError>>,
+    /// What [`Publisher::scheduled_list`] answers next; `Ok(None)` when nothing is queued.
+    scheduled_list: Mutex<VecDeque<Result<Option<Vec<PlatformScheduled>>, ConnectorError>>>,
     /// Revocations answer from here, `Ok(())` (the trait's default) when nothing is queued; the
     /// credentials revoked are kept apart from [`ScriptedConnector::calls`] (see
     /// [`ScriptedConnector::revoke_calls`]).
@@ -582,6 +584,7 @@ impl ScriptedConnector {
             scheduled: Script::default(),
             scheduled_calls: Mutex::default(),
             withdraw: Script::default(),
+            scheduled_list: Mutex::default(),
             revoke: Script::default(),
             revoke_calls: Mutex::default(),
             creator_info: Script::default(),
@@ -708,6 +711,15 @@ impl ScriptedConnector {
     /// Queues what the next [`Publisher::withdraw`] answers.
     pub fn push_withdraw(&self, result: Result<bool, ConnectorError>) {
         self.withdraw.push(result);
+    }
+
+    /// Queues what the next [`Publisher::scheduled_list`] answers (it answers `Ok(None)`, a
+    /// provider without a scheduler to read, while nothing is queued).
+    pub fn push_scheduled_list(
+        &self,
+        result: Result<Option<Vec<PlatformScheduled>>, ConnectorError>,
+    ) {
+        lock(&self.scheduled_list).push_back(result);
     }
 
     /// Queues what the next [`Publisher::resolve`] answers.
@@ -1030,6 +1042,14 @@ impl Publisher for ScriptedConnector {
             receipt: receipt.clone(),
         });
         self.next(&self.withdraw, "withdraw result")
+    }
+
+    async fn scheduled_list(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        lock(&self.scheduled_list).pop_front().unwrap_or(Ok(None))
     }
 
     /// The post is there: a scripted provider reads back what it published.

@@ -274,7 +274,21 @@ async fn a_post_is_left_with_the_platform_once_and_settles_when_it_went_out_ther
     assert_eq!(handed, [("Yeni sezon başlıyor".to_owned(), WHEN)]);
     assert_eq!(slot_state(&w, slot.id), SlotState::Ready);
     assert_eq!(ledgered(&w, "studio.publish.claimed"), 1);
-    // The account's page says where it waits; nothing is stuck for anybody.
+    // The account's page says where it waits; nothing is stuck for anybody. It also says what
+    // the platform's own scheduler holds: Jeeta's post, and one Jeeta does not know of (left
+    // there by hand, or by a hand-over that never said whether it was taken).
+    x.push_scheduled_list(Ok(Some(vec![
+        jt_app::ports::connectors::PlatformScheduled {
+            external_id: "stray-1".into(),
+            publish_at: WHEN + Duration::days(1),
+            text: "Elle zamanlanmış\nikinci satır".into(),
+        },
+        jt_app::ports::connectors::PlatformScheduled {
+            external_id: "sched-1".into(),
+            publish_at: WHEN,
+            text: "Yeni sezon başlıyor".into(),
+        },
+    ])));
     let detail = social::account_get(
         &w.d,
         &a,
@@ -289,6 +303,34 @@ async fn a_post_is_left_with_the_platform_once_and_settles_when_it_went_out_ther
         .unwrap();
     assert!(u.held_at_provider);
     assert_eq!(u.state, UpcomingState::Ready);
+    assert_eq!(
+        serde_json::to_value(&detail.at_platform).unwrap(),
+        json!([
+            {"external_id":"sched-1","publish_at":"2026-10-24T10:00:00Z",
+             "title":"Yeni sezon başlıyor","known":true},
+            {"external_id":"stray-1","publish_at":"2026-10-25T10:00:00Z",
+             "title":"Elle zamanlanmış","known":false},
+        ])
+    );
+    // A platform that has no scheduler to read, or a read that fails, leaves the list out and
+    // never fails the page.
+    x.push_scheduled_list(Err(ConnectorError::transient("down")));
+    for _ in 0..2 {
+        let detail = social::account_get(
+            &w.d,
+            &a,
+            input(json!({"capability_id":w.f.slot.capability_id})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail.at_platform, None);
+        assert!(
+            serde_json::to_value(&detail)
+                .unwrap()
+                .get("at_platform")
+                .is_none()
+        );
+    }
     let pending = studio_work::pending(&w.d, &w.ctx).await.unwrap();
     assert!(
         !serde_json::to_string(&pending)

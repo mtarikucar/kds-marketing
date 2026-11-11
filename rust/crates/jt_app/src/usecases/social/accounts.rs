@@ -151,6 +151,25 @@ pub struct AccountDetail {
     pub upcoming: Vec<Upcoming>,
     pub recent: Vec<Recent>,
     pub totals: Totals,
+    /// What the platform's own scheduler holds for the account right now, whoever left it
+    /// there; absent when the platform has no scheduler to read or the read failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_platform: Option<Vec<AtPlatform>>,
+}
+
+/// A post the platform's own scheduler holds for the account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AtPlatform {
+    /// The platform's id of the scheduled post.
+    pub external_id: String,
+    #[serde(with = "jt_studio::time_compat")]
+    pub publish_at: OffsetDateTime,
+    /// The first line of its text.
+    pub title: String,
+    /// Whether it is one of Jeeta's own coming posts held there (same time). One that is not
+    /// was left there by hand, or by a hand-over Jeeta could not follow: Jeeta will neither
+    /// report nor take it back.
+    pub known: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -447,12 +466,51 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
             });
         }
     }
+    let account = account_of(&c, &settings, &latest, &queue);
+    // What the platform's own scheduler holds, read with no transaction open. A read that
+    // fails, or a connection that cannot be read now, leaves the list out: it never fails the
+    // account's page.
+    let sealed = if chain::capability_access(&c, ctx.now, false).is_ok() {
+        r.capabilities().read_sealed(c.id).await?
+    } else {
+        None
+    };
+    drop(r);
+    let at_platform = match (
+        sealed.and_then(|s| open_credential(d, ctx.workspace_id, &s).ok()),
+        provider_for_kind(&c.kind_key).and_then(|p| d.connectors.publisher(p)),
+    ) {
+        (Some(credential), Some(publisher)) => publisher
+            .scheduled_list(&credential, &adapter_public(&c))
+            .await
+            .ok()
+            .flatten()
+            .map(|mut posts| {
+                posts.sort_by(|a, b| {
+                    (a.publish_at, &a.external_id).cmp(&(b.publish_at, &b.external_id))
+                });
+                posts
+                    .into_iter()
+                    .take(MAX_LISTED)
+                    .map(|p| AtPlatform {
+                        known: upcoming
+                            .iter()
+                            .any(|u| u.held_at_provider && u.publish_at == p.publish_at),
+                        title: first_line(&p.text),
+                        external_id: p.external_id,
+                        publish_at: p.publish_at,
+                    })
+                    .collect()
+            }),
+        _ => None,
+    };
     Ok(AccountDetail {
-        account: account_of(&c, &settings, &latest, &queue),
+        account,
         days,
         upcoming,
         recent,
         totals,
+        at_platform,
     })
 }
 

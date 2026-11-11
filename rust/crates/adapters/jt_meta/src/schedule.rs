@@ -29,7 +29,9 @@
 //! text post and the read of a post that went out are the documented shapes, tested against the
 //! Graph mock only.
 
-use jt_app::ports::connectors::{PostFormat, PublishReceipt, PublishRequest, Scheduled};
+use jt_app::ports::connectors::{
+    PlatformScheduled, PostFormat, PublishReceipt, PublishRequest, Scheduled,
+};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::{Value, json};
@@ -159,6 +161,48 @@ pub(crate) async fn schedule(
         external_id: id,
         url: None,
     })
+}
+
+/// What Facebook's scheduler holds for the Page now (`GET /{page}/scheduled_posts`, Page
+/// reference: <https://developers.facebook.com/docs/graph-api/reference/page/scheduled_posts/>),
+/// whoever left it there; `None` for a capability that is not a Facebook Page. A row without an
+/// id or a time is left out.
+pub(crate) async fn list(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+    if kind_of(public)? != "facebook_page" {
+        return Ok(None);
+    }
+    let (page, token) = page_of(cred, public, "read the scheduled posts")?;
+    let app = connector.graph_app()?;
+    let rows = connector
+        .graph_pages(
+            &app,
+            token,
+            &[page, "scheduled_posts"],
+            &[
+                ("fields", "id,message,scheduled_publish_time"),
+                ("limit", "100"),
+            ],
+        )
+        .await?;
+    Ok(Some(
+        rows.iter()
+            .filter_map(|row| {
+                let external_id = text(&row["id"]).filter(|id| node(id).is_ok())?;
+                let at = row["scheduled_publish_time"]
+                    .as_i64()
+                    .or_else(|| row["scheduled_publish_time"].as_str()?.parse().ok())?;
+                Some(PlatformScheduled {
+                    external_id,
+                    publish_at: OffsetDateTime::from_unix_timestamp(at).ok()?,
+                    text: text(&row["message"]).unwrap_or_default(),
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// Where the scheduled post `receipt` names stands (see the module docs).

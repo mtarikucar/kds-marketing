@@ -229,6 +229,61 @@ async fn a_photo_upload_that_fails_schedules_nothing_and_is_never_unknown() {
 }
 
 #[tokio::test]
+async fn what_facebooks_scheduler_holds_for_the_page_is_read_whoever_left_it_there() {
+    let r = rig().await;
+    let (cred, public) = page();
+    r.mock.set(
+        "GET",
+        "/fb/v19.0/123/scheduled_posts",
+        ok(json!({"data":[
+            {"id":"123_456","message":"hello\nsecond line","scheduled_publish_time":1_793_098_800},
+            {"id":"123_457","scheduled_publish_time":"1793185200"},
+            {"id":"123_458","message":"no time"},
+            {"message":"no id","scheduled_publish_time":1_793_098_800}
+        ]})),
+    );
+    let held = r
+        .meta
+        .scheduled_list(&cred, &public)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        held.iter()
+            .map(|p| (
+                p.external_id.as_str(),
+                p.publish_at.unix_timestamp(),
+                p.text.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("123_456", 1_793_098_800, "hello\nsecond line"),
+            ("123_457", 1_793_185_200, ""),
+        ]
+    );
+    let sent = r.mock.request("GET", "/fb/v19.0/123/scheduled_posts");
+    assert_graph_auth(&sent, "test");
+    assert_eq!(
+        sent.param("fields"),
+        Some("id,message,scheduled_publish_time")
+    );
+    // Nothing to read for an account that is not a Facebook Page, and nothing is asked.
+    assert_eq!(
+        r.meta
+            .scheduled_list(&cred, &json!({"kind_key":"instagram","external_id":"123"}))
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        r.mock
+            .requests("GET", "/fb/v19.0/123/scheduled_posts")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn a_scheduling_answer_that_neither_took_nor_refused_is_unknown_and_a_refusal_is_not() {
     let r = rig().await;
     let (cred, public) = page();

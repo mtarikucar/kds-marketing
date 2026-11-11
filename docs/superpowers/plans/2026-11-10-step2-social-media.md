@@ -320,3 +320,7 @@ Independent of Tasks 1–3 (fixtures).
   attempted version is not offered again. Nothing was published. Not seen: the Page's own
   scheduled list from Facebook's side while the post was there (the owner was asked to look for
   the post the first run may have left, 13 November 14:00, and to delete it).
+- 2026-11-11 The owner could not find, in Meta Business Suite, the post the first hand-over may
+  have left, and nobody else could look: neither the agent nor Jeeta sees the platform's own
+  scheduler. The account view now reads it (B59, `at_platform`) and marks what Jeeta does not
+  hold there; the panel warns on the account's page.

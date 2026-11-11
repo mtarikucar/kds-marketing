@@ -134,13 +134,22 @@ async fn a_finished_package_is_scheduled_by_an_agent_and_goes_out_on_the_page() 
     .await
     .unwrap_or_else(|e| panic!("{e:?}"));
     let slot = serde_json::to_value(scheduled.publication.slot.id).unwrap();
+    // The account's page also reads what Facebook's own scheduler holds for the Page: nothing.
+    w.mock.set(
+        "GET",
+        &format!("/fb/v19.0/{PAGE}/scheduled_posts"),
+        ok(json!({"data":[]})),
+    );
     let before = account(&w.deps, &w.owner, page).await;
+    assert_eq!(before["at_platform"], json!([]), "{before}");
     assert_eq!(before["upcoming"][0]["slot_id"], slot, "{before}");
     assert_eq!(before["upcoming"][0]["state"], "ready");
     assert_eq!(before["upcoming"][0]["format"], "feed_post");
     assert_eq!(before["recent"], json!([]));
     assert!(
-        w.mock.recorded().is_empty(),
+        w.mock
+            .requests("POST", &format!("/fb/v19.0/{PAGE}/photos"))
+            .is_empty(),
         "nothing is sent before its time"
     );
 
@@ -186,6 +195,11 @@ async fn a_finished_package_is_scheduled_by_an_agent_and_goes_out_on_the_page() 
     );
     // Sent once, and every request carried its token and its proof.
     assert_eq!(publish::publish_due(&w.deps, w.id).await.unwrap(), 0);
-    assert_eq!(w.mock.recorded().len(), 1);
+    assert_eq!(
+        w.mock
+            .requests("POST", &format!("/fb/v19.0/{PAGE}/photos"))
+            .len(),
+        1
+    );
     assert_eq!(w.mock.violations(), Vec::<String>::new());
 }

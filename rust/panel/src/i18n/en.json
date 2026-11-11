@@ -213,6 +213,8 @@
     "approved": "Approved. It goes out at its time.",
     "notWaiting": "This post is not waiting for approval.",
     "noUpcoming": "No posts scheduled.",
+    "strays": "Scheduled at the platform, not known to Jeeta",
+    "straysHelp": "These posts are in the platform’s own scheduler but are not among the posts Jeeta left there: scheduled by hand, or left by a hand-over whose outcome was never learnt. Jeeta does not follow them or take them back; delete them on the platform’s own screen if they should not go out.",
     "noRecent": "No posts in this period.",
     "noPackages": "No packages waiting for a time.",
     "materials": "{{count}} materials",

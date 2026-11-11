@@ -1208,6 +1208,18 @@ pub trait Publisher: Send + Sync {
             "scheduling a post at the provider is unsupported",
         ))
     }
+    /// The posts the provider's own scheduler holds for the account now, whoever left them there:
+    /// how a person sees a post Jeeta does not know of (one left there by hand, or one whose
+    /// hand-over answered without saying whether it was taken). `None`, the default, for a
+    /// provider or an account without a scheduler to read. A read: it never publishes anything.
+    async fn scheduled_list(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        let _ = (cred, public);
+        Ok(None)
+    }
     /// What the provider says, right now, about the account a post goes to, for a provider whose
     /// posts a human makes on its posting screen (TikTok's `creator_info`, read fresh each time
     /// the screen is shown and before a choice is accepted; an account that may not post at this
@@ -1221,6 +1233,15 @@ pub trait Publisher: Send + Sync {
         let _ = (cred, public);
         Ok(None)
     }
+}
+
+/// A post a provider's own scheduler holds ([`Publisher::scheduled_list`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlatformScheduled {
+    pub external_id: String,
+    pub publish_at: time::OffsetDateTime,
+    /// Its text, as the provider gives it; empty when it has none.
+    pub text: String,
 }
 
 /// Where a post left with a provider's own scheduler stands ([`Publisher::scheduled`]).

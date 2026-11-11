@@ -32,7 +32,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "social.account_get",
-            description: "One social account over a period (the last 30 days when left out, at most 366): its numbers day by day, the posts coming on it (state ready, waiting_person with waits_for, or held), the posts that went out with what each reached, and the period's totals. A number the platform does not give is null. [risk: READ]",
+            description: "One social account over a period (the last 30 days when left out, at most 366): its numbers day by day, the posts coming on it (state ready, waiting_person with waits_for, or held), the posts that went out with what each reached, and the period's totals. A number the platform does not give is null. at_platform, when the platform has a scheduler of its own that can be read, lists what that scheduler holds for the account right now (external_id, publish_at, title, known): known false is a post Jeeta does not hold there, left by hand or by a hand-over whose outcome was unknown; Jeeta neither reports it nor takes it back, so tell the owner. [risk: READ]",
             permissions: &[Permission::SocialWork],
             schema: || Schema::try_from(social::schema("account_get")).expect("social schema"),
             run: account_get,

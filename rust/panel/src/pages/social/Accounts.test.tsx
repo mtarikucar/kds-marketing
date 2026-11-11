@@ -81,6 +81,22 @@ it('links a waiting TikTok post to its posting screen and shows absent metrics a
   expect(await within(detail).findByTestId('metric-followers')).toHaveTextContent('—');
   expect(within(detail).getByRole('link', { name: /Senden bekleniyor/ })).toHaveAttribute('href', '/social?tiktok=s1');
 });
+it('warns about posts the platform holds that Jeeta did not leave there, and only about those', async () => {
+  mockFetch({ ...socialAnswers, 'GET /api/social/accounts/ig1': { ...accountDetail, at_platform: [
+    { external_id: 'p1', publish_at: '2026-11-13T11:00:00Z', title: 'Elle zamanlanmış', known: false },
+    { external_id: 'p2', publish_at: '2026-11-12T10:45:00Z', title: 'Sistemin kendi gönderisi', known: true },
+  ] } });
+  renderAt('/social?account=ig1');
+  const strays = await screen.findByRole('region', { name: 'Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler' });
+  expect(within(strays).getByText(/Elle zamanlanmış/)).toBeVisible();
+  expect(within(strays).queryByText(/Sistemin kendi gönderisi/)).not.toBeInTheDocument();
+});
+it('says nothing about the platform’s scheduler when it holds only Jeeta’s own posts or cannot be read', async () => {
+  mockFetch({ ...socialAnswers, 'GET /api/social/accounts/ig1': { ...accountDetail, at_platform: [{ external_id: 'p2', publish_at: '2026-11-12T10:45:00Z', title: 'Sistemin kendi gönderisi', known: true }] } });
+  renderAt('/social?account=ig1');
+  await screen.findByRole('region', { name: 'Sıradaki paylaşımlar' });
+  expect(screen.queryByRole('region', { name: 'Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler' })).not.toBeInTheDocument();
+});
 it('does not fabricate a change when the starting observation is absent', async () => {
   mockFetch({ ...socialAnswers, 'GET /api/social/accounts/ig1': { ...accountDetail, days: [{ ...socialAccount.latest, followers: null }, socialAccount.latest] } });
   renderAt('/social?account=ig1');

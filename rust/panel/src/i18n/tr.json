@@ -213,6 +213,8 @@
     "approved": "Onaylandı. Saatinde yayınlanacak.",
     "notWaiting": "Bu paylaşım onay beklemiyor.",
     "noUpcoming": "Planlanmış paylaşım yok.",
+    "strays": "Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler",
+    "straysHelp": "Bu gönderiler platformun kendi zamanlayıcısında duruyor ama Jeeta’nın bıraktığı paylaşımlardan biri değil: elle zamanlanmış ya da sonucu öğrenilemeyen bir bırakmadan kalmış olabilir. Jeeta bunları izlemez ve geri çekmez; yayınlanmasını istemiyorsanız platformun kendi ekranından silin.",
     "noRecent": "Bu dönemde paylaşım yok.",
     "noPackages": "Zaman seçilmeyi bekleyen paket yok.",
     "materials": "{{count}} materyal",

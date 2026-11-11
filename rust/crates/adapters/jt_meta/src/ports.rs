@@ -10,9 +10,9 @@ use jt_app::ports::connectors::{
 use jt_app::ports::connectors::{
     AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector,
     InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, MessagingSender,
-    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PostMetrics, PrivateReceipt,
-    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, Publisher,
-    Scheduled, SendReceipt, SubjectFacts,
+    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformScheduled, PostMetrics,
+    PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
+    Publisher, Scheduled, SendReceipt, SubjectFacts,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -163,6 +163,14 @@ impl Publisher for MetaConnector {
         receipt: &PublishReceipt,
     ) -> Result<bool, ConnectorError> {
         schedule::withdraw(self, cred, public, receipt).await
+    }
+
+    async fn scheduled_list(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        schedule::list(self, cred, public).await
     }
 }
 

@@ -1231,6 +1231,12 @@ tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına b�
   çekildi (`studio.publish.withdrawn`); hiçbir şey yayınlanmadı. Metin ve bağlantı gönderisi ile
   saatinde yayınlanmış bir gönderinin okunması gerçek Sayfada denenmedi. Ayar kapalı gelir; açmadan
   önce kendi Sayfa'nda bir paylaşımın zamanlandığını ve geri çekildiğini gör.
+- **Platformda duran, Jeeta'nın bilmediği gönderi (B59).** `social.account_get`, platformun kendi
+  zamanlayıcısı okunabiliyorsa (bugün Facebook Sayfası, `GET /{page}/scheduled_posts`) orada şu an
+  duran gönderileri `at_platform` alanında verir: `{external_id, publish_at, title, known}`.
+  `known: false`, Jeeta'nın orada tutmadığı gönderidir (elle zamanlanmış ya da sonucu bilinmeyen bir
+  bırakmadan kalmış). Jeeta onu izlemez ve geri çekmez; panel hesabın sayfasında uyarır, ajan sahibe
+  söyler. Okuma başarısız olursa alan gelmez; hesabın sayfası etkilenmez.
 - **Saat değiştirme (B57).** Ajan, bir içerik sürümünün planlanmış paylaşımını hiçbir şey
   gönderilmeden iptal ederse (`studio.slot_cancel`) sürüm yeniden saat bekler ve
   `social.version_schedule` ona yeni saat verir. İnsanın iptali paylaşmama kararıdır; denenmiş

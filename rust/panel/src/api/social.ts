@@ -21,6 +21,8 @@ export interface AccountDetail {
   /** `format` is `null` for a post that went out without a planned post behind it (an older slot). */
   recent: { slot_id: string; published_at: string; format: string | null; title: string; url: string | null; metrics: Pick<Numbers, 'reach' | 'views' | 'engagement'> }[];
   totals: { posts: number | null; reach: number | null; views: number | null; engagement: number | null };
+  /** What the platform's own scheduler holds for the account now; absent when it has none to read. `known` is false for a post Jeeta does not hold there. */
+  at_platform?: { external_id: string; publish_at: string; title: string; known: boolean }[];
 }
 export interface WaitingPackage {
   project_id: string;
