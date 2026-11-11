@@ -154,6 +154,27 @@ pub struct ReserveSpend {
     pub evidence_key: String,
     #[serde(with = "crate::time_compat")]
     pub at: OffsetDateTime,
+    /// The module that spends (design 2026-11-10 S6): `ads`, `inbox`, `outreach`, `calls` or
+    /// `social`. Absent from a reservation made before modules were named: see
+    /// [`ReserveSpend::spending_module`]. Never written when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// The ad campaign the spend is of, for a campaign Jeeta built. Never written when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign_id: Option<uuid::Uuid>,
+}
+impl ReserveSpend {
+    /// The module this reservation spends for: the one it names, else what its shape says (the
+    /// paid lane is advertising; a Studio chain on the organic lane is a post; anything else is
+    /// a message sent through the inbox).
+    pub fn spending_module(&self) -> &str {
+        match &self.module {
+            Some(module) => module,
+            None if self.lane == LaneKind::Paid => "ads",
+            None if self.chain.is_some() => "social",
+            None => "inbox",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpendReservation {

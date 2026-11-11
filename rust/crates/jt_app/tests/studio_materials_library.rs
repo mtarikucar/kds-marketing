@@ -55,7 +55,7 @@ fn agent(w: &World) -> Ctx {
     }
 }
 
-/// A person in the panel who is neither owner nor manager (a role with `studio.work`).
+/// A person in the panel who is neither owner nor manager (a role with `materials.work`).
 fn member(w: &World) -> Ctx {
     Ctx {
         role_key: Some("studio_helper".into()),
@@ -400,7 +400,7 @@ async fn the_library_needs_no_strategy_but_an_active_workspace() {
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::WorkspaceInactive);
-    // `studio.work` is needed.
+    // `materials.work` is needed.
     let mut rep = w.ctx.clone();
     rep.permissions = jt_tenancy::SystemRole::Rep.permissions();
     let e = library::materials_list(&w.d, &rep, input(json!({})))
@@ -1063,7 +1063,7 @@ async fn the_panels_decisions_are_an_owners_or_a_managers_in_person() {
         .await
         .unwrap_err();
         assert_eq!(e.code, ErrorCode::Forbidden);
-        let e = library::material_policy_set(&w.d, &ctx, MaterialPolicy::default())
+        let e = library::material_policy_set(&w.d, &ctx, MaterialPolicy::default().into())
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::Forbidden);
@@ -1204,17 +1204,32 @@ async fn the_calendar_and_the_policy_are_the_owners_to_set() {
         lead_days: 30,
         reuse_days: 7,
         recap_days: 60,
+        ai_standalone: false,
     };
-    library::material_policy_set(&w.d, &w.ctx, policy)
+    let days = json!({"lead_days":30,"reuse_days":7,"recap_days":60});
+    // The standalone setting is on until a person turns it off, and the days alone leave it be.
+    let set = library::material_policy_set(&w.d, &w.ctx, input(days.clone()))
         .await
         .unwrap();
+    assert!(set.ai_standalone);
+    let mut off = days.clone();
+    off["ai_standalone"] = json!(false);
+    assert_eq!(
+        library::material_policy_set(&w.d, &w.ctx, input(off))
+            .await
+            .unwrap(),
+        policy
+    );
+    assert_eq!(
+        library::material_policy_set(&w.d, &w.ctx, input(days))
+            .await
+            .unwrap(),
+        policy
+    );
     let e = library::material_policy_set(
         &w.d,
         &w.ctx,
-        MaterialPolicy {
-            lead_days: 91,
-            ..policy
-        },
+        input(json!({"lead_days":91,"reuse_days":7,"recap_days":60})),
     )
     .await
     .unwrap_err();
@@ -1917,4 +1932,167 @@ async fn a_material_showing_people_is_erased_24_months_after_its_olay() {
         .find(|r| r.entry.action.as_str() == "studio.material.erased")
         .unwrap();
     assert_eq!(entry.entry.payload["reason"], "retention");
+}
+
+#[tokio::test]
+async fn free_labels_and_capture_corrections_preserve_manual_intent() {
+    let (w, _) = publishing_world().await;
+    let file = upload(&w, "generic-label-file", "image/png", &png(213)).await;
+    let material = add(
+        &w,
+        &w.ctx,
+        "generic-label-material",
+        file,
+        json!({
+            "genel":true,"share":"shareable","labels":["  Summer   Launch  ","summer launch","Cafe"]
+        }),
+    )
+    .await;
+    assert_eq!(
+        material.tags.labels,
+        ["cafe".into(), "summer launch".into()].into()
+    );
+    assert_eq!(
+        material.captured_at, None,
+        "upload time is not capture time"
+    );
+    let initial =
+        library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":material.id})))
+            .await
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(initial.intelligence.status).unwrap(),
+        "pending"
+    );
+    let edited = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":material.revision,
+            "title":"Summer menu","labels":["Drinks"],"captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(edited.title, "Summer menu");
+    assert_eq!(edited.tags.labels, ["drinks".into()].into());
+    assert_eq!(edited.captured_at, Some(datetime!(2026-06-01 12:00 UTC)));
+    let metadata =
+        library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":material.id})))
+            .await
+            .unwrap();
+    for field in ["title", "labels", "captured_at"] {
+        assert!(metadata.intelligence.manual_fields.contains(field));
+    }
+    let cleared = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":edited.revision,"captured_at":null
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared.captured_at, None);
+    let same = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":cleared.revision,"labels":[]
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.captured_at, None);
+    assert!(same.tags.labels.is_empty());
+    let stale = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":edited.revision,"title":"stale"
+        })),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::Conflict);
+    library::material_delete(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":material.id,"expected_revision":same.revision,"confirm":true
+        })),
+    )
+    .await
+    .unwrap();
+    let mut r = w.d.uow.tenant(w.ctx.workspace_id).await.unwrap();
+    assert!(
+        r.studio_materials()
+            .get_intelligence(material.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn legacy_tag_tool_cannot_bypass_human_analysis_field_locks() {
+    let (w, _) = publishing_world().await;
+    let file = upload(&w, "locked-source", "image/png", &png(214)).await;
+    let original = add(
+        &w,
+        &w.ctx,
+        "locked-material",
+        file,
+        json!({"genel":true,"share":"shareable"}),
+    )
+    .await;
+    let corrected = library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({
+            "material_id":original.id,"expected_revision":original.revision,
+            "title":"Human title","labels":["Cafe"],"quality":"publishable",
+            "captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    for change in [
+        json!({"title":"Agent title"}),
+        json!({"labels":["other"]}),
+        json!({"quality":"unusable"}),
+        json!({"captured_at":null}),
+    ] {
+        let mut request =
+            json!({"material_id":corrected.id,"expected_revision":corrected.revision});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(change.as_object().unwrap().clone());
+        let error = library::material_tag(&w.d, &agent(&w), input(request))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::Conflict);
+        assert_eq!(reason(&error), "material_manual_field_locked");
+        let stored =
+            library::material_get(&w.d, &w.ctx, input(json!({"material_id":corrected.id})))
+                .await
+                .unwrap()
+                .material;
+        assert_eq!(stored, corrected);
+    }
+    let same = library::material_tag(
+        &w.d,
+        &agent(&w),
+        input(json!({
+            "material_id":corrected.id,"expected_revision":corrected.revision,
+            "title":" Human title ","labels":[" CAFE "],"quality":"publishable",
+            "captured_at":"2026-06-01T12:00:00Z"
+        })),
+    )
+    .await
+    .unwrap();
+    assert_eq!(same.title, corrected.title);
+    assert_eq!(same.tags, corrected.tags);
+    assert_eq!(same.captured_at, corrected.captured_at);
 }

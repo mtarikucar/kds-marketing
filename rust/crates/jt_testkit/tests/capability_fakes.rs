@@ -100,6 +100,8 @@ fn spend(item: &BudgetItem, amount: i64, at: OffsetDateTime) -> BudgetSpend {
         item.workspace_id,
         item.id,
         NewBudgetSpend {
+            module: None,
+            campaign_id: None,
             amount,
             source: SpendSource::Agent,
             reference: None,

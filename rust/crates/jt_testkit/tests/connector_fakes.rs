@@ -9,7 +9,7 @@ use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::connectors::{
     AdInsights, AdSet, Asset, ConsentRow, DeliveryState, DeliveryStatus, InboundEventDraft,
     OAuthApp, OAuthCallback, PolledMail, PostMetrics, PublishReceipt, PublishRequest, SendReceipt,
-    Url, XApp,
+    SmsConsentFilter, Url, XApp,
 };
 use jt_app::ports::{
     EventOrder, EventQuery, OAuthPendingId, OAuthPendingRow, ProbeRun, ProbeRunId, SecretBox,
@@ -1022,14 +1022,27 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
     assert!(!connector.probe(&cred, &json!({})).await.ok);
     let sms = registry.sms(Provider::Netgsm).expect("netgsm sends sms");
     assert_eq!(
-        sms.send(&cred, "905550000000", "Merhaba", Some("ref-1"), false)
-            .await
-            .unwrap()
-            .provider_id,
+        sms.send(
+            &cred,
+            "905550000000",
+            "Merhaba",
+            Some("ref-1"),
+            SmsConsentFilter::None
+        )
+        .await
+        .unwrap()
+        .provider_id,
         "job-1"
     );
     assert_eq!(
-        sms.send(&cred, "905550000001", "Selam", None, true).await,
+        sms.send(
+            &cred,
+            "905550000001",
+            "Selam",
+            None,
+            SmsConsentFilter::Business
+        )
+        .await,
         Err(ConnectorError::throttle(None))
     );
     assert_eq!(
@@ -1048,14 +1061,14 @@ async fn scripted_connector_answers_in_order_and_records_calls() {
                 to: "905550000000".into(),
                 text: "Merhaba".into(),
                 reference: Some("ref-1".into()),
-                commercial: false,
+                filter: SmsConsentFilter::None,
             },
             ConnectorCall::SendSms {
                 credential: cred.clone(),
                 to: "905550000001".into(),
                 text: "Selam".into(),
                 reference: None,
-                commercial: true,
+                filter: SmsConsentFilter::Business,
             },
         ]
     );
@@ -1151,6 +1164,8 @@ async fn scripted_connector_covers_every_operation() {
         media: vec![],
         privacy: None,
         tiktok: None,
+        format: None,
+        media_mimes: vec![],
     };
     let publisher = registry.publisher(Provider::Meta).unwrap();
     assert_eq!(
@@ -1501,13 +1516,25 @@ async fn scripted_connector_preserves_unknown_outcomes_and_costs() {
     };
     assert_eq!(
         connector
-            .send(&credential, "905550000000", "hello", None, false)
+            .send(
+                &credential,
+                "905550000000",
+                "hello",
+                None,
+                SmsConsentFilter::None
+            )
             .await,
         Err(error.clone())
     );
     assert_eq!(
         connector
-            .send(&credential, "905550000000", "hello", None, false)
+            .send(
+                &credential,
+                "905550000000",
+                "hello",
+                None,
+                SmsConsentFilter::None
+            )
             .await
             .unwrap()
             .cost_minor,

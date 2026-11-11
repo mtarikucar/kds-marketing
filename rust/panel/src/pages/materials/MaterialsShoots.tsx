@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import { Badge } from '@/components/ui';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   formatDay,
@@ -31,7 +32,7 @@ export function ShootRow({ request, links = {} }: { request: m.ShootRequest; lin
     if (!resolve.isPending) resolve.mutate(status);
   };
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`shoot-${request.id}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`shoot-${request.id}`}>
       <p className="break-words text-sm font-medium">{request.text}</p>
       <p className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span>{t(`materials.shoot.reason.${reason.kind}`)}</span>
@@ -87,6 +88,7 @@ function AddRequest() {
   );
   return (
     <form
+      aria-label={t('materials.views.shoots')}
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
@@ -139,7 +141,7 @@ export function MaterialsShoots(links: ShootLinks) {
   return (
     <div className="space-y-4" data-testid="materials-shoots">
       <AddRequest />
-      <MaterialsError error={list.error} />
+      <MaterialsReadStatus query={list} />
       <section aria-labelledby="shoots-this-week" className="space-y-2">
         <h3 id="shoots-this-week" className="font-semibold">
           {t('materials.shoot.thisWeek')}

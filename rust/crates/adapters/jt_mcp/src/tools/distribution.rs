@@ -26,7 +26,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           inbox.work with their profile, open_owned, on_shift and eligible, the \
                           ownerless open journeys (count, oldest_journey_id) and the stalled \
                           assignments. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: empty_schema,
             run: get,
         },
@@ -41,7 +41,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (5 to 10080 working minutes of the owner) }; and optionally mode auto | \
                           manual and max_reassignments (0 to 10). Needs inbox.manage. Answers as \
                           jeeta.distribution.get. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: rules_schema,
             run: rules_set,
         },
@@ -52,7 +52,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           to 20 each; empty takes any), hours {tz, from, to, days} (working hours: \
                           on shift first, SLA counted inside them), away_until. A member sets \
                           their own with inbox.work; another's needs inbox.manage. [risk: WRITE]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: rep_schema,
             run: rep_set,
         },
@@ -64,7 +64,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (none when nobody was named), the rule, the SLA due time and when the \
                           owner acted. Answers {items, next}: pass next.assigned_at and next.id \
                           back as before_at and before_id. [risk: READ]",
-            permission: Permission::InboxWork,
+            permissions: &[Permission::InboxWork],
             schema: list_schema,
             run: assignments_list,
         },
@@ -74,7 +74,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           owner, longest open first, whatever their decision (a v1 import, \
                           nobody eligible, a manager's unassignment). Needs inbox.manage. Answers \
                           {assigned, no_eligible, imported, reassigned, kept}. [risk: WRITE]",
-            permission: Permission::InboxManage,
+            permissions: &[Permission::InboxManage],
             schema: backfill_schema,
             run: backfill,
         },

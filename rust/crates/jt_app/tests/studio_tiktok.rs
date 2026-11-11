@@ -727,7 +727,7 @@ async fn only_an_owner_or_manager_passes_the_screen() {
         ..t.w.ctx.clone()
     };
     let worker = Ctx {
-        permissions: [Permission::StudioWork].into_iter().collect(),
+        permissions: [Permission::SocialWork].into_iter().collect(),
         ..t.w.ctx.clone()
     };
     for ctx in [&agent, &member, &worker] {
@@ -746,7 +746,7 @@ async fn only_an_owner_or_manager_passes_the_screen() {
     assert!(
         SystemRole::Owner
             .permissions()
-            .contains(&Permission::StudioManage)
+            .contains(&Permission::SocialManage)
     );
 }
 

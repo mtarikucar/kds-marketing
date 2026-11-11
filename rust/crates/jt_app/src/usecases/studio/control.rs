@@ -27,13 +27,6 @@ pub struct BrakeInput {
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StudioPolicyInput {
-    pub lane: LaneKind,
-    pub requires_human_approval: bool,
-    pub expected_revision: u64,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ApprovalInput {
     pub target: ApprovalTarget,
     pub expected_revision: u64,
@@ -46,7 +39,9 @@ pub struct ApprovalOut {
 }
 
 pub async fn brake(d: &Deps, ctx: &Ctx, input: BrakeInput) -> Result<StudioControl, AppError> {
-    ctx.require(Permission::StudioManage)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.brake",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = r.strategy().lock_execution_frame().await?;
     active(r.as_mut()).await?;
@@ -69,43 +64,9 @@ pub async fn brake(d: &Deps, ctx: &Ctx, input: BrakeInput) -> Result<StudioContr
     let _ = reconcile_bindings(d, ctx.workspace_id).await;
     Ok(c)
 }
-pub async fn policy_set(
-    d: &Deps,
-    ctx: &Ctx,
-    input: StudioPolicyInput,
-) -> Result<StudioControl, AppError> {
-    ctx.require(Permission::StudioManage)?;
-    let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = r
-        .strategy()
-        .lock_execution_frame()
-        .await?
-        .ok_or_else(AppError::strategy_required)?;
-    active(r.as_mut()).await?;
-    let c = r
-        .studio_control()
-        .set_policy(
-            input.expected_revision,
-            input.lane,
-            input.requires_human_approval,
-        )
-        .await?;
-    let mut e = ledger_entry(
-        ctx,
-        "studio.policy_set",
-        "studio_control",
-        ctx.workspace_id,
-        json!({"lane":input.lane,"requires_human_approval":input.requires_human_approval,"revision":c.revision,"takeover":true}),
-    )?;
-    e.strategy_version_id = Some(frame.id.0);
-    r.ledger().append(e).await?;
-    r.commit().await?;
-    Ok(c)
-}
-/// The owner or manager approving in person: `studio.manage`, a human actor of the owner or
+/// The owner or manager approving in person: a human actor of the owner or
 /// manager role, not acting through an agent connection.
 pub(crate) fn human_approver(ctx: &Ctx) -> Result<UserId, AppError> {
-    ctx.require(Permission::StudioManage)?;
     let Actor::Human { user_id } = ctx.actor else {
         return Err(human_required());
     };
@@ -135,6 +96,13 @@ pub(crate) async fn hypothesis_live(
 /// (`tiktok_posting_screen_required`): it is approved only on its posting screen, with the choice
 /// made there (`tiktok::tiktok_post`).
 pub async fn approve(d: &Deps, ctx: &Ctx, input: ApprovalInput) -> Result<ApprovalOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.approve",
+    ))?;
+    ctx.require(match input.target {
+        ApprovalTarget::Slot(_) => Permission::SocialManage,
+        ApprovalTarget::BudgetMove(_) => Permission::AdsManage,
+    })?;
     let user_id = human_approver(ctx)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = r
@@ -448,12 +416,7 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
         let daily = set
             .daily_budget_minor
             .ok_or_else(|| refuse("unknown_budget_cost"))?;
-        if c.policy.requires_human_approval
-            || fresh
-                .lanes
-                .get(&LaneKind::Paid)
-                .is_some_and(|l| l.requires_human_approval)
-        {
+        if c.policy.requires_human_approval {
             let m = r
                 .studio()
                 .latest_budget_move(b.id)
@@ -472,7 +435,7 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
             }
             m.check_approval(&jt_studio::StudioPolicy {
                 expected_revision: m.revision,
-                requires_human_approval: true,
+                capability_requires_human_approval: true,
                 ..Default::default()
             })
             .map_err(|e| refuse(&e.to_string()))?;
@@ -552,6 +515,8 @@ async fn reconcile_one(d: &Deps, b: &AdSetBinding) -> Result<(), AppError> {
             super::budget::reserve_connector_spend(
                 r.as_mut(),
                 ReserveSpend {
+                    module: None,
+                    campaign_id: None,
                     binding_id: Some(b.id),
                     chain: Some(b.chain.clone()),
                     replaces,

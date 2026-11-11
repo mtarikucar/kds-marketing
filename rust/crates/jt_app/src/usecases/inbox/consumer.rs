@@ -657,7 +657,7 @@ pub(crate) async fn apply_from(
     r.journeys()
         .apply_transition(j.id, transition, event)
         .await?;
-    journeys::apply_effects(deps, ctx, r, &j, &effects).await?;
+    journeys::apply_effects(r, &j, &effects).await?;
     crate::usecases::outreach::hooks::on_journey_event(r, ctx, j.id, &kind).await?;
     record(
         r,

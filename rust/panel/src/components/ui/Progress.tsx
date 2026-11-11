@@ -30,7 +30,7 @@ export function Progress({ value, tone = 'primary', className }: ProgressProps) 
       className={cn('h-2', trackClasses, className)}
     >
       <div
-        className={cn('h-full rounded-full transition-all duration-base', fillToneClasses[tone])}
+        className={cn('h-full rounded-full transition-colors duration-base', fillToneClasses[tone])}
         style={{ width: `${clampedValue}%` }}
       />
     </div>

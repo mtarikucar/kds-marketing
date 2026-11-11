@@ -6,7 +6,7 @@ mod support;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use jt_app::ports::connectors::{DeliveryReports, SmsSender};
+use jt_app::ports::connectors::{DeliveryReports, SmsConsentFilter, SmsSender};
 use jt_netgsm::RetryPolicy;
 use support::*;
 use time::Duration;
@@ -105,7 +105,13 @@ async fn a_read_retries_once_on_a_connect_failure() {
         StdDuration::from_secs(5),
     );
     let e = netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+        .send(
+            &sms_cred(),
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .with_subscriber(recovery.clone())
         .await
         .unwrap_err();

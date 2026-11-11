@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <!-- An original Jeeta work illustration: a finished brief, filed and ready for the next step. -->
+  <path d="M17 83 35 64h63l13 19v24H17V83Z" fill="#DDE7FF" stroke="#142650" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M30 77V28a5 5 0 0 1 5-5h46l15 15v43H35a5 5 0 0 1-5-4Z" fill="#F8FAFF" stroke="#142650" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M81 23v15h15" fill="#DDE7FF"/>
+  <path d="M81 23v15h15" stroke="#142650" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M44 66h22M44 73h32" stroke="#A7B6D2" stroke-width="3" stroke-linecap="round"/>
+  <path d="m45 47 7 7 14-15" stroke="#2962FF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M17 83h29l5 9h27l5-9h28v21a5 5 0 0 1-5 5H22a5 5 0 0 1-5-5V83Z" fill="#10224F" stroke="#F8FAFF" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M35 115c32 2 65-22 73-65" stroke="#FF7900" stroke-width="5" stroke-linecap="round"/>
+  <path d="m99 54 11-17 5 20-9-5-7 2Z" fill="#FF7900"/>
+</svg>

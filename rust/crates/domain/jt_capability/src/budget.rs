@@ -180,6 +180,12 @@ pub struct BudgetItem {
     /// stays. Missing reads as `None` (live).
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub retired_at: Option<OffsetDateTime>,
+    /// The workspace's general ad budget (design 2026-11-10 B37): every paid spend, whatever
+    /// the ad account, counts against it, and ad campaigns draw from it. At most one live item
+    /// of a workspace is; only an `ad_budget` item in a currency with a period that is not
+    /// `total` can be. Missing reads as `false`.
+    #[serde(default)]
+    pub general: bool,
 }
 
 /// What a new budget item is created with; [`BudgetItem::new`] checks it.
@@ -230,7 +236,18 @@ impl BudgetItem {
             strategy_version_id: None,
             created_at: now,
             retired_at: None,
+            general: false,
         })
+    }
+}
+
+impl BudgetItem {
+    /// Whether this item can be the general ad budget: an `ad_budget` in a currency, with a
+    /// period that is not `total`.
+    pub fn can_be_general(&self) -> bool {
+        self.kind == BudgetKind::AdBudget
+            && matches!(self.unit, Unit::Currency(_))
+            && self.period != Period::Total
     }
 }
 
@@ -271,14 +288,28 @@ pub struct BudgetSpend {
     /// An invoice number, a campaign id, ... Missing reads as `None`.
     #[serde(default)]
     pub reference: Option<String>,
+    /// The module the spend belongs to, one of [`SPEND_MODULES`] (design 2026-11-10 S6: Bütçe
+    /// shows spend by module); `None` for a spend recorded by hand. Missing reads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// The ad campaign the spend is of, for advertising. Missing reads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub campaign_id: Option<Uuid>,
 }
 
+/// The modules a spend can belong to.
+pub const SPEND_MODULES: [&str; 5] = ["ads", "inbox", "outreach", "calls", "social"];
+
 /// What a new spend is recorded with; [`BudgetSpend::new`] checks it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NewBudgetSpend {
     pub amount: i64,
     pub source: SpendSource,
     pub reference: Option<String>,
+    /// See [`BudgetSpend::module`].
+    pub module: Option<String>,
+    /// See [`BudgetSpend::campaign_id`]; only with the module `ads`.
+    pub campaign_id: Option<Uuid>,
 }
 
 impl BudgetSpend {
@@ -297,10 +328,16 @@ impl BudgetSpend {
             amount,
             source,
             reference,
+            module,
+            campaign_id,
         } = input;
         if amount <= 0 {
             return Err(CapabilityError::NonPositiveAmount(amount));
         }
+        // The module is named by the code that spends, never by a caller: one that is not a
+        // spending module, or a campaign outside advertising, is dropped rather than stored.
+        let module = module.filter(|m| SPEND_MODULES.contains(&m.as_str()));
+        let campaign_id = campaign_id.filter(|_| module.as_deref() == Some("ads"));
         if let Some(reference) = &reference {
             check_len("reference", reference, MAX_REFERENCE_CHARS)?;
         }
@@ -312,6 +349,8 @@ impl BudgetSpend {
             amount,
             source,
             reference,
+            module,
+            campaign_id,
         })
     }
 }

@@ -207,18 +207,18 @@ impl World {
         .await
         .unwrap()
     }
-    pub async fn policy(&self, required: bool, revision: u64) -> StudioControl {
-        policy_set(
-            &self.d,
-            &self.ctx,
-            StudioPolicyInput {
-                lane: LaneKind::Organic,
-                requires_human_approval: required,
-                expected_revision: revision,
-            },
-        )
-        .await
-        .unwrap()
+    /// Sets whether the fixture slot's account asks for a person's approval: the connection's
+    /// own flag, the only approval setting there is (design 2026-11-10 B35).
+    pub async fn approval(&self, required: bool) {
+        self.approval_of(self.f.slot.capability_id, required).await;
+    }
+    /// The same flag of connection `capability` (an ad account's, for the paid lane).
+    pub async fn approval_of(&self, capability: CapabilityId, required: bool) {
+        let mut r = self.uow.tenant(self.f.ws).await.unwrap();
+        let mut c = r.capabilities().lock(capability).await.unwrap().unwrap();
+        c.policy.requires_human_approval = required;
+        r.capabilities().update(c).await.unwrap();
+        r.commit().await.unwrap();
     }
     pub async fn approve(&self) {
         approve(
@@ -371,4 +371,14 @@ impl World {
         r.commit().await.unwrap();
         self.uow.snapshot().studio.publications[0].id
     }
+}
+
+/// `w` as a workspace without the content module (design 2026-11-10 B18): the planner's triggers
+/// ask agents for packages of posts, as before the module existed, instead of opening production
+/// areas.
+pub async fn without_content(w: World) -> World {
+    jt_app::usecases::modules::remove(&w.d, &w.ctx, jt_app::usecases::modules::CONTENT)
+        .await
+        .unwrap();
+    w
 }

@@ -4,8 +4,8 @@ use crate::{
     error::AppError,
     ports::{
         TenantRepos,
-        connectors::{PublishReceipt, PublishRequest, PublishResolution, Publisher},
-        studio::{ApprovalTarget, PublishOutcome, SlotQuery},
+        connectors::{PublishReceipt, PublishRequest, PublishResolution, Publisher, Scheduled},
+        studio::{ApprovalTarget, PublishOutcome, SlotId, SlotQuery},
     },
     usecases::{
         Deps,
@@ -33,6 +33,14 @@ pub const RESOLVE_WINDOW: Duration = Duration::minutes(30);
 /// upgrades it to its public id ([`resolve_observed`]). A post fewer may see, or a draft, has
 /// none to wait for and settles at once.
 pub const PUBLIC_ID_WAIT: Duration = Duration::minutes(15);
+
+/// How far ahead of its time a ready post is looked at for its platform's own scheduler
+/// (design 2026-11-10 §7.3); each provider names the window it takes ([`Publisher::schedule_window`]).
+pub const HOLD_HORIZON: Duration = Duration::days(30);
+
+/// How close to a held post's time Jeeta still asks its platform to take it back: nearer than
+/// this the post is going out, and a post that is out is never deleted.
+pub const WITHDRAW_MARGIN: Duration = Duration::minutes(2);
 
 fn query(until: OffsetDateTime) -> SlotQuery {
     SlotQuery {
@@ -78,8 +86,9 @@ pub(crate) fn content<'a>(
         None => (&p.text, &p.media, None, None),
     }
 }
-/// The request publishing `p` on `c`. A TikTok post (`tiktok`, the posting screen's choice) goes
-/// out as the human left it there: its caption in place of the drafted text and link, its
+/// The request publishing `p` on `c`, as a post of `format` when the slot carries a planned post
+/// (an Instagram story goes out as one). A TikTok post (`tiktok`, the posting screen's choice)
+/// goes out as the human left it there: its caption in place of the drafted text and link, its
 /// privacy in place of the adaptation's.
 async fn request(
     d: &Deps,
@@ -87,11 +96,13 @@ async fn request(
     p: &Piece,
     c: &Capability,
     tiktok: Option<&TiktokPost>,
+    format: Option<jt_studio::PostFormat>,
 ) -> Result<PublishRequest, AppError> {
     p.validate_persisted()
         .map_err(|_| AppError::validation("invalid piece", json!({"reason":"invalid_piece"})))?;
     let (text, media, link, privacy) = content(p, c);
-    let (media_urls, media) = super::files::resolve_media(d, ws, media, &c.kind_key).await?;
+    let (media_urls, media_mimes, media) =
+        super::files::resolve_typed_media(d, ws, media, &c.kind_key).await?;
     let out = match tiktok {
         // A draft names no privacy: it is chosen in TikTok.
         Some(post) => PublishRequest {
@@ -101,6 +112,8 @@ async fn request(
             media,
             privacy: (!post.is_draft()).then(|| post.privacy_level.clone()),
             tiktok: Some(post.clone()),
+            format,
+            media_mimes: media_mimes.clone(),
         },
         None => PublishRequest {
             text: text.to_owned(),
@@ -109,6 +122,8 @@ async fn request(
             media,
             privacy: privacy.map(str::to_owned),
             tiktok: None,
+            format,
+            media_mimes,
         },
     };
     Ok(out)
@@ -198,7 +213,8 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
                     .await?
                     .ok_or_else(|| AppError::not_found("piece"))?;
                 let choice = screen_choice(r.as_mut(), &s, &c).await?;
-                found = Some((s, p, c, choice));
+                let format = r.studio_posts().get_post(s.id).await?.map(|x| x.format);
+                found = Some((s, p, c, choice, format));
                 break;
             }
             if found.is_none()
@@ -209,7 +225,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             }
             found
         };
-        let Some((slot, piece, cap, choice)) = candidate else {
+        let Some((slot, piece, cap, choice, format)) = candidate else {
             break;
         };
         let provider = provider_for_kind(&cap.kind_key)
@@ -218,7 +234,7 @@ pub async fn publish_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
             .connectors
             .publisher(provider)
             .ok_or_else(|| chain::refuse("connector_unavailable"))?;
-        let req = request(d, ws, &piece, &cap, choice.as_ref()).await;
+        let req = request(d, ws, &piece, &cap, choice.as_ref(), format).await;
         if let Err(e) = &req
             && !matches!(
                 e.code,
@@ -551,6 +567,96 @@ pub async fn recover_publications(d: &Deps, ws: WorkspaceId) -> Result<u32, AppE
     Ok(count)
 }
 
+/// A hand-over that never learnt whether the platform took the post (`Unknown`, its time kept)
+/// may have left a post there that nothing follows. Once its slot is no longer going out
+/// (retired: cancelled, replaced, redone) and its time is still ahead, this looks the post up in
+/// the platform's own scheduler by what Jeeta sent, on the same account at the same time with
+/// the same text, and takes it back: cancelled here and still going out there would be the worst
+/// of both (design 2026-11-10 §7.3, B60). Only an exact, single match is Jeeta's own post; any
+/// other post there is never touched, and a post with a link in its text is not matched. A
+/// read or a withdrawal that fails is tried again by the next run. Answers how many posts were
+/// taken back.
+pub async fn reconcile_unknown_hand_overs(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
+    let now = d.clock.now();
+    let strays: Vec<PublishAttempt> = {
+        let mut r = d.uow.tenant(ws).await?;
+        chain::active(r.as_mut()).await?;
+        let mut strays = Vec::new();
+        for s in r.studio().list_slots(query(now + HOLD_HORIZON)).await? {
+            if s.state != SlotState::Retired {
+                continue;
+            }
+            strays.extend(
+                r.studio()
+                    .slot_evidence(s.id)
+                    .await?
+                    .0
+                    .into_iter()
+                    .filter(|a| {
+                        a.state() == PublishState::Unknown
+                            && a.held_until().is_some_and(|at| at > now)
+                    }),
+            );
+        }
+        strays
+    };
+    let mut count = 0;
+    for a in strays {
+        let Some(at) = a.held_until() else {
+            continue;
+        };
+        let (cap, cred) = {
+            let mut r = d.uow.tenant(ws).await?;
+            let Some(c) = r.capabilities().find(a.capability_id()).await? else {
+                continue;
+            };
+            if chain::capability_access(&c, now, true).is_err() {
+                continue;
+            }
+            let Ok(cred) = credential(d, r.as_mut(), &c).await else {
+                continue;
+            };
+            (c, cred)
+        };
+        let Some(publisher) =
+            provider_for_kind(&cap.kind_key).and_then(|p| d.connectors.publisher(p))
+        else {
+            continue;
+        };
+        let public = adapter_public(&cap);
+        let Ok(Some(held)) = publisher.scheduled_list(&cred, &public).await else {
+            continue;
+        };
+        let sent = a.piece().text.trim();
+        let mut own = held
+            .iter()
+            .filter(|p| p.publish_at == at && p.text.trim() == sent);
+        let (Some(post), None) = (own.next(), own.next()) else {
+            continue;
+        };
+        let receipt = crate::ports::connectors::PublishReceipt {
+            external_id: post.external_id.clone(),
+            url: None,
+        };
+        if !matches!(publisher.withdraw(&cred, &public, &receipt).await, Ok(true)) {
+            continue;
+        }
+        let mut r = d.uow.tenant(ws).await?;
+        let entry = jt_ledger::LedgerEntry::new(
+            ws,
+            a.actor().clone(),
+            jt_ledger::Action::new("studio.publish.withdrawn")
+                .map_err(|_| AppError::internal("action"))?,
+            json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"reason":"unknown_hand_over"}),
+            now,
+        );
+        r.ledger().append(entry).await?;
+        r.commit().await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// Recovers the observed attempt `a` (its captured `receipt`) as [`recover_publications`] does,
 /// under the attempt's historical authority: `true` once settled.
 async fn recover_observed(
@@ -571,12 +677,18 @@ async fn recover_observed(
                     .await?
                     .and_then(|approval| approval.tiktok)
                     .is_some_and(|post| post.expects_public_id());
-                Some((c, cred, public_id))
+                // A story has no counters: it is confirmed by reading it back by its id.
+                let story = r
+                    .studio_posts()
+                    .get_post(a.slot_id())
+                    .await?
+                    .is_some_and(|p| p.format == jt_studio::PostFormat::Story);
+                Some((c, cred, public_id, story))
             }
             Err(_) => None,
         }
     };
-    let Some((c, cred, public_id)) = prepared else {
+    let Some((c, cred, public_id, story)) = prepared else {
         return Ok(false);
     };
     let provider = provider_for_kind(&c.kind_key);
@@ -584,6 +696,19 @@ async fn recover_observed(
         provider.and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
     {
         let public = adapter_public(&c);
+        // A post left with the platform's scheduler is asked about there, from its time on.
+        if let Some(at) = a.held_until() {
+            return settle_held(
+                d,
+                ws,
+                a,
+                (provider, publisher.as_ref()),
+                (&cred, &public),
+                receipt,
+                at,
+            )
+            .await;
+        }
         if let Some(settled) = settle_observed(
             d,
             ws,
@@ -596,6 +721,26 @@ async fn recover_observed(
         .await?
         {
             return Ok(settled);
+        }
+        if story {
+            if publisher
+                .read_back(&cred, &public, &receipt.external_id)
+                .await
+                .is_err()
+            {
+                return Ok(false);
+            }
+            finish(
+                d,
+                ws,
+                a,
+                PublishOutcome::Succeeded(PublishReceipt {
+                    external_id: receipt.external_id.clone(),
+                    url: receipt.url.clone(),
+                }),
+            )
+            .await?;
+            return Ok(true);
         }
     }
     let Some(reader) = provider_for_kind(&c.kind_key).and_then(|p| d.connectors.insights(p)) else {
@@ -727,4 +872,421 @@ async fn upgrade_settled(
         .await?;
     r.commit().await?;
     Ok(upgraded)
+}
+
+/// Leaves with their platform's own scheduler the ready posts whose time is ahead, where the
+/// workspace switched that on and the platform can hold the post (design 2026-11-10 §7.3, B47).
+///
+/// It is the slot's one attempt, made early: the same authorization, claim fence and spend
+/// reservation as a send, judged as of the post's time (its account's hours, the material gate,
+/// the connection's approval), and then `schedule` instead of `publish`. The captured receipt
+/// names the scheduled post; from its time on the recovery job asks the platform whether it
+/// went out ([`recover_publications`]). A post that cannot be left there (another platform,
+/// media, a story, too near or too far, a refusal as of its time) is not touched: Jeeta sends it
+/// at its time. Answers how many posts were handed over.
+pub async fn hold_ahead(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
+    let now = d.clock.now();
+    let slots = {
+        let mut r = d.uow.tenant(ws).await?;
+        chain::active(r.as_mut()).await?;
+        if !r
+            .studio_posts()
+            .posting_settings()
+            .await?
+            .provider_scheduling
+        {
+            return Ok(0);
+        }
+        r.studio().list_slots(query(now + HOLD_HORIZON)).await?
+    };
+    let internal = |e: &AppError| e.code == crate::error::ErrorCode::Internal;
+    let mut count = 0;
+    for slot in slots {
+        if slot.state != SlotState::Ready || slot.scheduled_at <= now {
+            continue;
+        }
+        let at = slot.scheduled_at;
+        // Can its platform hold it, and would Jeeta send it at its time? Nothing is prepared
+        // for a post that stays with Jeeta.
+        let found = {
+            let mut r = d.uow.tenant(ws).await?;
+            if !r.studio().slot_evidence(slot.id).await?.0.is_empty() {
+                continue;
+            }
+            let Some(c) = r.capabilities().find(slot.capability_id).await? else {
+                continue;
+            };
+            let Some(piece) = r.studio().get_piece(slot.id, slot.revision).await? else {
+                continue;
+            };
+            let Some((provider, publisher)) = provider_for_kind(&c.kind_key)
+                .and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
+            else {
+                continue;
+            };
+            let format = r.studio_posts().get_post(slot.id).await?.map(|x| x.format);
+            // Can this account's platform hold a post of this format at all?
+            let shape = PublishRequest {
+                format,
+                ..Default::default()
+            };
+            if publisher
+                .schedule_window(&adapter_public(&c), &shape)
+                .is_none()
+            {
+                continue;
+            }
+            match authorize_execution_at(r.as_mut(), input(&slot), at).await {
+                Ok(_) => {}
+                Err(e) if internal(&e) => return Err(e),
+                Err(_) => continue,
+            }
+            (c, piece, provider, publisher, format)
+        };
+        let (cap, piece, provider, publisher, format) = found;
+        let req = match request(d, ws, &piece, &cap, None, format).await {
+            Ok(req) => req,
+            Err(e) if internal(&e) => return Err(e),
+            // Its media cannot be prepared now: it stays with Jeeta, which says why at its time.
+            Err(_) => continue,
+        };
+        // This very post, this far ahead?
+        match publisher.schedule_window(&adapter_public(&cap), &req) {
+            Some((earliest, latest)) if at - now >= earliest && at - now <= latest => {}
+            _ => continue,
+        }
+        let (attempt, cred, public, spend) = {
+            let mut r = d.uow.tenant(ws).await?;
+            let permit = match authorize_execution_at(r.as_mut(), input(&slot), at).await {
+                Ok(permit) => permit,
+                Err(e) if internal(&e) => return Err(e),
+                Err(_) => continue,
+            };
+            let Some(c) = r.capabilities().find(slot.capability_id).await? else {
+                continue;
+            };
+            if c.external_id != cap.external_id || c.kind_key != cap.kind_key {
+                continue;
+            }
+            let cred = match credential(d, r.as_mut(), &c).await {
+                Ok(cred) => cred,
+                Err(e) if internal(&e) => return Err(e),
+                Err(_) => continue,
+            };
+            let a = match r.studio().claim_publication_held(slot.id, now, at).await {
+                Ok(Some(a)) => a,
+                Ok(None) => continue,
+                Err(e) if e.details["reason"] == "daily_ops_cap" => continue,
+                Err(e) => return Err(e),
+            };
+            if a.slot_id() != slot.id
+                || a.piece() != &piece
+                || a.executed_version_id() != permit.strategy_version_id
+                || a.control_revision() != permit.control_revision
+            {
+                continue;
+            }
+            let spend = match super::budget::reserve_metered(
+                r.as_mut(),
+                &c,
+                Some(slot.chain.clone()),
+                Some(1),
+                format!("publish:{}:{}", slot.id, slot.revision),
+                now,
+            )
+            .await
+            {
+                Ok(spend) => spend,
+                Err(e) if internal(&e) => return Err(e),
+                Err(_) => continue,
+            };
+            r.commit().await?;
+            (a, cred, adapter_public(&c), spend)
+        };
+        let result = publisher.schedule(&cred, &public, &req, at).await;
+        if let Some(spend) = spend {
+            let mut r = d.uow.tenant(ws).await?;
+            r.strategy().lock_execution_frame().await?;
+            super::budget::settle_metered(
+                r.as_mut(),
+                spend,
+                result.as_ref().map(|_| None).map_err(|e| e.kind()),
+            )
+            .await?;
+            r.commit().await?;
+        }
+        match result {
+            // The receipt names the scheduled post: asked about from its time on.
+            Ok(receipt) => finish(d, ws, &attempt, PublishOutcome::Observed(receipt)).await?,
+            Err(e) => fail(d, ws, &attempt, provider, &e).await?,
+        }
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Where a post left with its platform's scheduler stands, from its time `at` on: out (the
+/// attempt succeeds with the post's receipt), gone from the platform (it fails: it will not go
+/// out), or still waiting, which is asked again every run for [`RESOLVE_WINDOW`] after its time
+/// and then recorded as unknown, for a person. `true` once settled.
+async fn settle_held(
+    d: &Deps,
+    ws: WorkspaceId,
+    a: &PublishAttempt,
+    (provider, publisher): (Provider, &dyn Publisher),
+    (cred, public): (&Credential, &Value),
+    receipt: &PublishReceipt,
+    at: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let late = d.clock.now() - at >= RESOLVE_WINDOW;
+    let e = match publisher.scheduled(cred, public, receipt).await {
+        Ok(Scheduled::Published(post)) => {
+            finish(d, ws, a, PublishOutcome::Succeeded(post)).await?;
+            return Ok(true);
+        }
+        Ok(Scheduled::Gone) => ConnectorError::permanent(
+            "the scheduled post is no longer at the platform: it was not published",
+        ),
+        Ok(Scheduled::Waiting) if late => ConnectorError::unknown(format!(
+            "the platform still held the scheduled post {} minutes after its time",
+            RESOLVE_WINDOW.whole_minutes()
+        )),
+        Err(_) if late => ConnectorError::unknown(format!(
+            "the scheduled post could not be read {} minutes after its time",
+            RESOLVE_WINDOW.whole_minutes()
+        )),
+        Ok(Scheduled::Waiting) | Err(_) => return Ok(false),
+    };
+    fail(d, ws, a, provider, &e).await?;
+    Ok(true)
+}
+
+/// What became of taking a post back from its platform's scheduler (`withdraw_held`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Withdrawal {
+    /// The slot has no post waiting at a platform.
+    NotHeld,
+    /// Taken back: it will not go out.
+    Withdrawn,
+    /// It had already gone out.
+    WentOut,
+    /// Its time is nearer than [`WITHDRAW_MARGIN`]: it is going out.
+    TooLate,
+    /// The platform did not confirm; a refusal is recorded as an unknown outcome for a person.
+    Unconfirmed,
+}
+
+/// Takes the post of `slot` back from its platform's scheduler, because of `why` (design
+/// 2026-11-10 §7.3: whatever would stop Jeeta from sending also takes a held post back).
+///
+/// Taken back, the attempt ends as refused (`withdrawn: <why>`) and `studio.publish.withdrawn`
+/// is written; with `release` the slot is cancelled too and, for a version of a content package,
+/// the version waits for a time again. A platform that refuses (not a passing failure) leaves
+/// the attempt as an unknown outcome with `studio.publish.withdraw_unconfirmed`: a person looks
+/// at the platform, and nothing is sent again. A passing failure changes nothing: it is asked
+/// again.
+pub(crate) async fn withdraw_held(
+    d: &Deps,
+    ws: WorkspaceId,
+    slot: SlotId,
+    why: &str,
+    release: bool,
+) -> Result<Withdrawal, AppError> {
+    let now = d.clock.now();
+    let (a, receipt, access) = {
+        let mut r = d.uow.tenant(ws).await?;
+        let Some(a) = r
+            .studio()
+            .slot_evidence(slot)
+            .await?
+            .0
+            .into_iter()
+            .find(PublishAttempt::is_held)
+        else {
+            return Ok(Withdrawal::NotHeld);
+        };
+        let Some(jt_studio::PublishOutcome::Observed(receipt)) = a.outcome().cloned() else {
+            return Ok(Withdrawal::NotHeld);
+        };
+        if a.held_until().is_none_or(|at| at - now <= WITHDRAW_MARGIN) {
+            return Ok(Withdrawal::TooLate);
+        }
+        // The account that holds it, as it was when the post was left there.
+        let access = match chain::authorize_publication_recovery(r.as_mut(), &a, now).await {
+            Ok(c) => match credential(d, r.as_mut(), &c).await {
+                Ok(cred) => Ok((c, cred)),
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        (a, receipt, access)
+    };
+    let result = match access {
+        Ok((c, cred)) => {
+            let Some((provider, publisher)) = provider_for_kind(&c.kind_key)
+                .and_then(|p| d.connectors.publisher(p).map(|publisher| (p, publisher)))
+            else {
+                return Ok(Withdrawal::Unconfirmed);
+            };
+            publisher
+                .withdraw(&cred, &adapter_public(&c), &receipt)
+                .await
+                .map_err(|e| (Some(provider), e))
+        }
+        Err(e) if e.code == crate::error::ErrorCode::Internal => return Err(e),
+        Err(_) => Err((
+            None,
+            ConnectorError::permission("the account that holds the post cannot be used"),
+        )),
+    };
+    let frame = Some(a.executed_version_id().0);
+    match result {
+        Ok(true) => {
+            let mut r = d.uow.tenant(ws).await?;
+            let refused = AppError::conflict("publication withdrawn");
+            let refused = AppError {
+                details: json!({"provider_reason": format!("withdrawn: {why}")}),
+                ..refused
+            };
+            r.studio()
+                .finish_publication(a.id(), PublishOutcome::Refused(refused), now)
+                .await?;
+            if release {
+                if let Some(s) = r.studio().get_slot(slot).await?
+                    && matches!(s.state, SlotState::Planned | SlotState::Ready)
+                {
+                    r.studio()
+                        .retire_slot(s.id, s.revision, "cancelled")
+                        .await?;
+                    super::posts::retire_post_of(
+                        r.as_mut(),
+                        s.id,
+                        jt_studio::RetirementReason::Cancelled,
+                        now,
+                    )
+                    .await?;
+                }
+                crate::usecases::social::schedule::free_version_of(
+                    r.as_mut(),
+                    &super::measure::system_ctx(ws, now),
+                    slot,
+                )
+                .await?;
+            }
+            let mut entry = jt_ledger::LedgerEntry::new(
+                ws,
+                a.actor().clone(),
+                jt_ledger::Action::new("studio.publish.withdrawn")
+                    .map_err(|_| AppError::internal("action"))?,
+                json!({"attempt_id":a.id(),"slot_id":slot,"reason":why}),
+                now,
+            );
+            entry.strategy_version_id = frame;
+            r.ledger().append(entry).await?;
+            r.commit().await?;
+            Ok(Withdrawal::Withdrawn)
+        }
+        Ok(false) => Ok(Withdrawal::WentOut),
+        // A passing failure: asked again by the next run, or by the person's next try.
+        Err((_, ConnectorError::Transient { .. } | ConnectorError::Throttle { .. })) => {
+            Ok(Withdrawal::Unconfirmed)
+        }
+        Err((provider, e)) => {
+            let reason = failure::failure_reason(provider, &e);
+            let error = AppError::validation(
+                "withdrawal unconfirmed",
+                json!({"provider_error":"unknown",
+                       "provider_reason":format!("withdraw ({why}): {reason}")}),
+            );
+            let mut r = d.uow.tenant(ws).await?;
+            r.studio()
+                .finish_publication(a.id(), PublishOutcome::Unknown(error), now)
+                .await?;
+            let mut entry = jt_ledger::LedgerEntry::new(
+                ws,
+                a.actor().clone(),
+                jt_ledger::Action::new("studio.publish.withdraw_unconfirmed")
+                    .map_err(|_| AppError::internal("action"))?,
+                json!({"attempt_id":a.id(),"slot_id":slot,"reason":why,
+                       "provider_error":e.kind(),"provider_reason":reason}),
+                now,
+            );
+            entry.strategy_version_id = frame;
+            r.ledger().append(entry).await?;
+            r.commit().await?;
+            Ok(Withdrawal::Unconfirmed)
+        }
+    }
+}
+
+/// Takes the post of `slot` back from its platform's scheduler before a person's own action
+/// on it goes on (cancelling the slot, "Olmamış" on its content): `Ok` when nothing waits at a
+/// platform, when it was taken back, or when it is out or going out (the action then meets a
+/// published post, as it always could); `CONFLICT` (`withdraw_unconfirmed`) when the platform
+/// did not confirm, so that nothing is cancelled here while it may still go out there.
+pub(crate) async fn withdraw_for_person(
+    d: &Deps,
+    ws: WorkspaceId,
+    slot: SlotId,
+    why: &str,
+) -> Result<(), AppError> {
+    match withdraw_held(d, ws, slot, why, false).await? {
+        Withdrawal::Unconfirmed => Err(AppError {
+            code: crate::error::ErrorCode::Conflict,
+            message: "the platform did not confirm taking the scheduled post back".into(),
+            details: json!({"reason":"withdraw_unconfirmed","slot_id":slot}),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Takes back from their platforms the held posts Jeeta would no longer send (design
+/// 2026-11-10 §7.3): the slot was cancelled or its content replaced, or what authorizes a send
+/// refuses it as of its time (a brake, the module removed, the account paused, the connection's
+/// approval switched on, a share permission revoked, the strategy gone). Run every minute by the
+/// publisher job, before anything is sent; a post taken back is cancelled and, for a version of
+/// a content package, waits for a time again. Answers how many were taken back.
+pub async fn withdraw_stopped(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
+    let now = d.clock.now();
+    let held = {
+        let mut r = d.uow.tenant(ws).await?;
+        chain::active(r.as_mut()).await?;
+        let mut held = vec![];
+        let slots = r.studio().list_slots(query(now + HOLD_HORIZON)).await?;
+        for s in slots {
+            if s.scheduled_at <= now {
+                continue;
+            }
+            for a in r.studio().slot_evidence(s.id).await?.0 {
+                if a.is_held() {
+                    held.push((s.clone(), a));
+                }
+            }
+        }
+        held
+    };
+    let mut count = 0;
+    for (s, a) in held {
+        let why = if s.state != SlotState::Ready || s.revision != a.slot_revision() {
+            Some("slot_changed".to_owned())
+        } else {
+            let mut r = d.uow.tenant(ws).await?;
+            match authorize_execution_at(r.as_mut(), input(&s), s.scheduled_at).await {
+                Ok(_) => None,
+                Err(e) if e.code == crate::error::ErrorCode::Internal => return Err(e),
+                Err(e) => Some(
+                    e.details["reason"]
+                        .as_str()
+                        .unwrap_or(e.code.as_str())
+                        .to_owned(),
+                ),
+            }
+        };
+        if let Some(why) = why
+            && withdraw_held(d, ws, s.id, &why, true).await? == Withdrawal::Withdrawn
+        {
+            count += 1;
+        }
+    }
+    Ok(count)
 }

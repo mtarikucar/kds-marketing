@@ -9,7 +9,7 @@ import { isApiError } from '@/api/client';
 import { failureText } from '@/lib/delivery';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import type tr from '@/i18n/tr.json';
-import { StudioError, buttonClass, inputClass, useStudioKey, useStudioMutation } from './StudioShared';
+import { StudioError, StudioReadStatus, buttonClass, inputClass, useStudioKey, useStudioMutation } from './StudioShared';
 
 // The TikTok posting screen, as TikTok's Content Sharing Guidelines ask for it
 // (https://developers.tiktok.com/doc/content-sharing-guidelines, "Required UX Implementation in
@@ -98,7 +98,7 @@ function RecentVideos({ posts }: { posts: api.RecentPost[] }) {
         {posts.map((post) => {
           const title = post.title ?? t('studio.tiktok.untitled');
           return (
-            <li key={post.id} className="flex min-w-0 gap-2 rounded-md border border-border p-2">
+            <li key={post.id} className="flex min-w-0 gap-3 border-b border-border py-3">
               <Cover url={post.cover_image_url} />
               <div className="min-w-0 space-y-1">
                 {post.share_url ? (
@@ -147,7 +147,7 @@ function AccountView({ posting }: { posting: api.TiktokPosting }) {
 
 /**
  * A published TikTok post's counters in its slot's detail: read live, else the latest
- * measurement's; nothing when the slot has no post, or the read failed.
+ * measurement's; nothing when the slot has no post, and recovery when its read fails.
  */
 export function TiktokPostCounters({ slotId }: { slotId: string }) {
   const { t, i18n } = useTranslation();
@@ -159,6 +159,7 @@ export function TiktokPostCounters({ slotId }: { slotId: string }) {
     refetchOnMount: 'always',
   });
   const data = counters.data;
+  if (counters.isLoading || counters.error) return <StudioReadStatus query={counters} />;
   if (!data?.post) return null;
   if (data.draft) {
     return <p className="text-xs text-muted-foreground">{t('studio.tiktok.sentToDrafts')}</p>;
@@ -343,7 +344,7 @@ export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
           {t('studio.tiktok.viewPost')}
         </a>
       )}
-      <StudioError error={detail.error} />
+      <StudioReadStatus query={detail} />
     </div>
   );
 }
@@ -404,9 +405,14 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   const post = useStudioMutation(() => api.tiktokPost(slot.id, slot.revision, choice));
   const screenName = t('studio.tiktok.screen');
   if (posting.isPending) {
-    return <p className="text-sm text-muted-foreground">{t('studio.tiktok.loading')}</p>;
+    return <p role="status" className="py-4 text-sm text-muted-foreground">{t('studio.tiktok.loading')}</p>;
   }
-  if (!data) return <TiktokError error={posting.error} />;
+  if (!data) return (
+    <div className="space-y-3">
+      <TiktokError error={posting.error} />
+      <button type="button" className={buttonClass} onClick={() => void posting.refetch()}>{t('common.retry')}</button>
+    </div>
+  );
   const { creator } = data;
   if (creator.cannot_post) {
     return (
@@ -462,18 +468,18 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   return (
     <form
       aria-label={screenName}
-      className="space-y-3 rounded-md border border-primary p-3 text-sm"
+      className="space-y-5 border-y border-border py-5 text-sm"
       onSubmit={(e) => {
         e.preventDefault();
         if (ready) post.mutate();
       }}
     >
-      <h3 className="font-medium">{screenName}</h3>
+      <h3 className="border-b border-border pb-3 text-lg font-medium">{screenName}</h3>
       <Creator creator={creator} />
       <AccountView posting={data} />
-      <div role="radiogroup" aria-labelledby={`${ids}-mode`} className="space-y-1">
+      <div role="radiogroup" aria-labelledby={`${ids}-mode`} className="space-y-3 border-y border-border py-4">
         <p id={`${ids}-mode`}>{t('studio.tiktok.mode')}</p>
-        <label className="flex items-center gap-2">
+        <label className="flex min-h-10 items-center gap-2">
           <input
             type="radio"
             name={`${ids}-mode`}
@@ -482,7 +488,7 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
           />
           <span>{t('studio.tiktok.modeDirect')}</span>
         </label>
-        <label className={`flex items-center gap-2 ${data.drafts_available ? '' : 'opacity-60'}`}>
+        <label className={`flex min-h-10 items-center gap-2 ${data.drafts_available ? '' : 'opacity-60'}`}>
           <input
             type="radio"
             name={`${ids}-mode`}

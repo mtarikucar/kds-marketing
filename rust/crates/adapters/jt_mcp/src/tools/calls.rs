@@ -35,7 +35,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           voice bridge plays on its own), disclosure_sentence and \
                           greeting_inbound, shown with the workspace's name filled into the \
                           approved templates the owner left unwritten. [risk: READ]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: schema_for::<NoArgs>,
             run: policy_get,
         },
@@ -49,7 +49,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           values; a different value is FORBIDDEN, details.reason person_only \
                           naming the field). Only a person may turn disclose_assistant off \
                           (FORBIDDEN for you). Returns the stored policy. [risk: WRITE]",
-            permission: Permission::CallsManage,
+            permissions: &[Permission::CallsManage],
             schema: policy_schema,
             run: policy_set,
         },
@@ -86,7 +86,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           daily_ops_cap, budget_exhausted, disclosure_missing. Returns {call, \
                           turns}; the number is masked. After the call, record its outcome \
                           with jeeta.calls.end. [risk: SPEND]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: place_schema,
             run: place,
         },
@@ -105,7 +105,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           the call ends by script once the fallback lines are spent. \
                           jeeta.calls.say with wait_reply_s returns the reply itself. \
                           [risk: READ]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: listen_schema,
             run: listen,
         },
@@ -128,7 +128,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           by script. CONFLICT not_live once the call ended. Returns {call_id, \
                           seq, state}, and events and timed_out with wait_reply_s. \
                           [risk: WRITE]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: say_schema,
             run: say,
         },
@@ -138,7 +138,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           rep's PBX extension; the policy's handoff_extension when left out). \
                           Your part of the call ends at once (transferred); the line goes on \
                           with the rep. Returns {call, turns}. [risk: WRITE]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: transfer_schema,
             run: transfer,
         },
@@ -147,7 +147,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Read one call: its session (state, purpose, mode, times, end cause, \
                           outcome, duration, cost, recording) and its turns. The number is \
                           masked. [risk: READ]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: schema_for::<CallArgs>,
             run: get,
         },
@@ -157,7 +157,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (person_id), in a state, of a direction (inbound, outbound) or since \
                           a time; limit 1 to 200 (50). Numbers are masked. Returns {calls: \
                           [...]}. [risk: READ]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: schema_for::<ListArgs>,
             run: list,
         },
@@ -171,7 +171,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           journey gets the call; with a known duration and a tariff the spend \
                           is recorded on the line's budget item. Ending twice changes nothing. \
                           Returns {call, turns}. [risk: WRITE]",
-            permission: Permission::CallsWork,
+            permissions: &[Permission::CallsWork],
             schema: end_schema,
             run: end,
         },

@@ -44,6 +44,7 @@ export { cn } from './cn';
 export { Label } from './Label';
 export { Field, type FieldProps } from './Field';
 export { Input } from './Input';
+export { PasswordInput } from './PasswordInput';
 export { PhoneInput, splitPhone, combinePhone, PHONE_PLACEHOLDER, PHONE_COUNTRIES, type PhoneInputProps } from './PhoneInput';
 export { Textarea } from './Textarea';
 export {
@@ -143,7 +144,7 @@ export {
   type TDProps,
 } from './Table';
 export { DataTable, type DataTableProps } from './DataTable';
-export { PageHeader, type PageHeaderProps } from './PageHeader';
+export { PageHeader, PageFrameContext, type PageHeaderProps } from './PageHeader';
 export { FilterBar, type FilterBarProps, type FilterBarSearchProps } from './FilterBar';
 export { LanguageSwitcher } from './LanguageSwitcher';
 export { Disclosure, type DisclosureProps } from './Disclosure';

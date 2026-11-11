@@ -1,4 +1,341 @@
 {
+  "adCampaigns": {
+    "queue": "Reklam kampanyaları",
+    "legacy": "Dışarıda kurulmuş reklam setleri",
+    "open": "Reklam kampanyası aç",
+    "goal": "Hedef",
+    "title": "Reklam kampanyasının adı (isteğe bağlı)",
+    "budget": "Reklam kampanyası bütçesi",
+    "start": "Başlama saati",
+    "end": "Bitiş tarihi (isteğe bağlı)",
+    "account": "Reklam hesabı (isteğe bağlı)",
+    "agentChooses": "Ajan seçsin",
+    "remaining": "Genel reklam bütçesinde kalan: {{amount}}",
+    "general": "Genel reklam bütçesi",
+    "allPlatforms": "Tüm platformlar",
+    "platform": "Platform",
+    "viewBudget": "Bütçe’de gör",
+    "noBudget": "Başlamak için genel reklam bütçesini belirleyin.",
+    "spentBudget": "Harcanan / bütçe",
+    "results": "Sonuç",
+    "cost": "Sonuç başına maliyet",
+    "lead_form": "{{n}} form",
+    "link_click": "{{n}} site ziyareti",
+    "unmeasured": "Henüz ölçülmedi",
+    "starts": "Başlangıç: {{at}}",
+    "more": "Daha fazla",
+    "closed": "Kapanmış reklam kampanyaları",
+    "empty": "Henüz reklam kampanyası yok.",
+    "noMatch": "Bu platformda reklam kampanyası yok.",
+    "back": "Reklam kampanyalarına dön",
+    "pause": "Kampanyayı durdur",
+    "resume": "Sürdür",
+    "endAction": "Bitir",
+    "approve": "Onayla",
+    "decline": "Reddet",
+    "reason": "Neden",
+    "edit": "Bütçeyi ve bitiş tarihini değiştir",
+    "proposalCost": "Önerilen toplam bütçe: {{amount}}. Onayına kadar harcama yapılmaz.",
+    "expired": "Bu önerinin onay süresi doldu. Harcama yapılmadı.",
+    "audience": "Kime gösteriliyor",
+    "destination": "Tıklanınca açılacak yer",
+    "leadDestination": "Reklam formu: {{name}}",
+    "ads": "Reklamlar",
+    "placement": "Yerleşim",
+    "fallback": "Platform önizlemesi şu anda kullanılamıyor.",
+    "days": "Günlere göre sonuçlar",
+    "day": "Gün",
+    "spent": "Harcanan",
+    "impressions": "Gösterim",
+    "clicks": "Tıklama",
+    "ctr": "Tıklama oranı",
+    "moves": "Ajanın yaptıkları",
+    "noMoves": "Henüz bir değişiklik yapılmadı.",
+    "noDays": "Henüz günlük sonuç yok.",
+    "noPlan": "Ajan reklam kampanyasının planını hazırlayacak.",
+    "adNumber": "Reklam {{n}}",
+    "done": "Yapıldı",
+    "refused": "Yapılamadı",
+    "save": "Kaydet",
+    "invalid": "Hedef, geçerli bir bütçe ve başlama saati girin. Bitiş verilirse başlangıçtan en az 24 saat, en çok 90 gün sonra olmalı.",
+    "invalidEdit": "Geçerli bir bütçe girin; bitiş başlangıçtan en az 24 saat, en çok 90 gün sonra olmalı.",
+    "showClosed": "Kapanmış reklam kampanyalarını göster",
+    "heldByCampaigns": "Açık reklam kampanyalarına ayrılan: {{amount}}",
+    "endTitle": "Reklam kampanyasını bitir",
+    "endConfirm": "Reklam kampanyası reklam platformunda durdurulur ve yeniden başlatılamaz. Harcanmamış bütçesi genel reklam bütçesinde serbest kalır.",
+    "errors": {
+      "no_general_ad_budget": "Önce Bütçe sayfasında genel reklam bütçesini belirleyin.",
+      "no_paid_lane": "Onaylı stratejide, genel reklam bütçesinin para biriminde bir ücretli kanal yok. Önce stratejiye ekleyin.",
+      "spend_stopped": "Reklam harcaması durdurulmuş. Bütçe sayfasından yeniden açılabilir.",
+      "above_general_budget": "Reklam kampanyası bütçesi genel reklam bütçesinde kalanı aşıyor. Kalan: {{amount}}.",
+      "above_strategy_cap": "Reklam kampanyası bütçesi stratejideki ücretli kanal sınırını aşıyor. Kalan: {{amount}}.",
+      "above_account_cap": "Reklam kampanyası bütçesi reklam hesabının harcama sınırını aşıyor. Kalan: {{amount}}.",
+      "already_built": "Reklam kampanyası reklam platformunda kuruldu; bütçesi ve bitiş tarihi artık değiştirilemez. Bitirip yenisini açabilirsiniz.",
+      "stopped_by_budget": "Bu reklam kampanyasını bütçe durdurdu; bütçe izin verince kendiliğinden sürer.",
+      "not_running": "Bu reklam kampanyası artık sürmüyor.",
+      "not_stopped": "Bu reklam kampanyası durdurulmuş değil.",
+      "not_a_proposal": "Bu reklam kampanyası onay bekleyen bir öneri değil.",
+      "proposal_expired": "Bu önerinin onay süresi doldu."
+    },
+    "notes": {
+      "plan_refused": "Ajanın planı üç kez geri çevrildi; reklam kampanyası bir kişiyi bekliyor.",
+      "provider_still_running": "Reklam platformunda durdurulması bekleniyor; Jeeta yeniden deniyor. O zamana kadar kalan bütçesi ayrılmış sayılır.",
+      "spend_stopped": "reklam harcaması durduruldu",
+      "budget_exhausted": "genel reklam bütçesi bu dönem için doldu",
+      "module_removed": "reklam yönetimi modülü kaldırıldı",
+      "workspace_inactive": "çalışma alanı etkin değildi"
+    },
+    "stoppedBy": {
+      "person": "Bir kişi durdurdu",
+      "agent": "Ajan durdurdu",
+      "budget": "Bütçe durdurdu; kendiliğinden sürer"
+    },
+    "noPlanClosed": "Reklam kampanyası, planı hazırlanmadan kapandı.",
+    "refusalTitle": "Ajanın son planı geri çevrildi ({{n}}/3)",
+    "findings": {
+      "not_a_usable_ad_account": "Reklam hesabı kullanılamıyor: bağlı ve doğrulanmış bir reklam hesabı gerekli.",
+      "credential_scope_missing": "Reklam hesabının bağlantısında reklam oluşturma izni yok ({{needs}}). Hesabı Yetenekler ve bağlantılar'dan yeniden bağlayın ve izin ekranında bu izni verin.",
+      "capability_unavailable": "Reklam hesabının bağlantısı şu an kullanılamıyor: doğrulanmamış ya da yeniden bağlanması gerekiyor.",
+      "access_expired": "Reklam hesabının bağlantısının süresi dolmuş; hesabı yeniden bağlayın.",
+      "account_unreadable": "Reklam hesabı okunamadı; bağlantısını yenileyin.",
+      "not_the_campaigns_account": "Plan, bu reklam kampanyası için seçtiğiniz reklam hesabını kullanmıyor.",
+      "currency_mismatch": "Reklam hesabının para birimi ({{account}}) genel reklam bütçesininkinden ({{budget}}) farklı.",
+      "below_the_accounts_minimum": "Bütçe, reklam hesabının bu süre için kabul ettiği en düşük tutarın altında. En az: {{amount}}.",
+      "eu_targeting_needs_payer": "Avrupa Birliği ülkelerine reklam bu sürümde desteklenmiyor.",
+      "lead_form_needs_the_inbox": "Reklam formu için Gelen kutusu modülü kurulu olmalı.",
+      "special_category_not_supported": "Özel reklam kategorileri bu sürümde desteklenmiyor.",
+      "other": "Ajanın düzelteceği alan: {{field}}"
+    },
+    "endReasons": {
+      "budget_spent": "Bütçesi harcandı.",
+      "end_date": "Bitiş tarihine ulaştı.",
+      "person": "Bir kişi bitirdi."
+    },
+    "pause_ad": "Reklamı durdurma",
+    "resume_ad": "Reklamı sürdürme",
+    "add_ad": "Reklam ekleme",
+    "fix_ad": "Reklam düzeltme",
+    "none": "Değişiklik yapılmadı",
+    "states": {
+      "proposed": "Onayını bekliyor",
+      "queued": "Sırada",
+      "planning": "Hazırlanıyor",
+      "building": "Kuruluyor",
+      "in_review": "İncelemede",
+      "live": "Yayında",
+      "paused": "Durduruldu",
+      "rejected": "Reddedildi (ajan düzeltiyor)",
+      "ended": "Bitti",
+      "held": "Ajan çözemedi",
+      "expired": "Süresi doldu",
+      "declined": "Reddedildi (sen)"
+    },
+    "placements": {
+      "facebook_feed": "Facebook akışı",
+      "instagram_feed": "Instagram akışı",
+      "instagram_story": "Instagram hikâyesi",
+      "instagram_reels": "Instagram Reels"
+    },
+    "adStates": {
+      "active": "Yayında",
+      "paused": "Durduruldu",
+      "in_review": "İncelemede",
+      "disapproved": "Reddedildi"
+    },
+    "cta": {
+      "LEARN_MORE": "Daha fazla bilgi",
+      "SHOP_NOW": "Alışveriş yap",
+      "SIGN_UP": "Kaydol",
+      "CONTACT_US": "Bize ulaş",
+      "GET_QUOTE": "Teklif al",
+      "APPLY_NOW": "Başvur",
+      "BOOK_NOW": "Rezervasyon yap",
+      "DOWNLOAD": "İndir"
+    }
+  },
+  "budgetSpending": {
+    "general": "Genel reklam bütçesi",
+    "breakdown": "Nereye harcandı",
+    "from": "Başlangıç günü",
+    "until": "Bitiş günü",
+    "invalidPeriod": "Bitiş günü başlangıç gününden sonra olmalı.",
+    "stopping": "Durdurma",
+    "stopAll": "Tüm harcamayı durdur",
+    "stopModule": "{{module}}: harcamayı durdur",
+    "stop": "Harcamayı durdur",
+    "resume": "Sürdür",
+    "resumeScope": "{{scope}}: Sürdür",
+    "all": "Tüm harcama",
+    "running": "Harcama açık",
+    "stopped": "Durduruldu",
+    "waiting": "Duraklatma bekliyor",
+    "help": "Yalnızca harcama durur; para harcamayan işler sürer. Aday havuzundan gönderilen ilk mesajlar Gelen kutusu altında sayılır: onları Gelen kutusu ya da tüm harcama durdurur.",
+    "noSpend": "Bu dönemde harcama yok.",
+    "byHand": "Elle kaydedilen",
+    "held": "Açık reklam kampanyalarına ayrılan (başka kampanya alamaz)",
+    "modules": {
+      "ads": "Reklam yönetimi",
+      "inbox": "Gelen kutusu",
+      "outreach": "Kampanyalar",
+      "calls": "Aramalar",
+      "social": "Sosyal medya yönetimi"
+    }
+  },
+  "socialAccounts": {
+    "accounts": "Hesaplar",
+    "packages": "Hazır paketler",
+    "packageHelp": "Ajan bu sürümler için zaman seçecek.",
+    "connect": "Hesap bağla",
+    "empty": "Henüz bağlı sosyal hesabın yok.",
+    "back": "Hesaplara dön",
+    "paused": "Duraklatıldı",
+    "locked": "Bağlantı kullanılamıyor",
+    "pause": "Paylaşımı duraklat",
+    "resume": "Paylaşımı sürdür",
+    "accountSettings": "Hesap bazında paylaşım",
+    "period": "Dönem",
+    "days": "{{count}} gün",
+    "change": "Değişim",
+    "trend": "{{metric}} eğilimi",
+    "trendMetric": "Eğilim ölçüsü",
+    "totals": "Dönem toplamı",
+    "upcoming": "Sıradaki paylaşımlar",
+    "recent": "Son paylaşımlar",
+    "atProvider": "Platformda zamanlandı",
+    "byJeeta": "Jeeta yayınlayacak",
+    "waitingPerson": "Senden bekleniyor",
+    "finishTiktok": "TikTok paylaşımını tamamla",
+    "waitingApproval": "Onayını bekliyor",
+    "held": "Tutuluyor",
+    "approve": "Onayla",
+    "approvalTitle": "Onay bekleyen paylaşım",
+    "approvalHelp": "Bu hesabın bağlantısında “her eylem insan onayı bekler” ayarı açık. Onaylarsan paylaşım saatinde yayınlanır; ayarı Bağlantılar’dan kapatabilirsin.",
+    "approved": "Onaylandı. Saatinde yayınlanacak.",
+    "notWaiting": "Bu paylaşım onay beklemiyor.",
+    "noUpcoming": "Planlanmış paylaşım yok.",
+    "strays": "Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler",
+    "straysHelp": "Bu gönderiler platformun kendi zamanlayıcısında duruyor ama Jeeta’nın bıraktığı paylaşımlardan biri değil: elle zamanlanmış ya da sonucu öğrenilemeyen bir bırakmadan kalmış olabilir. Jeeta bunları izlemez ve geri çekmez; yayınlanmasını istemiyorsanız platformun kendi ekranından silin.",
+    "noRecent": "Bu dönemde paylaşım yok.",
+    "noPackages": "Zaman seçilmeyi bekleyen paket yok.",
+    "materials": "{{count}} materyal",
+    "unknownAccount": "Sosyal hesap",
+    "noSuitableAccount": "Uygun hesap henüz yok.",
+    "blocked": {
+      "no_approved_strategy": "Onaylı strateji yok; paylaşım planlanamaz.",
+      "no_connected_account": "Bağlı ve çalışan bir sosyal hesap yok. Bir hesap bağlayın ya da bağlantısını yenileyin.",
+      "account_paused": "Uygun hesapların paylaşımı durdurulmuş. Hesabı sürdürünce ajan zaman seçer.",
+      "its_account_unavailable": "Bu sürümün hazırlandığı hesap şu an paylaşım alamıyor.",
+      "format_not_supported": "Bağlı hesapların hiçbiri bu biçimi almıyor.",
+      "channel_not_in_strategy": "Onaylı strateji bağlı hesapların kanalını seçmemiş. Stratejinin kanallarına ekleyin.",
+      "hypothesis_does_not_post": "Bu içeriğin hipotezi stratejide paylaşım yapmıyor. Sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar; sıfır yazılmışsa stratejide değiştirin."
+    },
+    "metrics": {
+      "followers": "Takipçi",
+      "reach": "Erişim",
+      "views": "Görüntülenme",
+      "engagement": "Etkileşim",
+      "profile_visits": "Profil ziyareti",
+      "posts": "Paylaşım"
+    }
+  },
+  "contentAreas": {
+    "existing": "Önceki çalışmalar ve kaynaklar",
+    "line": "Üretim hattı",
+    "open": "Üretim alanı aç",
+    "openHelp": "Bir hedef cümlesi ve başlama saati yeter. Ajan içerik paketini hazırlasın.",
+    "goal": "Hedef",
+    "start": "Başlama saati",
+    "optional": "Platform ve biçim (isteğe bağlı)",
+    "platform": "Platform",
+    "format": "Biçim",
+    "agentChooses": "Ajan seçsin",
+    "archive": "Arşivdekileri göster",
+    "archiveEmpty": "Arşivde üretim alanı yok",
+    "archiveHelp": "Arşivlenmiş alanlar burada görünür.",
+    "empty": "İlk üretim alanınızı açın",
+    "more": "Daha fazla",
+    "future": "Saatini bekliyor",
+    "queued": "Sırada; ajan henüz almadı",
+    "waiting": "Ajan {{n}} çekim istedi",
+    "done": "{{n}} platform sürümü hazır",
+    "held": "Ajan çözemedi; bakmanız gerekiyor",
+    "redoStatus": "Yeniden yapılıyor: “{{note}}”",
+    "back": "Üretim hattına dön",
+    "versions": "Platform sürümleri",
+    "account": "Hesap seçilmedi",
+    "versionSummary": "Bu sürüm",
+    "usedMaterials": "Kullanılan materyaller",
+    "missingMaterial": "Materyal kullanılamıyor",
+    "checksPassed": "Materyal izni ve doğruluk kontrolleri geçti",
+    "agentNote": "Ajanın notları",
+    "redo": "Olmamış",
+    "redoHelp": "Neyin değişmesini istediğinizi yazın. Ajan yeni bir paket hazırlasın.",
+    "redoNote": "Ne değişsin?",
+    "redoSubmit": "Yeniden yap",
+    "heldHelp": "Ajan bu içeriği üç denemede de materyal izni ve doğruluk kontrollerinden geçiremedi. Neyin değişeceğini yazıp ajana geri gönderin ya da alanı arşivleyin.",
+    "heldAction": "Not yazıp geri gönder",
+    "heldReasons": "Son teslimde tutulan sürümler",
+    "accept": "Yine de kabul et",
+    "acceptHelp": "Bulgular yalnızca metinle ilgili. Metnin doğru olduğundan eminseniz içeriği olduğu gibi kabul edebilirsiniz; kabul eden kişi kayda geçer.",
+    "notAcceptable": "Bu içerik kabul edilemez: sorun metinde değil, materyalde ya da hedefte. Not yazıp ajana geri gönderin.",
+    "released": "Metin denetimindeki bulguyu bir kişi kabul etti",
+    "progress": "Adımlar ve ara çıktılar",
+    "stepsLabel": "Üretim adımları",
+    "requests": "Çekim talepleri",
+    "previousMedia": "Önceki görsel",
+    "nextMedia": "Sonraki görsel",
+    "mediaPage": "Görsel {{n}} / {{total}}",
+    "states": {
+      "queued": "Sırada",
+      "working": "Çalışıyor",
+      "waiting_material": "Çekim bekliyor",
+      "done": "Tamamlandı",
+      "held": "Sorun var",
+      "archived": "Arşivde"
+    },
+    "opened": {
+      "human": "İnsan açtı",
+      "olay": "Sistem açtı · Yeni materyal",
+      "calendar": "Sistem açtı · Özel gün",
+      "floor": "Sistem açtı · Boş kanal"
+    },
+    "steps": {
+      "1": "Amacı belirle",
+      "2": "Hedef kitleyi tanımla",
+      "3": "Platformu ve biçimi seç",
+      "4": "Konu araştırması",
+      "5": "Fikir ve yaklaşım",
+      "6": "Ana mesaj",
+      "7": "Başlık ve açılış",
+      "8": "Metin ya da senaryo",
+      "9": "Materyali üret ya da topla",
+      "10": "Düzenleme ve tasarım",
+      "11": "Platforma uyarla",
+      "12": "Paylaşım bilgileri",
+      "13": "Son kontrol",
+      "14": "Paketle"
+    }
+  },
+  "moduleStatus": {
+    "label": "Modül durumu",
+    "noAgent": "Bu modülde çalışabilecek bağlı bir ajan yok; işler bekliyor.",
+    "overdue": "Ajan en son {{time}} yoklama yaptı; {{n}} iş bekliyor.",
+    "strategy": "Onaylı strateji yok; hazırlık yapılır, paylaşım ve harcama bekler.",
+    "paid": "Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.",
+    "noPosting": "Onaylı stratejide hiçbir hipotez paylaşım yapmıyor; paylaşımlar bekler. Paylaşım sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar.",
+    "budget": "Bütçe’de reklam bütçesi yok; kampanyalar bekler.",
+    "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin."
+  },
+  "modulePages": {
+      "materials": "Materyal kütüphanesi",
+      "content": "İçerik oluşturma",
+      "social": "Sosyal medya yönetimi",
+      "ads": "Reklam yönetimi",
+      "specialDays": "Özel günler",
+      "settings": "Ayarlar",
+      "pauseSocial": "Paylaşımı duraklat",
+      "paidUnavailable": "Reklam yönetimi için bağlı bir reklam hesabı ve ücretli reklamları içeren onaylı bir strateji gerekir."
+  },
   "app": {
     "name": "Jeeta",
     "tagline": "Çalışma alanı paneli"
@@ -37,25 +374,31 @@
     "disclosure": {
       "show": "Göster",
       "hide": "Gizle"
-    }
+    },
+    "showPassword": "Parolayı göster",
+    "hidePassword": "Parolayı gizle",
+    "skipContent": "İçeriğe geç"
   },
   "nav": {
+    "users": "Kullanıcılar",
     "label": "Ana menü",
     "home": "Ana sayfa",
     "team": "Ekip",
     "roles": "Roller",
-    "apiKeys": "API anahtarları",
     "agents": "Ajanlar",
     "ledger": "Günlük",
     "strategy": "Strateji",
-    "capabilities": "Kabiliyetler",
+    "capabilities": "Yetenekler ve bağlantılar",
     "budget": "Bütçe",
     "inbox": "Gelen kutusu",
     "studio": "Büyüme stüdyosu",
     "people": "Kişiler",
     "calls": "Aramalar",
     "prospects": "Aday havuzu",
-    "outreach": "Kampanyalar"
+    "outreach": "Kampanyalar",
+    "workGroup": "Müşteri ilişkileri",
+    "growthGroup": "Planlama",
+    "workspaceGroup": "Çalışma alanı"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -124,10 +467,11 @@
       "work": "Gelen kutusunda çalışma",
       "manage": "Gelen kutusunu yönetme"
     },
-    "studio": {
-      "work": "Stüdyoda çalış",
-      "manage": "Stüdyoyu yönet"
-    },
+    "materials": {"work": "Materyal kütüphanesi ile çalışma"},
+    "content": {"work": "İçerik oluşturma ile çalışma", "manage": "İçerik oluşturma yönetimi"},
+    "social": {"work": "Sosyal medya yönetimi ile çalışma", "manage": "Sosyal medya yönetimi yönetimi"},
+    "ads": {"work": "Reklam yönetimi ile çalışma", "manage": "Reklam yönetimi yönetimi"},
+
     "calls": {
       "work": "Arama yapma ve görüşme kaydını görme",
       "manage": "Arama politikasını yönetme",
@@ -211,6 +555,8 @@
     "CONFLICT": "Bu işlem mevcut durumla çakışıyor.",
     "VALIDATION": "Girilen bilgiler geçersiz.",
     "STRATEGY_REQUIRED": "Bu işlem için önce onaylı bir strateji gerekiyor.",
+    "MODULE_NOT_INSTALLED": "Bu modül çalışma alanına eklenmemiş.",
+    "CAPABILITY_REQUIRED": "Bu modül için önce gerekli yeteneğin bağlanması gerekiyor.",
     "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
     "HOST_NOT_ALLOWED": "Bu adrese erişime izin verilmiyor.",
     "UPSTREAM_UNAVAILABLE": "Sağlayıcı şu anda yanıt vermiyor. Lütfen biraz sonra yeniden deneyin.",
@@ -242,7 +588,7 @@
   },
   "login": {
     "title": "Giriş yap",
-    "description": "Çalışma alanınıza e-posta ve parolanızla girin.",
+    "description": "Çalışma alanınıza e-posta ve parolanızla girin",
     "submit": "Giriş yap",
     "invalid": "E-posta ya da parola hatalı.",
     "noAccount": "Hesabınız yok mu?",
@@ -250,14 +596,14 @@
   },
   "register": {
     "title": "Kayıt ol",
-    "description": "Hesabınızı ve ilk çalışma alanınızı oluşturun.",
+    "description": "Hesabınızı ve ilk çalışma alanınızı oluşturun",
     "submit": "Hesap oluştur",
     "haveAccount": "Zaten hesabınız var mı?",
     "loginLink": "Giriş yapın"
   },
   "invite": {
     "title": "Daveti kabul et",
-    "description": "Bir çalışma alanına davet edildiniz.",
+    "description": "Bir çalışma alanına davet edildiniz",
     "signedInAs": "{{email}} olarak oturum açtınız. Daveti bu hesapla kabul edebilirsiniz.",
     "accept": "Daveti kabul et",
     "newUser": "Hesabınız yoksa adınızı ve bir parola girerek katılın.",
@@ -271,15 +617,15 @@
     "goHome": "Panele git"
   },
   "home": {
-    "title": "Ana sayfa",
-    "description": "Çalışma alanınızın özeti.",
+    "title": "İş akışı",
+    "description": "Müşteri konuşmaları, bekleyen kararlar ve sıradaki takip işleri",
     "slug": "Kısa ad",
     "status": "Durum",
     "myRole": "Rolünüz",
     "myPermissions": "İzinleriniz",
     "strategy": {
       "title": "Strateji bekleniyor",
-      "body": "Strateji, ajanınızın MCP üzerinden sizinle yürüttüğü istişareyle oluşur: ajan sorar, yanıtlarınızı ve varsayımlarını kaydeder, taslağı onayınıza sunar.",
+      "body": "Ajanınızla hedef kitlenizi, amaçlarınızı ve yaklaşımınızı belirleyin. Taslak yürürlüğe girmeden önce gözden geçirin.",
       "start": "İstişareyi başlat",
       "open": "Stratejiye git",
       "draftTitle": "Strateji taslağı üzerinde çalışılıyor",
@@ -290,8 +636,9 @@
       "submittedWait": "Bir sahip ya da yönetici onayladığında yürürlüğe girer.",
       "approve": "Onayla",
       "approvedTitle": "Strateji yürürlükte",
-      "approvedBody": "Yürürlükteki sürüm: {{number}}.",
-      "hypotheses": "Hipotez sayısı: {{count}}."
+      "approvedBody": "Sürüm {{number}} yürürlükte",
+      "hypotheses": "{{count}} etkin hipotez",
+      "label": "Strateji"
     },
     "inactive": {
       "pending_payment": "Ödeme onaylanıp etkinleştirme kodu girildiğinde çalışma alanınız açılır.",
@@ -317,6 +664,9 @@
       "connectLink": "Ajanı bağla"
     },
     "pending": {
+      "ads_campaign_proposal": "Bir reklam kampanyası önerisi onayını bekliyor.",
+      "ads_campaign_held": "Ajan bir reklam kampanyasını çözemedi.",
+
       "title": "Bekleyen işler",
       "empty": "Bekleyen iş yok.",
       "consult_strategy": "Stratejiyi istişareyle oluşturun ya da açık taslağa devam edin.",
@@ -345,12 +695,29 @@
       "promoted_not_contacted": "Aktarılan ama henüz kendisine yazılmayan adaylar var.",
       "campaign_approval": "Bir kampanya onayınızı bekliyor.",
       "campaign_blocked": "Bir kampanya durdu; nedenine bakın.",
-      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor."
-    }
+      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor.",
+      "description": "Öncelik sırasına göre kararlar ve takip işleri.",
+      "count": "{{count}} bekleyen iş",
+      "emptyHint": "Yeni onaylar ve takip işleri burada görünür. Aşağıdan konuşmaları inceleyebilir veya sıradaki içeriği planlayabilirsiniz.",
+      "studio_slot": "Paylaşım hazırlanmayı bekliyor",
+      "studio_approval": "İşlem onayınızı bekliyor",
+      "studio_budget_move": "Reklam bütçesi işlemi bekliyor",
+      "studio_shoot_request": "Çekim veya yükleme bekleniyor",
+      "studio_post_request": "Paylaşım planı ajanı bekliyor",
+      "studio_material_analysis": "Materyal ajan analizini bekliyor",
+      "studio_material_production": "Görsel üretimi ajanı bekliyor",
+      "content_area": "Üretim alanı sırada",
+      "content_material_request": "Üretim alanı için çekim gerekiyor",
+      "content_area_held": "Üretim alanında çözmeniz gereken bir sorun var"
+    },
+    "workspaceDetails": "Çalışma alanı bilgileri ve izinler",
+    "continueWorking": "Çalışmaya devam et",
+    "inboxHint": "Konuşmalar, kişiler ve takip işleri.",
+    "studioHint": "İçerikleri planlayın, sıradaki işleri inceleyin."
   },
   "team": {
     "title": "Ekip",
-    "description": "Çalışma alanının üyeleri ve bekleyen davetler.",
+    "description": "Çalışma alanının üyeleri ve bekleyen davetler",
     "invite": "Üye davet et",
     "columns": {
       "member": "Üye",
@@ -380,7 +747,7 @@
   },
   "roles": {
     "title": "Roller",
-    "description": "Sistem rolleri sabittir; özel roller kendi izinlerini taşır.",
+    "description": "Sistem rolleri sabittir; özel roller kendi izinlerini taşır",
     "create": "Rol oluştur",
     "columns": {
       "name": "Ad",
@@ -406,27 +773,7 @@
     }
   },
   "apiKeys": {
-    "title": "API anahtarları",
-    "description": "Ajanlar bu çalışma alanına bu anahtarlarla bağlanır.",
-    "create": "Anahtar oluştur",
-    "columns": {
-      "name": "Ad",
-      "prefix": "Önek",
-      "scopes": "Kapsamlar",
-      "status": "Durum",
-      "created": "Oluşturulma",
-      "lastUsed": "Son kullanım"
-    },
-    "neverUsed": "Hiç kullanılmadı",
-    "revoke": "İptal et",
-    "revokeTitle": "Anahtarı iptal et",
-    "revokeBody": "{{name}} anahtarı iptal edilecek; onu kullanan ajanlar artık bağlanamayacak.",
-    "revoked": "Anahtar iptal edildi.",
-    "empty": "Henüz API anahtarı yok.",
-    "emptyBody": "Bir ajanı bağlamak için anahtar oluşturun.",
     "dialog": {
-      "title": "API anahtarı oluştur",
-      "description": "Anahtara bir ad verin ve isterseniz kapsamını daraltın.",
       "scopesHint": "Hiçbirini seçmezseniz anahtar sizin tüm izinlerinizi taşır.",
       "submit": "Anahtar oluştur",
       "plaintextTitle": "Yeni anahtarınız",
@@ -444,25 +791,42 @@
   },
   "agents": {
     "title": "Ajanlar",
-    "description": "Bu çalışma alanına API anahtarlarıyla bağlanan istemciler.",
-    "columns": {
-      "client": "İstemci",
-      "version": "Sürüm",
-      "protocol": "Protokol",
-      "key": "API anahtarı",
-      "firstSeen": "İlk görülme",
-      "lastSeen": "Son görülme",
-      "toolCalls": "Araç çağrısı",
-      "checkin": "Yoklama"
-    },
+    "description": "Her ajan bu çalışma alanına burada verilen bir anahtarla bağlanır. Her satır bir anahtarı ve onunla bağlanan ajanları gösterir.",
+    "connect": "Ajan bağla",
+    "empty": "Henüz bağlı ajan yok.",
+    "emptyBody": "Bir ajan bağlayın: adını verin, anahtarını alın, komutu ajanınızda çalıştırın.",
+    "emptyBodyReadOnly": "Bir ajan bağlandığında burada görünür. Ajan bağlamak için API anahtarlarını yönetme izni gerekir.",
     "overdue": "Gecikti",
     "onTime": "Zamanında",
-    "empty": "Henüz bağlanan ajan yok.",
-    "emptyBody": "Bir API anahtarıyla bağlanan ilk istemci burada görünecek."
+    "lastContact": "son temas {{when}}",
+    "toolCalls": "Araç çağrısı: {{count}}",
+    "firstSeen": "ilk bağlantı {{when}}",
+    "protocol": "Protokol {{version}}",
+    "connected": "{{name}} anahtarıyla bağlanan ajanlar",
+    "issuedAt": "verildi {{when}}",
+    "revokedAt": "erişimi kesildi {{when}}",
+    "waiting": "Bu anahtarla henüz bağlanan ajan yok.",
+    "neverConnected": "Bu anahtarla hiç ajan bağlanmadı.",
+    "howTo": "Nasıl bağlanır?",
+    "keyShownOnce": "Anahtarın kendisi yalnızca oluşturulurken gösterilir. Elinizde yoksa bu erişimi kesip yeni bir ajan bağlayın.",
+    "permissions": "İzinler: {{count}}",
+    "revoke": "Erişimi kes",
+    "revokeTitle": "Ajanın erişimini kes",
+    "revokeBody": "{{name}} anahtarı iptal edilecek; onunla bağlanan ajanlar artık bağlanamayacak. Bu geri alınamaz.",
+    "revoked": "Erişim kesildi.",
+    "revokedGroup": "Erişimi kesilenler: {{count}}",
+    "dialog": {
+      "title": "Ajan bağla",
+      "description": "Ajana bir ad verin, isterseniz izinlerini daraltın. Anahtarı oluşturunca bağlantı komutu gösterilir.",
+      "name": "Ajanın adı",
+      "nameHint": "Listede bu adla görünür; örneğin “Satış ajanı”.",
+      "permissions": "İzinler",
+      "submit": "Anahtarı oluştur"
+    }
   },
   "ledger": {
     "title": "Günlük",
-    "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur.",
+    "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur",
     "filter": "Eylem filtresi",
     "filterPlaceholder": "örn. team.",
     "apply": "Filtrele",
@@ -478,7 +842,10 @@
     "redactedNote": "Gizli değerler maskelenmiştir.",
     "loadMore": "Daha fazla yükle",
     "empty": "Günlükte kayıt yok.",
-    "emptyBody": "Çalışma alanında bir şey olduğunda burada görünecek."
+    "emptyBody": "Çalışma alanında bir şey olduğunda burada görünecek.",
+    "workbench": {
+      "scrollHint": "Diğer sütunları görmek için tabloyu yatay kaydırın."
+    }
   },
   "platform": {
     "console": "Platform konsolu",
@@ -556,7 +923,10 @@
       "resetHelp": "Başka bir operatörün parolasını sıfırlar ve tüm oturumlarını kapatır. En az 12 karakter kullanın.",
       "operator": "Operatör kimliği",
       "password": "Yeni parola",
-      "resetDone": "Parola sıfırlandı; hedef operatörün oturumları kapatıldı."
+      "resetDone": "Parola sıfırlandı; hedef operatörün oturumları kapatıldı.",
+      "workbench": {
+        "details": "İşler, bağlantılar ve yedekleme"
+      }
     }
   },
   "notFound": {
@@ -566,7 +936,7 @@
   },
   "strategy": {
     "title": "Strateji",
-    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak.",
+    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak",
     "tabs": {
       "approved": "Onaylı",
       "draft": "Taslak"
@@ -732,12 +1102,20 @@
       "hypothesisChannel": "{{n}}. hipotez: bu kanal için bağlı hesap yok.",
       "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
     },
-    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin."
+    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin.",
+    "workbench": {
+      "sections": "Brief bölümleri",
+      "gapCount": "{{count}} eksik",
+      "fixFirstGap": "İlk eksiği tamamla",
+      "viewFirstGap": "İlk eksiğe git",
+      "brand": "Marka ve kitle",
+      "plan": "Hedefler ve plan"
+    }
   },
   "capabilities": {
     "title": "Kabiliyetler",
-    "description": "Çalışma alanının üzerinden iş yapabildiği hesaplar, cihazlar ve araçlar.",
-    "declare": "Kabiliyet bildir",
+    "description": "İşinize göre bağlantıları seçin; durumlarını ve kullanım izinlerini yönetin",
+    "declare": "Kaynak ekle",
     "filterLabel": "Tür grubu",
     "filterAll": "Tümü",
     "empty": "Kabiliyet yok.",
@@ -1099,6 +1477,78 @@
         "step3": "jeeta-device-bridge.exe'yi çalıştırın. Gördüğü her telefon yaklaşık 15 saniye içinde bu sayfada, Cihazlar altında doğrulanmış olarak görünür. Her oturum açılışında kendiliğinden başlatmak için:",
         "ownKey": "Her bilgisayardaki köprünün kendi anahtarı olmalı: Jeeta köprüleri anahtarlarından ayırt eder ve çalışan başka bir köprünün tuttuğu telefonu reddeder. Başka bir bilgisayar için yeniden eşleştirin."
       }
+    },
+    "workbench": {
+      "purposeLabel": "Ne yapmak istiyorsunuz?",
+      "inventory": "Bağlantılarınız",
+      "search": "Bağlantı ara",
+      "searchPlaceholder": "Ad, hesap veya kanal ara…",
+      "allStatus": "Tüm durumlar",
+      "attention": "İlgilenilmesi gereken",
+      "verified": "Doğrulanmış",
+      "retired": "Kullanımdan kaldırılmış",
+      "statusLabel": "Bağlantı durumu",
+      "advanced": "Türüne göre daralt",
+      "technical": "Teknik bağlantı ayarları",
+      "clear": "Filtreleri temizle",
+      "noMatch": "Bu seçimle eşleşen bağlantı yok",
+      "noMatchBody": "Başka bir amaç seçin veya arama ve durum filtrelerini temizleyin.",
+      "count": "{{count}} bağlantı gösteriliyor",
+      "pairDevice": "Telefon eşleştirmeyi aç",
+      "managerNeeded": "Yeni bağlantı eklemek için çalışma alanı yöneticinizle görüşün.",
+      "steps": {
+        "choose": "Yapacağınız işi seçin",
+        "connect": "İlgili hesabı bağlayın",
+        "check": "Durumunu kontrol edin"
+      },
+      "goals": {
+        "all": {
+          "label": "Tüm bağlantılar",
+          "title": "Hesaplarınız, yapacağınız işin yanında.",
+          "description": "Müşterilerle konuşmak, içerik yayımlamak veya aramaları yönetmek için gereken bağlantıları seçin. Eklediğiniz hesapların durumunu aşağıdan takip edin."
+        },
+        "messages": {
+          "label": "Müşterilerle konuş",
+          "title": "Konuşmaları tek yerde toplayın.",
+          "description": "Müşterilerinizin size ulaştığı kanalı bağlayın. Hesap bağlantısı ve doğrulama tamamlandığında konuşmaları Gelen Kutusu’ndan yönetin."
+        },
+        "publishing": {
+          "label": "İçerik yayımla",
+          "title": "İçeriğinizin ulaşacağı hesapları bağlayın.",
+          "description": "Yayın yapmak istediğiniz sosyal hesabı seçin. İçeriği ve onay sürecini Büyüme Stüdyosu’nda yönetin; bağlantı durumu ve yayın izinlerini burada kontrol edin."
+        },
+        "calls": {
+          "label": "Aramaları yönet",
+          "title": "Telefon hattınızı çalışma alanına taşıyın.",
+          "description": "NetGSM santralinizi bağlayın. Aramalar ekranında görüşmeleri takip edin; sesli temsilci kullanımı için ayrıca köprü kurulumu gerekir."
+        },
+        "devices": {
+          "label": "Cihazlarla çalış",
+          "title": "Sahadaki cihazları ekibinize bağlayın.",
+          "description": "Telefonu eşleştirin veya cihaz kaydı ekleyin. Erişilebilirlik ve kullanım izinlerini bağlantının kendi satırından takip edin."
+        },
+        "growth": {
+          "label": "Reklam ve topluluk",
+          "title": "Büyüme kanallarınızı bir arada takip edin.",
+          "description": "Reklam hesabınızı bağlayın veya topluluk kaynaklarınızı kaydedin. Kayıt eklemek tek başına entegrasyonu etkinleştirmez."
+        },
+        "tools": {
+          "label": "İş araçları",
+          "title": "Ekibinizin kullandığı kaynakları düzenleyin.",
+          "description": "Takvim, pazar yeri, ajan ve diğer iş araçlarını sınıflandırın. Entegrasyon kurulumu ve izinler kaynağa göre ayrıca tamamlanır."
+        }
+      },
+      "addForPurpose": "Bu amaç için bağlantı ekle",
+      "groupsTab": "Hesap grupları",
+      "technicalTab": "Teknik ayarlar",
+      "pagination": "Bağlantı sayfaları",
+      "previous": "Önceki",
+      "next": "Sonraki",
+      "page": "{{current}} / {{total}}",
+      "showDetails": "Ayrıntılar",
+      "hideDetails": "Ayrıntıları kapat",
+      "startHelp": "Müşterilerinizin kullandığı bir hesabı bağlayın. Ardından bağlantının durumunu buradan kontrol edin.",
+      "startConnection": "İlk hesabı bağla"
     }
   },
   "connect": {
@@ -1214,7 +1664,7 @@
   },
   "budget": {
     "title": "Bütçe",
-    "description": "Çalışma alanının kendi parası ve sınırları: reklam bütçesi, SMS, ajan kotası, sarf malzemesi.",
+    "description": "Çalışma alanının kendi parası ve sınırları: reklam bütçesi, SMS, ajan kotası, sarf malzemesi",
     "create": "Bütçe kalemi oluştur",
     "columns": {
       "name": "Ad",
@@ -1299,44 +1749,22 @@
       "human": "İnsan",
       "agent": "Ajan",
       "connector": "Bağlayıcı ({{name}})"
+    },
+    "workbench": {
+      "scrollHint": "Diğer sütunları görmek için tabloyu yatay kaydırın."
     }
   },
   "inbox": {
     "erasure": {
       "open": "Kişisel verileri sil",
-      "description": "İletişim kimlikleri, mesaj ve not metinleri, randevu bilgileri ve dosya referansları kalıcı olarak silinir. Anonim yolculuk, olay ve komisyon kayıtları ile tutarlar korunur. Ajanınızın sakladığı dosyalar silinmez.",
+      "description": "İletişim kimlikleri, mesaj ve not metinleri, randevu bilgileri ve dosya referansları kalıcı olarak silinir. Anonim yolculuk ve olay kayıtları ile tutarlar korunur. Ajanınızın sakladığı dosyalar silinmez.",
       "confirm": "Onaylamak için “{{phrase}}” yazın.",
       "submit": "Kalıcı olarak sil",
       "phrase": "SİL"
     },
-    "commissions": {
-      "title": "Komisyonlar",
-      "description": "Kazanılan yolculukların insan temsilci komisyonları.",
-      "filterState": "Komisyon durumu",
-      "all": "Tümü",
-      "payee": "Hak sahibi",
-      "unassigned": "Atanmamış",
-      "snapshotRate": "Kazanıldığı andaki oran: %{{rate}}",
-      "noPayeeHelp": "Kazanıldığı anda hak sahibi yoktu. Bu kayıt ödenemez; atanmamış takip görevi oluşturuldu.",
-      "approve": "Onayla",
-      "pay": "Ödendi olarak işaretle",
-      "rates": "Komisyon oranı ayarla",
-      "rateHelp": "100 baz puan = %1. Temsilci oranı varsayılanın önüne geçer. Değişiklikler yalnız sonraki kazanımlara uygulanır.",
-      "rateTarget": "Oranın kapsamı",
-      "defaultRate": "Çalışma alanı varsayılanı",
-      "rate": "Oran (baz puan)",
-      "save": "Oranı kaydet",
-      "saved": "Oran kaydedildi.",
-      "state": {
-        "no_payee": "Hak sahibi yok",
-        "pending": "Onay bekliyor",
-        "approved": "Onaylandı",
-        "paid": "Ödendi"
-      }
-    },
     "emailSubject": "E-posta konusu",
     "title": "Gelen kutusu",
-    "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin.",
+    "description": "Konuşmaları yanıtlayın, yolculukları ve takip işlerini yönetin",
     "queues": "Kuyruklar",
     "search": "Kişi ara",
     "empty": "Bu kuyrukta konuşma yok.",
@@ -1542,7 +1970,11 @@
       "removeNamed": "Engeli kaldır: {{channel}} / {{reason}}",
       "send": "Ticari mesaj gönder",
       "intent": "Gönderim amacı",
-      "sendHint": "Ticari ileti için geçerli izin gerekir. Engellemeler gönderimden hemen önce yeniden denetlenir."
+      "sendHint": "Ticari ileti için geçerli izin gerekir. Engellemeler gönderimden hemen önce yeniden denetlenir.",
+      "consents": "Kayıtlı izinler",
+      "suppressions": "İletişim engelleri",
+      "noConsents": "Henüz izin kaydı yok.",
+      "noSuppressions": "İletişim engeli yok."
     },
     "offers": {
       "quotes": "Teklifler",
@@ -1581,7 +2013,9 @@
         "booked": "Planlandı",
         "held": "Yapıldı",
         "cancelled": "İptal edildi"
-      }
+      },
+      "noQuotes": "Henüz teklif yok.",
+      "noAppointments": "Henüz randevu yok."
     },
     "public": {
       "surface": {
@@ -1664,6 +2098,13 @@
       },
       "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
       "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
+    },
+    "noTasks": "Henüz görev yok. Sıradaki takip işini aşağıdan ekleyin.",
+    "noNotes": "Henüz not yok. Ekibiniz için yararlı bilgileri ekleyin.",
+    "ux": {
+      "browseQueues": "Kuyruklar ve kişi araması",
+      "emptyQueueHint": "Başka bir kuyruk seçin veya bir kişiyi arayın. Yeni görüşmeler bağlı müşteri kanallarından buraya gelir.",
+      "chooseHint": "Kuyruktan bir görüşme seçin. Kişi aramasıyla geçmiş görüşmelere de ulaşabilirsiniz."
     }
   },
   "studio": {
@@ -1683,7 +2124,7 @@
     "laneRelease": "Kanalı sürdür",
     "proposal": "Hipotez öner",
     "titleField": "Başlık",
-    "segment": "Kitle anahtarı",
+    "segment": "Kitle referansı",
     "angle": "Yaklaşım",
     "channel": "Kanal",
     "metric": "Ölçüt",
@@ -1744,7 +2185,7 @@
     "bind": "Reklam seti bağla",
     "account": "Reklam hesabı",
     "externalSet": "Mevcut reklam seti",
-    "arm": "İçerik kolu",
+    "arm": "İçerik çeşidi",
     "budgetMove": "Günlük bütçeyi değiştir",
     "binding": "Bağlı reklam seti",
     "dailyBudget": "Günlük bütçe",
@@ -1772,7 +2213,7 @@
     "retirement": "İptal veya emeklilik ayrıntısı günlükte.",
     "success": "Kaydedildi.",
     "loading": "Yükleniyor…",
-    "entryHypothesis": "Değerlendirilen hipotez",
+    "entryHypothesis": "İlgili içerik yaklaşımı",
     "minorUnits": "alt birim",
     "publishFailed": "Yayınlanamadı: {{reason}}",
     "publishUncertain": "Yayın durumu belirsiz; tekrar göndermeyin ({{reason}}).",
@@ -1898,11 +2339,34 @@
       },
       "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
       "noCover": "Önizleme yok"
+    },
+    "description": "İçerikleri planlayın, bugünün işlerini inceleyin ve sonuçları değerlendirin",
+    "emptyPlanHelp": "Planlanan içerikler burada görünür. Sıradaki içeriği hazırlamak için kaynak materyallerinizi ekleyin.",
+    "addMaterials": "Materyal ekle",
+    "filters": {
+      "hypothesis": "İçerik yaklaşımı",
+      "from": "Başlangıç",
+      "until": "Bu tarihten önce"
+    },
+    "contentFormats": {
+      "text": "Metin paylaşımı",
+      "image": "Görsel",
+      "video": "Video"
+    },
+    "workbench": {
+      "filters": "Filtreler",
+      "filtersActive": "Etkin",
+      "clearFilters": "Filtreleri temizle",
+      "invalidRange": "Başlangıç tarihi bitiş tarihinden sonra olamaz.",
+      "hypotheses": "Hipotezleri göster",
+      "todayHint": "Onaylar, planlanan içerikler ve ilgilenmeniz gereken engeller.",
+      "viewPlan": "Haftalık planı gör",
+      "sections": "Stüdyo görünümü"
     }
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
-    "description": "Tek seferlik havale ve işletmen onayıyla kalıcı erişim.",
+    "description": "Tek seferlik havale ve işletmen onayıyla kalıcı erişim",
     "stages": {
       "pending_payment": "Ödeme bekleniyor",
       "approval": "İşletmen onayı bekleniyor",
@@ -1930,19 +2394,19 @@
   },
   "onboarding": {
     "title": "İlk kurulum",
-    "description": "İlerlemeniz çalışma alanının güncel durumundan okunur.",
+    "description": "İlerlemeniz çalışma alanının güncel durumundan okunur",
     "paymentConfirmed": "Ödeme onaylandı",
     "paymentPending": "Ödeme onayı bekleniyor",
     "strategy": "Strateji",
     "strategyApproved": "Strateji onaylandı",
     "strategyPending": "Strateji onayı bekleniyor",
     "prepare": "Stratejiyi hazırla",
-    "teamKeys": "Ekip ve API anahtarları",
+    "teamKeys": "Ekip ve ajanlar",
     "activationRequired": "Ekip, anahtar ve bağlantı işlemleri için önce çalışma alanını etkinleştirin. Ödeme onayı tek başına erişimi açmaz.",
     "members": "Ekip üyesi: {{count}}",
     "keys": "Etkin anahtar: {{count}}",
     "invite": "Ekibi davet et",
-    "createKey": "API anahtarı oluştur",
+    "createKey": "Ajan bağla",
     "connector": "Bağlayıcı doğrulaması",
     "connectorVerified": "Bağlayıcı doğrulandı",
     "connectorPending": "Bağlayıcı doğrulaması bekleniyor",
@@ -1953,7 +2417,8 @@
     "agentNeeded": "Ajanın güncel bağlantısı yok. İşlerin ilerlemesi için kendi ajan zamanlayıcınız çalışmalıdır.",
     "agents": "Ajanları görüntüle",
     "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
-    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz."
+    "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz.",
+    "teamOwnerHelp": "Ekip davetleri ve API anahtarları için çalışma alanı yöneticinizle görüşün."
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
@@ -1979,14 +2444,18 @@
     }
   },
   "gates": {
+    "moduleBody": "Bu bölümün modülü kaldırılmış. Mevcut kayıtlar korunur.",
+    "moduleLink": "Modülü incele",
     "strategyBody": "Bu bölüm, onaylı bir strateji olunca açılır. Stratejiyi ajanınızla ya da strateji sayfasından hazırlayıp onaylayın.",
     "strategyLink": "Stratejiye git",
     "inactiveBody": "Bu bölüm, çalışma alanı etkinleşince açılır.",
-    "inactiveLink": "Ödeme ve etkinleştirme"
+    "inactiveLink": "Ödeme ve etkinleştirme",
+    "capabilityBody": "Bu bölüm, gerekli yetenek bağlanıp doğrulanınca açılır.",
+    "capabilityLink": "Yetenek bağla"
   },
   "people": {
     "title": "Kişiler",
-    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil.",
+    "description": "Çalışma alanındaki herkes; henüz konuşması olmayan içe aktarılmış ya da elle eklenmiş kişiler dahil",
     "search": "Ada ya da şirkete göre ara",
     "empty": "Henüz kişi yok.",
     "noMatch": "Eşleşen kişi yok.",
@@ -2006,6 +2475,12 @@
       "email": "E-posta",
       "webchat": "Web sohbeti",
       "phone": "Telefon"
+    },
+    "clearSearch": "Aramayı temizle",
+    "noMatchBody": "Başka bir ad veya şirket deneyin ya da aramayı temizleyin.",
+    "ux": {
+      "connectChannels": "Müşteri kanallarını bağla",
+      "emptyBody": "Bağlı kanallardan ilk mesaj geldiğinde veya müşteri adayı içe aktarıldığında kişiler burada görünür."
     }
   },
   "failure": {
@@ -2185,7 +2660,124 @@
         "opening_outbound": "Giden aramada işletmenin açılış cümlesi",
         "transcript_notice": "Yazıya dökme bildirimi",
         "closing": "Planda kapanış yoksa kapanış cümlesi"
+      },
+      "scriptsTitle": "Karşılama ve bildirimler",
+      "phrasesTitle": "Bekletme ve yedek ifadeler",
+      "limitsTitle": "Süreler ve aktarma",
+      "description": "Arayanların duyacağı metinleri, bekletme ifadelerini ve süre sınırlarını ayarlayın.",
+      "ux": {
+        "sectionHint": "Değiştirmek istediğiniz bölümü açın. Kapalı bölümlerdeki değerler ve taslak düzenlemeler korunur; Kaydet tüm ayarları birlikte uygular."
+      },
+      "editor": {
+        "intro": "Bir arama senaryosu seçin; o anda kullanılacak metinleri ve süreleri birlikte düzenleyin.",
+        "navigation": "Arama senaryosu",
+        "changed": "{{count}} bölümde kaydedilmemiş değişiklik",
+        "upToDate": "Kaydedilmiş ayarlar",
+        "modified": "Değiştirildi",
+        "direction": "Arama yönü",
+        "inbound": "Müşteri bizi aradığında",
+        "outbound": "Biz müşteriyi aradığımızda",
+        "emptyOpening": "Boş bırakırsanız bu karşılama çalınmaz.",
+        "phraseType": "Düzenlenecek ifade grubu",
+        "phraseHelp": "{{count}} / 5 cümle. Boş satırlar kaydedilmez; her cümle en çok 600 karakter olabilir.",
+        "phraseLabel": "Cümle {{number}}",
+        "removePhrase": "{{number}}. cümleyi kaldır",
+        "addPhrase": "Cümle ekle",
+        "situation": "Görüşmenin sonundaki durum",
+        "preview": "Senaryo önizlemesi",
+        "previewHint": "Taslak metin ve süreleri gösterir. Ses çalmaz, arama başlatmaz.",
+        "noText": "Bu durum için metin yazılmamış.",
+        "template": "İşletmenin varsayılan şablonu kullanılır.",
+        "openingPreviewHint": "Arama planı ve bildirim ayarları da açılışta kullanılacak metni etkiler.",
+        "disclosureOn": "Açılışta asistan bildirimi zorunlu.",
+        "disclosureOff": "Asistan bildirimi zorunluluğu kapalı.",
+        "disclosureHint": "Zorunluluk açıksa açılış metni bu ifadeyi aynen içermelidir.",
+        "missingDisclosure": "Bildirim zorunlu, ancak metni boş. Bu durum arama başlatılmasını engelleyebilir.",
+        "recordingHint": "Bu metin tek başına kayıt başlatmaz; kayıt yapılacaksa önce duyurulur.",
+        "transcriptHint": "Ajan aramalarında açılıştan sonra okunur. Boş bırakılırsa okunmaz.",
+        "seconds": "{{value}} sn",
+        "firstWait": "İlk bekletme cümlesi",
+        "secondWait": "İkinci bekletme cümlesi",
+        "fallback": "Plandaki yedek yanıta geçiş",
+        "notifyAgent": "Sessizlik ajana bildirilir",
+        "endSilence": "Sessizlik devam ediyorsa görüşme kapatılır",
+        "waitingPreviewHint": "Süreler, ajan yanıtının beklenmeye başladığı andan ölçülür. Köprünün kısa ifadeleri ayrıca kullanılabilir.",
+        "silencePreviewHint": "Müşterinin yanıtı beklenirken geçerlidir. Uyarı metninin ne zaman çalınacağını ajan ve ses köprüsü belirler.",
+        "variantPreview": "Bir metin örneğidir; kullanılacak ifade aramanın durumuna bağlıdır.",
+        "durationHint": "Görüşmenin üst sınırı. Arama planı daha kısa bir sınır belirleyebilir.",
+        "extensionPreview": "Tanımlı aktarma dahilisi: {{value}}",
+        "noExtension": "Aktarma dahilisi tanımlı değil.",
+        "extensionHint": "1–16 rakam. Boş bırakmak tanımlı dahiliyi kaldırır; bu alan tek başına otomatik aktarma başlatmaz.",
+        "priceHint": "Dakika bedeli bütçe tahmininde kullanılır; operatörün gerçek faturası değildir.",
+        "saveHint": "Kaydet, tüm senaryolardaki değişiklikleri birlikte uygular.",
+        "discard": "Değişiklikleri geri al",
+        "loadLatest": "Güncel ayarları yükle",
+        "conflict": "Sunucudaki ayarlar değişti. Taslağınız korundu. Başka değişikliklerin üzerine yazmamak için güncel ayarları yükleyin; bu işlem taslağı sıfırlar.",
+        "savedReadFailed": "Ayarlar kaydedildi, ancak güncel değerler okunamadı. Devam etmeden önce güncel ayarları yükleyin.",
+        "fixBeforeSave": "Kaydetmeden önce şu alanları düzeltin:",
+        "wholeNumber": "Boş değer veya kesir kullanmayın. Süreler en az 1, ücret en az 0 olmalı.",
+        "durationRange": "Azami süre 1–900 saniye olmalı.",
+        "waitingOrder": "İlk bekleme < ikinci bekleme < yedek yanıt olmalı; tüm süreler 1–60 saniye arasında olmalı.",
+        "silenceOrder": "Sessizlik bildirimi kapanıştan önce olmalı; süreler 1–120 saniye arasında olmalı.",
+        "extensionFormat": "Dahili yalnızca 1–16 rakam içerebilir.",
+        "textLength": "Metin en çok 600 karakter olabilir; yalnızca boşluk kullanmayın.",
+        "phraseLimit": "Bir grupta en çok 5 cümle, her cümlede en çok 600 karakter olabilir.",
+        "sections": {
+          "opening": {
+            "title": "Karşılama",
+            "help": "Gelen ve giden aramanın ilk cümlesini ayrı ayrı belirleyin."
+          },
+          "notices": {
+            "title": "Bildirimler",
+            "help": "Asistan kimliği, yazıya dökme ve kayıt duyurularını düzenleyin."
+          },
+          "waiting": {
+            "title": "Yanıt beklerken",
+            "help": "Ajan yanıt hazırlarken müşterinin duyacağı ifadeleri ve bekleme sürelerini belirleyin."
+          },
+          "silence": {
+            "title": "Sessizlik ve duyma",
+            "help": "Müşteri yanıt vermediğinde veya sesi anlaşılamadığında kullanılacak ayarlar."
+          },
+          "ending": {
+            "title": "Görüşme sonu",
+            "help": "Normal kapanış, sesli mesaj ve teknik sorun için ayrı metinler hazırlayın."
+          },
+          "limits": {
+            "title": "Sınırlar ve aktarma",
+            "help": "Görüşme süresi, aktarma dahilisi ve bütçe tahminini ayarlayın."
+          }
+        },
+        "endings": {
+          "closing": "Normal kapanış",
+          "voicemail_text": "Sesli mesaj",
+          "fault": "Teknik sorun"
+        }
       }
+    },
+    "filterEmpty": "Bu yönde arama yok",
+    "filterEmptyBody": "Diğer aramaları görmek için başka bir yön seçin.",
+    "showAll": "Tüm aramaları göster",
+    "workbench": {
+      "recordOutcome": "Sonuç kaydet",
+      "openCall": "Aramayı incele",
+      "outcomeMissing": "Sonuç kaydedilmemiş",
+      "allCalls": "Tüm aramalar",
+      "openCalls": "Açık aramalar",
+      "unrecordedCalls": "Sonuç bekleyenler",
+      "queues": "Arama iş kuyruğu",
+      "search": "Numara, dahili veya özet ara",
+      "resultCount": "Yüklenen {{total}} aramadan {{count}} kayıt eşleşiyor",
+      "unrecordedHint": "Biten ama sonucu kaydedilmemiş aramalar. Görüşmeyi açıp sonucu kontrol edin.",
+      "filteredEmpty": "Bu filtrelerle eşleşen arama yok",
+      "filteredEmptyBody": "Aramayı veya seçili kuyruğu değiştirin; tüm kayıtları görmek için filtreleri temizleyin.",
+      "pagination": "Arama sayfaları",
+      "pageRange": "{{first}}–{{last}} / {{total}} kayıt",
+      "previousPage": "Önceki",
+      "nextPage": "Sonraki",
+      "views": "Arama görünümleri",
+      "conversationsTab": "Görüşmeler",
+      "settingsTab": "Arama ayarları"
     }
   },
   "materials": {
@@ -2294,6 +2886,13 @@
       "date_in_generic": "Genel içerikte metin, materyalin olay gününü anıyor.",
       "archive_year_missing": "Geçen yılın içeriğinde olayın yılı metinde geçmiyor.",
       "client_named_product_only": "Sadece ürün izinli materyalde müşterinin adı geçiyor.",
+      "source_permission_restricted": "Bu görselin kaynağı olan materyalin paylaşım izni yok.",
+      "material_not_in_area": "Bu materyal üretim alanına eklenmemiş.",
+      "material_not_found": "Materyal bulunamadı.",
+      "media_count": "Bu biçim bu sayıda görsel ya da video almıyor.",
+      "media_type": "Bu biçim ve hesap bu dosya türünü almıyor.",
+      "account_refused": "Seçilen hesap paylaşıma hazır değil ya da bu biçimi almıyor.",
+      "hypothesis_not_in_approved_strategy": "İçerik onaylı stratejideki bir hedefe bağlı değil.",
       "unknown": "Materyal kontrolü bu parçayı tutuyor ({{code}})."
     },
     "error": {
@@ -2322,7 +2921,21 @@
       "hard_findings_not_releasable": "Materyal sorunları bırakılamaz: materyali veya içeriği değiştirin.",
       "no_caption_findings": "Bırakılacak bir metin bulgusu yok.",
       "findings_changed": "Bulgular siz bakarken değişti; yenileyip tekrar bakın.",
-      "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin."
+      "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin.",
+      "material_revision_changed": "Materyal güncellendi. Güncel bilgileri yükleyip yeniden deneyin.",
+      "analysis_in_progress": "Ajan bu materyali inceliyor. Analiz tamamlandığında yeniden deneyebilirsiniz.",
+      "analysis_claim_expired": "Analiz süresi doldu. İşi yeniden sıraya alın.",
+      "analysis_not_pending": "Analiz durumu değişti. Güncel bilgileri yükleyin.",
+      "production_failed": "Üretim tamamlanamadı. İsteği kontrol edip yeniden oluşturun.",
+      "source_changed": "Kaynak materyal değişti. Güncel materyalle yeni bir istek oluşturun.",
+      "production_not_pending": "Üretim isteğinin durumu değişti. Güncel bilgileri yükleyin.",
+      "production_claim_expired": "Üretim oturumunun süresi doldu. İsteği kontrol edin.",
+      "story_image_jpeg_only": "Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.",
+      "story_image_too_large": "Hikâye görseli en çok 8 MB olabilir: daha küçük bir JPEG yükleyin.",
+      "story_video_too_large": "Hikâye videosu en çok 100 MB olabilir: videoyu küçültüp yeniden yükleyin.",
+      "story_video_length": "Hikâye videosu 3 ile 60 saniye arasında olmalı: videoyu kırpıp yeniden yükleyin.",
+      "story_video_length_unknown": "Videonun süresi okunamadı: videoyu MP4 olarak yeniden dışa aktarıp yükleyin.",
+      "story_video_not_fast_start": "Video hızlı başlatmaya uygun değil: videoyu 'fast start / web için optimize' seçeneğiyle dışa aktarın ve yeniden yükleyin."
     },
     "invalid": {
       "media": "Dosya kabul edilmedi: JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) olmalı.",
@@ -2347,7 +2960,7 @@
       "request_key": "İstek anahtarı geçersiz; sayfayı yenileyip tekrar deneyin."
     },
     "upload": {
-      "intro": "Atölyeden, siparişten veya özel günden fotoğraf ve video ekleyin. Her dosya hemen yüklenir; sonra hepsi için bir kez olayı ve paylaşım iznini seçersiniz.",
+      "intro": "Fotoğraf ve videolarınızı ekleyin. Bağlı ajan, içeriklerine göre etiket ve grup önerir; siz dilediğiniz zaman düzenleyebilirsiniz.",
       "camera": "Kamerayla çek",
       "gallery": "Galeriden seç",
       "files": "Seçilen dosyalar",
@@ -2368,7 +2981,7 @@
       "createdOlay": "Yeni olay oluşturuldu: {{title}}",
       "genel": "Genel (belirli bir olaya bağlı değil)",
       "genelHelp": "Yalnızca sahip veya yönetici seçebilir. Materyal genel kullanılabilir olur ve yalnızca belirli bir olaydan söz etmeyen içerikte kullanılır.",
-      "permission": "Paylaşım izni (zorunlu)",
+      "permission": "İçerik üretiminde kullanım",
       "permissionByManager": "Paylaşım iznini sahip veya yönetici verir; materyaller onların kararını bekleyecek.",
       "tags": "Etiketler (isteğe bağlı)",
       "waitUploads": "Yüklemeler bitince ekleyebilirsiniz.",
@@ -2388,7 +3001,12 @@
       "again": "Yeni yükleme",
       "serverSuggests": "Çekim tarihine göre bu materyal “{{title}}” olayına ait olabilir.",
       "moveThere": "Bu olaya taşı",
-      "moved": "“{{title}}” olayına taşındı."
+      "moved": "“{{title}}” olayına taşındı.",
+      "workbench": {
+        "searchEvents": "Olay adı veya yer ara",
+        "selectedEvent": "Seçili olay: {{title}}",
+        "noEvents": "Eşleşen olay yok. Aramayı değiştirin veya aşağıdan yeni olay oluşturun."
+      }
     },
     "olay": {
       "kind": "Tür",
@@ -2457,7 +3075,15 @@
       "deleteKvkk": "KVKK gereği dosyanın kendisi (baytları) silinir; başlığı, etiketleri ve kişileri temizlenir. Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır.",
       "deleteUsed": "Sağlayıcıda yayınlanmış gönderiler silinmez: onları “Kullanıldığı yerler” bağlantılarından kendiniz kaldırın.",
       "deleteConfirm": "Sil",
-      "deleteCancel": "Vazgeç"
+      "deleteCancel": "Vazgeç",
+      "workbench": {
+        "sections": "Materyal bölümleri",
+        "review": "Etiketler ve kişiler",
+        "publishing": "İzin ve yerleşim",
+        "history": "Kullanım geçmişi",
+        "reviewHelp": "Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.",
+        "publishingHelp": "Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır."
+      }
     },
     "people": {
       "title": "Görünen kişiler",
@@ -2515,6 +3141,8 @@
       "reuseHelp": "Aynı materyal bu kadar gün içinde yeniden gösterilmez.",
       "recap": "Özet süresi (gün)",
       "recapHelp": "Bir olay bittikten sonra bu kadar gün özet içeriğinde öncelik alır.",
+      "aiStandalone": "Ajanın ürettiği görsel tek başına paylaşılabilsin",
+      "aiStandaloneHelp": "Açıkken ajan, kendi ürettiği ve içinde kişi olmayan bir görselle, gerçek çekim olmadan içerik hazırlayabilir; bu içerikte belirli bir etkinlik, yer ya da müşteri adı geçemez. Kapalıyken her içerikte en az bir gerçek çekim bulunur; ajanın görseli yalnızca onun yanında kullanılır.",
       "save": "Kuralları kaydet",
       "invalid": "Hazırlık 0–90, tekrar ve özet 0–365 gün arasında tam sayı olmalı."
     },
@@ -2568,7 +3196,72 @@
       "upload": "Materyal yükle",
       "refused_one": "Kullanılamayan {{count}} materyal",
       "refused_other": "Kullanılamayan {{count}} materyal",
-      "pick": "İçeriğin konusunu ve en az bir materyal seçin."
+      "pick": "İçeriğin konusunu ve en az bir materyal seçin.",
+      "story": "Hikâyede metin paylaşılmaz: yalnız görsel gider. Tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4 seçin."
+    },
+    "intelligence": {
+      "legacy": "Önceki etiketler",
+      "labels": "İçerik etiketleri",
+      "labelsHelp": "Ajan, görselin içeriğine göre etiketler oluşturur. İstediğiniz etiketi ekleyebilir veya kaldırabilirsiniz.",
+      "newLabel": "Yeni etiket",
+      "addLabel": "Ekle",
+      "removeLabel": "{{label}} etiketini kaldır",
+      "uploadTitle": "Yükleyin, birlikte düzenleyelim",
+      "uploadHelp": "Bağlı ajan görselleri inceleyerek açıklama, etiket ve grup önerir. Olay seçmek zorunda değilsiniz; sonuçları sonradan düzenleyebilirsiniz.",
+      "eventOptional": "Belirli bir olaya bağla (isteğe bağlı)",
+      "shareHelp": "Paylaşılabilir, içerik üretiminde kullanılabilir demektir. Yükleme, otomatik yayın başlatmaz.",
+      "optionalTags": "Etiket ve kaliteyi kendim belirle",
+      "pendingHelp": "Analiz, bağlı ajan bir sonraki çalışmasında işi aldığında başlar. Ajan çalışmıyorsa materyaller analiz bekler.",
+      "title": "İçerik bilgileri",
+      "description": "Görselde ne var?",
+      "group": "Grup",
+      "groupHelp": "Benzer materyalleri bir araya getirir. Bir etkinliğin gerçekleştiğini doğrulamaz.",
+      "materialTitle": "Materyal adı",
+      "capturedAt": "Çekim tarihi ve saati (İstanbul)",
+      "captureHelp": "Yükleme tarihinden farklıdır. Dosyada güvenilir çekim bilgisi yoksa boş bırakılır.",
+      "save": "Bilgileri kaydet",
+      "retry": "Analizi yeniden sıraya al",
+      "noAnalysis": "Bu materyal henüz analize alınmadı.",
+      "pending": "Ajan analizi bekleniyor",
+      "running": "Ajan inceliyor",
+      "completed": "Analiz tamamlandı",
+      "failed": "Analiz tamamlanamadı",
+      "manualHelp": "Kaydettiğiniz bilgiler korunur; analiz açık düzenlemenizi sessizce değiştirmez.",
+      "previewUnavailable": "Önizleme yüklenemedi.",
+      "dateSource": "Çekim tarihi kaynağı",
+      "unknown": "Bilinmiyor",
+      "embedded": "Dosya bilgisi",
+      "manual": "Elle girildi",
+      "agent": "Ajan önerisi",
+      "upload": "Yükleme zamanı",
+      "search": "Ad, açıklama veya etiket ara",
+      "allGroups": "Tüm gruplar",
+      "ungrouped": "Henüz gruplandırılmadı",
+      "library": "Kütüphane",
+      "libraryHelp": "Görsellerinizi gruplara göre bulun; ayrıntıları açıp düzenleyin.",
+      "noResults": "Bu aramayla eşleşen materyal yok.",
+      "conflict": "Siz düzenlerken bu bilgiler güncellendi. Taslağınız korunuyor. Güncel bilgileri yükleyip yeniden düzenleyin.",
+      "reload": "Taslağı bırak, güncel bilgileri yükle"
+    },
+    "production": {
+      "title": "Bu materyalden yeni görsel üret",
+      "help": "Düzenleme, kırpma veya afiş isteyin. Bağlı ajan işi aldığında üretim başlar; orijinal dosya korunur ve sonuç ayrı materyal olarak kaydedilir.",
+      "kind": "Ne hazırlayalım?",
+      "edit": "Görseli düzenle",
+      "crop": "Kırp ve yeniden kadrajla",
+      "poster": "Afiş hazırla",
+      "instructions": "Nasıl bir sonuç istiyorsunuz?",
+      "submit": "Üretim isteğini gönder",
+      "open": "Üretilen materyali aç",
+      "status": {
+        "pending": "Ajan bekleniyor",
+        "running": "Ajan çalışıyor",
+        "completed": "Hazır",
+        "failed": "Tamamlanamadı",
+        "cancelled": "İptal edildi"
+      },
+      "queued": "İstek sıraya alındı. Bağlı ajan işi aldığında burada ilerlemesini görebilirsiniz.",
+      "sourceChanged": "Kaynak güncellendi. Güncel materyalle yeniden istek oluşturun."
     }
   },
   "leads": {
@@ -2625,14 +3318,14 @@
       "emptyBody": "Bir şablon yazın, sonra adımları ve kitlesiyle bir kampanya hazırlayın.",
       "locked": {
         "title": "Soğuk e-posta platformda kapalı",
-        "body": "Bu sunucuda JEETA_OUTREACH_ENABLED açılana kadar hiçbir kampanya başlatılamaz ve hiçbir kampanya e-postası gönderilmez. Kampanya hazırlayabilirsiniz."
+        "body": "Platform yöneticiniz kampanya gönderimini etkinleştirene kadar kampanyalarınızı hazırlayabilirsiniz. Bu süre içinde kampanyalar başlatılmaz ve e-posta gönderilmez."
       },
       "identityMissing": {
         "title": "Gönderen bilgileri eksik",
         "body": "Her e-postanın sonuna eklenen bilgiler (şirket adı, adres, aydınlatma metni bağlantısı) girilmeden kampanya başlatılamaz."
       },
       "blocked": {
-        "platform": "Soğuk e-posta platformda kapalı (JEETA_OUTREACH_ENABLED).",
+        "platform": "Soğuk e-posta platformda kapalı.",
         "identity": "Gönderen bilgileri eksik: şirket adı, adres ve aydınlatma metni bağlantısı."
       }
     },
@@ -2655,8 +3348,8 @@
       "erase": "Sil"
     },
     "outcome": {
-      "promoted": "Gelen kutusuna aktarıldı.",
-      "alreadyPromoted": "Daha önce aktarılmış.",
+      "promoted": "İletişime alındı.",
+      "alreadyPromoted": "Zaten iletişimde.",
       "rejected": "Reddedildi.",
       "blocked": "İletişim yasağı kaydedildi."
     },
@@ -2677,7 +3370,7 @@
       "new": "Yeni",
       "qualified": "Nitelikli",
       "rejected": "Reddedildi",
-      "promoted": "Aktarıldı",
+      "promoted": "İletişimde",
       "do_not_contact": "İletişim yasağı"
     },
     "reject": {
@@ -2881,7 +3574,7 @@
       "do_not_contact": "İletişim yasağı listesinde.",
       "system_actor": "Sistem havuza kayıt yazamaz.",
       "rubric_mismatch": "Puanlama ölçütleri değişmiş; yeniden puanlayın.",
-      "outreach_disabled_on_platform": "Soğuk e-posta bu sunucuda kapalı (JEETA_OUTREACH_ENABLED); kampanya başlatılamaz.",
+      "outreach_disabled_on_platform": "Soğuk e-posta bu sunucuda kapalı; kampanya başlatılamaz.",
       "sender_identity_missing": "Gönderen bilgileri eksik: E-posta ayarlarından şirket adı, adres ve aydınlatma metni bağlantısını girin.",
       "approval_required": "Önce onay gerekiyor.",
       "human_required": "Bunu yalnızca bir ekip üyesi yapabilir.",
@@ -2989,7 +3682,8 @@
         "cities": "Şehirler (virgülle)",
         "sectors": "Sektörler (virgülle)",
         "awayUntil": "İzinli olduğu tarih",
-        "saved": "Müsaitlik kaydedildi."
+        "saved": "Müsaitlik kaydedildi.",
+        "scrollHint": "Tüm sütunları ve işlemleri görmek için yatay kaydırın."
       },
       "log": {
         "title": "Atama geçmişi",
@@ -2998,6 +3692,14 @@
         "slaDue": "İlk temas için son: {{at}}",
         "acted": "{{at}} tarihinde ilgilenildi",
         "superseded": "Yerine başka bir karar geçti"
+      },
+      "workbench": {
+        "sections": "Dağıtım bölümleri",
+        "ruleDetails": "Eşleşme ve yönlendirme",
+        "invalidScore": "{{name}}: En düşük puan 0 ile 100 arasında bir tam sayı olmalı.",
+        "invalidSla": "{{name}}: İlk temas süresi 5 ile 10080 dakika arasında bir tam sayı olmalı.",
+        "invalidMembers": "{{name}}: En az bir üye seçin.",
+        "invalidReassign": "Yeniden atama sınırı 0 ile 10 arasında bir tam sayı olmalı."
       }
     },
     "basis": {
@@ -3230,16 +3932,26 @@
       "saved": "Ayarlar kaydedildi.",
       "b2b": {
         "title": "İşletme alıcısı dayanağı",
-        "description": "İzni olmayan işletmelere, herkese açık iletişim bilgileri üzerinden e-posta gönderme dayanağı. Varsayılan olarak kapalıdır.",
+        "description": "İzni olmayan işletmelere, herkese açık iletişim bilgileri üzerinden ilk mesajı gönderme dayanağı: e-posta, SMS, WhatsApp, Instagram ve Messenger için ayrı ayrı açılır. Varsayılan olarak kapalıdır.",
         "legal": "Bunu yalnızca avukatınız bu kullanımı yazılı olarak teyit ettikten sonra açın. Açarken teyidi ve notunuzu kayda geçiririz.",
         "recorded": "Kayıtlı teyit: {{at}}",
         "email": "E-posta için işletme alıcısı dayanağını aç",
         "iys": "Göndermeden önce İYS'de sorgula",
         "counsel": "Avukatım bu kullanımı yazılı olarak teyit etti",
         "note": "Teyidin notu (kim, ne zaman, neyi teyit etti)",
-        "notInForce": "Dayanak kayıtlı, ancak platformda soğuk e-posta kapalı olduğu için şu an geçerli değil.",
+        "notInForce": "Dayanak kayıtlı, ancak platformda soğuk gönderim kapalı olduğu için şu an geçerli değil.",
         "save": "Dayanağı kaydet"
       }
+    },
+    "filteredEmpty": {
+      "title": "Eşleşen sonuç yok",
+      "body": "Daha fazla sonuç görmek için filtreleri değiştirin veya temizleyin.",
+      "clear": "Filtreleri temizle"
+    },
+    "ux": {
+      "moreFilters": "Diğer filtreler",
+      "hideFilters": "Ek filtreleri gizle",
+      "hideTaskForm": "Görev formunu gizle"
     }
   },
   "posts": {
@@ -3259,7 +3971,8 @@
     "trigger": {
       "olay": "Yeni olay materyalleri",
       "calendar": "Yaklaşan özel gün",
-      "floor": "Uzun süredir gönderi yok"
+      "floor": "Uzun süredir gönderi yok",
+      "project": "Üretim alanı"
     },
     "materials_one": "{{count}} materyal",
     "materials_other": "{{count}} materyal",
@@ -3278,7 +3991,7 @@
       "publishAt": "Yayın: {{at}}",
       "prepFrom": "Hazırlık: {{at}}",
       "graceUntil": "En geç: {{at}}",
-      "open": "Studio'da aç",
+      "open": "Paylaşımı aç",
       "tz": "Saatler {{tz}} saat dilimine göredir.",
       "state": {
         "waiting": "Hazırlık başlamadı",
@@ -3339,12 +4052,227 @@
       "debounceHelp": "Bir olaya materyal eklemek bittikten bu kadar sonra plan istenir: 20 fotoğraf tek istek olur.",
       "horizon": "Planlama ufku (gün)",
       "tz": "Saat dilimi",
-      "storyNote": "Hikâyeler henüz hiçbir kanalda yayınlanmıyor.",
+      "storyNote": "Hikâyeler yalnız Instagram'da yayınlanır: tek JPEG (en çok 8 MB) veya 3–60 saniyelik tek MP4, metin gitmez. Facebook sayfası hikâyeleri henüz yok.",
       "save": "Ayarları kaydet",
       "saved": "Kaydedildi.",
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
+      "providerScheduling": "Platformun kendi zamanlayıcısını kullan",
+      "providerSchedulingHelp": "Açıkken, zamanlayıcısı olan platformlarda (şimdilik Facebook Sayfası: metin, bağlantı ve tek görselli paylaşımlar) paylaşım saatinden önce platforma bırakılır ve orada zamanlanmış görünür. Fren, duraklatma ya da “Olmamış” platformdaki paylaşımı geri çeker. Kapalıyken her paylaşımı saatinde Jeeta yayınlar.",
       "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
-      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
+      "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir.",
+      "workbench": {
+        "sections": "Ayar grupları",
+        "formats": "Format süreleri",
+        "limits": "Günlük sınırlar",
+        "calendar": "Takvim ve saat",
+        "saveHelp": "Gruplar arasında geçiş yapabilirsiniz. Kaydet, tüm gruplardaki değişiklikleri birlikte uygular."
+      }
     }
+  },
+  "publicIntro": {
+    "title": "Her temasın bir sonraki adımı.",
+    "description": "Ekibinizin müşteri ilişkilerini, içeriklerini ve günlük işlerini aynı çalışma alanından yönetin",
+    "people": {
+      "title": "İlişkileri takip edin",
+      "description": "Kişiler ve görüşmeler, ekip için ortak bir geçmişte."
+    },
+    "work": {
+      "title": "İşi ilerletin",
+      "description": "Bekleyen görevler, içerikler ve onaylar bir arada."
+    },
+    "results": {
+      "title": "Ne olduğunu görün",
+      "description": "Yapılan işleri ve sonuçlarını kaynağına kadar takip edin."
+    }
+  },
+  "entryUx": {
+    "providerLabel": "Hizmet sağlayıcısı",
+    "providerPlaceholder": "Bir hizmet seçin",
+    "chooseService": "1. Hangi hesabı bağlayacaksınız?",
+    "chooseServiceHelp": "Önce sağlayıcıyı, ardından kullanacağınız hesap türünü seçin",
+    "connectStep": "2. Hesabınıza erişim verin",
+    "connectStepHelp": "Bağlantı tamamlandığında hesabı Kabiliyetler sayfasında kontrol edebilirsiniz",
+    "setupAudience": "Bu teknik bilgiler sağlayıcı uygulamasını yöneten ekip içindir. Kendi hesabınızı bağlamak için yukarıdaki adımı kullanın",
+    "callbackProvider": "Callback adresi gösterilecek sağlayıcı",
+    "transferDetails": "Banka bilgileri ve açıklama kodu",
+    "reportDetails": "Bildirim bilgilerini gözden geçir veya düzelt",
+    "reportSection": "Havaleyi yaptım",
+    "reportHelp": "Havaleyi yaptıysanız tutarı ve ödeme zamanını doğrulayın",
+    "billingPending": "Havaleyi aşağıdaki açıklama koduyla yapın. Ardından ödeme bildirimini gönderin",
+    "billingApproval": "Bildiriminiz incelemede. Onaydan sonra size iletilen etkinleştirme kodunu bu sayfaya girin",
+    "billingActivation": "Size iletilen 8 haneli kodu girerek çalışma alanını açın",
+    "billingActive": "Çalışma alanı açık. Kalan kurulum adımlarına devam edebilirsiniz",
+    "billingSuspended": "Çalışma alanı askıda. Yeni bir ödeme bildiriminden önce işletmenle durumu netleştirin",
+    "setupNextTitle": "Sıradaki adım",
+    "setupNextPayment": "Ödeme ve etkinleştirme durumunu kontrol edin",
+    "setupNextStrategy": "Ekibinizin çalışacağı stratejiyi hazırlayın",
+    "setupNextConnection": "Kullanacağınız ilk hesabı bağlayın",
+    "setupNextAgent": "Ajan bağlantısını kontrol edin",
+    "setupDone": "Temel kurulum hazır. Bekleyen işlere geçebilirsiniz",
+    "setupOpen": "Bu adıma git",
+    "setupOptional": "Gerektiğinde",
+    "homeAllWork": "Tüm işleri göster ({{count}})",
+    "homeLessWork": "İlk beş işe dön",
+    "loginInviteHint": "Davetin gönderildiği e-posta ile giriş yapın; ardından davetinize döneceksiniz",
+    "registerNext": "Hesabınız oluşturulunca ödeme ve kurulum adımlarını çalışma alanınızda görebilirsiniz",
+    "workspaceHint": "Ekibinizin veya işletmenizin adı",
+    "inviteReturn": "Zaten hesabınız varsa giriş yapın; bu davete geri döneceksiniz",
+    "inviteAcceptedHelp": "Ekibin size verdiği yetkilerle çalışma alanını açabilirsiniz",
+    "notFoundHint": "Adresi kontrol edin veya önceki sayfaya dönün",
+    "previousPage": "Önceki sayfa",
+    "inviteIntroTitle": "Ekibinizin çalışma alanına katılın",
+    "inviteIntroBody": "Davetinizi kabul edin, ardından ekibinizin izin verdiği işlere devam edin",
+    "registerIntroTitle": "Ekibinizin çalışma alanını kurun",
+    "registerIntroBody": "Önce hesabınızı oluşturun. Kurulum, ödeme ve hesap bağlantıları sonraki adımda",
+    "operatorIntroTitle": "Çalışma alanı işletimi",
+    "operatorIntroBody": "İşletmen hesabınızla ödeme, erişim ve sistem durumunu yönetin",
+    "accountDetails": "Hesap kimliği ve izin ayrıntıları",
+    "selectedAccounts": "{{count}} hesap seçili. Onayladığınızda Kabiliyetler sayfasına geçeceksiniz",
+    "setupSuspended": "Kurulum duraklatıldı",
+    "setupPermission": "Kurulum durumunu çalışma alanı yöneticinizle kontrol edin"
+  },
+  "projects": {
+    "tab": "Üretim alanları",
+    "heading": "Bir fikirden yayına",
+    "intro": "Materyalleri, eksik çekimleri ve paylaşım hazırlığını aynı üretim alanında bir araya getirin.",
+    "create": "Üretim alanı aç",
+    "title": "Alan adı",
+    "titlePlaceholder": "Örn. Yeni menü tanıtımı",
+    "brief": "Ne hazırlıyoruz?",
+    "briefPlaceholder": "Kime ne anlatacağız? Önemli detayları ve istediğiniz sonucu yazın.",
+    "createHint": "Önce hedefi kaydedin. Materyalleri ve kanal çıktılarını bu alana ekleyebilirsiniz.",
+    "search": "Üretim alanı ara",
+    "showArchived": "Arşivdekileri göster",
+    "noMatches": "Bu aramaya uyan üretim alanı yok.",
+    "empty": "İlk üretim alanını açın; tek bir fikrin kaynakları, edit işleri ve yayınları burada birlikte ilerlesin.",
+    "noBrief": "Hedef ve içerik notları henüz eklenmedi.",
+    "sourceCount": "{{count}} materyal",
+    "outputCount": "{{count}} kanal çıktısı",
+    "requestCount": "{{count}} eksik materyal talebi",
+    "back": "Üretim alanlarına dön",
+    "archived": "Arşivde",
+    "archive": "Arşivle",
+    "restore": "Arşivden çıkar",
+    "archivedHelp": "Bu alan arşivde; yeni iş eklenemez. Bekleyen üretim işleri durduruldu. Daha önce zamanlanmış yayınlar devam eder; onları yayın detayından yönetebilirsiniz.",
+    "archiveHelp": "Arşivlemek bekleyen üretim işlerini durdurur. Zamanlanmış yayınları iptal etmez.",
+    "viewsLabel": "Üretim alanı görünümleri",
+    "editBrief": "Hedefi düzenle",
+    "conflictHelp": "Alan veya kaynaklar değişmiş olabilir. Güncel bilgileri inceleyip formu yeniden açın; yazdığınız bilgiler siz kapatana kadar korunur.",
+    "sourcesTitle": "Bu işin materyalleri",
+    "sourcesHelp": "Kütüphaneden seçin veya yeni çekim yükleyin. Aynı materyal başka üretim alanlarında da kullanılabilir.",
+    "fromLibrary": "Kütüphaneden seç",
+    "upload": "Materyal yükle",
+    "uploadHelp": "Eklediğiniz materyaller kütüphaneye kaydedilir ve bu üretim alanına bağlanır.",
+    "backToSources": "Alan materyallerine dön",
+    "searchMaterials": "Başlık, etiket veya grupta ara",
+    "allGroups": "Tüm gruplar",
+    "noMaterialsMatch": "Seçime uygun materyal yok. Aramayı değiştirin veya yeni materyal yükleyin.",
+    "attachSelected": "Seçilenleri ekle ({{count}})",
+    "showMore": "Daha fazla göster",
+    "sourcesEmpty": "Bu alana henüz materyal eklenmedi. Kütüphaneden seçerek veya yükleyerek başlayın.",
+    "removeSource": "Alandan çıkar",
+    "unavailableSources": "{{count}} kaynak artık kullanılamıyor. Yayın hazırlığından önce uygun bir materyalle değiştirin.",
+    "sourcesChanged": "{{count}} materyalin bilgileri değişti. İnceledikten sonra güncel sürümlerini bu alan için seçin.",
+    "refreshSources": "Güncel sürümleri kullan",
+    "openMaterial": "Materyali incele",
+    "requestsTitle": "Eksik materyaller",
+    "requestsHelp": "Hangi çekim veya görselin gerektiğini yazın. Gelen materyali seçerek talebi tamamlayın.",
+    "requestMaterial": "Materyal talep et",
+    "requestText": "Neye ihtiyacımız var?",
+    "requestPlaceholder": "Örn. Ürünün detayını gösteren 5–8 saniyelik dikey yakın çekim.",
+    "requestsEmpty": "Açık materyal talebi yok.",
+    "resolveRequest": "Gelen materyali seç",
+    "resolveHelp": "Bu ihtiyacı karşılayan materyalleri seçin. Talep yalnızca bir teslimatla tamamlanır.",
+    "resolveEmpty": "Önce bu alana materyal ekleyin veya yükleyin.",
+    "confirmDelivery": "Teslimatı tamamla",
+    "dismissRequest": "Artık gerekmiyor",
+    "reopenRequest": "Talebi yeniden aç",
+    "showResolved": "Tamamlanan ve kaldırılan talepler",
+    "productionTitle": "Edit ve üretim",
+    "productionHelp": "Kaynakları seçin ve istediğiniz sonucu tarif edin. Orijinaller korunur; üretilen sonuç ayrı bir materyal olarak görünür.",
+    "newProduction": "Üretim isteği oluştur",
+    "productionPlaceholder": "Örn. Ürünü öne çıkaran dikey bir kapak hazırla; metin için üstte boşluk bırak.",
+    "chooseSources": "Kaynakları seçin · en fazla 5 ({{count}} seçili)",
+    "productionWaiting": "İstek, bağlı ve uygun araca erişimi olan ajan tarafından alındığında işlenir. Ajan çalışmıyorsa beklemeye devam eder.",
+    "productionNeedsSources": "Üretim için önce bu alana kaynak materyal ekleyin.",
+    "productionEmpty": "Henüz üretim isteği yok. Kaynaklardan bir düzenleme, kırpma veya afiş isteyebilirsiniz.",
+    "showProductionHistory": "Önceki hedef ve kaynaklara ait işleri göster",
+    "invalidated": "Önceki sürüm",
+    "invalidatedHelp": "Hedef veya kaynaklar değişti. Bu sonuç güncel yayın hazırlığında kullanılamaz; yeni bir üretim isteği oluşturun.",
+    "instructionsRemoved": "Bu işin talimatları artık mevcut değil.",
+    "productionFailed": "Üretim tamamlanamadı. Kaynakları inceleyip uygun araçla yeni bir istek oluşturun.",
+    "productionComplete": "Çıktıyı inceleyin. Yeni materyalin paylaşım izni ayrıca değerlendirilir.",
+    "publicationsTitle": "Kanal çıktıları ve yayınlar",
+    "publicationsHelp": "Bir fikirden farklı kanal çıktıları hazırlayın. Önce hedefi kaydedin, ardından kaynaklarla birlikte gerçek yayın planına alın.",
+    "addOutput": "Kanal çıktısı ekle",
+    "editOutput": "Hedefi değiştir",
+    "outputTitle": "Paylaşım adı",
+    "outputPlaceholder": "Örn. Yeni menü — ilk tanıtım",
+    "format": "Format",
+    "channel": "Kanal hesabı",
+    "chooseLater": "Daha sonra seç",
+    "connectionNeeded": "Bağlantıyı kontrol edin",
+    "targetTime": "Hedef yayın zamanı",
+    "timezone": "Saat dilimi: {{zone}}",
+    "targetHint": "Bu tarih bir hedeftir. Yayın planına alındığında gerçek bir takvim kaydı oluşur; içerik hazırlığı ayrıca tamamlanır.",
+    "saveOutput": "Hedefi kaydet",
+    "outputsEmpty": "Henüz kanal çıktısı yok. Bu işten hazırlanacak gönderi, hikâye veya video hedefini ekleyin.",
+    "channelNotChosen": "Hesap seçilmedi",
+    "timeNotChosen": "Zaman seçilmedi",
+    "outputDraft": "Hedef taslağı",
+    "publicationUnavailable": "Bağlı yayın okunamadı",
+    "removeOutput": "Taslağı kaldır",
+    "schedule": "Yayın planına al",
+    "scheduleTitle": "Kaynakları ve stratejiyi belirle",
+    "scheduleHelp": "Bu adım genel içerik için bir yayın planı oluşturur. Kanal, kaynak uygunluğu, hazırlık süresi ve paylaşım sınırları kaydederken kontrol edilir.",
+    "strategyNeeded": "Yayın planlamak için organik içerik sıklığı tanımlı onaylanmış bir strateji gerekir. Materyal hazırlığına devam edebilirsiniz.",
+    "openStrategy": "Stratejiyi aç",
+    "hypothesis": "Strateji yaklaşımı",
+    "chooseHypothesis": "Bir yaklaşım seçin",
+    "contentType": "İçerik türü",
+    "useStrategyDefault": "Stratejideki varsayılan",
+    "publishMaterials": "Bu paylaşımda kullanılacak materyaller",
+    "schedulePermissionHelp": "Paylaşılabilir, güncel ve genel kullanıma uygun materyalleri seçin. Üretilen görsellerin izinlerini Materyaller bölümünden kontrol edebilirsiniz.",
+    "scheduleNeedsTarget": "Planlamak için bir hesap ve gelecekteki yayın zamanını seçin.",
+    "linkExisting": "Mevcut bir yayını bu çıktıya bağla",
+    "linkHelp": "Bu alandaki materyalleri kullanan, hedef format, hesap ve zamana uyan bir yayın seçin. Yeni bir paylaşım oluşturulmaz.",
+    "noExisting": "Bu kaynakları kullanan uygun bir yayın bulunamadı.",
+    "existingPublication": "Mevcut yayın",
+    "choosePublication": "Yayın seçin",
+    "link": "Yayını bağla",
+    "preparePublication": "İçeriği hazırla / incele",
+    "allPublicationActions": "Diğer yayın işlemleri",
+    "plannedHelp": "Yayın takvimde. Paylaşım metni ve materyal seçimi tamamlanınca içerik hazır duruma geçer.",
+    "views": {
+      "overview": "Özet",
+      "materials": "Materyaller",
+      "production": "Üretim",
+      "publications": "Yayınlar"
+    },
+    "next": {
+      "requests": "Eksikleri tamamla ({{count}})",
+      "materials": "Materyal ekleyerek başla",
+      "production": "Üretim işlerini incele ({{count}})",
+      "publications": "Yayın hedeflerini hazırla"
+    },
+    "requestStatus": {
+      "open": "Bekleniyor",
+      "done": "Teslim edildi",
+      "dismissed": "Gerekmiyor"
+    },
+    "errors": {
+      "project_source_changed": "Kaynak materyal değişti. Materyaller bölümünde inceleyip “Güncel sürümleri kullan” ile yenileyin.",
+      "lead_too_short": "Hazırlık için daha fazla zaman gerekiyor. Hedef zamanı paylaşım ayarlarındaki hazırlık süresine göre ileri alın.",
+      "channel_unavailable": "Seçilen kanal kullanılamıyor. Kabiliyetler bölümünden bağlantısını kontrol edin.",
+      "material_refused": "Seçilen materyallerin izin, kalite veya kullanım koşulları bu paylaşım için uygun değil. Materyalleri inceleyin.",
+      "no_eligible_material": "Bu paylaşım için uygun bir ana materyal bulunamadı. Genel kullanıma uygun kaynakları seçin.",
+      "format_unsupported": "Bu kanal seçilen formatı desteklemiyor. Formatı veya hesabı değiştirin.",
+      "project_output_changed": "Kanal çıktısı değişti. Güncel hedefi inceleyip tekrar deneyin.",
+      "project_output_incomplete": "Önce kanal hesabını ve hedef yayın zamanını belirleyin.",
+      "project_archived": "Bu alan arşivde. Yeni iş eklemek için arşivden çıkarın.",
+      "project_has_open_requests": "Bu çıktı için eksik materyalleri tamamlayın veya gerekmeyen talepleri kapatın."
+    },
+    "productionToolsHelp": "Tek görsel kırpma, uygun medya işçisi çalışırken otomatik işlenebilir. Birden fazla kaynaktan düzenleme ve afiş için bu işi yapabilen bağlı ajan gerekir.",
+    "briefChangesHelp": "Hedefi değiştirmek önceki üretim işlerini geçersiz kılar. Bekleyen işler durdurulur; tamamlanan sonuçlar geçmişte kalır. Zamanlanmış yayınlar ayrıca yönetilir."
   }
 }

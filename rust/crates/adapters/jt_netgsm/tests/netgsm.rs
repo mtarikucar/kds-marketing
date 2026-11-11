@@ -8,7 +8,8 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use jt_app::ports::connectors::{
-    Connector, ConsentRow, ConsentSync, DeliveryReports, DeliveryState, SmsSender, Telephony,
+    Connector, ConsentRow, ConsentSync, DeliveryReports, DeliveryState, SmsConsentFilter,
+    SmsSender, Telephony,
 };
 use jt_connector::{ConnectorError, Credential, EventKind, Provider};
 use jt_netgsm::{
@@ -111,7 +112,7 @@ async fn send_posts_the_v2_body_with_basic_auth() {
             "+90 500 000 00 01",
             "Merhaba dünya, randevunuz yarın",
             Some("ref-1"),
-            false,
+            SmsConsentFilter::None,
         )
         .await
         .unwrap();
@@ -138,7 +139,13 @@ async fn send_posts_the_v2_body_with_basic_auth() {
     // Plain text needs no Turkish encoding; no reference, no `referansID`.
     r.mock.clear();
     r.netgsm
-        .send(&sms_cred(), "905000000002", "Randevu: 10:30", None, false)
+        .send(
+            &sms_cred(),
+            "905000000002",
+            "Randevu: 10:30",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -161,7 +168,13 @@ async fn send_keeps_a_numeric_job_id_exact() {
     );
     let receipt = r
         .netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+        .send(
+            &sms_cred(),
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap();
     assert_eq!(receipt.provider_id, "17000000000000000000000009");
@@ -172,7 +185,11 @@ async fn send_refuses_what_cannot_be_sent_without_calling() {
     let r = rig().await;
     for (to, text) in [("", "Merhaba"), ("abc", "Merhaba"), ("905000000001", "  ")] {
         assert_eq!(
-            kind_of(r.netgsm.send(&sms_cred(), to, text, None, false).await),
+            kind_of(
+                r.netgsm
+                    .send(&sms_cred(), to, text, None, SmsConsentFilter::None)
+                    .await
+            ),
             "permanent",
             "{to:?} {text:?}"
         );
@@ -181,7 +198,13 @@ async fn send_refuses_what_cannot_be_sent_without_calling() {
     assert_eq!(
         kind_of(
             r.netgsm
-                .send(&pbx_cred(), "905000000001", "x", None, false)
+                .send(
+                    &pbx_cred(),
+                    "905000000001",
+                    "x",
+                    None,
+                    SmsConsentFilter::None
+                )
                 .await
         ),
         "permanent"
@@ -216,7 +239,13 @@ async fn error_codes_map_by_the_table() {
         );
         let e = r
             .netgsm
-            .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "Merhaba",
+                None,
+                SmsConsentFilter::None,
+            )
             .await
             .expect_err(code);
         assert_eq!(e.kind(), expected, "code {code}: {e}");
@@ -228,7 +257,13 @@ async fn error_codes_map_by_the_table() {
     r.mock.set("POST", SEND, raw(200, "30"));
     let e = r
         .netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+        .send(
+            &sms_cred(),
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "auth");
@@ -244,7 +279,13 @@ async fn error_codes_map_by_the_table() {
     );
     assert_eq!(
         r.netgsm
-            .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "Merhaba",
+                None,
+                SmsConsentFilter::None
+            )
             .await,
         Err(ConnectorError::throttle(Some(Duration::seconds(30))))
     );
@@ -263,7 +304,13 @@ async fn error_codes_map_by_the_table() {
         r.mock.set("POST", SEND, reply.clone());
         let e = r
             .netgsm
-            .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "Merhaba",
+                None,
+                SmsConsentFilter::None,
+            )
             .await
             .expect_err("an error");
         assert_eq!(e.kind(), expected, "{reply:?}: {e}");
@@ -277,7 +324,13 @@ async fn no_retry_after_an_unparseable_response() {
         .on("POST", SEND, raw(200, "<html>beklenmedik yanit</html>"));
     let e = r
         .netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+        .send(
+            &sms_cred(),
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "permanent", "{e}");
@@ -289,7 +342,13 @@ async fn no_retry_after_an_unparseable_response() {
     r.mock.set("POST", SEND, raw(500, "Internal Server Error"));
     let e = r
         .netgsm
-        .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+        .send(
+            &sms_cred(),
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "transient", "{e}");
@@ -398,7 +457,13 @@ async fn post_write_transport_failure_is_unknown() {
     linkup["call_mode"] = json!("linkup");
     let errors = [
         r.netgsm
-            .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "Merhaba",
+                None,
+                SmsConsentFilter::None,
+            )
             .await
             .map(drop),
         r.netgsm
@@ -436,7 +501,13 @@ async fn post_write_transport_failure_is_unknown() {
     let before = dropper.accepted();
     assert!(
         netgsm
-            .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "Merhaba",
+                None,
+                SmsConsentFilter::None
+            )
             .await
             .is_err()
     );
@@ -474,7 +545,13 @@ async fn no_password_in_any_error_text() {
         r.mock.set("POST", IYS_SEARCH, reply.clone());
         errors.push(
             r.netgsm
-                .send(&sms_cred(), "905000000001", "Merhaba", None, false)
+                .send(
+                    &sms_cred(),
+                    "905000000001",
+                    "Merhaba",
+                    None,
+                    SmsConsentFilter::None,
+                )
                 .await
                 .unwrap_err(),
         );
@@ -900,7 +977,13 @@ async fn the_sender_name_is_trimmed_once_for_send_check_and_account() {
     let probe = r.netgsm.probe(&padded, &public("sms_line")).await;
     assert_eq!(probe.facts["account_id"], MSGHEADER, "{probe:?}");
     r.netgsm
-        .send(&padded, "905000000001", "Merhaba", None, false)
+        .send(
+            &padded,
+            "905000000001",
+            "Merhaba",
+            None,
+            SmsConsentFilter::None,
+        )
         .await
         .unwrap();
     assert_eq!(r.mock.request("POST", SEND).json()["msgheader"], MSGHEADER);
@@ -1405,7 +1488,13 @@ async fn broken_response_body_preserves_write_uncertainty() {
     linkup["call_mode"] = json!("linkup");
     for result in [
         netgsm
-            .send(&sms_cred(), "905000000001", "hello", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "hello",
+                None,
+                SmsConsentFilter::None,
+            )
             .await
             .map(drop),
         netgsm
@@ -1452,7 +1541,13 @@ async fn send_receipt_carries_only_reported_minor_unit_cost() {
         );
         let receipt = r
             .netgsm
-            .send(&sms_cred(), "905000000001", "hello", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "hello",
+                None,
+                SmsConsentFilter::None,
+            )
             .await
             .unwrap();
         assert_eq!(receipt.cost_minor, expected);
@@ -1460,7 +1555,13 @@ async fn send_receipt_carries_only_reported_minor_unit_cost() {
     r.mock.set("POST", SEND, rest("send"));
     assert_eq!(
         r.netgsm
-            .send(&sms_cred(), "905000000001", "hello", None, false)
+            .send(
+                &sms_cred(),
+                "905000000001",
+                "hello",
+                None,
+                SmsConsentFilter::None
+            )
             .await
             .unwrap()
             .cost_minor,
@@ -1470,7 +1571,12 @@ async fn send_receipt_carries_only_reported_minor_unit_cost() {
 
 #[tokio::test]
 async fn sms_commercial_iysfilter_mapping() {
-    for (commercial, expected) in [(true, "11"), (false, "0")] {
+    // None for a reply, the individual list for a consent, the merchant list for a business.
+    for (commercial, expected) in [
+        (SmsConsentFilter::Individual, "11"),
+        (SmsConsentFilter::Business, "12"),
+        (SmsConsentFilter::None, "0"),
+    ] {
         let r = rig().await;
         r.mock.on("POST", SEND, rest("send"));
         r.netgsm

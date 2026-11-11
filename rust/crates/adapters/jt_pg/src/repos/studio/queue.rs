@@ -7,6 +7,9 @@ impl PgTenantRepos {
         &mut self,
         now: OffsetDateTime,
         target: Option<SlotId>,
+        // The time a provider's own scheduler sends the post, for a claim made ahead of the
+        // slot's time (design 2026-11-10 §7.3); `None` for a post that is due.
+        hold: Option<OffsetDateTime>,
     ) -> Result<Option<PublishAttempt>, AppError> {
         let Some(version) = StrategyRepo::lock_execution_frame(self).await? else {
             return Ok(None);
@@ -18,7 +21,7 @@ impl PgTenantRepos {
         // A planned post past its grace is never sent (spec 2026-11-03 D28): late, maybe in
         // the quiet hours.
         let row:Option<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and s.state='ready' and s.scheduled_at <= $2 and ($3::uuid is null or s.id=$3) and a.lane='organic' and not exists(select 1 from studio_publish_attempts p where p.workspace_id=s.workspace_id and p.slot_id=s.id) and not exists(select 1 from studio_posts sp where sp.workspace_id=s.workspace_id and sp.slot_id=s.id and sp.grace_until < $2) order by s.scheduled_at,s.id for update of s skip locked limit 1")
-            .bind(self.workspace_id().0).bind(now).bind(target.map(|id|id.0)).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"claim due Studio slot"))?;
+            .bind(self.workspace_id().0).bind(hold.unwrap_or(now)).bind(target.map(|id|id.0)).fetch_optional(self.tx.conn()).await.map_err(|e|map_sqlx(e,"claim due Studio slot"))?;
         let Some(row) = row else { return Ok(None) };
         let slot: Slot = decode(row)?;
         let piece: Value = sqlx::query_scalar(
@@ -40,11 +43,13 @@ impl PgTenantRepos {
                 .bind(self.workspace_id().0).bind(slot.capability_id.0)
                 .fetch_all(self.tx.conn()).await.map_err(|e| map_sqlx(e, "count daily Studio claims"))?;
             let offset = time::UtcOffset::from_hms(3, 0, 0).expect("Istanbul offset");
-            let day = now.to_offset(offset).date();
+            // A post left with a provider's scheduler counts on the day it goes out.
+            let day = hold.unwrap_or(now).to_offset(offset).date();
             let mut used = 0u64;
             for row in rows {
                 let attempt: PublishAttempt = decode(row)?;
-                if attempt.claimed_at().to_offset(offset).date() == day {
+                let at = attempt.held_until().unwrap_or(attempt.claimed_at());
+                if at.to_offset(offset).date() == day {
                     used += 1;
                 }
             }
@@ -69,7 +74,8 @@ impl PgTenantRepos {
             now,
         )
         .map_err(invalid)?
-        .with_account(account);
+        .with_account(account)
+        .with_hold(hold);
         sqlx::query("insert into studio_publish_attempts(workspace_id,id,data,slot_id,piece_id,executed_version_id,state) values($1,$2,$3,$4,$5,$6,'sending')")
             .bind(self.workspace_id().0).bind(attempt.id().0).bind(encode(&attempt)?).bind(slot.id.0).bind(attempt.piece().id.0).bind(version.id.0).execute(self.tx.conn()).await.map_err(|e|map_sqlx(e,"persist Studio Sending claim"))?;
         self.studio_attempt_ledger(&attempt, "studio.publish.claimed", now)

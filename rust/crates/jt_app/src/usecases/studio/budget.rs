@@ -51,8 +51,19 @@ pub async fn validate_reservation(
     if active(r).await? != req.workspace_id || frame.id != req.executed_version_id {
         return Err(refuse("strategy_changed"));
     }
-    if flags.is_braked(req.lane) {
+    // A reservation of a Studio chain (a post, an ad set) also stops while its lane's module is
+    // removed; any other connector spend (an inbox send) stops on a human's brake alone.
+    let braked = if req.chain.is_some() {
+        flags.is_braked(req.lane)
+    } else {
+        flags.brake_engaged_for(req.lane)
+    };
+    if braked {
         return Err(refuse("studio_braked"));
+    }
+    // A person stopped this module's spending, or all spending, in Bütçe (design 2026-11-10 S7).
+    if flags.spend_stopped.stops(req.spending_module()) {
+        return Err(refuse("spend_stopped"));
     }
     if req.amount_minor < 0
         || req.at < frame.approved_at.unwrap_or(frame.created_at)
@@ -148,6 +159,12 @@ pub async fn validate_reservation(
             manual_lane += i128::from(r.budget().spent_between(item.id, from, until).await?);
         }
     }
+    // What the ad campaigns Jeeta built still commit is the paid lane's too (design 2026-11-10
+    // §8): a budget move of a bound ad set cannot spend what a campaign holds.
+    if req.lane == LaneKind::Paid {
+        manual_lane +=
+            crate::usecases::ads::committed(r, &req.currency, None, None, req.at).await?;
+    }
     check(
         occupied(
             &combined,
@@ -241,6 +258,8 @@ pub(super) async fn validate_observed_spend(
         .await?
         .ok_or_else(|| AppError::not_found("capability"))?;
     let req = ReserveSpend {
+        module: None,
+        campaign_id: None,
         workspace_id: binding.chain.workspace_id,
         capability_id: c.id,
         budget_item_ids: c.budget_item_ids.clone(),
@@ -354,6 +373,8 @@ async fn attribute_bindings(
                     item_windows: BTreeMap::new(),
                     item_amounts: BTreeMap::new(),
                     request: ReserveSpend {
+                        module: None,
+                        campaign_id: None,
                         workspace_id: req.workspace_id,
                         capability_id: capability.id,
                         budget_item_ids: capability.budget_item_ids,
@@ -577,6 +598,21 @@ pub async fn reserve_metered(
     key: String,
     at: OffsetDateTime,
 ) -> Result<Option<SpendReservation>, AppError> {
+    reserve_metered_for(r, c, chain, quantity, key, at, None).await
+}
+
+/// [`reserve_metered`] naming the module that spends (design 2026-11-10 S6: `inbox`,
+/// `outreach`, `social`); `None` leaves it to the reservation's shape
+/// ([`ReserveSpend::spending_module`]).
+pub async fn reserve_metered_for(
+    r: &mut dyn TenantRepos,
+    c: &Capability,
+    chain: Option<Chain>,
+    quantity: Option<u64>,
+    key: String,
+    at: OffsetDateTime,
+    module: Option<&str>,
+) -> Result<Option<SpendReservation>, AppError> {
     if !is_metered(c) {
         return Ok(None);
     }
@@ -631,6 +667,8 @@ pub async fn reserve_metered(
             at,
             chain,
             replaces: None,
+            module: module.map(str::to_owned),
+            campaign_id: None,
         },
     )
     .await

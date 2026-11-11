@@ -29,6 +29,21 @@ export function formatRelative(iso: string | null | undefined, language: string,
   return rtf.format(Math.round(seconds / 86_400), 'day');
 }
 
+/**
+ * A compact timestamp for lists: the time today (`16:48`), day and time within the year
+ * (`10 Kas 16:48`), else the date (`10 Kas 2025`).
+ */
+export function formatWhen(iso: string | null | undefined, language: string, now: Date = new Date()): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const locale = language.startsWith('tr') ? 'tr-TR' : 'en-GB';
+  const time: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+  if (date.toDateString() === now.toDateString()) return new Intl.DateTimeFormat(locale, time).format(date);
+  if (date.getFullYear() === now.getFullYear()) return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', ...time }).format(date);
+  return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+}
+
 /** The number of minor-unit digits of an ISO 4217 currency (2 for TRY, 0 for JPY). */
 export function minorDigits(currency: string): number {
   try {

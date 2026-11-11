@@ -22,6 +22,11 @@ export function can(me: MeOut | undefined, permission: Permission): boolean {
   return currentMembership(me)?.permissions.includes(permission) ?? false;
 }
 
+/** Whether at least one of these permissions is granted. */
+export function canAny(me: MeOut | undefined, permissions: readonly Permission[]): boolean {
+  return permissions.some(permission => can(me, permission));
+}
+
 /** Whether the current membership's role is `owner` or `manager` (the server checks again). */
 export function isOwnerOrManager(me: MeOut | undefined): boolean {
   const role = currentMembership(me)?.role_key;

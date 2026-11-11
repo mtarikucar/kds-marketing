@@ -419,6 +419,10 @@ async fn posting_settings_are_the_defaults_until_saved_then_replaced() {
             ..PostingPolicy::default()
         },
         tz: "Europe/Berlin".into(),
+        // A paused account and the settings' revision are stored with the policy.
+        paused_capability_ids: [jt_capability::CapabilityId::new_v7()].into(),
+        revision: 3,
+        provider_scheduling: true,
     };
     tx.studio_posts()
         .save_posting_settings(saved.clone())
@@ -428,6 +432,7 @@ async fn posting_settings_are_the_defaults_until_saved_then_replaced() {
     let replaced = PostingSettings {
         policy: PostingPolicy::default(),
         tz: "UTC".into(),
+        ..Default::default()
     };
     tx.studio_posts()
         .save_posting_settings(replaced.clone())
@@ -444,14 +449,17 @@ async fn posting_settings_are_the_defaults_until_saved_then_replaced() {
             ..PostingPolicy::default()
         },
         tz: "UTC".into(),
+        ..Default::default()
     };
     let zoneless = PostingSettings {
         policy: PostingPolicy::default(),
         tz: String::new(),
+        ..Default::default()
     };
     let long_zone = PostingSettings {
         policy: PostingPolicy::default(),
         tz: "x".repeat(65),
+        ..Default::default()
     };
     for invalid in [floorless, zoneless, long_zone] {
         assert_eq!(
@@ -685,6 +693,7 @@ async fn another_workspace_sees_and_names_none_of_it() {
         .save_posting_settings(PostingSettings {
             policy: PostingPolicy::default(),
             tz: "UTC".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -808,7 +817,13 @@ async fn the_down_refuses_while_a_post_or_a_request_is_stored_and_both_repeat() 
     let f = ready(&uow).await;
     let material = seed_material(&uow, f.ws).await;
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../migrations");
-    let up = std::fs::read_to_string(dir.join("0022_studio_posts.up.sql")).unwrap();
+    // The posting policy's later columns (`0037_social_accounts`) come back with the table: the
+    // repository writes them.
+    let up = format!(
+        "{}\n{}",
+        std::fs::read_to_string(dir.join("0022_studio_posts.up.sql")).unwrap(),
+        std::fs::read_to_string(dir.join("0037_social_accounts.up.sql")).unwrap()
+    );
     let down = std::fs::read_to_string(dir.join("0022_studio_posts.down.sql")).unwrap();
     let run = |sql: String| {
         let pool = db.pool.clone();
@@ -837,6 +852,7 @@ async fn the_down_refuses_while_a_post_or_a_request_is_stored_and_both_repeat() 
         .save_posting_settings(PostingSettings {
             policy: PostingPolicy::default(),
             tz: "UTC".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -918,5 +934,71 @@ async fn a_post_past_its_grace_is_never_claimed() {
             .await
             .unwrap()
             .is_some()
+    );
+}
+
+/// The social accounts' daily snapshots (`0037_social_accounts`): the shared repository
+/// contract, and the table's own checks.
+#[tokio::test]
+async fn account_snapshots_repository_contract() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let a = ready(&uow).await;
+    let b = ready(&uow).await;
+    let second = uuid::Uuid::now_v7();
+    let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into capabilities(id,workspace_id,kind_key,name,reach,status,created_at,updated_at) \
+         values($1,$2,'instagram','Atölye IG','connector','verified',now(),now())",
+    )
+    .bind(second)
+    .bind(a.ws.0)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    jt_testkit::social_accounts_contract::exercise(
+        &uow,
+        a.ws,
+        [a.slot.capability_id, jt_capability::CapabilityId(second)],
+        b.ws,
+        b.slot.capability_id,
+    )
+    .await;
+
+    // The document names its own workspace and account: a row whose document says otherwise is
+    // refused by the table, whoever writes it.
+    let mut raw = TenantTx::begin(&db.pool, a.ws).await.unwrap();
+    let err = sqlx::query(
+        "insert into social_account_days(workspace_id,capability_id,day,data,read_at) \
+         values($1,$2,'2026-10-30',$3,now())",
+    )
+    .bind(a.ws.0)
+    .bind(a.slot.capability_id.0)
+    .bind(serde_json::json!({"workspace_id": a.ws.0, "capability_id": second}))
+    .execute(raw.conn())
+    .await
+    .unwrap_err();
+    raw.rollback().await.unwrap();
+    assert_eq!(
+        err.as_database_error().unwrap().code().as_deref(),
+        Some("23514")
+    );
+    // Row-level security: B cannot write a snapshot into A's workspace.
+    let mut raw = TenantTx::begin(&db.pool, b.ws).await.unwrap();
+    let err = sqlx::query(
+        "insert into social_account_days(workspace_id,capability_id,day,data,read_at) \
+         values($1,$2,'2026-10-30',$3,now())",
+    )
+    .bind(a.ws.0)
+    .bind(a.slot.capability_id.0)
+    .bind(serde_json::json!({"workspace_id": a.ws.0, "capability_id": a.slot.capability_id.0}))
+    .execute(raw.conn())
+    .await
+    .unwrap_err();
+    raw.rollback().await.unwrap();
+    assert_eq!(
+        err.as_database_error().unwrap().code().as_deref(),
+        Some("42501")
     );
 }

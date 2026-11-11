@@ -9,11 +9,6 @@ async fn compliance_history_rates_and_financial_rows() {
 }
 
 #[tokio::test]
-async fn commission_unique_per_journey() {
-    compliance_contract::commission_unique_per_journey(Arc::new(InMemoryUow::new())).await;
-}
-
-#[tokio::test]
 async fn erasure_replay_and_tenant_isolation() {
     compliance_contract::erasure_replay_and_tenant_isolation(Arc::new(InMemoryUow::new())).await;
 }

@@ -280,15 +280,6 @@ async fn compliance_history_rates_and_financial_rows() {
 }
 
 #[tokio::test]
-async fn commission_unique_per_journey() {
-    let db = jt_testkit::TestDb::new().await;
-    jt_testkit::compliance_contract::commission_unique_per_journey(std::sync::Arc::new(
-        jt_pg::PgUnitOfWork::new(db.pool.clone()),
-    ))
-    .await;
-}
-
-#[tokio::test]
 async fn erasure_replay_and_tenant_isolation() {
     let db = jt_testkit::TestDb::new().await;
     jt_testkit::compliance_contract::erasure_replay_and_tenant_isolation(std::sync::Arc::new(

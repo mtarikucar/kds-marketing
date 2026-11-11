@@ -108,94 +108,15 @@ pub async fn compliance_history_rates_and_financial_rows(uow: Arc<dyn UnitOfWork
             .state,
         AppointmentState::Held
     );
-    assert_eq!(t.commissions().default_rate().await.unwrap(), None);
-    t.commissions().set_default_rate(500).await.unwrap();
-    t.commissions()
-        .set_user_rate(f.user, Some(750))
-        .await
-        .unwrap();
-    assert_eq!(t.commissions().default_rate().await.unwrap(), Some(500));
-    assert_eq!(t.commissions().user_rate(f.user).await.unwrap(), Some(750));
-    t.commissions().set_user_rate(f.user, None).await.unwrap();
-    assert_eq!(t.commissions().user_rate(f.user).await.unwrap(), None);
-    let c = CommissionRow {
-        id: Uuid::now_v7(),
-        workspace_id: f.ws,
-        created_at: FIXED_NOW,
-        commission: Commission {
-            journey_id: j.id,
-            payee: Some(f.user),
-            amount_minor: 600,
-            currency: "TRY".into(),
-            rate_bp: 500,
-            state: CommissionState::Pending,
-        },
-    };
-    t.commissions().insert(c.clone()).await.unwrap();
-    assert_eq!(
-        t.commissions().by_journey(j.id).await.unwrap(),
-        Some(c.clone())
-    );
-    t.commissions()
-        .set_state(c.id, CommissionState::Approved)
-        .await
-        .unwrap();
-    assert_eq!(
-        t.commissions()
-            .get(c.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .commission
-            .state,
-        CommissionState::Approved
-    );
-    assert_eq!(t.commissions().list().await.unwrap().len(), 1);
     t.commit().await.unwrap();
     let mut other = uow.tenant(f.other).await.unwrap();
     assert!(other.consents().list(p.id).await.unwrap().is_empty());
     assert!(other.quotes().get(q.id).await.unwrap().is_none());
     assert!(other.appointments().get(a.id).await.unwrap().is_none());
-    assert!(other.commissions().get(c.id).await.unwrap().is_none());
-    assert_eq!(other.commissions().default_rate().await.unwrap(), None);
     assert_eq!(
         other.consents().insert(consent).await.unwrap_err().code,
         ErrorCode::NotFound
     );
-}
-
-pub async fn commission_unique_per_journey(uow: Arc<dyn UnitOfWork>) {
-    let f = Fixture::new(uow.clone()).await;
-    let p = f.insert_person("Won").await;
-    let j = f.journey(p.id);
-    let c = CommissionRow {
-        id: Uuid::now_v7(),
-        workspace_id: f.ws,
-        created_at: FIXED_NOW,
-        commission: Commission {
-            journey_id: j.id,
-            payee: None,
-            amount_minor: 100,
-            currency: "TRY".into(),
-            rate_bp: 100,
-            state: CommissionState::NoPayee,
-        },
-    };
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    f.insert_journey(&mut *t, &j).await.unwrap();
-    t.commissions().insert(c.clone()).await.unwrap();
-    t.commit().await.unwrap();
-    let mut duplicate = c.clone();
-    duplicate.id = Uuid::now_v7();
-    duplicate.commission.amount_minor = 999;
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    assert_eq!(
-        t.commissions().insert(duplicate).await.unwrap_err().code,
-        ErrorCode::Conflict
-    );
-    drop(t);
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    assert_eq!(t.commissions().by_journey(j.id).await.unwrap(), Some(c));
 }
 
 pub async fn erasure_replay_and_tenant_isolation(uow: Arc<dyn UnitOfWork>) {

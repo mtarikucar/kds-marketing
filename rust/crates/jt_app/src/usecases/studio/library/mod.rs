@@ -14,15 +14,21 @@
 //! tag keys and kinds, never the owner's words (titles, notes, places, client names, texts).
 mod calendar;
 mod capture;
+mod intelligence;
 mod items;
 mod kvkk;
 mod olays;
+mod productions;
 mod shoots;
 
 pub use calendar::*;
+pub(crate) use capture::video_facts_of;
+pub use intelligence::*;
 pub use items::*;
 pub(crate) use kvkk::erase_person;
 pub use olays::*;
+pub(crate) use productions::request_production_in;
+pub use productions::*;
 pub use shoots::*;
 
 use super::chain::active;
@@ -39,10 +45,14 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use uuid::Uuid;
 
-/// A tenant bundle for a library use case: the caller holds `studio.work` and the workspace is
+/// A tenant bundle for a library use case: the caller holds its module permission and the workspace is
 /// active.
-pub(crate) async fn open(d: &Deps, ctx: &Ctx) -> Result<Box<dyn TenantRepos>, AppError> {
-    ctx.require(Permission::StudioWork)?;
+pub(crate) async fn open(
+    d: &Deps,
+    ctx: &Ctx,
+    permission: Permission,
+) -> Result<Box<dyn TenantRepos>, AppError> {
+    ctx.require(permission)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     active(r.as_mut()).await?;
     Ok(r)

@@ -31,7 +31,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           resets_at), each open research task's remaining count, the retention \
                           in days and the blocklist's rules (listed: phone, email, instagram, \
                           tiktok; flagged only: domain, name_city). [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: schema_for::<NoArgs>,
             run: playbook,
         },
@@ -47,7 +47,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           previously_rejected_soft list prospects sharing the website's domain \
                           or the name and city (never a refusal: a branch or another business \
                           goes on, naming them in distinct_from). [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: check_schema,
             run: check,
         },
@@ -73,7 +73,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           research_task_id records it for that task (CONFLICT task_closed when \
                           the task is closed; an ad-hoc task closes itself at its target). \
                           [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: create_schema,
             run: create,
         },
@@ -87,7 +87,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           contact values meet create's checks. Answers {prospect, flags} (as \
                           create's, for the keys the edit adds); CONFLICT stale_revision \
                           (revision: read it again), duplicate or not_editable. [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: update_schema,
             run: update,
         },
@@ -100,7 +100,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           are recorded (fields), the latest score and the purge time, never \
                           contact values. Answers {items, next}: pass next.before_at and \
                           next.before_id back for the following page. [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: list_schema,
             run: list,
         },
@@ -109,7 +109,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Read one prospect (prospect_id) with every field's evidence, its \
                           latest scores, the prospects sharing its website or name and city \
                           (duplicate_candidates) and its ledger history. [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: id_schema,
             run: get,
         },
@@ -123,7 +123,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           Answers {score, status, qualified}; CONFLICT rubric_mismatch \
                           (current: read the playbook again), prospecting_off or not_scorable. \
                           [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: score_schema,
             run: score,
         },
@@ -135,7 +135,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           already_customer, duplicate, other with a note), or reopen a \
                           rejection (a person with prospects.manage only). Answers {prospect}; \
                           CONFLICT invalid_transition or stale_revision. [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: decide_schema,
             run: decide,
         },
@@ -153,7 +153,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           prospects (every one marked), people (inbox people of promoted \
                           prospects holding a key: record the objection on them too), kinds}. \
                           Requires confirm: true. [risk: DESTRUCTIVE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: dnc_schema,
             run: do_not_contact,
         },
@@ -163,7 +163,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           tiktok) and the raw value (the hash is computed again). A person with \
                           prospects.manage only; an agent is refused (human_only); an erasure is \
                           never lifted. Answers {kind, lifted}. [risk: WRITE]",
-            permission: Permission::ProspectsManage,
+            permissions: &[Permission::ProspectsManage],
             schema: lift_schema,
             run: dnc_lift,
         },
@@ -175,7 +175,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           so it is never recorded again. A promoted prospect is erased with its \
                           person (CONFLICT erase_the_person). Answers {prospect_id, erased, \
                           kinds}. Requires confirm: true. [risk: DESTRUCTIVE]",
-            permission: Permission::ProspectsManage,
+            permissions: &[Permission::ProspectsManage],
             schema: erase_schema,
             run: erase,
         },
@@ -185,7 +185,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           rejected_retention_days, unpromoted_retention_days, \
                           rejected_memory_days, max_promotions_per_day, \
                           agents_promote_qualified_only. [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: schema_for::<NoArgs>,
             run: settings_get,
         },
@@ -204,14 +204,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           person_already_linked)}]}. Needs inbox.work too. A request_key replays \
                           each promotion for 24 hours. Contact nobody before promotion; promotion \
                           sends nothing. [risk: WRITE]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: promote_schema,
             run: promote,
         },
         ToolDef {
             use_case: "prospects.report",
             description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly with jeeta.outreach.report:                           adapt targeting within the approved ICP, and propose rubric or ICP changes to the owner through                           the strategy consultation. [risk: READ]",
-            permission: Permission::ProspectsWork,
+            permissions: &[Permission::ProspectsWork],
             schema: report_schema,
             run: report,
         },
@@ -222,7 +222,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           rejected_memory_days (0 to 1095), max_promotions_per_day (1 to 1000), \
                           agents_promote_qualified_only; the others stay. Answers the settings. \
                           [risk: WRITE]",
-            permission: Permission::ProspectsManage,
+            permissions: &[Permission::ProspectsManage],
             schema: settings_schema,
             run: settings_set,
         },

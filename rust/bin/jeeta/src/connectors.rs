@@ -24,9 +24,9 @@
 use std::sync::Arc;
 
 use jt_app::ports::connectors::{
-    AdBudgetWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports, InsightsReader,
-    LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider, PlatformAppConfig,
-    PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
+    AdBudgetWriter, AdCampaignWriter, Connector, ConnectorRegistry, ConsentSync, DeliveryReports,
+    InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider,
+    PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
@@ -142,6 +142,10 @@ impl ConnectorRegistry for ProviderRegistry {
         (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn MessagingSender>)
     }
 
+    fn ad_campaigns(&self, provider: Provider) -> Option<Arc<dyn AdCampaignWriter>> {
+        (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn AdCampaignWriter>)
+    }
+
     fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
         (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn AdBudgetWriter>)
     }
@@ -198,6 +202,7 @@ mod tests {
             ("insights", registry.insights(provider).is_some()),
             ("messaging", registry.messaging(provider).is_some()),
             ("ads", registry.ads(provider).is_some()),
+            ("ad_campaigns", registry.ad_campaigns(provider).is_some()),
             ("leadgen", registry.leadgen(provider).is_some()),
             ("telephony", registry.telephony(provider).is_some()),
             ("consent", registry.consent(provider).is_some()),
@@ -237,6 +242,7 @@ mod tests {
                     "insights",
                     "messaging",
                     "ads",
+                    "ad_campaigns",
                     "leadgen",
                     "public",
                     "public_poller",

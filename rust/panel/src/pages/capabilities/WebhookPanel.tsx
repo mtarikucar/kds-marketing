@@ -19,12 +19,12 @@ export function WebhookPanel() {
   const hooks = useQuery({ queryKey: HOOKS_KEY, queryFn: ({ signal }) => connectorHooks(signal), staleTime: 0, gcTime: 0 });
   return (
     <section aria-labelledby="webhook-addresses-title">
-      <Card>
-        <CardHeader>
+      <Card className="rounded-none border-0 border-t border-border bg-transparent">
+        <CardHeader className="px-0 pb-4 pt-6">
           <CardTitle id="webhook-addresses-title">{t('capabilities.hooks.title')}</CardTitle>
           <CardDescription>{t('capabilities.hooks.description')}</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-5">
+        <CardContent className="flex min-w-0 flex-col gap-5 px-0 pb-0">
           <QueryState query={hooks}>
             {hooks.data && (
               <>

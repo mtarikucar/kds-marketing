@@ -3,11 +3,16 @@
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
+    AdAccountLimits, AdCampaignWriter, AdDay, AdLevel, AdObjective, AdPlacement, AdSetSpec, AdSpec,
+    CampaignProviderState, CampaignSpec, CreativeSpec, LeadFormSpec,
+};
+
+use jt_app::ports::connectors::{
     AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector,
     InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, MessagingSender,
-    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PostMetrics, PrivateReceipt,
-    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, Publisher,
-    SendReceipt, SubjectFacts,
+    ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformScheduled, PostMetrics,
+    PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
+    Publisher, Scheduled, SendReceipt, SubjectFacts,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -17,7 +22,7 @@ use url::Url;
 
 use crate::{
     META_HOSTS, MetaConnector, ads, assets, comments, insights, leadgen, messaging, oauth, probe,
-    publish,
+    publish, schedule,
 };
 
 #[async_trait]
@@ -113,6 +118,59 @@ impl Publisher for MetaConnector {
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError> {
         publish::publish(self, cred, public, request).await
+    }
+
+    async fn read_back(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        publish::read_back(self, cred, public, external_id).await
+    }
+
+    fn schedule_window(
+        &self,
+        public: &Value,
+        request: &PublishRequest,
+    ) -> Option<(time::Duration, time::Duration)> {
+        schedule::window(public, request)
+    }
+
+    async fn schedule(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        request: &PublishRequest,
+        at: time::OffsetDateTime,
+    ) -> Result<PublishReceipt, ConnectorError> {
+        schedule::schedule(self, cred, public, request, at).await
+    }
+
+    async fn scheduled(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Scheduled, ConnectorError> {
+        schedule::scheduled(self, cred, public, receipt).await
+    }
+
+    async fn withdraw(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<bool, ConnectorError> {
+        schedule::withdraw(self, cred, public, receipt).await
+    }
+
+    async fn scheduled_list(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        schedule::list(self, cred, public).await
     }
 }
 
@@ -302,5 +360,102 @@ impl AdBudgetWriter for MetaConnector {
         until: Date,
     ) -> Result<Vec<AdInsights>, ConnectorError> {
         ads::insights(self, cred, public, since, until).await
+    }
+}
+
+#[async_trait]
+impl AdCampaignWriter for MetaConnector {
+    async fn account_limits(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<AdAccountLimits, ConnectorError> {
+        crate::campaigns::account_limits(self, cred, public).await
+    }
+    async fn find_by_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        level: AdLevel,
+        name: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        crate::campaigns::find_by_name(self, cred, public, level, name).await
+    }
+    async fn create_campaign(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CampaignSpec,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::create_campaign(self, cred, public, spec).await
+    }
+    async fn create_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSetSpec,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::create_adset(self, cred, public, spec).await
+    }
+    async fn upload_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::upload_image(self, cred, public, bytes, name).await
+    }
+    async fn create_lead_form(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &LeadFormSpec,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::create_lead_form(self, cred, public, spec).await
+    }
+    async fn create_creative(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CreativeSpec,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::create_creative(self, cred, public, spec).await
+    }
+    async fn create_ad(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSpec,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::create_ad(self, cred, public, spec).await
+    }
+    async fn campaign_state(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+    ) -> Result<CampaignProviderState, ConnectorError> {
+        crate::campaigns::campaign_state(self, cred, public, campaign_id).await
+    }
+    async fn ad_days(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+        objective: AdObjective,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<AdDay>, ConnectorError> {
+        crate::campaigns::ad_days(self, cred, public, campaign_id, objective, since, until).await
+    }
+    async fn preview(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        creative: &CreativeSpec,
+        placement: AdPlacement,
+    ) -> Result<String, ConnectorError> {
+        crate::campaigns::preview(self, cred, public, creative, placement).await
     }
 }

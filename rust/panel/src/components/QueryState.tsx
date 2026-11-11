@@ -10,7 +10,9 @@ import { errorMessage } from '@/lib/errors';
  * page or the billing page can.
  */
 const GATES = {
+  MODULE_NOT_INSTALLED: { body: 'gates.moduleBody', link: 'gates.moduleLink', to: '/modules' },
   STRATEGY_REQUIRED: { body: 'gates.strategyBody', link: 'gates.strategyLink', to: '/strategy' },
+  CAPABILITY_REQUIRED: { body: 'gates.capabilityBody', link: 'gates.capabilityLink', to: '/connect' },
   WORKSPACE_INACTIVE: { body: 'gates.inactiveBody', link: 'gates.inactiveLink', to: '/billing' },
 } as const;
 type Gate = (typeof GATES)[keyof typeof GATES];
@@ -39,7 +41,7 @@ export function QueryState({
     return (
       <Callout tone="info">
         <p>{t(gate.body)}</p>
-        <Link className="mt-1 inline-block text-primary underline" to={gate.to}>
+        <Link className="mt-1 inline-block text-primary underline" to={isApiError(query.error) && query.error.code === 'MODULE_NOT_INSTALLED' && typeof query.error.details?.module === 'string' ? `/modules/${encodeURIComponent(query.error.details.module)}` : gate.to}>
           {t(gate.link)}
         </Link>
       </Callout>

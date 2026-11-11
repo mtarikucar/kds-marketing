@@ -17,11 +17,11 @@ export function UsedInList({
   const { t, i18n } = useTranslation();
   if (!uses.length) return <p className="text-sm text-muted-foreground">{t('materials.usedIn.none')}</p>;
   return (
-    <ul className="space-y-2">
+    <ul className="divide-y divide-border">
       {uses.map((u) => (
         <li
           key={`${u.piece_id}-${u.revision}`}
-          className="space-y-1 rounded-md border border-border p-3 text-sm"
+          className="min-w-0 space-y-2 break-words py-4 text-sm"
         >
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span>

@@ -18,15 +18,16 @@ mod capability;
 mod group;
 mod kind;
 mod policy;
+mod requirement;
 mod status;
 
 use serde::{Deserialize, Serialize};
 
 pub use budget::{
     BudgetItem, BudgetItemId, BudgetKind, BudgetSpend, BudgetSpendId, END_OF_TIME,
-    MAX_REFERENCE_CHARS, MAX_UNIT_LABEL_CHARS, NewBudgetItem, NewBudgetSpend, Period, SpendSource,
-    Unit, can_link_budget, period_window, remaining, unit_fits, validate_cap, validate_currency,
-    validate_unit,
+    MAX_REFERENCE_CHARS, MAX_UNIT_LABEL_CHARS, NewBudgetItem, NewBudgetSpend, Period,
+    SPEND_MODULES, SpendSource, Unit, can_link_budget, period_window, remaining, unit_fits,
+    validate_cap, validate_currency, validate_unit,
 };
 pub use capability::{
     Capability, CapabilityId, Evidence, MAX_EVIDENCE_REF_CHARS, MAX_EVIDENCE_REFS,
@@ -43,6 +44,7 @@ pub use kind::{
     canonical_external_id, kinds_in_group,
 };
 pub use policy::{DEFAULT_VERIFY_MAX_AGE_DAYS, Hours, MAX_TZ_CHARS, Policy, validate_policy};
+pub use requirement::{Requirement, RequirementTerm, counts_as_connected, missing_requirements};
 pub use status::{EffectiveStatus, StoredStatus, effective_status};
 
 /// The longest name of a capability, a group or a budget item, in characters.

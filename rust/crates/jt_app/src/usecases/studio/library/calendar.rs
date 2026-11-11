@@ -63,9 +63,12 @@ fn check_year(year: i32) -> Result<(), AppError> {
 
 /// The effective calendar of a year, its workspace rows and the materials policy.
 pub async fn calendar_list(d: &Deps, ctx: &Ctx, q: CalendarQuery) -> Result<CalendarOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.calendar_list",
+    ))?;
     let year = q.year.unwrap_or_else(|| istanbul_day(ctx.now).year());
     check_year(year)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     let rows: Vec<CalendarEntry> = r
         .studio_materials()
         .calendar_rows()
@@ -88,6 +91,9 @@ pub async fn calendar_set(
     ctx: &Ctx,
     i: CalendarSetInput,
 ) -> Result<CalendarEntry, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.calendar_set",
+    ))?;
     human_approver(ctx)?;
     check_year(i.year)?;
     let row = CalendarEntry {
@@ -101,7 +107,7 @@ pub async fn calendar_set(
         enabled: i.enabled,
     };
     row.validate().map_err(invalid)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     // The calendar decides which season materials are in their window: the publisher's fence.
     r.studio_control().lock_control().await?;
     r.studio_materials().save_calendar_row(row.clone()).await?;
@@ -119,26 +125,72 @@ pub async fn calendar_set(
     Ok(row)
 }
 
-/// An owner or manager sets the materials policy (D18): lead, reuse and recap days.
+/// `studio.material_policy_set`'s input: the three day counts, and the standalone setting when
+/// the caller changes it. Absent, it stays as stored: a screen that knows only the days never
+/// switches it.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialPolicyInput {
+    pub lead_days: u16,
+    pub reuse_days: u16,
+    pub recap_days: u16,
+    #[serde(default)]
+    pub ai_standalone: Option<bool>,
+}
+
+impl From<MaterialPolicy> for MaterialPolicyInput {
+    fn from(p: MaterialPolicy) -> Self {
+        MaterialPolicyInput {
+            lead_days: p.lead_days,
+            reuse_days: p.reuse_days,
+            recap_days: p.recap_days,
+            ai_standalone: Some(p.ai_standalone),
+        }
+    }
+}
+
+impl Default for MaterialPolicyInput {
+    /// The default days, the standalone setting left as stored.
+    fn default() -> Self {
+        MaterialPolicyInput {
+            ai_standalone: None,
+            ..MaterialPolicy::default().into()
+        }
+    }
+}
+
+/// An owner or manager sets the materials policy (D18): lead, reuse and recap days, and whether
+/// an agent's own visual may stand alone (design 2026-11-10 B39).
 pub async fn material_policy_set(
     d: &Deps,
     ctx: &Ctx,
-    i: MaterialPolicy,
+    i: MaterialPolicyInput,
 ) -> Result<MaterialPolicy, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_policy_set",
+    ))?;
     human_approver(ctx)?;
-    i.validate().map_err(invalid)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     r.studio_control().lock_control().await?;
-    r.studio_materials().save_material_policy(i).await?;
+    let stored = r.studio_materials().material_policy().await?;
+    let policy = MaterialPolicy {
+        lead_days: i.lead_days,
+        reuse_days: i.reuse_days,
+        recap_days: i.recap_days,
+        ai_standalone: i.ai_standalone.unwrap_or(stored.ai_standalone),
+    };
+    policy.validate().map_err(invalid)?;
+    r.studio_materials().save_material_policy(policy).await?;
     r.ledger()
         .append(ledger_entry(
             ctx,
             "studio.material.policy_set",
             "studio_material_policy",
             ctx.workspace_id,
-            json!({"lead_days":i.lead_days,"reuse_days":i.reuse_days,"recap_days":i.recap_days}),
+            json!({"lead_days":policy.lead_days,"reuse_days":policy.reuse_days,
+                   "recap_days":policy.recap_days,"ai_standalone":policy.ai_standalone}),
         )?)
         .await?;
     r.commit().await?;
-    Ok(i)
+    Ok(policy)
 }

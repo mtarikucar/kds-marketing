@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
+import { ChevronRight, Search } from 'lucide-react';
 import { searchPeople } from '@/api/inbox';
 import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
-import { Button, Card, CardContent, EmptyState, Field, Input, PageHeader } from '@/components/ui';
+import { Button, EmptyState, Field, Input, PageHeader } from '@/components/ui';
 import { formatDateTime } from '@/lib/format';
 import { personName } from '@/lib/people';
+import { can } from '@/lib/roles';
 
 /** People per page; the server pages with limit/offset in (created_at, id) order. */
 export const PEOPLE_PAGE = 50;
@@ -18,7 +20,8 @@ export const PEOPLE_PAGE = 50;
  */
 export function PeoplePage() {
   const { t, i18n } = useTranslation();
-  const workspace = useSession().data?.current_workspace;
+  const session = useSession();
+  const workspace = session.data?.current_workspace;
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const people = useQuery({
@@ -31,12 +34,17 @@ export function PeoplePage() {
   return (
     <>
       <PageHeader title={t('people.title')} description={t('people.description')} />
-      <Card>
-        <CardContent className="flex flex-col gap-4 pt-6">
+      <section className="min-w-0 border-y border-border bg-surface">
+        <div className="flex flex-col">
+          <div className="border-b border-border px-5 py-4 sm:px-6 [&>div]:max-w-xl">
           <Field label={t('people.search')}>
             {(ids) => (
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" aria-hidden="true" />
               <Input
                 id={ids.id}
+                type="search"
+                className="pl-9"
                 value={q}
                 autoComplete="off"
                 onChange={(e) => {
@@ -44,32 +52,35 @@ export function PeoplePage() {
                   setPage(0);
                 }}
               />
+              </div>
             )}
           </Field>
+          </div>
           <QueryState query={people}>
             {rows.length === 0 ? (
-              <EmptyState title={t(q.trim() ? 'people.noMatch' : 'people.empty')} description={t('people.emptyBody')} />
+              <EmptyState icon={!q.trim() && page === 0 ? <img src="/brand/guide-conversations.webp" width={112} height={112} alt="" /> : undefined} className="rounded-none border-0 bg-surface" title={t(q.trim() || page > 0 ? 'people.noMatch' : 'people.empty')} description={q.trim() || page > 0 ? t('people.noMatchBody') : t('people.ux.emptyBody', { defaultValue: 'Bağlı kanallardan ilk mesaj geldiğinde veya müşteri adayı içe aktarıldığında kişiler burada görünür.' })} action={page > 0 ? <Button variant="outline" onClick={() => setPage((value) => value - 1)}>{t('people.previous')}</Button> : q.trim() ? <Button variant="outline" onClick={() => { setQ(''); setPage(0); }}>{t('people.clearSearch')}</Button> : can(session.data, 'capabilities.manage') ? <Button asChild variant="outline"><Link to="/capabilities">{t('people.ux.connectChannels', { defaultValue: 'Müşteri kanallarını bağla' })}</Link></Button> : undefined} />
             ) : (
               <>
-                <ul className="divide-y divide-border rounded-lg border border-border">
+                <ul className="divide-y divide-border">
                   {rows.map((person) => (
                     <li key={person.id}>
                       <Link
                         to={`/inbox?person=${encodeURIComponent(person.id)}`}
-                        className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-3 hover:bg-surface-muted"
+                        className="group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-l-2 border-transparent px-5 py-4 hover:border-brand-accent hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:px-6"
                       >
-                        <span>
-                          <span className="font-medium text-foreground">{personName(t, person)}</span>
-                          {person.company && <span className="text-muted-foreground"> · {person.company}</span>}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-base font-medium text-foreground">{personName(t, person)}</span>
+                          {person.company && <span className="block truncate text-sm text-muted-foreground">{person.company}</span>}
                         </span>
-                        <span className="text-caption text-muted-foreground">
+                        <span className="col-start-1 row-start-2 text-caption text-muted-foreground sm:col-start-2 sm:row-start-1">
                           {t('people.added', { at: formatDateTime(person.created_at, i18n.language) })}
                         </span>
+                        <ChevronRight strokeWidth={1.5} className="col-start-2 row-span-2 row-start-1 h-4 w-4 text-muted-foreground group-hover:text-foreground sm:col-start-3 sm:row-span-1" aria-hidden="true" />
                       </Link>
                     </li>
                   ))}
                 </ul>
-                <div className="flex items-center justify-between gap-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4 text-sm sm:px-6">
                   <span className="text-muted-foreground">
                     {t('people.range', { first, last: first + rows.length - 1 })}
                   </span>
@@ -90,8 +101,8 @@ export function PeoplePage() {
               </>
             )}
           </QueryState>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </>
   );
 }

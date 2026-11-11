@@ -46,10 +46,10 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_strategy::{
-    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, Gap, Hypothesis,
-    HypothesisId, HypothesisInput, HypothesisState, MAX_CONSULTATION_TEXT_CHARS, Sections,
-    StrategyVersion, StrategyVersionId, VersionStatus, next_draft_from, parse_hypotheses_strict,
-    parse_section_strict, validate_for_approval,
+    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, ContentTypeShare, Gap,
+    Hypothesis, HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState, LaneKind,
+    MAX_CONSULTATION_TEXT_CHARS, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
+    next_draft_from, parse_hypotheses_strict, parse_section_strict, validate_for_approval,
 };
 use jt_tenancy::{Email, MembershipStatus, Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
@@ -489,11 +489,34 @@ pub async fn set_hypotheses(
     Ok(out)
 }
 
+/// The content type of a hypothesis that posts without naming its own types.
+pub const DEFAULT_CONTENT_TYPE: &str = "general";
+
+/// The organic cadence a live hypothesis gets at submission when it names none and the strategy
+/// posts (`cadence.per_week` above zero): it posts, with one content type. The posting engine
+/// takes a post only for a hypothesis with an organic cadence, and neither the panel nor the
+/// consultation asks for that field, so without this a strategy written the usual way would
+/// post nothing (design 2026-11-10 B53). A hypothesis that names an organic cadence keeps it,
+/// one of zero posts a week included: that is how a hypothesis is told not to post.
+fn default_organic_cadence(per_week: u16) -> HypothesisCadence {
+    HypothesisCadence {
+        slots_per_week: per_week,
+        exploration_bps: 0,
+        content_types: vec![ContentTypeShare {
+            key: DEFAULT_CONTENT_TYPE.into(),
+            min_bps: 0,
+            max_bps: 10_000,
+        }],
+    }
+}
+
 /// Submits the draft for approval and returns it. Needs `team.manage`.
 ///
 /// The draft must have no gap (see [`VersionOut::gaps`]), else `VALIDATION` with `details.gaps`.
-/// Without a draft, `CONFLICT` "no draft". Submitting again records the new time. Logs the
-/// submission and writes `strategy.submit` (payload `number`).
+/// Without a draft, `CONFLICT` "no draft". Submitting again records the new time. A live
+/// hypothesis without an organic cadence gets the default one when the strategy posts
+/// (`default_organic_cadence`). Logs the submission and writes `strategy.submit` (payload
+/// `number`).
 pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     require_consultant(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
@@ -505,6 +528,17 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     let gaps = approval_gaps(&draft.sections, &hypotheses, &known, &groups);
     if !gaps.is_empty() {
         return Err(not_ready(gaps));
+    }
+    if draft.sections.cadence.per_week > 0 {
+        for mut h in hypotheses {
+            if h.state.is_live() && !h.cadence.contains_key(&LaneKind::Organic) {
+                h.cadence.insert(
+                    LaneKind::Organic,
+                    default_organic_cadence(draft.sections.cadence.per_week),
+                );
+                repos.hypotheses().upsert(draft.id, h).await?;
+            }
+        }
     }
     repos
         .strategy()
@@ -1218,7 +1252,7 @@ pub fn hypotheses_schema() -> Value {
                 },
                 "metric": { "type": "string", "description": "The measure that decides it." },
                 "prior_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                "cadence": {"type":"object","properties":{"organic":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false},"paid":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false}},"additionalProperties":false},
+                "cadence": {"type":"object","description":"Per lane, how the hypothesis is used. organic: it posts on social accounts, in the content types named (a post is planned only for a hypothesis with an organic cadence above zero posts a week). Left out, a submission gives it the default organic cadence when the strategy posts. paid: only for ad sets bound by hand.","properties":{"organic":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false},"paid":{"type":"object","properties":{"slots_per_week":{"type":"integer","minimum":0,"maximum":65535},"exploration_bps":{"type":"integer","minimum":0,"maximum":10000,"default":0},"content_types":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string","minLength":1},"min_bps":{"type":"integer","minimum":0,"maximum":10000},"max_bps":{"type":"integer","minimum":0,"maximum":10000}},"required":["key","min_bps","max_bps"],"additionalProperties":false}}},"required":["slots_per_week","content_types"],"additionalProperties":false}},"additionalProperties":false},
             },
             "additionalProperties": false,
         },

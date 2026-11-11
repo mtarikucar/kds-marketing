@@ -1,0 +1,37 @@
+{
+  "at": "2026-11-05T12:35:30.917861+00:00",
+  "scope": "Current Unslop gallery refresh only",
+  "screenshots": 105,
+  "desktop": 54,
+  "mobile": 51,
+  "fresh_sources": 105,
+  "embedded_docs_images": 8,
+  "before_images_preserved": 3,
+  "capture_groups": {
+    "public_live_admin": 35,
+    "foundation": 4,
+    "studio": 22,
+    "leads": 18,
+    "inbox": 10,
+    "admin_fixtures": 16
+  },
+  "axe_states": 4,
+  "axe_violations": 0,
+  "axe_manual_review": [
+    {
+      "state": "conversation-light-1440",
+      "rules": [
+        "color-contrast"
+      ]
+    }
+  ],
+  "task_form_keyboard": {
+    "task-form-keyboard-1440": true,
+    "task-form-keyboard-390": true
+  },
+  "browser_asset_inventory": 24,
+  "font_files": 2,
+  "font_license": "docs/operations/licenses/IBM-Plex-Sans-OFL.txt",
+  "archive": "/workspace/jeeta-ekran-goruntuleri.zip",
+  "archive_sha256": "1bc303b45d6fdeba2bc7e16e693c0fa6bcd660e0d134d1deef4feb46d848766e"
+}

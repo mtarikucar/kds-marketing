@@ -34,7 +34,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           text.unicode when it can type text outside ASCII), unicode, bridge_id, \
                           bridge_version and last_seen_at. Returns {phones: [...]}. \
                           [risk: READ]",
-            permission: Permission::DevicesWork,
+            permissions: &[Permission::DevicesWork],
             schema: schema_for::<NoArgs>,
             run: list,
         },
@@ -57,7 +57,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           say. Status queued or leased means the wait ended first: follow it \
                           with jeeta.devices.command_get. Refused as \
                           jeeta.devices.act refuses. [risk: WRITE]",
-            permission: Permission::DevicesWork,
+            permissions: &[Permission::DevicesWork],
             schema: observe_schema,
             run: observe,
         },
@@ -99,7 +99,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (no bridge listed the phone within the last minute) or \
                           phone_retired; NOT_FOUND for an unknown phone. Every command is \
                           written to the ledger with all its arguments. [risk: WRITE]",
-            permission: Permission::DevicesWork,
+            permissions: &[Permission::DevicesWork],
             schema: act_schema,
             run: act,
         },
@@ -115,7 +115,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           Returns {command_id, capability_id, kind, command, status, attempts, \
                           result, reason, detail, file_url, requested_by, created_at, \
                           expires_at, leased_at, done_at}. [risk: READ]",
-            permission: Permission::DevicesWork,
+            permissions: &[Permission::DevicesWork],
             schema: command_get_schema,
             run: command_get,
         },
@@ -126,7 +126,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           arguments, status, attempts, reason, detail, who asked and when, \
                           without its result (read one command's result with \
                           jeeta.devices.command_get). Returns {commands: [...]}. [risk: READ]",
-            permission: Permission::DevicesWork,
+            permissions: &[Permission::DevicesWork],
             schema: commands_schema,
             run: commands,
         },

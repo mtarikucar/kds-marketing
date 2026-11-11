@@ -49,7 +49,12 @@ pub(crate) async fn erase_person(
 ) -> Result<Vec<FileId>, AppError> {
     r.studio_control().lock_control().await?;
     let mut files = Vec::new();
-    for m in r.studio_materials().list_materials().await? {
+    for listed in r.studio_materials().list_materials().await? {
+        // Redacting one source can also invalidate its derivatives. Re-read before using the
+        // revision so those cascades do not conflict with this iteration's initial snapshot.
+        let Some(m) = r.studio_materials().get_material(listed.id).await? else {
+            continue;
+        };
         if m.erased_at.is_some() {
             continue;
         }
@@ -67,6 +72,8 @@ pub(crate) async fn erase_person(
         r.studio_materials()
             .update_material(erased.clone(), m.revision)
             .await?;
+        r.studio_materials().delete_intelligence(m.id).await?;
+        files.extend(super::invalidate_material_productions(r, m.id, ctx.now, true).await?);
         r.ledger()
             .append(ledger_entry(
                 ctx,

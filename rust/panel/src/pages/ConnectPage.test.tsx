@@ -15,8 +15,24 @@ const started = {
 
 /** The kind buttons of one provider's section. */
 function providerSection(name: string): HTMLElement {
+  const provider = Object.entries(tr.connect.providers).find(([,label])=>label===name)?.[0];
+  fireEvent.change(screen.getByRole('combobox',{name:'Hizmet sağlayıcısı'}),{target:{value:provider}});
   return screen.getByRole('group', { name });
 }
+
+it('shows one provider at a time and clears a previous account form when the provider changes', async()=>{
+  const user=userEvent.setup();
+  mockFetch({'GET /api/auth/me':me});
+  renderAt('/connect');
+  const choice=await screen.findByRole('combobox',{name:'Hizmet sağlayıcısı'});
+  expect(screen.queryByRole('group',{name:tr.connect.providers.meta})).not.toBeInTheDocument();
+  await user.selectOptions(choice,'meta');
+  await user.click(within(screen.getByRole('group',{name:tr.connect.providers.meta})).getByRole('button',{name:'Facebook sayfası'}));
+  expect(screen.getByRole('button',{name:i18n.t('connect.oauth.submit',{provider:'Meta'})})).toBeInTheDocument();
+  await user.selectOptions(choice,'mail');
+  expect(screen.queryByRole('button',{name:i18n.t('connect.oauth.submit',{provider:'Meta'})})).not.toBeInTheDocument();
+  expect(screen.getByRole('group',{name:tr.connect.providers.mail})).toBeInTheDocument();
+});
 
 describe('ConnectPage', () => {
   it('starts an OAuth flow for a Meta kind and sends the browser to the provider', async () => {

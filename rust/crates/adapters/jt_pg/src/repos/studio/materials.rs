@@ -86,6 +86,42 @@ impl PgTenantRepos {
 
 #[async_trait]
 impl MaterialRepo for PgTenantRepos {
+    async fn get_intelligence(
+        &mut self,
+        id: MaterialId,
+    ) -> Result<Option<MaterialAnalysisRecord>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar("select data from studio_material_intelligence where workspace_id=$1 and material_id=$2")
+            .bind(self.workspace_id().0).bind(id.0).fetch_optional(self.tx.conn()).await
+            .map_err(|e| map_sqlx(e, "read material intelligence"))?;
+        row.map(decode).transpose()
+    }
+    async fn list_intelligence(&mut self) -> Result<Vec<MaterialAnalysisRecord>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar("select i.data from studio_material_intelligence i join studio_materials m on m.workspace_id=i.workspace_id and m.id=i.material_id where i.workspace_id=$1 and m.erased_at is null order by i.material_id")
+            .bind(self.workspace_id().0).fetch_all(self.tx.conn()).await
+            .map_err(|e| map_sqlx(e, "list material intelligence"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn save_intelligence(&mut self, row: MaterialAnalysisRecord) -> Result<(), AppError> {
+        let done = sqlx::query("insert into studio_material_intelligence(workspace_id,material_id,data) select $1,$2,$3 where exists(select 1 from studio_materials where workspace_id=$1 and id=$2 and erased_at is null) on conflict(workspace_id,material_id) do update set data=excluded.data")
+            .bind(self.workspace_id().0).bind(row.material_id.0).bind(encode(&row)?)
+            .execute(self.tx.conn()).await.map_err(|e| map_sqlx(e, "save material intelligence"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("material"));
+        }
+        Ok(())
+    }
+    async fn delete_intelligence(&mut self, id: MaterialId) -> Result<(), AppError> {
+        sqlx::query(
+            "delete from studio_material_intelligence where workspace_id=$1 and material_id=$2",
+        )
+        .bind(self.workspace_id().0)
+        .bind(id.0)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "delete material intelligence"))?;
+        Ok(())
+    }
+
     async fn insert_olay(&mut self, olay: Olay) -> Result<(), AppError> {
         same_workspace(self.workspace_id(), olay.workspace_id)?;
         checked("studio_olays", olay.validate())?;
@@ -544,14 +580,15 @@ impl MaterialRepo for PgTenantRepos {
     }
 
     async fn material_policy(&mut self) -> Result<MaterialPolicy, AppError> {
-        let row: Option<(i32, i32, i32)> = sqlx::query_as(
-            "select lead_days,reuse_days,recap_days from studio_material_policy where workspace_id=$1",
+        let row: Option<(i32, i32, i32, bool)> = sqlx::query_as(
+            "select lead_days,reuse_days,recap_days,ai_standalone from studio_material_policy \
+             where workspace_id=$1",
         )
         .bind(self.workspace_id().0)
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read materials policy"))?;
-        let Some((lead, reuse, recap)) = row else {
+        let Some((lead, reuse, recap, ai_standalone)) = row else {
             return Ok(MaterialPolicy::default());
         };
         let days =
@@ -560,20 +597,24 @@ impl MaterialRepo for PgTenantRepos {
             lead_days: days(lead)?,
             reuse_days: days(reuse)?,
             recap_days: days(recap)?,
+            ai_standalone,
         })
     }
 
     async fn save_material_policy(&mut self, p: MaterialPolicy) -> Result<(), AppError> {
         checked("studio_material_policy", p.validate())?;
         sqlx::query(
-            "insert into studio_material_policy(workspace_id,lead_days,reuse_days,recap_days) values($1,$2,$3,$4) \
+            "insert into studio_material_policy\
+             (workspace_id,lead_days,reuse_days,recap_days,ai_standalone) values($1,$2,$3,$4,$5) \
              on conflict (workspace_id) do update set lead_days=excluded.lead_days,\
-             reuse_days=excluded.reuse_days,recap_days=excluded.recap_days",
+             reuse_days=excluded.reuse_days,recap_days=excluded.recap_days,\
+             ai_standalone=excluded.ai_standalone",
         )
         .bind(self.workspace_id().0)
         .bind(i32::from(p.lead_days))
         .bind(i32::from(p.reuse_days))
         .bind(i32::from(p.recap_days))
+        .bind(p.ai_standalone)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save materials policy"))?;

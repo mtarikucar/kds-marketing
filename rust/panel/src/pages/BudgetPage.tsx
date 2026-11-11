@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { BreakdownPeriod, ItemSpending, SpendingStops, useBudgetBreakdown } from './budget/BudgetBreakdown';
+import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Receipt } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -102,12 +103,13 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [countLabel, setCountLabel] = useState('');
   const [cap, setCap] = useState<number | null>(null);
   const [period, setPeriod] = useState<BudgetPeriod>('monthly');
+  const [general, setGeneral] = useState(false);
   const create = useMutation({
     mutationFn: createBudgetItem,
     onSuccess: async () => {
       toast.success(t('budget.dialog.created'));
       onOpenChange(false);
-      await queryClient.invalidateQueries({ queryKey: ITEMS_KEY });
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ITEMS_KEY }), queryClient.invalidateQueries({ queryKey: ['budget-items'] }), queryClient.invalidateQueries({ queryKey: ['budget', 'breakdown'] })]);
     },
   });
 
@@ -120,6 +122,7 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       setCountLabel('');
       setCap(null);
       setPeriod('monthly');
+      setGeneral(false);
       create.reset();
     }
     // Reset only when the dialog closes.
@@ -141,7 +144,7 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    create.mutate({ name: name.trim(), kind, unit, cap: cap ?? 0, period });
+    create.mutate({ name: name.trim(), kind, unit, cap: cap ?? 0, period, ...(kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' ? { general } : {}) });
   };
 
   return (
@@ -244,6 +247,7 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               )}
             </Field>
           </div>
+          {kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
@@ -264,13 +268,15 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
  */
 function budgetItemEdit(
   item: BudgetItemOut['item'],
-  form: { name: string; cap: number | null; period: BudgetPeriod },
+  form: { name: string; cap: number | null; period: BudgetPeriod; general: boolean },
 ): UpdateBudgetItemInput {
   const input: UpdateBudgetItemInput = {};
   const name = form.name.trim();
   if (name !== item.name.trim()) input.name = name;
   if (form.cap !== null && form.cap !== item.cap) input.cap = form.cap;
   if (form.period !== item.period) input.period = form.period;
+  const general = item.kind === 'ad_budget' && item.unit.kind === 'currency' && form.period !== 'total' && form.general;
+  if (general !== Boolean(item.general)) input.general = general;
   return input;
 }
 
@@ -281,6 +287,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
   const [name, setName] = useState('');
   const [cap, setCap] = useState<number | null>(null);
   const [period, setPeriod] = useState<BudgetPeriod>('monthly');
+  const [general, setGeneral] = useState(false);
   const save = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateBudgetItemInput }) => updateBudgetItem(id, input),
     onSuccess: async () => {
@@ -289,6 +296,8 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
         queryClient.invalidateQueries({ queryKey: CAPABILITIES_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['budget-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget', 'breakdown'] }),
       ]);
     },
   });
@@ -297,12 +306,13 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
     setName(entry?.item.name ?? '');
     setCap(entry?.item.cap ?? null);
     setPeriod(entry?.item.period ?? 'monthly');
+    setGeneral(Boolean(entry?.item.general));
     save.reset();
   }, [entry?.item.id]);
 
   if (!entry) return null;
   const { item } = entry;
-  const input = budgetItemEdit(item, { name, cap, period });
+  const input = budgetItemEdit(item, { name, cap, period, general });
   const changed = Object.keys(input).length > 0;
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -352,6 +362,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
               )}
             </Field>
           </div>
+          {item.kind === 'ad_budget' && item.unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
@@ -529,6 +540,7 @@ export function BudgetPage() {
   const queryClient = useQueryClient();
   const session = useSession();
   const canManage = can(session.data, 'budget.manage');
+  const breakdown = useBudgetBreakdown();
   const items = useQuery({ queryKey: ITEMS_KEY, queryFn: listBudgetItems });
   const [creating, setCreating] = useState(false);
   const [spendFor, setSpendFor] = useState<BudgetItemOut | null>(null);
@@ -542,6 +554,8 @@ export function BudgetPage() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ITEMS_KEY }),
         queryClient.invalidateQueries({ queryKey: CAPABILITIES_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['budget-items'] }),
+        queryClient.invalidateQueries({ queryKey: ['budget', 'breakdown'] }),
       ]);
     },
     onError: (err) => toast.error(errorMessage(t, err)),
@@ -563,11 +577,14 @@ export function BudgetPage() {
           ) : null
         }
       />
+      <BreakdownPeriod view={breakdown} />
       <QueryState query={items}>
         {(items.data ?? []).length === 0 ? (
           <EmptyState title={t('budget.empty')} description={t('budget.emptyBody')} />
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+          <div className="min-w-0 space-y-2">
+            <p className="text-caption text-muted-foreground md:hidden">{t('budget.workbench.scrollHint', { defaultValue: 'Diğer sütunları görmek için tabloyu yatay kaydırın.' })}</p>
+            <div role="region" aria-label={t('budget.title')} tabIndex={0} className="relative w-full min-w-0 overflow-x-auto rounded-xl border border-border bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
             <Table>
               <THead>
                 <TR>
@@ -589,14 +606,14 @@ export function BudgetPage() {
                   const over = entry.remaining < 0;
                   const retired = item.retired_at !== null;
                   return (
-                    <TR
-                      key={item.id}
+                    <Fragment key={item.id}><TR
                       data-retired={retired || undefined}
                       className={cn(retired && 'text-muted-foreground opacity-60')}
                     >
                       <TD className={cn('font-medium', retired ? 'text-muted-foreground' : 'text-foreground')}>
                         <span className="flex flex-col gap-0.5">
                           {item.name}
+                          {item.general && <span className="text-xs text-muted-foreground">{t('budgetSpending.general')}</span>}
                           {retired && (
                             <span className="text-caption font-normal">
                               {t('budget.retiredOn', { date: formatDateTime(item.retired_at, i18n.language) })}
@@ -645,13 +662,17 @@ export function BudgetPage() {
                         </span>
                       </TD>
                     </TR>
+                    {breakdown.valid && breakdown.query.data && <TR><TD colSpan={8}><ItemSpending unit={item.unit} item={breakdown.query.data.items.find(b => b.item_id === item.id)} /></TD></TR>}
+                    </Fragment>
                   );
                 })}
               </TBody>
             </Table>
+            </div>
           </div>
         )}
       </QueryState>
+      {breakdown.query.data && <SpendingStops stop={breakdown.query.data.stop} manage={canManage} />}
       {canManage && (
         <>
           <CreateItemDialog open={creating} onOpenChange={setCreating} />

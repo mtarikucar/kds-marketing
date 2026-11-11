@@ -107,6 +107,33 @@ fn request_keys_name_their_trigger() {
     );
 }
 
+#[test]
+fn a_project_request_is_a_named_single_channel_generic_output() {
+    let mut project = PackageRequest {
+        key: format!("project:{}:{}", id(11), id(12)),
+        olay_id: None,
+        capability_id: Some(CapabilityId(id(9))),
+        hints: PackageHints {
+            max_posts: Some(1),
+            subject: Some(Subject::Generic),
+            ..Default::default()
+        },
+        ..request(PackageTrigger::Project)
+    };
+    assert!(project.validate().is_ok());
+    assert_eq!(project.trigger.key(), "project");
+    assert!(project.covers(CapabilityId(id(9))));
+    assert!(!project.covers(CapabilityId(id(10))));
+    project.key = "floor:not-a-project".into();
+    assert!(project.validate().is_err());
+    project.key = format!("project:{}:{}", id(11), id(12));
+    project.olay_id = Some(OlayId(id(3)));
+    assert!(project.validate().is_err());
+    project.olay_id = None;
+    project.hints.max_posts = Some(2);
+    assert!(project.validate().is_err());
+}
+
 fn post() -> PlannedPost {
     PlannedPost {
         slot_id: SlotId(id(1)),
@@ -170,8 +197,10 @@ fn each_format_takes_the_media_its_adapter_publishes() {
     assert!(media_types_ok(FeedPost, "linkedin_member", &[mp4]));
     assert!(media_types_ok(TiktokVideo, "tiktok", &[mp4]));
     assert!(!media_types_ok(TiktokVideo, "tiktok", &[png]));
-    // Nothing for a story, an unsupported pair or no media.
-    assert!(!media_types_ok(Story, "instagram", &[png]));
+    // A story is an image or a video on Instagram (its own rule says which: a JPEG), nothing on
+    // a Page; nothing for an unsupported pair or no media.
+    assert!(media_types_ok(Story, "instagram", &[png]));
+    assert!(!media_types_ok(Story, "facebook_page", &[png]));
     assert!(!media_types_ok(Reel, "facebook_page", &[mp4]));
     assert!(!media_types_ok(FeedPost, "x", &[]));
     assert_eq!(PostRefusal::MediaType.code(), "media_type");
@@ -256,7 +285,7 @@ fn formats_rank_by_their_mean_reward_for_the_olay_kind() {
         outcome(Carousel, w, 1, f64::NAN),
     ];
     let scores = format_scores(&outcomes, w);
-    // Reels and carousels tie at 0.3: more posts first. Stories are published nowhere: never
+    // Reels and carousels tie at 0.3: more posts first. Stories are never measured (D60): never
     // ranked.
     assert_eq!(
         scores.iter().map(|s| s.format).collect::<Vec<_>>(),

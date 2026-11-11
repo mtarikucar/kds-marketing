@@ -44,8 +44,102 @@ pub struct PieceMaterials {
     pub uses: Vec<PieceMaterial>,
 }
 
+/// Analysis is an external agent's durable work, never an implicit server vision call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateSource {
+    #[default]
+    Unknown,
+    Exif,
+    FileModified,
+    AgentInferred,
+    Manual,
+}
+
+/// Public metadata. Lease credentials are deliberately held separately.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterialIntelligence {
+    pub status: AnalysisStatus,
+    #[serde(default)]
+    pub manual_fields: std::collections::BTreeSet<String>,
+    pub description: String,
+    pub group_name: Option<String>,
+    pub date_source: DateSource,
+    pub attempts: u32,
+    pub analyzed_revision: Option<u64>,
+    pub last_error_code: Option<String>,
+    #[serde(with = "jt_studio::time_compat::option")]
+    pub analyzed_at: Option<OffsetDateTime>,
+    #[serde(with = "jt_studio::time_compat")]
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterialAnalysisLease {
+    pub token_hash: String,
+    pub owner: jt_tenancy::AgentConnectionId,
+    pub material_revision: u64,
+    #[serde(with = "jt_studio::time_compat")]
+    pub expires_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterialAnalysisRecord {
+    pub material_id: MaterialId,
+    pub intelligence: MaterialIntelligence,
+    pub lease: Option<MaterialAnalysisLease>,
+}
+
+impl MaterialAnalysisRecord {
+    pub fn pending(material_id: MaterialId, now: OffsetDateTime, date_source: DateSource) -> Self {
+        Self {
+            material_id,
+            lease: None,
+            intelligence: MaterialIntelligence {
+                status: AnalysisStatus::Pending,
+                manual_fields: Default::default(),
+                description: String::new(),
+                group_name: None,
+                date_source,
+                attempts: 0,
+                analyzed_revision: None,
+                last_error_code: None,
+                analyzed_at: None,
+                updated_at: now,
+            },
+        }
+    }
+    pub fn claimable(&self, now: OffsetDateTime) -> bool {
+        self.intelligence.status == AnalysisStatus::Pending
+            || (self.intelligence.status == AnalysisStatus::Running
+                && self
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.expires_at <= now))
+    }
+}
+
 #[async_trait]
 pub trait MaterialRepo: Send + Sync {
+    /// Caller holds the Studio control lock for writes. Rows are scoped to the tenant and
+    /// reference an existing material; private lease hashes never belong in API responses.
+    async fn get_intelligence(
+        &mut self,
+        id: MaterialId,
+    ) -> Result<Option<MaterialAnalysisRecord>, AppError>;
+    async fn list_intelligence(&mut self) -> Result<Vec<MaterialAnalysisRecord>, AppError>;
+    async fn save_intelligence(&mut self, row: MaterialAnalysisRecord) -> Result<(), AppError>;
+    async fn delete_intelligence(&mut self, id: MaterialId) -> Result<(), AppError>;
+
     /// `CONFLICT` when the id is taken.
     async fn insert_olay(&mut self, olay: Olay) -> Result<(), AppError>;
     /// Replaces the olay stored at `expected_revision` (`CONFLICT` otherwise) by `olay`, whose

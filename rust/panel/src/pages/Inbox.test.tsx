@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { USER_ID, WS_ID } from '@/test/fixtures';
@@ -141,6 +141,7 @@ describe('Inbox', () => {
   it('event_forms_match_tool_schema', async () => {
     const calls = await openConversation();
     const user = userEvent.setup();
+    await user.click(screen.getByText('Olay kaydet', { selector: 'summary' }));
     const form = await screen.findByRole('form', { name: 'Olay kaydet' });
     const select = within(form).getByLabelText('Olay');
     const submit = within(form).getByRole('button', { name: 'Olay kaydet' });
@@ -196,6 +197,7 @@ describe('Inbox', () => {
     };
     const calls = await openConversation(answers);
     const user = userEvent.setup();
+    await user.click(await screen.findByText('Birleştirmeler', { selector: 'summary', exact: false }));
     const apply = await screen.findByRole('button', { name: 'Birleştir' });
     answers['GET /api/inbox/merges'] = [{ ...merge, status: 'applied' }];
     await user.click(apply);
@@ -297,6 +299,7 @@ it('Inbox owner, task and note forms send exact bodies', async () => {
   const user = userEvent.setup();
   await user.selectOptions(await screen.findByLabelText('Yolculuk sahibi'), '');
   await waitFor(() => expect(calls.find((c) => c.path.endsWith('/owner'))?.body).toEqual({ user_id: null }));
+  await user.click(screen.getByText('Görev ekle', { selector: 'summary' }));
   await user.type(screen.getByLabelText('Görev başlığı'), 'Tekrar ara');
   fireEvent.change(screen.getByLabelText('Son tarih (yerel saat)'), {
     target: { value: '2026-12-01T10:30' },
@@ -309,11 +312,52 @@ it('Inbox owner, task and note forms send exact bodies', async () => {
       assignee: null,
     }),
   );
+  await user.click(screen.getByText('Not ekle', { selector: 'summary' }));
   await user.type(screen.getByLabelText('Yeni not'), 'Öğleden sonra uygun.');
   await user.click(screen.getByRole('button', { name: 'Not ekle' }));
   await waitFor(() =>
     expect(calls.find((c) => c.path.endsWith('/notes'))?.body).toEqual({ text: 'Öğleden sonra uygun.' }),
   );
+});
+
+it('keeps existing follow-up work visible while secondary forms open on demand and retain drafts', async () => {
+  await openConversation({ ...inboxAnswers,
+    'GET /api/inbox/merges': [merge],
+    'GET /api/inbox/journeys/journey-1': { journey, events: [], notes: [], tasks: [
+      { id: 'task-open', title: 'Bugün teklif dönüşünü kontrol et', status: 'open', due_at: '2026-12-01T10:30:00Z', assignee: null },
+    ] },
+  });
+  expect(await screen.findByText('Bugün teklif dönüşünü kontrol et')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Tamamla' })).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Birleştir' })).not.toBeVisible();
+  expect(screen.getByRole('textbox', { name: 'Yanıtınız' })).toBeVisible();
+  expect(screen.getByRole('form', { name: 'Olay kaydet' })).not.toBeVisible();
+  expect(screen.getByRole('form', { name: 'Görev ekle' })).not.toBeVisible();
+  const user = userEvent.setup();
+  const addTask = screen.getByText('Görev ekle', { selector: 'summary' });
+  await user.click(addTask);
+  await user.type(screen.getByLabelText('Görev başlığı'), 'Taslak takip işi');
+  await user.click(addTask);
+  expect(screen.getByRole('form', { name: 'Görev ekle' })).not.toBeVisible();
+  await user.click(addTask);
+  expect(screen.getByLabelText('Görev başlığı')).toHaveValue('Taslak takip işi');
+});
+
+it('lets the compact queue browser retain search text and resets it closed after selecting another record', async () => {
+  mockFetch(inboxAnswers);
+  const { router } = renderAt('/inbox/conv-1');
+  await screen.findByRole('textbox', { name: 'Yanıtınız' });
+  const browser = screen.getByRole('button', { name: 'Kuyruklar ve kişi araması' });
+  expect(browser).toHaveAttribute('aria-expanded', 'false');
+  const user = userEvent.setup();
+  await user.click(browser);
+  expect(browser).toHaveAttribute('aria-expanded', 'true');
+  await user.type(screen.getByRole('searchbox', { name: 'Kişi ara' }), 'Deniz');
+  await user.click(browser);
+  await user.click(browser);
+  expect(screen.getByRole('searchbox', { name: 'Kişi ara' })).toHaveValue('Deniz');
+  await act(async () => { await router.navigate('/inbox?person=person-1'); });
+  await waitFor(() => expect(browser).toHaveAttribute('aria-expanded', 'false'));
 });
 
 it('Inbox merges page refuses suggestions and reports guarded undo conflicts', async () => {

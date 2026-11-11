@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  EmptyState,
   PageHeader,
 } from '@/components/ui';
 import { selectClass, useInboxKey, useInboxMutation } from './InboxShared';
@@ -53,12 +54,16 @@ function MergeCard({ row }: { row: InboxMerge }) {
   return (
     <article
       id={`merge-${row.id}`}
-      className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-surface-muted p-3 text-sm [overflow-wrap:anywhere]"
+      className="flex min-w-0 flex-col gap-4 border-b border-border bg-surface px-5 py-6 text-sm [overflow-wrap:anywhere]"
     >
-      <h3 className="font-semibold">{t('inbox.merges.suggestion')}</h3>
-      <p>
-        {sourceName} / {targetName}
-      </p>
+      <h3 className="font-display text-lg font-normal">{t('inbox.merges.suggestion')}</h3>
+      <QueryState query={source}>
+        <QueryState query={target}>
+          <p className="border-l-2 border-brand-accent py-1 pl-3 font-medium leading-6">
+            {sourceName} / {targetName}
+          </p>
+        </QueryState>
+      </QueryState>
       <Badge className="self-start">
         {t(`inbox.merges.status.${row.status}`, { defaultValue: row.status })}
       </Badge>
@@ -69,7 +74,7 @@ function MergeCard({ row }: { row: InboxMerge }) {
       </ul>
       {row.status === 'suggested' && (
         <>
-          <label>
+          <label className="flex flex-col gap-2">
             {t('inbox.merges.keep')}
             <select className={selectClass} value={keep} onChange={(e) => setKeep(e.target.value)}>
               <option value={row.target_id}>{targetName}</option>
@@ -94,6 +99,7 @@ function MergeCard({ row }: { row: InboxMerge }) {
           onClick={() => {
             setUndoOpen(true);
             setConfirmation('');
+            undo.reset();
           }}
         >
           {t('inbox.merges.undo')}
@@ -106,19 +112,20 @@ function MergeCard({ row }: { row: InboxMerge }) {
           if (!undo.isPending) setUndoOpen(open);
         }}
       >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md" dismissible={!undo.isPending}>
+          <DialogHeader className="pr-7">
             <DialogTitle>{t('inbox.merges.undo')}</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="leading-6">
               {t('inbox.merges.confirmHint', { phrase: t('inbox.merges.confirmPhrase') })}
             </DialogDescription>
           </DialogHeader>
-          <label className="text-sm">
+          <label className="flex flex-col gap-3 rounded-lg border border-warning bg-warning-subtle p-4 text-sm leading-6">
             {t('inbox.merges.confirmLabel')}
             <Input
               value={confirmation}
               onChange={(e) => setConfirmation(e.target.value)}
               autoComplete="off"
+              disabled={undo.isPending}
             />
           </label>
           <ErrorCallout error={undo.error} />
@@ -144,22 +151,25 @@ function MergeCard({ row }: { row: InboxMerge }) {
 }
 
 export function InboxMergeBanner({ personId }: { personId: string }) {
+  const { t } = useTranslation();
   const key = useInboxKey();
   const session = useSession();
   const allowed = can(session.data, 'inbox.manage');
   const merges = useQuery({ queryKey: [...key, 'merges'], queryFn: api.listMerges, enabled: allowed });
   if (!allowed) return null;
+  const rows = merges.data?.filter((row) =>
+    (row.source_id === personId || row.target_id === personId) && ['suggested', 'applied'].includes(row.status),
+  ) ?? [];
   return (
     <QueryState query={merges}>
-      {merges.data
-        ?.filter(
-          (row) =>
-            (row.source_id === personId || row.target_id === personId) &&
-            ['suggested', 'applied'].includes(row.status),
-        )
-        .map((row) => (
+      {rows.length > 0 && <details className="border-t border-border pt-3">
+        <summary className="cursor-pointer text-sm font-medium">{t('inbox.merges.title')} <span className="ml-2 text-caption font-normal tabular-nums text-muted-foreground">{rows.length}</span></summary>
+        <div className="pt-3">
+        {rows.map((row) => (
           <MergeCard key={row.id} row={row} />
         ))}
+        </div>
+      </details>}
     </QueryState>
   );
 }
@@ -196,7 +206,7 @@ export function InboxMerges() {
             <MergeCard key={row.id} row={row} />
           ))}
         </div>
-        {rows?.length === 0 && <p className="text-muted-foreground">{t('inbox.merges.empty')}</p>}
+        {rows?.length === 0 && <EmptyState className="rounded-none border-x-0" title={t('inbox.merges.empty')} action={<Button asChild variant="outline"><Link to="/inbox">{t('inbox.title')}</Link></Button>} />}
       </QueryState>
     </>
   );

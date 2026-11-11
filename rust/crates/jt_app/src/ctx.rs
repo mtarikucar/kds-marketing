@@ -39,6 +39,24 @@ impl Ctx {
         })
     }
 
+    /// Requires at least one of `any`; an empty set never grants access. A set of one answers
+    /// exactly as [`Self::require`] does (`details.permission`), so that a use case with a single
+    /// permission refuses the same way over the panel and MCP; a larger set names every key that
+    /// would have sufficed in `details.permissions`.
+    pub fn require_any(&self, any: &[Permission]) -> Result<(), AppError> {
+        if let [only] = any {
+            return self.require(*only);
+        }
+        if any.iter().any(|p| self.permissions.contains(p)) {
+            return Ok(());
+        }
+        Err(AppError {
+            code: ErrorCode::Forbidden,
+            message: "missing module permission".into(),
+            details: json!({"permissions": any.iter().map(Permission::key).collect::<Vec<_>>()}),
+        })
+    }
+
     /// Whether the caller's role is `owner` or `manager` (for an agent, its issuer's role). No
     /// role known never counts.
     pub fn is_owner_or_manager(&self) -> bool {

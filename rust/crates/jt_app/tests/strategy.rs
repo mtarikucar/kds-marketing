@@ -135,6 +135,17 @@ impl TenantRepos for SpyTenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
+        self.inner.studio_projects()
+    }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self.inner.ads()
+    }
+    fn studio_productions(
+        &mut self,
+    ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
+        self.inner.studio_productions()
+    }
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self.inner.studio_materials()
     }
@@ -192,9 +203,6 @@ impl TenantRepos for SpyTenant {
     }
     fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
         self.inner.appointments()
-    }
-    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
-        self.inner.commissions()
     }
     fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {
         self.inner.erasure()
@@ -2547,4 +2555,76 @@ async fn approval_creates_one_standing_task_per_icp_entry() {
             .count(),
         2
     );
+}
+
+/// Design 2026-11-10 B53: a strategy written the usual way names no cadence on its hypotheses,
+/// and the posting engine takes a post only for a hypothesis with an organic one.
+#[tokio::test]
+async fn submitting_gives_a_hypothesis_that_names_no_organic_cadence_the_default_one() {
+    let organic = |v: &VersionOut, title: &str| {
+        let h = v
+            .hypotheses
+            .iter()
+            .find(|h| h.title == title)
+            .unwrap_or_else(|| panic!("{title}"));
+        serde_json::to_value(&h.cadence).unwrap()["organic"].clone()
+    };
+    let hypotheses = json!([
+        {"title":"plain","segment_key":"students","angle":"a","channel":"instagram",
+         "metric":"dm","prior_confidence":0.6},
+        {"title":"named","segment_key":"students","angle":"b","channel":"instagram",
+         "metric":"dm","prior_confidence":0.6,
+         "cadence":{"organic":{"slots_per_week":2,
+            "content_types":[{"key":"story","min_bps":0,"max_bps":10000}]}}},
+        {"title":"silent","segment_key":"students","angle":"c","channel":"instagram",
+         "metric":"dm","prior_confidence":0.6,
+         "cadence":{"organic":{"slots_per_week":0,"content_types":[]}}},
+    ]);
+
+    // The strategy posts three times a week: the hypothesis that says nothing posts, with one
+    // content type; what a hypothesis says itself stays, "no posts" included.
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    let draft = strategy::set_hypotheses(&w.deps, &w.owner_ctx, hypotheses.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        organic(&draft, "plain"),
+        Value::Null,
+        "nothing before it is submitted"
+    );
+    let submitted = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(
+        organic(&submitted, "plain"),
+        json!({"slots_per_week":3,"exploration_bps":0,
+            "content_types":[{"key":"general","min_bps":0,"max_bps":10000}]})
+    );
+    assert_eq!(organic(&submitted, "named")["slots_per_week"], 2);
+    assert_eq!(
+        organic(&submitted, "named")["content_types"][0]["key"],
+        "story"
+    );
+    assert_eq!(organic(&submitted, "silent")["slots_per_week"], 0);
+    // It is what is approved, and submitting again changes nothing more.
+    let approved = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    assert_eq!(organic(&approved, "plain"), organic(&submitted, "plain"));
+
+    // A strategy that posts nothing (no posts a week) gives no hypothesis a cadence.
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "cadence".to_owned(),
+        json!({"per_week":0,"channel_mix":[]}),
+    )
+    .await
+    .unwrap();
+    strategy::set_hypotheses(&w.deps, &w.owner_ctx, hypotheses)
+        .await
+        .unwrap();
+    let submitted = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(organic(&submitted, "plain"), Value::Null);
 }

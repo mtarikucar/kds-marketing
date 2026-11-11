@@ -221,6 +221,19 @@ pub trait StudioRepo: Send + Sync {
         let _ = (slot, now);
         Err(AppError::internal("targeted publication claim unsupported"))
     }
+    /// Claims the Ready slot `slot`, whose time has not come, to leave its post with the
+    /// provider's own scheduler until `at` (design 2026-11-10 §7.3): the slot's one attempt, under
+    /// the same fence as [`Self::claim_publication_for`], with the daily operation cap counted on
+    /// the day the post goes out. Unsupported wrappers fail closed.
+    async fn claim_publication_held(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+        at: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        let _ = (slot, now, at);
+        Err(AppError::internal("held publication claim unsupported"))
+    }
     /// Record when completion was observed; replay keeps the first observation unchanged.
     async fn finish_publication(
         &mut self,
@@ -264,12 +277,6 @@ pub trait StudioBudgetRepo: Send + Sync {
 }
 #[async_trait]
 pub trait StudioControlRepo: Send + Sync {
-    async fn set_policy(
-        &mut self,
-        expected_revision: u64,
-        lane: LaneKind,
-        requires_human_approval: bool,
-    ) -> Result<StudioControl, AppError>;
     async fn binding_control(
         &mut self,
         id: AdSetBindingId,
@@ -282,6 +289,20 @@ pub trait StudioControlRepo: Send + Sync {
         expected_revision: u64,
         lane: Option<LaneKind>,
         engaged: bool,
+    ) -> Result<StudioControl, AppError>;
+    /// What spending a person stopped, read without a lock: for a check before a spend that is
+    /// not a reservation (a call about to be placed).
+    async fn spend_stop(&mut self) -> Result<jt_studio::SpendStop, AppError>;
+    /// Stores what spending a person stopped (design 2026-11-10 S7) and, when `paid_brake` is
+    /// given, the paid lane's brake with it, as one change of the control at
+    /// `expected_revision` (`CONFLICT` when it moved). `release_workspace_brake` also clears the
+    /// workspace-wide brake: letting all spending go on leaves nothing stopped.
+    async fn set_spend_stop(
+        &mut self,
+        expected_revision: u64,
+        stop: jt_studio::SpendStop,
+        paid_brake: Option<bool>,
+        release_workspace_brake: bool,
     ) -> Result<StudioControl, AppError>;
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -8,9 +8,14 @@ import type { InboxAuthor } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 
-export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm';
+export const selectClass = 'w-full min-w-0 rounded-md border border-input bg-surface px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 export const columnClass =
-  'min-w-0 rounded-xl border border-border bg-card p-4 flex flex-col gap-4 [overflow-wrap:anywhere]';
+  'min-w-0 border-t border-border bg-surface p-4 sm:p-5 flex flex-col gap-4 [overflow-wrap:anywhere]';
+/** The inbox is one working surface. These panes share dividers, never individual card frames. */
+export const conversationClass =
+  'min-w-0 flex flex-col gap-4 bg-surface px-4 py-4 sm:px-6 lg:min-h-0 lg:overflow-y-auto [overflow-wrap:anywhere]';
+export const journeyClass =
+  'inbox-journey min-w-0 flex flex-col gap-4 border-t border-border bg-surface-muted/60 px-4 py-4 text-sm lg:max-h-72 lg:overflow-y-auto xl:max-h-none xl:min-h-0 xl:border-l xl:border-t-0 [overflow-wrap:anywhere]';
 export function useInboxKey() {
   const session = useSession();
   return ['inbox', session.data?.current_workspace] as const;

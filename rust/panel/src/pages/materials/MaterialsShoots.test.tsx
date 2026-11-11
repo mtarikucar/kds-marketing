@@ -15,7 +15,7 @@ const dates = shoot('r3', {
   week_start: dayFrom(-14),
 });
 const answers = { ...materialsAnswers, 'GET /api/studio/shoot-requests': [older, thisWeek, dates] };
-const open = () => renderAt('/studio?tab=materials&view=shoots');
+const open = () => renderAt('/materials?view=shoots');
 
 describe('Materyaller · Çekim listesi', () => {
   it("lists this week's open requests first, then the older ones", async () => {
@@ -73,7 +73,7 @@ describe('Materyaller · Çekim listesi', () => {
   });
 
   it('leads a missing-dates request to its calendar year', async () => {
-    mockFetch({ ...answers, 'GET /api/studio/calendar': { year: 2027, entries: [], rows: [], policy: { lead_days: 21, reuse_days: 14, recap_days: 30 } } });
+    mockFetch({ ...answers, 'GET /api/studio/calendar': { year: 2027, entries: [], rows: [], policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: true } } });
     const { router } = open();
     await userEvent.click(await within(await screen.findByTestId('shoot-r3')).findByRole('button', { name: 'Takvime git' }));
     await screen.findByTestId('materials-calendar');

@@ -6,22 +6,13 @@ use crate::{
 };
 use axum::{Json, extract::State};
 use jt_app::ports::studio::StudioControl;
-use jt_app::usecases::studio::control::{
-    self, ApprovalInput, ApprovalOut, BrakeInput, StudioPolicyInput,
-};
+use jt_app::usecases::studio::control::{self, ApprovalInput, ApprovalOut, BrakeInput};
 pub async fn brake(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<BrakeInput>,
 ) -> Result<Json<StudioControl>, ApiError> {
     Ok(Json(control::brake(&s.deps, &ctx, body).await?))
-}
-pub async fn policy_set(
-    State(s): State<AppState>,
-    WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiJson(body): ApiJson<StudioPolicyInput>,
-) -> Result<Json<StudioControl>, ApiError> {
-    Ok(Json(control::policy_set(&s.deps, &ctx, body).await?))
 }
 pub async fn approve(
     State(s): State<AppState>,
@@ -240,7 +231,7 @@ use jt_app::usecases::studio::library;
 
 /// The JSON `body` with the path's `fields` added, read as `T`: a path field in the body is
 /// `VALIDATION`.
-fn path_body<T: serde::de::DeserializeOwned>(
+pub(super) fn path_body<T: serde::de::DeserializeOwned>(
     mut body: serde_json::Value,
     fields: &[(&str, serde_json::Value)],
 ) -> Result<T, ApiError> {
@@ -318,6 +309,49 @@ pub async fn material_get(
 ) -> Result<Json<library::MaterialDetail>, ApiError> {
     Ok(Json(
         library::material_get(&s.deps, &ctx, library::MaterialIdInput { material_id }).await?,
+    ))
+}
+pub async fn material_intelligence_get(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(material_id): ApiPath<MaterialId>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<library::MaterialIntelligenceOut>, ApiError> {
+    Ok(Json(
+        library::material_intelligence_get(&s.deps, &ctx, library::MaterialIdInput { material_id })
+            .await?,
+    ))
+}
+pub async fn material_preview(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(material_id): ApiPath<MaterialId>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<library::MaterialPreview>, ApiError> {
+    Ok(Json(
+        library::material_preview(&s.deps, &ctx, library::MaterialIdInput { material_id }).await?,
+    ))
+}
+pub async fn material_intelligence_update(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<MaterialId>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<library::MaterialIntelligenceOut>, ApiError> {
+    let input = path_body(body, &[("material_id", serde_json::json!(id))])?;
+    Ok(Json(
+        library::material_intelligence_update(&s.deps, &ctx, input).await?,
+    ))
+}
+pub async fn material_analysis_retry(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<MaterialId>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<library::MaterialIntelligenceOut>, ApiError> {
+    let input = path_body(body, &[("material_id", serde_json::json!(id))])?;
+    Ok(Json(
+        library::material_analysis_retry(&s.deps, &ctx, input).await?,
     ))
 }
 pub async fn material_add(
@@ -412,11 +446,12 @@ pub async fn calendar_set(
     )?;
     Ok(Json(library::calendar_set(&s.deps, &ctx, input).await?))
 }
-/// A human owner or manager sets the materials policy (`{lead_days, reuse_days, recap_days}`).
+/// A human owner or manager sets the materials policy (`{lead_days, reuse_days, recap_days}`, and
+/// `ai_standalone` when it changes).
 pub async fn material_policy_set(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiJson(body): ApiJson<MaterialPolicy>,
+    ApiJson(body): ApiJson<library::MaterialPolicyInput>,
 ) -> Result<Json<MaterialPolicy>, ApiError> {
     Ok(Json(
         library::material_policy_set(&s.deps, &ctx, body).await?,
@@ -499,4 +534,137 @@ pub async fn posting_policy_set(
     ApiJson(body): ApiJson<PostingSettings>,
 ) -> Result<Json<PostingSettings>, ApiError> {
     Ok(Json(posts::posting_policy_set(&s.deps, &ctx, body).await?))
+}
+
+/// Batched public metadata, avoiding a per-card query in the materials library.
+pub async fn material_intelligence_list(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<Vec<library::MaterialIntelligenceOut>>, ApiError> {
+    Ok(Json(
+        library::material_intelligence_list(&s.deps, &ctx).await?,
+    ))
+}
+pub async fn material_production_list(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<library::MaterialProductionQuery>,
+) -> Result<Json<Vec<jt_app::ports::material_productions::MaterialProduction>>, ApiError> {
+    Ok(Json(
+        library::material_production_list(&s.deps, &ctx, q).await?,
+    ))
+}
+pub async fn material_production_request(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<library::MaterialProductionRequestInput>,
+) -> Result<Json<jt_app::ports::material_productions::MaterialProduction>, ApiError> {
+    Ok(Json(
+        library::material_production_request(&s.deps, &ctx, body).await?,
+    ))
+}
+
+use jt_app::ports::production_projects::ProductionProject;
+use jt_app::usecases::studio::{project_schedule as schedule, projects};
+pub async fn project_list(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(q): ApiQuery<projects::ProjectQuery>,
+) -> Result<Json<projects::ProjectListOut>, ApiError> {
+    Ok(Json(projects::project_list(&s.deps, &ctx, q).await?))
+}
+pub async fn project_get(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiQuery(_): ApiQuery<work::EmptyInput>,
+) -> Result<Json<projects::ProjectDetail>, ApiError> {
+    Ok(Json(
+        projects::project_get(&s.deps, &ctx, projects::ProjectIdInput { project_id: id }).await?,
+    ))
+}
+pub async fn project_create(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(i): ApiJson<projects::ProjectCreateInput>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    Ok(Json(projects::project_create(&s.deps, &ctx, i).await?))
+}
+pub async fn project_update(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    let i = path_body(body, &[("project_id", serde_json::json!(id))])?;
+    Ok(Json(projects::project_update(&s.deps, &ctx, i).await?))
+}
+pub async fn project_materials(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    let i = path_body(body, &[("project_id", serde_json::json!(id))])?;
+    Ok(Json(projects::project_materials(&s.deps, &ctx, i).await?))
+}
+pub async fn project_request(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    let i = path_body(body, &[("project_id", serde_json::json!(id))])?;
+    Ok(Json(projects::project_request(&s.deps, &ctx, i).await?))
+}
+pub async fn project_production(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<projects::ProjectProductionOut>, ApiError> {
+    let i = path_body(body, &[("project_id", serde_json::json!(id))])?;
+    Ok(Json(projects::project_production(&s.deps, &ctx, i).await?))
+}
+pub async fn project_publication(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<uuid::Uuid>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    let i = path_body(body, &[("project_id", serde_json::json!(id))])?;
+    Ok(Json(projects::project_publication(&s.deps, &ctx, i).await?))
+}
+pub async fn project_request_update(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath((project, request)): ApiPath<(uuid::Uuid, uuid::Uuid)>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<ProductionProject>, ApiError> {
+    let i = path_body(
+        body,
+        &[
+            ("project_id", serde_json::json!(project)),
+            ("request_id", serde_json::json!(request)),
+        ],
+    )?;
+    Ok(Json(
+        projects::project_request_update(&s.deps, &ctx, i).await?,
+    ))
+}
+pub async fn project_schedule(
+    State(s): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath((project, output)): ApiPath<(uuid::Uuid, uuid::Uuid)>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<schedule::ProjectScheduleOut>, ApiError> {
+    let i = path_body(
+        body,
+        &[
+            ("project_id", serde_json::json!(project)),
+            ("output_id", serde_json::json!(output)),
+        ],
+    )?;
+    Ok(Json(schedule::project_schedule(&s.deps, &ctx, i).await?))
 }

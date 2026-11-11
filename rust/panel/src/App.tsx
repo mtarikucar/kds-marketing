@@ -1,6 +1,11 @@
+import { LegacyRedirect } from '@/layout/LegacyRedirect';
+import { UsersPage } from '@/pages/UsersPage';
+import { ContentPage } from '@/pages/content/ContentPage';
+import { SocialPage } from '@/pages/social/SocialPage';
+import { AdsPage } from '@/pages/ads/AdsPage';
+import { MaterialsPage } from '@/pages/materials/MaterialsPage';
 import { BillingPage } from '@/pages/BillingPage';
 import { OnboardingPage } from '@/pages/OnboardingPage';
-import { StudioPage } from './pages/StudioPage';
 import { Navigate, type RouteObject } from 'react-router-dom';
 import { AppRoot } from '@/layout/AppRoot';
 import { PlatformShell } from '@/layout/PlatformShell';
@@ -8,7 +13,6 @@ import { PublicLayout } from '@/layout/PublicLayout';
 import { Shell } from '@/layout/Shell';
 import { AcceptInvitePage } from '@/pages/AcceptInvitePage';
 import { AgentsPage } from '@/pages/AgentsPage';
-import { ApiKeysPage } from '@/pages/ApiKeysPage';
 import { BudgetPage } from '@/pages/BudgetPage';
 import { CallDetail } from '@/pages/CallDetail';
 import { CallsPage } from '@/pages/CallsPage';
@@ -17,23 +21,21 @@ import { ConnectPage } from '@/pages/ConnectPage';
 import { InboxPage } from '@/pages/InboxPage';
 import { PeoplePage } from '@/pages/PeoplePage';
 import { ProspectsPage } from '@/pages/ProspectsPage';
-import { ProspectDetail } from '@/pages/ProspectDetail';
 import { ResearchTasksPage } from '@/pages/ResearchTasksPage';
 import { OutreachPage } from '@/pages/OutreachPage';
 import { OutreachCampaign } from '@/pages/OutreachCampaign';
 import { OutreachSettings } from '@/pages/OutreachSettings';
 import { OutreachTemplates } from '@/pages/OutreachTemplates';
 import { InboxMerges } from '@/pages/InboxMerges';
-import { InboxCommissions } from '@/pages/InboxCommissions';
 import { HomePage } from '@/pages/HomePage';
-import { LedgerPage } from '@/pages/LedgerPage';
+import { ModulesPage } from '@/pages/modules/ModulesPage';
+import { ModuleDetailPage } from '@/pages/modules/ModuleDetailPage';
+import { ModuleGate } from '@/layout/ModuleGate';
 import { LoginPage } from '@/pages/LoginPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { OAuthCallbackPage } from '@/pages/OAuthCallbackPage';
 import { RegisterPage } from '@/pages/RegisterPage';
-import { RolesPage } from '@/pages/RolesPage';
 import { StrategyPage } from '@/pages/StrategyPage';
-import { TeamPage } from '@/pages/TeamPage';
 import { DistributionPage } from '@/pages/DistributionPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
 import { PaymentsPage } from '@/pages/platform/PaymentsPage';
@@ -81,36 +83,43 @@ export const routes: RouteObject[] = [
         element: <Shell />,
         children: [
           { index: true, element: <HomePage /> },
+          { path: 'modules', element: <ModulesPage /> },
+          { path: 'modules/:moduleId', element: <ModuleDetailPage /> },
+          { path: 'activity', element: <LegacyRedirect to="/" /> },
           { path: 'billing', element: <BillingPage /> },
           { path: 'onboarding', element: <OnboardingPage /> },
-          { path: 'inbox', element: <InboxPage /> },
-          { path: 'inbox/:conversationId', element: <InboxPage /> },
+          { path: 'inbox', element: <ModuleGate moduleId="inbox"><InboxPage /></ModuleGate> },
+          { path: 'inbox/:conversationId', element: <ModuleGate moduleId="inbox"><InboxPage /></ModuleGate> },
           { path: 'inbox/merges', element: <InboxMerges /> },
-          { path: 'inbox/commissions', element: <InboxCommissions /> },
-          { path: 'people', element: <PeoplePage /> },
-          { path: 'prospects', element: <ProspectsPage /> },
-          { path: 'prospects/tasks', element: <ResearchTasksPage /> },
-          { path: 'prospects/:prospectId', element: <ProspectDetail /> },
-          { path: 'outreach', element: <OutreachPage /> },
-          { path: 'outreach/templates', element: <OutreachTemplates /> },
-          { path: 'outreach/settings', element: <OutreachSettings /> },
-          { path: 'outreach/new', element: <OutreachCampaign /> },
-          { path: 'outreach/:campaignId', element: <OutreachCampaign /> },
-          { path: 'calls', element: <CallsPage /> },
-          { path: 'calls/:callId', element: <CallDetail /> },
+          { path: 'people', element: <ModuleGate moduleId="people"><PeoplePage /></ModuleGate> },
+          { path: 'prospects/tasks', element: <ModuleGate moduleId="prospects"><ResearchTasksPage /></ModuleGate> },
+          // One route for the list and a chosen prospect: the page keeps its filters between them.
+          { path: 'prospects/:prospectId?', element: <ModuleGate moduleId="prospects"><ProspectsPage /></ModuleGate> },
+          { path: 'outreach', element: <ModuleGate moduleId="outreach"><OutreachPage /></ModuleGate> },
+          { path: 'outreach/templates', element: <ModuleGate moduleId="outreach"><OutreachTemplates /></ModuleGate> },
+          { path: 'outreach/settings', element: <ModuleGate moduleId="outreach"><OutreachSettings /></ModuleGate> },
+          { path: 'outreach/new', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
+          { path: 'outreach/:campaignId', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
+          { path: 'calls', element: <ModuleGate moduleId="calls"><CallsPage /></ModuleGate> },
+          { path: 'calls/:callId', element: <ModuleGate moduleId="calls"><CallDetail /></ModuleGate> },
           { path: 'strategy', element: <StrategyPage /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },
           // Where a provider sends the browser back after signing in (the OAuth redirect URI).
           { path: 'oauth/callback/:provider', element: <OAuthCallbackPage /> },
           { path: 'budget', element: <BudgetPage /> },
-          { path: 'team', element: <TeamPage /> },
+          { path: 'team', element: <LegacyRedirect to="/users" /> },
           { path: 'team/distribution', element: <DistributionPage /> },
-          { path: 'roles', element: <RolesPage /> },
-          { path: 'api-keys', element: <ApiKeysPage /> },
+          { path: 'roles', element: <LegacyRedirect to="/users" /> },
+          { path: 'api-keys', element: <LegacyRedirect to="/agents" /> },
           { path: 'agents', element: <AgentsPage /> },
-          { path: 'ledger', element: <LedgerPage /> },
-          { path: 'studio', element: <StudioPage /> },
+          { path: 'ledger', element: <LegacyRedirect to="/" /> },
+          { path: 'users', element: <UsersPage /> },
+          { path: 'content', element: <ModuleGate moduleId="content"><ContentPage /></ModuleGate> },
+          { path: 'social', element: <ModuleGate moduleId="social"><SocialPage /></ModuleGate> },
+          { path: 'ads', element: <ModuleGate moduleId="ads"><AdsPage /></ModuleGate> },
+          { path: 'materials', element: <ModuleGate moduleId="materials"><MaterialsPage /></ModuleGate> },
+          { path: 'studio', element: <LegacyRedirect /> },
         ],
       },
       { path: '*', element: <NotFoundPage /> },

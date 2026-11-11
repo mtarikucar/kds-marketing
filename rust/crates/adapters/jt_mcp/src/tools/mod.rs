@@ -5,6 +5,7 @@
 //! a JSON object: an object output as it is, a list under a named key (e.g. `{"members": […]}`)
 //! and an output-less operation as a confirmation (e.g. `{"role_id": …, "deleted": true}`).
 
+mod ads;
 mod agents;
 mod api_keys;
 mod billing;
@@ -12,15 +13,19 @@ mod budget;
 mod calls;
 mod capabilities;
 mod connector;
+mod content;
 mod devices;
 mod distribution;
 mod events;
 mod inbox;
 mod ledger;
+mod modules;
 mod outreach;
+mod projects;
 mod prospects;
 mod research;
 mod roles;
+mod social;
 mod strategy;
 mod studio;
 mod team;
@@ -40,7 +45,7 @@ use crate::registry::ToolRun;
 pub(crate) struct ToolDef {
     pub use_case: &'static str,
     pub description: &'static str,
-    pub permission: Permission,
+    pub permissions: &'static [Permission],
     pub schema: fn() -> Schema,
     pub run: ToolRun,
 }
@@ -49,8 +54,13 @@ pub(crate) struct ToolDef {
 pub(crate) fn definitions() -> Vec<ToolDef> {
     [
         studio::definitions(),
+        projects::definitions(),
+        content::definitions(),
+        social::definitions(),
+        ads::definitions(),
         agents::definitions(),
         workspace::definitions(),
+        modules::definitions(),
         team::definitions(),
         roles::definitions(),
         api_keys::definitions(),

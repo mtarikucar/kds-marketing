@@ -52,7 +52,7 @@ use crate::{
 };
 use jt_capability::Capability;
 use jt_connector::{Credential, provider_for_kind};
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -165,7 +165,12 @@ async fn screen(
     expected: Option<u64>,
 ) -> Result<Screen, AppError> {
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.tiktok_posting"),
+    )
+    .await?;
     let slot = r
         .studio()
         .get_slot(id)
@@ -341,13 +346,15 @@ fn refused(e: TiktokPostRefusal) -> AppError {
     }
 }
 
-/// The posting screen of slot `slot_id` (see the module docs). Requires `studio.manage`.
+/// The posting screen of slot `slot_id` (see the module docs). Requires `social.manage`.
 pub async fn tiktok_posting(
     d: &Deps,
     ctx: &Ctx,
     slot_id: SlotId,
 ) -> Result<TiktokPostingOut, AppError> {
-    ctx.require(Permission::StudioManage)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.tiktok_posting",
+    ))?;
     let s = screen(d, ctx, slot_id, None).await?;
     let (text, media, link, _) = content(&s.piece, &s.capability);
     let previews = previews(d, ctx.workspace_id, media).await?;
@@ -377,16 +384,23 @@ pub async fn tiktok_posting(
 
 /// The counters of TikTok slot `slot_id`'s published post (see the module docs): read live with
 /// the post's historical read authority, else the latest complete measurement's; nothing before
-/// the slot is published. Requires `studio.work`. A read: it publishes nothing.
+/// the slot is published. Requires `social.work`. A read: it publishes nothing.
 pub async fn tiktok_metrics(
     d: &Deps,
     ctx: &Ctx,
     slot_id: SlotId,
 ) -> Result<TiktokMetricsOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.tiktok_metrics",
+    ))?;
     let (publication, measured, access, draft) = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
-        gated(r.as_mut(), ctx).await?;
+        gated(
+            r.as_mut(),
+            ctx,
+            crate::usecases::studio::permissions::for_use_case("studio.tiktok_metrics"),
+        )
+        .await?;
         let slot = r
             .studio()
             .get_slot(slot_id)
@@ -518,6 +532,9 @@ pub async fn tiktok_post(
     ctx: &Ctx,
     input: TiktokPostInput,
 ) -> Result<ApprovalOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.tiktok_post",
+    ))?;
     let user_id = human_approver(ctx)?;
     let s = screen(d, ctx, input.slot_id, Some(input.expected_revision)).await?;
     // Each way out needs its own grant: drafts one a connection made before them lacks.

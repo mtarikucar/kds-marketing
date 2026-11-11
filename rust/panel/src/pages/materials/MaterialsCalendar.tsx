@@ -5,6 +5,7 @@ import * as m from '@/api/materials';
 import { Badge } from '@/components/ui';
 import {
   MaterialsError,
+  MaterialsReadStatus,
   cardClass,
   fieldClass,
   formatRange,
@@ -47,6 +48,7 @@ function EntryForm({
   const save = useMaterialsMutation((row: m.CalendarEntry) => m.calendarSet(row), onDone);
   return (
     <form
+      aria-label={isNew ? t('materials.calendar.add') : entry.name}
       className="grid grid-cols-1 gap-3 rounded-md border border-border p-3 sm:grid-cols-2"
       noValidate
       onSubmit={(e) => {
@@ -165,7 +167,7 @@ function EntryRow({
   const [editing, setEditing] = useState(false);
   const dated = entry.window_start && entry.window_end;
   return (
-    <li className="space-y-2 rounded-md border border-border p-3" data-testid={`calendar-${entry.key}`}>
+    <li className="space-y-3 border-b border-border py-4" data-testid={`calendar-${entry.key}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">{entry.name}</span>
         <span className="flex flex-wrap gap-1">
@@ -196,12 +198,14 @@ function EntryRow({
   );
 }
 
-/** The materials policy (D18): lead, reuse and recap days. */
+/** The materials policy (D18): lead, reuse and recap days, and whether an agent's own visual may
+ * be content's only material (design B39). */
 function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: boolean }) {
   const { t } = useTranslation();
   const [lead, setLead] = useState(String(policy.lead_days));
   const [reuse, setReuse] = useState(String(policy.reuse_days));
   const [recap, setRecap] = useState(String(policy.recap_days));
+  const [aiStandalone, setAiStandalone] = useState(policy.ai_standalone);
   const [invalid, setInvalid] = useState(false);
   const save = useMaterialsMutation((p: m.MaterialPolicy) => m.materialPolicySet(p));
   const field = (label: string, help: string, value: string, set: (v: string) => void) => (
@@ -227,7 +231,7 @@ function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: bo
         const p = { lead_days: days(lead, 90), reuse_days: days(reuse, 365), recap_days: days(recap, 365) };
         const ok = Object.values(p).every((v) => typeof v === 'number');
         setInvalid(!ok);
-        if (ok) save.mutate(p as m.MaterialPolicy);
+        if (ok) save.mutate({ ...p, ai_standalone: aiStandalone } as m.MaterialPolicy);
       }}
     >
       <h4 className="font-semibold">{t('materials.policy.title')}</h4>
@@ -236,6 +240,19 @@ function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: bo
         {field(t('materials.policy.reuse'), t('materials.policy.reuseHelp'), reuse, setReuse)}
         {field(t('materials.policy.recap'), t('materials.policy.recapHelp'), recap, setRecap)}
       </div>
+      <label className="flex items-start gap-3 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1 size-4 shrink-0"
+          checked={aiStandalone}
+          disabled={!decider}
+          onChange={(e) => setAiStandalone(e.target.checked)}
+        />
+        <span className="flex flex-col gap-1">
+          <span>{t('materials.policy.aiStandalone')}</span>
+          <span className="text-xs text-muted-foreground">{t('materials.policy.aiStandaloneHelp')}</span>
+        </span>
+      </label>
       {invalid && (
         <p role="alert" className="text-sm text-danger">
           {t('materials.policy.invalid')}
@@ -260,7 +277,7 @@ function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: bo
 export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (year: number) => void }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
-  const decider = useDecider();
+  const decider = useDecider('content.manage');
   const [adding, setAdding] = useState(false);
   const calendar = useQuery({ queryKey: [...key, 'calendar', year], queryFn: () => m.calendarList(year) });
   const now = Number(m.istanbulDay(new Date()).slice(0, 4));
@@ -280,7 +297,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
           ))}
         </select>
       </label>
-      <MaterialsError error={calendar.error} />
+      <MaterialsReadStatus query={calendar} />
       {undated.length > 0 && (
         <p className="rounded-md bg-warning-subtle p-3 text-sm" role="status">
           {t('materials.calendar.undated', { count: undated.length, year })}
@@ -288,7 +305,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
       )}
       {data && (
         <>
-          <ul className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
+          <ul className="grid grid-cols-1 gap-x-8 md:grid-cols-2" aria-label={t('materials.views.calendar')}>
             {data.entries.map((e) => (
               <EntryRow
                 key={`${e.key}-${data.year}-${e.window_start}-${e.window_end}-${e.lead_days}-${e.enabled}-${e.name}`}
@@ -321,7 +338,7 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
               </button>
             ))}
           <PolicyForm
-            key={`${data.policy.lead_days}-${data.policy.reuse_days}-${data.policy.recap_days}`}
+            key={`${data.policy.lead_days}-${data.policy.reuse_days}-${data.policy.recap_days}-${data.policy.ai_standalone}`}
             policy={data.policy}
             decider={decider}
           />

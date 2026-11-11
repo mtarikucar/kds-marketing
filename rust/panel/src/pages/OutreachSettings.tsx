@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { setOutreachSettings } from '@/api/outreach';
-import type { OutreachSettingsInput, OutreachSettingsOut } from '@/api/types';
+import type { ContactChannel, OutreachSettingsInput, OutreachSettingsOut } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -57,8 +57,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
   };
   return (
     <form className="flex flex-col gap-4" onSubmit={submit} aria-label={t('leads.settings.general')}>
-      <fieldset className="grid gap-3 sm:grid-cols-2" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.identity')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-2" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.identity')}</legend>
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.settings.company')}
           <Input value={company} maxLength={120} onChange={(e) => setCompany(e.target.value)} />
@@ -72,8 +72,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="url" value={privacy} onChange={(e) => setPrivacy(e.target.value)} />
         </label>
       </fieldset>
-      <fieldset className="flex flex-col gap-2 text-sm" disabled={!editable}>
-        <legend className="mb-1 font-medium">{t('leads.settings.sending')}</legend>
+      <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-border p-4 text-sm" disabled={!editable}>
+        <legend className="px-1 font-semibold">{t('leads.settings.sending')}</legend>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={approval} onChange={(e) => setApproval(e.target.checked)} />
           {t('leads.settings.requiresApproval')}
@@ -83,8 +83,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           {t('leads.settings.clickTracking')}
         </label>
       </fieldset>
-      <fieldset className="grid gap-3 sm:grid-cols-4" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.warmup')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-4" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.warmup')}</legend>
         <label className="flex items-center gap-2 text-sm sm:col-span-4">
           <input type="checkbox" checked={warmupOn} onChange={(e) => setWarmupOn(e.target.checked)} />
           {t('leads.settings.warmupOn')}
@@ -102,8 +102,8 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="number" value={max} onChange={(e) => setMax(e.target.value)} />
         </label>
       </fieldset>
-      <fieldset className="grid gap-3 sm:grid-cols-2" disabled={!editable}>
-        <legend className="mb-1 text-sm font-medium">{t('leads.settings.frequency')}</legend>
+      <fieldset className="grid min-w-0 gap-3 rounded-lg border border-border p-4 sm:grid-cols-2" disabled={!editable}>
+        <legend className="px-1 text-sm font-semibold">{t('leads.settings.frequency')}</legend>
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.settings.minGap')}
           <Input type="number" value={gap} onChange={(e) => setGap(e.target.value)} />
@@ -125,6 +125,14 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
   );
 }
 
+/** The channels the business-recipient basis may cover (`jt_outreach::B2B_BASIS_CHANNELS`), in the order offered. */
+const B2B_CHANNELS: readonly ContactChannel[] = ['email', 'sms', 'whats_app', 'instagram_dm', 'messenger'];
+const B2B_NAMES: Partial<Record<ContactChannel, string>> = { sms: 'SMS', whats_app: 'WhatsApp', instagram_dm: 'Instagram', messenger: 'Messenger' };
+const b2bLabel = (language: string, channel: ContactChannel) =>
+  language.startsWith('tr')
+    ? `${B2B_NAMES[channel]} için işletme alıcısı dayanağını aç`
+    : `Open the business-recipient basis for ${B2B_NAMES[channel]}`;
+
 /**
  * The business-recipient basis: a human owner's act with the counsel's confirmation recorded in
  * the same save (spec §3.12, D17). Off by default; cold email to businesses stays locked until then.
@@ -133,7 +141,7 @@ function B2bForm({ settings }: { settings: OutreachSettingsOut }) {
   const { t, i18n } = useTranslation();
   const refresh = useLeadsRefresh();
   const guard = useInFlight();
-  const [email, setEmail] = useState(settings.b2b_basis.includes('email'));
+  const [channels, setChannels] = useState<readonly ContactChannel[]>(settings.b2b_basis);
   const [lookup, setLookup] = useState(settings.require_iys_lookup);
   const [confirmed, setConfirmed] = useState(false);
   const [note, setNote] = useState('');
@@ -147,15 +155,18 @@ function B2bForm({ settings }: { settings: OutreachSettingsOut }) {
     },
   });
   // Opening the basis, or turning the İYS lookup off, needs the acknowledgement in the same save.
-  const widens = (email && !settings.b2b_basis.includes('email')) || (!lookup && settings.require_iys_lookup);
+  const widens = channels.some((c) => !settings.b2b_basis.includes(c)) || (!lookup && settings.require_iys_lookup);
   const ack = confirmed && note.trim().length > 0;
-  const changed = email !== settings.b2b_basis.includes('email') || lookup !== settings.require_iys_lookup;
+  const changed =
+    channels.length !== settings.b2b_basis.length ||
+    channels.some((c) => !settings.b2b_basis.includes(c)) ||
+    lookup !== settings.require_iys_lookup;
   const valid = changed && (!widens || ack);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!valid) return;
     const input: OutreachSettingsInput = {
-      b2b_basis: email ? ['email'] : [],
+      b2b_basis: B2B_CHANNELS.filter((c) => channels.includes(c)),
       require_iys_lookup: lookup,
       ...(widens || ack ? { legal_ack: { counsel_confirmed: true, note: note.trim() } } : {}),
     };
@@ -176,10 +187,16 @@ function B2bForm({ settings }: { settings: OutreachSettingsOut }) {
               {` · ${settings.legal_ack.note}`}
             </p>
           )}
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={email} onChange={(e) => setEmail(e.target.checked)} />
-            {t('leads.settings.b2b.email')}
-          </label>
+          {B2B_CHANNELS.map((channel) => (
+            <label key={channel} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={channels.includes(channel)}
+                onChange={(e) => setChannels((list) => (e.target.checked ? [...list, channel] : list.filter((c) => c !== channel)))}
+              />
+              {channel === 'email' ? t('leads.settings.b2b.email') : b2bLabel(i18n.language, channel)}
+            </label>
+          ))}
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={lookup} onChange={(e) => setLookup(e.target.checked)} />
             {t('leads.settings.b2b.iys')}

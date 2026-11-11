@@ -690,7 +690,9 @@ async fn b2b_basis_only_by_human_owner_with_ack() {
         &o.w.deps,
         &o.w.owner_ctx,
         settings(
-            json!({"b2b_basis": ["sms"], "legal_ack": {"counsel_confirmed": true, "note": "x"}}),
+            // A call is no message: the basis covers messaging channels only (every one of them
+            // since the owner's decision of 2026-11-10; email only before).
+            json!({"b2b_basis": ["phone"], "legal_ack": {"counsel_confirmed": true, "note": "x"}}),
         ),
     )
     .await);

@@ -112,6 +112,10 @@ async fn pending_and_planning_read_all_stored_positions() {
         .unwrap();
     assert_eq!(out.slots.len(), 1);
     assert_eq!(out.slots[0].slot.id, f.slot.id);
+    // Without the content module (with it, the calendar trigger works without a channel too).
+    jt_app::usecases::modules::remove(&d, &ctx, jt_app::usecases::modules::CONTENT)
+        .await
+        .unwrap();
     // The first run retires the weekly quotas' ready slot, once (spec 2026-11-03 D34); the
     // fixture's hypothesis has no organic cadence, so no trigger asks for anything.
     assert_eq!(

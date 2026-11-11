@@ -7,7 +7,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use jt_studio::*;
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::Duration;
@@ -185,10 +185,13 @@ impl Staging {
         }
     }
 }
-/// Stores a medium for Studio, replayed by `request_key`. Needs `studio.work` and an active
+/// Stores a medium for Studio, replayed by `request_key`. Needs `materials.work` and an active
 /// workspace, not an approved strategy (spec 2026-11-03 D35): the owner gathers materials before
 /// and while the strategy is worked out.
 pub async fn file_upload(d: &Deps, ctx: &Ctx, i: FileUploadInput) -> Result<StoredFile, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.file_upload",
+    ))?;
     let mut stage = Staging::new();
     let result = file_upload_in(d, ctx, i, &mut stage).await;
     stage.compensate(d, ctx.workspace_id).await;
@@ -200,7 +203,6 @@ async fn file_upload_in(
     i: FileUploadInput,
     stage: &mut Staging,
 ) -> Result<StoredFile, AppError> {
-    ctx.require(Permission::StudioWork)?;
     key(&i.request_key)?;
     limit(&i.mime)?;
     // Only a digest of bytes/URLs reaches request storage.
@@ -467,7 +469,21 @@ pub async fn resolve_media(
     media: &[MediaAsset],
     kind_key: &str,
 ) -> Result<(Vec<Url>, Vec<MediaUpload>), AppError> {
+    let (urls, _, bytes) = resolve_typed_media(d, ws, media, kind_key).await?;
+    Ok((urls, bytes))
+}
+
+/// [`resolve_media`], with the type of each URL, in order, as the file store (`StoredFile::mime`)
+/// or the hosted asset names it: a signed file-store URL names no file type, so a provider is
+/// told an image from a video by it.
+pub async fn resolve_typed_media(
+    d: &Deps,
+    ws: WorkspaceId,
+    media: &[MediaAsset],
+    kind_key: &str,
+) -> Result<(Vec<Url>, Vec<String>, Vec<MediaUpload>), AppError> {
     let mut urls = vec![];
+    let mut mimes = vec![];
     let mut bytes = vec![];
     for m in media {
         match m {
@@ -491,7 +507,8 @@ pub async fn resolve_media(
                         d.files
                             .provider_url(ws, *id, d.clock.now() + Duration::hours(24))
                             .await?,
-                    )
+                    );
+                    mimes.push(f.mime.trim().to_ascii_lowercase());
                 }
             }
             MediaAsset::HostedUrl {
@@ -507,11 +524,12 @@ pub async fn resolve_media(
                 if MediaDelivery::of(kind_key, mime) == MediaDelivery::Bytes {
                     bytes.push(u)
                 } else {
-                    urls.push(url.clone())
+                    urls.push(url.clone());
+                    mimes.push(mime.trim().to_ascii_lowercase());
                 }
             }
             MediaAsset::Bytes { .. } => return Err(invalid()),
         }
     }
-    Ok((urls, bytes))
+    Ok((urls, mimes, bytes))
 }

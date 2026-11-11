@@ -100,6 +100,7 @@ fn check(
             at: at(day),
             olays,
             calendar: &cal,
+            ai_standalone: false,
         },
     )
 }
@@ -439,6 +440,84 @@ fn every_refusal_code() {
     );
 }
 
+/// Design 2026-11-10 B39: a visual an agent made, bound to no olay, is the main visual only
+/// where the workspace lets it and only of content that speaks about nothing specific; a flag or
+/// a named person still needs a human, and the setting changes nothing for a real material.
+#[test]
+fn an_agents_visual_stands_alone_only_under_the_setting_and_about_nothing_specific() {
+    let a = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 11 - 16),
+        date!(2026 - 11 - 16),
+    );
+    let olays = [a.clone()];
+    let cal = calendar();
+    let cx = |ai_standalone| UseContext {
+        at: at(date!(2026 - 11 - 10)),
+        olays: &olays,
+        calendar: &cal,
+        ai_standalone,
+    };
+    let mut ai = material(9, Binding::Genel);
+    ai.origin = Origin::AiGenerated {
+        generator: "codex".into(),
+    };
+    ai.share.as_mut().unwrap().by = None;
+    let about_a = Subject::Olay { olay_id: a.id };
+
+    assert_eq!(
+        check_use(&ai, UseRole::Anchor, &Subject::Generic, &cx(true)),
+        Ok(())
+    );
+    assert_eq!(
+        piece_roles(&[&ai], &Subject::Generic, &cx(true)),
+        Ok(vec![(ai.id, UseRole::Anchor)])
+    );
+    // About an olay it stays a supporting visual, whatever the setting.
+    assert_eq!(
+        check_use(&ai, UseRole::Anchor, &about_a, &cx(true)),
+        Err(Refusal::AiNotAnchor)
+    );
+    assert_eq!(
+        piece_roles(&[&ai], &about_a, &cx(true)),
+        Err(PieceRefusal::NoAnchor)
+    );
+    // The setting off: as before, never alone.
+    assert_eq!(
+        check_use(&ai, UseRole::Anchor, &Subject::Generic, &cx(false)),
+        Err(Refusal::AiNotAnchor)
+    );
+    assert_eq!(
+        piece_roles(&[&ai], &Subject::Generic, &cx(false)),
+        Err(PieceRefusal::NoAnchor)
+    );
+    // What needs a person's permission is not opened by the setting.
+    let mut face = ai.clone();
+    face.tags.depicts.insert(Depicts::Face);
+    assert_eq!(
+        check_use(&face, UseRole::Anchor, &Subject::Generic, &cx(true)),
+        Err(Refusal::SensitiveNeedsHuman)
+    );
+    let mut ungraded = ai.clone();
+    ungraded.tags.quality = None;
+    assert_eq!(
+        check_use(&ungraded, UseRole::Anchor, &Subject::Generic, &cx(true)),
+        Err(Refusal::Quality)
+    );
+    // A real material bound to an olay still needs a human to free it for generic content.
+    let real = material(10, bound(&a));
+    assert_eq!(
+        check_use(&real, UseRole::Anchor, &Subject::Generic, &cx(true)),
+        Err(Refusal::NotFreed)
+    );
+    // The setting is on unless a workspace turns it off, and an older stored policy reads as on.
+    assert!(MaterialPolicy::default().ai_standalone);
+    let stored: MaterialPolicy =
+        serde_json::from_str(r#"{"lead_days":21,"reuse_days":14,"recap_days":30}"#).unwrap();
+    assert!(stored.ai_standalone);
+}
+
 /// A named person counts as a `depicts` flag (spec D38): an agent never gives such an image its
 /// permission, and one it gave is not a human's.
 #[test]
@@ -589,6 +668,7 @@ fn a_piece_needs_an_anchor_and_every_material_to_pass() {
         at: at(date!(2026 - 11 - 17)),
         olays: &olays,
         calendar: &cal,
+        ai_standalone: false,
     };
     let subject = Subject::Olay { olay_id: a.id };
     let real = material(1, bound(&a));
@@ -674,6 +754,7 @@ fn selection_prefers_season_then_upcoming_then_recap_then_archive_then_generic()
         at: at(day),
         olays: &olays,
         calendar: &cal,
+        ai_standalone: false,
     };
     let policy = MaterialPolicy::default();
     let need = SlotNeed::default();
@@ -737,6 +818,7 @@ fn selection_avoids_recent_use_and_needs_the_tags() {
         at: now,
         olays: &olays,
         calendar: &cal,
+        ai_standalone: false,
     };
     let policy = MaterialPolicy::default();
     let one = material(1, bound(&a));

@@ -43,7 +43,7 @@ fn tools_listed_with_schemas() {
     for (name, use_case, risk) in expected {
         let tool = &tools[name];
         assert_eq!(tool.use_case, use_case, "{name}");
-        assert_eq!(tool.permission, Permission::DevicesWork, "{name}");
+        assert_eq!(tool.permissions, &[Permission::DevicesWork], "{name}");
         assert_eq!(tool.risk, risk, "{name}");
         assert!(tool.description.ends_with(jt_mcp::risk_tag(risk)), "{name}");
         let schema = tool.input_schema.as_value();

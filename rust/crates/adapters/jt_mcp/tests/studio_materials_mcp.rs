@@ -30,6 +30,67 @@ const TWINS: &[(&str, Risk, &[&str])] = &[
     ),
     ("materials_list", Risk::Read, &[]),
     ("material_get", Risk::Read, &["material_id"]),
+    ("material_intelligence_list", Risk::Read, &[]),
+    ("material_intelligence_get", Risk::Read, &["material_id"]),
+    ("material_preview", Risk::Read, &["material_id"]),
+    (
+        "material_analysis_claim",
+        Risk::Write,
+        &["material_id", "expected_revision"],
+    ),
+    (
+        "material_analysis_complete",
+        Risk::Write,
+        &[
+            "material_id",
+            "claim_token",
+            "expected_revision",
+            "description",
+            "labels",
+            "date_source",
+        ],
+    ),
+    (
+        "material_analysis_fail",
+        Risk::Write,
+        &[
+            "material_id",
+            "claim_token",
+            "expected_revision",
+            "error_code",
+        ],
+    ),
+    (
+        "material_analysis_retry",
+        Risk::Write,
+        &["material_id", "expected_revision"],
+    ),
+    ("material_production_list", Risk::Read, &[]),
+    (
+        "material_production_claim",
+        Risk::Write,
+        &["production_id", "expected_revision"],
+    ),
+    (
+        "material_production_complete",
+        Risk::Write,
+        &[
+            "production_id",
+            "expected_revision",
+            "claim_token",
+            "output_material_id",
+        ],
+    ),
+    (
+        "material_production_fail",
+        Risk::Write,
+        &[
+            "production_id",
+            "expected_revision",
+            "claim_token",
+            "error_code",
+        ],
+    ),
     (
         "material_add",
         Risk::Write,
@@ -49,8 +110,11 @@ const TWINS: &[(&str, Risk, &[&str])] = &[
 
 /// A human's decisions (D4): panel routes, never a tool.
 const HUMAN_ONLY: &[&str] = &[
+    "project_production",
     "olay_confirm",
     "material_permission",
+    "material_intelligence_update",
+    "material_production_request",
     "material_free",
     "material_bind",
     "material_delete",
@@ -76,7 +140,15 @@ async fn library_tools_listed_with_schemas_and_no_tool_for_a_humans_decision() {
         let name = format!("jeeta.studio.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("studio.{action}"), "{name}");
-        assert_eq!(tool.permission, Permission::StudioWork, "{name}");
+        assert_eq!(
+            tool.permissions,
+            if action.starts_with("material_production_") || *action == "calendar_list" {
+                &[Permission::ContentWork][..]
+            } else {
+                &[Permission::MaterialsWork][..]
+            },
+            "{name}"
+        );
         assert_eq!(tool.risk, *risk, "{name}");
         assert!(
             tool.description.ends_with(jt_mcp::risk_tag(*risk)),
@@ -130,6 +202,25 @@ async fn library_tools_listed_with_schemas_and_no_tool_for_a_humans_decision() {
         tag["properties"]["quality"]["enum"],
         json!(["publishable", "needs_crop", "unusable", null])
     );
+    let complete = tools["jeeta.studio.material_analysis_complete"]
+        .input_schema
+        .as_value();
+    assert_eq!(complete["properties"]["labels"]["maxItems"], 32);
+    assert_eq!(
+        complete["properties"]["date_source"]["enum"],
+        json!(["unknown", "exif", "file_modified", "agent_inferred"])
+    );
+    for action in [
+        "material_analysis_claim",
+        "material_analysis_complete",
+        "material_analysis_fail",
+        "material_production_claim",
+        "material_production_complete",
+        "material_production_fail",
+    ] {
+        let row = jt_app::catalog::find(&format!("studio.{action}")).unwrap();
+        assert!(row.mcp_only && row.panel_route.is_none());
+    }
     // What a human decides, the agent is told.
     let says = |name: &str, words: &[&str]| {
         let text = tools[name].description;
@@ -313,4 +404,152 @@ async fn an_agent_builds_the_library_through_the_tools_without_a_strategy() {
     .await
     .unwrap_err();
     assert_eq!(e.code, jt_app::error::ErrorCode::Validation);
+    let id = material["id"].clone();
+    let public = run(
+        "jeeta.studio.material_intelligence_get",
+        json!({"material_id":id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(public["intelligence"]["status"], "pending");
+    let batch = run("jeeta.studio.material_intelligence_list", json!({}))
+        .await
+        .unwrap();
+    assert_eq!(batch["materials"][0]["material"]["id"], id);
+    let claim = run(
+        "jeeta.studio.material_analysis_claim",
+        json!({"material_id":id,"expected_revision":2}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(claim["intelligence"]["status"], "running");
+    assert!(
+        claim["preview"]["url"]
+            .as_str()
+            .unwrap()
+            .contains("files.example.com")
+    );
+    let public = run(
+        "jeeta.studio.material_intelligence_get",
+        json!({"material_id":id}),
+    )
+    .await
+    .unwrap();
+    assert!(public.get("claim_token").is_none());
+    assert!(public["intelligence"].get("lease").is_none());
+    let second = run(
+        "jeeta.studio.material_analysis_claim",
+        json!({"material_id":id,"expected_revision":2}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(second.code, jt_app::error::ErrorCode::Conflict);
+    let failed=run("jeeta.studio.material_analysis_fail",json!({"material_id":id,"expected_revision":2,"claim_token":claim["claim_token"],"error_code":"unsupported_media"})).await.unwrap();
+    assert_eq!(failed["intelligence"]["status"], "failed");
+    run(
+        "jeeta.studio.material_analysis_retry",
+        json!({"material_id":id,"expected_revision":2}),
+    )
+    .await
+    .unwrap();
+    let claim = run(
+        "jeeta.studio.material_analysis_claim",
+        json!({"material_id":id,"expected_revision":2}),
+    )
+    .await
+    .unwrap();
+    let result=run("jeeta.studio.material_analysis_complete",json!({"material_id":id,"expected_revision":2,"claim_token":claim["claim_token"],"description":"A poster for the workshop","labels":["workshop"],"group_name":"Workshop posters","date_source":"unknown"})).await.unwrap();
+    assert_eq!(result["intelligence"]["status"], "completed");
+    assert_eq!(result["material"]["tags"]["labels"], json!(["workshop"]));
+    assert_eq!(result["material"]["revision"], 3);
+    // The adapter cannot grant permission to a human, a key without scope, or another tenant.
+    let mut human = agent.clone();
+    human.actor = Actor::Human { user_id: owner };
+    human.agent_connection_id = None;
+    let tool = &tools["jeeta.studio.material_analysis_claim"];
+    assert_eq!(
+        (tool.run)(
+            &deps,
+            &human,
+            json!({"material_id":id,"expected_revision":3})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        jt_app::error::ErrorCode::Forbidden
+    );
+    let mut restricted = agent.clone();
+    restricted.permissions.remove(&Permission::MaterialsWork);
+    assert_eq!(
+        (tools["jeeta.studio.material_intelligence_get"].run)(
+            &deps,
+            &restricted,
+            json!({"material_id":id})
+        )
+        .await
+        .unwrap_err()
+        .code,
+        jt_app::error::ErrorCode::Forbidden
+    );
+    let other = jt_app::usecases::auth::register(
+        &deps,
+        jt_app::usecases::auth::RegisterInput {
+            email: "other@materials.example".into(),
+            password: "correct horse battery".into(),
+            display_name: "Other".into(),
+            workspace_name: "Other".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let other_ws = other.me.current_workspace.unwrap();
+    jt_testkit::flows::activate_workspace(&deps, other_ws).await;
+    let mut foreign = agent.clone();
+    foreign.workspace_id = other_ws;
+    assert_eq!(
+        (tools["jeeta.studio.material_preview"].run)(&deps, &foreign, json!({"material_id":id}))
+            .await
+            .unwrap_err()
+            .code,
+        jt_app::error::ErrorCode::NotFound
+    );
+    // A human requests production; the external agent claims, then reports an honest failure.
+    let production=jt_app::usecases::studio::library::material_production_request(&deps,&human,serde_json::from_value(json!({"request_key":"crop","kind":"crop","instructions":"Square crop","sources":[{"material_id":id,"expected_revision":3}]})).unwrap()).await.unwrap();
+    let listed = run(
+        "jeeta.studio.material_production_list",
+        json!({"source_material_id":id}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed["productions"][0]["id"], json!(production.id));
+    let claim = run(
+        "jeeta.studio.material_production_claim",
+        json!({"production_id":production.id,"expected_revision":1}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(claim["production"]["revision"], 2);
+    let wrong_output=run("jeeta.studio.material_production_complete",json!({"production_id":production.id,"expected_revision":2,"claim_token":claim["claim_token"],"output_material_id":id})).await.unwrap_err();
+    assert_eq!(wrong_output.code, jt_app::error::ErrorCode::Conflict);
+    let failed=run("jeeta.studio.material_production_fail",json!({"production_id":production.id,"expected_revision":2,"claim_token":claim["claim_token"],"error_code":"editing_unavailable"})).await.unwrap();
+    assert_eq!(failed["status"], "failed");
+    let production=jt_app::usecases::studio::library::material_production_request(&deps,&human,serde_json::from_value(json!({"request_key":"crop-success","kind":"crop","instructions":"Square crop","sources":[{"material_id":id,"expected_revision":3}]})).unwrap()).await.unwrap();
+    let claim = run(
+        "jeeta.studio.material_production_claim",
+        json!({"production_id":production.id,"expected_revision":1}),
+    )
+    .await
+    .unwrap();
+    let file=run("jeeta.studio.file_upload",json!({"request_key":"derivative-file","filename":"crop.png","mime":"image/png","content":{"kind":"bytes_base64","data":"iVBORw0KGgpkZXJpdmF0aXZl"}})).await.unwrap();
+    let output=run("jeeta.studio.material_add",json!({"request_key":"derivative","file_id":file["id"],"olay_id":olay["id"],"origin":{"kind":"ai_generated","generator":"fixture"},"depicts":[],"share":"shareable"})).await.unwrap();
+    let complete=run("jeeta.studio.material_production_complete",json!({"production_id":production.id,"expected_revision":2,"claim_token":claim["claim_token"],"output_material_id":output["material"]["id"]})).await.unwrap();
+    assert_eq!(complete["status"], "completed");
+    assert_eq!(complete["output_material_id"], output["material"]["id"]);
+    let output = run(
+        "jeeta.studio.material_get",
+        json!({"material_id":output["material"]["id"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output["material"]["share"], Value::Null);
 }

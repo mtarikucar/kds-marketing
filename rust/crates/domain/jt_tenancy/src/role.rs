@@ -34,10 +34,20 @@ pub enum Permission {
     /// Manage the inbox dictionary and privileged journey changes.
     #[serde(rename = "inbox.manage")]
     InboxManage,
-    #[serde(rename = "studio.work")]
-    StudioWork,
-    #[serde(rename = "studio.manage")]
-    StudioManage,
+    #[serde(rename = "content.work")]
+    ContentWork,
+    #[serde(rename = "social.work")]
+    SocialWork,
+    #[serde(rename = "ads.work")]
+    AdsWork,
+    #[serde(rename = "materials.work")]
+    MaterialsWork,
+    #[serde(rename = "content.manage")]
+    ContentManage,
+    #[serde(rename = "social.manage")]
+    SocialManage,
+    #[serde(rename = "ads.manage")]
+    AdsManage,
     /// Place, follow and end phone calls, and read the call log and policy.
     #[serde(rename = "calls.work")]
     CallsWork,
@@ -85,8 +95,13 @@ const ALL_PERMISSIONS: &[Permission] = &[
     Permission::BudgetManage,
     Permission::InboxWork,
     Permission::InboxManage,
-    Permission::StudioWork,
-    Permission::StudioManage,
+    Permission::ContentWork,
+    Permission::SocialWork,
+    Permission::AdsWork,
+    Permission::MaterialsWork,
+    Permission::ContentManage,
+    Permission::SocialManage,
+    Permission::AdsManage,
     Permission::CallsWork,
     Permission::CallsManage,
     Permission::CallsBridge,
@@ -102,8 +117,13 @@ impl Permission {
     /// The stable key, e.g. `"team.manage"`.
     pub fn key(&self) -> &'static str {
         match self {
-            Permission::StudioWork => "studio.work",
-            Permission::StudioManage => "studio.manage",
+            Permission::ContentWork => "content.work",
+            Permission::ContentManage => "content.manage",
+            Permission::SocialWork => "social.work",
+            Permission::SocialManage => "social.manage",
+            Permission::AdsWork => "ads.work",
+            Permission::AdsManage => "ads.manage",
+            Permission::MaterialsWork => "materials.work",
             Permission::CallsWork => "calls.work",
             Permission::CallsManage => "calls.manage",
             Permission::CallsBridge => "calls.bridge",

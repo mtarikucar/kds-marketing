@@ -9,6 +9,8 @@
 
 #![allow(dead_code)]
 
+pub mod workspace;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -412,13 +414,16 @@ pub async fn rig() -> Rig {
     rig_with(TestApps::default()).await
 }
 
-/// A rig whose platform apps are `apps`; its container poll does not pause (30 reads).
+/// A rig whose platform apps are `apps`; its container poll does not pause (30 reads, 7 more
+/// for a video).
 pub async fn rig_with(apps: TestApps) -> Rig {
     let mock = Mock::start().await;
     let meta = MetaConnector::new(egress(&mock), bases(&mock), Arc::new(apps)).with_container_poll(
         ContainerPoll {
             interval: std::time::Duration::ZERO,
             attempts: 30,
+            video_interval: std::time::Duration::ZERO,
+            video_attempts: 7,
         },
     );
     Rig { mock, meta }

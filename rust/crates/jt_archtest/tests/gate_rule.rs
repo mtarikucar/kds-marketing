@@ -3,7 +3,7 @@
 //! read or answer customers are listed one by one ([`EXEMPT_INBOX`]), so a new inbox row is
 //! `Gated` until someone decides it answers customers. Separately, only
 //! `auth.*`, `workspace.*` and `platform.*` use cases and the objections (a business's
-//! do-not-contact and erasure) run whatever the workspace's status, and
+//! do-not-contact and erasure), plus the read-only module registry, run whatever the workspace's status, and
 //! `strategy.*` and `work.*` ones also while it awaits payment (never while it is suspended).
 //! The behavioural half (a gated use case answers `STRATEGY_REQUIRED` / `WORKSPACE_INACTIVE`)
 //! lives in the adapters' tests.
@@ -80,10 +80,6 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.appointments.book",
     "inbox.appointments.cancel",
     "inbox.appointments.held",
-    "inbox.commissions.list",
-    "inbox.commissions.approve",
-    "inbox.commissions.pay",
-    "inbox.commission_rates.set",
     // Comments and marketplace questions: moderating, marking handled, reporting, and approving
     // or discarding a held answer are answering customers too.
     "inbox.public.hide",
@@ -96,6 +92,31 @@ const EXEMPT_INBOX: &[&str] = &[
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
+    "content.area_claim",
+    "content.area_progress",
+    "content.area_release",
+    "content.area_redo",
+    "social.versions_waiting",
+    "social.accounts_list",
+    "social.account_get",
+    "social.account_pause",
+    // Reading a campaign, a person's own decisions that need no strategy, the agent's hold and
+    // a stop are exempt; whatever commits or spends is gated.
+    "ads.campaigns_list",
+    "ads.campaign_get",
+    "ads.campaign_open",
+    "ads.campaign_decline",
+    "ads.campaign_claim",
+    "ads.campaign_release",
+    "ads.campaign_pause",
+    "ads.campaign_end",
+    "ads.ad_preview",
+    // Modules describe the work area and its assignments; configuration precedes strategy.
+    // Explicit identities keep any future executable module action gated by default.
+    "modules.list",
+    "modules.install",
+    "modules.update",
+    "modules.remove",
     "ops.health",
     "billing.status",
     "billing.activate",
@@ -106,6 +127,15 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.ledger_export",
     // The materials library: the owner gathers materials before and while the strategy is
     // worked out (spec 2026-11-03 D35), uploads included.
+    "studio.project_list",
+    "studio.project_create",
+    "studio.project_get",
+    "studio.project_update",
+    "studio.project_materials",
+    "studio.project_request",
+    "studio.project_request_update",
+    "studio.project_production",
+    "studio.project_publication",
     "studio.file_upload",
     "studio.olays_list",
     "studio.olay_get",
@@ -116,6 +146,21 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.material_get",
     "studio.material_add",
     "studio.material_tag",
+    // Preparing and organising the library also precedes strategy approval. These rows only
+    // analyse or produce library assets; scheduling and publishing still require the gate.
+    "studio.material_intelligence_list",
+    "studio.material_intelligence_get",
+    "studio.material_intelligence_update",
+    "studio.material_preview",
+    "studio.material_analysis_retry",
+    "studio.material_analysis_claim",
+    "studio.material_analysis_complete",
+    "studio.material_analysis_fail",
+    "studio.material_production_request",
+    "studio.material_production_list",
+    "studio.material_production_claim",
+    "studio.material_production_complete",
+    "studio.material_production_fail",
     "studio.material_permission",
     "studio.material_free",
     "studio.material_bind",
@@ -181,7 +226,11 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
     let expected = |id: &str| {
         if matches!(
             id,
-            "billing.status" | "ops.health" | "prospects.do_not_contact" | "prospects.erase"
+            "billing.status"
+                | "ops.health"
+                | "modules.list"
+                | "prospects.do_not_contact"
+                | "prospects.erase"
         ) || STATUS_EXEMPT_PREFIXES.iter().any(|p| id.starts_with(p))
         {
             StatusExemption::Always
@@ -203,8 +252,8 @@ fn only_auth_workspace_and_platform_run_while_suspended_and_strategy_and_work_wh
         .collect();
     assert!(
         wrong.is_empty(),
-        "status_exemption must be Always exactly for auth.*, workspace.* and platform.*, \
-         PendingPayment exactly for strategy.* and work.*, else Never: {wrong:?}"
+        "status_exemption must match the explicit status allowlist (including modules.list); \
+         module mutations require an active workspace: {wrong:?}"
     );
     assert_eq!(
         jt_app::catalog::STATUS_EXEMPT_PREFIXES,
@@ -318,7 +367,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 53);
+    assert_eq!(rows.len(), 49);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

@@ -27,6 +27,12 @@ pub fn mp4_box_header(head: &[u8], left: u64) -> Option<([u8; 4], u64, u64)> {
     Some((kind, size, header))
 }
 
+/// A video's length in milliseconds from its `moov` box's payload alone (its header left out):
+/// `mvhd`'s duration, or a fragmented video's `mvex/mehd`.
+pub fn mp4_moov_duration_ms(moov: &[u8]) -> Option<u64> {
+    crate::mp4::moov_duration_ms(moov)
+}
+
 /// A video's capture time from its `moov/mvhd` box's payload alone (its header left out), as
 /// [`capture_time`] reads it from the whole file.
 pub fn mp4_mvhd_capture_time(mvhd: &[u8]) -> Option<OffsetDateTime> {

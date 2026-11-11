@@ -21,6 +21,7 @@
 //! The provider adapters and the platform's provider apps have their own module,
 //! [`connectors`].
 
+pub mod ads;
 pub mod billing;
 pub mod bridges;
 pub mod calls;
@@ -31,9 +32,11 @@ pub mod distribution;
 pub mod files;
 pub mod inbox;
 pub mod mail_files;
+pub mod material_productions;
 pub mod materials;
 pub mod outreach;
 pub mod posts;
+pub mod production_projects;
 pub mod prospects;
 pub mod public;
 pub mod studio;
@@ -663,6 +666,10 @@ pub trait LedgerRepo: Send + Sync {
 /// The workspace's own row.
 #[async_trait]
 pub trait WorkspaceRepo: Send + Sync {
+    /// Declarative module registry, isolated to this workspace.
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError>;
+    /// Caller holds the workspace lock for read/modify/write.
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError>;
     /// Serializes billing/status writers; held until transaction commit/drop.
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError>;
     /// Writes status and its reason/actor audit atomically; refuses another workspace.
@@ -1067,6 +1074,23 @@ pub trait BudgetRepo: Send + Sync {
         limit: u32,
         before: Option<(OffsetDateTime, BudgetSpendId)>,
     ) -> Result<Vec<BudgetSpend>, AppError>;
+    /// What was spent at `from` or later and before `to`, summed per budget item, module and ad
+    /// campaign (design 2026-11-10 S6): one slice for each combination that has spend. A spend
+    /// recorded by hand has no module.
+    async fn spend_slices(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<SpendSlice>, AppError>;
+}
+
+/// One slice of [`BudgetRepo::spend_slices`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpendSlice {
+    pub budget_item_id: BudgetItemId,
+    pub module: Option<String>,
+    pub campaign_id: Option<uuid::Uuid>,
+    pub amount: i64,
 }
 
 /// How often an agent checks in unless the workspace says otherwise: once a day.
@@ -1681,6 +1705,11 @@ pub trait TenantRepos: Send + Sync {
     fn studio_budget(&mut self) -> &mut dyn crate::ports::studio::StudioBudgetRepo;
     fn studio_control(&mut self) -> &mut dyn crate::ports::studio::StudioControlRepo;
     /// The materials library (`ports::materials`).
+    fn studio_projects(&mut self) -> &mut dyn production_projects::ProjectRepo;
+    /// The workspace's ad campaigns (design 2026-11-10 §8).
+    fn ads(&mut self) -> &mut dyn ads::AdsRepo;
+    fn studio_productions(&mut self)
+    -> &mut dyn crate::ports::material_productions::ProductionRepo;
     fn studio_materials(&mut self) -> &mut dyn crate::ports::materials::MaterialRepo;
     /// Olay-driven publishing: planned posts, package requests, the posting policy
     /// (`ports::posts`).
@@ -1704,7 +1733,6 @@ pub trait TenantRepos: Send + Sync {
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;
     fn quotes(&mut self) -> &mut dyn QuoteRepo;
     fn appointments(&mut self) -> &mut dyn AppointmentRepo;
-    fn commissions(&mut self) -> &mut dyn CommissionRepo;
     fn erasure(&mut self) -> &mut dyn ErasureRepo;
     fn mail_cursors(&mut self) -> &mut dyn MailCursorRepo;
     fn attribution(&mut self) -> &mut dyn AttributionRepo;

@@ -24,7 +24,9 @@
 //! links included (an existing proof is replaced); calls to `graph.instagram.com` never do (that
 //! host belongs to the Instagram app). The Meta app (its secret and Graph version) is read from
 //! the [`PlatformAppConfig`] at call time; the Graph version defaults to
-//! [`DEFAULT_GRAPH_VERSION`]. Calls to `graph.instagram.com` are unversioned.
+//! [`DEFAULT_GRAPH_VERSION`]. A call on an ad account, or on what belongs to one, never goes out
+//! on a version older than [`ADS_API_VERSION`], the Marketing API version those calls are written
+//! for. Calls to `graph.instagram.com` are unversioned.
 //!
 //! **Errors.** Nothing is thrown: every failure is a [`ConnectorError`], built through its
 //! redacting constructors, its reason naming the Graph error's type, code, subcode and message
@@ -72,6 +74,7 @@
 
 mod ads;
 mod assets;
+mod campaigns;
 mod comments;
 mod credential;
 mod graph;
@@ -82,6 +85,7 @@ mod oauth;
 mod ports;
 mod probe;
 mod publish;
+mod schedule;
 pub mod webhook;
 
 use std::fmt;
@@ -92,7 +96,7 @@ use jt_app::ports::connectors::PlatformAppConfig;
 use jt_outbound::Egress;
 use url::Url;
 
-pub use graph::DEFAULT_GRAPH_VERSION;
+pub use graph::{ADS_API_VERSION, DEFAULT_GRAPH_VERSION};
 pub use messaging::MAX_MESSENGER_TEXT;
 pub use oauth::{
     FACEBOOK_SCOPES, INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES,
@@ -118,6 +122,15 @@ pub const CONTAINER_POLL_ATTEMPTS: u32 = 30;
 
 /// The pause between two reads of an Instagram media container, by default.
 pub const CONTAINER_POLL_INTERVAL: Duration = Duration::from_secs(3);
+
+/// How many more times a video container is read, by default, after
+/// [`CONTAINER_POLL_ATTEMPTS`]: Meta suggests reading a container once a minute for up to five
+/// minutes, and a video (a reel, a story's video, a carousel's video item) takes longer to
+/// process than an image. 90 s of quick reads, then 7 reads 30 s apart: about five minutes.
+pub const CONTAINER_VIDEO_POLL_ATTEMPTS: u32 = 7;
+
+/// The pause between two of a video container's further reads, by default.
+pub const CONTAINER_VIDEO_POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Where the adapter sends its calls and its users: the real hosts by default
 /// ([`MetaBases::production`]). Each is a base URL (scheme, host, port and an optional path
@@ -154,11 +167,16 @@ impl MetaBases {
 }
 
 /// How an Instagram media container is waited for: read up to `attempts` times, `interval` apart,
-/// until it is `FINISHED`.
+/// until it is `FINISHED`; a video container then up to `video_attempts` more times,
+/// `video_interval` apart. The publish job holds no tenant transaction or row lock while it waits
+/// (the attempt is committed as sending before the provider is called); its scheduler lock is
+/// held for the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ContainerPoll {
     pub interval: Duration,
     pub attempts: u32,
+    pub video_interval: Duration,
+    pub video_attempts: u32,
 }
 
 impl Default for ContainerPoll {
@@ -166,6 +184,8 @@ impl Default for ContainerPoll {
         ContainerPoll {
             interval: CONTAINER_POLL_INTERVAL,
             attempts: CONTAINER_POLL_ATTEMPTS,
+            video_interval: CONTAINER_VIDEO_POLL_INTERVAL,
+            video_attempts: CONTAINER_VIDEO_POLL_ATTEMPTS,
         }
     }
 }

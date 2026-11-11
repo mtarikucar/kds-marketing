@@ -121,7 +121,9 @@ impl Panel {
         };
         let state = AppState {
             deps: deps.clone(),
-            gate: Arc::new(PgStrategyGate::new(db.pool.clone())),
+            gate: Arc::new(crate::fakes::ModulesReadyGate(Arc::new(
+                PgStrategyGate::new(db.pool.clone()),
+            ))),
             cookie_secure,
             panel_dir,
         };

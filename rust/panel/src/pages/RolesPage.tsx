@@ -127,7 +127,7 @@ function RoleDialog({
   );
 }
 
-export function RolesPage() {
+export function RolesPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
@@ -199,7 +199,7 @@ export function RolesPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader embedded={embedded}
         title={t('roles.title')}
         description={t('roles.description')}
         actions={
@@ -215,7 +215,7 @@ export function RolesPage() {
         <DataTable
           columns={columns}
           data={roles.data ?? []}
-          emptyState={<EmptyState title={t('roles.empty')} />}
+          emptyState={<EmptyState className="rounded-none border-0" title={t('roles.empty')} />}
         />
       </QueryState>
       {canManage && (

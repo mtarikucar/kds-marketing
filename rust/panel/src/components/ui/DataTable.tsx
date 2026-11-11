@@ -79,7 +79,7 @@ export function DataTable<T>({
   const showEmpty = !isLoading && data.length === 0;
 
   return (
-    <div className={cn('w-full overflow-x-auto rounded-xl border border-border', className)}>
+    <div className={cn('relative w-full min-w-0 overflow-x-auto rounded-lg border border-border bg-surface', className)}>
       <Table className="dt-responsive">
         <THead>
           {table.getHeaderGroups().map((headerGroup) => (
@@ -112,7 +112,7 @@ export function DataTable<T>({
                       type="button"
                       onClick={header.column.getToggleSortingHandler()}
                       className={cn(
-                        'inline-flex items-center gap-1 text-micro uppercase tracking-[inherit]',
+                        'inline-flex items-center gap-1 text-caption',
                         'transition-colors duration-fast hover:text-foreground',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[--ring] rounded-sm',
                       )}
@@ -176,8 +176,8 @@ export function DataTable<T>({
       </Table>
 
       {showEmpty && (
-        <div className="p-2">
-          {emptyState ?? <EmptyState title="No data" description="There is nothing to show yet." />}
+        <div>
+          {emptyState ?? <EmptyState className="rounded-none border-0" title="No data" description="There is nothing to show yet." />}
         </div>
       )}
     </div>

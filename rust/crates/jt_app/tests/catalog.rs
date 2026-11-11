@@ -43,13 +43,25 @@ fn mcp_only_use_cases_have_no_panel_route() {
             uc.id
         );
     }
-    // An agent-only tool has no human caller: the agent's check-in is the only one.
+    // Agent-only tools have no human caller.
     let mcp_only: Vec<&str> = CATALOG
         .iter()
         .filter(|uc| uc.mcp_only)
         .map(|uc| uc.id)
         .collect();
-    assert_eq!(mcp_only, ["work.checkin"]);
+    assert_eq!(
+        mcp_only,
+        [
+            "ads.campaign_propose",
+            "studio.material_production_claim",
+            "studio.material_production_complete",
+            "studio.material_production_fail",
+            "studio.material_analysis_claim",
+            "studio.material_analysis_complete",
+            "studio.material_analysis_fail",
+            "work.checkin",
+        ]
+    );
 }
 
 #[test]
@@ -106,6 +118,15 @@ fn panel_routes_are_unique() {
 
 /// The materials library and its uploads: exempt from the strategy gate (spec 2026-11-03 D35).
 const STUDIO_LIBRARY: &[&str] = &[
+    "studio.project_list",
+    "studio.project_create",
+    "studio.project_get",
+    "studio.project_update",
+    "studio.project_materials",
+    "studio.project_request",
+    "studio.project_request_update",
+    "studio.project_production",
+    "studio.project_publication",
     "studio.file_upload",
     "studio.olays_list",
     "studio.olay_get",
@@ -113,6 +134,19 @@ const STUDIO_LIBRARY: &[&str] = &[
     "studio.olay_update",
     "studio.materials_list",
     "studio.material_get",
+    "studio.material_intelligence_list",
+    "studio.material_production_request",
+    "studio.material_production_list",
+    "studio.material_production_claim",
+    "studio.material_production_complete",
+    "studio.material_production_fail",
+    "studio.material_intelligence_get",
+    "studio.material_preview",
+    "studio.material_analysis_retry",
+    "studio.material_intelligence_update",
+    "studio.material_analysis_claim",
+    "studio.material_analysis_complete",
+    "studio.material_analysis_fail",
     "studio.material_add",
     "studio.material_tag",
     "studio.slot_materials",
@@ -153,17 +187,65 @@ fn catalog_is_the_release_table() {
         ("studio.trend_record", Some("jeeta.studio.trend_record"), Some(("POST", "/api/studio/trends")), false, Risk::Write),
         ("studio.hypothesis_propose", Some("jeeta.studio.hypothesis_propose"), Some(("POST", "/api/studio/hypotheses/proposals")), false, Risk::Write),
         ("studio.brake", Some("jeeta.studio.brake"), Some(("POST", "/api/studio/brake")), false, Risk::Write),
-        ("studio.policy_set", Some("jeeta.studio.policy_set"), Some(("PUT", "/api/studio/policy")), false, Risk::Write),
         ("studio.approve", Some("jeeta.studio.approve"), Some(("POST", "/api/studio/approvals")), false, Risk::Write),
         ("studio.tiktok_posting", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Read),
         ("studio.tiktok_post", None, Some(("POST", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Write),
         ("studio.tiktok_metrics", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")), true, Risk::Read),
+        ("content.area_claim", Some("jeeta.content.area_claim"), Some(("POST", "/api/content/areas/{project_id}/claim")), false, Risk::Write),
+        ("content.area_progress", Some("jeeta.content.area_progress"), Some(("POST", "/api/content/areas/{project_id}/progress")), false, Risk::Write),
+        ("content.area_release", Some("jeeta.content.area_release"), Some(("POST", "/api/content/areas/{project_id}/release")), false, Risk::Write),
+        ("content.area_deliver", Some("jeeta.content.area_deliver"), Some(("POST", "/api/content/areas/{project_id}/delivery")), false, Risk::Write),
+        ("content.area_redo", None, Some(("POST", "/api/content/areas/{project_id}/redo")), true, Risk::Write),
+        ("content.delivery_accept", None, Some(("POST", "/api/content/areas/{project_id}/delivery/accept")), true, Risk::Write),
+        ("social.version_schedule", Some("jeeta.social.version_schedule"), Some(("POST", "/api/social/versions/schedule")), false, Risk::Write),
+        ("social.versions_waiting", Some("jeeta.social.versions_waiting"), Some(("GET", "/api/social/packages")), false, Risk::Read),
+        ("social.accounts_list", Some("jeeta.social.accounts_list"), Some(("GET", "/api/social/accounts")), false, Risk::Read),
+        ("social.account_get", Some("jeeta.social.account_get"), Some(("GET", "/api/social/accounts/{capability_id}")), false, Risk::Read),
+        ("social.account_pause", None, Some(("POST", "/api/social/accounts/{capability_id}/pause")), true, Risk::Write),
+        ("ads.campaigns_list", Some("jeeta.ads.campaigns_list"), Some(("GET", "/api/ads/campaigns")), false, Risk::Read),
+        ("ads.campaign_open", None, Some(("POST", "/api/ads/campaigns")), true, Risk::Spend),
+        ("ads.campaign_get", Some("jeeta.ads.campaign_get"), Some(("GET", "/api/ads/campaigns/{campaign_id}")), false, Risk::Read),
+        ("ads.campaign_update", None, Some(("PATCH", "/api/ads/campaigns/{campaign_id}")), true, Risk::Write),
+        ("ads.campaign_propose", Some("jeeta.ads.campaign_propose"), None, false, Risk::Write),
+        ("ads.campaign_approve", None, Some(("POST", "/api/ads/campaigns/{campaign_id}/approve")), true, Risk::Spend),
+        ("ads.campaign_decline", None, Some(("POST", "/api/ads/campaigns/{campaign_id}/decline")), true, Risk::Write),
+        ("ads.campaign_claim", Some("jeeta.ads.campaign_claim"), Some(("POST", "/api/ads/campaigns/{campaign_id}/claim")), false, Risk::Write),
+        ("ads.campaign_release", Some("jeeta.ads.campaign_release"), Some(("POST", "/api/ads/campaigns/{campaign_id}/release")), false, Risk::Write),
+        ("ads.plan_submit", Some("jeeta.ads.plan_submit"), Some(("POST", "/api/ads/campaigns/{campaign_id}/plan")), false, Risk::Spend),
+        ("ads.campaign_move", Some("jeeta.ads.campaign_move"), Some(("POST", "/api/ads/campaigns/{campaign_id}/moves")), false, Risk::Write),
+        ("ads.campaign_pause", Some("jeeta.ads.campaign_pause"), Some(("POST", "/api/ads/campaigns/{campaign_id}/pause")), false, Risk::Write),
+        ("ads.campaign_resume", None, Some(("POST", "/api/ads/campaigns/{campaign_id}/resume")), true, Risk::Spend),
+        ("ads.campaign_end", None, Some(("POST", "/api/ads/campaigns/{campaign_id}/end")), true, Risk::Write),
+        ("ads.ad_preview", Some("jeeta.ads.ad_preview"), Some(("GET", "/api/ads/campaigns/{campaign_id}/ads/{index}/preview")), false, Risk::Read),
+        ("studio.project_list", Some("jeeta.studio.project_list"), Some(("GET", "/api/studio/projects")), false, Risk::Read),
+        ("studio.project_create", Some("jeeta.studio.project_create"), Some(("POST", "/api/studio/projects")), false, Risk::Write),
+        ("studio.project_get", Some("jeeta.studio.project_get"), Some(("GET", "/api/studio/projects/{project_id}")), false, Risk::Read),
+        ("studio.project_update", Some("jeeta.studio.project_update"), Some(("PATCH", "/api/studio/projects/{project_id}")), false, Risk::Write),
+        ("studio.project_materials", Some("jeeta.studio.project_materials"), Some(("POST", "/api/studio/projects/{project_id}/materials")), false, Risk::Write),
+        ("studio.project_request", Some("jeeta.studio.project_request"), Some(("POST", "/api/studio/projects/{project_id}/requests")), false, Risk::Write),
+        ("studio.project_request_update", Some("jeeta.studio.project_request_update"), Some(("PATCH", "/api/studio/projects/{project_id}/requests/{request_id}")), false, Risk::Write),
+        ("studio.project_production", None, Some(("POST", "/api/studio/projects/{project_id}/productions")), true, Risk::Write),
+        ("studio.project_publication", Some("jeeta.studio.project_publication"), Some(("POST", "/api/studio/projects/{project_id}/publications")), false, Risk::Write),
+        ("studio.project_schedule", Some("jeeta.studio.project_schedule"), Some(("POST", "/api/studio/projects/{project_id}/outputs/{output_id}/schedule")), false, Risk::Write),
         ("studio.olays_list", Some("jeeta.studio.olays_list"), Some(("GET", "/api/studio/olays")), false, Risk::Read),
         ("studio.olay_get", Some("jeeta.studio.olay_get"), Some(("GET", "/api/studio/olays/{olay_id}")), false, Risk::Read),
         ("studio.olay_create", Some("jeeta.studio.olay_create"), Some(("POST", "/api/studio/olays")), false, Risk::Write),
         ("studio.olay_update", Some("jeeta.studio.olay_update"), Some(("PATCH", "/api/studio/olays/{olay_id}")), false, Risk::Write),
         ("studio.materials_list", Some("jeeta.studio.materials_list"), Some(("GET", "/api/studio/materials")), false, Risk::Read),
         ("studio.material_get", Some("jeeta.studio.material_get"), Some(("GET", "/api/studio/materials/{material_id}")), false, Risk::Read),
+        ("studio.material_intelligence_list", Some("jeeta.studio.material_intelligence_list"), Some(("GET", "/api/studio/material-intelligence")), false, Risk::Read),
+        ("studio.material_production_request", None, Some(("POST", "/api/studio/material-productions")), true, Risk::Write),
+        ("studio.material_production_list", Some("jeeta.studio.material_production_list"), Some(("GET", "/api/studio/material-productions")), false, Risk::Read),
+        ("studio.material_production_claim", Some("jeeta.studio.material_production_claim"), None, false, Risk::Write),
+        ("studio.material_production_complete", Some("jeeta.studio.material_production_complete"), None, false, Risk::Write),
+        ("studio.material_production_fail", Some("jeeta.studio.material_production_fail"), None, false, Risk::Write),
+        ("studio.material_intelligence_get", Some("jeeta.studio.material_intelligence_get"), Some(("GET", "/api/studio/materials/{material_id}/intelligence")), false, Risk::Read),
+        ("studio.material_preview", Some("jeeta.studio.material_preview"), Some(("GET", "/api/studio/materials/{material_id}/preview")), false, Risk::Read),
+        ("studio.material_analysis_retry", Some("jeeta.studio.material_analysis_retry"), Some(("POST", "/api/studio/materials/{material_id}/analysis/retry")), false, Risk::Write),
+        ("studio.material_intelligence_update", None, Some(("PATCH", "/api/studio/materials/{material_id}/intelligence")), true, Risk::Write),
+        ("studio.material_analysis_claim", Some("jeeta.studio.material_analysis_claim"), None, false, Risk::Write),
+        ("studio.material_analysis_complete", Some("jeeta.studio.material_analysis_complete"), None, false, Risk::Write),
+        ("studio.material_analysis_fail", Some("jeeta.studio.material_analysis_fail"), None, false, Risk::Write),
         ("studio.material_add", Some("jeeta.studio.material_add"), Some(("POST", "/api/studio/materials")), false, Risk::Write),
         ("studio.material_tag", Some("jeeta.studio.material_tag"), Some(("PATCH", "/api/studio/materials/{material_id}/tags")), false, Risk::Write),
         ("studio.slot_materials", Some("jeeta.studio.slot_materials"), Some(("GET", "/api/studio/slots/{slot_id}/materials")), false, Risk::Read),
@@ -227,10 +309,6 @@ fn catalog_is_the_release_table() {
         ("inbox.appointments.book", Some("jeeta.inbox.appointments_book"), Some(("POST", "/api/inbox/journeys/{journey_id}/appointments")), false, Risk::Write),
         ("inbox.appointments.cancel", Some("jeeta.inbox.appointments_cancel"), Some(("POST", "/api/inbox/appointments/{id}/cancel")), false, Risk::Write),
         ("inbox.appointments.held", Some("jeeta.inbox.appointments_held"), Some(("POST", "/api/inbox/appointments/{id}/held")), false, Risk::Write),
-        ("inbox.commissions.list", Some("jeeta.inbox.commissions_list"), Some(("GET", "/api/inbox/commissions")), false, Risk::Read),
-        ("inbox.commissions.approve", Some("jeeta.inbox.commissions_approve"), Some(("POST", "/api/inbox/commissions/{id}/approve")), false, Risk::Write),
-        ("inbox.commissions.pay", Some("jeeta.inbox.commissions_pay"), Some(("POST", "/api/inbox/commissions/{id}/pay")), false, Risk::Write),
-        ("inbox.commission_rates.set", Some("jeeta.inbox.commission_rates_set"), Some(("PUT", "/api/inbox/commission-rates")), false, Risk::Write),
         ("inbox.public.hide", Some("jeeta.inbox.public_hide"), Some(("POST", "/api/inbox/items/{item_id}/hide")), false, Risk::Write),
         ("inbox.public.delete", Some("jeeta.inbox.public_delete"), Some(("POST", "/api/inbox/items/{item_id}/delete")), false, Risk::Destructive),
         ("inbox.public.mark_handled", Some("jeeta.inbox.public_mark_handled"), Some(("POST", "/api/inbox/items/handled")), false, Risk::Write),
@@ -244,6 +322,10 @@ fn catalog_is_the_release_table() {
         ("billing.status", None, Some(("GET", "/api/billing")), true, Risk::Read),
         ("billing.activate", None, Some(("POST", "/api/billing/activate")), true, Risk::Write),
         ("billing.report_payment", Some("jeeta.billing.report_payment"), Some(("POST", "/api/billing/payments")), false, Risk::Write),
+        ("modules.list", Some("jeeta.modules.list"), Some(("GET", "/api/workspace/modules")), false, Risk::Read),
+        ("modules.install", Some("jeeta.modules.install"), Some(("PUT", "/api/workspace/modules/{module_id}")), false, Risk::Write),
+        ("modules.update", Some("jeeta.modules.update"), Some(("PATCH", "/api/workspace/modules/{module_id}")), false, Risk::Write),
+        ("modules.remove", Some("jeeta.modules.remove"), Some(("DELETE", "/api/workspace/modules/{module_id}")), false, Risk::Write),
         ("workspace.info", Some("jeeta.workspace.info"), Some(("GET", "/api/workspace")), false, Risk::Read),
         ("workspace.switch", None, Some(("POST", "/api/auth/switch-workspace")), true, Risk::Write),
         ("team.list", Some("jeeta.team.list"), Some(("GET", "/api/team")), false, Risk::Read),
@@ -293,6 +375,8 @@ fn catalog_is_the_release_table() {
         ("budget.items.retire", Some("jeeta.budget.items_retire"), Some(("POST", "/api/budget/items/{budget_item_id}/retire")), false, Risk::Destructive),
         ("budget.spend.record", Some("jeeta.budget.spend_record"), Some(("POST", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Spend),
         ("budget.spend.list", Some("jeeta.budget.spend_list"), Some(("GET", "/api/budget/items/{budget_item_id}/spend")), false, Risk::Read),
+        ("budget.breakdown", Some("jeeta.budget.breakdown"), Some(("GET", "/api/budget/breakdown")), false, Risk::Read),
+        ("budget.stop", None, Some(("POST", "/api/budget/stop")), true, Risk::Write),
         ("connector.start_oauth", Some("jeeta.connector.start_oauth"), Some(("POST", "/api/connectors/oauth/start")), false, Risk::Write),
         ("connector.complete_oauth", None, Some(("GET", "/api/connectors/oauth/callback/{provider}")), true, Risk::Write),
         ("connector.confirm_assets", Some("jeeta.connector.confirm_assets"), Some(("POST", "/api/connectors/oauth/{pending_id}/confirm")), false, Risk::Write),
@@ -384,9 +468,9 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 245);
+    assert_eq!(CATALOG.len(), 295);
     for uc in CATALOG {
-        assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
+        assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
     let exempt = |e: StatusExemption| -> Vec<&str> {
         CATALOG
@@ -403,6 +487,7 @@ fn catalog_is_the_release_table() {
             "auth.logout",
             "auth.me",
             "billing.status",
+            "modules.list",
             "workspace.info",
             "workspace.switch",
             "prospects.do_not_contact",

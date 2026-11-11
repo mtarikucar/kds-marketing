@@ -44,6 +44,13 @@ export const me: MeOut = {
       permissions: [
         'api_keys.manage',
         'budget.manage',
+        'materials.work',
+        'content.work',
+        'content.manage',
+        'social.work',
+        'social.manage',
+        'ads.work',
+        'ads.manage',
         'capabilities.manage',
         'ledger.read',
         'team.manage',

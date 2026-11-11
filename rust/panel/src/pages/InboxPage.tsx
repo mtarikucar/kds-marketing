@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { ChevronDown, PanelRight, Search } from 'lucide-react';
 import * as api from '@/api/inbox';
 import type { InboxConversationRow, InboxQueue } from '@/api/types';
 import { useSession } from '@/auth/useSession';
@@ -9,12 +10,12 @@ import { kindLabel } from '@/lib/capabilities';
 import { personName } from '@/lib/people';
 import { can } from '@/lib/roles';
 import { QueryState } from '@/components/QueryState';
-import { Badge, Button, Callout, Disclosure, Input, PageHeader } from '@/components/ui';
+import { Badge, Button, Callout, cn, Disclosure, Input } from '@/components/ui';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
-import { Deadline, columnClass, useInboxKey } from './InboxShared';
+import { Deadline, conversationClass, journeyClass, useInboxKey } from './InboxShared';
 
 /** The surface badge of a row (spec §9): a direct message, a comment, a question, relayed mail. */
 function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'question' | 'relay' {
@@ -23,44 +24,69 @@ function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'questio
   return 'private';
 }
 
+/** A short timestamp like a mail list: the time today, the weekday this week, else the date. */
+function shortTime(iso: string | null | undefined, language: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const locale = language.startsWith('tr') ? 'tr-TR' : 'en-GB';
+  if (date.toDateString() === now.toDateString()) return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(date);
+  if (now.getTime() - date.getTime() < 6 * 86_400_000) return new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(date);
+  return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short' }).format(date);
+}
+
+function initials(name: string): string {
+  const parts = name.replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toLocaleUpperCase() || '·';
+}
+
+/** The customer spoke last and nobody answered yet: shown bold, like an unread mail. */
+function awaitsReply(row: InboxConversationRow): boolean {
+  if (row.state === 'closed' || !row.last_inbound_at) return false;
+  return !row.last_outbound_at || row.last_inbound_at > row.last_outbound_at;
+}
+
+/** One conversation as a compact mail-list row: who, channel, state, when. */
 function ConversationLink({ row }: { row: InboxConversationRow }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const key = useInboxKey();
   const person = useQuery({
     queryKey: [...key, 'person', row.person_id],
     queryFn: () => api.getPerson(row.person_id),
   });
   const { conversationId } = useParams();
+  const name = personName(t, person.data?.person, person.data?.identities);
+  const selected = conversationId === row.id;
+  const unread = awaitsReply(row);
+  const when = row.last_inbound_at && (!row.last_outbound_at || row.last_inbound_at > row.last_outbound_at) ? row.last_inbound_at : row.last_outbound_at ?? row.updated_at;
   return (
     <Link
       to={`/inbox/${encodeURIComponent(row.id)}`}
-      aria-current={conversationId === row.id ? 'page' : undefined}
-      className={`block min-w-0 rounded-lg border p-3 text-sm focus-visible:ring-2 focus-visible:ring-ring ${conversationId === row.id ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted'}`}
-    >
-      <span className="block font-medium">{personName(t, person.data?.person, person.data?.identities)}</span>
-      <span className="text-xs text-muted-foreground">
-        {kindLabel(t, row.kind_key)} · {t(`inbox.state.${typeof row.state === 'string' ? row.state : 'snoozed'}`)}
-      </span>
-      {row.surface && (
-        <span className="mt-1 flex flex-wrap items-center gap-1">
-          <Badge size="sm" tone={row.surface === 'private' ? 'neutral' : 'primary'}>
-            {t(`inbox.public.surface.${surfaceKey(row)}`)}
-          </Badge>
-          {!!row.owed_items && (
-            <Badge size="sm" tone="warning">
-              {t('inbox.public.owed', { count: row.owed_items })}
-            </Badge>
-          )}
-          {!!row.held_replies && (
-            <Badge size="sm" tone="info">
-              {t('inbox.public.heldCount', { count: row.held_replies })}
-            </Badge>
-          )}
-          {row.next_deadline && <Deadline at={row.next_deadline} />}
-        </span>
+      aria-current={selected ? 'page' : undefined}
+      className={cn(
+        'grid min-w-0 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-0.5 border-b border-border/60 px-3 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        selected ? 'bg-primary-50 shadow-[inset_3px_0_0_var(--primary)] dark:bg-primary-950/50' : 'hover:bg-surface-muted',
       )}
+    >
+      <span className="row-span-2 flex h-8 w-8 items-center justify-center rounded-full bg-surface-muted text-xs font-semibold text-foreground" aria-hidden="true">{initials(name)}</span>
+      <span className={cn('truncate', unread ? 'font-semibold text-foreground' : 'font-medium')}>{name}</span>
+      <time dateTime={when} className={cn('text-[11px] tabular-nums', unread ? 'font-semibold text-foreground' : 'text-muted-foreground')}>{shortTime(when, i18n.language)}</time>
+      <span className="col-span-2 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
+        <span className="shrink-0 rounded-full bg-surface-muted px-1.5 py-px text-[11px] text-foreground/80">{kindLabel(t, row.kind_key)}</span>
+        <span className="truncate">{t(`inbox.state.${typeof row.state === 'string' ? row.state : 'snoozed'}`)}</span>
+        {row.surface && <Badge size="sm" tone={row.surface === 'private' ? 'neutral' : 'primary'}>{t(`inbox.public.surface.${surfaceKey(row)}`)}</Badge>}
+        {!!row.owed_items && <Badge size="sm" tone="warning">{t('inbox.public.owed', { count: row.owed_items })}</Badge>}
+        {!!row.held_replies && <Badge size="sm" tone="info">{t('inbox.public.heldCount', { count: row.held_replies })}</Badge>}
+        {row.next_deadline && <Deadline at={row.next_deadline} />}
+      </span>
     </Link>
   );
+}
+
+const JOURNEY_PANE_KEY = 'jeeta.inbox.journeyPane';
+function readJourneyPane(): boolean {
+  try { return window.localStorage.getItem(JOURNEY_PANE_KEY) !== 'closed'; } catch { return true; }
 }
 
 export function InboxPage() {
@@ -73,6 +99,13 @@ export function InboxPage() {
   const [params] = useSearchParams();
   const [queue, setQueue] = useState<InboxQueue | 'approvals'>('ours');
   const [search, setSearch] = useState('');
+  const [queueExpanded, setQueueExpanded] = useState(false);
+  const [journeyPane, setJourneyPane] = useState(readJourneyPane);
+  const toggleJourneyPane = () => setJourneyPane((open) => {
+    try { window.localStorage.setItem(JOURNEY_PANE_KEY, open ? 'closed' : 'open'); } catch { /* per-viewer convenience only */ }
+    return !open;
+  });
+  useEffect(() => setQueueExpanded(false), [conversationId, params.get('person'), params.get('task')]);
   const rows = useInfiniteQuery({
     queryKey: [...key, 'conversations', queue],
     queryFn: ({ pageParam }) => api.listConversations(queue as InboxQueue, pageParam),
@@ -105,6 +138,7 @@ export function InboxPage() {
   });
   const task = tasks.data?.find((row) => row.id === taskId);
   const journeyId = task?.journey_id ?? selectedPerson.data?.open_journey?.id;
+  const hasSelection = !!conversationId || !!personId || !!taskId;
   if (session.isPending) return <QueryState query={session} />;
   if (!allowed)
     return (
@@ -112,59 +146,63 @@ export function InboxPage() {
         {t('errors.missingPermission', { permission: t('permissions.inbox.work') })}
       </Callout>
     );
+  const queues: (InboxQueue | 'approvals')[] = ['ours', 'unassigned', 'snoozed', 'all', 'approvals'];
+  const queueLabel = (value: InboxQueue | 'approvals') => value === 'approvals' ? t('inbox.public.approvals') : t(`inbox.queue.${value}`);
+  const listHidden = hasSelection && !queueExpanded;
   return (
-    <>
-      <PageHeader
-        title={t('inbox.title')}
-        description={t('inbox.description')}
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button asChild variant="outline"><Link to="/inbox/commissions">{t('inbox.commissions.title')}</Link></Button>
-            {manage && <Button asChild variant="outline">
-              <Link to="/inbox/merges">{t('inbox.merges.title')}</Link>
-            </Button>}
-          </div>
-        }
-      />
+    <div className="flex min-w-0 flex-col lg:h-[calc(100dvh-61px)] lg:min-h-[36rem]">
+      <header className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border px-4 py-2.5">
+        <h1 className="font-display text-xl font-medium">{t('inbox.title')}</h1>
+        <label className="relative min-w-[12rem] max-w-md flex-1">
+          <span className="sr-only">{t('inbox.search')}</span>
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <Input className="h-9 bg-surface pl-9" type="search" placeholder={t('inbox.search')} value={search} onChange={(e) => setSearch(e.target.value)} />
+        </label>
+        <div className="ms-auto flex items-center gap-1">
+          {manage && <Button asChild size="sm" variant="ghost"><Link to="/inbox/merges">{t('inbox.merges.title')}</Link></Button>}
+          <Button size="sm" variant="ghost" className="hidden xl:inline-flex" aria-pressed={journeyPane} onClick={toggleJourneyPane}>
+            <PanelRight className="h-4 w-4" aria-hidden="true" />{t('inbox.journey')}
+          </Button>
+        </div>
+      </header>
       <div
         data-testid="inbox-columns"
-        className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.6fr)_minmax(0,1.2fr)]"
+        className={cn(
+          'grid min-w-0 grid-cols-1 overflow-hidden bg-surface',
+          'lg:min-h-0 lg:flex-1 lg:grid-cols-[11rem_19rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)_auto]',
+          journeyPane ? 'xl:grid-cols-[11rem_21rem_minmax(0,1fr)_17rem] xl:grid-rows-1' : 'xl:grid-cols-[11rem_21rem_minmax(0,1fr)] xl:grid-rows-1 xl:[&_.inbox-journey]:hidden',
+        )}
       >
-        <aside className={columnClass} aria-label={t('inbox.queues')}>
-          <h2 className="font-semibold">{t('inbox.queues')}</h2>
-          <div className="grid grid-cols-2 gap-2">
-            {(['ours', 'unassigned', 'snoozed', 'all'] as const).map((value) => (
-              <Button
-                key={value}
-                size="sm"
-                variant={queue === value ? 'primary' : 'outline'}
-                aria-pressed={queue === value}
-                onClick={() => setQueue(value)}
-              >
-                {t(`inbox.queue.${value}`)}
-              </Button>
-            ))}
+        {hasSelection && <Button variant="ghost" className="justify-between rounded-none border-b border-border px-4 lg:hidden" aria-expanded={queueExpanded} aria-controls="inbox-queue-content" onClick={() => setQueueExpanded((value) => !value)}>
+          {t('inbox.ux.browseQueues', { defaultValue: 'Kuyruklar ve kişi araması' })}
+          <ChevronDown className={`h-4 w-4 ${queueExpanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+        </Button>}
+        <nav aria-label={t('inbox.queues')} className={cn('min-w-0 border-b border-border bg-surface-muted/60 p-2 lg:row-span-2 xl:row-span-1 lg:flex lg:flex-col lg:gap-0.5 lg:overflow-y-auto lg:border-b-0 lg:border-e', listHidden ? 'hidden' : 'flex gap-1 overflow-x-auto')}>
+          <h2 className="hidden px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground lg:block">{t('inbox.queues')}</h2>
+          {queues.map((value) => (
             <Button
+              key={value}
               size="sm"
-              className="col-span-2"
-              variant={queue === 'approvals' ? 'primary' : 'outline'}
-              aria-pressed={queue === 'approvals'}
-              onClick={() => setQueue('approvals')}
+              variant="ghost"
+              className={cn('shrink-0 justify-start rounded-md px-2.5 lg:w-full', value === 'approvals' && 'lg:mt-3', queue === value ? 'bg-primary-50 font-semibold text-foreground dark:bg-primary-950/60' : 'text-muted-foreground')}
+              aria-pressed={queue === value}
+              onClick={() => setQueue(value)}
             >
-              {t('inbox.public.approvals')}
+              {queueLabel(value)}
             </Button>
+          ))}
+        </nav>
+        <section id="inbox-queue-content" aria-label={search.trim() ? t('inbox.search') : queueLabel(queue)} className={cn('min-w-0 flex-col border-b border-border lg:row-span-2 xl:row-span-1 lg:flex lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-e', listHidden ? 'hidden' : 'flex max-h-[28rem] overflow-y-auto')}>
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/60 bg-surface/95 px-3 py-2 text-xs text-muted-foreground backdrop-blur">
+            <span className="font-medium text-foreground">{search.trim() ? t('inbox.search') : queueLabel(queue)}</span>
           </div>
-          <label className="text-sm">
-            {t('inbox.search')}
-            <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </label>
           {queue === 'approvals' && !search.trim() ? (
             <QueryState query={pending}>
               {pending.data?.approvals?.map((held) => (
                 <Link
                   key={held.outbox_id}
                   data-testid="approval"
-                  className="flex flex-col gap-1 rounded-lg border p-3 text-sm hover:bg-muted"
+                  className="flex flex-col gap-1 border-b border-border/60 px-3 py-2.5 text-sm shadow-[inset_3px_0_0_var(--warning)] hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   to={`/inbox/${encodeURIComponent(held.conversation_id)}`}
                 >
                   <span className="font-medium">{t('inbox.public.approvalFor')}</span>
@@ -172,7 +210,7 @@ export function InboxPage() {
                 </Link>
               ))}
               {pending.data && !pending.data.approvals?.length && (
-                <p className="text-sm text-muted-foreground">{t('inbox.public.noApprovals')}</p>
+                <p className="px-3 py-4 text-sm text-muted-foreground">{t('inbox.public.noApprovals')}</p>
               )}
             </QueryState>
           ) : search.trim() ? (
@@ -180,15 +218,18 @@ export function InboxPage() {
               {people.data?.map((person) => (
                 <Link
                   key={person.id}
-                  className="rounded-lg border p-3 text-sm hover:bg-muted"
+                  className="border-b border-border/60 px-3 py-2.5 text-sm hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                   to={`/inbox?person=${encodeURIComponent(person.id)}`}
                 >
-                  {personName(t, person)}
-                  <span className="block text-xs text-muted-foreground">{person.company}</span>
+                  <span className="font-medium">{personName(t, person)}</span>
+                  {person.company && <span className="block text-xs text-muted-foreground">{person.company}</span>}
                 </Link>
               ))}
               {people.data?.length === 0 && (
-                <p className="text-sm text-muted-foreground">{t('inbox.empty')}</p>
+                <div className="space-y-3 p-3">
+                  <p className="text-sm text-muted-foreground">{t('people.noMatch')}</p>
+                  <Button size="sm" variant="outline" onClick={() => setSearch('')}>{t('people.clearSearch')}</Button>
+                </div>
               )}
             </QueryState>
           ) : (
@@ -199,11 +240,15 @@ export function InboxPage() {
                   <ConversationLink key={row.id} row={row} />
                 ))}
               {rows.data?.pages[0]?.items.length === 0 && (
-                <p className="text-sm text-muted-foreground">{t('inbox.empty')}</p>
+                <div className="space-y-2 px-3 py-4 text-sm text-muted-foreground">
+                  <p>{t('inbox.empty')}</p>
+                  <p className="leading-6">{t('inbox.ux.emptyQueueHint', { defaultValue: 'Başka bir kuyruk seçin veya bir kişiyi arayın. Yeni görüşmeler bağlı müşteri kanallarından buraya gelir.' })}</p>
+                </div>
               )}
               {rows.hasNextPage && (
                 <Button
-                  variant="outline"
+                  variant="ghost"
+                  className="m-2"
                   loading={rows.isFetchingNextPage}
                   onClick={() => void rows.fetchNextPage()}
                 >
@@ -212,7 +257,7 @@ export function InboxPage() {
               )}
             </QueryState>
           )}
-        </aside>
+        </section>
         {conversationId ? (
           <InboxConversation
             key={`${session.data?.current_workspace}:${conversationId}`}
@@ -220,13 +265,17 @@ export function InboxPage() {
           />
         ) : (
           <>
-            <section className={columnClass} aria-label={t('inbox.thread')}>
-              <h2 className="font-semibold">
+            <section className={cn(conversationClass, !hasSelection && 'hidden lg:flex')} aria-label={t('inbox.thread')}>
+              <h2 className="font-display text-lg font-medium">
                 {selectedPerson.data
                   ? personName(t, selectedPerson.data.person, selectedPerson.data.identities)
                   : t('inbox.thread')}
               </h2>
-              <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>
+              {!selectedPerson.data ? (
+                <div className="flex min-h-72 flex-1 flex-col items-center justify-center text-center">
+                  <p className="max-w-sm text-sm leading-6 text-muted-foreground">{t('inbox.ux.chooseHint', { defaultValue: 'Kuyruktan bir görüşme seçin. Kişi aramasıyla geçmiş görüşmelere de ulaşabilirsiniz.' })}</p>
+                </div>
+              ) : <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>}
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
                 <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
               </>}
@@ -253,14 +302,14 @@ export function InboxPage() {
                 personId={selectedPerson.data?.person.id}
               />
             ) : (
-              <section className={columnClass}>
-                <h2 className="font-semibold">{t('inbox.journey')}</h2>
-                <p className="text-sm text-muted-foreground">{t('inbox.noJourney')}</p>
+              <section className={cn(journeyClass, !hasSelection && 'hidden xl:flex')}>
+                <h2 className="text-sm font-medium">{t('inbox.journey')}</h2>
+                <p className="text-sm leading-6 text-muted-foreground">{t('inbox.noJourney')}</p>
               </section>
             )}
           </>
         )}
       </div>
-    </>
+    </div>
   );
 }

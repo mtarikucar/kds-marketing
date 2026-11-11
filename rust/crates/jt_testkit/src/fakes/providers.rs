@@ -19,14 +19,20 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
+    AdAccountLimits, AdCampaignWriter, AdDay, AdLevel, AdPlacement, AdSetSpec, AdSpec,
+    CampaignProviderState, CampaignSpec, CreativeSpec, LeadFormSpec,
+};
+
+use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
     DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
     LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
     MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
-    PlatformAppConfig, PolledMail, PostMetrics, PrivateReceipt, PublicPoller, PublicSurface,
-    PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost,
-    SendReceipt, SmsSender, SubjectFacts, Telephony, TiktokApp, TiktokCreator, Url, XApp,
+    PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt, PublicPoller,
+    PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
+    RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony,
+    TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -195,6 +201,67 @@ impl<T> Script<T> {
 /// One call a [`ScriptedConnector`] received, with its arguments.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectorCall {
+    AccountLimits {
+        credential: Credential,
+        public: Value,
+    },
+    FindByName {
+        credential: Credential,
+        public: Value,
+        level: AdLevel,
+        name: String,
+    },
+    CreateCampaign {
+        credential: Credential,
+        public: Value,
+        spec: CampaignSpec,
+    },
+    CreateAdset {
+        credential: Credential,
+        public: Value,
+        spec: AdSetSpec,
+    },
+    UploadImage {
+        credential: Credential,
+        public: Value,
+        bytes: Vec<u8>,
+        name: String,
+    },
+    CreateLeadForm {
+        credential: Credential,
+        public: Value,
+        spec: LeadFormSpec,
+    },
+    CreateCreative {
+        credential: Credential,
+        public: Value,
+        spec: CreativeSpec,
+    },
+    CreateAd {
+        credential: Credential,
+        public: Value,
+        spec: AdSpec,
+    },
+    CampaignState {
+        credential: Credential,
+        public: Value,
+        campaign_id: String,
+    },
+    AdDays {
+        credential: Credential,
+        public: Value,
+        campaign_id: String,
+        objective: jt_app::ports::connectors::AdObjective,
+        since: Date,
+        until: Date,
+    },
+    Preview {
+        credential: Credential,
+        public: Value,
+        creative: CreativeSpec,
+        placement: AdPlacement,
+    },
+
     SetAdStatus {
         credential: Credential,
         entity_id: String,
@@ -231,7 +298,7 @@ pub enum ConnectorCall {
         to: String,
         text: String,
         reference: Option<String>,
-        commercial: bool,
+        filter: SmsConsentFilter,
     },
     SendMail {
         workspace_id: WorkspaceId,
@@ -248,6 +315,19 @@ pub enum ConnectorCall {
         credential: Credential,
         public: Value,
         request: PublishRequest,
+    },
+    /// A post left with the provider's own scheduler to go out at `at`.
+    Schedule {
+        credential: Credential,
+        public: Value,
+        request: PublishRequest,
+        at: OffsetDateTime,
+    },
+    /// A scheduled post asked back from the provider.
+    Withdraw {
+        credential: Credential,
+        public: Value,
+        receipt: PublishReceipt,
     },
     PostMetrics {
         credential: Credential,
@@ -324,6 +404,18 @@ type SendHook =
     Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 pub struct ScriptedConnector {
+    account_limits: Script<Result<AdAccountLimits, ConnectorError>>,
+    find_by_name: Script<Result<Option<String>, ConnectorError>>,
+    create_campaign: Script<Result<String, ConnectorError>>,
+    create_adset: Script<Result<String, ConnectorError>>,
+    upload_image: Script<Result<String, ConnectorError>>,
+    create_lead_form: Script<Result<String, ConnectorError>>,
+    create_creative: Script<Result<String, ConnectorError>>,
+    create_ad: Script<Result<String, ConnectorError>>,
+    campaign_state: Script<Result<CampaignProviderState, ConnectorError>>,
+    ad_days: Script<Result<Vec<AdDay>, ConnectorError>>,
+    preview: Script<Result<String, ConnectorError>>,
+
     provider: Provider,
     hosts: &'static [&'static str],
     calls: Mutex<Vec<ConnectorCall>>,
@@ -346,6 +438,23 @@ pub struct ScriptedConnector {
     /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::resolve_calls`]).
     resolve: Script<Result<Option<PublishResolution>, ConnectorError>>,
     resolve_calls: Mutex<Vec<PublishReceipt>>,
+    /// The window this provider's own scheduler takes a post in
+    /// ([`ScriptedConnector::with_scheduler`]); `None`, as the trait's default: it has none. It
+    /// takes a post that is not a story and carries at most one medium, as the one real
+    /// scheduler does.
+    schedule_window: Option<(time::Duration, time::Duration)>,
+    /// Posts left with the scheduler answer from here; each is a recorded
+    /// [`ConnectorCall::Schedule`].
+    schedule: Script<Result<PublishReceipt, ConnectorError>>,
+    /// Where a scheduled post stands answers from here, `Ok(Scheduled::Waiting)` when nothing is
+    /// queued; the receipts asked about are kept apart from [`ScriptedConnector::calls`] (see
+    /// [`ScriptedConnector::scheduled_calls`]).
+    scheduled: Script<Result<Scheduled, ConnectorError>>,
+    scheduled_calls: Mutex<Vec<PublishReceipt>>,
+    /// Withdrawals answer from here; each is a recorded [`ConnectorCall::Withdraw`].
+    withdraw: Script<Result<bool, ConnectorError>>,
+    /// What [`Publisher::scheduled_list`] answers next; `Ok(None)` when nothing is queued.
+    scheduled_list: Mutex<VecDeque<Result<Option<Vec<PlatformScheduled>>, ConnectorError>>>,
     /// Revocations answer from here, `Ok(())` (the trait's default) when nothing is queued; the
     /// credentials revoked are kept apart from [`ScriptedConnector::calls`] (see
     /// [`ScriptedConnector::revoke_calls`]).
@@ -392,6 +501,40 @@ pub struct ScriptedConnector {
 }
 
 impl ScriptedConnector {
+    pub fn push_account_limits(&self, result: Result<AdAccountLimits, ConnectorError>) {
+        self.account_limits.push(result);
+    }
+    pub fn push_find_by_name(&self, result: Result<Option<String>, ConnectorError>) {
+        self.find_by_name.push(result);
+    }
+    pub fn push_create_campaign(&self, result: Result<String, ConnectorError>) {
+        self.create_campaign.push(result);
+    }
+    pub fn push_create_adset(&self, result: Result<String, ConnectorError>) {
+        self.create_adset.push(result);
+    }
+    pub fn push_upload_image(&self, result: Result<String, ConnectorError>) {
+        self.upload_image.push(result);
+    }
+    pub fn push_create_lead_form(&self, result: Result<String, ConnectorError>) {
+        self.create_lead_form.push(result);
+    }
+    pub fn push_create_creative(&self, result: Result<String, ConnectorError>) {
+        self.create_creative.push(result);
+    }
+    pub fn push_create_ad(&self, result: Result<String, ConnectorError>) {
+        self.create_ad.push(result);
+    }
+    pub fn push_campaign_state(&self, result: Result<CampaignProviderState, ConnectorError>) {
+        self.campaign_state.push(result);
+    }
+    pub fn push_ad_days(&self, result: Result<Vec<AdDay>, ConnectorError>) {
+        self.ad_days.push(result);
+    }
+    pub fn push_preview(&self, result: Result<String, ConnectorError>) {
+        self.preview.push(result);
+    }
+
     pub fn push_resolve_adset(&self, result: Result<Option<String>, ConnectorError>) {
         self.resolve_adset.push(result);
     }
@@ -408,6 +551,17 @@ impl ScriptedConnector {
     /// ([`with_hosts`](Self::with_hosts) names some).
     pub fn new(provider: Provider) -> Self {
         ScriptedConnector {
+            account_limits: Script::default(),
+            find_by_name: Script::default(),
+            create_campaign: Script::default(),
+            create_adset: Script::default(),
+            upload_image: Script::default(),
+            create_lead_form: Script::default(),
+            create_creative: Script::default(),
+            create_ad: Script::default(),
+            campaign_state: Script::default(),
+            ad_days: Script::default(),
+            preview: Script::default(),
             provider,
             hosts: &[],
             calls: Mutex::new(Vec::new()),
@@ -425,6 +579,12 @@ impl ScriptedConnector {
             publish: Script::default(),
             resolve: Script::default(),
             resolve_calls: Mutex::default(),
+            schedule_window: None,
+            schedule: Script::default(),
+            scheduled: Script::default(),
+            scheduled_calls: Mutex::default(),
+            withdraw: Script::default(),
+            scheduled_list: Mutex::default(),
             revoke: Script::default(),
             revoke_calls: Mutex::default(),
             creator_info: Script::default(),
@@ -459,6 +619,13 @@ impl ScriptedConnector {
     /// The adapter answering `hosts` from [`Connector::hosts`].
     pub fn with_hosts(mut self, hosts: &'static [&'static str]) -> Self {
         self.hosts = hosts;
+        self
+    }
+
+    /// The adapter with a scheduler of its own that takes a post between `earliest` and
+    /// `latest` ahead of its time ([`Publisher::schedule_window`]).
+    pub fn with_scheduler(mut self, earliest: time::Duration, latest: time::Duration) -> Self {
+        self.schedule_window = Some((earliest, latest));
         self
     }
 
@@ -524,6 +691,35 @@ impl ScriptedConnector {
 
     pub fn push_publish(&self, result: Result<PublishReceipt, ConnectorError>) {
         self.publish.push(result);
+    }
+
+    /// Queues what the next [`Publisher::schedule`] answers.
+    pub fn push_schedule(&self, result: Result<PublishReceipt, ConnectorError>) {
+        self.schedule.push(result);
+    }
+
+    /// Queues what the next [`Publisher::scheduled`] answers.
+    pub fn push_scheduled(&self, result: Result<Scheduled, ConnectorError>) {
+        self.scheduled.push(result);
+    }
+
+    /// The receipts [`Publisher::scheduled`] was asked about, in order.
+    pub fn scheduled_calls(&self) -> Vec<PublishReceipt> {
+        lock(&self.scheduled_calls).clone()
+    }
+
+    /// Queues what the next [`Publisher::withdraw`] answers.
+    pub fn push_withdraw(&self, result: Result<bool, ConnectorError>) {
+        self.withdraw.push(result);
+    }
+
+    /// Queues what the next [`Publisher::scheduled_list`] answers (it answers `Ok(None)`, a
+    /// provider without a scheduler to read, while nothing is queued).
+    pub fn push_scheduled_list(
+        &self,
+        result: Result<Option<Vec<PlatformScheduled>>, ConnectorError>,
+    ) {
+        lock(&self.scheduled_list).push_back(result);
     }
 
     /// Queues what the next [`Publisher::resolve`] answers.
@@ -727,14 +923,14 @@ impl SmsSender for ScriptedConnector {
         to: &str,
         text: &str,
         reference: Option<&str>,
-        commercial: bool,
+        filter: SmsConsentFilter,
     ) -> Result<SendReceipt, ConnectorError> {
         self.record(ConnectorCall::SendSms {
             credential: cred.clone(),
             to: to.to_owned(),
             text: text.to_owned(),
             reference: reference.map(str::to_owned),
-            commercial,
+            filter,
         });
         self.after_send().await;
         self.next(&self.sms, "sms result")
@@ -793,6 +989,77 @@ impl Publisher for ScriptedConnector {
         });
         self.after_send().await;
         self.next(&self.publish, "publish result")
+    }
+    fn schedule_window(
+        &self,
+        _public: &Value,
+        request: &PublishRequest,
+    ) -> Option<(time::Duration, time::Duration)> {
+        if request.format == Some(jt_app::ports::connectors::PostFormat::Story)
+            || request.media_urls.len() + request.media.len() > 1
+        {
+            return None;
+        }
+        self.schedule_window
+    }
+
+    async fn schedule(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        request: &PublishRequest,
+        at: OffsetDateTime,
+    ) -> Result<PublishReceipt, ConnectorError> {
+        self.record(ConnectorCall::Schedule {
+            credential: cred.clone(),
+            public: public.clone(),
+            request: request.clone(),
+            at,
+        });
+        self.after_send().await;
+        self.next(&self.schedule, "schedule result")
+    }
+
+    async fn scheduled(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Scheduled, ConnectorError> {
+        lock(&self.scheduled_calls).push(receipt.clone());
+        self.scheduled.try_next().unwrap_or(Ok(Scheduled::Waiting))
+    }
+
+    async fn withdraw(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<bool, ConnectorError> {
+        self.record(ConnectorCall::Withdraw {
+            credential: cred.clone(),
+            public: public.clone(),
+            receipt: receipt.clone(),
+        });
+        self.next(&self.withdraw, "withdraw result")
+    }
+
+    async fn scheduled_list(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        lock(&self.scheduled_list).pop_front().unwrap_or(Ok(None))
+    }
+
+    /// The post is there: a scripted provider reads back what it published.
+    async fn read_back(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        Ok(())
     }
 
     async fn resolve(
@@ -1727,6 +1994,11 @@ impl ConnectorRegistry for ScriptedRegistry {
             .map(|c| c as Arc<dyn MessagingSender>)
     }
 
+    fn ad_campaigns(&self, provider: Provider) -> Option<Arc<dyn AdCampaignWriter>> {
+        self.offered(provider, META_ONLY)
+            .map(|c| c as Arc<dyn AdCampaignWriter>)
+    }
+
     fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
         self.offered(provider, META_ONLY)
             .map(|c| c as Arc<dyn AdBudgetWriter>)
@@ -1764,5 +2036,170 @@ impl ConnectorRegistry for ScriptedRegistry {
             .get(&provider)
             .cloned()
             .map(|p| p as Arc<dyn PublicPoller>)
+    }
+}
+
+#[async_trait]
+impl AdCampaignWriter for ScriptedConnector {
+    async fn account_limits(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<AdAccountLimits, ConnectorError> {
+        self.record(ConnectorCall::AccountLimits {
+            credential: cred.clone(),
+            public: public.clone(),
+        });
+        self.account_limits
+            .next("connector", self.provider, "account_limits")
+    }
+    async fn find_by_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        level: AdLevel,
+        name: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        self.record(ConnectorCall::FindByName {
+            credential: cred.clone(),
+            public: public.clone(),
+            level,
+            name: name.to_owned(),
+        });
+        self.find_by_name
+            .next("connector", self.provider, "find_by_name")
+    }
+    async fn create_campaign(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CampaignSpec,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::CreateCampaign {
+            credential: cred.clone(),
+            public: public.clone(),
+            spec: spec.clone(),
+        });
+        self.create_campaign
+            .next("connector", self.provider, "create_campaign")
+    }
+    async fn create_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSetSpec,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::CreateAdset {
+            credential: cred.clone(),
+            public: public.clone(),
+            spec: spec.clone(),
+        });
+        self.create_adset
+            .next("connector", self.provider, "create_adset")
+    }
+    async fn upload_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::UploadImage {
+            credential: cred.clone(),
+            public: public.clone(),
+            bytes: bytes.to_owned(),
+            name: name.to_owned(),
+        });
+        self.upload_image
+            .next("connector", self.provider, "upload_image")
+    }
+    async fn create_lead_form(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &LeadFormSpec,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::CreateLeadForm {
+            credential: cred.clone(),
+            public: public.clone(),
+            spec: spec.clone(),
+        });
+        self.create_lead_form
+            .next("connector", self.provider, "create_lead_form")
+    }
+    async fn create_creative(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CreativeSpec,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::CreateCreative {
+            credential: cred.clone(),
+            public: public.clone(),
+            spec: spec.clone(),
+        });
+        self.create_creative
+            .next("connector", self.provider, "create_creative")
+    }
+    async fn create_ad(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSpec,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::CreateAd {
+            credential: cred.clone(),
+            public: public.clone(),
+            spec: spec.clone(),
+        });
+        self.create_ad.next("connector", self.provider, "create_ad")
+    }
+    async fn campaign_state(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+    ) -> Result<CampaignProviderState, ConnectorError> {
+        self.record(ConnectorCall::CampaignState {
+            credential: cred.clone(),
+            public: public.clone(),
+            campaign_id: campaign_id.to_owned(),
+        });
+        self.campaign_state
+            .next("connector", self.provider, "campaign_state")
+    }
+    async fn ad_days(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+        objective: jt_app::ports::connectors::AdObjective,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<AdDay>, ConnectorError> {
+        self.record(ConnectorCall::AdDays {
+            credential: cred.clone(),
+            public: public.clone(),
+            campaign_id: campaign_id.to_owned(),
+            objective,
+            since,
+            until,
+        });
+        self.ad_days.next("connector", self.provider, "ad_days")
+    }
+    async fn preview(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        creative: &CreativeSpec,
+        placement: AdPlacement,
+    ) -> Result<String, ConnectorError> {
+        self.record(ConnectorCall::Preview {
+            credential: cred.clone(),
+            public: public.clone(),
+            creative: creative.clone(),
+            placement,
+        });
+        self.preview.next("connector", self.provider, "preview")
     }
 }

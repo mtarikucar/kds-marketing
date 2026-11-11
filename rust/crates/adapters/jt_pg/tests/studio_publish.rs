@@ -430,3 +430,101 @@ async fn daily_ops_cap_limits_claims() {
     );
     r.commit().await.unwrap();
 }
+
+/// A post left with its platform's own scheduler (design 2026-11-10 §7.3): the claim is made
+/// ahead of the slot's time, is the slot's one attempt, and its hold survives storage.
+#[tokio::test]
+async fn a_claim_ahead_of_its_time_is_the_slots_one_attempt_and_keeps_its_hold() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = ready(&uow).await;
+    let at = f.slot.scheduled_at;
+    let now = at - time::Duration::days(2);
+    let receipt = PublishReceipt {
+        external_id: "scheduled-post".into(),
+        url: None,
+    };
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    // Two days ahead it is not due; and a hold that is not ahead is not a hold.
+    assert!(
+        r.studio()
+            .claim_publication_for(f.slot.id, now)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        r.studio()
+            .claim_publication_held(f.slot.id, at, at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let a = r
+        .studio()
+        .claim_publication_held(f.slot.id, now, at)
+        .await
+        .unwrap()
+        .expect("the slot is claimed ahead of its time");
+    assert_eq!(a.state(), PublishState::Sending);
+    assert_eq!((a.claimed_at(), a.held_until()), (now, Some(at)));
+    assert!(
+        !a.is_held(),
+        "nothing is at the platform before its receipt"
+    );
+    r.studio()
+        .finish_publication(a.id(), PublishOutcome::Observed(receipt.clone()), now)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    let restarted = PgUnitOfWork::new(db.pool.clone());
+    let mut r = restarted.tenant(f.ws).await.unwrap();
+    let saved = r
+        .studio()
+        .slot_evidence(f.slot.id)
+        .await
+        .unwrap()
+        .0
+        .remove(0);
+    assert!(saved.is_held());
+    assert_eq!(saved.held_until(), Some(at));
+    // The slot's one attempt: neither sent at its time nor handed over again.
+    assert!(
+        r.studio()
+            .claim_publication_for(f.slot.id, at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        r.studio()
+            .claim_publication_held(f.slot.id, now, at)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Taken back: refused, and held no more.
+    r.studio()
+        .finish_publication(
+            a.id(),
+            PublishOutcome::Refused(jt_app::error::AppError::conflict("publication withdrawn")),
+            now,
+        )
+        .await
+        .unwrap();
+    let saved = r
+        .studio()
+        .slot_evidence(f.slot.id)
+        .await
+        .unwrap()
+        .0
+        .remove(0);
+    assert_eq!(saved.state(), PublishState::Refused);
+    assert!(!saved.is_held());
+    assert_eq!(
+        saved.held_until(),
+        Some(at),
+        "the record keeps that it was held"
+    );
+}

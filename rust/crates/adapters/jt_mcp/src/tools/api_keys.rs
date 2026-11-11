@@ -19,7 +19,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Issue a new API key for this workspace with a name and scopes the \
                           caller holds itself (none: all of them). Returns the key with its \
                           plaintext, which is shown only this once. [risk: WRITE]",
-            permission: Permission::ApiKeysManage,
+            permissions: &[Permission::ApiKeysManage],
             schema: schema_for::<CreateArgs>,
             run: create,
         },
@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "List the workspace's API keys, active and revoked, with their names, \
                           display prefixes, scopes and last use; never their secrets. Returns \
                           {keys: [...]}. [risk: READ]",
-            permission: Permission::ApiKeysManage,
+            permissions: &[Permission::ApiKeysManage],
             schema: schema_for::<NoArgs>,
             run: list,
         },
@@ -36,7 +36,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "api_keys.revoke",
             description: "Revoke an API key by id; it stops authenticating at once, including \
                           the key making this call. [risk: DESTRUCTIVE]",
-            permission: Permission::ApiKeysManage,
+            permissions: &[Permission::ApiKeysManage],
             schema: schema_for::<KeyArgs>,
             run: revoke,
         },

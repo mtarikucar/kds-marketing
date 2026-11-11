@@ -58,10 +58,14 @@ pub(crate) fn refuse(reason: &str) -> AppError {
         details: json!({"reason":reason}),
     }
 }
+/// The refusal of a post on an account whose posting a person paused.
+pub(crate) const ACCOUNT_PAUSED: &str = "account_paused";
+
 /// Whether `e` is [`authorize_execution_at`]'s refusal of a target that waits for someone rather
 /// than failed: its approval, a TikTok piece's posting screen ([`StudioPolicy::check_approval`]),
-/// or a piece held by the material gate (spec 2026-11-03 §5.6), which a corrected piece or
-/// material releases. `studio.pending` names each; none is a failed run.
+/// a piece held by the material gate (spec 2026-11-03 §5.6), which a corrected piece or
+/// material releases, or an account a person paused, which that person resumes. `studio.pending`
+/// names each; none is a failed run.
 pub(crate) fn awaits_human(e: &AppError) -> bool {
     e.code == ErrorCode::Conflict
         && ([
@@ -70,7 +74,8 @@ pub(crate) fn awaits_human(e: &AppError) -> bool {
         ]
         .iter()
         .any(|w| e.details["reason"] == w.to_string())
-            || e.details["reason"] == super::materials::MATERIAL_HOLD)
+            || e.details["reason"] == super::materials::MATERIAL_HOLD
+            || e.details["reason"] == ACCOUNT_PAUSED)
 }
 pub(crate) async fn active(r: &mut dyn TenantRepos) -> Result<WorkspaceId, AppError> {
     let w = r.workspace().get().await?;
@@ -113,6 +118,10 @@ pub(crate) fn capability_access(
 /// [`capability_access`]'s refusal of a grant without the scope Studio needs: reconnecting the
 /// account (which asks for it) fixes it.
 pub(crate) const SCOPE_MISSING: &str = "credential_scope_missing";
+/// The scopes one of which a grant of `kind` must hold to be written with; none for another kind.
+pub(crate) fn write_scopes(kind: &str) -> &'static [&'static str] {
+    studio_scopes(kind, true).unwrap_or(&[])
+}
 /// Whether `c`'s grant lacks every scope of `required` (an empty list needs none).
 fn lacks_studio_scope(c: &Capability, required: &[&str]) -> bool {
     let scopes = granted_scopes(c);
@@ -237,6 +246,16 @@ pub async fn authorize_execution_at(
     if control.is_braked(lane) {
         return Err(refuse("studio_braked"));
     }
+    // A person paused this account's posting (design 2026-11-10 §7.6): as a brake, for it alone.
+    if lane == LaneKind::Organic
+        && r.studio_posts()
+            .posting_settings()
+            .await?
+            .paused_capability_ids
+            .contains(&c.id)
+    {
+        return Err(refuse(ACCOUNT_PAUSED));
+    }
     let birth = r
         .strategy()
         .find(input.chain.born_version_id)
@@ -274,10 +293,6 @@ pub async fn authorize_execution_at(
     .map_err(|e| refuse(&e.to_string()))?;
     let policy = StudioPolicy {
         expected_revision: input.expected_revision,
-        requires_human_approval: control
-            .lanes
-            .get(&lane)
-            .is_some_and(|l| l.requires_human_approval),
         capability_requires_human_approval: c.policy.requires_human_approval,
         // TikTok's guidelines: a human passes its posting screen whatever the policies above say.
         posting_screen_required: jt_studio::requires_posting_screen(&c.kind_key),

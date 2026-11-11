@@ -76,13 +76,7 @@ fn reducer_table_matches_spec() {
                 currency: "TRY".into(),
             },
             S::Won,
-            vec![
-                JourneyEffect::CommissionDue {
-                    amount_minor: 12500,
-                    currency: "TRY".into(),
-                },
-                JourneyEffect::CloseTasks,
-            ],
+            vec![JourneyEffect::CloseTasks],
         ),
         (
             S::Contacted,

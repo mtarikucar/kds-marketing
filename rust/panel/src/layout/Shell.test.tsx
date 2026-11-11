@@ -7,6 +7,7 @@ import { flatten } from '@/i18n/flatten';
 import { PERMISSIONS, type MeOut } from '@/api/types';
 import { WS_ID, me, workspace } from '@/test/fixtures';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { coreModules, legacyModules } from '@/test/modules';
 
 const NO_SESSION = withStatus(401, { code: 'UNAUTHENTICATED', message: 'no session', details: {} });
 
@@ -15,21 +16,31 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
     renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    await userEvent.click(within(nav).getByText('Yönetim'));
     for (const label of [
       tr.nav.home,
       tr.nav.strategy,
       tr.nav.capabilities,
       tr.nav.budget,
-      tr.nav.team,
-      tr.nav.roles,
-      tr.nav.apiKeys,
+      tr.nav.users,
       tr.nav.agents,
-      tr.nav.ledger,
     ]) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
     expect(screen.getAllByText('Alfa Atölye').length).toBeGreaterThan(0);
     expect(document.documentElement.lang).toBe('tr');
+  });
+
+  it('opens the navigation drawer, follows a link and dismisses the drawer', async () => {
+    const user = userEvent.setup();
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
+    const { router } = renderAt('/');
+    await user.click(await screen.findByRole('button', { name: tr.nav.label }));
+    const drawer = await screen.findByRole('dialog');
+    expect(within(drawer).getByRole('link', { name: tr.nav.inbox })).toHaveAttribute('href', '/inbox');
+    await user.click(await within(drawer).findByRole('link', { name: tr.nav.people }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/people'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('shows only the name, without a switcher, for a single current workspace', async () => {
@@ -72,7 +83,7 @@ describe('Shell', () => {
     mockFetch({ 'GET /api/auth/me': permitted, 'GET /api/workspace': workspace });
     const first = renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-    expect(within(nav).getByRole('link', { name: tr.nav.prospects })).toHaveAttribute('href', '/prospects');
+    expect(await within(nav).findByRole('link', { name: tr.nav.prospects })).toHaveAttribute('href', '/prospects');
     expect(within(nav).getByRole('link', { name: tr.nav.outreach })).toHaveAttribute('href', '/outreach');
     first.unmount();
 
@@ -83,6 +94,34 @@ describe('Shell', () => {
     expect(within(plain).getByRole('link', { name: tr.nav.home })).toBeInTheDocument();
     expect(within(plain).queryByRole('link', { name: tr.nav.prospects })).not.toBeInTheDocument();
     expect(within(plain).queryByRole('link', { name: tr.nav.outreach })).not.toBeInTheDocument();
+  });
+
+  it('keeps core modules and the add action while hiding optional modules in a new workspace', async () => {
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+    renderAt('/');
+    const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(within(nav).queryByRole('link', { name: tr.nav.inbox })).not.toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: tr.nav.strategy })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'Modül ekle' })).toHaveAttribute('href', '/modules');
+    expect(within(nav).queryByRole('link', { name: tr.nav.studio })).not.toBeInTheDocument();
+  });
+
+  it('adds arbitrary installed blueprints to navigation without accepting external paths', async () => {
+    const custom = { ...legacyModules.modules[0], required: false, blueprint: {
+      id: 'quality-control', name: 'Kalite kontrol', description: '', version: '1', requirements: [], workflow: [], builtin: false,
+    } };
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': { ...coreModules, modules: [...coreModules.modules, custom] } });
+    renderAt('/');
+    const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(await within(nav).findByRole('link', { name: 'Kalite kontrol' })).toHaveAttribute('href', '/modules/quality-control');
+  });
+
+  it('blocks direct navigation to an uninstalled optional screen without fetching its business data', async () => {
+    const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+    renderAt('/studio');
+    expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeInTheDocument();
+    expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
+    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/social');
   });
 
   it('permissions_copy_parity', () => {
@@ -116,4 +155,33 @@ describe('Shell', () => {
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/platform/login');
   });
+});
+
+it('orders core, installed modules including inbox, then management without removed pages', async () => {
+  mockFetch({ 'GET /api/auth/me': { ...me, memberships: [{ ...me.memberships[0], permissions: [...PERMISSIONS] }] } });
+  renderAt('/');
+  const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+  await within(nav).findByRole('link', { name: 'Materyal kütüphanesi' });
+  await userEvent.click(within(nav).getByText('Yönetim'));
+  expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
+    '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/materials', '/people', '/prospects', '/outreach', '/calls', '/modules',
+    '/budget', '/users', '/capabilities', '/agents',
+  ]);
+  expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();
+  expect(within(nav).queryByText('Günlük')).not.toBeInTheDocument();
+});
+
+it.each(['materials', 'content', 'social', 'ads'])('gates the %s module before any business query', async module => {
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
+  renderAt(`/${module}`);
+  expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', `/modules/${module}`);
+  expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
+});
+
+it('offers a module installation link when a read reports MODULE_NOT_INSTALLED', async () => {
+  mockFetch({ 'GET /api/auth/me': me, 'GET /api/budget/items': withStatus(409, { code: 'MODULE_NOT_INSTALLED', message: 'removed', details: { module: 'ads' } }) });
+  renderAt('/budget');
+  expect(await screen.findByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/ads');
+  expect(screen.getByText(tr.gates.moduleBody)).toBeVisible();
 });

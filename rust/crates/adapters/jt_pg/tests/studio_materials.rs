@@ -347,6 +347,7 @@ async fn calendar_rows_shoot_requests_policy_and_releases() {
         lead_days: 28,
         reuse_days: 7,
         recap_days: 45,
+        ai_standalone: false,
     };
     tx.studio_materials()
         .save_material_policy(policy)
@@ -389,6 +390,11 @@ async fn the_down_refuses_while_the_library_holds_anything() {
     // The planned posts reference the olays: reverted before, applied again after.
     let posts_up = std::fs::read_to_string(dir.join("0022_studio_posts.up.sql")).unwrap();
     let posts_down = std::fs::read_to_string(dir.join("0022_studio_posts.down.sql")).unwrap();
+    // Newer analysis/production tables depend on the library being round-tripped here.
+    for name in ["0030_material_productions", "0029_material_intelligence"] {
+        let sql = std::fs::read_to_string(dir.join(format!("{name}.down.sql"))).unwrap();
+        sqlx::raw_sql(&sql).execute(&db.pool).await.unwrap();
+    }
     sqlx::raw_sql(&posts_down).execute(&db.pool).await.unwrap();
     // Empty: down and up again, each twice.
     for _ in 0..2 {
@@ -398,6 +404,10 @@ async fn the_down_refuses_while_the_library_holds_anything() {
         sqlx::raw_sql(&up).execute(&db.pool).await.unwrap();
     }
     sqlx::raw_sql(&posts_up).execute(&db.pool).await.unwrap();
+    for name in ["0029_material_intelligence", "0030_material_productions"] {
+        let sql = std::fs::read_to_string(dir.join(format!("{name}.up.sql"))).unwrap();
+        sqlx::raw_sql(&sql).execute(&db.pool).await.unwrap();
+    }
     let mut tx = uow.tenant(ws).await.unwrap();
     tx.studio_materials()
         .insert_olay(confirmed_olay(ws))

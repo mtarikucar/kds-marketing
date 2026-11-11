@@ -23,6 +23,10 @@ pub enum ErrorCode {
     Validation,
     /// The use case is gated and the workspace has no approved strategy.
     StrategyRequired,
+    /// The use case's module needs a connected capability the workspace does not have.
+    CapabilityRequired,
+    /// The use case's module was removed from the workspace.
+    ModuleNotInstalled,
     /// The use case is gated and the workspace is not active.
     WorkspaceInactive,
     /// An outbound request targeted a host outside the allowlist.
@@ -45,6 +49,8 @@ impl ErrorCode {
             ErrorCode::Conflict => "CONFLICT",
             ErrorCode::Validation => "VALIDATION",
             ErrorCode::StrategyRequired => "STRATEGY_REQUIRED",
+            ErrorCode::CapabilityRequired => "CAPABILITY_REQUIRED",
+            ErrorCode::ModuleNotInstalled => "MODULE_NOT_INSTALLED",
             ErrorCode::WorkspaceInactive => "WORKSPACE_INACTIVE",
             ErrorCode::HostNotAllowed => "HOST_NOT_ALLOWED",
             ErrorCode::UpstreamUnavailable => "UPSTREAM_UNAVAILABLE",
@@ -120,6 +126,26 @@ impl AppError {
     }
 
     /// `STRATEGY_REQUIRED`: a gated use case was called before a strategy was approved.
+    /// `CAPABILITY_REQUIRED`: `module` stays locked until one of each `missing` requirement
+    /// (kind or group keys joined by `|`) is connected.
+    pub fn capability_required(module: &str, missing: Vec<String>) -> Self {
+        Self::new(
+            ErrorCode::CapabilityRequired,
+            "this module needs a connected capability first",
+            json!({"module": module, "missing": missing}),
+        )
+    }
+
+    /// `MODULE_NOT_INSTALLED`: `module` was removed from the workspace; its use cases stay
+    /// closed until it is installed again. Its records are kept.
+    pub fn module_not_installed(module: &str) -> Self {
+        Self::new(
+            ErrorCode::ModuleNotInstalled,
+            "this module is not installed in the workspace",
+            json!({"module": module}),
+        )
+    }
+
     pub fn strategy_required() -> Self {
         Self::new(
             ErrorCode::StrategyRequired,
@@ -192,6 +218,10 @@ mod tests {
                 "VALIDATION",
             ),
             (AppError::strategy_required(), "STRATEGY_REQUIRED"),
+            (
+                AppError::capability_required("inbox", vec!["messaging".into()]),
+                "CAPABILITY_REQUIRED",
+            ),
             (
                 AppError::workspace_inactive(WorkspaceStatus::Suspended),
                 "WORKSPACE_INACTIVE",

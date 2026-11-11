@@ -21,7 +21,7 @@ use jt_capability::{Capability, CapabilityId};
 use jt_connector::{ConnectorError, Credential, Provider};
 use jt_strategy::{HypothesisId, LaneKind};
 use jt_studio::*;
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -210,11 +210,15 @@ async fn listing(
     Ok((c, account, sets))
 }
 pub async fn adsets_list(d: &Deps, ctx: &Ctx, i: AdSetsQuery) -> Result<Vec<AdSet>, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.adsets_list",
+    ))?;
     Ok(listing(d, ctx, i.capability_id).await?.2)
 }
 pub async fn adset_bind(d: &Deps, ctx: &Ctx, i: BindAdSetInput) -> Result<AdSetBinding, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.adset_bind",
+    ))?;
     key(&i.request_key)?;
     if i.adset_id.trim().is_empty() || i.adset_id.len() > 200 {
         return Err(AppError::validation(
@@ -366,7 +370,9 @@ pub async fn budget_move(
     ctx: &Ctx,
     i: BudgetMoveInput,
 ) -> Result<BudgetMoveOut, AppError> {
-    ctx.require(Permission::StudioManage)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.budget_move",
+    ))?;
     key(&i.request_key)?;
     if i.daily_budget_minor <= 0 || jt_strategy::validate_currency(&i.currency).is_err() {
         return Err(AppError::validation(
@@ -449,11 +455,7 @@ pub async fn budget_move(
         )?;
         e.strategy_version_id = Some(frame.id.0);
         r.ledger().append(e).await?;
-        let pending = c.policy.requires_human_approval
-            || flags
-                .lanes
-                .get(&LaneKind::Paid)
-                .is_some_and(|l| l.requires_human_approval);
+        let pending = c.policy.requires_human_approval;
         r.commit().await?;
         pending
     };
@@ -605,6 +607,8 @@ pub async fn dispatch_move(d: &Deps, ctx: &Ctx, id: BudgetMoveId) -> Result<(), 
         let reservation = reserve_connector_spend(
             r.as_mut(),
             ReserveSpend {
+                module: None,
+                campaign_id: None,
                 binding_id: Some(b.id),
                 workspace_id: ctx.workspace_id,
                 capability_id: c.id,
@@ -838,12 +842,7 @@ async fn refresh_period(d: &Deps, b: &AdSetBinding) -> Result<bool, AppError> {
         .request
         .daily_budget_minor
         .ok_or_else(|| refuse("daily_budget_missing"))?;
-    if c.policy.requires_human_approval
-        || flags
-            .lanes
-            .get(&LaneKind::Paid)
-            .is_some_and(|l| l.requires_human_approval)
-    {
+    if c.policy.requires_human_approval {
         let m = r
             .studio()
             .latest_budget_move(b.id)
@@ -851,7 +850,7 @@ async fn refresh_period(d: &Deps, b: &AdSetBinding) -> Result<bool, AppError> {
             .ok_or_else(|| refuse("approval_required"))?;
         m.check_approval(&StudioPolicy {
             expected_revision: m.revision,
-            requires_human_approval: true,
+            capability_requires_human_approval: true,
             ..Default::default()
         })
         .map_err(|_| refuse("approval_required"))?;

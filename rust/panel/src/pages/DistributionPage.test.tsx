@@ -104,6 +104,7 @@ describe('DistributionPage', () => {
       }),
     );
     renderAt('/team/distribution');
+    await user.click(await screen.findByRole('tab', { name: tr.leads.distribution.reps.title }, LOADED));
     const [owner, rep] = await screen.findAllByTestId('rep', undefined, LOADED);
     expect(within(owner).queryByRole('button')).not.toBeInTheDocument();
     // Without inbox.manage: the rules are shown, not edited, and there is no backfill.
@@ -132,6 +133,7 @@ describe('DistributionPage', () => {
     const user = userEvent.setup();
     mockFetch(answers());
     renderAt('/team/distribution');
+    await user.click(await screen.findByRole('tab', { name: tr.leads.distribution.reps.title }, LOADED));
     const [owner, rep] = await screen.findAllByTestId('rep', undefined, LOADED);
     await user.click(within(rep).getByRole('button', { name: 'Rana Temsilci için düzenle' }));
     const languages = within(screen.getByRole('form', { name: 'Rana Temsilci: müsaitlik' })).getByRole('textbox', {
@@ -163,6 +165,7 @@ describe('DistributionPage', () => {
     const user = userEvent.setup();
     const calls = mockFetch(answers());
     renderAt('/team/distribution');
+    await user.click(await screen.findByRole('tab', { name: tr.leads.distribution.log.title }, LOADED));
     const [first, second] = await screen.findAllByTestId('assignment', undefined, LOADED);
     expect(first).toHaveTextContent('Rana Temsilci');
     expect(first).toHaveTextContent(tr.leads.causes.rule);
@@ -183,4 +186,85 @@ describe('DistributionPage', () => {
       expect(q().get('user_id')).toBe(REP_ID);
     });
   });
+});
+
+
+it('keeps an unsaved rule draft while switching distribution sections', async () => {
+  mockFetch(answers());
+  renderAt('/team/distribution');
+  const user = userEvent.setup();
+  const name = within((await screen.findAllByTestId('rule', undefined, LOADED))[0]).getByRole('textbox', { name: tr.leads.distribution.rules.name });
+  await user.clear(name);
+  await user.type(name, 'Yeni taslak');
+  await user.click(screen.getByRole('tab', { name: tr.leads.distribution.reps.title }));
+  expect(screen.getByRole('tabpanel', { name: tr.leads.distribution.reps.title })).toBeVisible();
+  await user.click(screen.getByRole('tab', { name: tr.leads.distribution.rules.title }));
+  expect(name).toHaveValue('Yeni taslak');
+});
+
+it('keeps existing rule details compact and opens a newly added rule for editing', async () => {
+  mockFetch(answers());
+  renderAt('/team/distribution');
+  const user = userEvent.setup();
+  const existing = await screen.findAllByTestId('rule', undefined, LOADED);
+  const summary = within(existing[0]).getByText('Eşleşme ve yönlendirme');
+  expect(summary.closest('details')).not.toHaveAttribute('open');
+  await user.click(summary);
+  expect(summary.closest('details')).toHaveAttribute('open');
+  await user.click(screen.getByRole('button', { name: tr.leads.distribution.rules.add }));
+  const rows = screen.getAllByTestId('rule');
+  expect(within(rows[2]).getByText('Eşleşme ve yönlendirme').closest('details')).toHaveAttribute('open');
+  expect(within(rows[2]).getByRole('textbox', { name: tr.leads.distribution.rules.name })).toBeVisible();
+});
+
+it('explains invalid rule numbers even after their details are closed', async () => {
+  const calls = mockFetch(answers({ 'PUT /api/distribution/rules': distribution }));
+  renderAt('/team/distribution');
+  const user = userEvent.setup();
+  const row = (await screen.findAllByTestId('rule', undefined, LOADED))[0];
+  const summary = within(row).getByText('Eşleşme ve yönlendirme');
+  await user.click(summary);
+  const score = within(row).getByRole('spinbutton', { name: tr.leads.distribution.rules.minScore });
+  await user.type(score, '101');
+  const sla = within(row).getByRole('spinbutton', { name: tr.leads.distribution.rules.sla });
+  await user.clear(sla);
+  await user.type(sla, '2');
+  await user.click(summary);
+  expect(summary.closest('details')).not.toHaveAttribute('open');
+  expect(screen.getByRole('alert')).toHaveTextContent('İzmir kafeleri: En düşük puan 0 ile 100');
+  expect(screen.getByRole('alert')).toHaveTextContent('İzmir kafeleri: İlk temas süresi 5 ile 10080');
+  expect(screen.getByRole('button', { name: tr.leads.distribution.rules.save })).toBeDisabled();
+  expect(calls.some((call) => call.method === 'PUT')).toBe(false);
+  await user.click(summary);
+  await user.clear(score);
+  await user.type(score, '50');
+  await user.clear(sla);
+  await user.type(sla, '60');
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: tr.leads.distribution.rules.save })).toBeEnabled();
+});
+
+it('explains an empty member pool and an invalid reassignment limit', async () => {
+  mockFetch(answers());
+  renderAt('/team/distribution');
+  const user = userEvent.setup();
+  const row = (await screen.findAllByTestId('rule', undefined, LOADED))[0];
+  const summary = within(row).getByText('Eşleşme ve yönlendirme');
+  await user.click(summary);
+  await user.click(within(row).getByRole('checkbox', { name: 'Rana Temsilci' }));
+  await user.click(summary);
+  const limit = screen.getByRole('spinbutton', { name: tr.leads.distribution.maxReassignments });
+  await user.clear(limit);
+  await user.type(limit, '11');
+  expect(screen.getByRole('alert')).toHaveTextContent('İzmir kafeleri: En az bir üye seçin');
+  expect(screen.getByRole('alert')).toHaveTextContent('Yeniden atama sınırı 0 ile 10');
+  expect(screen.getByRole('button', { name: tr.leads.distribution.rules.save })).toBeDisabled();
+});
+
+it('allows an optional missing SLA without treating it as invalid', async () => {
+  const noSla = { ...distribution, rules: distribution.rules.map((r) => ({ ...r, sla_minutes: undefined })) };
+  mockFetch(answers({ 'GET /api/distribution': noSla }));
+  renderAt('/team/distribution');
+  expect(await screen.findByRole('button', { name: tr.leads.distribution.rules.save }, LOADED)).toBeEnabled();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });

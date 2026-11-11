@@ -95,7 +95,7 @@ pub struct FrequencyInput {
 pub struct SettingsInput {
     #[serde(default)]
     pub requires_approval: Option<bool>,
-    /// Email only; channels need the owner and `legal_ack`.
+    /// Messaging channels only (`B2B_BASIS_CHANNELS`); channels need the owner and `legal_ack`.
     #[serde(default)]
     pub b2b_basis: Option<Vec<Channel>>,
     /// Turning it off needs the owner and `legal_ack`.
@@ -209,13 +209,13 @@ pub async fn settings_set(
     if changed.is_empty() {
         return Err(nothing_to_change(FIELDS));
     }
-    // The business-recipient basis: email only, opened by a human owner with the counsel's
-    // confirmation recorded in the same call.
+    // The business-recipient basis: messaging channels only, opened by a human owner with the
+    // counsel's confirmation recorded in the same call.
     if let Some(channels) = &input.b2b_basis
         && channels.iter().any(|c| !B2B_BASIS_CHANNELS.contains(c))
     {
         return Err(AppError::validation(
-            "the business-recipient basis covers email only",
+            "the business-recipient basis covers messaging channels only",
             json!({ "field": "b2b_basis", "reason": "channel_not_allowed" }),
         ));
     }

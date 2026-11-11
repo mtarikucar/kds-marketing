@@ -155,7 +155,7 @@ async fn facts(
             }))
         }
         (MetaCred::User { token }, "meta_ads") => {
-            ad_account_facts(connector, &app, token, account_of(public)).await
+            ad_account_facts(connector, token, account_of(public)).await
         }
         (MetaCred::Page { token, .. } | MetaCred::User { token }, kind) => {
             let me = connector
@@ -196,10 +196,11 @@ async fn subscribed(connector: &MetaConnector, app: &GraphApp, token: &str) -> O
 /// active ad account when none is named.
 async fn ad_account_facts(
     connector: &MetaConnector,
-    app: &GraphApp,
     token: &str,
     account: Option<&str>,
 ) -> Result<Value, ConnectorError> {
+    // An ad account is read on the version its calls are written for.
+    let app = &connector.ads_app()?;
     let account = match account {
         Some(account) => account.strip_prefix("act_").unwrap_or(account).to_owned(),
         None => {

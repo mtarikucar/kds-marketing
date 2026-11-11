@@ -138,8 +138,10 @@ async fn pending_needs_workspace_read() {
 #[tokio::test]
 async fn pending_lists_consult_when_no_strategy() {
     let w = active_world().await;
+    // Declaring a capability needs `capabilities.manage`: a rep is not asked to.
     let rep = w.member("rep").await;
-    let out = pending(&w, &rep).await;
+    assert_eq!(kinds(&pending(&w, &rep).await), [WorkKind::ConsultStrategy]);
+    let out = pending(&w, &w.owner_ctx).await;
 
     assert_eq!(out.strategy, StrategyState::Missing);
     // Highest priority first: the consultation, then the first capability.
@@ -223,13 +225,14 @@ async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
         assert!(!kinds(&out).contains(&WorkKind::ConsultStrategy));
     }
 
-    // A rep, and an owner's key without team.manage, may not: nothing about the strategy.
+    // A rep, and an owner's key without team.manage, may not: nothing about the strategy, and
+    // without capabilities.manage nothing about the first capability either.
     let rep = w.member("rep").await;
     let narrowed = w.agent(&["workspace.read"]).await;
     for ctx in [&rep, &narrowed] {
         let out = pending(&w, ctx).await;
         assert_eq!(out.strategy, submitted);
-        assert_eq!(kinds(&out), [WorkKind::DeclareFirstCapability]);
+        assert_eq!(kinds(&out), []);
     }
     // On the wire, the draft as approving it names it.
     assert_eq!(

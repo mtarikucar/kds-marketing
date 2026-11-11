@@ -416,7 +416,7 @@ fn script_listing(m: &Mock) {
     );
     m.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(graph_fixture(m, "me_adaccounts")),
     );
     m.on(
@@ -509,7 +509,7 @@ async fn list_assets_skips_what_the_user_did_not_grant() {
     m.on("GET", "/fb/v19.0/me/accounts", ok(json!({ "data": [] })));
     m.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         status(403, graph_fixture(m, "error_permission")),
     );
     m.on(
@@ -562,18 +562,18 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     let m = &r.mock;
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
     );
     script_listing(m);
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_1")),
     );
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_2")),
     );
     r.meta.list_assets(&user_cred()).await.unwrap();
@@ -593,7 +593,7 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     // Both paged reads followed their next link.
     assert_eq!(m.requests("GET", "/fb/v19.0/me/accounts").len(), 2);
     assert_eq!(
-        m.requests("GET", "/fb/v19.0/act_1111111111/insights").len(),
+        m.requests("GET", "/fb/v27.0/act_1111111111/insights").len(),
         2
     );
     let graph: Vec<_> = recorded
@@ -612,7 +612,7 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     // The followed links kept their cursors.
     let second = &m.requests("GET", "/fb/v19.0/me/accounts")[1];
     assert_eq!(second.param("after"), Some("QVFTEST2"));
-    let second = &m.requests("GET", "/fb/v19.0/act_1111111111/insights")[1];
+    let second = &m.requests("GET", "/fb/v27.0/act_1111111111/insights")[1];
     assert_eq!(second.param("after"), Some("MQZDZD"));
 }
 
@@ -672,6 +672,8 @@ async fn no_appsecret_proof_on_instagram_graph() {
                 media: vec![],
                 privacy: None,
                 tiktok: None,
+                format: None,
+                media_mimes: vec![],
             },
         )
         .await
@@ -1013,7 +1015,7 @@ async fn probe_returns_account_id_per_kind() {
     // Meta Ads: the ad account's number without act_, by the act_ node.
     r2.mock.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({ "id": "act_1111111111", "account_id": "1111111111", "name": "Test Reklam", "account_status": 1, "currency": "TRY" })),
     );
     let p = r2
@@ -1027,7 +1029,7 @@ async fn probe_returns_account_id_per_kind() {
     // Without an account named, the token's only active ad account.
     r2.mock.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(graph_fixture(&r2.mock, "me_adaccounts")),
     );
     let p = r2.meta.probe(&user_cred(), &public("meta_ads", None)).await;
@@ -1090,7 +1092,7 @@ async fn probe_failures_are_results() {
     // Two ad accounts and none named: the probe cannot choose.
     r.mock.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(json!({ "data": [
             { "account_id": "1", "account_status": 1 }, { "account_id": "2", "account_status": 1 }
         ]})),
@@ -1569,6 +1571,8 @@ fn post(text: &str, media: &[&str], link: Option<&str>) -> PublishRequest {
         media: vec![],
         privacy: None,
         tiktok: None,
+        format: None,
+        media_mimes: vec![],
     }
 }
 
@@ -1725,6 +1729,402 @@ async fn facebook_publish_feed_photos_and_video() {
     assert!(m.recorded().is_empty());
 }
 
+/// A Studio medium's URL: the file store's signed URL, which names no file type.
+const SIGNED_A: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000a?workspace=w&signature=s";
+const SIGNED_B: &str =
+    "https://files.test/files/0190a0b0-0000-7000-8000-00000000000b?workspace=w&signature=s";
+
+/// `request` with the type of each medium, in order, as the file store names it.
+fn typed(mut request: PublishRequest, mimes: &[&str]) -> PublishRequest {
+    request.media_mimes = mimes.iter().map(|m| (*m).to_owned()).collect();
+    request
+}
+
+/// A video is told from its type, not its URL: Studio's signed URLs have no file ending.
+#[tokio::test]
+async fn a_signed_video_url_is_a_video_by_its_type() {
+    let p = public("instagram", Some(IG));
+    let container = |m: &Mock, id: &str| {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media_publish",
+            ok(json!({ "id": "900" })),
+        );
+        m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    };
+    // A reel.
+    let r = rig().await;
+    container(&r.mock, "800");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "REELS", "video_url": SIGNED_A, "caption": "Reel" })
+    );
+    // A story's video.
+    let r = rig().await;
+    container(&r.mock, "801");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "video_url": SIGNED_A })
+    );
+    // An image stays an image.
+    let r = rig().await;
+    container(&r.mock, "802");
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Foto", &[SIGNED_A], None), &["image/jpeg"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        r.mock
+            .request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "image_url": SIGNED_A, "caption": "Foto" })
+    );
+    // A carousel's video item is a video.
+    let r = rig().await;
+    let m = &r.mock;
+    for id in ["810", "811", "812"] {
+        m.on(
+            "POST",
+            "/fb/v19.0/17841400000000001/media",
+            ok(json!({ "id": id })),
+        );
+        m.on(
+            "GET",
+            &format!("/fb/v19.0/{id}"),
+            ok(json!({ "status_code": "FINISHED" })),
+        );
+    }
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "900" })),
+    );
+    m.on("GET", "/fb/v19.0/900", ok(json!({ "id": "900" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(
+                post("Kaydır", &[SIGNED_A, SIGNED_B], None),
+                &["image/jpeg", "video/mp4"],
+            ),
+        )
+        .await
+        .unwrap();
+    let items: Vec<Value> = m
+        .requests("POST", "/fb/v19.0/17841400000000001/media")
+        .iter()
+        .map(Recorded::json)
+        .collect();
+    assert_eq!(
+        items[..2],
+        [
+            json!({ "image_url": SIGNED_A, "is_carousel_item": true }),
+            json!({ "media_type": "VIDEO", "video_url": SIGNED_B, "is_carousel_item": true }),
+        ]
+    );
+}
+
+/// On a Facebook Page a signed video URL goes to the Page's videos, by its type.
+#[tokio::test]
+async fn a_signed_video_url_on_a_page_is_a_video_by_its_type() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/1234567890/videos",
+        ok(json!({ "id": "77" })),
+    );
+    r.meta
+        .publish(
+            &page_cred(),
+            &public("facebook_page", Some(PAGE)),
+            &typed(post("Video", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/1234567890/videos").json()["file_url"],
+        json!(SIGNED_A)
+    );
+    assert!(m.requests("POST", "/fb/v19.0/1234567890/photos").is_empty());
+}
+
+/// `request` as an Instagram story (its planned post's format).
+fn story(mut request: PublishRequest) -> PublishRequest {
+    request.format = Some(jt_app::ports::connectors::PostFormat::Story);
+    request
+}
+
+/// A story is one `STORIES` container of one image or one video, without a caption (the Content
+/// Publishing API documents none for stories), read until FINISHED, then published; with a Page
+/// token on the Graph API.
+#[tokio::test]
+async fn ig_story_is_one_stories_container_without_a_caption_on_the_graph_api() {
+    let r = rig().await;
+    let m = &r.mock;
+    let p = public("instagram", Some(IG));
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "700" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/700",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "701" })),
+    );
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    let receipt = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(post(
+                "Hikâyede metin gitmez",
+                &["https://cdn.test/yeni.jpg"],
+                Some("https://kahve.test"),
+            )),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "701");
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media")
+            .json(),
+        json!({ "media_type": "STORIES", "image_url": "https://cdn.test/yeni.jpg" })
+    );
+    assert_eq!(m.requests("GET", "/fb/v19.0/700").len(), 2);
+    assert_eq!(
+        m.request("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .json(),
+        json!({ "creation_id": "700" })
+    );
+}
+
+/// With an Instagram Login token a story goes to graph.instagram.com the same way; a video is
+/// its `video_url`.
+#[tokio::test]
+async fn ig_story_video_goes_through_instagram_login() {
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media",
+        ok(json!({ "id": "9300000000" })),
+    );
+    m.on(
+        "GET",
+        "/ig/9300000000",
+        ok(json!({ "status_code": "FINISHED", "id": "9300000000" })),
+    );
+    m.on(
+        "POST",
+        "/ig/17841400000000009/media_publish",
+        ok(json!({ "id": "9400000000" })),
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    let p = public("instagram", Some("17841400000000009"));
+    let receipt = r
+        .meta
+        .publish(
+            &ig_login_cred(),
+            &p,
+            &story(post("", &["https://cdn.test/yeni.mp4"], None)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.external_id, "9400000000");
+    assert_eq!(
+        m.request("POST", "/ig/17841400000000009/media").json(),
+        json!({ "media_type": "STORIES", "video_url": "https://cdn.test/yeni.mp4" })
+    );
+    for call in m.recorded() {
+        assert!(call.path.starts_with("/ig/"), "{}", call.line());
+        assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN), "{}", call.line());
+    }
+}
+
+/// A video container is read longer than an image one (Meta suggests reading once a minute for up
+/// to five minutes): past the image's 30 reads, 7 more, `video_interval` apart, before giving up.
+#[tokio::test]
+async fn a_video_container_is_waited_for_longer_than_an_image_one() {
+    let p = public("instagram", Some(IG));
+    // A reel finishing on its 35th read is published.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "880" })),
+    );
+    for _ in 0..34 {
+        m.on(
+            "GET",
+            "/fb/v19.0/880",
+            ok(json!({ "status_code": "IN_PROGRESS" })),
+        );
+    }
+    m.on(
+        "GET",
+        "/fb/v19.0/880",
+        ok(json!({ "status_code": "FINISHED" })),
+    );
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media_publish",
+        ok(json!({ "id": "881" })),
+    );
+    m.on("GET", "/fb/v19.0/881", ok(json!({ "id": "881" })));
+    r.meta
+        .publish(
+            &page_cred(),
+            &p,
+            &typed(post("Reel", &[SIGNED_A], None), &["video/mp4"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.requests("GET", "/fb/v19.0/880").len(), 35);
+    // A video story never finishing: 37 reads, then a transient failure and no publish.
+    let r = rig().await;
+    let m = &r.mock;
+    m.on(
+        "POST",
+        "/fb/v19.0/17841400000000001/media",
+        ok(json!({ "id": "882" })),
+    );
+    m.on(
+        "GET",
+        "/fb/v19.0/882",
+        ok(json!({ "status_code": "IN_PROGRESS" })),
+    );
+    let e = r
+        .meta
+        .publish(
+            &page_cred(),
+            &p,
+            &story(typed(post("", &[SIGNED_A], None), &["video/mp4"])),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), "transient");
+    assert_eq!(m.requests("GET", "/fb/v19.0/882").len(), 37);
+    assert!(
+        m.requests("POST", "/fb/v19.0/17841400000000001/media_publish")
+            .is_empty()
+    );
+}
+
+/// A post is read back by its id alone (`GET /{id}?fields=id`): how an observed story, which has
+/// no counters, is confirmed; on either login path.
+#[tokio::test]
+async fn a_post_is_read_back_by_its_id_alone() {
+    use jt_app::ports::connectors::Publisher;
+    let r = rig().await;
+    let m = &r.mock;
+    m.on("GET", "/fb/v19.0/701", ok(json!({ "id": "701" })));
+    r.meta
+        .read_back(&page_cred(), &public("instagram", Some(IG)), "701")
+        .await
+        .unwrap();
+    assert_eq!(
+        m.request("GET", "/fb/v19.0/701").param("fields"),
+        Some("id")
+    );
+    m.on("GET", "/ig/9400000000", ok(json!({ "id": "9400000000" })));
+    r.meta
+        .read_back(
+            &ig_login_cred(),
+            &public("instagram", Some("17841400000000009")),
+            "9400000000",
+        )
+        .await
+        .unwrap();
+    // Another id, or nothing: not confirmed.
+    m.on("GET", "/fb/v19.0/702", ok(json!({ "id": "703" })));
+    assert!(
+        r.meta
+            .read_back(&page_cred(), &public("instagram", Some(IG)), "702")
+            .await
+            .is_err()
+    );
+}
+
+/// A story is one medium; a Facebook Page's stories are not built: both refused, nothing sent.
+#[tokio::test]
+async fn a_story_of_two_media_or_on_a_page_is_refused_before_anything_is_sent() {
+    let r = rig().await;
+    let m = &r.mock;
+    let two = story(post(
+        "",
+        &["https://cdn.test/a.jpg", "https://cdn.test/b.jpg"],
+        None,
+    ));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("instagram", Some(IG)), &two)
+                .await
+        ),
+        "permanent"
+    );
+    let page = story(post("", &["https://cdn.test/a.jpg"], None));
+    assert_eq!(
+        kind_of(
+            r.meta
+                .publish(&page_cred(), &public("facebook_page", Some(PAGE)), &page)
+                .await
+        ),
+        "permanent"
+    );
+    assert!(m.recorded().is_empty());
+}
+
 #[tokio::test]
 async fn ig_publish_polls_until_finished_and_gives_up_after_limit() {
     let r = rig().await;
@@ -1863,6 +2263,8 @@ async fn ig_publish_polls_until_finished_and_gives_up_after_limit() {
     .with_container_poll(ContainerPoll {
         interval: StdDuration::from_millis(40),
         attempts: 3,
+        video_interval: StdDuration::from_millis(40),
+        video_attempts: 0,
     });
     r.mock.on(
         "POST",
@@ -2324,14 +2726,14 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
     );
     let m = &r.mock;
     let p = public("meta_ads", Some("1111111111"));
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/adsets",
+        "/fb/v27.0/act_1111111111/adsets",
         ok(graph_fixture(m, "adsets")),
     );
     let sets = r.meta.list_adsets(&user_cred(), &p).await.unwrap();
@@ -2343,21 +2745,21 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     assert_eq!(sets[0].lifetime_budget_minor, None, "0 reads as none");
     assert_eq!(sets[1].lifetime_budget_minor, Some(500_000));
     assert_eq!(
-        m.request("GET", "/fb/v19.0/act_1111111111/adsets")
+        m.request("GET", "/fb/v27.0/act_1111111111/adsets")
             .param("fields"),
         Some("id,name,status,campaign_id,daily_budget,lifetime_budget")
     );
 
     m.on(
         "POST",
-        "/fb/v19.0/1313131313",
+        "/fb/v27.0/1313131313",
         ok(json!({ "success": true })),
     );
     r.meta
         .set_daily_budget(&user_cred(), "1313131313", 25_000)
         .await
         .unwrap();
-    let write = m.request("POST", "/fb/v19.0/1313131313");
+    let write = m.request("POST", "/fb/v27.0/1313131313");
     assert_eq!(write.json(), json!({ "daily_budget": 25_000 }));
     assert_graph_auth(&write, USER_TOKEN);
     assert_eq!(
@@ -2371,12 +2773,12 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
 
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_1")),
     );
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_2")),
     );
     let rows = r
@@ -2395,7 +2797,7 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     assert_eq!(rows[0].impressions, 10_000);
     assert_eq!(rows[0].clicks, 250);
     assert_eq!(rows[1].spend_minor, 700);
-    let first = &m.requests("GET", "/fb/v19.0/act_1111111111/insights")[0];
+    let first = &m.requests("GET", "/fb/v27.0/act_1111111111/insights")[0];
     assert_eq!(first.param("level"), Some("campaign"));
     assert_eq!(first.param("time_increment"), Some("1"));
     assert_eq!(first.param("limit"), Some("500"));
@@ -2877,8 +3279,8 @@ async fn adset_metrics_preserve_missing_and_currency_exponent() {
     let p = public("meta_ads", Some("1111111111"));
     for (currency, spend, expected, exponent) in [("JPY", "123", 123, 0), ("TRY", "12.34", 1234, 2)]
     {
-        r.mock.set("GET", "/fb/v19.0/act_1111111111", ok(json!({"account_id":"1111111111","currency":currency,"timezone_name":"Europe/Istanbul"})));
-        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend,"clicks":"0"}]})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111", ok(json!({"account_id":"1111111111","currency":currency,"timezone_name":"Europe/Istanbul"})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend,"clicks":"0"}]})));
         let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
         assert_eq!(context.minor_unit_exponent, exponent);
         let rows = r
@@ -2902,7 +3304,7 @@ async fn adset_metrics_preserve_missing_and_currency_exponent() {
         json!("1.001"),
         json!("9223372036854775808"),
     ] {
-        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend}]})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend}]})));
         assert!(
             r.meta
                 .adset_insights(
@@ -2922,18 +3324,18 @@ async fn ad_status_meta_and_fake_contract() {
     use jt_app::ports::connectors::AdStatus;
     let r = rig().await;
     r.mock
-        .set("POST", "/fb/v19.0/222", ok(json!({"success":true})));
+        .set("POST", "/fb/v27.0/222", ok(json!({"success":true})));
     for (status, wire) in [(AdStatus::Paused, "PAUSED"), (AdStatus::Active, "ACTIVE")] {
         r.meta
             .set_status(&user_cred(), "222", status)
             .await
             .unwrap();
-        let requests = r.mock.requests("POST", "/fb/v19.0/222");
+        let requests = r.mock.requests("POST", "/fb/v27.0/222");
         let body: Value = serde_json::from_str(&requests.last().unwrap().body).unwrap();
         assert_eq!(body["status"], wire);
         assert!(body.get("daily_budget").is_none());
     }
-    r.mock.set("POST", "/fb/v19.0/222", ok(json!({})));
+    r.mock.set("POST", "/fb/v27.0/222", ok(json!({})));
     assert!(
         r.meta
             .set_status(&user_cred(), "222", AdStatus::Paused)
@@ -2943,13 +3345,13 @@ async fn ad_status_meta_and_fake_contract() {
     let p = public("meta_ads", Some("1111111111"));
     r.mock.set(
         "GET",
-        "/fb/v19.0/333",
+        "/fb/v27.0/333",
         ok(json!({"account_id":"other","adset_id":"222"})),
     );
     assert!(r.meta.resolve_adset(&user_cred(), &p, "333").await.is_err());
     r.mock.set(
         "GET",
-        "/fb/v19.0/333",
+        "/fb/v27.0/333",
         ok(json!({"account_id":"1111111111","adset_id":"222"})),
     );
     assert_eq!(
@@ -2969,7 +3371,7 @@ async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
     ] {
         r.mock.set(
             "GET",
-            "/fb/v19.0/act_1111111111",
+            "/fb/v27.0/act_1111111111",
             ok(json!({
                 "account_id":"1111111111", "currency":"TRY", "timezone_name":timezone
             })),

@@ -35,7 +35,7 @@ export function PbxPolicyPanel({ capability }: { capability: Capability }) {
     onError: (err) => toast.error(errorMessage(t, err)),
   });
   return (
-    <div role="group" aria-labelledby={`${id}-title`} className="flex flex-col gap-3 rounded-lg border border-border p-3">
+    <div role="group" aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-3 border-t border-border pt-4">
       <p id={`${id}-title`} className="text-caption text-muted-foreground">
         {t('capabilities.pbx.title')}
       </p>

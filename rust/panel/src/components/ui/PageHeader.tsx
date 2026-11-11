@@ -1,6 +1,13 @@
+import { createContext, useContext } from 'react';
 import { cn } from './cn';
 import { Breadcrumbs } from './Breadcrumbs';
 import type { BreadcrumbItem, BreadcrumbsProps } from './Breadcrumbs';
+
+/**
+ * True inside the app shell's page frame (every page but the full-bleed workspaces): the page
+ * title is drawn as a full-width bar under the shell header, flush with the frame's edges.
+ */
+export const PageFrameContext = createContext(false);
 
 export interface PageHeaderProps {
   title: string;
@@ -29,6 +36,7 @@ export interface PageHeaderProps {
 export function PageHeader({
   title, description, breadcrumbs, renderBreadcrumbLink, actions, embedded, className,
 }: PageHeaderProps) {
+  const framed = useContext(PageFrameContext);
   if (embedded) {
     // Only the <h1> is redundant — the shell above already says what page this
     // is. The description is not: it routinely carries the one operational fact
@@ -46,12 +54,12 @@ export function PageHeader({
         {description
           ? <p className="min-w-0 flex-1 text-sm text-muted-foreground">{description}</p>
           : <span className="flex-1" />}
-        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+        {actions && <div className="flex min-w-0 flex-wrap items-center gap-2">{actions}</div>}
       </div>
     );
   }
   return (
-    <div className={cn('flex flex-col gap-2', className)}>
+    <div data-page-header="" className={cn('flex flex-col gap-2', framed && '-mx-4 border-b border-border bg-background px-4 py-3', className)}>
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs items={breadcrumbs} renderLink={renderBreadcrumbLink} />
       )}
@@ -71,10 +79,9 @@ export function PageHeader({
           header whose actions fit beside the title renders exactly as before. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div className="min-w-0 flex-1 sm:min-w-64">
-          {/* `title` so a name cut short by `truncate` can still be read whole. */}
-          <h1 className="font-display text-h1 text-foreground truncate" title={title}>{title}</h1>
+          <h1 className="break-words font-display text-xl font-medium text-foreground [overflow-wrap:anywhere]">{title}</h1>
           {description && (
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            <p className="mt-0.5 max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>
           )}
         </div>
         {actions && (

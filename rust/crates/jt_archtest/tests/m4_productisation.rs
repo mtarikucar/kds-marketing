@@ -25,7 +25,26 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 82] = [
+const POST_M4_ADDED: [(&str, &str); 124] = [
+    ("modules.list", "jeeta.modules.list"),
+    ("modules.install", "jeeta.modules.install"),
+    ("modules.update", "jeeta.modules.update"),
+    ("modules.remove", "jeeta.modules.remove"),
+    ("studio.project_list", "jeeta.studio.project_list"),
+    ("studio.project_create", "jeeta.studio.project_create"),
+    ("studio.project_get", "jeeta.studio.project_get"),
+    ("studio.project_update", "jeeta.studio.project_update"),
+    ("studio.project_materials", "jeeta.studio.project_materials"),
+    ("studio.project_request", "jeeta.studio.project_request"),
+    (
+        "studio.project_request_update",
+        "jeeta.studio.project_request_update",
+    ),
+    (
+        "studio.project_publication",
+        "jeeta.studio.project_publication",
+    ),
+    ("studio.project_schedule", "jeeta.studio.project_schedule"),
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -85,6 +104,47 @@ const POST_M4_ADDED: [(&str, &str); 82] = [
     ("studio.olay_update", "jeeta.studio.olay_update"),
     ("studio.materials_list", "jeeta.studio.materials_list"),
     ("studio.material_get", "jeeta.studio.material_get"),
+    (
+        "studio.material_intelligence_list",
+        "jeeta.studio.material_intelligence_list",
+    ),
+    (
+        "studio.material_production_list",
+        "jeeta.studio.material_production_list",
+    ),
+    (
+        "studio.material_production_claim",
+        "jeeta.studio.material_production_claim",
+    ),
+    (
+        "studio.material_production_complete",
+        "jeeta.studio.material_production_complete",
+    ),
+    (
+        "studio.material_production_fail",
+        "jeeta.studio.material_production_fail",
+    ),
+    (
+        "studio.material_intelligence_get",
+        "jeeta.studio.material_intelligence_get",
+    ),
+    ("studio.material_preview", "jeeta.studio.material_preview"),
+    (
+        "studio.material_analysis_retry",
+        "jeeta.studio.material_analysis_retry",
+    ),
+    (
+        "studio.material_analysis_claim",
+        "jeeta.studio.material_analysis_claim",
+    ),
+    (
+        "studio.material_analysis_complete",
+        "jeeta.studio.material_analysis_complete",
+    ),
+    (
+        "studio.material_analysis_fail",
+        "jeeta.studio.material_analysis_fail",
+    ),
     ("studio.material_add", "jeeta.studio.material_add"),
     ("studio.material_tag", "jeeta.studio.material_tag"),
     ("studio.slot_materials", "jeeta.studio.slot_materials"),
@@ -139,14 +199,57 @@ const POST_M4_ADDED: [(&str, &str); 82] = [
     ("outreach.report", "jeeta.outreach.report"),
     ("outreach.settings_get", "jeeta.outreach.settings_get"),
     ("outreach.settings_set", "jeeta.outreach.settings_set"),
+    // Content creation (design 2026-11-10 §6): an agent's hold on a production area and its
+    // checked delivery.
+    ("content.area_claim", "jeeta.content.area_claim"),
+    ("content.area_progress", "jeeta.content.area_progress"),
+    ("content.area_release", "jeeta.content.area_release"),
+    ("content.area_deliver", "jeeta.content.area_deliver"),
+    // Social media management (design 2026-11-10 §7): a finished version gets its time.
+    ("social.version_schedule", "jeeta.social.version_schedule"),
+    ("social.versions_waiting", "jeeta.social.versions_waiting"),
+    ("social.accounts_list", "jeeta.social.accounts_list"),
+    ("social.account_get", "jeeta.social.account_get"),
+    // Bütçe (design 2026-11-10 §9): spend by module, and what is stopped.
+    ("budget.breakdown", "jeeta.budget.breakdown"),
+    // Reklam yönetimi (design 2026-11-10 §8): the agent's side of an ad campaign.
+    ("ads.campaigns_list", "jeeta.ads.campaigns_list"),
+    ("ads.campaign_get", "jeeta.ads.campaign_get"),
+    ("ads.campaign_propose", "jeeta.ads.campaign_propose"),
+    ("ads.campaign_claim", "jeeta.ads.campaign_claim"),
+    ("ads.campaign_release", "jeeta.ads.campaign_release"),
+    ("ads.plan_submit", "jeeta.ads.plan_submit"),
+    ("ads.campaign_move", "jeeta.ads.campaign_move"),
+    ("ads.campaign_pause", "jeeta.ads.campaign_pause"),
+    ("ads.ad_preview", "jeeta.ads.ad_preview"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
 /// passes (TikTok's Content Sharing Guidelines), so no MCP tool, and its published post's
 /// counters; and the voice and device bridges' own surfaces, each served to its bridge's key,
 /// never as an MCP tool; and the materials library's human decisions (spec 2026-11-03 D4),
-/// releasing a slot's caption findings among them (§7), and the posting policy (§14.3).
-const POST_M4_PANEL_ONLY: [&str; 19] = [
+/// releasing a slot's caption findings among them (§7), and the posting policy (§14.3); and a
+/// person's two decisions about a production area (design 2026-11-10 B7, B9): "Olmamış", and
+/// accepting a delivery the text check alone holds.
+/// Rows of the ratified baseline removed after M4: commissions left the product on 2026-11-10,
+/// and the lane-level approval with the split of Growth Studio the same day.
+const POST_M4_REMOVED: [(&str, &str); 5] = [
+    ("inbox.commissions.list", "jeeta.inbox.commissions_list"),
+    (
+        "inbox.commissions.approve",
+        "jeeta.inbox.commissions_approve",
+    ),
+    ("inbox.commissions.pay", "jeeta.inbox.commissions_pay"),
+    (
+        "inbox.commission_rates.set",
+        "jeeta.inbox.commission_rates_set",
+    ),
+    // The lane's approval switch (design 2026-11-10 S18, B35): each connection's own flag stays.
+    ("studio.policy_set", "jeeta.studio.policy_set"),
+];
+
+const POST_M4_PANEL_ONLY: [&str; 32] = [
+    "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
     "studio.tiktok_metrics",
@@ -166,6 +269,18 @@ const POST_M4_PANEL_ONLY: [&str; 19] = [
     "studio.material_policy_set",
     "studio.material_check_release",
     "studio.posting_policy_set",
+    "studio.material_intelligence_update",
+    "studio.material_production_request",
+    "content.area_redo",
+    "content.delivery_accept",
+    "social.account_pause",
+    "budget.stop",
+    "ads.campaign_open",
+    "ads.campaign_update",
+    "ads.campaign_approve",
+    "ads.campaign_decline",
+    "ads.campaign_resume",
+    "ads.campaign_end",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {
@@ -280,9 +395,13 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
         let row = jt_app::catalog::find(id).unwrap();
         assert!(row.panel_only && row.mcp_tool.is_none(), "{id}");
     }
+    for (id, _) in POST_M4_REMOVED {
+        assert!(expected.remove(id), "{id}");
+        assert!(jt_app::catalog::find(id).is_none(), "{id}");
+    }
     assert_eq!(
         CATALOG.len(),
-        144 + POST_M4_ADDED.len() + POST_M4_PANEL_ONLY.len()
+        144 + POST_M4_ADDED.len() + POST_M4_PANEL_ONLY.len() - POST_M4_REMOVED.len()
     );
     assert_eq!(
         CATALOG
@@ -297,8 +416,14 @@ fn catalog_and_handlers_match_ratified_m4_surface_set() {
     for (_, tool) in POST_M4_ADDED {
         assert!(tools.insert(tool.into()));
     }
+    for (_, tool) in POST_M4_REMOVED {
+        assert!(tools.remove(tool), "{tool}");
+    }
     let registry = jt_mcp::registry();
-    assert_eq!(registry.len(), 125 + POST_M4_ADDED.len());
+    assert_eq!(
+        registry.len(),
+        125 + POST_M4_ADDED.len() - POST_M4_REMOVED.len()
+    );
     assert_eq!(
         registry
             .iter()
@@ -509,7 +634,13 @@ fn only_named_billing_rows_bypass_pending_status() {
         } else if ["auth.", "workspace.", "platform."]
             .iter()
             .any(|p| row.id.starts_with(p))
-            || ["ops.health", "prospects.do_not_contact", "prospects.erase"].contains(&row.id)
+            || [
+                "ops.health",
+                "modules.list",
+                "prospects.do_not_contact",
+                "prospects.erase",
+            ]
+            .contains(&row.id)
         {
             Always
         } else if ["strategy.", "work."].iter().any(|p| row.id.starts_with(p)) {
@@ -587,7 +718,7 @@ async fn m4_surface_schema_and_effect_parity() {
         .iter()
         .find(|t| t.name == "jeeta.billing.report_payment")
         .unwrap();
-    assert_eq!(tool.permission, jt_tenancy::Permission::TeamManage);
+    assert_eq!(tool.permissions, &[jt_tenancy::Permission::TeamManage]);
     assert_eq!(tool.risk, jt_app::catalog::Risk::Write);
     let schema = tool.input_schema.as_value();
     let fields = BTreeSet::from(["reference", "amount_minor", "paid_at", "request_key"]);

@@ -11,7 +11,6 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use jt_studio::*;
-use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -229,14 +228,27 @@ async fn normalize(
 /// Checks a submission under the control fence: the slot's chain, every medium a material, the
 /// subject named (a planned post's own by default, and no other: spec 2026-11-03 D28), the
 /// adaptations naming the slot's account, and for a planned post the media its format takes on
-/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force and
-/// the subject.
+/// the channel's kind (`media_count`, `media_type`). Answers the slot, the strategy in force, the
+/// subject and, for a story, its one medium's material (its file is checked by the caller).
 async fn validate(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     i: &PieceInput,
-) -> Result<(Slot, jt_strategy::StrategyVersion, Subject), AppError> {
-    let frame = gated(r, ctx).await?;
+) -> Result<
+    (
+        Slot,
+        jt_strategy::StrategyVersion,
+        Subject,
+        Option<jt_studio::Material>,
+    ),
+    AppError,
+> {
+    let frame = gated(
+        r,
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.piece_submit"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     let s = r
         .studio()
@@ -357,8 +369,11 @@ async fn validate(
                 "the post's format takes other media on this channel",
             ));
         }
+        if p.format == PostFormat::Story {
+            return Ok((s, frame, subject, materials.into_iter().next()));
+        }
     }
-    Ok((s, frame, subject))
+    Ok((s, frame, subject, None))
 }
 /// What `studio.piece_submit`'s request key keeps (spec 2026-11-03 D40): the answer without its
 /// piece and its material check, which hold the caption and what it matched (a client's name, an
@@ -391,6 +406,9 @@ async fn replayed(
     Ok(out)
 }
 pub async fn piece_submit(d: &Deps, ctx: &Ctx, i: PieceInput) -> Result<SlotOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.piece_submit",
+    ))?;
     let mut stage = files::Staging::new();
     let result = submit(d, ctx, i, &mut stage).await;
     stage.compensate(d, ctx.workspace_id).await;
@@ -402,12 +420,16 @@ async fn submit(
     i: PieceInput,
     stored: &mut files::Staging,
 ) -> Result<SlotOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
     files::key(&i.request_key)?;
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
     {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
-        gated(r.as_mut(), ctx).await?;
+        gated(
+            r.as_mut(),
+            ctx,
+            crate::usecases::studio::permissions::for_use_case("studio.piece_submit"),
+        )
+        .await?;
         if let Some(v) = r
             .studio()
             .request_replay("studio.piece_submit", &i.request_key, &payload)
@@ -431,7 +453,12 @@ async fn submit(
         );
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.piece_submit"),
+    )
+    .await?;
     if let Some(v) = r
         .studio()
         .request_replay("studio.piece_submit", &i.request_key, &payload)
@@ -439,20 +466,99 @@ async fn submit(
     {
         return replayed(r.as_mut(), v, ctx.now).await;
     }
-    let (s, frame, subject) = validate(r.as_mut(), ctx, &i).await?;
+    let (s, frame, subject, story) = validate(r.as_mut(), ctx, &i).await?;
+    // A story's one medium: what Instagram takes (a JPEG up to 8 MB, an MP4 of 3 to 60 s), the
+    // refusal saying what to fix.
+    if let Some(m) = &story
+        && let Some(refusal) = super::posts::story_refusal(d, r.as_mut(), m).await?
+    {
+        return Err(AppError::validation(
+            "the story's medium is not one Instagram takes",
+            json!({"field":"media","reason":refusal.code(),"format":PostFormat::Story}),
+        ));
+    }
     for f in &stored.files {
         r.studio().save_file(f.clone()).await?;
     }
+    store_piece(
+        d,
+        ctx,
+        r.as_mut(),
+        &frame,
+        &s,
+        i.expected_revision,
+        subject,
+        PieceContent {
+            text: i.text,
+            media,
+            adaptations,
+        },
+        &i.request_key,
+    )
+    .await?;
+    let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
+    r.studio()
+        .request_receipt(
+            "studio.piece_submit",
+            &i.request_key,
+            &payload,
+            &encode(&submission_receipt(&out))?,
+        )
+        .await?;
+    stored.commit_started = true;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// What a piece says and shows: its text, its media, and what replaces them on one account.
+pub(crate) struct PieceContent {
+    pub text: String,
+    pub media: Vec<MediaAsset>,
+    pub adaptations: BTreeMap<String, ChannelContent>,
+}
+
+/// Stores `content` as the piece of slot `s` after revision `expected_revision`, inside the
+/// caller's gated, Studio-locked transaction: every file is there, the materials pass the gate
+/// about `subject` at the slot's time (spec 2026-11-03 D1), their roles are recorded and the slot
+/// is Ready. `studio.piece_submit` and the scheduling of a content package's version both end
+/// here, so a piece is stored under one set of rules whoever brings it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn store_piece(
+    d: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    frame: &jt_strategy::StrategyVersion,
+    s: &Slot,
+    expected_revision: u64,
+    subject: Subject,
+    content: PieceContent,
+    request_key: &str,
+) -> Result<Piece, AppError> {
+    // A post waiting at its platform's scheduler goes out as it was left there (design
+    // 2026-11-10 §7.3): its content is not replaced under it. Cancelling it, or "Olmamış" on its
+    // content, takes it back first.
+    if r.studio()
+        .slot_evidence(s.id)
+        .await?
+        .0
+        .iter()
+        .any(jt_studio::PublishAttempt::is_held)
+    {
+        return Err(AppError {
+            code: crate::error::ErrorCode::Conflict,
+            message: "the post waits at its platform's scheduler".into(),
+            details: json!({"reason":"held_at_provider","slot_id":s.id}),
+        });
+    }
     let p = Piece {
         id: PieceId(d.ids.uuid()),
-        chain: s.chain,
-        revision: i
-            .expected_revision
+        chain: s.chain.clone(),
+        revision: expected_revision
             .checked_add(1)
             .ok_or_else(|| AppError::conflict("revision overflow"))?,
-        text: i.text,
-        media,
-        adaptations,
+        text: content.text,
+        media: content.media,
+        adaptations: content.adaptations,
     };
     p.validate_persisted().map_err(|_| files::invalid())?;
     // Recheck physical availability while holding the same control fence as cleanup.
@@ -479,11 +585,10 @@ async fn submit(
         &p.media,
         p.adaptations.values().map(|a| a.media.as_slice()),
     ))?;
-    let materials = super::materials::materials_of(r.as_mut(), &files).await?;
-    let roles =
-        super::materials::check_piece(r.as_mut(), &materials, &subject, s.scheduled_at).await?;
+    let materials = super::materials::materials_of(r, &files).await?;
+    let roles = super::materials::check_piece(r, &materials, &subject, s.scheduled_at).await?;
     r.studio()
-        .save_piece(s.id, i.expected_revision, p.clone(), &i.request_key)
+        .save_piece(s.id, expected_revision, p.clone(), request_key)
         .await?;
     r.studio_materials()
         .record_piece_materials(
@@ -501,16 +606,5 @@ async fn submit(
         )
         .await?;
     r.ledger().append(ledger_entry(ctx,"studio.piece_submit","studio_slot",s.id,json!({"piece_id":p.id,"revision":p.revision,"born_version_id":p.chain.born_version_id,"executed_version_id":frame.id,"materials":roles.iter().map(|(id,_)|id).collect::<Vec<_>>(),"subject":subject}))?).await?;
-    let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
-    r.studio()
-        .request_receipt(
-            "studio.piece_submit",
-            &i.request_key,
-            &payload,
-            &encode(&submission_receipt(&out))?,
-        )
-        .await?;
-    stored.commit_started = true;
-    r.commit().await?;
-    Ok(out)
+    Ok(p)
 }

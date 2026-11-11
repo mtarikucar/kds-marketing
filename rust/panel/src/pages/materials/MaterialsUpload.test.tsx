@@ -38,14 +38,47 @@ const answers = {
 
 async function pickPhoto() {
   const user = userEvent.setup();
-  renderAt('/studio?tab=materials&view=upload');
+  renderAt('/materials?view=upload');
   const input = await screen.findByLabelText('Galeriden seç', { selector: 'input' });
   await user.upload(input, photo());
   await screen.findByText('Yüklendi');
+  const optional = screen.getByText('Belirli bir olaya bağla (isteğe bağlı)');
+  if (!optional.closest('details')?.open) await user.click(optional);
   return user;
 }
 
 describe('Materyaller · Yükle', () => {
+  it('searches a long event list without losing the selected event or its upload', async () => {
+    const events = Array.from({ length: 9 }, (_, index) => ({
+      olay: olay(`event-${index}`, {
+        title: `Ürün çekimi ${index}`,
+        place: index === 8 ? 'Beyoğlu' : 'Moda',
+        starts_on: dayFrom(5),
+        ends_on: dayFrom(6),
+      }),
+      materials: 0,
+    }));
+    const calls = mockFetch({ ...answers, 'GET /api/studio/olays': events });
+    const user = await pickPhoto();
+    const search = screen.getByRole('searchbox', { name: 'Olay adı veya yer ara' });
+    await user.type(search, 'Beyoğlu');
+    expect(screen.getByRole('radio', { name: /Ürün çekimi 8/ })).toBeVisible();
+    expect(screen.queryByRole('radio', { name: /Ürün çekimi 0/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: /Ürün çekimi 8/ }));
+    await user.clear(search);
+    await user.type(search, 'bulunmayan');
+    expect(screen.getByText('Seçili olay: Ürün çekimi 8')).toBeVisible();
+    expect(screen.getByText(/Eşleşen olay yok/)).toHaveAttribute('role', 'status');
+    expect(screen.getByRole('radio', { name: 'Yeni olay oluştur' })).toBeVisible();
+    await user.click(screen.getByRole('radio', { name: 'Paylaşılabilir' }));
+    await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
+    await screen.findByText('1 materyal eklendi.');
+    expect(calls.filter((call) => call.path === '/api/studio/files')).toHaveLength(1);
+    expect(
+      calls.find((call) => call.method === 'POST' && call.path === '/api/studio/materials')?.body,
+    ).toMatchObject({ olay_id: 'event-8', file_id: 'file-1', share: 'shareable' });
+  });
+
   it('stores each picked file at once with its own request key', async () => {
     const calls = mockFetch(answers);
     await pickPhoto();
@@ -66,44 +99,36 @@ describe('Materyaller · Yükle', () => {
     );
   });
 
-  it('shows the olay its capture day suggests first', async () => {
-    mockFetch(answers);
-    await pickPhoto();
-    const suggested = await screen.findByRole('group', { name: 'Çekim tarihine göre önerilen' });
-    expect(within(suggested).getByRole('radio', { name: /Kadıköy atölyesi/ })).toBeInTheDocument();
-    expect(within(suggested).queryByRole('radio', { name: /Yılbaşı hazırlığı/ })).not.toBeInTheDocument();
-    expect(screen.getAllByRole('radio')[0]).toHaveAccessibleName(/Kadıköy atölyesi/);
-    expect(
-      within(screen.getByRole('group', { name: 'Diğer olaylar' })).getByRole('radio', {
-        name: /Yılbaşı hazırlığı/,
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it('refuses to submit without a share permission, then adds with it', async () => {
+  it('defaults to shareable general use and never treats lastModified as capture time', async () => {
     const calls = mockFetch(answers);
     const user = await pickPhoto();
-    await user.click(await screen.findByRole('radio', { name: /Kadıköy atölyesi/ }));
-    await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
-    expect(await screen.findByText('Paylaşım iznini seçin.')).toBeInTheDocument();
-    expect(calls.some((c) => c.method === 'POST' && c.path === '/api/studio/materials')).toBe(false);
-
-    await user.click(screen.getByRole('radio', { name: 'Sadece ürün (yüz ve isimler gizli)' }));
-    await user.click(screen.getByText('Etiketler (isteğe bağlı)'));
-    await user.click(screen.getByRole('checkbox', { name: 'Figür' }));
+    expect(screen.getByRole('radio', { name: 'Paylaşılabilir' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Genel \(belirli/ })).toBeChecked();
+    expect(screen.queryByRole('group', { name: 'Çekim tarihine göre önerilen' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
     await screen.findByText('1 materyal eklendi.');
-    const files = calls.find((c) => c.path === '/api/studio/files')?.body as { request_key: string };
     const add = calls.find((c) => c.method === 'POST' && c.path === '/api/studio/materials');
-    expect(add?.body).toMatchObject({
-      request_key: `${files.request_key}:material`,
-      file_id: 'file-1',
+    expect(add?.body).toMatchObject({ genel: true, share: 'shareable', labels: [] });
+    expect(add?.body).not.toHaveProperty('captured_at');
+    expect(screen.getByText(/Analiz, bağlı ajan/)).toBeVisible();
+  });
+
+  it('allows custom business labels and an explicit restricted permission', async () => {
+    const calls = mockFetch(answers);
+    const user = await pickPhoto();
+    await user.click(screen.getByRole('radio', { name: /Kadıköy atölyesi/ }));
+    await user.click(screen.getByRole('radio', { name: 'Sadece ürün (yüz ve isimler gizli)' }));
+    await user.click(screen.getByText('Etiket ve kaliteyi kendim belirle'));
+    expect(screen.queryByRole('checkbox', { name: 'Figür' })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Yeni etiket'), 'Kahve molası');
+    await user.click(screen.getByRole('button', { name: 'Ekle' }));
+    await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
+    await screen.findByText('1 materyal eklendi.');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/api/studio/materials')?.body).toMatchObject({
       olay_id: 'o-ws',
-      origin: { kind: 'real' },
       share: 'product_only',
-      product_groups: ['figur'],
+      labels: ['Kahve molası'],
     });
-    expect((add?.body as Record<string, unknown>).genel).toBeUndefined();
   });
 
   it('creates a new olay inline once, then adds to it', async () => {
@@ -116,6 +141,7 @@ describe('Materyaller · Yükle', () => {
     const user = await pickPhoto();
     await user.click(await screen.findByRole('radio', { name: 'Yeni olay oluştur' }));
     await user.type(screen.getByLabelText('Başlık'), 'Moda sahnesi atölyesi');
+    await user.type(screen.getByLabelText('Tarih (başlangıç)'), dayFrom(-2));
     await user.click(screen.getByRole('radio', { name: 'Paylaşılabilir' }));
     await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
     await screen.findByText('1 materyal eklendi.');
@@ -194,7 +220,7 @@ describe('Materyaller · Yükle', () => {
   it('refuses a file type the store does not take before sending it', async () => {
     const calls = mockFetch(answers);
     const user = userEvent.setup({ applyAccept: false });
-    renderAt('/studio?tab=materials&view=upload');
+    renderAt('/materials?view=upload');
     const input = await screen.findByLabelText('Galeriden seç', { selector: 'input' });
     await user.upload(input, new File(['x'], 'foto.heic', { type: 'image/heic' }));
     expect(await screen.findByText('Kabul edilmedi')).toBeInTheDocument();

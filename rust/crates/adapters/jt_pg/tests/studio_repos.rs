@@ -17,7 +17,9 @@ async fn studio_schema_exact_table_delta() {
             "studio_control",
             "studio_files",
             "studio_learning_applications",
+            "studio_material_intelligence",
             "studio_material_policy",
+            "studio_material_productions",
             "studio_material_releases",
             "studio_materials",
             "studio_measurements",
@@ -27,6 +29,7 @@ async fn studio_schema_exact_table_delta() {
             "studio_pieces",
             "studio_posting_policy",
             "studio_posts",
+            "studio_production_projects",
             "studio_publications",
             "studio_publish_attempts",
             "studio_request_keys",
@@ -42,8 +45,14 @@ async fn studio_schema_exact_table_delta() {
     // public items, subjects and cursors (0019_inbox_public), the pool (0020_prospects), the
     // materials library's seven (0021_studio_materials), the planned posts, package requests and
     // posting policy (0022_studio_posts), outreach (0026_outreach), distribution
-    // (0027_distribution) and the mail files (0028_mail_files).
-    assert_eq!(count, 48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1);
+    // (0027_distribution), mail files (0028), intelligence (0029), productions (0030),
+    // production projects (0031), the workspace module registry (0032), the account
+    // snapshots (0037_social_accounts) and the ad campaigns (0040_ads_campaigns), less the
+    // three commission tables of 0008 that 0033_drop_commissions drops.
+    assert_eq!(
+        count,
+        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1 + 1 + 1 - 3
+    );
 }
 
 #[tokio::test]
@@ -139,6 +148,16 @@ const POSTS_UP: &str = include_str!("../../../../migrations/0022_studio_posts.up
 const POSTS_DOWN: &str = include_str!("../../../../migrations/0022_studio_posts.down.sql");
 /// Public subjects reference Studio publications: their migration goes first.
 const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
+
+async fn material_side_tables_down(pool: &sqlx::PgPool) {
+    for sql in [
+        include_str!("../../../../migrations/0035_module_permissions.down.sql"),
+        include_str!("../../../../migrations/0030_material_productions.down.sql"),
+        include_str!("../../../../migrations/0029_material_intelligence.down.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(pool).await.unwrap();
+    }
+}
 #[tokio::test]
 async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     use jt_pg::TenantTx;
@@ -153,8 +172,9 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .await
     .unwrap();
     // 14 Studio tables, the materials library's seven (0021_studio_materials) and the three of
-    // olay-driven publishing (0022_studio_posts).
-    assert_eq!(tables.len(), 14 + 7 + 3);
+    // olay-driven publishing (0022_studio_posts), intelligence (0029), productions (0030),
+    // and production projects (0031). The module registry is outside the studio_ namespace.
+    assert_eq!(tables.len(), 14 + 7 + 3 + 3);
     for table in tables {
         let forced: bool = sqlx::query_scalar(
             "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1",
@@ -236,6 +256,7 @@ async fn roles(pool: &sqlx::PgPool, ws: jt_tenancy::WorkspaceId) -> Vec<(String,
 #[tokio::test]
 async fn studio_role_backfill_new_workspace_parity() {
     let db = TestDb::new().await;
+    material_side_tables_down(&db.pool).await;
     sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_DOWN)
         .execute(&db.pool)
@@ -244,6 +265,12 @@ async fn studio_role_backfill_new_workspace_parity() {
     sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (old, _) = db.seed_workspace("old-studio").await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0035_module_permissions.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("update roles set permissions=array_remove(array_remove(permissions,'studio.work'),'studio.manage') where workspace_id=$1").bind(old.0).execute(tx.conn()).await.unwrap();
     tx.commit().await.unwrap();
@@ -251,10 +278,30 @@ async fn studio_role_backfill_new_workspace_parity() {
     sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_UP).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(POSTS_UP).execute(&db.pool).await.unwrap();
+    for sql in [
+        include_str!("../../../../migrations/0029_material_intelligence.up.sql"),
+        include_str!("../../../../migrations/0030_material_productions.up.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
+    }
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0035_module_permissions.up.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let (new, _) = db.seed_workspace("new-studio").await;
     assert_eq!(roles(&db.pool, old).await, roles(&db.pool, new).await);
     for (key, perms) in roles(&db.pool, old).await {
-        for permission in ["studio.work", "studio.manage"] {
+        for permission in [
+            "content.work",
+            "social.work",
+            "ads.work",
+            "materials.work",
+            "content.manage",
+            "social.manage",
+            "ads.manage",
+        ] {
             assert_eq!(perms.iter().any(|p| p == permission), key != "rep");
         }
     }
@@ -262,6 +309,7 @@ async fn studio_role_backfill_new_workspace_parity() {
 #[tokio::test]
 async fn studio_backfill_down_preserves_existing_grants() {
     let db = TestDb::new().await;
+    material_side_tables_down(&db.pool).await;
     sqlx::raw_sql(POSTS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(MATERIALS_DOWN)
         .execute(&db.pool)
@@ -270,6 +318,12 @@ async fn studio_backfill_down_preserves_existing_grants() {
     sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
     let (ws, _) = db.seed_workspace("grants").await;
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0035_module_permissions.down.sql"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
     let mut tx = jt_pg::PlatformTx::begin(&db.pool).await.unwrap();
     sqlx::query("update roles set permissions=array_remove(permissions,'studio.manage') where workspace_id=$1 and key='manager'").bind(ws.0).execute(tx.conn()).await.unwrap();
     sqlx::query("update roles set permissions=array_remove(array_remove(permissions,'studio.work'),'studio.manage') where workspace_id=$1 and key='owner'").bind(ws.0).execute(tx.conn()).await.unwrap();

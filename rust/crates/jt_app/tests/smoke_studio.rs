@@ -22,6 +22,11 @@ async fn strategy_plan_content_publish_measure_learn_and_project() {
 /// Shared unchanged M2/M3 acceptance flow for the M4 aggregate.
 pub async fn run_acceptance() {
     let (mut w, x) = scenarios::publishing_world().await;
+    // The M3 flow asks agents for posts: the workspace as it is without the content module
+    // (design 2026-11-10 B18). With it, the triggers open production areas (content_triggers).
+    jt_app::usecases::modules::remove(&w.d, &w.ctx, jt_app::usecases::modules::CONTENT)
+        .await
+        .unwrap();
     w.d.channels = Arc::new(jt_app::usecases::capabilities::UowChannelCatalog::new(
         Arc::new(w.uow.clone()),
     ));
@@ -175,6 +180,7 @@ pub async fn run_acceptance() {
     for days in [1, 3, 7] {
         w.d.clock = Arc::new(FixedClock(published_at + Duration::days(days)));
         scenarios::metrics(&x);
+        scenarios::no_account_numbers(&x);
         assert_eq!(
             Job::StudioMeasure.run(&w.d, w.d.clock.now()).await.changed,
             1

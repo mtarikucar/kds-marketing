@@ -9,6 +9,6 @@ describe('LoginPage', () => {
     renderAt('/login');
     expect(await screen.findByRole('heading', { level: 1, name: tr.login.title })).toBeInTheDocument();
     expect(screen.getByLabelText(tr.fields.email, { exact: false })).toBeInTheDocument();
-    expect(screen.getByLabelText(tr.fields.password, { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText(tr.fields.password, { exact: false, selector: 'input' })).toBeInTheDocument();
   });
 });

@@ -531,10 +531,10 @@ async fn sms_optional_cost() {
         jt_testkit::fakes::ConnectorCall::SendSms {
             reference,
             to,
-            commercial,
+            filter,
             ..
         } => {
-            assert!(!commercial);
+            assert_eq!(*filter, jt_app::ports::connectors::SmsConsentFilter::None);
             assert_eq!(
                 reference.as_deref(),
                 Some(s.inbox.outbox[0].id.to_string().as_str())
@@ -1667,7 +1667,7 @@ async fn business_basis_off_by_default_refuses_izin_yok() {
 }
 
 #[tokio::test]
-async fn business_basis_on_allows_email_only() {
+async fn business_basis_covers_the_channels_the_owner_opened() {
     let (mut w, id, c) = setup_channel("mailbox").await;
     recipient_kind(&w, RecipientKind::Business).await;
     platform(&mut w, true);
@@ -1686,15 +1686,80 @@ async fn business_basis_on_allows_email_only() {
             .unwrap_err();
         assert_eq!(e.message, "IZIN_YOK", "{kind:?}");
     }
-    // A stored "sms" never widens the basis: this program allows email only.
+    // The owner opened SMS too (owner decision 2026-11-10: every messaging channel may be
+    // opened): it goes out, under İYS's merchant filter rather than the individual one.
     let (mut w, id, c) = setup_channel("sms_line").await;
     recipient_kind(&w, RecipientKind::Business).await;
     platform(&mut w, true);
     b2b_basis(&w, &["email", "sms"], true).await;
-    let e = replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("b2b-sms"))
+    c.push_sms(accepted());
+    let out = replies::reply(&w.deps, &w.owner_ctx, id, commercial_keyed("b2b-sms"))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    assert!(matches!(
+        &c.calls()[0],
+        jt_testkit::fakes::ConnectorCall::SendSms {
+            filter: jt_app::ports::connectors::SmsConsentFilter::Business,
+            ..
+        }
+    ));
+    // A channel the owner did not open stays closed.
+    let (mut w, id, c) = setup_channel("sms_line").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email"], true).await;
+    let e = replies::reply(
+        &w.deps,
+        &w.owner_ctx,
+        id,
+        commercial_keyed("b2b-sms-closed"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.message, "IZIN_YOK");
+    assert!(c.calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_first_email_carries_its_own_subject_and_an_sms_takes_none() {
+    // The first message to a prospect (spec 2026-11-10-prospects-pool-redesign-design.md): an
+    // email that starts a thread names its subject; without one it would read "Re:".
+    let (mut w, _, c) = setup_channel("mailbox").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email", "sms"], true).await;
+    let person = w.uow.snapshot().inbox.people[0].id;
+    c.push_mail(accepted());
+    let first = |channel: &str, key: &str| -> replies::SendInput {
+        serde_json::from_value(json!({
+            "channel": channel, "text": "Merhaba", "intent": "commercial",
+            "subject": "Sadakat kartı", "request_key": key,
+        }))
+        .unwrap()
+    };
+    let out = replies::send(&w.deps, &w.owner_ctx, person, first("email", "first-mail"))
+        .await
+        .unwrap();
+    assert_eq!(out.state, "sent");
+    match &c.calls()[0] {
+        jt_testkit::fakes::ConnectorCall::SendMail { message, .. } => {
+            assert_eq!(message.subject, "Sadakat kartı");
+            assert_eq!(message.in_reply_to, None);
+        }
+        other => panic!("unexpected call {other:?}"),
+    }
+    // A subject means nothing on SMS: refused before anything is queued or sent.
+    let (mut w, _, c) = setup_channel("sms_line").await;
+    recipient_kind(&w, RecipientKind::Business).await;
+    platform(&mut w, true);
+    b2b_basis(&w, &["email", "sms"], true).await;
+    let person = w.uow.snapshot().inbox.people[0].id;
+    let e = replies::send(&w.deps, &w.owner_ctx, person, first("sms", "first-sms"))
         .await
         .unwrap_err();
-    assert_eq!(e.message, "IZIN_YOK");
+    assert_eq!(e.code, jt_app::error::ErrorCode::Validation);
+    assert_eq!(e.details["field"], "subject");
     assert!(c.calls().is_empty());
 }
 

@@ -1,4 +1,341 @@
 {
+  "adCampaigns": {
+    "queue": "Ad campaigns",
+    "legacy": "Ad sets created elsewhere",
+    "open": "Open an ad campaign",
+    "goal": "Goal",
+    "title": "Ad campaign title (optional)",
+    "budget": "Ad campaign budget",
+    "start": "Start time",
+    "end": "End date (optional)",
+    "account": "Ad account (optional)",
+    "agentChooses": "Let the agent choose",
+    "remaining": "General ad budget remaining: {{amount}}",
+    "general": "General ad budget",
+    "allPlatforms": "All platforms",
+    "platform": "Platform",
+    "viewBudget": "View in Budget",
+    "noBudget": "Set a general ad budget to get started.",
+    "spentBudget": "Spent / budget",
+    "results": "Results",
+    "cost": "Cost per result",
+    "lead_form": "{{n}} forms",
+    "link_click": "{{n}} site visits",
+    "unmeasured": "Not measured yet",
+    "starts": "Starts: {{at}}",
+    "more": "Show more",
+    "closed": "Closed ad campaigns",
+    "empty": "No ad campaigns yet.",
+    "noMatch": "No ad campaigns on this platform.",
+    "back": "Back to ad campaigns",
+    "pause": "Pause ad campaign",
+    "resume": "Resume",
+    "endAction": "End",
+    "approve": "Approve",
+    "decline": "Decline",
+    "reason": "Reason",
+    "edit": "Change budget and end date",
+    "proposalCost": "Proposed total budget: {{amount}}. Nothing is spent before your approval.",
+    "expired": "This proposal expired without approval. Nothing was spent.",
+    "audience": "Who sees it",
+    "destination": "Click destination",
+    "leadDestination": "Ad form: {{name}}",
+    "ads": "Ads",
+    "placement": "Placement",
+    "fallback": "The platform preview is currently unavailable.",
+    "days": "Daily results",
+    "day": "Day",
+    "spent": "Spent",
+    "impressions": "Impressions",
+    "clicks": "Clicks",
+    "ctr": "Click-through rate",
+    "moves": "What the agent changed",
+    "noMoves": "No changes yet.",
+    "noDays": "No daily results yet.",
+    "noPlan": "The agent will prepare this ad campaign’s plan.",
+    "adNumber": "Ad {{n}}",
+    "done": "Done",
+    "refused": "Refused",
+    "save": "Save",
+    "invalid": "Enter a goal, a valid budget and a start time. An end, when given, must be 24 hours to 90 days after the start.",
+    "invalidEdit": "Enter a valid budget; the end must be 24 hours to 90 days after the start.",
+    "showClosed": "Show closed ad campaigns",
+    "heldByCampaigns": "Held by open ad campaigns: {{amount}}",
+    "endTitle": "End the ad campaign",
+    "endConfirm": "The ad campaign is paused at the ad platform and cannot be started again. What it has not spent is free again in the general ad budget.",
+    "errors": {
+      "no_general_ad_budget": "First set a general ad budget on the Budget page.",
+      "no_paid_lane": "The approved strategy has no paid channel in the general ad budget’s currency. Add one to the strategy first.",
+      "spend_stopped": "Ad spending is stopped. It can be turned on again on the Budget page.",
+      "above_general_budget": "The ad campaign budget exceeds what is left of the general ad budget. Left: {{amount}}.",
+      "above_strategy_cap": "The ad campaign budget exceeds the strategy’s paid channel limit. Left: {{amount}}.",
+      "above_account_cap": "The ad campaign budget exceeds the ad account’s spending limit. Left: {{amount}}.",
+      "already_built": "The ad campaign is built at the ad platform; its budget and end date can no longer change. End it and open another.",
+      "stopped_by_budget": "The budget stopped this ad campaign; it goes on by itself when the budget allows it.",
+      "not_running": "This ad campaign is no longer running.",
+      "not_stopped": "This ad campaign is not stopped.",
+      "not_a_proposal": "This ad campaign is not a proposal awaiting approval.",
+      "proposal_expired": "This proposal expired without approval."
+    },
+    "notes": {
+      "plan_refused": "The agent’s plan was turned down three times; the ad campaign waits for a person.",
+      "provider_still_running": "Waiting for the ad platform to confirm the pause; Jeeta keeps trying. Until then what is left of its budget stays held.",
+      "spend_stopped": "ad spending was stopped",
+      "budget_exhausted": "the general ad budget is used up for this period",
+      "module_removed": "the ads module was removed",
+      "workspace_inactive": "the workspace was not active"
+    },
+    "stoppedBy": {
+      "person": "Stopped by a person",
+      "agent": "Stopped by the agent",
+      "budget": "Stopped by the budget; goes on by itself"
+    },
+    "noPlanClosed": "The ad campaign closed before its plan was prepared.",
+    "refusalTitle": "The agent’s last plan was turned down ({{n}}/3)",
+    "findings": {
+      "not_a_usable_ad_account": "The ad account cannot be used: a connected, verified ad account is needed.",
+      "credential_scope_missing": "The ad account’s connection may not create ads (it lacks {{needs}}). Reconnect the account under Capabilities and connections and allow that permission on the consent screen.",
+      "capability_unavailable": "The ad account’s connection cannot be used now: it is not verified, or it has to be reconnected.",
+      "access_expired": "The ad account’s connection has expired; reconnect the account.",
+      "account_unreadable": "The ad account could not be read; renew its connection.",
+      "not_the_campaigns_account": "The plan does not use the ad account you chose for this ad campaign.",
+      "currency_mismatch": "The ad account’s currency ({{account}}) differs from the general ad budget’s ({{budget}}).",
+      "below_the_accounts_minimum": "The budget is below the least the ad account takes for this run. At least: {{amount}}.",
+      "eu_targeting_needs_payer": "Ads to European Union countries are not supported in this version.",
+      "lead_form_needs_the_inbox": "An ad form needs the Inbox module installed.",
+      "special_category_not_supported": "Special ad categories are not supported in this version.",
+      "other": "For the agent to fix: {{field}}"
+    },
+    "endReasons": {
+      "budget_spent": "Its budget was spent.",
+      "end_date": "It reached its end date.",
+      "person": "Ended by a person."
+    },
+    "pause_ad": "Pause ad",
+    "resume_ad": "Resume ad",
+    "add_ad": "Add ad",
+    "fix_ad": "Fix ad",
+    "none": "No change",
+    "states": {
+      "proposed": "Awaiting your approval",
+      "queued": "Queued",
+      "planning": "Planning",
+      "building": "Building",
+      "in_review": "In review",
+      "live": "Live",
+      "paused": "Paused",
+      "rejected": "Rejected (agent fixing)",
+      "ended": "Ended",
+      "held": "Agent could not resolve",
+      "expired": "Expired",
+      "declined": "Declined by you"
+    },
+    "placements": {
+      "facebook_feed": "Facebook feed",
+      "instagram_feed": "Instagram feed",
+      "instagram_story": "Instagram story",
+      "instagram_reels": "Instagram Reels"
+    },
+    "adStates": {
+      "active": "Live",
+      "paused": "Paused",
+      "in_review": "In review",
+      "disapproved": "Rejected"
+    },
+    "cta": {
+      "LEARN_MORE": "Learn more",
+      "SHOP_NOW": "Shop now",
+      "SIGN_UP": "Sign up",
+      "CONTACT_US": "Contact us",
+      "GET_QUOTE": "Get quote",
+      "APPLY_NOW": "Apply now",
+      "BOOK_NOW": "Book now",
+      "DOWNLOAD": "Download"
+    }
+  },
+  "budgetSpending": {
+    "general": "General ad budget",
+    "breakdown": "Where the money went",
+    "from": "From date",
+    "until": "Until date",
+    "invalidPeriod": "The end date must follow the start date.",
+    "stopping": "Spending controls",
+    "stopAll": "Stop all spending",
+    "stopModule": "{{module}}: stop spending",
+    "stop": "Stop spending",
+    "resume": "Resume",
+    "resumeScope": "{{scope}}: Resume",
+    "all": "All spending",
+    "running": "Spending enabled",
+    "stopped": "Stopped",
+    "waiting": "Waiting for pause confirmation",
+    "help": "Only spending stops; work that costs no money goes on. First messages sent from the prospect pool count under Inbox: stopping Inbox, or all spending, stops them.",
+    "noSpend": "No spending in this period.",
+    "byHand": "Recorded by hand",
+    "held": "Held by open ad campaigns (no other campaign can take it)",
+    "modules": {
+      "ads": "Ads",
+      "inbox": "Inbox",
+      "outreach": "Campaigns",
+      "calls": "Calls",
+      "social": "Social media"
+    }
+  },
+  "socialAccounts": {
+    "accounts": "Accounts",
+    "packages": "Ready packages",
+    "packageHelp": "The agent will choose a time for these versions.",
+    "connect": "Connect an account",
+    "empty": "No social accounts connected yet.",
+    "back": "Back to accounts",
+    "paused": "Paused",
+    "locked": "Connection unavailable",
+    "pause": "Pause posting",
+    "resume": "Resume posting",
+    "accountSettings": "Posting by account",
+    "period": "Period",
+    "days": "{{count}} days",
+    "change": "Change",
+    "trend": "{{metric}} trend",
+    "trendMetric": "Trend metric",
+    "totals": "Period totals",
+    "upcoming": "Upcoming posts",
+    "recent": "Recent posts",
+    "atProvider": "Scheduled on platform",
+    "byJeeta": "Jeeta will publish",
+    "waitingPerson": "Waiting for you",
+    "finishTiktok": "Finish your TikTok post",
+    "waitingApproval": "Waiting for your approval",
+    "held": "Held",
+    "approve": "Approve",
+    "approvalTitle": "Post waiting for approval",
+    "approvalHelp": "This account's connection has “every action waits for a person's approval” switched on. Once you approve, the post goes out at its time; the setting is under Connections.",
+    "approved": "Approved. It goes out at its time.",
+    "notWaiting": "This post is not waiting for approval.",
+    "noUpcoming": "No posts scheduled.",
+    "strays": "Scheduled at the platform, not known to Jeeta",
+    "straysHelp": "These posts are in the platform’s own scheduler but are not among the posts Jeeta left there: scheduled by hand, or left by a hand-over whose outcome was never learnt. Jeeta does not follow them or take them back; delete them on the platform’s own screen if they should not go out.",
+    "noRecent": "No posts in this period.",
+    "noPackages": "No packages waiting for a time.",
+    "materials": "{{count}} materials",
+    "unknownAccount": "Social account",
+    "noSuitableAccount": "No suitable account yet.",
+    "blocked": {
+      "no_approved_strategy": "There is no approved strategy; no post can be planned.",
+      "no_connected_account": "No social account is connected and working. Connect one or renew its connection.",
+      "account_paused": "Posting is paused on the accounts that could take it. Resume one and the agent picks a time.",
+      "its_account_unavailable": "The account this version was made for cannot take a post now.",
+      "format_not_supported": "None of the connected accounts takes this format.",
+      "channel_not_in_strategy": "The approved strategy has not chosen the connected accounts’ channel. Add it to the strategy’s channels.",
+      "hypothesis_does_not_post": "This content’s hypothesis does not post in the strategy. If its cadence was never written, submitting the strategy again completes it; if it says zero, change it in the strategy."
+    },
+    "metrics": {
+      "followers": "Followers",
+      "reach": "Reach",
+      "views": "Views",
+      "engagement": "Engagement",
+      "profile_visits": "Profile visits",
+      "posts": "Posts"
+    }
+  },
+  "contentAreas": {
+    "existing": "Earlier work and sources",
+    "line": "Production line",
+    "open": "Open production area",
+    "openHelp": "A goal sentence and a start time are enough. Let the agent prepare the content package.",
+    "goal": "Goal",
+    "start": "Start time",
+    "optional": "Platform and format (optional)",
+    "platform": "Platform",
+    "format": "Format",
+    "agentChooses": "Let the agent choose",
+    "archive": "Show archived areas",
+    "archiveEmpty": "No archived production areas",
+    "archiveHelp": "Archived areas appear here.",
+    "empty": "Open your first production area",
+    "more": "Show more",
+    "future": "Waiting for its start time",
+    "queued": "Queued; no agent has picked it up yet",
+    "waiting": "The agent requested {{n}} captures",
+    "done": "{{n}} platform versions ready",
+    "held": "The agent could not resolve this; your attention is needed",
+    "redoStatus": "Being redone: “{{note}}”",
+    "back": "Back to production line",
+    "versions": "Platform versions",
+    "account": "No account selected",
+    "versionSummary": "This version",
+    "usedMaterials": "Materials used",
+    "missingMaterial": "Material unavailable",
+    "checksPassed": "Material permission and truth checks passed",
+    "agentNote": "Agent notes",
+    "redo": "Needs work",
+    "redoHelp": "Describe what should change. The agent will prepare a new package.",
+    "redoNote": "What should change?",
+    "redoSubmit": "Request redo",
+    "heldHelp": "The agent could not get this content past the material permission and accuracy checks in three tries. Write what should change and send it back, or archive the area.",
+    "heldAction": "Write a note and send back",
+    "heldReasons": "Versions held in the last delivery",
+    "accept": "Accept anyway",
+    "acceptHelp": "The findings are about the text only. If you are sure the text is right, you can accept the content as it is; who accepted it is recorded.",
+    "notAcceptable": "This content cannot be accepted: the problem is in the material or the target, not the text. Write a note and send it back to the agent.",
+    "released": "A person accepted the finding of the text check",
+    "progress": "Steps and intermediate outputs",
+    "stepsLabel": "Production steps",
+    "requests": "Capture requests",
+    "previousMedia": "Previous image",
+    "nextMedia": "Next image",
+    "mediaPage": "Image {{n}} / {{total}}",
+    "states": {
+      "queued": "Queued",
+      "working": "Working",
+      "waiting_material": "Waiting for captures",
+      "done": "Done",
+      "held": "Needs attention",
+      "archived": "Archived"
+    },
+    "opened": {
+      "human": "Opened by a person",
+      "olay": "Opened by the system · New material",
+      "calendar": "Opened by the system · Special day",
+      "floor": "Opened by the system · Quiet channel"
+    },
+    "steps": {
+      "1": "Define the goal",
+      "2": "Define the audience",
+      "3": "Choose the platform and format",
+      "4": "Research the topic",
+      "5": "Idea and approach",
+      "6": "Main message",
+      "7": "Title and opening",
+      "8": "Copy or script",
+      "9": "Create or collect materials",
+      "10": "Editing and design",
+      "11": "Adapt to the platform",
+      "12": "Publication details",
+      "13": "Final check",
+      "14": "Package"
+    }
+  },
+  "moduleStatus": {
+    "label": "Module status",
+    "noAgent": "No connected agent can work in this module; work is waiting.",
+    "overdue": "The agent last checked in at {{time}}; {{n}} items are waiting.",
+    "strategy": "No approved strategy; preparation can continue, but publishing and spending wait.",
+    "paid": "The strategy does not allow ad spending; campaigns are waiting.",
+    "noPosting": "No hypothesis of the approved strategy posts; posts are waiting. If no posting cadence was ever written, submitting the strategy again completes it.",
+    "budget": "No ad budget has been set in Budget; campaigns are waiting.",
+    "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen."
+  },
+  "modulePages": {
+      "materials": "Materials library",
+      "content": "Content creation",
+      "social": "Social media",
+      "ads": "Advertising",
+      "specialDays": "Special days",
+      "settings": "Settings",
+      "pauseSocial": "Pause publishing",
+      "paidUnavailable": "Advertising needs a connected ad account and an approved strategy that includes paid advertising."
+  },
   "app": {
     "name": "Jeeta",
     "tagline": "Workspace panel"
@@ -37,25 +374,31 @@
     "disclosure": {
       "show": "Show",
       "hide": "Hide"
-    }
+    },
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "skipContent": "Skip to content"
   },
   "nav": {
+    "users": "Users",
     "label": "Main menu",
     "home": "Home",
     "team": "Team",
     "roles": "Roles",
-    "apiKeys": "API keys",
     "agents": "Agents",
     "ledger": "Ledger",
     "strategy": "Strategy",
-    "capabilities": "Capabilities",
+    "capabilities": "Abilities & connections",
     "budget": "Budget",
     "inbox": "Inbox",
     "studio": "Growth studio",
     "people": "People",
     "calls": "Calls",
     "prospects": "Prospects",
-    "outreach": "Campaigns"
+    "outreach": "Campaigns",
+    "workGroup": "Customer work",
+    "growthGroup": "Planning",
+    "workspaceGroup": "Workspace"
   },
   "shell": {
     "workspace": "Workspace",
@@ -124,10 +467,11 @@
       "work": "Work in the inbox",
       "manage": "Manage the inbox"
     },
-    "studio": {
-      "work": "Work in the studio",
-      "manage": "Manage the studio"
-    },
+    "materials": {"work": "Materials library: work"},
+    "content": {"work": "Content creation: work", "manage": "Content creation: manage"},
+    "social": {"work": "Social media: work", "manage": "Social media: manage"},
+    "ads": {"work": "Advertising: work", "manage": "Advertising: manage"},
+
     "calls": {
       "work": "Place calls and read the call log",
       "manage": "Manage the call policy",
@@ -211,6 +555,8 @@
     "CONFLICT": "This conflicts with the current state.",
     "VALIDATION": "Some of the details are not valid.",
     "STRATEGY_REQUIRED": "This needs an approved strategy first.",
+    "MODULE_NOT_INSTALLED": "This module is not installed in this workspace.",
+    "CAPABILITY_REQUIRED": "This module needs its capability connected first.",
     "WORKSPACE_INACTIVE": "The workspace is not active.",
     "HOST_NOT_ALLOWED": "Access to this address is not allowed.",
     "UPSTREAM_UNAVAILABLE": "The provider is not answering right now. Please try again shortly.",
@@ -242,7 +588,7 @@
   },
   "login": {
     "title": "Sign in",
-    "description": "Sign in to your workspace with your email and password.",
+    "description": "Sign in to your workspace with your email and password",
     "submit": "Sign in",
     "invalid": "The email or password is wrong.",
     "noAccount": "No account yet?",
@@ -250,14 +596,14 @@
   },
   "register": {
     "title": "Sign up",
-    "description": "Create your account and your first workspace.",
+    "description": "Create your account and your first workspace",
     "submit": "Create account",
     "haveAccount": "Already have an account?",
     "loginLink": "Sign in"
   },
   "invite": {
     "title": "Accept invite",
-    "description": "You have been invited to a workspace.",
+    "description": "You have been invited to a workspace",
     "signedInAs": "You are signed in as {{email}}. You can accept the invite with this account.",
     "accept": "Accept invite",
     "newUser": "No account yet? Join by entering your name and a password.",
@@ -271,15 +617,15 @@
     "goHome": "Go to the panel"
   },
   "home": {
-    "title": "Home",
-    "description": "An overview of your workspace.",
+    "title": "Work overview",
+    "description": "Customer conversations, pending decisions and the next follow-up",
     "slug": "Slug",
     "status": "Status",
     "myRole": "Your role",
     "myPermissions": "Your permissions",
     "strategy": {
       "title": "Waiting for a strategy",
-      "body": "The strategy comes out of a consultation your agent runs with you over MCP: it asks, records your answers and its assumptions, and puts the draft up for your approval.",
+      "body": "Work with your agent to define your audience, goals, and approach. Review the draft before it takes effect.",
       "start": "Start the consultation",
       "open": "Open the strategy",
       "draftTitle": "A strategy draft is being worked out",
@@ -290,8 +636,9 @@
       "submittedWait": "It takes effect once an owner or a manager approves it.",
       "approve": "Approve",
       "approvedTitle": "The strategy is in force",
-      "approvedBody": "Version in force: {{number}}.",
-      "hypotheses": "Hypotheses: {{count}}."
+      "approvedBody": "Version {{number}} in effect",
+      "hypotheses": "{{count}} active hypotheses",
+      "label": "Strategy"
     },
     "inactive": {
       "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
@@ -317,6 +664,9 @@
       "connectLink": "Connect an agent"
     },
     "pending": {
+      "ads_campaign_proposal": "An ad campaign proposal awaits your approval.",
+      "ads_campaign_held": "An ad campaign needs your help.",
+
       "title": "Pending work",
       "empty": "Nothing is pending.",
       "consult_strategy": "Work out the strategy in the consultation, or continue the open draft.",
@@ -345,12 +695,29 @@
       "promoted_not_contacted": "Promoted prospects have not been written to yet.",
       "campaign_approval": "A campaign is waiting for your approval.",
       "campaign_blocked": "A campaign has stopped; check why.",
-      "personalization_due": "A campaign's recipients are waiting for personalization."
-    }
+      "personalization_due": "A campaign's recipients are waiting for personalization.",
+      "description": "Decisions and follow-ups, in priority order.",
+      "count": "{{count}} pending items",
+      "emptyHint": "New approvals and follow-ups will appear here. You can review conversations or plan your next content below.",
+      "studio_slot": "A post awaits preparation",
+      "studio_approval": "An action awaits your approval",
+      "studio_budget_move": "An advertising budget action is pending",
+      "studio_shoot_request": "A shoot or upload is needed",
+      "studio_post_request": "A post plan awaits the agent",
+      "studio_material_analysis": "A material is waiting for agent analysis",
+      "studio_material_production": "Image production is waiting for an agent",
+      "content_area": "Production area queued",
+      "content_material_request": "Captures needed for a production area",
+      "content_area_held": "A production area needs your attention"
+    },
+    "workspaceDetails": "Workspace details & permissions",
+    "continueWorking": "Continue working",
+    "inboxHint": "Conversations, contacts, and follow-ups.",
+    "studioHint": "Plan content and review upcoming work."
   },
   "team": {
     "title": "Team",
-    "description": "The workspace's members and pending invites.",
+    "description": "The workspace's members and pending invites",
     "invite": "Invite member",
     "columns": {
       "member": "Member",
@@ -380,7 +747,7 @@
   },
   "roles": {
     "title": "Roles",
-    "description": "System roles are fixed; custom roles carry their own permissions.",
+    "description": "System roles are fixed; custom roles carry their own permissions",
     "create": "Create role",
     "columns": {
       "name": "Name",
@@ -406,27 +773,7 @@
     }
   },
   "apiKeys": {
-    "title": "API keys",
-    "description": "Agents connect to this workspace with these keys.",
-    "create": "Create key",
-    "columns": {
-      "name": "Name",
-      "prefix": "Prefix",
-      "scopes": "Scopes",
-      "status": "Status",
-      "created": "Created",
-      "lastUsed": "Last used"
-    },
-    "neverUsed": "Never used",
-    "revoke": "Revoke",
-    "revokeTitle": "Revoke key",
-    "revokeBody": "The key {{name}} will be revoked; agents using it will no longer connect.",
-    "revoked": "Key revoked.",
-    "empty": "No API keys yet.",
-    "emptyBody": "Create a key to connect an agent.",
     "dialog": {
-      "title": "Create API key",
-      "description": "Name the key and, if you like, narrow its scope.",
       "scopesHint": "If you choose none, the key carries all of your permissions.",
       "submit": "Create key",
       "plaintextTitle": "Your new key",
@@ -444,25 +791,42 @@
   },
   "agents": {
     "title": "Agents",
-    "description": "Clients that have connected to this workspace with its API keys.",
-    "columns": {
-      "client": "Client",
-      "version": "Version",
-      "protocol": "Protocol",
-      "key": "API key",
-      "firstSeen": "First seen",
-      "lastSeen": "Last seen",
-      "toolCalls": "Tool calls",
-      "checkin": "Check-in"
-    },
+    "description": "Each agent connects to this workspace with a key issued here. Each row shows a key and the agents that connected with it.",
+    "connect": "Connect an agent",
+    "empty": "No agent is connected yet.",
+    "emptyBody": "Connect an agent: name it, take its key, run the command in your agent.",
+    "emptyBodyReadOnly": "An agent shows here once it connects. Connecting one needs the permission to manage API keys.",
     "overdue": "Overdue",
     "onTime": "On time",
-    "empty": "No agent has connected yet.",
-    "emptyBody": "The first client to connect with an API key will show up here."
+    "lastContact": "last contact {{when}}",
+    "toolCalls": "Tool calls: {{count}}",
+    "firstSeen": "first connected {{when}}",
+    "protocol": "Protocol {{version}}",
+    "connected": "Agents connected with the key {{name}}",
+    "issuedAt": "issued {{when}}",
+    "revokedAt": "access removed {{when}}",
+    "waiting": "No agent has connected with this key yet.",
+    "neverConnected": "No agent ever connected with this key.",
+    "howTo": "How to connect?",
+    "keyShownOnce": "The key itself is shown only when it is created. If you no longer have it, remove this access and connect a new agent.",
+    "permissions": "Permissions: {{count}}",
+    "revoke": "Remove access",
+    "revokeTitle": "Remove the agent’s access",
+    "revokeBody": "The key {{name}} will be revoked; agents that connect with it will no longer get in. This cannot be undone.",
+    "revoked": "Access removed.",
+    "revokedGroup": "Access removed: {{count}}",
+    "dialog": {
+      "title": "Connect an agent",
+      "description": "Name the agent and, if you wish, narrow what it may do. Once the key is created, the connection command is shown.",
+      "name": "Agent name",
+      "nameHint": "It appears in the list under this name; for example “Sales agent”.",
+      "permissions": "Permissions",
+      "submit": "Create the key"
+    }
   },
   "ledger": {
     "title": "Ledger",
-    "description": "Everything that happens in the workspace; agent and human actions side by side.",
+    "description": "Everything that happens in the workspace; agent and human actions side by side",
     "filter": "Action filter",
     "filterPlaceholder": "e.g. team.",
     "apply": "Filter",
@@ -478,7 +842,10 @@
     "redactedNote": "Secret values are masked.",
     "loadMore": "Load more",
     "empty": "The ledger is empty.",
-    "emptyBody": "Things that happen in the workspace will show up here."
+    "emptyBody": "Things that happen in the workspace will show up here.",
+    "workbench": {
+      "scrollHint": "Scroll the table horizontally to see the other columns."
+    }
   },
   "platform": {
     "console": "Platform console",
@@ -556,7 +923,10 @@
       "resetHelp": "Reset a different operator and revoke all their sessions. Use at least 12 characters.",
       "operator": "Operator ID",
       "password": "New password",
-      "resetDone": "Password reset; target sessions revoked."
+      "resetDone": "Password reset; target sessions revoked.",
+      "workbench": {
+        "details": "Jobs, connections and backups"
+      }
     }
   },
   "notFound": {
@@ -566,7 +936,7 @@
   },
   "strategy": {
     "title": "Strategy",
-    "description": "The workspace's approved strategy and the draft being worked out.",
+    "description": "The workspace's approved strategy and the draft being worked out",
     "tabs": {
       "approved": "Approved",
       "draft": "Draft"
@@ -732,12 +1102,20 @@
       "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
       "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
     },
-    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected."
+    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected.",
+    "workbench": {
+      "sections": "Brief sections",
+      "gapCount": "{{count}} gaps",
+      "fixFirstGap": "Resolve the first gap",
+      "viewFirstGap": "Go to the first gap",
+      "brand": "Brand and audience",
+      "plan": "Goals and plan"
+    }
   },
   "capabilities": {
     "title": "Capabilities",
-    "description": "The accounts, devices and tools the workspace can act through.",
-    "declare": "Declare a capability",
+    "description": "Choose connections for your work; manage their status and permissions",
+    "declare": "Add a resource",
     "filterLabel": "Kind group",
     "filterAll": "All",
     "empty": "No capabilities.",
@@ -1099,6 +1477,78 @@
         "step3": "Run jeeta-device-bridge.exe. Within about 15 seconds each phone it sees appears under Devices on this page, verified. To start it at every logon:",
         "ownKey": "Each computer's bridge needs a key of its own: Jeeta tells bridges apart by their keys, and refuses a phone that another running bridge holds. For another computer, pair again."
       }
+    },
+    "workbench": {
+      "purposeLabel": "What do you want to do?",
+      "inventory": "Your connections",
+      "search": "Search connections",
+      "searchPlaceholder": "Search name, account or channel…",
+      "allStatus": "All statuses",
+      "attention": "Needs attention",
+      "verified": "Verified",
+      "retired": "Retired",
+      "statusLabel": "Connection status",
+      "advanced": "Narrow by type",
+      "technical": "Technical connection settings",
+      "clear": "Clear filters",
+      "noMatch": "No connections match this selection",
+      "noMatchBody": "Choose another purpose or clear the search and status filters.",
+      "count": "Showing {{count}} connections",
+      "pairDevice": "Open phone pairing",
+      "managerNeeded": "Ask your workspace manager to add a connection.",
+      "steps": {
+        "choose": "Choose the work",
+        "connect": "Connect the account",
+        "check": "Check its status"
+      },
+      "goals": {
+        "all": {
+          "label": "All connections",
+          "title": "Your accounts, alongside the work.",
+          "description": "Choose the connections you need to talk to customers, publish content or manage calls. Keep track of their status below."
+        },
+        "messages": {
+          "label": "Talk to customers",
+          "title": "Bring conversations together.",
+          "description": "Connect the channels your customers use. Once connection and verification are complete, manage conversations in Inbox."
+        },
+        "publishing": {
+          "label": "Publish content",
+          "title": "Connect the accounts your content will reach.",
+          "description": "Choose a social account. Manage content and approvals in Growth Studio; check connections and publishing permissions here."
+        },
+        "calls": {
+          "label": "Manage calls",
+          "title": "Bring your phone line into your workspace.",
+          "description": "Connect your NetGSM PBX. Follow conversations in Calls; a voice agent additionally requires a bridge setup."
+        },
+        "devices": {
+          "label": "Work with devices",
+          "title": "Connect field devices to your team.",
+          "description": "Pair a phone or register a device. Track reachability and usage permissions on each connection."
+        },
+        "growth": {
+          "label": "Ads and community",
+          "title": "Keep growth channels together.",
+          "description": "Connect an advertising account or register community resources. Registering a resource alone does not activate an integration."
+        },
+        "tools": {
+          "label": "Work tools",
+          "title": "Organize the resources your team uses.",
+          "description": "Classify calendars, marketplaces, agents and other tools. Integration setup and permissions are completed separately for each resource."
+        }
+      },
+      "addForPurpose": "Add a connection for this purpose",
+      "groupsTab": "Account groups",
+      "technicalTab": "Technical settings",
+      "pagination": "Connection pages",
+      "previous": "Previous",
+      "next": "Next",
+      "page": "{{current}} / {{total}}",
+      "showDetails": "Details",
+      "hideDetails": "Hide details",
+      "startHelp": "Connect one account your customers use. Then check its connection status here.",
+      "startConnection": "Connect your first account"
     }
   },
   "connect": {
@@ -1214,7 +1664,7 @@
   },
   "budget": {
     "title": "Budget",
-    "description": "The workspace's own money and caps: ad budget, SMS, agent quota, consumables.",
+    "description": "The workspace's own money and caps: ad budget, SMS, agent quota, consumables",
     "create": "Create a budget item",
     "columns": {
       "name": "Name",
@@ -1299,44 +1749,22 @@
       "human": "Human",
       "agent": "Agent",
       "connector": "Connector ({{name}})"
+    },
+    "workbench": {
+      "scrollHint": "Scroll the table horizontally to see the other columns."
     }
   },
   "inbox": {
     "erasure": {
       "open": "Erase personal data",
-      "description": "Permanently removes contact identities, message and note text, appointment details and file references. Anonymous journey, event and commission records and amounts remain. Files held by your agent are not deleted.",
+      "description": "Permanently removes contact identities, message and note text, appointment details and file references. Anonymous journey and event records and amounts remain. Files held by your agent are not deleted.",
       "confirm": "Type “{{phrase}}” to confirm.",
       "submit": "Erase permanently",
       "phrase": "ERASE"
     },
-    "commissions": {
-      "title": "Commissions",
-      "description": "Human representative commissions from won journeys.",
-      "filterState": "Commission state",
-      "all": "All",
-      "payee": "Payee",
-      "unassigned": "Unassigned",
-      "snapshotRate": "Rate at win: {{rate}}%",
-      "noPayeeHelp": "There was no payee at win. This record cannot be paid; an unassigned follow-up task was created.",
-      "approve": "Approve",
-      "pay": "Mark as paid",
-      "rates": "Set commission rate",
-      "rateHelp": "100 basis points = 1%. A representative rate overrides the default. Changes apply only to future wins.",
-      "rateTarget": "Rate applies to",
-      "defaultRate": "Workspace default",
-      "rate": "Rate (basis points)",
-      "save": "Save rate",
-      "saved": "Rate saved.",
-      "state": {
-        "no_payee": "No payee",
-        "pending": "Pending approval",
-        "approved": "Approved",
-        "paid": "Paid"
-      }
-    },
     "emailSubject": "Email subject",
     "title": "Inbox",
-    "description": "Reply to conversations and manage journeys and follow-ups.",
+    "description": "Reply to conversations and manage journeys and follow-ups",
     "queues": "Queues",
     "search": "Search people",
     "empty": "No conversations in this queue.",
@@ -1542,7 +1970,11 @@
       "removeNamed": "Remove suppression: {{channel}} / {{reason}}",
       "send": "Send commercial message",
       "intent": "Send intent",
-      "sendHint": "Commercial contact requires effective consent. Suppressions are checked again immediately before sending."
+      "sendHint": "Commercial contact requires effective consent. Suppressions are checked again immediately before sending.",
+      "consents": "Recorded permissions",
+      "suppressions": "Contact restrictions",
+      "noConsents": "No permission records.",
+      "noSuppressions": "No contact restrictions."
     },
     "offers": {
       "quotes": "Quotes",
@@ -1581,7 +2013,9 @@
         "booked": "Booked",
         "held": "Held",
         "cancelled": "Cancelled"
-      }
+      },
+      "noQuotes": "No quotes yet.",
+      "noAppointments": "No appointments yet."
     },
     "public": {
       "surface": {
@@ -1664,6 +2098,13 @@
       },
       "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
       "approvalNote": "On this account the agent's replies wait for your approval."
+    },
+    "noTasks": "No tasks yet. Add the next follow-up below.",
+    "noNotes": "No notes yet. Add useful context for your team.",
+    "ux": {
+      "browseQueues": "Queues and people search",
+      "emptyQueueHint": "Choose another queue or search for a person. New conversations arrive here from connected customer channels.",
+      "chooseHint": "Choose a conversation from a queue. Search for a person to find earlier conversations."
     }
   },
   "studio": {
@@ -1683,7 +2124,7 @@
     "laneRelease": "Resume lane",
     "proposal": "Propose hypothesis",
     "titleField": "Title",
-    "segment": "Audience key",
+    "segment": "Audience reference",
     "angle": "Angle",
     "channel": "Channel",
     "metric": "Metric",
@@ -1744,7 +2185,7 @@
     "bind": "Bind ad set",
     "account": "Ad account",
     "externalSet": "Existing ad set",
-    "arm": "Content arm",
+    "arm": "Content variation",
     "budgetMove": "Change daily budget",
     "binding": "Bound ad set",
     "dailyBudget": "Daily budget",
@@ -1772,7 +2213,7 @@
     "retirement": "Cancellation or retirement details are in the ledger.",
     "success": "Saved.",
     "loading": "Loading…",
-    "entryHypothesis": "Hypothesis for entry",
+    "entryHypothesis": "Related content approach",
     "minorUnits": "minor units",
     "publishFailed": "Not published: {{reason}}",
     "publishUncertain": "Publication is uncertain; do not resend ({{reason}}).",
@@ -1898,11 +2339,34 @@
       },
       "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
       "noCover": "No preview"
+    },
+    "description": "Plan content, review today’s work, and learn from results",
+    "emptyPlanHelp": "Scheduled content will appear here. Add your source materials to prepare the next piece.",
+    "addMaterials": "Add materials",
+    "filters": {
+      "hypothesis": "Content approach",
+      "from": "From",
+      "until": "Before"
+    },
+    "contentFormats": {
+      "text": "Text post",
+      "image": "Image",
+      "video": "Video"
+    },
+    "workbench": {
+      "filters": "Filters",
+      "filtersActive": "Active",
+      "clearFilters": "Clear filters",
+      "invalidRange": "The start date cannot be after the end date.",
+      "hypotheses": "Show hypotheses",
+      "todayHint": "Approvals, scheduled content, and blockers that need your attention.",
+      "viewPlan": "View the weekly plan",
+      "sections": "Studio view"
     }
   },
   "billing": {
     "title": "Payment and activation",
-    "description": "Permanent access with a one-time bank transfer and operator confirmation.",
+    "description": "Permanent access with a one-time bank transfer and operator confirmation",
     "stages": {
       "pending_payment": "Awaiting payment",
       "approval": "Awaiting operator confirmation",
@@ -1930,19 +2394,19 @@
   },
   "onboarding": {
     "title": "First-run setup",
-    "description": "Progress is read from the current workspace state.",
+    "description": "Progress is read from the current workspace state",
     "paymentConfirmed": "Payment confirmed",
     "paymentPending": "Awaiting payment confirmation",
     "strategy": "Strategy",
     "strategyApproved": "Strategy approved",
     "strategyPending": "Awaiting strategy approval",
     "prepare": "Prepare strategy",
-    "teamKeys": "Team and API keys",
+    "teamKeys": "Team and agents",
     "activationRequired": "Activate the workspace before managing team, keys and connections. Payment confirmation alone does not open access.",
     "members": "Team members: {{count}}",
     "keys": "Active keys: {{count}}",
     "invite": "Invite team",
-    "createKey": "Create API key",
+    "createKey": "Connect an agent",
     "connector": "Connector verification",
     "connectorVerified": "Connector verified",
     "connectorPending": "Awaiting connector verification",
@@ -1953,7 +2417,8 @@
     "agentNeeded": "No recent agent connection. Your own agent scheduler must run for work to proceed.",
     "agents": "View agents",
     "suspendedChecks": "This step is not checked while the workspace is suspended.",
-    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts."
+    "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts.",
+    "teamOwnerHelp": "Ask a workspace manager to manage team invitations and API keys."
   },
   "providerSetup": {
     "title": "Provider application setup",
@@ -1979,14 +2444,18 @@
     }
   },
   "gates": {
+    "moduleBody": "This section’s module was removed. Existing records are retained.",
+    "moduleLink": "View module",
     "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",
     "strategyLink": "Go to strategy",
     "inactiveBody": "This opens once the workspace is active.",
-    "inactiveLink": "Payment and activation"
+    "inactiveLink": "Payment and activation",
+    "capabilityBody": "This section opens once the capability it needs is connected and verified.",
+    "capabilityLink": "Connect a capability"
   },
   "people": {
     "title": "People",
-    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet.",
+    "description": "Everyone in the workspace, including imported or hand-added people who have no conversation yet",
     "search": "Search by name or company",
     "empty": "No people yet.",
     "noMatch": "No matching people.",
@@ -2006,6 +2475,12 @@
       "email": "Email",
       "webchat": "Web chat",
       "phone": "Phone"
+    },
+    "clearSearch": "Clear search",
+    "noMatchBody": "Try another name or company, or clear your search.",
+    "ux": {
+      "connectChannels": "Connect customer channels",
+      "emptyBody": "People appear here when a connected channel receives a first message or a lead is imported."
     }
   },
   "failure": {
@@ -2185,7 +2660,124 @@
         "opening_outbound": "Business opening on outbound calls",
         "transcript_notice": "Transcription notice",
         "closing": "Closing when the plan brings none"
+      },
+      "scriptsTitle": "Greetings and notices",
+      "phrasesTitle": "Holding and fallback phrases",
+      "limitsTitle": "Timing and transfer",
+      "description": "Set what callers hear, holding phrases and timing limits.",
+      "ux": {
+        "sectionHint": "Open the section you want to change. Values and draft edits in closed sections are preserved; Save applies all settings together."
+      },
+      "editor": {
+        "intro": "Choose a call scenario to edit the words and timing used at that moment.",
+        "navigation": "Call scenario",
+        "changed": "Unsaved changes in {{count}} sections",
+        "upToDate": "Saved settings",
+        "modified": "Modified",
+        "direction": "Call direction",
+        "inbound": "When a customer calls us",
+        "outbound": "When we call a customer",
+        "emptyOpening": "Leave empty to omit this greeting.",
+        "phraseType": "Phrase group to edit",
+        "phraseHelp": "{{count}} / 5 phrases. Blank entries are not saved; each phrase may have up to 600 characters.",
+        "phraseLabel": "Phrase {{number}}",
+        "removePhrase": "Remove phrase {{number}}",
+        "addPhrase": "Add phrase",
+        "situation": "End-of-call situation",
+        "preview": "Scenario preview",
+        "previewHint": "Shows draft text and timing. Does not play audio or place a call.",
+        "noText": "No text has been written for this situation.",
+        "template": "Uses the workspace default template.",
+        "openingPreviewHint": "The call plan and disclosure settings also affect the opening.",
+        "disclosureOn": "Assistant disclosure is required in the opening.",
+        "disclosureOff": "Assistant disclosure is not required.",
+        "disclosureHint": "When required, the opening must contain this exact sentence.",
+        "missingDisclosure": "Disclosure is required but its sentence is empty. This may prevent calls from starting.",
+        "recordingHint": "This text does not enable recording; it is announced first when recording is used.",
+        "transcriptHint": "Played after the opening on agent calls. Leave empty to omit it.",
+        "seconds": "{{value}} s",
+        "firstWait": "First holding phrase",
+        "secondWait": "Second holding phrase",
+        "fallback": "Switch to the plan’s fallback response",
+        "notifyAgent": "Notify the agent of silence",
+        "endSilence": "End the call if silence continues",
+        "waitingPreviewHint": "Measured from when the agent response became due. The bridge may also use its own short phrases.",
+        "silencePreviewHint": "Applies while waiting for the caller. The agent and voice bridge determine when a spoken prompt is played.",
+        "variantPreview": "An example phrase; the phrase used depends on the call situation.",
+        "durationHint": "Call duration limit. The call plan may set a shorter limit.",
+        "extensionPreview": "Configured handoff extension: {{value}}",
+        "noExtension": "No handoff extension configured.",
+        "extensionHint": "1–16 digits. Leave empty to remove it; this setting alone does not trigger a handoff.",
+        "priceHint": "Used for budget estimation, not the carrier’s actual bill.",
+        "saveHint": "Save applies changes from all scenarios together.",
+        "discard": "Discard changes",
+        "loadLatest": "Load latest settings",
+        "conflict": "Server settings changed. Your draft is preserved. Load the latest settings before saving to avoid overwriting other changes; this resets your draft.",
+        "savedReadFailed": "Settings were saved, but could not be read again. Load the latest settings before continuing.",
+        "fixBeforeSave": "Fix these fields before saving:",
+        "wholeNumber": "Use whole numbers, not blanks. Durations must be at least 1; cost must be at least 0.",
+        "durationRange": "Maximum duration must be 1–900 seconds.",
+        "waitingOrder": "First wait < second wait < fallback; all durations must be 1–60 seconds.",
+        "silenceOrder": "Silence notification must precede closing; durations must be 1–120 seconds.",
+        "extensionFormat": "An extension must contain 1–16 digits only.",
+        "textLength": "Text must be at most 600 characters and cannot contain only whitespace.",
+        "phraseLimit": "A group may have up to 5 phrases, each at most 600 characters.",
+        "sections": {
+          "opening": {
+            "title": "Greeting",
+            "help": "Set the first sentence for incoming and outgoing calls separately."
+          },
+          "notices": {
+            "title": "Disclosures",
+            "help": "Edit assistant identification, transcription and recording announcements."
+          },
+          "waiting": {
+            "title": "Waiting for a reply",
+            "help": "Set holding phrases and timing while the agent prepares a response."
+          },
+          "silence": {
+            "title": "Silence and hearing",
+            "help": "Settings for a silent caller or speech that cannot be understood."
+          },
+          "ending": {
+            "title": "Ending the call",
+            "help": "Prepare separate text for normal closing, voicemail and technical problems."
+          },
+          "limits": {
+            "title": "Limits and handoff",
+            "help": "Set call duration, the handoff extension and budget estimate."
+          }
+        },
+        "endings": {
+          "closing": "Normal closing",
+          "voicemail_text": "Voicemail",
+          "fault": "Technical problem"
+        }
       }
+    },
+    "filterEmpty": "No calls in this direction",
+    "filterEmptyBody": "Choose another direction to see the rest of your call log.",
+    "showAll": "Show all calls",
+    "workbench": {
+      "outcomeMissing": "Outcome not recorded",
+      "recordOutcome": "Record outcome",
+      "openCall": "Review call",
+      "allCalls": "All calls",
+      "openCalls": "Open calls",
+      "unrecordedCalls": "Awaiting outcome",
+      "queues": "Call work queue",
+      "search": "Search number, extension or summary",
+      "resultCount": "{{count}} matching records from {{total}} loaded calls",
+      "unrecordedHint": "Ended calls whose outcome has not been recorded. Open the call to review it.",
+      "filteredEmpty": "No calls match these filters",
+      "filteredEmptyBody": "Change the search or selected queue, or clear the filters to see all loaded calls.",
+      "pagination": "Call pages",
+      "pageRange": "{{first}}–{{last}} / {{total}} records",
+      "previousPage": "Previous",
+      "nextPage": "Next",
+      "views": "Call views",
+      "conversationsTab": "Conversations",
+      "settingsTab": "Call settings"
     }
   },
   "materials": {
@@ -2294,6 +2886,13 @@
       "date_in_generic": "In general content, the text names a day of the material's event.",
       "archive_year_missing": "In last year's content, the event's year is missing from the text.",
       "client_named_product_only": "The client is named although the material is product-only.",
+      "source_permission_restricted": "The material this visual was made from has no share permission.",
+      "material_not_in_area": "This material was not added to the production area.",
+      "material_not_found": "The material was not found.",
+      "media_count": "This format does not take this many images or videos.",
+      "media_type": "This format and account do not take this kind of file.",
+      "account_refused": "The chosen account is not ready to post or does not take this format.",
+      "hypothesis_not_in_approved_strategy": "The content is not tied to a goal of the approved strategy.",
       "unknown": "The material check holds this piece ({{code}})."
     },
     "error": {
@@ -2322,7 +2921,21 @@
       "hard_findings_not_releasable": "Material problems cannot be released: change the material or the piece.",
       "no_caption_findings": "There is no text finding to release.",
       "findings_changed": "The findings changed while you looked; refresh and look again.",
-      "stale": "This record changed while you looked; refresh and try again."
+      "stale": "This record changed while you looked; refresh and try again.",
+      "material_revision_changed": "The material changed. Load the current details and try again.",
+      "analysis_in_progress": "An agent is reviewing this material. Try again once analysis finishes.",
+      "analysis_claim_expired": "The analysis session expired. Queue it again.",
+      "analysis_not_pending": "The analysis state changed. Load the current details.",
+      "production_failed": "Production could not finish. Review the instructions and create a new request.",
+      "source_changed": "The source material changed. Create a new request with the current material.",
+      "production_not_pending": "The production request changed. Load the current details.",
+      "production_claim_expired": "The production session expired. Review the request.",
+      "story_image_jpeg_only": "A story image must be a JPEG: save the photo as JPEG and upload it again.",
+      "story_image_too_large": "A story image can be at most 8 MB: upload a smaller JPEG.",
+      "story_video_too_large": "A story video can be at most 100 MB: make the video smaller and upload it again.",
+      "story_video_length": "A story video must last 3 to 60 seconds: trim the video and upload it again.",
+      "story_video_length_unknown": "The video's length could not be read: export it again as MP4 and upload it.",
+      "story_video_not_fast_start": "The video is not set up to start fast: export it with the 'fast start / optimize for web' option and upload it again."
     },
     "invalid": {
       "media": "The file was refused: it must be JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
@@ -2347,7 +2960,7 @@
       "request_key": "The request key is invalid; refresh the page and try again."
     },
     "upload": {
-      "intro": "Add photos and videos from a workshop, an order or a special day. Each file uploads at once; then you choose the event and the share permission once for all of them.",
+      "intro": "Add photos and videos. Your connected agent suggests labels and groups from their content; you can edit them at any time.",
       "camera": "Take with camera",
       "gallery": "Choose from gallery",
       "files": "Chosen files",
@@ -2368,7 +2981,7 @@
       "createdOlay": "New event created: {{title}}",
       "genel": "General (tied to no event)",
       "genelHelp": "Only an owner or manager can choose this. The material becomes usable as general and is used only in content about no specific event.",
-      "permission": "Share permission (required)",
+      "permission": "Use in content creation",
       "permissionByManager": "An owner or manager gives the share permission; the materials will wait for their decision.",
       "tags": "Tags (optional)",
       "waitUploads": "You can add them once the uploads finish.",
@@ -2388,7 +3001,12 @@
       "again": "New upload",
       "serverSuggests": "By its capture date, this material may belong to “{{title}}”.",
       "moveThere": "Move it to that event",
-      "moved": "Moved to “{{title}}”."
+      "moved": "Moved to “{{title}}”.",
+      "workbench": {
+        "searchEvents": "Search event name or place",
+        "selectedEvent": "Selected event: {{title}}",
+        "noEvents": "No matching events. Change your search or create an event below."
+      }
     },
     "olay": {
       "kind": "Type",
@@ -2457,7 +3075,15 @@
       "deleteKvkk": "As KVKK requires, the file itself (its bytes) is deleted and its title, tags and people are cleared. Its record stays as evidence of the content it was used in.",
       "deleteUsed": "Posts already published stay on their provider: remove them yourself from the “Where it was used” links.",
       "deleteConfirm": "Delete",
-      "deleteCancel": "Cancel"
+      "deleteCancel": "Cancel",
+      "workbench": {
+        "sections": "Material sections",
+        "review": "Tags and people",
+        "publishing": "Permission and location",
+        "history": "Usage history",
+        "reviewHelp": "Review the content and the people shown. Save each section separately.",
+        "publishingHelp": "Decide where this material can be used. Sharing permission and event assignment are separate decisions."
+      }
     },
     "people": {
       "title": "People shown",
@@ -2515,6 +3141,8 @@
       "reuseHelp": "The same material is not shown again within this many days.",
       "recap": "Recap period (days)",
       "recapHelp": "For this many days after an event ends, it comes first for recap content.",
+      "aiStandalone": "A visual the agent made may be shared on its own",
+      "aiStandaloneHelp": "When on, the agent can prepare content from a visual it made that shows no person, without a real capture; such content may not name a specific event, place or client. When off, every piece of content shows at least one real capture, and the agent's visual is used only beside it.",
       "save": "Save the rules",
       "invalid": "Lead must be 0–90, reuse and recap 0–365 whole days."
     },
@@ -2568,7 +3196,72 @@
       "upload": "Upload materials",
       "refused_one": "{{count}} material not usable",
       "refused_other": "{{count}} materials not usable",
-      "pick": "Choose what the content is about and at least one material."
+      "pick": "Choose what the content is about and at least one material.",
+      "story": "A story shares no text: only the picture goes out. Choose one JPEG (at most 8 MB) or one MP4 of 3–60 seconds."
+    },
+    "intelligence": {
+      "legacy": "Previous tags",
+      "labels": "Content labels",
+      "labelsHelp": "The agent creates labels from the image content. Add or remove any label.",
+      "newLabel": "New label",
+      "addLabel": "Add",
+      "removeLabel": "Remove label {{label}}",
+      "uploadTitle": "Upload, then organize together",
+      "uploadHelp": "Your connected agent reviews images and suggests a description, labels and a group. Choosing an event is optional; you can edit the results later.",
+      "eventOptional": "Link to an event (optional)",
+      "shareHelp": "Shareable means available for content creation. Uploading does not publish anything automatically.",
+      "optionalTags": "Set labels and quality myself",
+      "pendingHelp": "Analysis starts when your connected agent next runs and picks up the job. While the agent is offline, materials wait for analysis.",
+      "title": "Content details",
+      "description": "What is in this image?",
+      "group": "Group",
+      "groupHelp": "Brings similar materials together. It does not confirm that an event took place.",
+      "materialTitle": "Material name",
+      "capturedAt": "Capture date and time (Istanbul)",
+      "captureHelp": "Separate from upload time. Left empty when reliable capture information is unavailable.",
+      "save": "Save details",
+      "retry": "Queue analysis again",
+      "noAnalysis": "This material has not been queued for analysis.",
+      "pending": "Waiting for agent analysis",
+      "running": "Agent is reviewing",
+      "completed": "Analysis complete",
+      "failed": "Analysis could not be completed",
+      "manualHelp": "Saved details are protected; analysis will not silently overwrite your edits.",
+      "previewUnavailable": "Preview could not be loaded.",
+      "dateSource": "Capture date source",
+      "unknown": "Unknown",
+      "embedded": "File metadata",
+      "manual": "Entered manually",
+      "agent": "Agent suggestion",
+      "upload": "Upload time",
+      "search": "Search name, description or label",
+      "allGroups": "All groups",
+      "ungrouped": "Not grouped yet",
+      "library": "Library",
+      "libraryHelp": "Find images by group; open a material to review and edit its details.",
+      "noResults": "No materials match this search.",
+      "conflict": "These details changed while you were editing. Your draft is preserved. Load the latest values before editing again.",
+      "reload": "Discard draft and load current details"
+    },
+    "production": {
+      "title": "Create a new image from this material",
+      "help": "Request an edit, crop or poster. Production begins when your connected agent picks up the job. The original stays intact; the result is saved as a separate material.",
+      "kind": "What should we create?",
+      "edit": "Edit the image",
+      "crop": "Crop and reframe",
+      "poster": "Create a poster",
+      "instructions": "Describe the result you want",
+      "submit": "Send production request",
+      "open": "Open the created material",
+      "status": {
+        "pending": "Waiting for agent",
+        "running": "Agent is working",
+        "completed": "Ready",
+        "failed": "Could not finish",
+        "cancelled": "Cancelled"
+      },
+      "queued": "Request queued. Progress appears here when your connected agent picks it up.",
+      "sourceChanged": "The source changed. Create a new request using the current material."
     }
   },
   "leads": {
@@ -2625,14 +3318,14 @@
       "emptyBody": "Write a template, then prepare a campaign with its steps and audience.",
       "locked": {
         "title": "Cold email is off on the platform",
-        "body": "No campaign can launch and no campaign email is sent until JEETA_OUTREACH_ENABLED is turned on for this server. You can still prepare campaigns."
+        "body": "You can prepare campaigns while your platform administrator enables campaign sending. Until then, campaigns cannot launch and no campaign emails are sent."
       },
       "identityMissing": {
         "title": "Sender details missing",
         "body": "A campaign cannot launch until the details every email ends with (company name, address, privacy notice link) are set."
       },
       "blocked": {
-        "platform": "Cold email is off on the platform (JEETA_OUTREACH_ENABLED).",
+        "platform": "Cold email is off on the platform.",
         "identity": "Sender details missing: company name, address and privacy notice link."
       }
     },
@@ -2655,8 +3348,8 @@
       "erase": "Erase"
     },
     "outcome": {
-      "promoted": "Promoted into the inbox.",
-      "alreadyPromoted": "Promoted before.",
+      "promoted": "Taken into contact.",
+      "alreadyPromoted": "Already in contact.",
       "rejected": "Rejected.",
       "blocked": "Do-not-contact recorded."
     },
@@ -2677,7 +3370,7 @@
       "new": "New",
       "qualified": "Qualified",
       "rejected": "Rejected",
-      "promoted": "Promoted",
+      "promoted": "In contact",
       "do_not_contact": "Do not contact"
     },
     "reject": {
@@ -2881,7 +3574,7 @@
       "do_not_contact": "On the do-not-contact list.",
       "system_actor": "The system records nothing in the pool.",
       "rubric_mismatch": "The scoring rubric changed; score again.",
-      "outreach_disabled_on_platform": "Cold email is off on this server (JEETA_OUTREACH_ENABLED); the campaign cannot launch.",
+      "outreach_disabled_on_platform": "Cold email is off on this server; the campaign cannot launch.",
       "sender_identity_missing": "Sender details missing: set the company name, address and privacy notice link in the email settings.",
       "approval_required": "Approval is needed first.",
       "human_required": "Only a team member can do this.",
@@ -2989,7 +3682,8 @@
         "cities": "Cities (comma separated)",
         "sectors": "Sectors (comma separated)",
         "awayUntil": "Away until",
-        "saved": "Availability saved."
+        "saved": "Availability saved.",
+        "scrollHint": "Scroll horizontally to see all columns and actions."
       },
       "log": {
         "title": "Assignment log",
@@ -2998,6 +3692,14 @@
         "slaDue": "First contact due {{at}}",
         "acted": "Acted on {{at}}",
         "superseded": "Replaced by a later decision"
+      },
+      "workbench": {
+        "sections": "Distribution sections",
+        "ruleDetails": "Matching and routing",
+        "invalidScore": "{{name}}: The minimum score must be a whole number from 0 to 100.",
+        "invalidSla": "{{name}}: The first-contact time must be a whole number from 5 to 10080 minutes.",
+        "invalidMembers": "{{name}}: Select at least one member.",
+        "invalidReassign": "The reassignment limit must be a whole number from 0 to 10."
       }
     },
     "basis": {
@@ -3230,16 +3932,26 @@
       "saved": "Settings saved.",
       "b2b": {
         "title": "Business-recipient basis",
-        "description": "The basis for emailing businesses without consent, at their publicly listed contact details. Off by default.",
+        "description": "The basis for sending a first message to businesses without consent, at their public contact points: opened separately for email, SMS, WhatsApp, Instagram and Messenger. Off by default.",
         "legal": "Turn this on only after your lawyer confirmed this use in writing. When you do, we record the confirmation and your note.",
         "recorded": "Confirmation on record: {{at}}",
         "email": "Turn the business-recipient basis on for email",
         "iys": "Look the address up in İYS before sending",
         "counsel": "My lawyer confirmed this use in writing",
         "note": "Note on the confirmation (who, when, what)",
-        "notInForce": "The basis is recorded, but it does not apply while cold email is off on the platform.",
+        "notInForce": "The basis is recorded, but it is not in force while cold sending is off on the platform.",
         "save": "Save the basis"
       }
+    },
+    "filteredEmpty": {
+      "title": "No matching results",
+      "body": "Change or clear the filters to see more results.",
+      "clear": "Clear filters"
+    },
+    "ux": {
+      "moreFilters": "More filters",
+      "hideFilters": "Hide extra filters",
+      "hideTaskForm": "Hide task form"
     }
   },
   "posts": {
@@ -3259,7 +3971,8 @@
     "trigger": {
       "olay": "New olay materials",
       "calendar": "Upcoming special day",
-      "floor": "No post for a while"
+      "floor": "No post for a while",
+      "project": "Production space"
     },
     "materials_one": "{{count}} material",
     "materials_other": "{{count}} materials",
@@ -3278,7 +3991,7 @@
       "publishAt": "Goes out: {{at}}",
       "prepFrom": "Preparation: {{at}}",
       "graceUntil": "At the latest: {{at}}",
-      "open": "Open in Studio",
+      "open": "Open post",
       "tz": "Times are in the {{tz}} time zone.",
       "state": {
         "waiting": "Preparation not started",
@@ -3339,12 +4052,227 @@
       "debounceHelp": "A plan is asked for this long after materials stop being added to an olay: 20 photos make one request.",
       "horizon": "Planning horizon (days)",
       "tz": "Time zone",
-      "storyNote": "Stories are not published on any channel yet.",
+      "storyNote": "Stories go out on Instagram only: one JPEG (at most 8 MB) or one MP4 of 3–60 seconds, without text. Facebook Page stories are not there yet.",
       "save": "Save settings",
       "saved": "Saved.",
       "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
+      "providerScheduling": "Use the platform's own scheduler",
+      "providerSchedulingHelp": "When on, a post is left ahead of its time with a platform that has a scheduler (for now a Facebook Page: text, link and single-photo posts) and shows as scheduled there. A brake, a pause or “Not right” takes it back from the platform. When off, Jeeta publishes every post at its time.",
       "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
-      "managerOnly": "Only an owner or manager changes these settings."
+      "managerOnly": "Only an owner or manager changes these settings.",
+      "workbench": {
+        "sections": "Settings groups",
+        "formats": "Format timing",
+        "limits": "Daily limits",
+        "calendar": "Calendar and time",
+        "saveHelp": "Switch between groups as needed. Save applies changes from all groups together."
+      }
     }
+  },
+  "publicIntro": {
+    "title": "Every connection has a next step.",
+    "description": "Manage customer relationships, content and daily work in one shared workspace",
+    "people": {
+      "title": "Keep the conversation going",
+      "description": "Contacts and conversations with a shared history for your team."
+    },
+    "work": {
+      "title": "Move the work forward",
+      "description": "Pending tasks, content and approvals in one place."
+    },
+    "results": {
+      "title": "See what happened",
+      "description": "Follow completed work and its results back to the source."
+    }
+  },
+  "entryUx": {
+    "providerLabel": "Service provider",
+    "providerPlaceholder": "Choose a service",
+    "chooseService": "1. Which account will you connect?",
+    "chooseServiceHelp": "Choose the provider, then the type of account you use",
+    "connectStep": "2. Give access to your account",
+    "connectStepHelp": "After connecting, review the account on the Capabilities page",
+    "setupAudience": "These technical details are for the team managing the provider app. Use the step above to connect your own account",
+    "callbackProvider": "Provider callback to show",
+    "transferDetails": "Bank details and payment reference",
+    "reportDetails": "Review or correct the notification",
+    "reportSection": "I have made the transfer",
+    "reportHelp": "If you have transferred the payment, confirm its amount and time",
+    "billingPending": "Make the transfer with the reference below, then send the payment notification",
+    "billingApproval": "Your notification is under review. Once approved, enter the activation code you receive on this page",
+    "billingActivation": "Enter the 8-character code you received to open the workspace",
+    "billingActive": "Your workspace is open. Continue with any remaining setup steps",
+    "billingSuspended": "The workspace is suspended. Check with the operator before reporting another payment",
+    "setupNextTitle": "Next step",
+    "setupNextPayment": "Check payment and activation",
+    "setupNextStrategy": "Prepare the strategy your team will follow",
+    "setupNextConnection": "Connect the first account you will use",
+    "setupNextAgent": "Check the agent connection",
+    "setupDone": "The core setup is ready. Open your pending work",
+    "setupOpen": "Open this step",
+    "setupOptional": "When needed",
+    "homeAllWork": "Show all work ({{count}})",
+    "homeLessWork": "Show the first five",
+    "loginInviteHint": "Sign in with the invited email address; you will return to your invitation",
+    "registerNext": "After creating your account, review payment and setup steps inside your workspace",
+    "workspaceHint": "Your team or business name",
+    "inviteReturn": "If you already have an account, sign in and return to this invitation",
+    "inviteAcceptedHelp": "Open the workspace with the permissions your team assigned",
+    "notFoundHint": "Check the address or return to the previous page",
+    "previousPage": "Previous page",
+    "inviteIntroTitle": "Join your team’s workspace",
+    "inviteIntroBody": "Accept the invitation, then continue with the work your team gives you access to",
+    "registerIntroTitle": "Set up your team’s workspace",
+    "registerIntroBody": "Create your account first. Setup, payment and account connections come next",
+    "operatorIntroTitle": "Workspace operations",
+    "operatorIntroBody": "Use your operator account to manage payment, access and system status",
+    "accountDetails": "Account identity and permission details",
+    "selectedAccounts": "{{count}} accounts selected. Confirmation opens the Capabilities page",
+    "setupSuspended": "Setup is paused",
+    "setupPermission": "Check setup progress with your workspace administrator"
+  },
+  "projects": {
+    "tab": "Production spaces",
+    "heading": "From an idea to publication",
+    "intro": "Keep source materials, missing shots and publication preparation in one production space.",
+    "create": "Create production space",
+    "title": "Space name",
+    "titlePlaceholder": "e.g. New menu launch",
+    "brief": "What are we making?",
+    "briefPlaceholder": "Who is this for? Describe the message, important details and desired outcome.",
+    "createHint": "Start with the goal. You can add materials and channel outputs in this space.",
+    "search": "Search production spaces",
+    "showArchived": "Show archived spaces",
+    "noMatches": "No production spaces match this search.",
+    "empty": "Create a production space to bring one idea’s sources, editing work and publications together.",
+    "noBrief": "No goal or content notes have been added yet.",
+    "sourceCount": "{{count}} materials",
+    "outputCount": "{{count}} channel outputs",
+    "requestCount": "{{count}} open material requests",
+    "back": "Back to production spaces",
+    "archived": "Archived",
+    "archive": "Archive",
+    "restore": "Restore",
+    "archivedHelp": "This space is archived and cannot accept new work. Pending production jobs were cancelled. Previously scheduled publications continue; manage them in publication details.",
+    "archiveHelp": "Archiving cancels pending production jobs. Scheduled publications are not cancelled.",
+    "viewsLabel": "Production space views",
+    "editBrief": "Edit brief",
+    "conflictHelp": "The space or its sources may have changed. Review the latest information and reopen the form; your entries remain until you close it.",
+    "sourcesTitle": "Materials for this work",
+    "sourcesHelp": "Choose from the library or upload a new shot. Materials can also be used in other production spaces.",
+    "fromLibrary": "Choose from library",
+    "upload": "Upload materials",
+    "uploadHelp": "Uploaded materials are saved to the library and attached to this production space.",
+    "backToSources": "Back to space materials",
+    "searchMaterials": "Search title, label or group",
+    "allGroups": "All groups",
+    "noMaterialsMatch": "No materials match. Change your search or upload new materials.",
+    "attachSelected": "Attach selected ({{count}})",
+    "showMore": "Show more",
+    "sourcesEmpty": "No materials are attached yet. Start by choosing from the library or uploading.",
+    "removeSource": "Remove from space",
+    "unavailableSources": "{{count}} sources are no longer available. Replace them before preparing publication.",
+    "sourcesChanged": "{{count}} materials have changed. Review them before selecting the latest versions for this space.",
+    "refreshSources": "Use latest versions",
+    "openMaterial": "Review material",
+    "requestsTitle": "Missing materials",
+    "requestsHelp": "Describe the shot or image needed. Complete the request by selecting the delivered material.",
+    "requestMaterial": "Request material",
+    "requestText": "What do we need?",
+    "requestPlaceholder": "e.g. A steady, vertical close-up showing product details for 5–8 seconds.",
+    "requestsEmpty": "No open material requests.",
+    "resolveRequest": "Select delivered material",
+    "resolveHelp": "Select the materials that fulfil this request. A delivery is required to complete it.",
+    "resolveEmpty": "First attach or upload materials in this space.",
+    "confirmDelivery": "Complete delivery",
+    "dismissRequest": "No longer needed",
+    "reopenRequest": "Reopen request",
+    "showResolved": "Show completed and dismissed requests",
+    "productionTitle": "Editing and production",
+    "productionHelp": "Select sources and describe the result. Originals are preserved; the output appears as a separate material.",
+    "newProduction": "Create production request",
+    "productionPlaceholder": "e.g. Create a vertical cover highlighting the product, leaving room for text at the top.",
+    "chooseSources": "Choose sources · up to 5 ({{count}} selected)",
+    "productionWaiting": "The request is processed when a connected agent with the required tools claims it. It stays pending while no agent is working.",
+    "productionNeedsSources": "Attach source materials to this space before starting production.",
+    "productionEmpty": "No production requests yet. Request an edit, crop or poster from your sources.",
+    "showProductionHistory": "Show work based on previous briefs and sources",
+    "invalidated": "Previous version",
+    "invalidatedHelp": "The brief or sources changed. This output cannot be used for current publication preparation; create a new production request.",
+    "instructionsRemoved": "Instructions for this job are no longer available.",
+    "productionFailed": "Production could not finish. Review the sources and create a new request using suitable tools.",
+    "productionComplete": "Review the output. Sharing permission for the new material is evaluated separately.",
+    "publicationsTitle": "Channel outputs and publications",
+    "publicationsHelp": "Prepare different channel outputs from one idea. Save the target, then schedule it with the selected materials.",
+    "addOutput": "Add channel output",
+    "editOutput": "Change target",
+    "outputTitle": "Output name",
+    "outputPlaceholder": "e.g. New menu — first announcement",
+    "format": "Format",
+    "channel": "Channel account",
+    "chooseLater": "Choose later",
+    "connectionNeeded": "Check connection",
+    "targetTime": "Target publication time",
+    "timezone": "Time zone: {{zone}}",
+    "targetHint": "This date is a target. Scheduling creates an actual calendar entry; content preparation must still be completed.",
+    "saveOutput": "Save target",
+    "outputsEmpty": "No channel outputs yet. Add a post, story or video target for this work.",
+    "channelNotChosen": "No account selected",
+    "timeNotChosen": "No time selected",
+    "outputDraft": "Target draft",
+    "publicationUnavailable": "Linked publication unavailable",
+    "removeOutput": "Remove draft",
+    "schedule": "Schedule publication",
+    "scheduleTitle": "Choose sources and strategy",
+    "scheduleHelp": "This creates a publication plan for general content. The channel, source eligibility, preparation lead time and posting limits are checked when saving.",
+    "strategyNeeded": "Scheduling requires an approved strategy with an organic content cadence. You can continue preparing materials.",
+    "openStrategy": "Open strategy",
+    "hypothesis": "Strategy hypothesis",
+    "chooseHypothesis": "Choose a hypothesis",
+    "contentType": "Content type",
+    "useStrategyDefault": "Strategy default",
+    "publishMaterials": "Materials for this publication",
+    "schedulePermissionHelp": "Select current materials permitted for sharing and general use. Review generated material permissions in Materials.",
+    "scheduleNeedsTarget": "Choose an account and a future target time before scheduling.",
+    "linkExisting": "Link an existing publication to this output",
+    "linkHelp": "Choose a publication using these materials that matches the target format, account and time. This does not create another post.",
+    "noExisting": "No suitable publications using these materials were found.",
+    "existingPublication": "Existing publication",
+    "choosePublication": "Choose a publication",
+    "link": "Link publication",
+    "preparePublication": "Prepare / review content",
+    "allPublicationActions": "Other publication actions",
+    "plannedHelp": "The publication is on the calendar. Complete the caption and material selection to make the content ready.",
+    "views": {
+      "overview": "Overview",
+      "materials": "Materials",
+      "production": "Production",
+      "publications": "Publications"
+    },
+    "next": {
+      "requests": "Complete missing materials ({{count}})",
+      "materials": "Start by adding materials",
+      "production": "Review production jobs ({{count}})",
+      "publications": "Prepare publication targets"
+    },
+    "requestStatus": {
+      "open": "Open",
+      "done": "Delivered",
+      "dismissed": "Dismissed"
+    },
+    "errors": {
+      "project_source_changed": "A source changed. Review it in Materials and choose “Use latest versions”.",
+      "lead_too_short": "More preparation time is required. Move the target time later according to the posting lead-time settings.",
+      "channel_unavailable": "The selected channel is unavailable. Check its connection in Capabilities.",
+      "material_refused": "Selected materials do not meet sharing, quality or usage requirements. Review the materials.",
+      "no_eligible_material": "No eligible anchor material was found. Select sources suitable for general use.",
+      "format_unsupported": "This channel does not support the selected format. Change the format or account.",
+      "project_output_changed": "The channel output changed. Review its latest target and try again.",
+      "project_output_incomplete": "First choose the channel account and target publication time.",
+      "project_archived": "This space is archived. Restore it before adding work.",
+      "project_has_open_requests": "Complete missing materials or dismiss requests that are no longer needed."
+    },
+    "productionToolsHelp": "Single-image cropping can run automatically when a compatible media worker is active. Multi-source edits and posters need a connected agent with the required tools.",
+    "briefChangesHelp": "Changing the brief invalidates earlier production jobs. Pending work stops and completed outputs remain in history. Scheduled publications are managed separately."
   }
 }

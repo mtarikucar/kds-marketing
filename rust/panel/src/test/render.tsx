@@ -1,10 +1,11 @@
 import { StrictMode } from 'react';
 import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { RouterProvider, createMemoryRouter } from 'react-router-dom';
+import { RouterProvider, createMemoryRouter, type RouteObject } from 'react-router-dom';
 import { vi } from 'vitest';
 import { PROVIDER_FUTURE, ROUTER_FUTURE, routes } from '@/App';
 import { setUnauthorizedHandler } from '@/api/client';
+import { legacyModules } from '@/test/modules';
 
 /** Canned answers keyed by `"<METHOD> <path>"`, e.g. `"GET /api/team"`. */
 export type FetchRoutes = Record<string, unknown>;
@@ -61,7 +62,13 @@ export function mockFetch(answers: FetchRoutes): FetchCall[] {
     const method = (init?.method ?? 'GET').toUpperCase();
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined;
     calls.push({ method, path: url.pathname, search: url.search, headers: new Headers(init?.headers), body });
-    const key = `${method} ${url.pathname}`;
+    const withQuery = `${method} ${url.pathname}${url.search}`;
+    const key = withQuery in answers ? withQuery : `${method} ${url.pathname}`;
+    // Existing page tests run in a migrated workspace with the prior modules installed.
+    // Individual module tests override this explicitly to exercise empty/error/removed states.
+    if (key === 'GET /api/workspace/modules' && !(key in answers)) {
+      return new Response(JSON.stringify(legacyModules), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
     if (key in answers) {
       let answer = answers[key];
       if (isDelayedAnswer(answer)) {
@@ -90,8 +97,8 @@ export function mockFetch(answers: FetchRoutes): FetchCall[] {
  * `strict`, under `StrictMode` as `main.tsx` renders it (effects run, are cleaned up and run
  * again on mount in development).
  */
-export function renderAt(path: string, { strict = false }: { strict?: boolean } = {}) {
-  const router = createMemoryRouter(routes, { initialEntries: [path], future: ROUTER_FUTURE });
+export function renderAt(path: string, { strict = false, routeConfig = routes }: { strict?: boolean; routeConfig?: RouteObject[] } = {}) {
+  const router = createMemoryRouter(routeConfig, { initialEntries: [path], future: ROUTER_FUTURE });
   setUnauthorizedHandler((target) => {
     void router.navigate(target);
   });

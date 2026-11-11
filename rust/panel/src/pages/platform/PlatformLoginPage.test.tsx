@@ -10,6 +10,6 @@ describe('PlatformLoginPage', () => {
     expect(
       await screen.findByRole('heading', { level: 1, name: tr.platform.login.title }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(tr.fields.password, { exact: false })).toBeInTheDocument();
+    expect(screen.getByLabelText(tr.fields.password, { exact: false, selector: 'input' })).toBeInTheDocument();
   });
 });

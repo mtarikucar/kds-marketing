@@ -673,5 +673,6 @@ async fn pending_payment_workspace_gets_workspace_inactive_on_capabilities() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 22);
+    // Among them the spend breakdown and the stop switches (2026-11-10).
+    assert_eq!(checked, 24);
 }

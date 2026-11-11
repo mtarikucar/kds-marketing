@@ -2,29 +2,6 @@ use super::*;
 use jt_strategy::LaneKind;
 #[async_trait]
 impl StudioControlRepo for PgTenantRepos {
-    async fn set_policy(
-        &mut self,
-        expected: u64,
-        lane: LaneKind,
-        required: bool,
-    ) -> Result<StudioControl, AppError> {
-        let mut c = self.lock_control().await?;
-        if c.revision != expected {
-            return Err(AppError::conflict("control revision changed"));
-        }
-        c.lanes.entry(lane).or_default().requires_human_approval = required;
-        c.revision = c
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| AppError::conflict("revision overflow"))?;
-        sqlx::query("update studio_control set data=$2 where workspace_id=$1")
-            .bind(self.workspace_id().0)
-            .bind(encode(&c)?)
-            .execute(self.tx.conn())
-            .await
-            .map_err(|e| map_sqlx(e, "set Studio policy"))?;
-        Ok(c)
-    }
     async fn binding_control(
         &mut self,
         id: AdSetBindingId,
@@ -57,10 +34,12 @@ impl StudioControlRepo for PgTenantRepos {
     async fn lock_control(&mut self) -> Result<StudioControl, AppError> {
         let ws = self.workspace_id();
         let initial = StudioControl {
+            spend_stopped: Default::default(),
             workspace_id: ws,
             brake_engaged: false,
             revision: 0,
             lanes: Default::default(),
+            removed: Default::default(),
         };
         sqlx::query(
             "insert into studio_control(workspace_id,data) values($1,$2) on conflict do nothing",
@@ -76,7 +55,16 @@ impl StudioControlRepo for PgTenantRepos {
                 .fetch_one(self.tx.conn())
                 .await
                 .map_err(|e| map_sqlx(e, "lock Studio control"))?;
-        decode(row)
+        let mut control: StudioControl = decode(row)?;
+        // A removed module stops its lane (design 2026-11-10 S25); derived here, never stored.
+        let registry: Option<Value> =
+            sqlx::query_scalar("select data from workspace_modules where workspace_id=$1")
+                .bind(ws.0)
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "read the module registry"))?;
+        control.removed = jt_app::usecases::modules::removed_lanes(registry.as_ref())?;
+        Ok(control)
     }
     async fn set_brake(
         &mut self,
@@ -103,6 +91,48 @@ impl StudioControlRepo for PgTenantRepos {
             .execute(self.tx.conn())
             .await
             .map_err(|e| map_sqlx(e, "set Studio brake"))?;
+        Ok(c)
+    }
+    async fn spend_stop(&mut self) -> Result<jt_studio::SpendStop, AppError> {
+        let row: Option<Value> =
+            sqlx::query_scalar("select data from studio_control where workspace_id=$1")
+                .bind(self.workspace_id().0)
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "read spend stop"))?;
+        Ok(match row {
+            Some(data) => decode::<StudioControl>(data)?.spend_stopped,
+            None => Default::default(),
+        })
+    }
+    async fn set_spend_stop(
+        &mut self,
+        expected: u64,
+        stop: jt_studio::SpendStop,
+        paid_brake: Option<bool>,
+        release_workspace_brake: bool,
+    ) -> Result<StudioControl, AppError> {
+        let mut c = self.lock_control().await?;
+        if c.revision != expected {
+            return Err(AppError::conflict("control revision changed"));
+        }
+        c.spend_stopped = stop;
+        if release_workspace_brake {
+            c.brake_engaged = false;
+        }
+        if let Some(engaged) = paid_brake {
+            c.lanes.entry(LaneKind::Paid).or_default().brake_engaged = engaged;
+        }
+        c.revision = c
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::conflict("revision overflow"))?;
+        sqlx::query("update studio_control set data=$2 where workspace_id=$1")
+            .bind(self.workspace_id().0)
+            .bind(encode(&c)?)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "set spend stop"))?;
         Ok(c)
     }
 }

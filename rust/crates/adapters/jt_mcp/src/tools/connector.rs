@@ -69,7 +69,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           ten minutes; the panel completes the flow and the owner chooses the \
                           accounts. You cannot complete it. Needs the platform's provider app to \
                           be configured (else CONFLICT). [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<StartArgs>,
             run: start_oauth,
         },
@@ -85,7 +85,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           flow is CONFLICT; an unknown flow is NOT_FOUND; an account another \
                           capability of the kind holds is CONFLICT. Returns {capabilities: \
                           [...]}. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<ConfirmArgs>,
             run: confirm_assets,
         },
@@ -101,7 +101,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: set_credentials_schema,
             run: set_credentials,
         },
@@ -112,7 +112,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           verified. Returns {result: {ok, latency_ms, error_kind, error_reason, \
                           facts}, status}; an auth failure marks it unreachable and asks for a \
                           reconnection. [risk: WRITE]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<CapabilityArgs>,
             run: probe,
         },
@@ -123,7 +123,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           reason line `kind: provider: reason`), when its token expires and \
                           whether it must be reconnected. Returns {connectors: [...]}. \
                           [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: health,
         },
@@ -138,7 +138,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           declared capability the account chosen first. A NetGSM capability \
                           takes new credentials instead (VALIDATION, details.reason \
                           use_set_credentials). [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<CapabilityArgs>,
             run: reconnect,
         },
@@ -155,7 +155,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           acts on (null until the platform's TikTok app is configured), the \
                           callback URL the operator enters in TikTok's developer portal. Returns \
                           {meta, netgsm: [{purpose, url}], tiktok: {url, events}}. [risk: READ]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<NoArgs>,
             run: hooks,
         },
@@ -168,7 +168,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           has the KVKK recording announcement in place). A field left out keeps \
                           its value; give at least one. Another kind is CONFLICT. Returns \
                           {capability_id, call_mode, recording_allowed}. [risk: WRITE]",
-            permission: Permission::CapabilitiesManage,
+            permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<PbxPolicyArgs>,
             run: set_pbx_policy,
         },

@@ -118,12 +118,17 @@ pub struct StoredWorkspacePolicy {
 /// Every table, in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
+    pub module_registries: Vec<(WorkspaceId, serde_json::Value)>,
     pub payments: Vec<jt_app::ports::billing::PaymentNotification>,
     pub entitlements: Vec<jt_app::ports::billing::WorkspaceEntitlement>,
     pub activation_codes: Vec<jt_app::ports::billing::ActivationCodeRow>,
     pub billing_references: Vec<(WorkspaceId, String)>,
     pub studio: super::studio::MemStudio,
     pub materials: super::materials::MemMaterials,
+    pub production_projects: Vec<jt_app::ports::production_projects::ProductionProject>,
+    /// The ad campaigns, each with its closed mark.
+    pub ads_campaigns: Vec<super::ads::StoredCampaign>,
+    pub material_productions: Vec<jt_app::ports::material_productions::ProductionRecord>,
     pub posts: super::posts::MemPosts,
     pub calls: super::calls::MemCalls,
     pub devices: super::devices::MemDevices,

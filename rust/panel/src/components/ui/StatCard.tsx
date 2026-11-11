@@ -33,13 +33,13 @@ export function StatCard({ label, value, icon, delta, tone = 'neutral', classNam
   return (
     <div
       className={cn(
-        'rounded-xl border border-border bg-surface p-5 shadow-sm',
+        'border-t border-border py-5',
         className,
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1 min-w-0">
-          <p className="text-micro uppercase tracking-wide text-muted-foreground font-medium truncate">
+        <div className="flex min-w-0 flex-col gap-3">
+          <p className="text-sm text-muted-foreground">
             {label}
           </p>
           <p className="font-display text-h1 tabular-nums text-foreground leading-none">

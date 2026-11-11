@@ -79,6 +79,17 @@ impl TenantRepos for Tenant {
     fn studio_control(&mut self) -> &mut dyn jt_app::ports::studio::StudioControlRepo {
         self.inner.studio_control()
     }
+    fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
+        self.inner.studio_projects()
+    }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self.inner.ads()
+    }
+    fn studio_productions(
+        &mut self,
+    ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
+        self.inner.studio_productions()
+    }
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self.inner.studio_materials()
     }
@@ -135,9 +146,6 @@ impl TenantRepos for Tenant {
     }
     fn appointments(&mut self) -> &mut dyn AppointmentRepo {
         self.inner.appointments()
-    }
-    fn commissions(&mut self) -> &mut dyn CommissionRepo {
-        self.inner.commissions()
     }
     fn erasure(&mut self) -> &mut dyn ErasureRepo {
         self.inner.erasure()
@@ -251,6 +259,13 @@ impl TenantRepos for Tenant {
 
 #[async_trait]
 impl WorkspaceRepo for Tenant {
+    async fn module_registry(&mut self) -> Result<Option<serde_json::Value>, AppError> {
+        self.inner.workspace().module_registry().await
+    }
+    async fn save_module_registry(&mut self, data: serde_json::Value) -> Result<(), AppError> {
+        self.inner.workspace().save_module_registry(data).await
+    }
+
     async fn lock(&mut self) -> Result<WorkspaceRow, AppError> {
         let row = self.inner.workspace().lock().await?;
         if let Some(hold) = &self.hold {

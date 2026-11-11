@@ -175,7 +175,7 @@ function InviteDialog({
   );
 }
 
-export function TeamPage() {
+export function TeamPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
@@ -278,11 +278,11 @@ export function TeamPage() {
 
   return (
     <>
-      <PageHeader
+      <PageHeader embedded={embedded}
         title={t('team.title')}
         description={t('team.description')}
         actions={
-          canManage ? (
+          canManage && team.data?.length !== 0 ? (
             <Button onClick={() => setInviting(true)} disabled={roleList.length === 0}>
               <UserPlus className="h-4 w-4" aria-hidden="true" />
               {t('team.invite')}
@@ -295,7 +295,17 @@ export function TeamPage() {
         <DataTable
           columns={columns}
           data={team.data ?? []}
-          emptyState={<EmptyState title={t('team.empty')} description={t('team.emptyBody')} />}
+          emptyState={
+            <EmptyState
+              className="rounded-none border-0"
+              icon={<img src="/brand/guide-setup.webp" alt="" width={112} height={112} />}
+              title={t('team.empty')}
+              description={t('team.emptyBody')}
+              action={canManage && roleList.length > 0 ? (
+                <Button onClick={() => setInviting(true)}>{t('team.invite')}</Button>
+              ) : undefined}
+            />
+          }
         />
       </QueryState>
       {canManage && <InviteDialog open={inviting} onOpenChange={setInviting} roles={roleList} />}

@@ -7,6 +7,7 @@
 //! route differs, and wraps the route in the gate layer of the resolved [`UseCase`]
 //! ([`crate::gate`]).
 
+pub mod ads;
 pub mod agents;
 pub mod api_keys;
 pub mod auth;
@@ -15,6 +16,7 @@ pub mod budget;
 pub mod calls;
 pub mod capabilities;
 pub mod connector;
+pub mod content;
 pub mod device_bridge;
 pub mod devices;
 pub mod distribution;
@@ -22,6 +24,7 @@ pub mod events;
 pub mod groups;
 pub mod inbox;
 pub mod ledger;
+mod modules;
 pub mod oauth_callback;
 pub mod ops;
 pub mod outreach;
@@ -30,6 +33,7 @@ pub mod platform_payments;
 pub mod prospects;
 pub mod research;
 pub mod roles;
+pub mod social;
 pub mod strategy;
 pub mod studio;
 pub mod team;
@@ -66,17 +70,67 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/studio/trends"),
     ("POST", "/api/studio/hypotheses/proposals"),
     ("POST", "/api/studio/brake"),
-    ("PUT", "/api/studio/policy"),
     ("POST", "/api/studio/approvals"),
     ("GET", "/api/studio/slots/{slot_id}/tiktok"),
     ("POST", "/api/studio/slots/{slot_id}/tiktok"),
     ("GET", "/api/studio/slots/{slot_id}/tiktok/metrics"),
+    ("POST", "/api/content/areas/{project_id}/claim"),
+    ("POST", "/api/content/areas/{project_id}/progress"),
+    ("POST", "/api/content/areas/{project_id}/release"),
+    ("POST", "/api/content/areas/{project_id}/delivery"),
+    ("POST", "/api/content/areas/{project_id}/redo"),
+    ("POST", "/api/content/areas/{project_id}/delivery/accept"),
+    ("POST", "/api/social/versions/schedule"),
+    ("GET", "/api/social/packages"),
+    ("GET", "/api/social/accounts"),
+    ("GET", "/api/social/accounts/{capability_id}"),
+    ("POST", "/api/social/accounts/{capability_id}/pause"),
+    ("GET", "/api/ads/campaigns"),
+    ("POST", "/api/ads/campaigns"),
+    ("GET", "/api/ads/campaigns/{campaign_id}"),
+    ("PATCH", "/api/ads/campaigns/{campaign_id}"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/approve"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/decline"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/claim"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/release"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/plan"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/moves"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/pause"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/resume"),
+    ("POST", "/api/ads/campaigns/{campaign_id}/end"),
+    (
+        "GET",
+        "/api/ads/campaigns/{campaign_id}/ads/{index}/preview",
+    ),
+    ("GET", "/api/studio/projects"),
+    ("POST", "/api/studio/projects"),
+    ("GET", "/api/studio/projects/{project_id}"),
+    ("PATCH", "/api/studio/projects/{project_id}"),
+    ("POST", "/api/studio/projects/{project_id}/materials"),
+    ("POST", "/api/studio/projects/{project_id}/requests"),
+    (
+        "PATCH",
+        "/api/studio/projects/{project_id}/requests/{request_id}",
+    ),
+    ("POST", "/api/studio/projects/{project_id}/productions"),
+    ("POST", "/api/studio/projects/{project_id}/publications"),
+    (
+        "POST",
+        "/api/studio/projects/{project_id}/outputs/{output_id}/schedule",
+    ),
     ("GET", "/api/studio/olays"),
     ("GET", "/api/studio/olays/{olay_id}"),
     ("POST", "/api/studio/olays"),
     ("PATCH", "/api/studio/olays/{olay_id}"),
     ("GET", "/api/studio/materials"),
     ("GET", "/api/studio/materials/{material_id}"),
+    ("GET", "/api/studio/material-intelligence"),
+    ("GET", "/api/studio/material-productions"),
+    ("POST", "/api/studio/material-productions"),
+    ("GET", "/api/studio/materials/{material_id}/intelligence"),
+    ("PATCH", "/api/studio/materials/{material_id}/intelligence"),
+    ("GET", "/api/studio/materials/{material_id}/preview"),
+    ("POST", "/api/studio/materials/{material_id}/analysis/retry"),
     ("POST", "/api/studio/materials"),
     ("PATCH", "/api/studio/materials/{material_id}/tags"),
     ("GET", "/api/studio/slots/{slot_id}/materials"),
@@ -112,10 +166,6 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/inbox/journeys/{journey_id}/appointments"),
     ("POST", "/api/inbox/appointments/{id}/cancel"),
     ("POST", "/api/inbox/appointments/{id}/held"),
-    ("GET", "/api/inbox/commissions"),
-    ("POST", "/api/inbox/commissions/{id}/approve"),
-    ("POST", "/api/inbox/commissions/{id}/pay"),
-    ("PUT", "/api/inbox/commission-rates"),
     ("POST", "/api/inbox/items/{item_id}/hide"),
     ("POST", "/api/inbox/items/{item_id}/delete"),
     ("POST", "/api/inbox/items/handled"),
@@ -171,6 +221,10 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/billing/activate"),
     ("POST", "/api/billing/payments"),
     ("GET", "/api/workspace"),
+    ("GET", "/api/workspace/modules"),
+    ("PUT", "/api/workspace/modules/{module_id}"),
+    ("PATCH", "/api/workspace/modules/{module_id}"),
+    ("DELETE", "/api/workspace/modules/{module_id}"),
     ("GET", "/api/team"),
     ("POST", "/api/team/invites"),
     ("POST", "/api/team/invites/accept"),
@@ -224,6 +278,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/budget/items/{budget_item_id}/retire"),
     ("POST", "/api/budget/items/{budget_item_id}/spend"),
     ("GET", "/api/budget/items/{budget_item_id}/spend"),
+    ("GET", "/api/budget/breakdown"),
+    ("POST", "/api/budget/stop"),
     ("POST", "/api/connectors/oauth/start"),
     ("GET", "/api/connectors/oauth/callback/{provider}"),
     ("POST", "/api/connectors/oauth/{pending_id}/confirm"),
@@ -467,12 +523,6 @@ pub fn api_routes() -> Vec<ApiRoute> {
         ),
         api_route("POST", "/studio/brake", "studio.brake", studio::brake),
         api_route(
-            "PUT",
-            "/studio/policy",
-            "studio.policy_set",
-            studio::policy_set,
-        ),
-        api_route(
             "POST",
             "/studio/approvals",
             "studio.approve",
@@ -495,6 +545,216 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/studio/slots/{slot_id}/tiktok/metrics",
             "studio.tiktok_metrics",
             studio::tiktok_metrics,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/claim",
+            "content.area_claim",
+            content::area_claim,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/progress",
+            "content.area_progress",
+            content::area_progress,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/release",
+            "content.area_release",
+            content::area_release,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/delivery",
+            "content.area_deliver",
+            content::area_deliver,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/redo",
+            "content.area_redo",
+            content::area_redo,
+        ),
+        api_route(
+            "POST",
+            "/content/areas/{project_id}/delivery/accept",
+            "content.delivery_accept",
+            content::delivery_accept,
+        ),
+        api_route(
+            "POST",
+            "/social/versions/schedule",
+            "social.version_schedule",
+            social::version_schedule,
+        ),
+        api_route(
+            "GET",
+            "/social/packages",
+            "social.versions_waiting",
+            social::versions_waiting,
+        ),
+        api_route(
+            "GET",
+            "/social/accounts",
+            "social.accounts_list",
+            social::accounts_list,
+        ),
+        api_route(
+            "GET",
+            "/social/accounts/{capability_id}",
+            "social.account_get",
+            social::account_get,
+        ),
+        api_route(
+            "POST",
+            "/social/accounts/{capability_id}/pause",
+            "social.account_pause",
+            social::account_pause,
+        ),
+        api_route(
+            "GET",
+            "/ads/campaigns",
+            "ads.campaigns_list",
+            ads::campaigns_list,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns",
+            "ads.campaign_open",
+            ads::campaign_open,
+        ),
+        api_route(
+            "GET",
+            "/ads/campaigns/{campaign_id}",
+            "ads.campaign_get",
+            ads::campaign_get,
+        ),
+        api_route(
+            "PATCH",
+            "/ads/campaigns/{campaign_id}",
+            "ads.campaign_update",
+            ads::campaign_update,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/approve",
+            "ads.campaign_approve",
+            ads::campaign_approve,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/decline",
+            "ads.campaign_decline",
+            ads::campaign_decline,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/claim",
+            "ads.campaign_claim",
+            ads::campaign_claim,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/release",
+            "ads.campaign_release",
+            ads::campaign_release,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/plan",
+            "ads.plan_submit",
+            ads::plan_submit,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/moves",
+            "ads.campaign_move",
+            ads::campaign_move,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/pause",
+            "ads.campaign_pause",
+            ads::campaign_pause,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/resume",
+            "ads.campaign_resume",
+            ads::campaign_resume,
+        ),
+        api_route(
+            "POST",
+            "/ads/campaigns/{campaign_id}/end",
+            "ads.campaign_end",
+            ads::campaign_end,
+        ),
+        api_route(
+            "GET",
+            "/ads/campaigns/{campaign_id}/ads/{index}/preview",
+            "ads.ad_preview",
+            ads::ad_preview,
+        ),
+        api_route(
+            "GET",
+            "/studio/projects",
+            "studio.project_list",
+            studio::project_list,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects",
+            "studio.project_create",
+            studio::project_create,
+        ),
+        api_route(
+            "GET",
+            "/studio/projects/{project_id}",
+            "studio.project_get",
+            studio::project_get,
+        ),
+        api_route(
+            "PATCH",
+            "/studio/projects/{project_id}",
+            "studio.project_update",
+            studio::project_update,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects/{project_id}/materials",
+            "studio.project_materials",
+            studio::project_materials,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects/{project_id}/requests",
+            "studio.project_request",
+            studio::project_request,
+        ),
+        api_route(
+            "PATCH",
+            "/studio/projects/{project_id}/requests/{request_id}",
+            "studio.project_request_update",
+            studio::project_request_update,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects/{project_id}/productions",
+            "studio.project_production",
+            studio::project_production,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects/{project_id}/publications",
+            "studio.project_publication",
+            studio::project_publication,
+        ),
+        api_route(
+            "POST",
+            "/studio/projects/{project_id}/outputs/{output_id}/schedule",
+            "studio.project_schedule",
+            studio::project_schedule,
         ),
         api_route(
             "GET",
@@ -531,6 +791,48 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/studio/materials/{material_id}",
             "studio.material_get",
             studio::material_get,
+        ),
+        api_route(
+            "GET",
+            "/studio/material-intelligence",
+            "studio.material_intelligence_list",
+            studio::material_intelligence_list,
+        ),
+        api_route(
+            "GET",
+            "/studio/material-productions",
+            "studio.material_production_list",
+            studio::material_production_list,
+        ),
+        api_route(
+            "POST",
+            "/studio/material-productions",
+            "studio.material_production_request",
+            studio::material_production_request,
+        ),
+        api_route(
+            "GET",
+            "/studio/materials/{material_id}/intelligence",
+            "studio.material_intelligence_get",
+            studio::material_intelligence_get,
+        ),
+        api_route(
+            "PATCH",
+            "/studio/materials/{material_id}/intelligence",
+            "studio.material_intelligence_update",
+            studio::material_intelligence_update,
+        ),
+        api_route(
+            "GET",
+            "/studio/materials/{material_id}/preview",
+            "studio.material_preview",
+            studio::material_preview,
+        ),
+        api_route(
+            "POST",
+            "/studio/materials/{material_id}/analysis/retry",
+            "studio.material_analysis_retry",
+            studio::material_analysis_retry,
         ),
         api_route(
             "POST",
@@ -718,30 +1020,6 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/inbox/appointments/{id}/held",
             "inbox.appointments.held",
             inbox::appointments_held,
-        ),
-        api_route(
-            "GET",
-            "/inbox/commissions",
-            "inbox.commissions.list",
-            inbox::commissions_list,
-        ),
-        api_route(
-            "POST",
-            "/inbox/commissions/{id}/approve",
-            "inbox.commissions.approve",
-            inbox::commissions_approve,
-        ),
-        api_route(
-            "POST",
-            "/inbox/commissions/{id}/pay",
-            "inbox.commissions.pay",
-            inbox::commissions_pay,
-        ),
-        api_route(
-            "PUT",
-            "/inbox/commission-rates",
-            "inbox.commission_rates.set",
-            inbox::commission_rates_set,
         ),
         api_route(
             "POST",
@@ -984,6 +1262,25 @@ pub fn api_routes() -> Vec<ApiRoute> {
             billing::report_payment,
         ),
         api_route("GET", "/workspace", "workspace.info", workspace::info),
+        api_route("GET", "/workspace/modules", "modules.list", modules::list),
+        api_route(
+            "PUT",
+            "/workspace/modules/{module_id}",
+            "modules.install",
+            modules::install,
+        ),
+        api_route(
+            "PATCH",
+            "/workspace/modules/{module_id}",
+            "modules.update",
+            modules::update,
+        ),
+        api_route(
+            "DELETE",
+            "/workspace/modules/{module_id}",
+            "modules.remove",
+            modules::remove,
+        ),
         api_route("GET", "/team", "team.list", team::list),
         api_route("POST", "/team/invites", "team.invite", team::invite),
         api_route(
@@ -1206,6 +1503,13 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "budget.spend.list",
             budget::spend,
         ),
+        api_route(
+            "GET",
+            "/budget/breakdown",
+            "budget.breakdown",
+            budget::breakdown,
+        ),
+        api_route("POST", "/budget/stop", "budget.stop", budget::stop),
         api_route(
             "POST",
             "/connectors/oauth/start",

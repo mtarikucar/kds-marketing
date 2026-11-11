@@ -25,7 +25,7 @@ import {
 import { browser, fileUrl } from '@/lib/browser';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime, formatRelative } from '@/lib/format';
-import { useCreateKey } from '@/pages/ApiKeysPage';
+import { useCreateKey } from '@/pages/agents/keys';
 import { PHONE_REFRESH_MS, deviceCommandKey, invalidateCapabilities, phoneLogKey } from './queries';
 
 /** The feature a bridge lists for a phone that types text outside ASCII (`jt_devices`). */
@@ -162,7 +162,7 @@ export function PhoneCard({
   const kinds = facts?.features.filter((f) => f !== TEXT_UNICODE) ?? [];
 
   return (
-    <div role="group" aria-labelledby={`${id}-title`} className="flex flex-col gap-2 rounded-lg border border-border p-3">
+    <div role="group" aria-labelledby={`${id}-title`} className="flex min-w-0 flex-col gap-2 border-t border-border pt-4">
       <p id={`${id}-title`} className="text-caption text-muted-foreground">
         {t('capabilities.phone.title')}
       </p>
@@ -192,7 +192,7 @@ export function PhoneCard({
         <p className="text-sm text-foreground">{t('capabilities.phone.never')}</p>
       )}
       <p className="text-caption text-muted-foreground">
-        {t('capabilities.phone.hint')} <code className="font-mono text-micro">{OPS_DOC}</code>
+        {t('capabilities.phone.hint')} <code className="break-all font-mono text-micro">{OPS_DOC}</code>
       </p>
     </div>
   );
@@ -470,7 +470,7 @@ function InstallSteps({ plaintext }: { plaintext: string }) {
         </div>
       </li>
       <li>
-        {t('capabilities.phone.pair.step3')} <code className="font-mono text-micro">{OPS_DOC}</code>
+        {t('capabilities.phone.pair.step3')} <code className="break-all font-mono text-micro">{OPS_DOC}</code>
       </li>
     </ol>
   );

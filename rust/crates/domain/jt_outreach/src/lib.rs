@@ -10,7 +10,8 @@
 //! **Cold email is locked by default.** [`outreach_fence`] and [`launch_fence`] check the
 //! platform switch (`JEETA_OUTREACH_ENABLED`, D24) before anything else, and the
 //! business-recipient basis ([`OutreachPolicy::b2b_channels`], D17) is empty unless a human
-//! owner recorded the counsel's confirmation, and then holds email only.
+//! owner recorded the counsel's confirmation, and then holds only the messaging channels that
+//! owner opened.
 //!
 //! Errors name a field and a stable reason key, never a value.
 

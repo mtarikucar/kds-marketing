@@ -19,7 +19,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "List the workspace's roles, the system roles (owner, manager, rep) \
                           and custom ones, with their ids, keys and permissions. Returns \
                           {roles: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: list,
         },
@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Create a custom role with a key (2 to 32 lowercase letters, digits or \
                           underscores), a name and permissions the caller holds itself. Returns \
                           the role. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<CreateArgs>,
             run: create,
         },
@@ -37,7 +37,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Replace the permissions of a custom role, by role id; members holding \
                           it get them from their next request. System roles cannot be changed. \
                           Returns the role. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<UpdateArgs>,
             run: update,
         },
@@ -45,7 +45,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "roles.delete",
             description: "Delete a custom role that no membership uses, by role id. System \
                           roles cannot be deleted. [risk: DESTRUCTIVE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<RoleArgs>,
             run: delete,
         },

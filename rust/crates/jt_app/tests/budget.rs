@@ -15,6 +15,7 @@ use time::Duration;
 
 fn monthly(name: &str, cap: i64) -> BudgetItemInput {
     BudgetItemInput {
+        general: false,
         unit_cost_minor: None,
         name: name.into(),
         kind: BudgetKind::Cash,
@@ -118,6 +119,7 @@ async fn create_item_starts_with_nothing_spent() {
         &w.deps,
         &manager,
         BudgetItemInput {
+            general: false,
             unit_cost_minor: None,
             name: " Filament ".into(),
             kind: BudgetKind::Consumable,
@@ -144,6 +146,7 @@ async fn create_item_starts_with_nothing_spent() {
             "cap": 4,
             "unit_cost_minor": null,
             "period": "weekly",
+            "general": false,
         })
     );
     let subject = entry.subject.as_ref().unwrap();
@@ -366,6 +369,7 @@ fn spend_cursor_takes_both_halves_or_neither() {
 
 fn edit(name: Option<&str>, cap: Option<i64>, period: Option<Period>) -> UpdateBudgetItem {
     UpdateBudgetItem {
+        general: None,
         unit_cost_minor: None,
         name: name.map(Into::into),
         cap,
@@ -456,7 +460,7 @@ async fn budget_item_update_keeps_kind_unit_and_spend() {
     assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
     assert_eq!(
         e.details,
-        json!({ "fields": ["name", "cap", "period", "unit_cost_minor"] })
+        json!({ "fields": ["name", "cap", "period", "unit_cost_minor", "general"] })
     );
     assert_invalid(
         &err(budget::update_item(&w.deps, &w.owner_ctx, item, edit(Some(" "), None, None)).await),

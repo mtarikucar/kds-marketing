@@ -82,6 +82,8 @@ pub struct UseContext<'a> {
     pub at: OffsetDateTime,
     pub olays: &'a [Olay],
     pub calendar: &'a Calendar,
+    /// The workspace's [`crate::MaterialPolicy::ai_standalone`].
+    pub ai_standalone: bool,
 }
 
 impl UseContext<'_> {
@@ -136,9 +138,13 @@ pub fn check_use(
     let day = istanbul_day(cx.at);
     if m.is_ai() {
         return match m.binding {
-            // A supporting visual: never an anchor (spec D10).
+            // A supporting visual (spec D10). It stands alone only where the workspace lets an
+            // agent's visual do so and the piece speaks about nothing specific (design
+            // 2026-11-10 B39): about an olay it never anchors, and the truth check refuses the
+            // name, place or client of a confirmed olay in a generic text.
             Binding::Genel => match role {
                 UseRole::Support => Ok(()),
+                UseRole::Anchor if cx.ai_standalone && *subject == Subject::Generic => Ok(()),
                 UseRole::Anchor => Err(Refusal::AiNotAnchor),
             },
             Binding::Olay { olay_id } => {

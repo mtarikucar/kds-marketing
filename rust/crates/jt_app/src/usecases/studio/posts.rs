@@ -4,7 +4,7 @@
 //! (`studio.posts_propose`), the planned posts (`studio.posts_list`), the owner's weekly summary
 //! (`studio.weekly_summary`) and the posting policy, a human's (`studio.posting_policy_set`).
 //!
-//! Each needs an approved strategy (they plan content) and `studio.work`. Nothing is published
+//! Each needs an approved strategy (they plan content) and `social.work`. Nothing is published
 //! without an eligible material: a package's posts are checked here at their time, and their
 //! pieces again at submission and at publish (spec D1). Ledger entries carry ids, codes and
 //! times, never captions or the owner's words.
@@ -120,7 +120,7 @@ pub(crate) struct Channel {
 
 /// The content types `h`'s organic cadence names for a channel of kind `kind`, the cadence's
 /// order kept; none when `h` is retired, posts elsewhere or has no usable organic cadence.
-fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
+pub(crate) fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
     let Some(cadence) = h.cadence.get(&LaneKind::Organic) else {
         return Vec::new();
     };
@@ -140,7 +140,7 @@ fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
 }
 
 /// Whether the strategy `frame` chose a channel of kind `kind` in one of `group_ids` (or any).
-fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
+pub(crate) fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
     frame.sections.channels.iter().any(|choice| {
         (choice.channel == "any" || choice.channel == kind)
             && choice
@@ -149,7 +149,10 @@ fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
     })
 }
 
-async fn group_ids(r: &mut dyn TenantRepos, c: CapabilityId) -> Result<Vec<Uuid>, AppError> {
+pub(crate) async fn group_ids(
+    r: &mut dyn TenantRepos,
+    c: CapabilityId,
+) -> Result<Vec<Uuid>, AppError> {
     Ok(r.capability_groups()
         .list()
         .await?
@@ -161,7 +164,7 @@ async fn group_ids(r: &mut dyn TenantRepos, c: CapabilityId) -> Result<Vec<Uuid>
 
 /// Whether capability `c` may take a post at `now`: an organic kind, connected for writing, with
 /// a publisher built for its provider.
-fn postable(d: &Deps, c: &Capability, now: OffsetDateTime) -> bool {
+pub(crate) fn postable(d: &Deps, c: &Capability, now: OffsetDateTime) -> bool {
     ORGANIC_KINDS.contains(&c.kind_key.as_str())
         && capability_access(c, now, true).is_ok()
         && jt_connector::provider_for_kind(&c.kind_key)
@@ -176,9 +179,18 @@ pub(crate) async fn channels(
     now: OffsetDateTime,
 ) -> Result<Vec<Channel>, AppError> {
     let hypotheses = r.hypotheses().list(frame.id).await?;
+    // An account a person paused takes no post (design 2026-11-10 §7.6).
+    let paused = r
+        .studio_posts()
+        .posting_settings()
+        .await?
+        .paused_capability_ids;
     let mut out = Vec::new();
     for c in r.capabilities().list(CapabilityFilter::default()).await? {
-        if !postable(d, &c, now) || !selected(frame, &c.kind_key, &group_ids(r, c.id).await?) {
+        if paused.contains(&c.id)
+            || !postable(d, &c, now)
+            || !selected(frame, &c.kind_key, &group_ids(r, c.id).await?)
+        {
             continue;
         }
         let mut options = Vec::new();
@@ -300,12 +312,12 @@ pub(crate) async fn generic_anchor(
     at: OffsetDateTime,
 ) -> Result<Option<MaterialId>, AppError> {
     let cx = lib.context(at);
+    let blocked = super::library::blocked_derivatives(r).await?;
     let state: BTreeMap<SlotId, &Slot> = slots.iter().map(|s| (s.id, s)).collect();
     let mut best: Option<(_, MaterialId)> = None;
-    for m in materials
-        .iter()
-        .filter(|m| check_use(m, UseRole::Anchor, &Subject::Generic, &cx).is_ok())
-    {
+    for m in materials.iter().filter(|m| {
+        !blocked.contains(&m.id) && check_use(m, UseRole::Anchor, &Subject::Generic, &cx).is_ok()
+    }) {
         let planned = posts
             .iter()
             .filter(|p| {
@@ -343,6 +355,7 @@ pub(crate) fn need_text(need: &SlotNeed) -> String {
         .map(|t| t.key())
         .chain(need.doors.iter().map(|t| t.key()))
         .chain(need.content_types.iter().map(|t| t.key()))
+        .chain(need.labels.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -368,7 +381,11 @@ pub(crate) async fn outcomes(
         else {
             continue;
         };
-        let Some(post) = posts.iter().find(|p| p.slot_id == publication.slot_id) else {
+        // A story is left out of learning: its insights last a day only.
+        let Some(post) = posts
+            .iter()
+            .find(|p| p.slot_id == publication.slot_id && p.format != PostFormat::Story)
+        else {
             continue;
         };
         out.push(PostOutcome {
@@ -382,6 +399,27 @@ pub(crate) async fn outcomes(
         });
     }
     Ok(out)
+}
+
+/// What is wrong with material `m` as a story's one medium (Instagram's `STORIES`): its file's
+/// type and size and, for a video, its length read from its `moov` box; `None` when Instagram
+/// takes it.
+pub(crate) async fn story_refusal(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    m: &Material,
+) -> Result<Option<StoryMediaRefusal>, AppError> {
+    let f = r
+        .studio()
+        .get_file(m.file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("file"))?;
+    let (ms, moov_first) = if is_video_mime(&f.mime) {
+        super::library::video_facts_of(d, &f).await?
+    } else {
+        (None, true)
+    };
+    Ok(story_media_refusal(&f.mime, f.size_bytes, ms, moov_first))
 }
 
 /// Records why the post of `slot`, when it has one, was retired at `at`.
@@ -470,8 +508,16 @@ pub async fn post_requests(
     ctx: &Ctx,
     q: PackageQuery,
 ) -> Result<Vec<PackageRequest>, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.post_requests",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.post_requests"),
+    )
+    .await?;
     Ok(r.studio_posts()
         .list_package_requests()
         .await?
@@ -534,7 +580,7 @@ pub struct PackageProposalOut {
     pub posts: Vec<PostOut>,
 }
 
-fn post_out(post: PlannedPost, slot: Slot, now: OffsetDateTime) -> PostOut {
+pub(crate) fn post_out(post: PlannedPost, slot: Slot, now: OffsetDateTime) -> PostOut {
     PostOut {
         pending: now >= post.prep_start_at
             && post.retired.is_none()
@@ -583,6 +629,17 @@ struct Checked {
     arm: Arm,
 }
 
+fn validate_proposal(i: &PackageProposalInput) -> Result<(), AppError> {
+    key(&i.request_key)?;
+    if i.posts.is_empty() || i.posts.len() > MAX_PACKAGE_POSTS {
+        return Err(AppError::validation(
+            format!("a package holds 1 to {MAX_PACKAGE_POSTS} posts"),
+            json!({"field": "posts", "reason": "post_count"}),
+        ));
+    }
+    Ok(())
+}
+
 /// Answers an open package request with planned posts (spec D27), all-or-nothing: each refused
 /// post names its reason (`VALIDATION` `package_refused`, `details.items`). A post is refused for
 /// its channel (`channel_unknown`, `channel_not_organic`, `channel_unavailable`, `other_channel`
@@ -601,17 +658,35 @@ pub async fn posts_propose(
     ctx: &Ctx,
     i: PackageProposalInput,
 ) -> Result<PackageProposalOut, AppError> {
-    key(&i.request_key)?;
-    if i.posts.is_empty() || i.posts.len() > MAX_PACKAGE_POSTS {
-        return Err(AppError::validation(
-            format!("a package holds 1 to {MAX_PACKAGE_POSTS} posts"),
-            json!({"field": "posts", "reason": "post_count"}),
-        ));
-    }
-    let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posts_propose",
+    ))?;
+    validate_proposal(&i)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posts_propose"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
+    let out = posts_propose_locked(d, ctx, r.as_mut(), &frame, i).await?;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// Materialize a proposal inside the caller's gated, Studio-locked transaction. Project
+/// scheduling uses this to commit its output link and the canonical slot together.
+/// The caller owns commit/rollback; every existing proposal validation still runs here.
+pub(crate) async fn posts_propose_locked(
+    d: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    frame: &StrategyVersion,
+    i: PackageProposalInput,
+) -> Result<PackageProposalOut, AppError> {
+    validate_proposal(&i)?;
+    let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
     if let Some(v) = r
         .studio()
         .request_replay("studio.posts_propose", &i.request_key, &payload)
@@ -653,24 +728,12 @@ pub async fn posts_propose(
             now,
             now + Duration::days(i64::from(MAX_POSTING_HORIZON_DAYS)),
         );
-    let lib = super::materials::library(r.as_mut(), latest).await?;
+    let lib = super::materials::library(r, latest).await?;
 
     let mut refusals: Vec<ItemRefusal> = Vec::new();
     let mut checked: Vec<(usize, Checked)> = Vec::new();
     for (index, p) in i.posts.iter().enumerate() {
-        match check_item(
-            d,
-            r.as_mut(),
-            &frame,
-            &hypotheses,
-            &arms,
-            &lib,
-            &request,
-            p,
-            now,
-        )
-        .await?
-        {
+        match check_item(d, r, frame, &hypotheses, &arms, &lib, &request, p, now).await? {
             Ok(c) => checked.push((index, c)),
             Err(mut refusal) => {
                 refusal.index = index;
@@ -694,7 +757,7 @@ pub async fn posts_propose(
             }
         })
         .collect();
-    let existing = existing_posts(r.as_mut()).await?;
+    let existing = existing_posts(r).await?;
     // Each post's hours and day at its own time in the zone (D51).
     let local = |at: OffsetDateTime| offset_at(tz, at);
     if let Err(list) = validate_package(&inputs, &existing, now, &local, &settings.policy) {
@@ -803,7 +866,6 @@ pub async fn posts_propose(
             &encode(&out)?,
         )
         .await?;
-    r.commit().await?;
     Ok(out)
 }
 
@@ -860,6 +922,14 @@ async fn check_item(
     }
     if !postable(d, &c, now) {
         return refuse("channel_unavailable");
+    }
+    if r.studio_posts()
+        .posting_settings()
+        .await?
+        .paused_capability_ids
+        .contains(&c.id)
+    {
+        return refuse(super::chain::ACCOUNT_PAUSED);
     }
     if !request.covers(c.id) {
         return refuse("other_channel");
@@ -939,6 +1009,15 @@ async fn check_item(
     if !media_types_ok(p.format, &kind, &mimes) {
         return refuse(PostRefusal::MediaType.code());
     }
+    let blocked = super::library::blocked_derivatives(r).await?;
+    if materials.iter().any(|m| blocked.contains(&m.id)) {
+        return refuse("source_permission_restricted");
+    }
+    if p.format == PostFormat::Story
+        && let Some(refusal) = story_refusal(d, r, &materials[0]).await?
+    {
+        return refuse(refusal.code());
+    }
     let refs: Vec<&Material> = materials.iter().collect();
     match piece_roles(&refs, &p.subject, &lib.context(p.publish_at)) {
         Ok(_) => {}
@@ -985,8 +1064,16 @@ pub struct PostsOut {
 /// The planned posts, by `publish_at`, each with its slot and whether it is pending: a post
 /// before its preparation start is listed here only (spec §14.3).
 pub async fn posts_list(d: &Deps, ctx: &Ctx, q: PostsQuery) -> Result<PostsOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posts_list",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posts_list"),
+    )
+    .await?;
     let mut posts = Vec::new();
     for p in r.studio_posts().list_posts().await? {
         if q.from.is_some_and(|f| p.publish_at < f) || q.until.is_some_and(|u| p.publish_at >= u) {
@@ -1081,8 +1168,16 @@ pub async fn weekly_summary(
     ctx: &Ctx,
     q: SummaryQuery,
 ) -> Result<WeeklySummaryOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.weekly_summary",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.weekly_summary"),
+    )
+    .await?;
     let settings = r.studio_posts().posting_settings().await?;
     let tz = zone_or_default(&settings.tz);
     let week_start = match q.week {
@@ -1228,6 +1323,9 @@ pub async fn posting_policy_set(
     ctx: &Ctx,
     i: PostingSettings,
 ) -> Result<PostingSettings, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posting_policy_set",
+    ))?;
     human_approver(ctx)?;
     i.policy.validate().map_err(|e| {
         let field = match &e {
@@ -1243,8 +1341,24 @@ pub async fn posting_policy_set(
         ));
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posting_policy_set"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
+    // The paused accounts are `social.account_pause`'s: setting the policy keeps them, and
+    // moves the settings' revision as every change does.
+    let stored = r.studio_posts().posting_settings().await?;
+    let i = PostingSettings {
+        paused_capability_ids: stored.paused_capability_ids,
+        revision: stored
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::conflict("posting settings revision overflow"))?,
+        ..i
+    };
     r.studio_posts().save_posting_settings(i.clone()).await?;
     let mut e = ledger_entry(
         ctx,
@@ -1257,4 +1371,15 @@ pub async fn posting_policy_set(
     r.ledger().append(e).await?;
     r.commit().await?;
     Ok(i)
+}
+
+#[cfg(test)]
+mod label_need_tests {
+    use super::*;
+
+    #[test]
+    fn shoot_request_need_includes_business_labels() {
+        let need = SlotNeed::from_keys("boyama.label:fresh bread", "existing_segment");
+        assert_eq!(need_text(&need), "boyama, fresh bread");
+    }
 }

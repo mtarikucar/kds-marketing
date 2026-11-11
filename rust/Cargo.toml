@@ -79,7 +79,7 @@ tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 # No default features: they would add `any` (every driver behind one type); `macros` stays for
 # `sqlx::migrate!` and `#[derive(sqlx::FromRow)]`.
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "uuid", "time", "json", "macros"] }
-rmcp = { version = "3.6", features = ["server", "transport-streamable-http-server", "transport-io"] }
+rmcp = { version = "3.9", features = ["server", "transport-streamable-http-server", "transport-io"] }
 # `multipart`: provider uploads (NetGSM voice files, Meta media) through `jt_outbound::Prepared`.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart"] }
 # The voice bridge's WebSocket client (Asterisk's events and media, the local speech services);

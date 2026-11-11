@@ -28,7 +28,7 @@ pub enum ConvState {
     Closed,
 }
 
-/// Who executes replies; this is independent of a journey's commission owner.
+/// Who executes replies; this is independent of a journey's owner.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Executor {

@@ -1,7 +1,7 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from './cn';
 
-const badge = cva('inline-flex items-center gap-1 rounded-full font-medium', {
+const badge = cva('inline-flex items-center gap-1 rounded-sm font-medium', {
   variants: {
     tone: {
       neutral: 'bg-surface-muted text-muted-foreground',

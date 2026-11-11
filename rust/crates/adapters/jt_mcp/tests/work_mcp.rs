@@ -201,10 +201,8 @@ async fn checkin_is_agent_only_and_returns_pending() {
     // What is pending, asked plainly: the agent connected a moment ago, so it is in time.
     let pending = ok(&call(&client, "jeeta.work.pending", json!({})).await);
     assert_eq!(pending["strategy"], "missing");
-    assert_eq!(
-        kinds(&pending),
-        ["consult_strategy", "declare_first_capability"]
-    );
+    // The key cannot declare a capability (no capabilities.manage): it is not asked to.
+    assert_eq!(kinds(&pending), ["consult_strategy"]);
     assert_eq!(pending["agent"]["overdue"], false);
     assert!(pending["agent"]["last_seen_at"].is_string());
 

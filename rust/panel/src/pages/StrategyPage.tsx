@@ -1,3 +1,5 @@
+import { StrategyLearned } from './StrategyLearned';
+import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, CheckCircle2, Compass, History, Play, Send } from 'lucide-react';
@@ -29,7 +31,6 @@ import {
   EmptyState,
   Field,
   Input,
-  PageHeader,
   Sheet,
   SheetContent,
   SheetDescription,
@@ -47,6 +48,7 @@ import { can, canApproveStrategy } from '@/lib/roles';
 import { HypothesesSection } from './strategy/HypothesesSection';
 import { GROUPS_KEY, STRATEGY_KEY, VERSIONS_KEY, invalidateStrategy } from './strategy/queries';
 import { SectionsView } from './strategy/sections';
+import { BriefNavigation, BriefGroupContext, EditRequestContext, navigateToSection, sectionForGap, sectionId, type BriefGroup, type BriefSection } from './strategy/BriefNavigation';
 
 type Tab = 'approved' | 'draft';
 
@@ -157,7 +159,7 @@ function VersionsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o
           {versions.data && versions.data.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('strategy.versionsEmpty')}</p>
           ) : (
-            <ol className="flex flex-col gap-3">
+            <ol className="flex flex-col gap-3 px-0 pb-0">
               {versions.data?.map((v) => (
                 <li key={v.id} className="flex flex-col gap-2 rounded-lg border border-border p-3">
                   <div className="flex items-center justify-between gap-2">
@@ -190,16 +192,18 @@ function ApprovedTab({
   groups: readonly GroupOut[];
 }) {
   const { t, i18n } = useTranslation();
+  const [group, setGroup] = useState<BriefGroup>('brand');
   const [archiving, setArchiving] = useState(false);
   if (!version) {
-    return <EmptyState title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} />;
+    return <EmptyState icon={<img src="/brand/scenes/strategy.svg" alt="" width={144} height={144} className="h-36 w-36" />} title={t('strategy.noApproved')} description={t('strategy.noApprovedBody')} className="py-10" />;
   }
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+    <BriefGroupContext.Provider value={{ group, setGroup }}>
+    <div className="-mx-4 flex flex-col gap-6 border-t border-border bg-surface px-4 py-5">
+      <Card className="rounded-none border-0 bg-transparent shadow-none">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex items-center gap-2">
-            <CardTitle>{t('strategy.versionLabel', { number: version.number })}</CardTitle>
+            <div className="space-y-2"><p className="text-xs tabular-nums text-muted-foreground">{t('strategy.versionLabel', { number: version.number })}</p><CardTitle className="text-xl font-normal sm:text-2xl">{version.sections.goals.objective || t('strategy.title')}</CardTitle></div>
             <VersionStatusBadge status={version.status} />
           </div>
           {canApprove && (
@@ -209,7 +213,7 @@ function ApprovedTab({
             </Button>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0 pb-0">
           <dl className="grid gap-3 sm:grid-cols-3">
             <Meta label={t('strategy.approvedAt')} value={version.approved_at && formatDateTime(version.approved_at, i18n.language)} />
             <Meta label={t('strategy.approvedBy')} value={version.approved_by_email} />
@@ -217,6 +221,7 @@ function ApprovedTab({
           </dl>
         </CardContent>
       </Card>
+      <BriefNavigation />
       <SectionsView sections={version.sections} editable={false} groups={groups} />
       <HypothesesSection
         hypotheses={version.hypotheses}
@@ -224,9 +229,10 @@ function ApprovedTab({
         channels={version.sections.channels.map((c) => c.channel)}
         editable={false}
       />
-      <ConsultationLog versionId={version.id} canRecord={false} />
+      <div hidden={group !== 'consultation'} id={sectionId('consultation')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"><ConsultationLog versionId={version.id} canRecord={false} /></div>
       {canApprove && <ArchiveDialog version={version} open={archiving} onOpenChange={setArchiving} />}
     </div>
+    </BriefGroupContext.Provider>
   );
 }
 
@@ -261,16 +267,18 @@ function DraftTab({
       await invalidateStrategy(queryClient);
     },
   });
+  const [group, setGroup] = useState<BriefGroup>('brand');
   const [approving, setApproving] = useState(false);
+  const [editRequest, setEditRequest] = useState<{ section: BriefSection; id: number } | null>(null);
+  const firstGapSection = gaps[0] ? sectionForGap(gaps[0]) : null;
 
   if (!draft) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('strategy.noDraft')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground">{t('strategy.noDraftBody')}</p>
+      <section className="flex flex-col items-start gap-6 rounded-xl border border-border bg-surface p-6 sm:flex-row sm:items-center sm:gap-9 sm:p-9">
+        <img src="/brand/scenes/strategy.svg" alt="" aria-hidden="true" width={160} height={160} className="h-36 w-36 shrink-0 sm:h-40 sm:w-40" />
+        <div className="flex min-w-0 max-w-2xl flex-col gap-4">
+          <h2 className="text-xl font-semibold tracking-tight">{t('strategy.noDraft')}</h2>
+          <p className="text-sm leading-relaxed text-muted-foreground">{t('strategy.noDraftBody')}</p>
           <ErrorCallout error={start.error} />
           {canConsult && (
             <Button className="self-start" onClick={() => start.mutate()} loading={start.isPending}>
@@ -278,8 +286,8 @@ function DraftTab({
               {t('strategy.start')}
             </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     );
   }
 
@@ -291,11 +299,13 @@ function DraftTab({
       : null;
 
   return (
-    <div className="flex flex-col gap-4">
-      <Card>
-        <CardHeader className="flex-row flex-wrap items-center justify-between gap-3">
+    <BriefGroupContext.Provider value={{ group, setGroup }}>
+    <EditRequestContext.Provider value={editRequest}>
+    <div className="-mx-4 flex flex-col gap-6 border-t border-border bg-surface px-4 py-5">
+      <Card className="rounded-none border-0 bg-transparent shadow-none">
+        <CardHeader className="flex-row flex-wrap items-center justify-between gap-4 px-0 pt-0">
           <div className="flex flex-wrap items-center gap-2">
-            <CardTitle>{t('strategy.versionLabel', { number: draft.number })}</CardTitle>
+            <div className="space-y-2"><p className="text-xs tabular-nums text-muted-foreground">{t('strategy.versionLabel', { number: draft.number })}</p><CardTitle className="text-xl font-normal sm:text-2xl">{draft.sections.goals.objective || t('strategy.title')}</CardTitle></div>
             <VersionStatusBadge status={draft.status} />
             <Badge tone={submitted ? 'primary' : 'neutral'} size="sm">
               {submitted ? t('strategy.submittedBadge') : t('strategy.notSubmittedBadge')}
@@ -318,7 +328,7 @@ function DraftTab({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
+        <CardContent className="flex flex-col gap-3 px-0 pb-0">
           {approveHint && (
             <p id="strategy-approve-hint" className="text-caption text-muted-foreground">
               {approveHint}
@@ -339,11 +349,26 @@ function DraftTab({
       {gaps.length > 0 ? (
         <Callout tone="warning" title={t('strategy.gapsTitle')}>
           <GapList gaps={gaps} />
+          {firstGapSection && (
+            <Button
+              className="mt-4"
+              variant="outline"
+              onClick={() => {
+                navigateToSection(firstGapSection, setGroup, canConsult);
+                if (canConsult) setEditRequest((current) => ({ section: firstGapSection, id: (current?.id ?? 0) + 1 }));
+              }}
+            >
+              {canConsult
+                ? t('strategy.workbench.fixFirstGap', { defaultValue: 'İlk eksiği tamamla' })
+                : t('strategy.workbench.viewFirstGap', { defaultValue: 'İlk eksiğe git' })}
+            </Button>
+          )}
         </Callout>
       ) : (
         <Callout tone="success">{t('strategy.noGaps')}</Callout>
       )}
 
+      <BriefNavigation gaps={gaps} />
       <SectionsView sections={draft.sections} editable={canConsult} groups={groups} />
       <HypothesesSection
         hypotheses={draft.hypotheses}
@@ -351,8 +376,10 @@ function DraftTab({
         channels={draft.sections.channels.map((c) => c.channel)}
         editable={canConsult}
       />
-      <ConsultationLog versionId={draft.id} canRecord={canConsult} />
+      <div hidden={group !== 'consultation'} id={sectionId('consultation')} tabIndex={-1} className="scroll-mt-6 outline-none focus-visible:ring-2 focus-visible:ring-ring"><ConsultationLog versionId={draft.id} canRecord={canConsult} /></div>
     </div>
+    </EditRequestContext.Provider>
+    </BriefGroupContext.Provider>
   );
 }
 
@@ -372,7 +399,7 @@ export function StrategyPage() {
 
   return (
     <>
-      <PageHeader
+      <WorkspaceHeader scene="strategy"
         title={t('strategy.title')}
         description={t('strategy.description')}
         actions={
@@ -392,10 +419,10 @@ export function StrategyPage() {
               </TabsTrigger>
               <TabsTrigger value="draft">{t('strategy.tabs.draft')}</TabsTrigger>
             </TabsList>
-            <TabsContent value="approved">
+            <TabsContent value="approved" className="mt-6">
               <ApprovedTab version={data.approved} canApprove={canApprove} groups={groups.data ?? []} />
             </TabsContent>
-            <TabsContent value="draft">
+            <TabsContent value="draft" className="mt-6">
               <DraftTab
                 draft={data.draft}
                 gaps={data.gaps}
@@ -408,6 +435,7 @@ export function StrategyPage() {
           </Tabs>
         )}
       </QueryState>
+      <StrategyLearned />
       <VersionsSheet open={versionsOpen} onOpenChange={setVersionsOpen} />
     </>
   );

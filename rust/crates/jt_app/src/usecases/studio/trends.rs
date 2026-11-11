@@ -35,7 +35,9 @@ pub struct HypothesisProposalOut {
     pub hypothesis_id: HypothesisId,
 }
 pub async fn trend_record(d: &Deps, ctx: &Ctx, i: TrendInput) -> Result<TrendSignal, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.trend_record",
+    ))?;
     if i.request_key.trim().is_empty()
         || i.request_key.len() > 200
         || i.summary.len() > 4000
@@ -47,7 +49,12 @@ pub async fn trend_record(d: &Deps, ctx: &Ctx, i: TrendInput) -> Result<TrendSig
         ));
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.trend_record"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     let h = r
         .hypotheses()
@@ -116,7 +123,9 @@ pub async fn hypothesis_propose(
     ctx: &Ctx,
     input: HypothesisInput,
 ) -> Result<HypothesisProposalOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.hypothesis_propose",
+    ))?;
     ctx.require(Permission::TeamManage)?;
     if input.id.is_some() {
         return Err(AppError::validation(
@@ -134,7 +143,12 @@ pub async fn hypothesis_propose(
     // Same lock order as strategy editing/approval: draft, frame, control. lock_draft also
     // serializes an absent draft, so the first two concurrent suggestions share its creation.
     let draft = r.strategy().lock_draft().await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.hypothesis_propose"),
+    )
+    .await?;
     let draft = if let Some(v) = draft {
         v
     } else {

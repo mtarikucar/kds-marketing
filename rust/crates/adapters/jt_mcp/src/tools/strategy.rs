@@ -33,7 +33,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           owner the open questions, record each answer, write sections, set \
                           hypotheses, submit; the owner or a manager approves. Gated tools work \
                           only while a version is approved. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: get,
         },
@@ -43,7 +43,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           version (its hypotheses kept) or empty when none is approved. While a \
                           draft is open, returns that draft instead and changes nothing. Returns \
                           the draft with its gaps. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<NoArgs>,
             run: start_consultation,
         },
@@ -52,7 +52,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Record a question put to the owner, the owner's answer, an assumption \
                           made without an answer, or a note in the open draft's consultation \
                           log, optionally about one section. Returns {id}. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<RecordArgs>,
             run: record,
         },
@@ -76,7 +76,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           channels and KPI targets 200; each prohibition 500) are refused with \
                           details.gaps; other missing content is allowed and listed in the \
                           returned draft's gaps. Editing withdraws a submission. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<WriteSectionArgs>,
             run: write_section,
         },
@@ -86,9 +86,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           segment responds to which angle on which channel, measured by a \
                           metric, with a prior confidence from 0 to 1. Give the id of a \
                           hypothesis to keep it; leave the id out to add a new one; one of the \
-                          approved version left out is retired. Returns the draft with its \
+                          approved version left out is retired. A hypothesis posts on social \
+                          accounts only with an organic cadence: leave cadence out and, when \
+                          the strategy posts (cadence.per_week above zero), submitting gives it \
+                          the default (it posts, with the one content type general); give \
+                          cadence.organic to name its own content types, or with \
+                          slots_per_week 0 to say it does not post. Returns the draft with its \
                           gaps. Editing withdraws a submission. [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<SetHypothesesArgs>,
             run: set_hypotheses,
         },
@@ -97,7 +102,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Submit the open draft for approval by the owner or a manager. A draft \
                           with gaps is refused with details.gaps. Returns the submitted draft. \
                           [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<NoArgs>,
             run: submit,
         },
@@ -113,7 +118,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           jeeta.work.pending; a draft that changed since is refused with \
                           CONFLICT, so read it again. Returns the approved version. \
                           [risk: WRITE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<ApproveArgs>,
             run: approve,
         },
@@ -124,7 +129,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           and gated tools stop until another version is approved. Only for a \
                           key of an owner or a manager, and only with confirm: true. An open \
                           draft stays open. [risk: DESTRUCTIVE]",
-            permission: Permission::TeamManage,
+            permissions: &[Permission::TeamManage],
             schema: schema_for::<ArchiveArgs>,
             run: archive,
         },
@@ -133,7 +138,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "List every version of the workspace's strategy, newest first, with \
                           its number, status and dates. Returns {versions: [...]}. \
                           [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: list_versions,
         },
@@ -144,7 +149,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           approval and archiving. Page back with before_at and before_id set to \
                           the at and id of the previous page's last entry. Returns \
                           {entries: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<ConsultationArgs>,
             run: consultation,
         },

@@ -74,7 +74,7 @@ async fn facebook_assets(
 ) -> Result<Vec<Asset>, ConnectorError> {
     let app = connector.graph_app()?;
     let mut assets = pages(connector, &app, token).await?;
-    assets.extend(ad_accounts(connector, &app, cred, token).await?);
+    assets.extend(ad_accounts(connector, cred, token).await?);
     assets.extend(whatsapp_numbers(connector, &app, cred, token).await?);
     Ok(assets)
 }
@@ -175,10 +175,11 @@ async fn pages(
 /// the `act_` prefix (`account_id`).
 async fn ad_accounts(
     connector: &MetaConnector,
-    app: &GraphApp,
     user: &Credential,
     token: &str,
 ) -> Result<Vec<Asset>, ConnectorError> {
+    // Ad accounts are listed on the version their calls are written for.
+    let app = &connector.ads_app()?;
     let rows = match connector
         .graph_pages(
             app,

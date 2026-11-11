@@ -10,6 +10,8 @@ pub mod schema;
 
 pub mod planner;
 pub mod posts;
+pub mod project_schedule;
+pub mod projects;
 pub mod trends;
 pub mod work;
 
@@ -25,3 +27,5 @@ pub mod budget;
 pub mod attribution;
 
 pub mod views;
+
+pub mod permissions;

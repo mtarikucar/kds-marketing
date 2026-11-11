@@ -80,14 +80,6 @@ export const addNote = (id: string, text: string) =>
   request<InboxNote>('POST', `${journey(id)}/notes`, { body: { text } });
 export const getInboxPending = () => request<InboxPendingOut>('GET', `${root}/pending`);
 
-export const listCommissions = (state?: import('./types').CommissionState, payee?: string) =>
-  request<import('./types').InboxCommission[]>('GET', `${root}/commissions`, { query: { state, payee } });
-export const approveCommission = (id: string) =>
-  request<import('./types').InboxCommission>('POST', `${root}/commissions/${seg(id)}/approve`);
-export const payCommission = (id: string) =>
-  request<import('./types').InboxCommission>('POST', `${root}/commissions/${seg(id)}/pay`);
-export const setCommissionRate = (input: { user_id: string | null; rate_bp: number }) =>
-  request<{ user_id: string | null; rate_bp: number }>('PUT', `${root}/commission-rates`, { body: input });
 
 export const erasePerson = (id: string) => request<{ person_id: string; erased: boolean }>('POST', `${root}/people/${seg(id)}/erase`, { body: { confirm: true } });
 
@@ -98,7 +90,7 @@ export const addSuppression = (id: string, channel: import('./types').ContactCha
   request('POST', `${root}/people/${seg(id)}/suppressions`, { body: { channel, reason: 'manual' } });
 export const removeSuppression = (id: string, channel: import('./types').ContactChannel, reason: import('./types').SuppressionReason) =>
   request('DELETE', `${root}/people/${seg(id)}/suppressions/${seg(channel)}/${seg(reason)}`);
-export const sendCommercial = (id: string, input: { channel: import('./types').SendChannel; text: string; intent: 'commercial'; request_key: string }) =>
+export const sendCommercial = (id: string, input: { channel: import('./types').SendChannel; text: string; intent: 'commercial'; request_key: string; subject?: string }) =>
   request<InboxReplyOut>('POST', `${root}/people/${seg(id)}/send`, { body: input });
 export const listQuotes = (id: string) => request<import('./types').InboxQuote[]>('GET', `${journey(id)}/quotes`);
 export const sendQuote = (id: string, input: import('./types').QuoteInput) =>

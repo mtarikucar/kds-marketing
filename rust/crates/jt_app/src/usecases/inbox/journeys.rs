@@ -273,7 +273,7 @@ pub async fn report(
     };
     let kind = event.kind.clone();
     r.journeys().apply_transition(id, transition, event).await?;
-    apply_effects(deps, ctx, r.as_mut(), &journey, &out.effects).await?;
+    apply_effects(r.as_mut(), &journey, &out.effects).await?;
     // A meeting, a win or a loss stops the person's outreach sequence (spec
     // 2026-10-30-leads-pool-outreach-design.md D16).
     crate::usecases::outreach::hooks::on_journey_event(r.as_mut(), ctx, id, &kind).await?;
@@ -285,13 +285,10 @@ pub async fn report(
 }
 
 pub(crate) async fn apply_effects(
-    deps: &Deps,
-    ctx: &Ctx,
     r: &mut dyn TenantRepos,
     journey: &Journey,
     effects: &[JourneyEffect],
 ) -> Result<(), AppError> {
-    let mut unassigned = None;
     for effect in effects {
         match effect {
             JourneyEffect::CloseTasks | JourneyEffect::CancelOpenTasks => {
@@ -304,17 +301,6 @@ pub(crate) async fn apply_effects(
                     if task.status == TaskStatus::Open {
                         r.tasks().set_status(task.id, status).await?;
                     }
-                }
-            }
-            JourneyEffect::CommissionDue {
-                amount_minor,
-                currency,
-            } => {
-                let row =
-                    super::commissions::snapshot(deps, ctx, r, journey, *amount_minor, currency)
-                        .await?;
-                if row.commission.state == CommissionState::NoPayee {
-                    unassigned = Some(row.id);
                 }
             }
             other => {
@@ -334,20 +320,6 @@ pub(crate) async fn apply_effects(
                 }
             }
         }
-    }
-    // Won closes the old work first; this new human follow-up must remain open.
-    if let Some(id) = unassigned {
-        r.tasks()
-            .insert(Task {
-                id: TaskId::from(id),
-                workspace_id: ctx.workspace_id,
-                journey_id: journey.id,
-                title: "Commission has no payee".into(),
-                due_at: ctx.now,
-                assignee: None,
-                status: TaskStatus::Open,
-            })
-            .await?;
     }
     Ok(())
 }

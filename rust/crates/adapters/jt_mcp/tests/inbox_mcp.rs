@@ -5,15 +5,12 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
         .into_iter()
         .filter(|s| s.name.starts_with("jeeta.inbox."))
         .collect();
-    assert_eq!(tools.len(), 53);
+    assert_eq!(tools.len(), 49);
     for tool in tools {
         assert_eq!(tool.input_schema.as_value()["additionalProperties"], false);
         let manage = matches!(
             tool.use_case,
             "inbox.people.erase"
-                | "inbox.commissions.approve"
-                | "inbox.commissions.pay"
-                | "inbox.commission_rates.set"
                 | "inbox.suppressions.add"
                 | "inbox.suppressions.remove"
                 | "inbox.journeys.assign_owner"
@@ -26,12 +23,12 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
                 | "inbox.public.delete"
         );
         assert_eq!(
-            tool.permission,
-            if manage {
+            tool.permissions,
+            &[if manage {
                 Permission::InboxManage
             } else {
                 Permission::InboxWork
-            }
+            }]
         );
     }
 }
@@ -40,10 +37,6 @@ fn inbox_tools_publish_strict_schemas_and_permissions() {
 fn merge_task_and_note_schemas_share_panel_inputs_with_path_ids() {
     use jt_app::usecases::inbox::schema;
     for (action, path_id) in [
-        ("commissions.list", None),
-        ("commission_rates.set", None),
-        ("commissions.approve", Some("commission_id")),
-        ("commissions.pay", Some("commission_id")),
         ("quotes.send", Some("journey_id")),
         ("quotes.accept", Some("quote_id")),
         ("quotes.list", Some("journey_id")),

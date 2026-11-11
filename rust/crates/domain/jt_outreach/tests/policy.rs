@@ -54,9 +54,23 @@ fn b2b_channels_need_the_counsel_confirmation_and_are_email_only() {
     p.legal_ack = Some(ack(false));
     assert!(p.b2b_channels().is_empty(), "the counsel did not confirm");
     p.legal_ack = Some(ack(true));
-    assert_eq!(p.b2b_channels(), vec![Channel::Email]);
-    assert_eq!(B2B_BASIS_CHANNELS, &[Channel::Email]);
-    p.b2b_basis = vec![Channel::Sms];
+    // Every messaging channel the owner opened, in the order stored.
+    assert_eq!(
+        p.b2b_channels(),
+        vec![Channel::Sms, Channel::Email, Channel::WhatsApp]
+    );
+    assert_eq!(
+        B2B_BASIS_CHANNELS,
+        &[
+            Channel::Email,
+            Channel::Sms,
+            Channel::WhatsApp,
+            Channel::InstagramDm,
+            Channel::Messenger
+        ]
+    );
+    // A call or web chat stored there never counts.
+    p.b2b_basis = vec![Channel::Phone, Channel::Webchat];
     assert!(p.b2b_channels().is_empty());
 }
 

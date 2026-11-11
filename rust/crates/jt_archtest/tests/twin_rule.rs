@@ -124,12 +124,18 @@ fn mcp_registry_matches_catalog() {
 /// (`prospects` +1) and the five `research` tools of leads L2 give 181; promotion (`prospects`
 /// +1), the five `distribution` tools and `jeeta.inbox.people_set_kind` (`inbox` +1) of leads L3
 /// give 188; the pool's report (`prospects` +1, leads L4-T6) gives 189; the 18 `outreach` tools
-/// of leads L4-T7 give 207.
+/// of leads L4-T7 give 207; eleven material intelligence and production tools give 218;
+/// nine production-project tools give 231; four declarative module tools give 231; dropping the
+/// four commission tools (2026-11-10, `inbox` -4) gives 231; the two `social` tools that give
+/// a finished content version its time (design 2026-11-10 §7) give 233, the two that read the
+/// social accounts 235, and dropping the lane approval's `jeeta.studio.policy_set` (`studio`
+/// -1: the approval that remains is each connection's own, design B35) gives 234.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("agent", 1),
     ("workspace", 1),
+    ("modules", 4),
     ("billing", 1),
     ("team", 4),
     ("roles", 4),
@@ -138,7 +144,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("ledger", 1),
     ("strategy", 10),
     ("capability", 16),
-    ("budget", 6),
+    ("budget", 7),
     ("work", 3),
     ("connector", 8),
     ("calls", 9),
@@ -148,16 +154,19 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("distribution", 5),
     ("outreach", 18),
     ("events", 3),
-    ("inbox", 53),
-    ("studio", 35),
+    ("inbox", 49),
+    ("studio", 54),
+    ("content", 4),
+    ("social", 4),
+    ("ads", 9),
 ];
 
 #[test]
-fn the_registry_holds_207_tools() {
+fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 207);
+    assert_eq!(specs.len(), 244);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 207);
+    assert_eq!(total, 244);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -166,18 +175,31 @@ fn the_registry_holds_207_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 207);
+    assert_eq!(catalog, 244);
 }
 
-/// An MCP-only use case has no human caller: only an agent's check-in is one.
+/// These MCP-only use cases are agent workflows without a panel route.
 #[test]
-fn only_the_agent_check_in_is_mcp_only() {
+fn agent_workflows_are_mcp_only() {
     let mcp_only: Vec<&str> = CATALOG
         .iter()
         .filter(|uc| uc.mcp_only)
         .map(|uc| uc.id)
         .collect();
-    assert_eq!(mcp_only, ["work.checkin"]);
+    assert_eq!(
+        mcp_only.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            // An agent proposes an ad campaign; a person opens one in the panel.
+            "ads.campaign_propose",
+            "work.checkin",
+            "studio.material_analysis_claim",
+            "studio.material_analysis_complete",
+            "studio.material_analysis_fail",
+            "studio.material_production_claim",
+            "studio.material_production_complete",
+            "studio.material_production_fail",
+        ])
+    );
 }
 
 /// These operations explicitly demand confirmation in addition to permission checks.
@@ -292,7 +314,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 245);
+    assert_eq!(CATALOG.len(), 295);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

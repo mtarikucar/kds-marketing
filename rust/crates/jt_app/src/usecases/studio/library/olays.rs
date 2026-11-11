@@ -129,7 +129,10 @@ fn client_person(client: Option<&OlayClient>) -> Option<uuid::Uuid> {
 
 /// Every olay, newest start first, with its live materials' count; `status` filters.
 pub async fn olays_list(d: &Deps, ctx: &Ctx, q: OlaysQuery) -> Result<Vec<OlayListItem>, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.olays_list",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let materials = r.studio_materials().list_materials().await?;
     Ok(r.studio_materials()
         .list_olays()
@@ -148,7 +151,10 @@ pub async fn olays_list(d: &Deps, ctx: &Ctx, q: OlaysQuery) -> Result<Vec<OlayLi
 
 /// The olay with its materials, their uses and its open requests.
 pub async fn olay_get(d: &Deps, ctx: &Ctx, i: OlayIdInput) -> Result<OlayDetail, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.olay_get",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let olay = r
         .studio_materials()
         .get_olay(i.olay_id)
@@ -185,9 +191,12 @@ fn summary(o: &Olay) -> Value {
 /// Creates an olay: confirmed when an owner or manager creates it in person (D3), proposed when an
 /// agent or another person does. Replayed by `request_key`, answering the olay as it is now (D40).
 pub async fn olay_create(d: &Deps, ctx: &Ctx, i: OlayCreateInput) -> Result<Olay, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.olay_create",
+    ))?;
     key(&i.request_key)?;
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let person = client_person(i.client.as_ref());
     if person.is_some() {
         r.people().lock_workspace().await?;
@@ -246,9 +255,12 @@ pub async fn olay_create(d: &Deps, ctx: &Ctx, i: OlayCreateInput) -> Result<Olay
 }
 
 /// Changes an olay at its expected revision. A proposed olay may be changed by anyone with
-/// `studio.work`; a confirmed one only by an owner or manager in person (an agent may not move a
+/// `materials.work`; a confirmed one only by an owner or manager in person (an agent may not move a
 /// confirmed event's dates or client).
 pub async fn olay_update(d: &Deps, ctx: &Ctx, i: OlayUpdateInput) -> Result<Olay, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.olay_update",
+    ))?;
     let mut changed: Vec<&str> = Vec::new();
     for (field, given) in [
         ("kind", i.kind.is_some()),
@@ -276,7 +288,7 @@ pub async fn olay_update(d: &Deps, ctx: &Ctx, i: OlayUpdateInput) -> Result<Olay
             "occasion",
         ]));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let person = i.client.as_ref().and_then(|c| client_person(c.as_ref()));
     if person.is_some() {
         r.people().lock_workspace().await?;
@@ -347,8 +359,11 @@ pub async fn olay_update(d: &Deps, ctx: &Ctx, i: OlayUpdateInput) -> Result<Olay
 /// A human owner or manager confirms a proposed olay (D3, D4): from now on its materials may be
 /// eligible.
 pub async fn olay_confirm(d: &Deps, ctx: &Ctx, i: OlayConfirmInput) -> Result<Olay, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.olay_confirm",
+    ))?;
     let by = super::super::control::human_approver(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let current = r
         .studio_materials()

@@ -12,15 +12,23 @@ use jt_app::{
     },
 };
 use jt_archtest::{direct_deps, rust_sources_in, workspace_dir};
-use jt_tenancy::{Permission, WorkspaceId, WorkspaceStatus};
+use jt_tenancy::{WorkspaceId, WorkspaceStatus};
 use jt_testkit::fakes::{ConnectorCall, FIXED_NOW};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, sync::Arc};
 use syn::visit::Visit;
 
 const ACTIONS: &[&str] = &[
+    "project_list",
+    "project_create",
+    "project_get",
+    "project_update",
+    "project_materials",
+    "project_request",
+    "project_request_update",
+    "project_publication",
+    "project_schedule",
     "brake",
-    "policy_set",
     "approve",
     "pending",
     "slot_get",
@@ -43,6 +51,17 @@ const ACTIONS: &[&str] = &[
     "olay_update",
     "materials_list",
     "material_get",
+    "material_intelligence_list",
+    "material_intelligence_get",
+    "material_preview",
+    "material_analysis_retry",
+    "material_analysis_claim",
+    "material_analysis_complete",
+    "material_analysis_fail",
+    "material_production_list",
+    "material_production_claim",
+    "material_production_complete",
+    "material_production_fail",
     "material_add",
     "material_tag",
     "slot_materials",
@@ -57,6 +76,15 @@ const ACTIONS: &[&str] = &[
 ];
 /// The materials library and its uploads need no approved strategy (spec 2026-11-03 D35).
 const EXEMPT: &[&str] = &[
+    "project_list",
+    "project_create",
+    "project_get",
+    "project_update",
+    "project_materials",
+    "project_request",
+    "project_request_update",
+    "project_publication",
+    "project_production",
     "brake",
     "ledger",
     "ledger_export",
@@ -67,6 +95,17 @@ const EXEMPT: &[&str] = &[
     "olay_update",
     "materials_list",
     "material_get",
+    "material_intelligence_list",
+    "material_intelligence_get",
+    "material_preview",
+    "material_analysis_retry",
+    "material_analysis_claim",
+    "material_analysis_complete",
+    "material_analysis_fail",
+    "material_production_list",
+    "material_production_claim",
+    "material_production_complete",
+    "material_production_fail",
     "material_add",
     "material_tag",
     "slot_materials",
@@ -81,12 +120,15 @@ const EXEMPT: &[&str] = &[
     "material_delete",
     "calendar_set",
     "material_policy_set",
+    "material_intelligence_update",
+    "material_production_request",
 ];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
 /// (TikTok's Content Sharing Guidelines), and its published post's counters.
 /// The materials library's human decisions (D4), releasing a slot's caption findings (§7) among
 /// them, are panel routes without a tool too.
 const PANEL_ONLY: &[&str] = &[
+    "project_production",
     "tiktok_posting",
     "tiktok_post",
     "tiktok_metrics",
@@ -99,6 +141,8 @@ const PANEL_ONLY: &[&str] = &[
     "material_policy_set",
     "material_check_release",
     "posting_policy_set",
+    "material_intelligence_update",
+    "material_production_request",
 ];
 fn set<'a>(values: impl IntoIterator<Item = &'a str>) -> BTreeSet<&'a str> {
     values.into_iter().collect()
@@ -110,7 +154,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 47);
+    assert_eq!(rows.len(), 69);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -151,7 +195,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 207);
+    assert_eq!(jt_mcp::registry().len(), 244);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -174,11 +218,13 @@ async fn studio_exact_catalog_and_gate_set() {
     // items, subjects and cursors of 0019_inbox_public, the five pool tables of 0020_prospects,
     // the materials library's seven of 0021_studio_materials, the planned posts, package requests
     // and posting policy of 0022_studio_posts, the four outreach tables of 0026_outreach, the
-    // three distribution tables of 0027_distribution and the mail files of 0028_mail_files.
-    assert_eq!(all_tables.len(), 100);
+    // three distribution tables of 0027_distribution, mail files of 0028_mail_files, and
+    // material intelligence and productions of 0029 and 0030, production projects of 0031,
+    // the workspace module registry of 0032, the account snapshots of 0037_social_accounts and
+    // the ad campaigns of 0040_ads_campaigns.
+    assert_eq!(all_tables.len(), 106);
 
-    // All twenty-four Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
-    // 0021_studio_materials, three of 0022_studio_posts.
+    // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(
         set(tables
             .iter()
@@ -189,6 +235,7 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_slots",
             "studio_pieces",
             "studio_files",
+            "studio_production_projects",
             "studio_publications",
             "studio_publish_attempts",
             "studio_measurements",
@@ -201,6 +248,8 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_request_keys",
             "studio_olays",
             "studio_materials",
+            "studio_material_intelligence",
+            "studio_material_productions",
             "studio_piece_materials",
             "studio_calendar_entries",
             "studio_shoot_requests",
@@ -255,13 +304,18 @@ fn calls(f: &syn::ItemFn) -> Vec<String> {
 fn all_studio_rows_have_handler_tool_and_schema_parity() {
     let http = syntax("crates/adapters/jt_panel_http/src/routes/studio.rs");
     let mcp = syntax("crates/adapters/jt_mcp/src/tools/studio.rs");
+    let project_mcp = syntax("crates/adapters/jt_mcp/src/tools/projects.rs");
     let registry = jt_mcp::registry();
     for action in ACTIONS {
         let row = CATALOG
             .iter()
             .find(|r| r.id == format!("studio.{action}"))
             .unwrap();
-        assert!(jt_panel_http::ROUTES.contains(&row.panel_route.unwrap()));
+        if let Some(route) = row.panel_route {
+            assert!(jt_panel_http::ROUTES.contains(&route));
+        } else {
+            assert!(row.mcp_only, "{action}");
+        }
         let tool = registry
             .iter()
             .find(|t| Some(t.name) == row.mcp_tool)
@@ -270,16 +324,151 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
         assert_eq!(tool.input_schema.as_value(), &expected);
         assert_eq!(expected["additionalProperties"], false);
         assert_eq!(
-            tool.permission,
-            if ["brake", "policy_set", "approve", "budget_move"].contains(action) {
-                Permission::StudioManage
-            } else {
-                Permission::StudioWork
+            tool.permissions,
+            match *action {
+                "file_upload" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_add" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_get" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "materials_list" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_preview" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_tag" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_bind" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_free" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_permission" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_delete" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_intelligence_get" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_intelligence_list" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_intelligence_update" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_analysis_claim" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_analysis_complete" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_analysis_fail" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_analysis_retry" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "olay_create" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "olay_update" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "olay_get" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "olays_list" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "olay_confirm" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "shoot_list" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "shoot_request" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "shoot_resolve" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "piece_submit" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "slot_materials" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "material_check_release" => &[jt_tenancy::Permission::MaterialsWork][..],
+                "project_create" => &[jt_tenancy::Permission::ContentManage][..],
+                "project_get" => &[jt_tenancy::Permission::ContentWork][..],
+                "project_list" => &[jt_tenancy::Permission::ContentWork][..],
+                "project_update" => &[jt_tenancy::Permission::ContentManage][..],
+                "project_materials" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::ContentManage,
+                ][..],
+                "project_request" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::ContentManage,
+                ][..],
+                "project_request_update" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::ContentManage,
+                ][..],
+                "project_production" => &[jt_tenancy::Permission::ContentManage][..],
+                "material_production_request" => &[jt_tenancy::Permission::ContentWork][..],
+                "material_production_list" => &[jt_tenancy::Permission::ContentWork][..],
+                "material_production_claim" => &[jt_tenancy::Permission::ContentWork][..],
+                "material_production_complete" => &[jt_tenancy::Permission::ContentWork][..],
+                "material_production_fail" => &[jt_tenancy::Permission::ContentWork][..],
+                "calendar_list" => &[jt_tenancy::Permission::ContentWork][..],
+                "calendar_set" => &[jt_tenancy::Permission::ContentWork][..],
+                "material_policy_set" => &[jt_tenancy::Permission::ContentWork][..],
+                "project_publication" => &[jt_tenancy::Permission::SocialWork][..],
+                "post_requests" => &[jt_tenancy::Permission::SocialWork][..],
+                "posts_propose" => &[jt_tenancy::Permission::SocialWork][..],
+                "posts_list" => &[jt_tenancy::Permission::SocialWork][..],
+                "posting_policy_set" => &[jt_tenancy::Permission::SocialWork][..],
+                "weekly_summary" => &[jt_tenancy::Permission::SocialWork][..],
+                "slot_get" => &[jt_tenancy::Permission::SocialWork][..],
+                "slot_cancel" => &[jt_tenancy::Permission::SocialWork][..],
+                "tiktok_metrics" => &[jt_tenancy::Permission::SocialWork][..],
+                "project_schedule" => &[jt_tenancy::Permission::SocialManage][..],
+                "tiktok_posting" => &[jt_tenancy::Permission::SocialManage][..],
+                "tiktok_post" => &[jt_tenancy::Permission::SocialManage][..],
+                "adsets_list" => &[jt_tenancy::Permission::AdsWork][..],
+                "adset_bind" => &[jt_tenancy::Permission::AdsWork][..],
+                "budget_move" => &[jt_tenancy::Permission::AdsManage][..],
+                "overview" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork,
+                    jt_tenancy::Permission::MaterialsWork,
+                    jt_tenancy::Permission::SocialManage,
+                    jt_tenancy::Permission::AdsManage,
+                    jt_tenancy::Permission::BudgetManage
+                ][..],
+                "pending" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork,
+                    jt_tenancy::Permission::MaterialsWork,
+                    jt_tenancy::Permission::SocialManage,
+                    jt_tenancy::Permission::AdsManage,
+                    jt_tenancy::Permission::BudgetManage
+                ][..],
+                "learned" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork,
+                    jt_tenancy::Permission::MaterialsWork
+                ][..],
+                "ledger" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork,
+                    jt_tenancy::Permission::MaterialsWork
+                ][..],
+                "ledger_export" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork,
+                    jt_tenancy::Permission::MaterialsWork
+                ][..],
+                "judgment_record" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork
+                ][..],
+                "trend_record" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork
+                ][..],
+                "hypothesis_propose" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::SocialWork,
+                    jt_tenancy::Permission::AdsWork
+                ][..],
+                "brake" => &[
+                    jt_tenancy::Permission::SocialManage,
+                    jt_tenancy::Permission::AdsManage,
+                    jt_tenancy::Permission::BudgetManage
+                ][..],
+                "approve" => &[
+                    jt_tenancy::Permission::SocialManage,
+                    jt_tenancy::Permission::AdsManage
+                ][..],
+                _ => panic!("unexpected Studio tool {action}"),
             }
         );
         // Parse both real implementations: a route-table entry alone is insufficient.
         // The same application function must be called by each actual handler.
-        for file in [&http, &mcp] {
+        let tool_source = if action.starts_with("project_") {
+            &project_mcp
+        } else {
+            &mcp
+        };
+        for file in if row.mcp_only {
+            vec![tool_source]
+        } else {
+            vec![&http, tool_source]
+        } {
             let handlers = functions(file);
             let handler = handlers.iter().find(|f| f.sig.ident == *action).unwrap();
             assert!(
@@ -310,12 +499,36 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
     let h = w.f.arm.key.hypothesis_id;
     vec![
         (
-            "brake",
-            json!({"engaged":true,"lane":null,"expected_revision":0}),
+            "project_create",
+            json!({"request_key":"project","title":"Production","brief":"Prepare real material"}),
         ),
         (
-            "policy_set",
-            json!({"lane":"organic","requires_human_approval":false,"expected_revision":0}),
+            "project_update",
+            json!({"project_id":id,"expected_revision":1,"brief":"Revised"}),
+        ),
+        (
+            "project_materials",
+            json!({"project_id":id,"expected_revision":1,"add":[w.material().id]}),
+        ),
+        (
+            "project_request",
+            json!({"project_id":id,"expected_revision":1,"request_key":"project-request","text":"Upload a source"}),
+        ),
+        (
+            "project_request_update",
+            json!({"project_id":id,"request_id":id,"expected_revision":1,"status":"dismissed"}),
+        ),
+        (
+            "project_publication",
+            json!({"project_id":id,"output_id":id,"slot_id":id,"expected_revision":1}),
+        ),
+        (
+            "project_schedule",
+            json!({"project_id":id,"output_id":id,"expected_revision":1,"request_key":"project-schedule","hypothesis_id":h,"material_ids":[w.material().id]}),
+        ),
+        (
+            "brake",
+            json!({"engaged":true,"lane":null,"expected_revision":0}),
         ),
         (
             "approve",
@@ -368,6 +581,34 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
         (
             "material_tag",
             json!({"material_id":w.material().id,"expected_revision":1,"doors":[]}),
+        ),
+        (
+            "material_analysis_retry",
+            json!({"material_id":w.material().id,"expected_revision":1}),
+        ),
+        (
+            "material_analysis_claim",
+            json!({"material_id":w.material().id,"expected_revision":1}),
+        ),
+        (
+            "material_analysis_complete",
+            json!({"material_id":w.material().id,"expected_revision":1,"claim_token":"test","description":"test","labels":[],"date_source":"unknown"}),
+        ),
+        (
+            "material_analysis_fail",
+            json!({"material_id":w.material().id,"expected_revision":1,"claim_token":"test","error_code":"test"}),
+        ),
+        (
+            "material_production_claim",
+            json!({"production_id":id,"expected_revision":1}),
+        ),
+        (
+            "material_production_complete",
+            json!({"production_id":id,"expected_revision":1,"claim_token":"test","output_material_id":w.material().id}),
+        ),
+        (
+            "material_production_fail",
+            json!({"production_id":id,"expected_revision":1,"claim_token":"test","error_code":"test"}),
         ),
         (
             "shoot_request",
@@ -425,7 +666,22 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 .find(|t| t.use_case == format!("studio.{action}"))
                 .unwrap();
             // Call the dispatcher directly: deliberately bypass the MCP middleware gate.
-            let e = (tool.run)(&w.d, &w.ctx, args).await.unwrap_err();
+            let mut agent_ctx = w.ctx.clone();
+            if (action.starts_with("material_analysis_") && action != "material_analysis_retry")
+                || action.starts_with("material_production_")
+            {
+                let connection_id = jt_tenancy::AgentConnectionId::new_v7();
+                let user_id = match w.ctx.actor {
+                    jt_ledger::Actor::Human { user_id } => user_id,
+                    _ => panic!("fixture expects a human"),
+                };
+                agent_ctx.actor = jt_ledger::Actor::Agent {
+                    connection_id,
+                    user_id,
+                };
+                agent_ctx.agent_connection_id = Some(connection_id);
+            }
+            let e = (tool.run)(&w.d, &agent_ctx, args).await.unwrap_err();
             assert_eq!(
                 e.code,
                 if inactive {
@@ -701,6 +957,7 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "ConsentSync",
             "InsightsReader",
             "AdBudgetWriter",
+            "AdCampaignWriter",
             "LeadGenFetcher",
             "OAuthProvider",
             // Replies, moderation and polls on public items (comments, marketplace questions):
@@ -721,14 +978,8 @@ fn studio_has_no_ai_media_or_trend_provider() {
         for f in functions(&ast) {
             for call in calls(f) {
                 assert!(
-                    ![
-                        "fetch_lead",
-                        "commissions",
-                        "installations",
-                        "generate",
-                        "scrape_trends"
-                    ]
-                    .contains(&call.as_str()),
+                    !["fetch_lead", "installations", "generate", "scrape_trends"]
+                        .contains(&call.as_str()),
                     "{}: {call}",
                     file.display()
                 );
@@ -776,7 +1027,75 @@ fn no_paid_creation_api() {
         .map(str::to_owned)
         .collect()
     );
-    // Product catalog's exhaustive 41-name assertion above precludes creation/commission/setup tools.
+    // Product catalog's exhaustive 41-name assertion above precludes creation/setup tools.
+}
+/// Jeeta builds ad campaigns itself (design 2026-11-10 B11), in one place: only the campaign
+/// builder calls the provider's creation port, and what it builds is activated only after the
+/// campaign's budget was held against every limit.
+#[test]
+fn only_the_campaign_builder_creates_at_the_ad_platform() {
+    const CREATION: [&str; 6] = [
+        "create_campaign",
+        "create_adset",
+        "create_creative",
+        "create_ad",
+        "create_lead_form",
+        "upload_image",
+    ];
+    let mut sites = BTreeSet::new();
+    for (file, source) in rust_sources_in(&workspace_dir().join("crates/jt_app"))
+        .into_iter()
+        .filter(|(p, _)| p.to_string_lossy().contains("/src/"))
+    {
+        let ast = syn::parse_file(&source).unwrap();
+        for f in functions(&ast) {
+            for call in calls(f) {
+                if CREATION.contains(&call.as_str()) {
+                    sites.insert(
+                        file.strip_prefix(workspace_dir())
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(
+        sites,
+        BTreeSet::from(["crates/jt_app/src/usecases/ads/build.rs".to_owned()]),
+        "a provider object is created by the campaign builder alone"
+    );
+    let ast = syntax("crates/jt_app/src/usecases/ads/build.rs");
+    let funcs = functions(&ast);
+    let activate = funcs
+        .iter()
+        .find(|f| f.sig.ident == "activate")
+        .expect("the builder activates what it built");
+    assert!(
+        calls(activate).iter().any(|c| c == "check_money"),
+        "activation holds the campaign's budget against every limit first"
+    );
+    // Opening, approving and planning commit money: each asks the same gate.
+    let ast = syntax("crates/jt_app/src/usecases/ads/mod.rs");
+    let funcs = functions(&ast);
+    for name in ["campaign_open", "campaign_approve", "campaign_resume"] {
+        let f = funcs
+            .iter()
+            .find(|f| f.sig.ident == name)
+            .unwrap_or_else(|| panic!("missing ads::{name}"));
+        assert!(
+            calls(f).iter().any(|c| c == "check_money"),
+            "ads::{name} commits money without the gate"
+        );
+    }
+    let ast = syntax("crates/jt_app/src/usecases/ads/plan.rs");
+    let funcs = functions(&ast);
+    let submit = funcs
+        .iter()
+        .find(|f| f.sig.ident == "plan_submit")
+        .expect("ads::plan::plan_submit");
+    assert!(calls(submit).iter().any(|c| c == "check_money"));
 }
 #[tokio::test]
 async fn only_learning_updates_derived_confidence() {
@@ -879,7 +1198,17 @@ fn spend_sites(source: &str) -> BTreeSet<(String, String)> {
     let mut sites = BTreeSet::new();
     for f in functions(&ast) {
         for name in calls(f) {
-            if ["publish", "set_daily_budget", "send", "send_text"].contains(&name.as_str()) {
+            // `schedule` leaves a post with its platform's own scheduler (design 2026-11-10
+            // §7.3): a write that publishes, as `publish` is.
+            if [
+                "publish",
+                "schedule",
+                "set_daily_budget",
+                "send",
+                "send_text",
+            ]
+            .contains(&name.as_str())
+            {
                 sites.insert((f.sig.ident.to_string(), name));
             }
         }
@@ -928,6 +1257,11 @@ fn all_connector_write_sites_have_reservation_paths() {
             "publish".into(),
         ),
         (
+            "crates/jt_app/src/usecases/studio/publish.rs".into(),
+            "hold_ahead".into(),
+            "schedule".into(),
+        ),
+        (
             "crates/jt_app/src/usecases/studio/ads.rs".into(),
             "dispatch_move".into(),
             "set_daily_budget".into(),
@@ -949,6 +1283,7 @@ fn all_connector_write_sites_have_reservation_paths() {
     );
     for (file, function, required) in [
         ("studio/publish.rs", "publish_due", "reserve_metered"),
+        ("studio/publish.rs", "hold_ahead", "reserve_metered"),
         ("studio/ads.rs", "dispatch_move", "reserve_connector_spend"),
         (
             "studio/control.rs",
@@ -956,7 +1291,8 @@ fn all_connector_write_sites_have_reservation_paths() {
             "reserve_connector_spend",
         ),
         ("inbox/replies.rs", "send_step", "claim"),
-        ("inbox/replies.rs", "claim", "reserve_metered"),
+        // The inbox names the module that spends (a campaign's step, else the inbox).
+        ("inbox/replies.rs", "claim", "reserve_metered_for"),
     ] {
         let ast = syntax(&format!("crates/jt_app/src/usecases/{file}"));
         let funcs = functions(&ast);

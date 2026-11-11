@@ -6,14 +6,7 @@ import { request, seg } from './client';
 // `jt_app::usecases::studio::library`. Calendar days are `YYYY-MM-DD`; instants RFC 3339.
 
 /** `jt_studio::OlayKind`, every variant. */
-export const OLAY_KINDS = [
-  'workshop',
-  'order',
-  'season',
-  'special_day',
-  'product_shoot',
-  'other',
-] as const;
+export const OLAY_KINDS = ['workshop', 'order', 'season', 'special_day', 'product_shoot', 'other'] as const;
 export type OlayKind = (typeof OLAY_KINDS)[number];
 /** Whether an olay of `kind` lives in a calendar occasion's windows (it names its `occasion`). */
 export const isSeasonal = (kind: OlayKind) => kind === 'season' || kind === 'special_day';
@@ -92,6 +85,8 @@ export type ContentType = (typeof CONTENT_TYPES)[number];
 export type Quality = (typeof QUALITIES)[number];
 export type Depicts = (typeof DEPICTS)[number];
 export interface Tags {
+  /** Workspace-specific labels; absent on records from older servers. */
+  labels?: string[];
   product_groups: ProductGroup[];
   doors: Door[];
   content_types: ContentType[];
@@ -164,6 +159,7 @@ export interface MaterialAddInput {
   genel?: boolean;
   origin: Origin;
   title?: string;
+  labels?: string[];
   product_groups?: ProductGroup[];
   doors?: Door[];
   content_types?: ContentType[];
@@ -180,6 +176,9 @@ export interface MaterialAddOut {
 }
 /** Each field given replaces that set (`[]` empties it; `quality: null` clears it). */
 export interface MaterialTagInput {
+  title?: string;
+  captured_at?: string | null;
+  labels?: string[];
   product_groups?: ProductGroup[];
   doors?: Door[];
   content_types?: ContentType[];
@@ -188,6 +187,41 @@ export interface MaterialTagInput {
   people?: string[];
 }
 export type MaterialState = 'live' | 'erased' | 'needs_review' | 'all';
+
+export type MaterialProductionKind = 'edit' | 'crop' | 'poster';
+export interface MaterialProduction {
+  id: string;
+  workspace_id: string;
+  kind: MaterialProductionKind;
+  instructions: string;
+  sources: { material_id: string; expected_revision: number }[];
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  output_material_id: string | null;
+  last_error_code: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+export interface MaterialIntelligence {
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  description: string;
+  group_name: string | null;
+  date_source: 'unknown' | 'exif' | 'file_modified' | 'agent_inferred' | 'manual';
+  attempts: number;
+  analyzed_revision: number | null;
+  last_error_code: string | null;
+  analyzed_at: string | null;
+  updated_at: string;
+  manual_fields: string[];
+}
+export interface MaterialIntelligenceOut {
+  material: Material;
+  intelligence: MaterialIntelligence | null;
+}
+export interface MaterialMetadataInput {
+  description?: string;
+  group_name?: string | null;
+}
 
 /** What a piece speaks about (spec D7). */
 export type Subject =
@@ -228,6 +262,8 @@ export interface MaterialPolicy {
   lead_days: number;
   reuse_days: number;
   recap_days: number;
+  /** Whether a visual the agent made may be content's only material (design B39). */
+  ai_standalone: boolean;
 }
 export interface CalendarOut {
   year: number;
@@ -280,17 +316,34 @@ export const olayConfirm = (id: string, expected_revision: number) =>
 export const materialsList = (q: { olay_id?: string; state?: MaterialState } = {}) =>
   request<Material[]>('GET', `${root}/materials`, { query: { ...q } });
 export const materialGet = (id: string) => request<MaterialDetail>('GET', material(id));
+export const materialProductions = (source_material_id: string) =>
+  request<MaterialProduction[]>('GET', `${root}/material-productions`, { query: { source_material_id } });
+export const materialProductionRequest = (body: {
+  request_key: string;
+  kind: MaterialProductionKind;
+  instructions: string;
+  sources: { material_id: string; expected_revision: number }[];
+}) => request<MaterialProduction>('POST', `${root}/material-productions`, { body });
+export const materialIntelligenceList = () =>
+  request<MaterialIntelligenceOut[]>('GET', `${root}/material-intelligence`);
+export const materialIntelligence = (id: string) =>
+  request<MaterialIntelligenceOut>('GET', `${material(id)}/intelligence`);
+export const materialAnalysisRetry = (id: string, expected_revision: number) =>
+  request<MaterialIntelligenceOut>('POST', `${material(id)}/analysis/retry`, { body: { expected_revision } });
+export const materialMetadata = (id: string, expected_revision: number, body: MaterialMetadataInput) =>
+  request<MaterialIntelligenceOut>('PATCH', `${material(id)}/intelligence`, {
+    body: { ...body, expected_revision },
+  });
+export const materialPreview = (id: string) =>
+  request<{ url: string; expires_at: string }>('GET', `${material(id)}/preview`);
+
 /** Adds a file stored by `studio.file_upload` (`fileUpload`) as a material. */
 export const materialAdd = (body: MaterialAddInput) =>
   request<MaterialAddOut>('POST', `${root}/materials`, { body });
 export const materialTag = (id: string, expected_revision: number, body: MaterialTagInput) =>
   request<Material>('PATCH', `${material(id)}/tags`, { body: { ...body, expected_revision } });
 /** Owner or manager (panel only); revoking is `not_shareable`. */
-export const materialPermission = (
-  id: string,
-  expected_revision: number,
-  permission: SharePermission,
-) =>
+export const materialPermission = (id: string, expected_revision: number, permission: SharePermission) =>
   request<Material>('PUT', `${material(id)}/permission`, {
     body: { expected_revision, permission },
   });

@@ -247,7 +247,7 @@ async fn a_slot_already_sent_is_not_offered_for_approval_again() {
     let slot = ApprovalTarget::Slot(w.f.slot.id);
     c.push_publish(Err(ConnectorError::permanent("HTTP 402 CreditsDepleted")));
     publish_due(&w.d, w.f.ws).await.unwrap();
-    w.policy(true, 0).await;
+    w.approval(true).await;
     // The content supplied again is a new revision, but no revision of a sent slot is sent.
     let mut piece = w.f.piece.clone();
     piece.id = jt_studio::PieceId::new_v7();
@@ -552,7 +552,7 @@ async fn background_publication_times_out_after_the_window() {
 #[tokio::test]
 async fn held_consent_and_future_slot_do_not_create_attempts() {
     let (w, c) = world().await;
-    w.policy(true, 0).await;
+    w.approval(true).await;
     // Waiting for its approval is not a failure.
     assert_eq!(publish_due(&w.d, w.f.ws).await.unwrap(), 0);
     assert_eq!(sends(&c), 0);

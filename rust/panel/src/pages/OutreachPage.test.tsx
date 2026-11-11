@@ -30,4 +30,26 @@ describe('OutreachPage', () => {
       ),
     );
   });
+
+  it('clears an empty status filter and returns to the unfiltered campaigns', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      'GET /api/auth/me': leadsMe,
+      'GET /api/outreach/settings': outreachSettings,
+      'GET /api/outreach/campaigns': { items: [], next: null },
+    });
+    renderAt('/outreach');
+    await screen.findByText(tr.leads.outreach.empty, {}, LOADED);
+    const status = screen.getByRole('combobox', { name: tr.leads.outreach.statusFilter });
+    await user.selectOptions(status, 'running');
+    const title = await screen.findByText(tr.leads.filteredEmpty.title);
+    const empty = title.parentElement!.parentElement!;
+    expect(within(empty).queryByRole('link', { name: tr.leads.outreach.newCampaign })).not.toBeInTheDocument();
+    await waitFor(() => expect(new URLSearchParams(calls.filter((c) => c.path === '/api/outreach/campaigns').at(-1)!.search).get('status')).toBe('running'));
+    await user.click(within(empty).getByRole('button', { name: tr.leads.filteredEmpty.clear }));
+    expect(status).toHaveValue('');
+    await waitFor(() => expect(new URLSearchParams(calls.filter((c) => c.path === '/api/outreach/campaigns').at(-1)!.search).get('status')).toBeNull());
+    expect(await screen.findByText(tr.leads.outreach.empty)).toBeInTheDocument();
+  });
+
 });

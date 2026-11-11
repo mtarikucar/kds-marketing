@@ -495,6 +495,16 @@ impl MailboxCursor {
 /// caption (then `text`, with no `link`), the privacy (then also `privacy`), the interactions and
 /// the commercial content disclosure. The TikTok adapter posts nothing without it and never
 /// picks a privacy itself; every other adapter ignores it.
+///
+/// `format` is the planned post's (`jt_studio::PostFormat`, spec 2026-11-03 D20), `None` for a
+/// slot of the weekly quotas. Instagram publishes a `story` as a `STORIES` container (one medium,
+/// no caption) and refuses a story it cannot post as one; every other format, and every other
+/// adapter, goes by the media as before.
+///
+/// `media_mimes` is the type of each of `media_urls`, in order (`image/jpeg`, `video/mp4`), as
+/// the file store or the hosted asset names it: an adapter that hands URLs to a provider tells an
+/// image from a video by it, never by the URL (a Studio file's signed URL names no file type).
+/// Empty when unknown (a request built by hand): the adapter then reads the URL's ending.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishRequest {
     pub text: String,
@@ -509,12 +519,18 @@ pub struct PublishRequest {
     /// The TikTok posting screen's choice (see above).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiktok: Option<TiktokPost>,
+    /// The planned post's format, when the slot carries one (see above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<PostFormat>,
+    /// The type of each of `media_urls`, in order (see above).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_mimes: Vec<String>,
 }
 
 // Shared pure transport records; existing Publisher and FileStore signatures are unchanged.
 pub use jt_studio::{
-    MediaUpload, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost, TiktokPostFlags,
-    TiktokPostMode, TiktokPostRefusal,
+    MediaUpload, PostFormat, PublishReceipt, TiktokCreator, TiktokMedia, TiktokPost,
+    TiktokPostFlags, TiktokPostMode, TiktokPostRefusal,
 };
 
 /// One post's counters, by the provider's metric name (e.g. `"impressions"`, `"likes"`).
@@ -1052,19 +1068,32 @@ pub trait Connector: Send + Sync {
     }
 }
 
+/// The provider's commercial-consent filter an SMS goes out under (NetGSM's `iysfilter`, the
+/// İYS check of the recipient).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SmsConsentFilter {
+    /// An informational reply: no filter.
+    None,
+    /// A commercial message to an individual: only with their İYS consent.
+    Individual,
+    /// A commercial message to a business (a merchant, `tacir`), sent on the business-recipient
+    /// basis: İYS's merchant filter.
+    Business,
+}
+
 /// Sends SMS.
 #[async_trait]
 pub trait SmsSender: Send + Sync {
     /// Sends `text` to `to` (a phone number), with the caller's `reference` for correlating
-    /// delivery reports when given. `commercial` enables the provider's commercial consent
-    /// filter (NetGSM İYS); informational replies pass `false`.
+    /// delivery reports when given, under the provider's consent `filter` (NetGSM İYS):
+    /// informational replies pass [`SmsConsentFilter::None`].
     async fn send(
         &self,
         cred: &Credential,
         to: &str,
         text: &str,
         reference: Option<&str>,
-        commercial: bool,
+        filter: SmsConsentFilter,
     ) -> Result<SendReceipt, ConnectorError>;
 }
 
@@ -1096,6 +1125,21 @@ pub trait Publisher: Send + Sync {
         public: &Value,
         request: &PublishRequest,
     ) -> Result<PublishReceipt, ConnectorError>;
+    /// Whether the post `external_id` (a receipt's id) is on the provider, read back by its id
+    /// alone (Meta: `GET /{id}?fields=id`): how an observed attempt whose post has no counters to
+    /// read (an Instagram story) is confirmed. `Err` when it cannot be read, is another post, or
+    /// the provider has no such read (the default). A read: it never publishes anything.
+    async fn read_back(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        let _ = (cred, public, external_id);
+        Err(ConnectorError::permanent(
+            "reading a post back is unsupported",
+        ))
+    }
     /// Where the post `receipt` names stands at the provider (`public` as [`Connector::probe`]
     /// gets it). `None`, the default, for a provider whose `publish` answers only once the post is
     /// live: its receipt is the post. A read: it never publishes anything.
@@ -1106,6 +1150,74 @@ pub trait Publisher: Send + Sync {
         receipt: &PublishReceipt,
     ) -> Result<Option<PublishResolution>, ConnectorError> {
         let _ = (cred, public, receipt);
+        Ok(None)
+    }
+    /// Whether this provider's own scheduler can hold `request` for the capability `public`
+    /// describes (design 2026-11-10 §7.3): the shortest and the longest time ahead it takes it,
+    /// or `None`, the default, when it cannot (Jeeta then sends the post itself at its time). It
+    /// reads nothing and sends nothing. Asked twice: first with a request that carries the
+    /// post's format alone (can this account's platform hold such a post at all?), before
+    /// anything is prepared, then with the request as it would be sent.
+    fn schedule_window(
+        &self,
+        public: &Value,
+        request: &PublishRequest,
+    ) -> Option<(time::Duration, time::Duration)> {
+        let _ = (public, request);
+        None
+    }
+    /// Leaves `request` with the provider to go out at `at`, by the provider's own scheduler. Its
+    /// receipt names the scheduled post: [`Self::scheduled`] and [`Self::withdraw`] take it.
+    /// Only for a post [`Self::schedule_window`] accepts.
+    async fn schedule(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        request: &PublishRequest,
+        at: time::OffsetDateTime,
+    ) -> Result<PublishReceipt, ConnectorError> {
+        let _ = (cred, public, request, at);
+        Err(ConnectorError::permanent(
+            "scheduling a post at the provider is unsupported",
+        ))
+    }
+    /// Where the post `receipt` names, left by [`Self::schedule`], stands. A read: it never
+    /// publishes anything.
+    async fn scheduled(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<Scheduled, ConnectorError> {
+        let _ = (cred, public, receipt);
+        Err(ConnectorError::permanent(
+            "scheduling a post at the provider is unsupported",
+        ))
+    }
+    /// Takes back the post `receipt` names, left by [`Self::schedule`], before it goes out:
+    /// `true` once it is not at the provider any more and will not go out, `false` when it had
+    /// already gone out (a post that is out is never deleted here). `Err` when neither is known.
+    async fn withdraw(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        receipt: &PublishReceipt,
+    ) -> Result<bool, ConnectorError> {
+        let _ = (cred, public, receipt);
+        Err(ConnectorError::permanent(
+            "scheduling a post at the provider is unsupported",
+        ))
+    }
+    /// The posts the provider's own scheduler holds for the account now, whoever left them there:
+    /// how a person sees a post Jeeta does not know of (one left there by hand, or one whose
+    /// hand-over answered without saying whether it was taken). `None`, the default, for a
+    /// provider or an account without a scheduler to read. A read: it never publishes anything.
+    async fn scheduled_list(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<Option<Vec<PlatformScheduled>>, ConnectorError> {
+        let _ = (cred, public);
         Ok(None)
     }
     /// What the provider says, right now, about the account a post goes to, for a provider whose
@@ -1121,6 +1233,26 @@ pub trait Publisher: Send + Sync {
         let _ = (cred, public);
         Ok(None)
     }
+}
+
+/// A post a provider's own scheduler holds ([`Publisher::scheduled_list`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlatformScheduled {
+    pub external_id: String,
+    pub publish_at: time::OffsetDateTime,
+    /// Its text, as the provider gives it; empty when it has none.
+    pub text: String,
+}
+
+/// Where a post left with a provider's own scheduler stands ([`Publisher::scheduled`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Scheduled {
+    /// At the provider, waiting for its time.
+    Waiting,
+    /// It went out: the post's receipt.
+    Published(PublishReceipt),
+    /// It is not at the provider any more and will not go out.
+    Gone,
 }
 
 /// Reads the counters of posts and accounts.
@@ -1528,6 +1660,244 @@ pub trait OAuthProvider: Send + Sync {
     }
 }
 
+/// The provider object edge searched during campaign reconciliation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdLevel {
+    Campaign,
+    AdSet,
+    Ad,
+    Creative,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdAccountLimits {
+    pub currency: String,
+    pub minor_unit_exponent: u8,
+    pub timezone: String,
+    pub min_daily_budget_minor: i64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdObjective {
+    Traffic,
+    Leads,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignSpec {
+    pub name: String,
+    pub objective: AdObjective,
+    pub lifetime_budget_minor: i64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdGender {
+    Female,
+    Male,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdInterest {
+    pub id: String,
+    pub name: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdAudience {
+    pub countries: Vec<String>,
+    pub regions: Vec<String>,
+    pub cities: Vec<String>,
+    pub age_min: u8,
+    pub age_max: u8,
+    pub genders: Vec<AdGender>,
+    pub interests: Vec<AdInterest>,
+    pub broad: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdPlatform {
+    Facebook,
+    Instagram,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdPlacements {
+    Automatic,
+    Platforms(Vec<AdPlatform>),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdSetGoal {
+    LinkClicks,
+    Leads { page_id: String },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdSetSpec {
+    pub name: String,
+    pub campaign_id: String,
+    pub goal: AdSetGoal,
+    pub audience: AdAudience,
+    pub placements: AdPlacements,
+    pub start_at: OffsetDateTime,
+    pub end_at: OffsetDateTime,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LeadQuestion {
+    FullName,
+    Email,
+    Phone,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeadFormSpec {
+    pub name: String,
+    pub questions: Vec<LeadQuestion>,
+    pub privacy_policy_url: Url,
+    pub thank_you_url: Url,
+    pub locale: String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallToAction {
+    LearnMore,
+    SignUp,
+    ShopNow,
+    ContactUs,
+    GetQuote,
+    Subscribe,
+    ApplyNow,
+    BookNow,
+    Download,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CreativeAction {
+    Link { url: Url },
+    LeadForm { form_id: String, url: Url },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreativeSpec {
+    pub name: String,
+    pub page_id: String,
+    pub instagram_user_id: Option<String>,
+    pub image_hash: String,
+    pub primary_text: String,
+    pub headline: String,
+    pub description: Option<String>,
+    pub call_to_action: CallToAction,
+    pub action: CreativeAction,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdSpec {
+    pub name: String,
+    pub adset_id: String,
+    pub creative_id: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProviderAdStatus {
+    Active,
+    Paused,
+    InReview,
+    Disapproved,
+    WithIssues,
+    Archived,
+    Other(String),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderAd {
+    pub ad_id: String,
+    pub name: String,
+    pub status: ProviderAdStatus,
+    pub feedback: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignProviderState {
+    pub campaign: ProviderAdStatus,
+    pub ads: Vec<ProviderAd>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdDay {
+    pub ad_id: String,
+    pub day: Date,
+    pub spend_minor: Option<i64>,
+    pub impressions: Option<i64>,
+    pub clicks: Option<i64>,
+    pub results: Option<i64>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdPlacement {
+    FacebookFeed,
+    InstagramFeed,
+    InstagramStory,
+    InstagramReels,
+}
+
+/// Campaign creation and reads. Creation stays paused; activation uses `AdBudgetWriter`.
+#[async_trait]
+pub trait AdCampaignWriter: Send + Sync {
+    async fn account_limits(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<AdAccountLimits, ConnectorError>;
+    async fn find_by_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        level: AdLevel,
+        name: &str,
+    ) -> Result<Option<String>, ConnectorError>;
+    async fn create_campaign(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CampaignSpec,
+    ) -> Result<String, ConnectorError>;
+    async fn create_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSetSpec,
+    ) -> Result<String, ConnectorError>;
+    async fn upload_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<String, ConnectorError>;
+    async fn create_lead_form(
+        &self,
+        page_cred: &Credential,
+        page_public: &Value,
+        spec: &LeadFormSpec,
+    ) -> Result<String, ConnectorError>;
+    async fn create_creative(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CreativeSpec,
+    ) -> Result<String, ConnectorError>;
+    async fn create_ad(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSpec,
+    ) -> Result<String, ConnectorError>;
+    async fn campaign_state(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+    ) -> Result<CampaignProviderState, ConnectorError>;
+    /// Each ad's numbers per day. `results` counts what the campaign is for (`objective`): form
+    /// submissions for a leads campaign, link clicks for a traffic one; never another action.
+    async fn ad_days(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+        objective: AdObjective,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<AdDay>, ConnectorError>;
+    async fn preview(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        creative: &CreativeSpec,
+        placement: AdPlacement,
+    ) -> Result<String, ConnectorError>;
+}
+
 /// The provider adapters this process has. Every getter answers `None` for a provider without
 /// that adapter or operation (or while no adapters are wired at all).
 pub trait ConnectorRegistry: Send + Sync {
@@ -1540,6 +1910,10 @@ pub trait ConnectorRegistry: Send + Sync {
     fn insights(&self, provider: Provider) -> Option<Arc<dyn InsightsReader>>;
     fn messaging(&self, provider: Provider) -> Option<Arc<dyn MessagingSender>>;
     fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>>;
+    /// Campaign building is offered only by providers that implement it.
+    fn ad_campaigns(&self, _provider: Provider) -> Option<Arc<dyn AdCampaignWriter>> {
+        None
+    }
     fn leadgen(&self, provider: Provider) -> Option<Arc<dyn LeadGenFetcher>>;
     fn telephony(&self, provider: Provider) -> Option<Arc<dyn Telephony>>;
     fn consent(&self, provider: Provider) -> Option<Arc<dyn ConsentSync>>;
@@ -1824,6 +2198,8 @@ mod tests {
             }],
             privacy: None,
             tiktok: None,
+            format: None,
+            media_mimes: vec![],
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(

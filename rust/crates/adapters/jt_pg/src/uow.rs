@@ -117,6 +117,17 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn studio_projects(&mut self) -> &mut dyn jt_app::ports::production_projects::ProjectRepo {
+        self
+    }
+    fn ads(&mut self) -> &mut dyn jt_app::ports::ads::AdsRepo {
+        self
+    }
+    fn studio_productions(
+        &mut self,
+    ) -> &mut dyn jt_app::ports::material_productions::ProductionRepo {
+        self
+    }
     fn studio_materials(&mut self) -> &mut dyn jt_app::ports::materials::MaterialRepo {
         self
     }
@@ -186,9 +197,6 @@ impl TenantRepos for PgTenantRepos {
         self
     }
     fn appointments(&mut self) -> &mut dyn jt_app::ports::inbox::AppointmentRepo {
-        self
-    }
-    fn commissions(&mut self) -> &mut dyn jt_app::ports::inbox::CommissionRepo {
         self
     }
     fn erasure(&mut self) -> &mut dyn jt_app::ports::inbox::ErasureRepo {

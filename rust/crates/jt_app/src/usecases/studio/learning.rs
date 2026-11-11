@@ -7,7 +7,7 @@ use crate::{
 };
 use jt_strategy::{HypothesisId, LaneKind};
 use jt_studio::*;
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -79,7 +79,23 @@ pub struct JudgmentOut {
     pub at: OffsetDateTime,
 }
 pub async fn learned(d: &Deps, ctx: &Ctx, q: LearnedQuery) -> Result<LearnedOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    learned_for(
+        d,
+        ctx,
+        q,
+        super::permissions::for_use_case("studio.learned"),
+    )
+    .await
+}
+
+/// Shared read for the learned page and overview, under the calling use case's grants.
+pub(crate) async fn learned_for(
+    d: &Deps,
+    ctx: &Ctx,
+    q: LearnedQuery,
+    permissions: &[jt_tenancy::Permission],
+) -> Result<LearnedOut, AppError> {
+    ctx.require_any(permissions)?;
     if q.from >= q.until {
         return Err(AppError::validation(
             "invalid result window",
@@ -87,7 +103,7 @@ pub async fn learned(d: &Deps, ctx: &Ctx, q: LearnedQuery) -> Result<LearnedOut,
         ));
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = super::work::gated(r.as_mut(), ctx).await?;
+    let frame = super::work::gated(r.as_mut(), ctx, permissions).await?;
     let arms = r.studio().list_arms().await?;
     let rows: Vec<_> = r
         .studio()
@@ -305,7 +321,9 @@ pub async fn judgment_record(
     ctx: &Ctx,
     mut i: JudgmentInput,
 ) -> Result<JudgmentOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.judgment_record",
+    ))?;
     if i.text.trim().is_empty()
         || i.text.len() > 4000
         || i.evidence_ids.is_empty()
@@ -322,7 +340,12 @@ pub async fn judgment_record(
     i.evidence_ids.dedup();
     let payload = serde_json::to_value(&i).map_err(|_| AppError::internal("judgment"))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = super::work::gated(r.as_mut(), ctx).await?;
+    let frame = super::work::gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.judgment_record"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     if let Some(out) = r
         .studio()

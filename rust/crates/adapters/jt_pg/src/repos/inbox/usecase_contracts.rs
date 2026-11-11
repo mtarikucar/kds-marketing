@@ -209,26 +209,12 @@ async fn concurrent_first_contacts_and_event_keys_are_serialized() {
     let mut r = uow.tenant(ws).await.unwrap();
     assert_eq!(r.journeys().events(j.id, 50).await.unwrap().len(), 1);
     let tasks = r.tasks().list(j.id).await.unwrap();
-    assert_eq!(tasks.len(), 2);
+    // Won closes the open task and opens nothing new.
+    assert_eq!(tasks.len(), 1);
     assert_eq!(
         tasks.iter().find(|t| t.id == original_task).unwrap().status,
         TaskStatus::Done
     );
-    let commissions = r.commissions().list().await.unwrap();
-    assert_eq!(commissions.len(), 1);
-    let commission = &commissions[0];
-    assert_eq!(commission.commission.journey_id, j.id);
-    assert_eq!(
-        commission.commission.state,
-        jt_inbox::CommissionState::NoPayee
-    );
-    assert_eq!(commission.commission.payee, None);
-    let followup = tasks
-        .iter()
-        .find(|t| t.id == TaskId::from(commission.id))
-        .unwrap();
-    assert_eq!(followup.status, TaskStatus::Open);
-    assert_eq!(followup.assignee, None);
 }
 
 #[tokio::test]

@@ -29,24 +29,40 @@ fn tools() -> BTreeMap<&'static str, jt_mcp::ToolSpec> {
 fn calls_tools_have_their_permissions_risks_and_strict_schemas() {
     let tools = tools();
     let expected = [
-        ("jeeta.calls.policy_get", Permission::CallsWork, Risk::Read),
+        (
+            "jeeta.calls.policy_get",
+            &[Permission::CallsWork][..],
+            Risk::Read,
+        ),
         (
             "jeeta.calls.policy_set",
-            Permission::CallsManage,
+            &[Permission::CallsManage][..],
             Risk::Write,
         ),
-        ("jeeta.calls.place", Permission::CallsWork, Risk::Spend),
-        ("jeeta.calls.get", Permission::CallsWork, Risk::Read),
-        ("jeeta.calls.list", Permission::CallsWork, Risk::Read),
-        ("jeeta.calls.end", Permission::CallsWork, Risk::Write),
-        ("jeeta.calls.listen", Permission::CallsWork, Risk::Read),
-        ("jeeta.calls.say", Permission::CallsWork, Risk::Write),
-        ("jeeta.calls.transfer", Permission::CallsWork, Risk::Write),
+        (
+            "jeeta.calls.place",
+            &[Permission::CallsWork][..],
+            Risk::Spend,
+        ),
+        ("jeeta.calls.get", &[Permission::CallsWork][..], Risk::Read),
+        ("jeeta.calls.list", &[Permission::CallsWork][..], Risk::Read),
+        ("jeeta.calls.end", &[Permission::CallsWork][..], Risk::Write),
+        (
+            "jeeta.calls.listen",
+            &[Permission::CallsWork][..],
+            Risk::Read,
+        ),
+        ("jeeta.calls.say", &[Permission::CallsWork][..], Risk::Write),
+        (
+            "jeeta.calls.transfer",
+            &[Permission::CallsWork][..],
+            Risk::Write,
+        ),
     ];
     assert_eq!(tools.len(), expected.len());
     for (name, permission, risk) in expected {
         let tool = &tools[name];
-        assert_eq!(tool.permission, permission, "{name}");
+        assert_eq!(tool.permissions, permission, "{name}");
         assert_eq!(tool.risk, risk, "{name}");
         assert!(
             tool.description.ends_with(jt_mcp::risk_tag(risk).trim()),

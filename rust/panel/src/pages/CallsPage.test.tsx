@@ -53,6 +53,25 @@ describe('CallsPage', () => {
     expect(screen.getByRole('link', { name: /2026|22/ })).toHaveAttribute('href', `/calls/${call.id}`);
   });
 
+  it('shows an empty direction and restores the full call log without refetching', async () => {
+    const user = userEvent.setup();
+    const requests = mockFetch({ 'GET /api/auth/me': caller, 'GET /api/calls': [call] });
+    renderAt('/calls');
+    await screen.findByRole('table', { name: tr.calls.title });
+    const directions = screen.getByRole('group', { name: tr.calls.columns.direction });
+    const readsBefore = requests.filter((request) => request.method === 'GET' && request.path === '/api/calls').length;
+
+    await user.click(within(directions).getByRole('button', { name: tr.calls.directions.inbound }));
+    expect(screen.getByText(tr.calls.filterEmpty)).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(within(directions).getByRole('button', { name: tr.calls.directions.inbound })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByRole('button', { name: tr.calls.showAll }));
+    expect(within(screen.getByRole('table', { name: tr.calls.title })).getByText(call.counterpart)).toBeInTheDocument();
+    expect(within(directions).getByRole('button', { name: tr.inbox.queue.all })).toHaveAttribute('aria-pressed', 'true');
+    expect(requests.filter((request) => request.method === 'GET' && request.path === '/api/calls')).toHaveLength(readsBefore);
+  });
+
   it('place_call_dialog_refusal_shows_reason', async () => {
     const user = userEvent.setup();
     const calls = mockFetch({

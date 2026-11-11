@@ -4,7 +4,7 @@ use crate::error::AppError;
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_inbox::*;
-use jt_tenancy::{UserId, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -24,15 +24,6 @@ pub struct AppointmentRow {
     pub workspace_id: WorkspaceId,
     #[serde(flatten)]
     pub appointment: Appointment,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommissionRow {
-    pub id: Uuid,
-    pub workspace_id: WorkspaceId,
-    #[serde(flatten)]
-    pub commission: Commission,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -125,20 +116,6 @@ pub trait AppointmentRepo: Send + Sync {
     async fn get(&mut self, id: Uuid) -> Result<Option<AppointmentRow>, AppError>;
     async fn list(&mut self, journey: JourneyId) -> Result<Vec<AppointmentRow>, AppError>;
     async fn set_state(&mut self, id: Uuid, state: AppointmentState) -> Result<(), AppError>;
-}
-#[async_trait]
-pub trait CommissionRepo: Send + Sync {
-    /// Duplicate journey or id is CONFLICT; never overwrites the won snapshot.
-    async fn insert(&mut self, row: CommissionRow) -> Result<(), AppError>;
-    async fn get(&mut self, id: Uuid) -> Result<Option<CommissionRow>, AppError>;
-    async fn by_journey(&mut self, journey: JourneyId) -> Result<Option<CommissionRow>, AppError>;
-    async fn list(&mut self) -> Result<Vec<CommissionRow>, AppError>;
-    async fn set_state(&mut self, id: Uuid, state: CommissionState) -> Result<(), AppError>;
-    async fn default_rate(&mut self) -> Result<Option<u16>, AppError>;
-    async fn set_default_rate(&mut self, rate_bp: u16) -> Result<(), AppError>;
-    async fn user_rate(&mut self, user: UserId) -> Result<Option<u16>, AppError>;
-    /// None removes an override so callers fall back to the workspace default.
-    async fn set_user_rate(&mut self, user: UserId, rate_bp: Option<u16>) -> Result<(), AppError>;
 }
 #[async_trait]
 pub trait ErasureRepo: Send + Sync {

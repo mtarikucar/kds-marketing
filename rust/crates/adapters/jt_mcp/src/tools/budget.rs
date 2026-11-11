@@ -28,7 +28,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           first, each with what was spent from it in its current period and \
                           what remains (negative when over the cap). Returns {items: [...]}. \
                           [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: items_list,
         },
@@ -41,7 +41,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           unit (minor units of a currency, so 100000 is 1000.00 TRY) and a \
                           period (daily, weekly, monthly or total). Returns the item. \
                           [risk: WRITE]",
-            permission: Permission::BudgetManage,
+            permissions: &[Permission::BudgetManage],
             schema: schema_for::<ItemCreateArgs>,
             run: items_create,
         },
@@ -53,7 +53,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           spent in the period is allowed: the spend stays recorded and the item \
                           reads over its cap. A retired item is not edited. Returns the item \
                           with what was spent and what remains in its period. [risk: WRITE]",
-            permission: Permission::BudgetManage,
+            permissions: &[Permission::BudgetManage],
             schema: schema_for::<ItemUpdateArgs>,
             run: items_update,
         },
@@ -63,7 +63,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           capability is unlinked from it and it takes no more links or spend; \
                           its spend history stays, and it is still listed with its retired_at. \
                           Returns the item. [risk: DESTRUCTIVE]",
-            permission: Permission::BudgetManage,
+            permissions: &[Permission::BudgetManage],
             schema: schema_for::<ItemRetireArgs>,
             run: items_retire,
         },
@@ -74,7 +74,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           campaign id). The spend is recorded as yours. Spending over the cap is \
                           recorded and flagged, not refused. Returns the spend and what remains \
                           in the period. [risk: SPEND]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<SpendRecordArgs>,
             run: spend_record,
         },
@@ -84,11 +84,62 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           its amount, source and reference. Page back with before_at and \
                           before_id set to the at and id of the previous page's last entry. \
                           Returns {spend: [...]}. [risk: READ]",
-            permission: Permission::WorkspaceRead,
+            permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<SpendListArgs>,
             run: spend_list,
         },
+        ToolDef {
+            use_case: "budget.breakdown",
+            description: "Read what each budget item spent in a period, by module (ads, inbox, \
+                          outreach, calls, social) and, for ads, by ad campaign; and what a \
+                          person stopped the spending of. Give from and until as RFC 3339 times \
+                          (from included, until not; at most 366 days), or neither for this \
+                          month so far. Spend nobody's module made (recorded by hand) is \
+                          unattributed_minor. held_minor, on the general ad budget only, is what \
+                          open ad campaigns still hold of it now (their unspent budgets) and no \
+                          other campaign can take; it is left out when nothing is held. \
+                          stop.modules lists the stopped modules: a spend \
+                          for one is refused with spend_stopped until a person lets it go on in \
+                          the budget page; no tool stops or releases spending. Returns {items: \
+                          [...], stop: {...}}. [risk: READ]",
+            permissions: &[
+                Permission::BudgetManage,
+                Permission::AdsWork,
+                Permission::SocialWork,
+                Permission::ContentWork,
+                Permission::InboxWork,
+                Permission::CallsWork,
+            ],
+            schema: schema_for::<BreakdownArgs>,
+            run: breakdown,
+        },
     ]
+}
+
+/// The period to read spend in.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BreakdownArgs {
+    /// The period's start (RFC 3339), included; the first of this month when left out.
+    #[serde(default)]
+    from: Option<String>,
+    /// The period's end (RFC 3339), not included; now when left out.
+    #[serde(default)]
+    until: Option<String>,
+}
+
+fn breakdown<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let BreakdownArgs { from, until } = args(raw)?;
+        to_json(
+            &jt_app::usecases::spending::breakdown(
+                deps,
+                ctx,
+                jt_app::usecases::spending::BreakdownQuery { from, until },
+            )
+            .await?,
+        )
+    })
 }
 
 /// A new budget item.
@@ -112,6 +163,11 @@ struct ItemCreateArgs {
     /// The period the cap applies to.
     #[schemars(schema_with = "period_schema")]
     period: Period,
+    /// Whether it is the workspace's general ad budget: every paid spend counts against it and
+    /// ad campaigns draw from it. Only an ad_budget in a currency with a period other than
+    /// total; at most one per workspace; its cap within the strategy's paid cap.
+    #[serde(default)]
+    general: bool,
 }
 
 /// A budget item and what to change of it.
@@ -134,6 +190,9 @@ struct ItemUpdateArgs {
     #[serde(default)]
     #[schemars(schema_with = "optional_period_schema")]
     period: Option<Period>,
+    /// true makes it the workspace's general ad budget, false stops it being one.
+    #[serde(default)]
+    general: Option<bool>,
 }
 
 /// The budget item to retire.
@@ -249,6 +308,7 @@ fn items_create<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             cap,
             unit_cost_minor,
             period,
+            general,
         } = args(raw)?;
         let input = BudgetItemInput {
             name,
@@ -257,6 +317,7 @@ fn items_create<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             cap,
             unit_cost_minor,
             period,
+            general,
         };
         to_json(&budget::create_item(deps, ctx, input).await?)
     })
@@ -270,12 +331,14 @@ fn items_update<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> 
             cap,
             unit_cost_minor,
             period,
+            general,
         } = args(raw)?;
         let input = UpdateBudgetItem {
             name,
             cap,
             period,
             unit_cost_minor,
+            general,
         };
         to_json(&budget::update_item(deps, ctx, BudgetItemId(budget_item_id), input).await?)
     })
