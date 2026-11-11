@@ -405,3 +405,14 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     switched on ad then ad set then campaign, read (spend into the general ad budget, only link
     clicks as results), stopped from Bütçe (paused at Meta), ended. The first real run is still
     the owner's (B38).
+  - **Committed and published to staging (2026-11-11).** The four steps are on
+    `design/jeeta-refinement` as `8fa83bde`, `1c3c7429`, `c7857483` and, with the files both
+    sessions touched, `7891020b` (the other session's own work is `e10887eb`). CI run
+    `42957581297` passed all nine jobs on `7891020b` (4,357 Rust tests, 655 panel tests).
+    Staging release `7891020b`, schema 32 to 40, was published on 2026-11-11 at 04:33 UTC; its
+    record is `ops/staging-7891020b.md` on `ops/release-dd66e8dc`. The commission tables were
+    empty before migration 33 (`0|0|0`), so it removed no record. Checked from outside only: the
+    35 published panel files match the artifact, readiness, eight routes, 401 without a session.
+    Nothing was tried signed in on staging. What stays open is what needs the owner's real
+    account: the first ad campaign built at Meta and the first post left with Facebook's
+    scheduler (B38; Step 2's proof box 5.3).
