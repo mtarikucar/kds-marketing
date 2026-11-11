@@ -21,7 +21,7 @@ use support::workspace::{FLOW_TOKEN as TOKEN, Workspace, workspace};
 use support::*;
 use time::{Duration, format_description::well_known::Rfc3339};
 
-const ACCOUNT: &str = "/fb/v19.0/act_123";
+const ACCOUNT: &str = "/fb/v27.0/act_123";
 
 /// A use case's input from its JSON, as a transport hands it over.
 macro_rules! input {
@@ -144,7 +144,7 @@ impl Flow {
         for id in ["1001", "2001", "4001"] {
             m.set(
                 "POST",
-                &format!("/fb/v19.0/{id}"),
+                &format!("/fb/v27.0/{id}"),
                 ok(json!({"success":true})),
             );
         }
@@ -155,15 +155,15 @@ impl Flow {
         let m = &self.mock;
         m.set(
             "GET",
-            "/fb/v19.0/1001",
+            "/fb/v27.0/1001",
             ok(json!({"account_id":"123","effective_status":"ACTIVE"})),
         );
         m.set(
             "GET",
-            "/fb/v19.0/1001/ads",
+            "/fb/v27.0/1001/ads",
             ok(json!({"data":[{"id":"4001","name":"ad","effective_status":ad_status}]})),
         );
-        m.set("GET", "/fb/v19.0/1001/insights", ok(json!({"data":[day]})));
+        m.set("GET", "/fb/v27.0/1001/insights", ok(json!({"data":[day]})));
     }
 
     fn plan(&self) -> Value {
@@ -195,7 +195,7 @@ impl Flow {
             .filter(|r| r.method == "POST" && !r.path.starts_with(ACCOUNT))
             .map(|r| {
                 (
-                    r.path.trim_start_matches("/fb/v19.0/").to_owned(),
+                    r.path.trim_start_matches("/fb/v27.0/").to_owned(),
                     r.json()["status"].as_str().unwrap_or_default().to_owned(),
                 )
             })
@@ -312,7 +312,7 @@ async fn a_campaign_goes_from_a_goal_to_a_running_ad_a_read_a_stop_and_an_end() 
         (totals.spent_minor, totals.results, totals.impressions),
         (1_234, Some(31), Some(1_000))
     );
-    let insights = f.mock.request("GET", "/fb/v19.0/1001/insights");
+    let insights = f.mock.request("GET", "/fb/v27.0/1001/insights");
     assert_eq!(insights.param("level"), Some("ad"));
     assert_eq!(insights.param("time_increment"), Some("1"));
     let budget_item = &budget::list_items(&f.deps, &f.owner).await.unwrap()[0];

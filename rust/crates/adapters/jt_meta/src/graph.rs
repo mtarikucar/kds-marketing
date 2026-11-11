@@ -30,6 +30,12 @@ use crate::{Masked, MetaConnector};
 /// The Graph API version used when the Meta app names none.
 pub const DEFAULT_GRAPH_VERSION: &str = "v19.0";
 
+/// The Marketing API version the calls on an ad account are written for (design 2026-11-10
+/// Ek B.3). Such a call never goes out on an older version: Meta says a call on a Marketing API
+/// version it no longer serves "may fail or be upgraded", and serves each for about a year. A
+/// newer version the Meta app names is used as it is.
+pub const ADS_API_VERSION: &str = "v27.0";
+
 /// The egress scope of every call.
 const SCOPE: EgressScope = EgressScope::Connector("meta");
 
@@ -143,6 +149,17 @@ impl GraphApp {
         })
     }
 
+    /// As [`GraphApp::of`], for a call on an ad account or on what belongs to one (its campaigns,
+    /// ad sets, ads, creatives, previews, insights, lead forms): the app's version when it is
+    /// newer than [`ADS_API_VERSION`], else that one.
+    pub(crate) fn for_ads(app: &MetaApp) -> Result<GraphApp, ConnectorError> {
+        let mut graph = GraphApp::of(app)?;
+        if version_number(&graph.version) < version_number(ADS_API_VERSION) {
+            ADS_API_VERSION.clone_into(&mut graph.version);
+        }
+        Ok(graph)
+    }
+
     /// Authentication with `token` on `graph.facebook.com`.
     pub(crate) fn auth<'a>(&'a self, token: &'a str) -> Auth<'a> {
         Auth::Graph {
@@ -177,6 +194,13 @@ pub(crate) fn graph_version(app: &MetaApp) -> Result<String, ConnectorError> {
             "the configured Graph API version is not of the form v19.0",
         ))
     }
+}
+
+/// A checked version (`v27.0`) as its two numbers, for comparing; anything else is the lowest.
+fn version_number(version: &str) -> (u16, u16) {
+    let mut parts = version.trim_start_matches('v').split('.');
+    let mut number = || parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+    (number(), number())
 }
 
 /// `appsecret_proof`: lowercase hex HMAC-SHA256 of `token` under `secret`.
@@ -287,6 +311,11 @@ impl MetaConnector {
     /// The Meta app's secret and Graph version, read now.
     pub(crate) fn graph_app(&self) -> Result<GraphApp, ConnectorError> {
         GraphApp::of(&self.meta_app()?)
+    }
+
+    /// As [`MetaConnector::graph_app`], for a call on an ad account ([`GraphApp::for_ads`]).
+    pub(crate) fn ads_app(&self) -> Result<GraphApp, ConnectorError> {
+        GraphApp::for_ads(&self.meta_app()?)
     }
 
     /// `graph.facebook.com/<version>/<segments>?<query>`.
@@ -1360,6 +1389,16 @@ mod tests {
         for bad in ["21.0", "v21", "v21.0/x", "v../", "vx.y"] {
             assert!(graph_version(&app(Some(bad))).is_err(), "{bad}");
         }
+        // A call on an ad account never goes out on a version older than the one it is written
+        // for; a newer one the app names is used, and a malformed one is still refused.
+        let ads = |v: Option<&str>| GraphApp::for_ads(&app(v)).map(|a| a.version);
+        assert_eq!(ads(None).unwrap(), ADS_API_VERSION);
+        assert_eq!(ads(Some("v19.0")).unwrap(), ADS_API_VERSION);
+        assert_eq!(ads(Some("v26.1")).unwrap(), ADS_API_VERSION);
+        assert_eq!(ads(Some("v27.0")).unwrap(), "v27.0");
+        assert_eq!(ads(Some("v27.1")).unwrap(), "v27.1");
+        assert_eq!(ads(Some("v100.0")).unwrap(), "v100.0");
+        assert!(ads(Some("v27")).is_err());
     }
 
     #[test]

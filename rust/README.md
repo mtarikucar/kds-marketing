@@ -193,7 +193,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_META_VERIFY_TOKEN` | — | Meta'nın webhook adresini doğrularken geri yolladığı anahtar; Meta uygulamasıyla **zorunlu**. Kendiniz üretin (`openssl rand -hex 32`) ve Meta panelinde de girin |
 | `JEETA_META_LOGIN_CONFIG_ID` | — | İsteğe bağlı: Facebook Login for Business yapılandırma kimliği (boşsa izinler tek tek istenir) |
 | `JEETA_META_WHATSAPP_CONFIG_ID` | — | İsteğe bağlı: WhatsApp gömülü kayıt yapılandırma kimliği |
-| `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur |
+| `JEETA_META_GRAPH_VERSION` | `v19.0` | Graph API sürümü, `v` ve iki sayı (ör. `v21.0`); başka bir biçim açılışı durdurur. Reklam hesabına giden çağrılar (hesap, kampanya, reklam seti, reklam, kreatif, önizleme, ölçü, lead formu) yazıldıkları `v27.0`'dan eski bir sürümle gönderilmez: burada daha eski bir sürüm ya da hiçbir şey yazıyorsa onlar `v27.0` ile, daha yenisi yazıyorsa onunla gider (B54) |
 | `JEETA_INSTAGRAM_APP_ID` | — | Platformun Instagram uygulamasının kimliği (Instagram Login); sırla birlikte verilir |
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
 | `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
@@ -1356,6 +1356,11 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 **İş listesi.** `ads_campaign_plan {campaign_id, expected_revision, rejected}` ve
 `ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
 `ads_campaign_held` reklamı yöneten insana.
+
+**API sürümü.** Reklam hesabına giden çağrılar Marketing API `v27.0` ile gider (B54);
+`JEETA_META_GRAPH_VERSION` daha yeni bir sürüm veriyorsa onunla. Meta her sürümü yaklaşık bir yıl
+sunar: `v27.0` kapanmadan önce bu çağrılar yeni sürümün belgesiyle karşılaştırılıp `jt_meta`'daki
+`ADS_API_VERSION` yükseltilmelidir.
 
 **Bu sürümde olmayanlar.** Kurulmuş kampanyanın bütçesi ve bitiş tarihi değiştirilemez (bitirip yenisi
 açılır). Kampanya sonuçları stratejinin öğrenme kayıtlarına yazılmaz. Lead formu için ad araması

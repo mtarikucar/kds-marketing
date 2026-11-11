@@ -45,7 +45,7 @@ async fn a_skipped_listing_part_logs_no_echoed_secret() {
             }}),
         )
     };
-    m.on("GET", "/fb/v19.0/me/adaccounts", refusal(USER_TOKEN));
+    m.on("GET", "/fb/v27.0/me/adaccounts", refusal(USER_TOKEN));
     m.on("GET", "/fb/v19.0/me/businesses", refusal(USER_TOKEN));
 
     let buffer = Buffer::default();

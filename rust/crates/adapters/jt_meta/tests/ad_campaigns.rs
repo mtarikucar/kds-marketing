@@ -83,7 +83,7 @@ async fn campaign_is_paused_with_a_total_budget_and_objective() {
     let r = rig().await;
     r.mock.on(
         "POST",
-        "/fb/v19.0/act_123/campaigns",
+        "/fb/v27.0/act_123/campaigns",
         ok(response("campaign")),
     );
     for (objective, expected) in [
@@ -112,7 +112,7 @@ async fn campaign_is_paused_with_a_total_budget_and_objective() {
 async fn adset_encodes_audience_placements_dates_and_lead_destination_without_budget() {
     let r = rig().await;
     r.mock
-        .on("POST", "/fb/v19.0/act_123/adsets", ok(response("adset")));
+        .on("POST", "/fb/v27.0/act_123/adsets", ok(response("adset")));
     let mut spec = adset();
     assert_eq!(
         r.meta
@@ -121,7 +121,7 @@ async fn adset_encodes_audience_placements_dates_and_lead_destination_without_bu
             .unwrap(),
         "set1"
     );
-    let req = r.mock.request("POST", "/fb/v19.0/act_123/adsets");
+    let req = r.mock.request("POST", "/fb/v27.0/act_123/adsets");
     assert_auth(&req, TOKEN);
     assert_eq!(
         req.json(),
@@ -169,7 +169,7 @@ async fn adset_encodes_audience_placements_dates_and_lead_destination_without_bu
 async fn image_upload_returns_hash_and_encodes_the_bytes() {
     let r = rig().await;
     r.mock
-        .on("POST", "/fb/v19.0/act_123/adimages", ok(response("image")));
+        .on("POST", "/fb/v27.0/act_123/adimages", ok(response("image")));
     assert_eq!(
         r.meta
             .upload_image(&cred(), &public(), &[0, 1, 2, 255], "test.png")
@@ -177,7 +177,7 @@ async fn image_upload_returns_hash_and_encodes_the_bytes() {
             .unwrap(),
         "hash1"
     );
-    let req = r.mock.request("POST", "/fb/v19.0/act_123/adimages");
+    let req = r.mock.request("POST", "/fb/v27.0/act_123/adimages");
     assert_auth(&req, TOKEN);
     assert_eq!(req.json(), json!({"name":"test.png","bytes":"AAEC/w=="}));
 }
@@ -187,7 +187,7 @@ async fn lead_form_uses_only_the_matching_page_credential() {
     let r = rig().await;
     r.mock.on(
         "POST",
-        "/fb/v19.0/page1/leadgen_forms",
+        "/fb/v27.0/page1/leadgen_forms",
         ok(response("lead_form")),
     );
     let spec = LeadFormSpec {
@@ -212,7 +212,7 @@ async fn lead_form_uses_only_the_matching_page_credential() {
             .unwrap(),
         "form1"
     );
-    let req = r.mock.request("POST", "/fb/v19.0/page1/leadgen_forms");
+    let req = r.mock.request("POST", "/fb/v27.0/page1/leadgen_forms");
     assert_auth(&req, "synthetic-page-token");
     assert_eq!(
         req.json(),
@@ -238,7 +238,7 @@ async fn creative_encodes_link_and_form_actions_and_all_ctas() {
     let r = rig().await;
     r.mock.on(
         "POST",
-        "/fb/v19.0/act_123/adcreatives",
+        "/fb/v27.0/act_123/adcreatives",
         ok(response("creative")),
     );
     let mut spec = creative();
@@ -249,7 +249,7 @@ async fn creative_encodes_link_and_form_actions_and_all_ctas() {
             .unwrap(),
         "creative1"
     );
-    let req = r.mock.request("POST", "/fb/v19.0/act_123/adcreatives");
+    let req = r.mock.request("POST", "/fb/v27.0/act_123/adcreatives");
     assert_auth(&req, TOKEN);
     assert_eq!(
         req.json(),
@@ -295,7 +295,7 @@ async fn creative_encodes_link_and_form_actions_and_all_ctas() {
 async fn ad_is_created_paused_with_its_creative() {
     let r = rig().await;
     r.mock
-        .on("POST", "/fb/v19.0/act_123/ads", ok(response("ad")));
+        .on("POST", "/fb/v27.0/act_123/ads", ok(response("ad")));
     assert_eq!(
         r.meta
             .create_ad(
@@ -311,7 +311,7 @@ async fn ad_is_created_paused_with_its_creative() {
             .unwrap(),
         "ad1"
     );
-    let req = r.mock.request("POST", "/fb/v19.0/act_123/ads");
+    let req = r.mock.request("POST", "/fb/v27.0/act_123/ads");
     assert_auth(&req, TOKEN);
     assert_eq!(
         req.json(),
@@ -323,7 +323,7 @@ async fn ad_is_created_paused_with_its_creative() {
 async fn account_limits_use_currency_units_and_minimum_budget() {
     let r = rig().await;
     r.mock
-        .on("GET", "/fb/v19.0/act_123", ok(response("limits")));
+        .on("GET", "/fb/v27.0/act_123", ok(response("limits")));
     assert_eq!(
         r.meta
             .account_limits(&cred(), &json!({"external_id":"123"}))
@@ -336,7 +336,7 @@ async fn account_limits_use_currency_units_and_minimum_budget() {
             min_daily_budget_minor: 500
         }
     );
-    let req = r.mock.request("GET", "/fb/v19.0/act_123");
+    let req = r.mock.request("GET", "/fb/v27.0/act_123");
     assert_auth(&req, TOKEN);
     assert_eq!(
         req.param("fields"),
@@ -353,7 +353,7 @@ async fn find_by_name_requires_one_exact_match_and_follows_pages() {
         (AdLevel::Ad, "ads"),
         (AdLevel::Creative, "adcreatives"),
     ] {
-        let path = format!("/fb/v19.0/act_123/{edge}");
+        let path = format!("/fb/v27.0/act_123/{edge}");
         r.mock.set("GET", &path, ok(json!({"data":[]})));
         assert_eq!(
             r.meta
@@ -381,7 +381,7 @@ async fn find_by_name_requires_one_exact_match_and_follows_pages() {
                 .unwrap(),
             Some("one".into())
         );
-        let next = format!("{}/v19.0/act_123/{edge}?after=next", r.mock.base("/fb"));
+        let next = format!("{}/v27.0/act_123/{edge}?after=next", r.mock.base("/fb"));
         r.mock.set(
             "GET",
             &path,
@@ -408,7 +408,7 @@ async fn state_maps_all_review_states_and_joins_feedback() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1",
+        "/fb/v27.0/campaign1",
         ok(json!({"account_id":"123","effective_status":"PAUSED"})),
     );
     let statuses = [
@@ -425,7 +425,7 @@ async fn state_maps_all_review_states_and_joins_feedback() {
         ("DELETED", ProviderAdStatus::Archived),
         ("FUTURE", ProviderAdStatus::Other("FUTURE".into())),
     ];
-    r.mock.on("GET","/fb/v19.0/campaign1/ads",ok(json!({"data":statuses.iter().enumerate().map(|(i,(s,_))|json!({"id":format!("ad{i}"),"name":"test ad","effective_status":s,"ad_review_feedback":{"global":{"policy":"Synthetic reason","other":"Another reason"}}})).collect::<Vec<_>>()})));
+    r.mock.on("GET","/fb/v27.0/campaign1/ads",ok(json!({"data":statuses.iter().enumerate().map(|(i,(s,_))|json!({"id":format!("ad{i}"),"name":"test ad","effective_status":s,"ad_review_feedback":{"global":{"policy":"Synthetic reason","other":"Another reason"}}})).collect::<Vec<_>>()})));
     let state = r
         .meta
         .campaign_state(&cred(), &public(), "campaign1")
@@ -439,10 +439,10 @@ async fn state_maps_all_review_states_and_joins_feedback() {
         assert!(ad.feedback.as_ref().unwrap().contains("Synthetic reason"));
         assert!(ad.feedback.as_ref().unwrap().contains("Another reason"));
     }
-    let req = r.mock.request("GET", "/fb/v19.0/campaign1");
+    let req = r.mock.request("GET", "/fb/v27.0/campaign1");
     assert_auth(&req, TOKEN);
     assert_eq!(req.param("fields"), Some("account_id,effective_status"));
-    let req = r.mock.request("GET", "/fb/v19.0/campaign1/ads");
+    let req = r.mock.request("GET", "/fb/v27.0/campaign1/ads");
     assert_auth(&req, TOKEN);
     assert_eq!(
         req.param("fields"),
@@ -455,7 +455,7 @@ async fn daily_numbers_preserve_missing_counters_and_exact_currency_units() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1",
+        "/fb/v27.0/campaign1",
         ok(json!({"account_id":"123"})),
     );
     for (currency, spend, want) in [
@@ -465,10 +465,10 @@ async fn daily_numbers_preserve_missing_counters_and_exact_currency_units() {
     ] {
         r.mock.set(
             "GET",
-            "/fb/v19.0/act_123",
+            "/fb/v27.0/act_123",
             ok(json!({"account_id":"123","currency":currency,"timezone_name":"UTC"})),
         );
-        r.mock.set("GET","/fb/v19.0/campaign1/insights",ok(json!({"data":[{"ad_id":"ad1","date_start":"2026-11-11","spend":spend,"impressions":"12","clicks":"0","actions":[{"action_type":"link_click","value":"9"},{"action_type":"lead","value":"2"}]},{"ad_id":"ad2","date_start":"2026-11-11"},{"ad_id":"ad3","date_start":"2026-11-11","actions":[{"action_type":"link_click","value":"4"}]}]})));
+        r.mock.set("GET","/fb/v27.0/campaign1/insights",ok(json!({"data":[{"ad_id":"ad1","date_start":"2026-11-11","spend":spend,"impressions":"12","clicks":"0","actions":[{"action_type":"link_click","value":"9"},{"action_type":"lead","value":"2"}]},{"ad_id":"ad2","date_start":"2026-11-11"},{"ad_id":"ad3","date_start":"2026-11-11","actions":[{"action_type":"link_click","value":"4"}]}]})));
         let days = r
             .meta
             .ad_days(
@@ -548,7 +548,7 @@ async fn preview_uses_unpublished_story_and_placement() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_123/generatepreviews",
+        "/fb/v27.0/act_123/generatepreviews",
         ok(response("preview")),
     );
     for (placement, format) in [
@@ -577,7 +577,7 @@ async fn preview_uses_unpublished_story_and_placement() {
 #[tokio::test]
 async fn validation_and_throttle_errors_are_safe_and_creation_is_not_retried() {
     let r = rig().await;
-    let path = "/fb/v19.0/act_123/campaigns";
+    let path = "/fb/v27.0/act_123/campaigns";
     r.mock.on("POST",path,status(400,json!({"error":{"code":100,"message":format!("invalid {TOKEN}"),"error_user_title":"Budget refused","error_user_msg":"Choose a larger budget"}})));
     let e = r
         .meta
@@ -726,16 +726,16 @@ async fn every_method_maps_validation_refusals_and_rate_limits_without_secret_ec
         if index == 9 {
             r.mock.on(
                 "GET",
-                "/fb/v19.0/campaign1",
+                "/fb/v27.0/campaign1",
                 ok(json!({"account_id":"123"})),
             );
             r.mock.on(
                 "GET",
-                "/fb/v19.0/act_123",
+                "/fb/v27.0/act_123",
                 ok(json!({"account_id":"123","currency":"TRY","timezone_name":"UTC"})),
             );
         }
-        let path = format!("/fb/v19.0/{edge}");
+        let path = format!("/fb/v27.0/{edge}");
         r.mock.on(verb,&path,status(400,json!({"error":{"code":100,"error_user_title":"Fix input","error_user_msg":format!("Refused {TOKEN} {}",support::META_APP_SECRET),"message":"technical error"}})));
         let e = call_method(&r, index).await.unwrap_err();
         assert_eq!(e.kind(), "permanent", "method {index}");
@@ -770,7 +770,7 @@ async fn echoed_creative_payload_and_encoded_ad_copy_are_redacted_before_truncat
             support::lower_encoded(TOKEN)
         ),
     ] {
-        r.mock.set("POST","/fb/v19.0/act_123/adcreatives",status(400,json!({"error":{"code":100,"error_user_title":"Fix creative","error_user_msg":message}})));
+        r.mock.set("POST","/fb/v27.0/act_123/adcreatives",status(400,json!({"error":{"code":100,"error_user_title":"Fix creative","error_user_msg":message}})));
         let e = r
             .meta
             .create_creative(&cred(), &public(), &creative())
@@ -805,7 +805,7 @@ async fn incomplete_creation_responses_remain_ambiguous() {
     ] {
         r.mock.set(
             "POST",
-            &format!("/fb/v19.0/{edge}"),
+            &format!("/fb/v27.0/{edge}"),
             ok(json!({"success":true})),
         );
         assert_eq!(call_method(&r, method).await.unwrap_err().kind(), "unknown");
@@ -866,7 +866,7 @@ async fn malformed_money_counters_dates_and_account_limits_refuse_instead_of_def
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1",
+        "/fb/v27.0/campaign1",
         ok(json!({"account_id":"123"})),
     );
     for account in [
@@ -875,7 +875,7 @@ async fn malformed_money_counters_dates_and_account_limits_refuse_instead_of_def
         json!({"account_id":"123","currency":"TRY","timezone_name":"UTC"}),
         json!({"account_id":"123","currency":"TRY","timezone_name":"UTC","min_daily_budget":-1}),
     ] {
-        r.mock.set("GET", "/fb/v19.0/act_123", ok(account));
+        r.mock.set("GET", "/fb/v27.0/act_123", ok(account));
         assert_eq!(
             r.meta
                 .account_limits(&cred(), &public())
@@ -887,7 +887,7 @@ async fn malformed_money_counters_dates_and_account_limits_refuse_instead_of_def
     }
     r.mock.set(
         "GET",
-        "/fb/v19.0/act_123",
+        "/fb/v27.0/act_123",
         ok(json!({"account_id":"123","currency":"TRY","timezone_name":"UTC"})),
     );
     for (field, bad) in [
@@ -906,7 +906,7 @@ async fn malformed_money_counters_dates_and_account_limits_refuse_instead_of_def
         row[field] = bad;
         r.mock.set(
             "GET",
-            "/fb/v19.0/campaign1/insights",
+            "/fb/v27.0/campaign1/insights",
             ok(json!({"data":[row]})),
         );
         assert_eq!(
@@ -933,14 +933,14 @@ async fn state_and_daily_numbers_follow_pages_and_refuse_foreign_paging_origins(
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1",
+        "/fb/v27.0/campaign1",
         ok(json!({"account_id":"123","effective_status":"ACTIVE"})),
     );
-    let next = format!("{}/v19.0/campaign1/ads?after=next", r.mock.base("/fb"));
-    r.mock.on("GET","/fb/v19.0/campaign1/ads",ok(json!({"data":[{"id":"ad1","name":"one","effective_status":"ACTIVE"}],"paging":{"next":next}})));
+    let next = format!("{}/v27.0/campaign1/ads?after=next", r.mock.base("/fb"));
+    r.mock.on("GET","/fb/v27.0/campaign1/ads",ok(json!({"data":[{"id":"ad1","name":"one","effective_status":"ACTIVE"}],"paging":{"next":next}})));
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1/ads",
+        "/fb/v27.0/campaign1/ads",
         ok(json!({"data":[{"id":"ad2","name":"two","effective_status":"PAUSED"}]})),
     );
     let state = r
@@ -959,18 +959,18 @@ async fn state_and_daily_numbers_follow_pages_and_refuse_foreign_paging_origins(
     assert!(state.ads.iter().all(|ad| ad.feedback.is_none()));
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_123",
+        "/fb/v27.0/act_123",
         ok(json!({"account_id":"123","currency":"TRY","timezone_name":"UTC"})),
     );
-    let next = format!("{}/v19.0/campaign1/insights?after=next", r.mock.base("/fb"));
+    let next = format!("{}/v27.0/campaign1/insights?after=next", r.mock.base("/fb"));
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1/insights",
+        "/fb/v27.0/campaign1/insights",
         ok(json!({"data":[{"ad_id":"ad1","date_start":"2026-11-11"}],"paging":{"next":next}})),
     );
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1/insights",
+        "/fb/v27.0/campaign1/insights",
         ok(json!({"data":[{"ad_id":"ad2","date_start":"2026-11-11"}]})),
     );
     let days = r
@@ -993,7 +993,7 @@ async fn state_and_daily_numbers_follow_pages_and_refuse_foreign_paging_origins(
     );
     r.mock.set(
         "GET",
-        "/fb/v19.0/campaign1/ads",
+        "/fb/v27.0/campaign1/ads",
         ok(json!({"data":[],"paging":{"next":"https://example.test/steal-token"}})),
     );
     assert_eq!(
@@ -1014,12 +1014,12 @@ async fn malformed_pages_are_not_interpreted_as_no_objects_or_no_results() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/campaign1",
+        "/fb/v27.0/campaign1",
         ok(json!({"account_id":"123","effective_status":"ACTIVE"})),
     );
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_123",
+        "/fb/v27.0/act_123",
         ok(json!({"account_id":"123","currency":"TRY","timezone_name":"UTC"})),
     );
     for malformed in [json!({}), json!({"data":null}), json!({"data":{}})] {
@@ -1029,7 +1029,7 @@ async fn malformed_pages_are_not_interpreted_as_no_objects_or_no_results() {
             (9, "campaign1/insights"),
         ] {
             r.mock
-                .set("GET", &format!("/fb/v19.0/{edge}"), ok(malformed.clone()));
+                .set("GET", &format!("/fb/v27.0/{edge}"), ok(malformed.clone()));
             assert_eq!(
                 call_method(&r, method).await.unwrap_err().kind(),
                 "permanent",
@@ -1044,14 +1044,14 @@ async fn campaign_reads_refuse_another_accounts_campaign_before_reading_ads_or_s
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_123",
+        "/fb/v27.0/act_123",
         ok(json!({"account_id":"123","currency":"JPY","timezone_name":"UTC"})),
     );
     for row in [
         json!({"account_id":"456","effective_status":"ACTIVE"}),
         json!({"effective_status":"ACTIVE"}),
     ] {
-        r.mock.set("GET", "/fb/v19.0/campaign1", ok(row));
+        r.mock.set("GET", "/fb/v27.0/campaign1", ok(row));
         assert_eq!(
             r.meta
                 .campaign_state(&cred(), &public(), "campaign1")
@@ -1076,10 +1076,10 @@ async fn campaign_reads_refuse_another_accounts_campaign_before_reading_ads_or_s
             "permanent"
         );
     }
-    assert!(r.mock.requests("GET", "/fb/v19.0/campaign1/ads").is_empty());
+    assert!(r.mock.requests("GET", "/fb/v27.0/campaign1/ads").is_empty());
     assert!(
         r.mock
-            .requests("GET", "/fb/v19.0/campaign1/insights")
+            .requests("GET", "/fb/v27.0/campaign1/insights")
             .is_empty()
     );
 }
@@ -1096,7 +1096,7 @@ async fn malformed_continuations_cannot_hide_a_duplicate() {
     ] {
         r.mock.set(
             "GET",
-            "/fb/v19.0/act_123/campaigns",
+            "/fb/v27.0/act_123/campaigns",
             ok(json!({"data":[{"id":"one","name":"unique"}],"paging":paging})),
         );
         assert_eq!(
@@ -1116,7 +1116,7 @@ async fn json_escaped_ad_copy_is_not_exposed_in_validation_errors() {
     let mut spec = creative();
     spec.primary_text = "Synthetic first line\nSecond \"quoted\" line\\end".into();
     let escaped = serde_json::to_string(&spec.primary_text).unwrap();
-    r.mock.on("POST","/fb/v19.0/act_123/adcreatives",status(400,json!({"error":{"code":100,"error_user_title":"Fix creative","error_user_msg":format!("Invalid text {escaped}")}})));
+    r.mock.on("POST","/fb/v27.0/act_123/adcreatives",status(400,json!({"error":{"code":100,"error_user_title":"Fix creative","error_user_msg":format!("Invalid text {escaped}")}})));
     let e = r
         .meta
         .create_creative(&cred(), &public(), &spec)

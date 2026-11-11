@@ -24,7 +24,9 @@
 //! links included (an existing proof is replaced); calls to `graph.instagram.com` never do (that
 //! host belongs to the Instagram app). The Meta app (its secret and Graph version) is read from
 //! the [`PlatformAppConfig`] at call time; the Graph version defaults to
-//! [`DEFAULT_GRAPH_VERSION`]. Calls to `graph.instagram.com` are unversioned.
+//! [`DEFAULT_GRAPH_VERSION`]. A call on an ad account, or on what belongs to one, never goes out
+//! on a version older than [`ADS_API_VERSION`], the Marketing API version those calls are written
+//! for. Calls to `graph.instagram.com` are unversioned.
 //!
 //! **Errors.** Nothing is thrown: every failure is a [`ConnectorError`], built through its
 //! redacting constructors, its reason naming the Graph error's type, code, subcode and message
@@ -94,7 +96,7 @@ use jt_app::ports::connectors::PlatformAppConfig;
 use jt_outbound::Egress;
 use url::Url;
 
-pub use graph::DEFAULT_GRAPH_VERSION;
+pub use graph::{ADS_API_VERSION, DEFAULT_GRAPH_VERSION};
 pub use messaging::MAX_MESSENGER_TEXT;
 pub use oauth::{
     FACEBOOK_SCOPES, INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES,

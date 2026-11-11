@@ -416,3 +416,13 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     Nothing was tried signed in on staging. What stays open is what needs the owner's real
     account: the first ad campaign built at Meta and the first post left with Facebook's
     scheduler (B38; Step 2's proof box 5.3).
+  - **The API version of the ad calls (2026-11-11, after the staging release).** This plan
+    names Marketing API v27.0 for the campaign calls, but the adapter sent every call on its
+    default `v19.0`, a version Meta no longer serves; Meta's versioning page says such a call
+    "may fail or be upgraded to the next available version". Found while preparing the owner's
+    first real run. Every call on an ad account (the account, its campaigns, ad sets, ads,
+    creatives, previews, insights, lead forms; listing and probing ad accounts) now goes out on
+    `v27.0` or on a newer version the Meta app names (B54, `jt_meta::ADS_API_VERSION`,
+    `GraphApp::for_ads`). The other Meta calls are unchanged. Staging release `7891020b` does
+    not carry this; there, setting `JEETA_META_GRAPH_VERSION=v27.0` has the same effect on the
+    ad calls but moves every other Meta call too.

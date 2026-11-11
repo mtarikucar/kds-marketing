@@ -55,7 +55,7 @@ pub(crate) async fn set_daily_budget(
         ));
     }
     let token = ads_token(cred)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let answer = connector
         .graph_post(
             &app,
@@ -86,7 +86,7 @@ pub(crate) async fn list_adsets(
 ) -> Result<Vec<AdSet>, ConnectorError> {
     let token = ads_token(cred)?;
     let account = act(public)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let rows = connector
         .graph_pages(
             &app,
@@ -150,7 +150,7 @@ pub(crate) async fn insights(
     let context = account_context(connector, cred, public).await?;
     let token = ads_token(cred)?;
     let account = act(public)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let day = format_description!("[year]-[month]-[day]");
     let format = |d: Date| {
         d.format(&day)
@@ -199,7 +199,7 @@ pub(crate) async fn set_status(
     status: AdStatus,
 ) -> Result<(), ConnectorError> {
     let token = ads_token(cred)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let status = match status {
         AdStatus::Paused => "PAUSED",
         AdStatus::Active => "ACTIVE",
@@ -233,7 +233,7 @@ pub(crate) async fn account_context(
     public: &Value,
 ) -> Result<AdAccountContext, ConnectorError> {
     let account = act(public)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let row = connector
         .graph_get(
             &app,
@@ -319,7 +319,7 @@ pub(crate) async fn adset_insights(
     }
     let context = account_context(connector, cred, public).await?;
     let account = act(public)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let day = format_description!("[year]-[month]-[day]");
     let range = json!({"since":since.format(&day).map_err(|_| missing("date"))?, "until":until.format(&day).map_err(|_| missing("date"))?}).to_string();
     let rows = connector
@@ -374,7 +374,7 @@ pub(crate) async fn resolve_adset(
     ad_id: &str,
 ) -> Result<Option<String>, ConnectorError> {
     let account = act(public)?;
-    let app = connector.graph_app()?;
+    let app = connector.ads_app()?;
     let row = connector
         .graph_get(
             &app,

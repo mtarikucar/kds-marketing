@@ -416,7 +416,7 @@ fn script_listing(m: &Mock) {
     );
     m.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(graph_fixture(m, "me_adaccounts")),
     );
     m.on(
@@ -509,7 +509,7 @@ async fn list_assets_skips_what_the_user_did_not_grant() {
     m.on("GET", "/fb/v19.0/me/accounts", ok(json!({ "data": [] })));
     m.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         status(403, graph_fixture(m, "error_permission")),
     );
     m.on(
@@ -562,18 +562,18 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     let m = &r.mock;
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
     );
     script_listing(m);
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_1")),
     );
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_2")),
     );
     r.meta.list_assets(&user_cred()).await.unwrap();
@@ -593,7 +593,7 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     // Both paged reads followed their next link.
     assert_eq!(m.requests("GET", "/fb/v19.0/me/accounts").len(), 2);
     assert_eq!(
-        m.requests("GET", "/fb/v19.0/act_1111111111/insights").len(),
+        m.requests("GET", "/fb/v27.0/act_1111111111/insights").len(),
         2
     );
     let graph: Vec<_> = recorded
@@ -612,7 +612,7 @@ async fn appsecret_proof_present_on_every_call_including_paging() {
     // The followed links kept their cursors.
     let second = &m.requests("GET", "/fb/v19.0/me/accounts")[1];
     assert_eq!(second.param("after"), Some("QVFTEST2"));
-    let second = &m.requests("GET", "/fb/v19.0/act_1111111111/insights")[1];
+    let second = &m.requests("GET", "/fb/v27.0/act_1111111111/insights")[1];
     assert_eq!(second.param("after"), Some("MQZDZD"));
 }
 
@@ -1015,7 +1015,7 @@ async fn probe_returns_account_id_per_kind() {
     // Meta Ads: the ad account's number without act_, by the act_ node.
     r2.mock.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({ "id": "act_1111111111", "account_id": "1111111111", "name": "Test Reklam", "account_status": 1, "currency": "TRY" })),
     );
     let p = r2
@@ -1029,7 +1029,7 @@ async fn probe_returns_account_id_per_kind() {
     // Without an account named, the token's only active ad account.
     r2.mock.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(graph_fixture(&r2.mock, "me_adaccounts")),
     );
     let p = r2.meta.probe(&user_cred(), &public("meta_ads", None)).await;
@@ -1092,7 +1092,7 @@ async fn probe_failures_are_results() {
     // Two ad accounts and none named: the probe cannot choose.
     r.mock.on(
         "GET",
-        "/fb/v19.0/me/adaccounts",
+        "/fb/v27.0/me/adaccounts",
         ok(json!({ "data": [
             { "account_id": "1", "account_status": 1 }, { "account_id": "2", "account_status": 1 }
         ]})),
@@ -2726,14 +2726,14 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     let r = rig().await;
     r.mock.on(
         "GET",
-        "/fb/v19.0/act_1111111111",
+        "/fb/v27.0/act_1111111111",
         ok(json!({"account_id":"1111111111","currency":"TRY","timezone_name":"Europe/Istanbul"})),
     );
     let m = &r.mock;
     let p = public("meta_ads", Some("1111111111"));
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/adsets",
+        "/fb/v27.0/act_1111111111/adsets",
         ok(graph_fixture(m, "adsets")),
     );
     let sets = r.meta.list_adsets(&user_cred(), &p).await.unwrap();
@@ -2745,21 +2745,21 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     assert_eq!(sets[0].lifetime_budget_minor, None, "0 reads as none");
     assert_eq!(sets[1].lifetime_budget_minor, Some(500_000));
     assert_eq!(
-        m.request("GET", "/fb/v19.0/act_1111111111/adsets")
+        m.request("GET", "/fb/v27.0/act_1111111111/adsets")
             .param("fields"),
         Some("id,name,status,campaign_id,daily_budget,lifetime_budget")
     );
 
     m.on(
         "POST",
-        "/fb/v19.0/1313131313",
+        "/fb/v27.0/1313131313",
         ok(json!({ "success": true })),
     );
     r.meta
         .set_daily_budget(&user_cred(), "1313131313", 25_000)
         .await
         .unwrap();
-    let write = m.request("POST", "/fb/v19.0/1313131313");
+    let write = m.request("POST", "/fb/v27.0/1313131313");
     assert_eq!(write.json(), json!({ "daily_budget": 25_000 }));
     assert_graph_auth(&write, USER_TOKEN);
     assert_eq!(
@@ -2773,12 +2773,12 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
 
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_1")),
     );
     m.on(
         "GET",
-        "/fb/v19.0/act_1111111111/insights",
+        "/fb/v27.0/act_1111111111/insights",
         ok(graph_fixture(m, "ads_insights_2")),
     );
     let rows = r
@@ -2797,7 +2797,7 @@ async fn ads_adsets_budgets_and_insights_follow_paging() {
     assert_eq!(rows[0].impressions, 10_000);
     assert_eq!(rows[0].clicks, 250);
     assert_eq!(rows[1].spend_minor, 700);
-    let first = &m.requests("GET", "/fb/v19.0/act_1111111111/insights")[0];
+    let first = &m.requests("GET", "/fb/v27.0/act_1111111111/insights")[0];
     assert_eq!(first.param("level"), Some("campaign"));
     assert_eq!(first.param("time_increment"), Some("1"));
     assert_eq!(first.param("limit"), Some("500"));
@@ -3279,8 +3279,8 @@ async fn adset_metrics_preserve_missing_and_currency_exponent() {
     let p = public("meta_ads", Some("1111111111"));
     for (currency, spend, expected, exponent) in [("JPY", "123", 123, 0), ("TRY", "12.34", 1234, 2)]
     {
-        r.mock.set("GET", "/fb/v19.0/act_1111111111", ok(json!({"account_id":"1111111111","currency":currency,"timezone_name":"Europe/Istanbul"})));
-        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend,"clicks":"0"}]})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111", ok(json!({"account_id":"1111111111","currency":currency,"timezone_name":"Europe/Istanbul"})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend,"clicks":"0"}]})));
         let context = r.meta.account_context(&user_cred(), &p).await.unwrap();
         assert_eq!(context.minor_unit_exponent, exponent);
         let rows = r
@@ -3304,7 +3304,7 @@ async fn adset_metrics_preserve_missing_and_currency_exponent() {
         json!("1.001"),
         json!("9223372036854775808"),
     ] {
-        r.mock.set("GET", "/fb/v19.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend}]})));
+        r.mock.set("GET", "/fb/v27.0/act_1111111111/insights", ok(json!({"data":[{"account_id":"1111111111","adset_id":"222","date_start":"2026-10-01","spend":spend}]})));
         assert!(
             r.meta
                 .adset_insights(
@@ -3324,18 +3324,18 @@ async fn ad_status_meta_and_fake_contract() {
     use jt_app::ports::connectors::AdStatus;
     let r = rig().await;
     r.mock
-        .set("POST", "/fb/v19.0/222", ok(json!({"success":true})));
+        .set("POST", "/fb/v27.0/222", ok(json!({"success":true})));
     for (status, wire) in [(AdStatus::Paused, "PAUSED"), (AdStatus::Active, "ACTIVE")] {
         r.meta
             .set_status(&user_cred(), "222", status)
             .await
             .unwrap();
-        let requests = r.mock.requests("POST", "/fb/v19.0/222");
+        let requests = r.mock.requests("POST", "/fb/v27.0/222");
         let body: Value = serde_json::from_str(&requests.last().unwrap().body).unwrap();
         assert_eq!(body["status"], wire);
         assert!(body.get("daily_budget").is_none());
     }
-    r.mock.set("POST", "/fb/v19.0/222", ok(json!({})));
+    r.mock.set("POST", "/fb/v27.0/222", ok(json!({})));
     assert!(
         r.meta
             .set_status(&user_cred(), "222", AdStatus::Paused)
@@ -3345,13 +3345,13 @@ async fn ad_status_meta_and_fake_contract() {
     let p = public("meta_ads", Some("1111111111"));
     r.mock.set(
         "GET",
-        "/fb/v19.0/333",
+        "/fb/v27.0/333",
         ok(json!({"account_id":"other","adset_id":"222"})),
     );
     assert!(r.meta.resolve_adset(&user_cred(), &p, "333").await.is_err());
     r.mock.set(
         "GET",
-        "/fb/v19.0/333",
+        "/fb/v27.0/333",
         ok(json!({"account_id":"1111111111","adset_id":"222"})),
     );
     assert_eq!(
@@ -3371,7 +3371,7 @@ async fn account_timezone_uses_meta_facts_with_istanbul_fallback() {
     ] {
         r.mock.set(
             "GET",
-            "/fb/v19.0/act_1111111111",
+            "/fb/v27.0/act_1111111111",
             ok(json!({
                 "account_id":"1111111111", "currency":"TRY", "timezone_name":timezone
             })),

@@ -21,7 +21,7 @@ pub(crate) async fn account_limits(
     public: &Value,
 ) -> Result<AdAccountLimits, ConnectorError> {
     let account = act(public)?;
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let row = c
         .graph_get(
             &app,
@@ -65,7 +65,7 @@ pub(crate) async fn find_by_name(
         AdLevel::Ad => "ads",
         AdLevel::Creative => "adcreatives",
     };
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let token = ads_token(cred)?;
     let filtering = json!([{"field":"name", "operator":"EQUAL", "value":name}]).to_string();
     let rows = c
@@ -105,7 +105,7 @@ async fn create(
     edge: &str,
     body: Value,
 ) -> Result<String, ConnectorError> {
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let row = c
         .graph_post_once(&app, ads_token(cred)?, &[&act(public)?, edge], &[], body)
         .await?;
@@ -223,7 +223,7 @@ pub(crate) async fn upload_image(
     if bytes.is_empty() {
         return Err(ConnectorError::permanent("ad image is empty"));
     }
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let row = c
         .graph_post_once(
             &app,
@@ -261,7 +261,7 @@ pub(crate) async fn create_lead_form(
             "lead form page does not match credential",
         ));
     }
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let row=c.graph_post_once(&app,token,&[node(page_id)?,"leadgen_forms"],&[],json!({"name":spec.name,
         "questions":spec.questions.iter().map(|q| json!({"type":match q {LeadQuestion::FullName=>"FULL_NAME",LeadQuestion::Email=>"EMAIL",LeadQuestion::Phone=>"PHONE_NUMBER"}})).collect::<Vec<_>>(),
         "privacy_policy":{"url":spec.privacy_policy_url},"follow_up_action_url":spec.thank_you_url,"locale":spec.locale})).await?;
@@ -371,7 +371,7 @@ pub(crate) async fn campaign_state(
     campaign_id: &str,
 ) -> Result<CampaignProviderState, ConnectorError> {
     let account = act(public)?;
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let token = ads_token(cred)?;
     let row = c
         .graph_get(
@@ -429,7 +429,7 @@ pub(crate) async fn ad_days(
         return Err(ConnectorError::permanent("insight date range is reversed"));
     }
     let context = account_context(c, cred, public).await?;
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let campaign = c
         .graph_get(
             &app,
@@ -495,7 +495,7 @@ pub(crate) async fn preview(
     creative: &CreativeSpec,
     placement: AdPlacement,
 ) -> Result<String, ConnectorError> {
-    let app = c.graph_app()?;
+    let app = c.ads_app()?;
     let format = match placement {
         AdPlacement::FacebookFeed => "MOBILE_FEED_STANDARD",
         AdPlacement::InstagramFeed => "INSTAGRAM_STANDARD",
