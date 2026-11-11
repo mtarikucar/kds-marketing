@@ -567,6 +567,96 @@ pub async fn recover_publications(d: &Deps, ws: WorkspaceId) -> Result<u32, AppE
     Ok(count)
 }
 
+/// A hand-over that never learnt whether the platform took the post (`Unknown`, its time kept)
+/// may have left a post there that nothing follows. Once its slot is no longer going out
+/// (retired: cancelled, replaced, redone) and its time is still ahead, this looks the post up in
+/// the platform's own scheduler by what Jeeta sent, on the same account at the same time with
+/// the same text, and takes it back: cancelled here and still going out there would be the worst
+/// of both (design 2026-11-10 §7.3, B60). Only an exact, single match is Jeeta's own post; any
+/// other post there is never touched, and a post with a link in its text is not matched. A
+/// read or a withdrawal that fails is tried again by the next run. Answers how many posts were
+/// taken back.
+pub async fn reconcile_unknown_hand_overs(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
+    let now = d.clock.now();
+    let strays: Vec<PublishAttempt> = {
+        let mut r = d.uow.tenant(ws).await?;
+        chain::active(r.as_mut()).await?;
+        let mut strays = Vec::new();
+        for s in r.studio().list_slots(query(now + HOLD_HORIZON)).await? {
+            if s.state != SlotState::Retired {
+                continue;
+            }
+            strays.extend(
+                r.studio()
+                    .slot_evidence(s.id)
+                    .await?
+                    .0
+                    .into_iter()
+                    .filter(|a| {
+                        a.state() == PublishState::Unknown
+                            && a.held_until().is_some_and(|at| at > now)
+                    }),
+            );
+        }
+        strays
+    };
+    let mut count = 0;
+    for a in strays {
+        let Some(at) = a.held_until() else {
+            continue;
+        };
+        let (cap, cred) = {
+            let mut r = d.uow.tenant(ws).await?;
+            let Some(c) = r.capabilities().find(a.capability_id()).await? else {
+                continue;
+            };
+            if chain::capability_access(&c, now, true).is_err() {
+                continue;
+            }
+            let Ok(cred) = credential(d, r.as_mut(), &c).await else {
+                continue;
+            };
+            (c, cred)
+        };
+        let Some(publisher) =
+            provider_for_kind(&cap.kind_key).and_then(|p| d.connectors.publisher(p))
+        else {
+            continue;
+        };
+        let public = adapter_public(&cap);
+        let Ok(Some(held)) = publisher.scheduled_list(&cred, &public).await else {
+            continue;
+        };
+        let sent = a.piece().text.trim();
+        let mut own = held
+            .iter()
+            .filter(|p| p.publish_at == at && p.text.trim() == sent);
+        let (Some(post), None) = (own.next(), own.next()) else {
+            continue;
+        };
+        let receipt = crate::ports::connectors::PublishReceipt {
+            external_id: post.external_id.clone(),
+            url: None,
+        };
+        if !matches!(publisher.withdraw(&cred, &public, &receipt).await, Ok(true)) {
+            continue;
+        }
+        let mut r = d.uow.tenant(ws).await?;
+        let entry = jt_ledger::LedgerEntry::new(
+            ws,
+            a.actor().clone(),
+            jt_ledger::Action::new("studio.publish.withdrawn")
+                .map_err(|_| AppError::internal("action"))?,
+            json!({"attempt_id":a.id(),"slot_id":a.slot_id(),"reason":"unknown_hand_over"}),
+            now,
+        );
+        r.ledger().append(entry).await?;
+        r.commit().await?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// Recovers the observed attempt `a` (its captured `receipt`) as [`recover_publications`] does,
 /// under the attempt's historical authority: `true` once settled.
 async fn recover_observed(

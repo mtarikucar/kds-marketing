@@ -670,3 +670,97 @@ async fn redo_and_cancel_take_a_held_post_back_first_or_change_nothing() {
     assert_eq!(attempt(&w, slot.id).state(), PublishState::Refused);
     assert_eq!(calls(&x, "publish"), 0);
 }
+
+/// A hand-over that never learnt whether the platform took the post: once its slot no longer
+/// goes out, Jeeta finds its own post at the platform by what it sent and takes it back; no
+/// other post there is touched.
+#[tokio::test]
+async fn an_unknown_hand_over_is_looked_up_at_the_platform_and_taken_back_once_its_slot_is_cancelled()
+ {
+    use jt_app::ports::connectors::PlatformScheduled;
+    use jt_app::usecases::studio::work::{CancelSlotInput, slot_cancel};
+    let (w, x) = hold_world(true).await;
+    let a = agent(&w);
+    let (_, slot) = scheduled(&w, "unknown", "feed_post", WHEN).await;
+    x.push_schedule(Err(ConnectorError::unknown(
+        "accepted response lacks post id",
+    )));
+    assert_eq!(publish::hold_ahead(&w.d, w.f.ws).await.unwrap(), 1);
+    let attempt_of = attempt(&w, slot.id);
+    assert_eq!(attempt_of.state(), PublishState::Unknown);
+    assert_eq!(attempt_of.held_until(), Some(WHEN));
+    let sent = attempt_of.piece().text.clone();
+    let at_platform = |id: &str, at: OffsetDateTime, text: &str| PlatformScheduled {
+        external_id: id.into(),
+        publish_at: at,
+        text: text.into(),
+    };
+    let listed = || {
+        Ok(Some(vec![
+            at_platform("other-time", WHEN + Duration::hours(1), &sent),
+            at_platform("other-text", WHEN, "Elle zamanlanmış başka bir gönderi"),
+            at_platform("ours", WHEN, &format!("{sent}\n")),
+        ]))
+    };
+
+    // While the slot still stands nothing is looked up: its outcome is a person's to look at.
+    assert_eq!(
+        publish::reconcile_unknown_hand_overs(&w.d, w.f.ws)
+            .await
+            .unwrap(),
+        0
+    );
+    // Cancelled: the post is looked up and only the exact match is taken back.
+    slot_cancel(
+        &w.d,
+        &a,
+        CancelSlotInput {
+            slot_id: slot.id,
+            expected_revision: slot.revision,
+            reason: "not this one".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(slot_state(&w, slot.id), SlotState::Retired);
+    x.push_scheduled_list(listed());
+    x.push_withdraw(Ok(true));
+    assert_eq!(
+        publish::reconcile_unknown_hand_overs(&w.d, w.f.ws)
+            .await
+            .unwrap(),
+        1
+    );
+    let taken: Vec<_> = x
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            ConnectorCall::Withdraw { receipt, .. } => Some(receipt.external_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(taken, ["ours"]);
+    assert_eq!(ledgered(&w, "studio.publish.withdrawn"), 1);
+
+    // Gone from the platform: nothing more to do. Two posts that both match are not ours to
+    // choose between, and a platform that cannot be read is asked again next time.
+    x.push_scheduled_list(Ok(Some(vec![at_platform(
+        "other-text",
+        WHEN,
+        "Elle zamanlanmış başka bir gönderi",
+    )])));
+    x.push_scheduled_list(Ok(Some(vec![
+        at_platform("twin-1", WHEN, &sent),
+        at_platform("twin-2", WHEN, &sent),
+    ])));
+    x.push_scheduled_list(Err(ConnectorError::transient("down")));
+    for _ in 0..3 {
+        assert_eq!(
+            publish::reconcile_unknown_hand_overs(&w.d, w.f.ws)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    assert_eq!(calls(&x, "withdraw"), 1);
+}

@@ -324,3 +324,8 @@ Independent of Tasks 1–3 (fixtures).
   have left, and nobody else could look: neither the agent nor Jeeta sees the platform's own
   scheduler. The account view now reads it (B59, `at_platform`) and marks what Jeeta does not
   hold there; the panel warns on the account's page.
+- 2026-11-11 On release `f7be8eb1` the account view answered for the owner's Page with one post
+  Jeeta does not know: the one the first hand-over left (13 November, 11:00 UTC). So Facebook
+  had scheduled it although its answer carried no post id, and the agent's cancel of the slot
+  had left it there to go out. The owner could not find it on Meta's screens. The recovery job
+  now takes such a post back itself when it is provably Jeeta's own (B60).

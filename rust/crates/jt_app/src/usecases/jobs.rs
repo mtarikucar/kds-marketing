@@ -2535,7 +2535,15 @@ async fn run_studio_publications(deps: &Deps, job: Job) -> JobReport {
                 (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
             }
         } else {
-            super::studio::publish::recover_publications(deps, ws).await
+            // What went out is settled, then a hand-over that never learnt its outcome is looked
+            // up at its platform and taken back when its slot no longer goes out. Each on its
+            // own: one failing does not stop the other.
+            let recovered = super::studio::publish::recover_publications(deps, ws).await;
+            let reconciled = super::studio::publish::reconcile_unknown_hand_overs(deps, ws).await;
+            match (recovered, reconciled) {
+                (Ok(recovered), Ok(reconciled)) => Ok(recovered + reconciled),
+                (Err(e), _) | (_, Err(e)) => Err(e),
+            }
         };
         match result {
             Ok(n) => report.changed += u64::from(n),

@@ -1237,6 +1237,12 @@ tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına b�
   `known: false`, Jeeta'nın orada tutmadığı gönderidir (elle zamanlanmış ya da sonucu bilinmeyen bir
   bırakmadan kalmış). Jeeta onu izlemez ve geri çekmez; panel hesabın sayfasında uyarır, ajan sahibe
   söyler. Okuma başarısız olursa alan gelmez; hesabın sayfası etkilenmez.
+- **Sonucu bilinmeyen bırakma (B60).** `studio_publish_recover` işi, sonucu öğrenilemeyen bir
+  bırakmanın yuvası artık yayınlanmayacaksa (iptal, değişiklik) ve saati gelmemişse gönderiyi
+  platformun zamanlayıcısında arar (`publish::reconcile_unknown_hand_overs`): aynı hesap, aynı saat,
+  aynı metin. Tek ve birebir eşleşme geri çekilir (`studio.publish.withdrawn`, neden
+  `unknown_hand_over`); başka hiçbir gönderiye dokunulmaz. Yuvası hâlâ duran bilinmeyen sonuç
+  insanın bakacağı iş olarak kalır.
 - **Saat değiştirme (B57).** Ajan, bir içerik sürümünün planlanmış paylaşımını hiçbir şey
   gönderilmeden iptal ederse (`studio.slot_cancel`) sürüm yeniden saat bekler ve
   `social.version_schedule` ona yeni saat verir. İnsanın iptali paylaşmama kararıdır; denenmiş
