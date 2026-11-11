@@ -203,11 +203,13 @@ Independent of Tasks 1–3 (fixtures).
 
 - [x] 5.1 README: the module, the use cases, the table, migrations 0037 and 0038.
 - [x] 5.2 Whole step: clippy, full Rust tests, panel tests, visual check.
-- [ ] 5.3 Proof on the separate local database: an area's package is scheduled by a connected
-  agent and appears under its account's "Sıradaki paylaşımlar". **Not done, and not possible
-  without a real connected account** (see the execution log, 2026-11-11): the server offers a
-  version only to an account with a sealed credential, and a credential is sealed only by a real
-  connect. The flow is the tests' (`social_schedule`, `social_accounts`, the twin parity suite).
+- [x] 5.3 Proof: an area's package is scheduled by a connected agent and appears under its
+  account's "Sıradaki paylaşımlar". Not possible on the separate local database (the server
+  offers a version only to an account with a sealed credential, and a credential is sealed only
+  by a real connect); done on staging on 2026-11-11 with the owner's own Facebook Page (see the
+  execution log): the agent delivered the package and gave its version the Page and a time, the
+  account's coming posts listed it (read as the agent, through the use case the panel's list
+  reads), Jeeta left it with Facebook's scheduler and took it back.
 
 ## Execution log
 
@@ -309,4 +311,12 @@ Independent of Tasks 1–3 (fixtures).
   - Also seen: a feed post cannot be scheduled nearer than its preparation lead (24 hours by
     default, `lead_too_short`), so the nearest test time is a day ahead; MCP sessions on staging
     answer 404 after a few idle minutes and the client must initialise again.
-  Box 5.3 stays open: the two-call hand-over and a withdrawal have not yet been seen on the Page.
+- 2026-11-11 **Second real run, on staging release `a621e9ae` (the fixes).** The agent gave the
+  waiting version the Page and tomorrow 13:45. Two minutes later the publish job handed it to
+  Facebook's scheduler in the two calls (claimed 10:27:56 UTC, done 10:28:03, no failure record)
+  and the account's coming posts showed it with `held_at_provider: true`. The agent then
+  cancelled the slot: Jeeta took the post back at Facebook first (`studio.publish.withdrawn`,
+  10:28:57) and retired the slot; the account's coming posts are empty and, as B57 says, the
+  attempted version is not offered again. Nothing was published. Not seen: the Page's own
+  scheduled list from Facebook's side while the post was there (the owner was asked to look for
+  the post the first run may have left, 13 November 14:00, and to delete it).

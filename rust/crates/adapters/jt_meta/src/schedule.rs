@@ -24,8 +24,10 @@
 //! the photos edge itself: run against a real Page on 2026-11-11, Meta took `POST /{page}/photos`
 //! with `scheduled_publish_time` and answered without a `post_id`, which left a scheduled post
 //! nobody could follow. An upload that fails schedules nothing (a temporary photo nobody
-//! attaches expires by itself), so its failure is never `Unknown`. The text post and the two
-//! reads are the documented shapes, tested against the Graph mock.
+//! attaches expires by itself), so its failure is never `Unknown`. The two calls and the
+//! withdrawal were then run against the same Page (a post was left there and taken back); the
+//! text post and the read of a post that went out are the documented shapes, tested against the
+//! Graph mock only.
 
 use jt_app::ports::connectors::{PostFormat, PublishReceipt, PublishRequest, Scheduled};
 use jt_connector::{ConnectorError, Credential};

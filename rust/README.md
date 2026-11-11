@@ -1225,10 +1225,12 @@ tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına b�
 - **Gerçek Sayfada ilk deneme (2026-11-11).** Tek görselli bir gönderi sahibin kendi Sayfasına
   bırakıldı: eski tek çağrılı yolu (`/photos` + `scheduled_publish_time`) Facebook kabul etti ama
   yanıtta gönderi kimliği yoktu; sonuç "bilinmeyen" kaydedildi ve Facebook'ta izlenemeyen bir
-  zamanlanmış gönderi kalmış olabilir. Bırakma bu yüzden iki çağrılı yola çevrildi (B56). Yeni yol,
-  metin gönderisi, durum okuma ve geri çekme sahte Graph sunucusuna karşı sınandı; gerçek Sayfada
-  henüz çalıştırılmadı. Ayar bu yüzden kapalı gelir; açmadan önce kendi Sayfa'nda bir paylaşımın
-  zamanlandığını ve geri çekildiğini gör.
+  zamanlanmış gönderi kalmış olabilir. Bırakma bu yüzden iki çağrılı yola çevrildi (B56). Yeni yol
+  aynı gün aynı Sayfada çalıştırıldı: tek görselli gönderi Facebook'un zamanlayıcısına bırakıldı
+  (hesabın sıradaki paylaşımlarında `held_at_provider`) ve yuva iptal edilince Facebook'tan geri
+  çekildi (`studio.publish.withdrawn`); hiçbir şey yayınlanmadı. Metin ve bağlantı gönderisi ile
+  saatinde yayınlanmış bir gönderinin okunması gerçek Sayfada denenmedi. Ayar kapalı gelir; açmadan
+  önce kendi Sayfa'nda bir paylaşımın zamanlandığını ve geri çekildiğini gör.
 - **Saat değiştirme (B57).** Ajan, bir içerik sürümünün planlanmış paylaşımını hiçbir şey
   gönderilmeden iptal ederse (`studio.slot_cancel`) sürüm yeniden saat bekler ve
   `social.version_schedule` ona yeni saat verir. İnsanın iptali paylaşmama kararıdır; denenmiş
