@@ -190,6 +190,12 @@ export function errorMessage(t: TFunction, err: unknown): string {
     case 'enrollment_not_active':
     case 'archived':
     case 'campaign_not_running':
+    case 'not_active':
+    case 'attachments_require_email':
+    case 'too_many_attachments':
+    case 'attachment_repeated':
+    case 'attachment_not_staged':
+    case 'message_too_large':
       return t(`leads.errors.${err.details.reason}`);
     default:
       break;

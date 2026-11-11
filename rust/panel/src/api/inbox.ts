@@ -53,8 +53,19 @@ const held = (id: string) => `${root}/replies/${seg(id)}`;
 export const approveReply = (id: string, text?: string) =>
   request<InboxReplyOut>('POST', `${held(id)}/approve`, { body: text === undefined ? {} : { text } });
 export const discardReply = (id: string) => request<InboxReplyOut>('POST', `${held(id)}/discard`);
-export const reply = (id: string, text: string, request_key?: string, subject?: string) =>
-  request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }) } });
+export const reply = (id: string, text: string, request_key?: string, subject?: string, attachments: string[] = []) =>
+  request<InboxReplyOut>('POST', `${conv(id)}/reply`, {
+    body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }), ...(attachments.length ? { attachments } : {}) },
+  });
+/** Sets whom a commercial message to the person reaches; the note goes on their journey. */
+export const setPersonKind = (id: string, input: { kind: import('./types').RecipientKind; note?: string }) =>
+  request<unknown>('POST', `${root}/people/${seg(id)}/kind`, { body: input });
+/** Stages a file for an email (≤ 7 MiB decoded; PDF, PNG, JPEG, text, CSV, Word, Excel). */
+export const uploadAttachment = (input: { request_key: string; filename: string; mime: string; data_base64: string }) =>
+  request<import('./types').AttachmentOut>('POST', `${root}/attachments`, { body: input });
+/** A mail file and, while its bytes are kept, a download address valid ten minutes. */
+export const getAttachment = (id: string) =>
+  request<import('./types').AttachmentGetOut>('GET', `${root}/attachments/${seg(id)}`);
 /** People by name/company; an empty query pages through everyone (`limit`/`offset`, oldest first). */
 export const searchPeople = (q: string, limit?: number, offset?: number) =>
   request<InboxPerson[]>('GET', `${root}/people`, { query: { q, limit, offset } });

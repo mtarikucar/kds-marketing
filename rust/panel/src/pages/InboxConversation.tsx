@@ -12,6 +12,7 @@ import { personName } from '@/lib/people';
 import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
+import { AttachmentChip, ComposerAttachments, RecipientKindField, type Staged } from './InboxLeads';
 import { InboxPublic } from './InboxPublic';
 import {
   columnClass,
@@ -47,18 +48,28 @@ export function InboxConversation({ id }: { id: string }) {
   const [text, setText] = useState('');
   const [subject, setSubject] = useState('');
   const [until, setUntil] = useState('');
-  const request = useRef<{ text: string; subject?: string; key: string }>();
+  // Staged uploads of this conversation's composer only: another conversation mounts its own.
+  const [staged, setStaged] = useState<Staged[]>([]);
+  const request = useRef<{ text: string; subject?: string; files: string; key: string }>();
   const send = useInboxMutation(
     async () => {
       // An empty subject lets the server answer the original one ("Re: <subject>").
       const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || undefined : undefined;
-      if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
-        request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
-      return api.reply(id, request.current.text, request.current.key, request.current.subject);
+      const files = conversation.data?.kind_key === 'mailbox' ? staged.map((s) => s.file_id) : [];
+      // One request key per draft: the text, the subject and the files together.
+      if (
+        !request.current ||
+        request.current.text !== text.trim() ||
+        request.current.subject !== emailSubject ||
+        request.current.files !== files.join()
+      )
+        request.current = { text: text.trim(), subject: emailSubject, files: files.join(), key: crypto.randomUUID() };
+      return api.reply(id, request.current.text, request.current.key, request.current.subject, files);
     },
     () => {
       setText('');
       setSubject('');
+      setStaged([]);
       request.current = undefined;
     },
   );
@@ -91,6 +102,7 @@ export function InboxConversation({ id }: { id: string }) {
         {ctx && !ctx.person.erased_at && !ctx.person.merged_into && <>
           <Disclosure key={ctx.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={ctx.person.id} /></Disclosure>
           <InboxErasure key={`erase:${ctx.person.id}`} personId={ctx.person.id} />
+          <RecipientKindField key={`kind:${ctx.person.id}:${ctx.person.recipient_kind ?? 'unknown'}`} person={ctx.person} />
         </>}
         <QueryState query={conversation}>
           {row && (
@@ -192,6 +204,13 @@ export function InboxConversation({ id }: { id: string }) {
                         <p className="my-2 whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
+                        {!!message.attachments?.length && (
+                          <div className="mb-2 flex flex-wrap gap-1" aria-label={t('inbox.attachments.of')}>
+                            {message.attachments.map((file) => (
+                              <AttachmentChip key={file.file_id} file={file} />
+                            ))}
+                          </div>
+                        )}
                         <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
                           {deliveryText(t, message)}
                         </p>
@@ -221,6 +240,7 @@ export function InboxConversation({ id }: { id: string }) {
                     rows={4}
                   />
                 </label>
+                {row.kind_key === 'mailbox' && <ComposerAttachments staged={staged} onChange={setStaged} />}
                 <ErrorCallout error={send.error} />
                 {refusal && (
                   <Button

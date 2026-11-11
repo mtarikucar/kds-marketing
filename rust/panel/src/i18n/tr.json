@@ -337,15 +337,15 @@
       "task_due": "Zamanı gelen görev",
       "voice_bridge_offline": "{{name}} kayıt göndermiyor: köprü yeniden kaydolana kadar ajan aramaları reddedilir.",
       "phone_offline": "{{name}} hiçbir cihaz köprüsünde görünmüyor: bir köprü onu yeniden listeleyene kadar ona komut gönderilemez.",
-      "research_due": "Açık bir araştırma görevi bugün yeni aday bekliyor.",
-      "prospects_to_score": "Puanlanmayı bekleyen adaylar var.",
-      "prospects_to_promote": "Gelen kutusuna aktarılmayı bekleyen nitelikli adaylar var.",
-      "ownerless_journeys": "Sahibi olmayan açık yolculuklar var.",
-      "assignment_stalled": "Süresi geçen atamalar başka birine verilemedi.",
-      "promoted_not_contacted": "Aktarılan ama henüz kendisine yazılmayan adaylar var.",
-      "campaign_approval": "Bir kampanya onayınızı bekliyor.",
-      "campaign_blocked": "Bir kampanya durdu; nedenine bakın.",
-      "personalization_due": "Bir kampanyanın alıcıları kişiselleştirme bekliyor."
+      "research_due": "Bir araştırma görevi bugün {{n}} aday daha kaydedebilir.",
+      "prospects_to_score": "{{n}} aday puanlanmayı bekliyor.",
+      "prospects_to_promote": "{{n}} nitelikli aday gelen kutusuna aktarılmayı bekliyor.",
+      "ownerless_journeys": "{{n}} açık yolculuğun sahibi yok.",
+      "assignment_stalled": "{{n}} atama süresi geçtiği hâlde başka birine verilemedi.",
+      "promoted_not_contacted": "Aktarılan {{n}} adaya henüz yazılmadı.",
+      "campaign_approval": "Bir kampanyanın {{revision}}. sürümü onayınızı bekliyor.",
+      "campaign_blocked": "Bir kampanya durdu: {{reason}}.",
+      "personalization_due": "Bir kampanyada {{n}} alıcı kişiselleştirme bekliyor."
     }
   },
   "team": {
@@ -1392,7 +1392,8 @@
       "ours": "Bizde",
       "unassigned": "Atanmamış",
       "snoozed": "Ertelenmiş",
-      "all": "Hepsi"
+      "all": "Hepsi",
+      "ownerless": "Sahipsiz"
     },
     "state": {
       "open": "Açık",
@@ -1442,7 +1443,8 @@
       "lost": "Kaybedildi",
       "snoozed": "Ertelendi",
       "reopened": "Yeniden açıldı",
-      "merged": "Birleştirildi"
+      "merged": "Birleştirildi",
+      "outreach_sent": "Kampanya e-postası gönderildi"
     },
     "taskStatus": {
       "open": "Açık",
@@ -1664,6 +1666,50 @@
       },
       "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
       "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
+    },
+    "outreachStep": "{{n}}. adım",
+    "leads": {
+      "prospect": "Aday kaydı",
+      "origin": "Nereden: {{via}}",
+      "kind": "Alıcı türü",
+      "setKind": "Alıcı türünü kaydet",
+      "newKind": "Yeni tür",
+      "kindNote": "Not (isteğe bağlı)",
+      "sequence": "Kampanya dizisi",
+      "campaign": "Kampanya",
+      "nextStep": "Sıradaki adım: {{n}} · {{at}}",
+      "stopSequence": "Diziyi durdur",
+      "looking": "Aranıyor…",
+      "noSequence": "Bu kişi şu an bir kampanya dizisinde değil.",
+      "assignments": "Atama geçmişi",
+      "noAssignments": "Atama yok.",
+      "ownerlessCount": "Sahibi olmayan açık yolculuk: {{n}}",
+      "stalledCount": "Süresi geçen atama: {{n}}",
+      "oldest": "En uzun bekleyeni aç",
+      "distributionLink": "Dağıtım ayarları"
+    },
+    "attachments": {
+      "add": "Dosya ekle",
+      "staged": "Eklenecek dosyalar",
+      "remove": "{{name}} dosyasını çıkar",
+      "download": "{{name}} dosyasını indir",
+      "gone": "Dosya artık saklanmıyor.",
+      "tooMany": "Bir e-postaya en fazla {{n}} dosya eklenebilir.",
+      "badType": "Bu dosya türü eklenemez: PDF, PNG, JPEG, metin, CSV, Word ya da Excel dosyası seçin.",
+      "tooLarge": "Dosya 7 MB'tan büyük.",
+      "skipped": {
+        "file_too_large": "Dosya çok büyük",
+        "too_many_files": "E-postanın dosya sınırı aşıldı",
+        "daily_limit": "Günlük dosya sınırı aşıldı"
+      },
+      "states": {
+        "stored": "Saklanıyor",
+        "staged": "Gönderilmedi",
+        "attached": "Gönderildi",
+        "skipped": "Alınmadı",
+        "deleted": "Silindi"
+      },
+      "of": "Ekler"
     }
   },
   "studio": {
@@ -2897,7 +2943,13 @@
       "not_enrollable": "Bu durumdaki bir kampanyaya alıcı eklenemez.",
       "enrollment_not_active": "Bu alıcı için kampanya zaten sürmüyor.",
       "archived": "Şablon arşivde.",
-      "campaign_not_running": "Kampanya şu an gönderim yapmıyor."
+      "campaign_not_running": "Kampanya şu an gönderim yapmıyor.",
+      "attachments_require_email": "Dosya yalnızca e-posta konuşmalarında eklenebilir.",
+      "too_many_attachments": "Bir e-postaya en fazla 5 dosya eklenebilir.",
+      "attachment_repeated": "Aynı dosya iki kez eklenmiş.",
+      "attachment_not_staged": "Dosya artık eklenemez; yeniden yükleyin.",
+      "message_too_large": "E-posta dosyalarıyla birlikte çok büyük.",
+      "not_active": "Bu alıcı için kampanya zaten sürmüyor."
     },
     "teamTabs": {
       "label": "Ekip bölümleri",
@@ -3246,6 +3298,73 @@
         "note": "Teyidin notu (kim, ne zaman, neyi teyit etti)",
         "notInForce": "Dayanak kayıtlı, ancak platformda soğuk e-posta kapalı olduğu için şu an geçerli değil.",
         "save": "Dayanağı kaydet"
+      }
+    },
+    "report": {
+      "title": "Raporlar",
+      "description": "Aday havuzunun ve kampanyaların sonuçları, çalışma alanının saatine göre tam günler üzerinden.",
+      "fromDay": "İlk gün",
+      "toDay": "Son gün",
+      "zone": "Günler {{tz}} saatine göre sayılır.",
+      "groupBy": "Gruplama",
+      "group": "Grup",
+      "none": "Belirtilmemiş",
+      "empty": "Bu aralıkta kayıt yok.",
+      "truncated": "Aralıkta bir raporun okuyabileceğinden fazla kayıt var; ilk kısmı sayıldı.",
+      "campaignTab": "Rapor",
+      "pool": {
+        "title": "Aday havuzu raporu",
+        "groups": {
+          "source": "Kaynağa göre",
+          "research_task": "Araştırma görevine göre",
+          "segment": "Segmente göre",
+          "sector": "Sektöre göre",
+          "city": "Şehre göre",
+          "score_bucket": "Puan aralığına göre",
+          "rubric_digest": "Ölçüt sürümüne göre"
+        },
+        "cols": {
+          "created": "Kaydedilen",
+          "scored": "Puanlanan",
+          "qualified": "Nitelikli",
+          "rejected": "Reddedilen",
+          "promoted": "Aktarılan",
+          "contacted": "Yazılan",
+          "replied": "Yanıt veren",
+          "meetings": "Randevu",
+          "quoted": "Teklif",
+          "won": "Kazanılan",
+          "lost": "Kaybedilen",
+          "revenue": "Kazanılan gelir",
+          "rates": "Oranlar"
+        },
+        "ratesText": "aktarılan→yanıt {{replied}} · yanıt→randevu {{meeting}} · randevu→satış {{won}}"
+      },
+      "outreach": {
+        "title": "Kampanya raporu",
+        "groups": {
+          "campaign": "Kampanyaya göre",
+          "step": "Adıma göre",
+          "template": "Şablona göre"
+        },
+        "step": "{{n}}. adım",
+        "unknownCampaign": "Silinmiş kampanya",
+        "unknownTemplate": "Bilinmeyen şablon",
+        "repliedText": "{{n}} ({{threaded}} aynı yazışmada)",
+        "cols": {
+          "enrolled": "Kaydedilen",
+          "skipped": "Atlanan",
+          "sent": "Gönderilen",
+          "failed": "Başarısız",
+          "bounced": "Geri dönen",
+          "complained": "Şikâyet",
+          "replied": "Yanıt",
+          "unsubscribed": "Abonelikten çıkan",
+          "unique_clicks": "Tıklayan",
+          "meetings_30d": "30 günde randevu",
+          "won_30d": "30 günde satış",
+          "stopped": "Durdurulan"
+        }
       }
     }
   },

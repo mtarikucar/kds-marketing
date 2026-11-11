@@ -1624,11 +1624,36 @@ comment; `Permission` union + four keys; `WorkKind` + nine kinds), `App.tsx` rou
 - [ ] Tests: `prospect_facts_in_journey_panel`, `stop_sequence_from_inbox`, `attachment_chip_downloads`,
   `composer_attachment_resets_on_conversation_change`, `home_renders_every_new_kind`; **commit** `feat(panel): leads
   in the inbox and home`.
+- As built (`5f405dce`, branch `feat/leads-panel`): `pages/InboxLeads.tsx` holds the pieces. The journey panel shows
+  `PersonOut.prospect` (`ProspectSummary`: facts, evidence, the latest score's reasons, signals) and the assignment
+  history (`distribution.assignments_list?journey_id`, read when its disclosure opens). There is no route for a
+  person's enrollments, so the active sequence is found through the journey's `outreach_sent` events: the
+  person's active enrollment (`?status=active&limit=200`) in the newest of at most three campaigns they name;
+  its stop sends `{}`. The recipient kind (badge and setter with a note) sits beside the conversation's compliance,
+  since it belongs to the person. There is no list of ownerless journeys either, so the "Sahipsiz" queue shows
+  `distribution.get`'s ownerless and stalled counts, the longest-waiting journey's person and the backfill
+  (`inbox.manage`). Attachments: chips per message (`stored`/`attached` download through `inbox.attachments_get`
+  in a tab opened on the click, `fileUrl`-checked; skipped and deleted files say why); the composer is offered on
+  mailbox conversations, checks the type, 7 MiB and five files before uploading, gives each upload its own request
+  key, and the reply's request key covers the files. Home's `itemText`/`itemLink` name the nine kinds with their
+  numbers. Tests beyond the plan's: `recipient_kind_is_set_with_a_note`, `ownerless_queue`.
 
 ### Task L8-T6: reports
 **Files:** `pages/LeadsReport.tsx`, the campaign report tab, tests.
 - [ ] Tests: `grouping_selector`, `local_day_ranges_sent_as_instants`, `revenue_per_currency_never_summed`;
   **commit** `feat(panel): lead and outreach reports`.
+- As built (`4c0a810f`): `pages/LeadsReport.tsx` (`/prospects/report`, both reports; `CampaignReport`, a
+  disclosure on a launched campaign's page, step grouping by default) and `lib/localDay.ts`, over the real
+  `usecases::{prospects,outreach}::report` shapes (the §3.16 guesses of L8-T1 are gone): `prospects.report
+  ?from&to&group_by` → `{from, to, group_by, groups: [{key, created, scored, qualified, rejected{}, promoted,
+  contacted, replied, meetings, quoted, won, lost{}, won_revenue{currency: minor}, rates}], truncated}`;
+  `outreach.report ?campaign_id&from&to&group_by` → `{.., groups: [{campaign_id, step, template_id, enrolled,
+  skipped{}, sent, unknown, failed, refused, bounced, complained, replied, replied_threaded, replied_unthreaded,
+  unsubscribed, unique_clicks | null, automated_clicks, meetings_30d, won_30d, stopped{}}]}`. The days are whole
+  local days of the pool settings' `timezone` (the last 30 by default) sent as `[from, to)` instants; won revenue
+  is one line per currency, never added. The L4-T7 routes match the earlier wrappers (`enrollments ?status&limit&
+  after` → `{items, next}`, stop and test take `{}`; test send answers `{to, step, message_id, state}`). Tests
+  beyond the plan's: `the_campaign_report_tab_asks_for_its_campaign` and `lib/localDay.test.ts`.
 
 ---
 

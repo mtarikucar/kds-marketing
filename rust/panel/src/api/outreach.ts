@@ -9,6 +9,7 @@ import type {
   EnrollInput,
   EnrollOut,
   EnrollmentListOut,
+  EnrollmentRow,
   EnrollmentStatus,
   OutreachReportGroup,
   OutreachReportOut,
@@ -72,34 +73,26 @@ export const controlCampaign = (id: string, action: ControlAction) =>
 export const enroll = (id: string, input: EnrollInput) =>
   request<EnrollOut>('POST', `${campaign(id)}/enrollments`, { body: input });
 
-/**
- * `GET /api/outreach/campaigns/{campaign_id}/enrollments`: follows spec §7.1 (and the
- * repository's `EnrollmentQuery`: `status`, `limit`, `after`) until its use case lands (L4-T7).
- */
+/** `GET /api/outreach/campaigns/{campaign_id}/enrollments?status&limit&after`: by id. */
 export const listEnrollments = (id: string, query: { status?: EnrollmentStatus; limit?: number; after?: string } = {}) =>
   request<EnrollmentListOut>('GET', `${campaign(id)}/enrollments`, { query: { ...query } });
 
 /**
- * `POST /api/outreach/enrollments/{enrollment_id}/stop` (stop reason `manual`): follows spec §7.1
- * until its use case lands (L4-T7); the panel reads the list again rather than the answer.
+ * `POST /api/outreach/enrollments/{enrollment_id}/stop` (stop reason `manual`): answers the
+ * enrollment; one no longer active is `CONFLICT not_active`.
  */
 export const stopEnrollment = (enrollmentId: string) =>
-  request<unknown>('POST', `${root}/enrollments/${seg(enrollmentId)}/stop`, { body: {} });
+  request<EnrollmentRow>('POST', `${root}/enrollments/${seg(enrollmentId)}/stop`, { body: {} });
 
 /** `POST /api/outreach/enrollments/personalization`: `custom.*` values, ≤ 100 a call. */
 export const personalize = (input: PersonalizeInput) =>
   request<{ updated: number }>('POST', `${root}/enrollments/personalization`, { body: input });
 
-/**
- * `POST /api/outreach/campaigns/{campaign_id}/test`: sends to the caller's own login address only.
- * Follows spec §7.1 until its use case lands (L4-T7).
- */
-export const testSend = (id: string) => request<unknown>('POST', `${campaign(id)}/test`, { body: {} });
+/** `POST /api/outreach/campaigns/{campaign_id}/test`: to the caller's own login address. */
+export const testSend = (id: string, input: { step?: number } = {}) =>
+  request<{ to: string; step: number; message_id: string; state: string }>('POST', `${campaign(id)}/test`, { body: input });
 
-/**
- * `GET /api/outreach/report`: `[from, to)` instants. Follows spec §3.16 and §7.1 until its use case
- * lands (L4-T6).
- */
+/** `GET /api/outreach/report`: `[from, to)` RFC 3339 instants, at most 366 days. */
 export const outreachReport = (query: { campaign_id?: string; from: string; to: string; group_by: OutreachReportGroup }) =>
   request<OutreachReportOut>('GET', `${root}/report`, { query: { ...query } });
 
