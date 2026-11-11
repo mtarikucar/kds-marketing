@@ -1452,6 +1452,29 @@ const INBOUND_SOURCES: &[&str] = &["INSTAGRAM","WEBSITE","PHONE","EMAIL","ADS","
   `dry_run_writes_nothing_and_reports_counts`, `rollback_removes_unchanged_prospects_and_keeps_touched`,
   `old_export_without_new_fields_still_imports_to_inbox` (format 1 compatibility), `report_holds_counts_only`.
 - [ ] Green (CI for `jt_pg`); **commit** `feat(import): route v1 leads between the inbox and the pool`.
+- As built (`58ac3067`, branch `feat/leads-import`): `Lead` gains the format-2 fields (all optional, nested
+  structs `Contact`, `Activity`, `Offer`, `Attribution`, `Research` also `deny_unknown_fields`; `format` other than 2
+  is `input_invalid`). `route` follows spec §10 and also sends a format-1 line and a format-2 line without a
+  `contact` object to the inbox (D90). `run` gained `seal: &dyn SecretBox` (the blocklist's keyed hashes; the binary
+  builds the serve `AesSecretBox` from `JEETA_SECRET_KEY`); inbox leads run before pool leads (D91). Pure
+  `pool_record(ws, lead, now) -> Option<PoolRecord>` builds the prospect through `jt_prospects::build` and then sets
+  every field's evidence to `SourceRef::Import`/`Recorder::Import` (D92); `Lead::{activity_notes, offers_note,
+  dnc_keys}`, `owner_of`. **Contract changes:** `ImportRepos` gained nothing — members come from
+  `memberships().list()`, the prospect checks and the prospect rollback use `prospects()` (D96);
+  `usecases::prospects::{blocklist_hash_in, blocklist_fingerprint_in}` (seal + workspace) under the existing
+  `blocklist_hash`/`blocklist_fingerprint`; `PgTenantRepos::untouched` also keeps a person a prospect is promoted
+  to, an outreach enrollment or a mail file names (D97). `Report` gains `to_inbox`, `to_pool`, `pooled`,
+  `skipped_deleted`, `skipped_merged`, `pool_duplicates`, `pool_in_inbox`, `pool_dnc`, `pool_blocked`, `pool_invalid`,
+  `owners_mapped`, `owners_unmapped`, `activities_as_notes`, `offers_as_notes`, `prospects_rolled_back`,
+  `prospects_kept` (27 counters, all numbers). No migration. Tests: `jt_app/tests/v1_import_routing.rs` (15, pure:
+  the plan's names plus `imported_values_out_of_bounds_are_refused_before_the_write`); `jt_pg/tests/m4_v1_import.rs`
+  gains `pool_duplicates_and_in_inbox_are_counted`, `opt_outs_become_dnc_hashes`,
+  `dry_run_writes_nothing_and_reports_counts`, `rollback_removes_unchanged_prospects_and_keeps_touched`,
+  `rollback_keeps_a_person_a_prospect_was_promoted_to`, `inbox_route_writes_activity_and_offer_notes_and_maps_the_owner`
+  (CI only); every existing call passes `&PlainSecretBox`; the format-1 test (`exported_jsonl_…`, the unchanged
+  `scripts/v1-export-leads.sql`) is `old_export_without_new_fields_still_imports_to_inbox`'s database half. The plan
+  test names that are database behaviour (`dry_run_…`, `pool_duplicates_…`, `opt_outs_…`) exist in both files.
+
 
 ### Task L7-T2: export runbook and the staging dry run
 
@@ -1461,6 +1484,13 @@ v1 read-only switch).
 - [ ] Run the export against a **staging copy** of v1, `jeeta import-v1 --workspace … --input … --dry-run` against
   staging Rust; record only the counts in the PR description (no values).
 - [ ] **Commit** `docs(import): the v1 lead export and import runbook`.
+- As built (`bcf64a97`): `docs/operations/v1-import.md`. The export query lives in the runbook, not in
+  `scripts/` (it must be re-checked against v1's schema at each export; the format-1 script stays for its test). It
+  differs from Appendix B: deleted and merged leads are left out at export (D98), offers and `lastContactAt` are
+  added, the attribution is `landingPath`/`referrerHost` only. A names-only column check against
+  `information_schema` must print `0`. **The staging dry run was not run** (owner guardrail: no server work in this
+  task); the coordinator runs §3 of the runbook after the cutover and records only counts.
+
 
 ---
 
