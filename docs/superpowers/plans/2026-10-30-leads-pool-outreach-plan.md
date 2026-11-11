@@ -1368,6 +1368,20 @@ migrations 20 → 21).
 - [ ] **Tests first:** contract `insert_link_attach_purge`, `rows_are_workspace_scoped`; `jt_files/tests/serve.rs`
   `attachment_purpose_forces_download_headers`, `attachment_address_does_not_verify_as_device`.
 - [ ] CI green; **commit** `feat(inbox): mail file records and download-only file addresses`.
+- As built (`67a054d1`, spec D80–D82): `rust/migrations/0028_mail_files.{up,down}.sql` (§4.4's table with the checks of
+  D80; the down is refused while a queued or held outbox entry names mail files), `jt_app::ports::mail_files`
+  (`MailFileRow`, `MailFileDirection`, `MailFileState::holds_bytes`, `SkipReason`, `mail_file_row_valid`,
+  `MAX_MAIL_FILE_PAGE`; `MailFileRepo { insert, get, lock, link_event_to_message, attach, for_messages,
+  due_for_purge, mark_deleted, erase_person, erase_event, kept, inbound_bytes_since }`, D81) and
+  `TenantRepos::mail_files` in every impl, `jt_pg/src/repos/inbox/mail_files.rs` (a refused check or foreign key
+  is `INTERNAL`), `jt_testkit/src/fakes/mail_files.rs`, the contract `jt_testkit::mail_files_contract`
+  (`insert_link_attach_purge`, `rows_are_workspace_scoped`, and
+  `erasure_blanks_names_and_answers_the_files_to_delete`) run by `jt_testkit/tests/mail_files_fakes.rs` and
+  `jt_pg/tests/mail_files_repos.rs`, and `mail_files_migration_is_repeatable_and_its_down_refuses_waiting_attachments`.
+  `jt_files`: `ATTACHMENT_PURPOSE`, `ATTACHMENT_POLICY`, `DiskFiles::attachment_url`, the download headers of D82
+  (`FileStore::attachment_url`, default refusing; `StreamedFile.filename`); tests as named in
+  `jt_files/tests/serve.rs`. Pins: tables 100, migrations 28 (`versions()` `1..=28`); `outreach_down` runs 0028's
+  down first (`TABLES_BEFORE_MAIL_FILES`), and so do the two inbox round trips and `PROSPECTS_DOWN`; README.
 
 ### Task L6-T2: inbound attachments
 
@@ -1385,6 +1399,17 @@ migrations 20 → 21).
   `failed_transaction_deletes_its_files`, `consumer_links_files_to_message_and_person`,
   `messages_list_shows_attachments`, `payload_never_holds_bytes`.
 - [ ] Green; **commit** `feat(inbox): keep inbound mail attachments`.
+- As built (`627f4fdb`, spec D83, D84): `PolledMail { draft, attachments }` and `InboundAttachment { filename,
+  declared_mime, bytes }` (no names or bytes in `Debug`), `From<InboundEventDraft> for PolledMail`;
+  `MailboxPoller::poll -> (Vec<PolledMail>, MailboxCursor)`; `jt_mail::parse::polled` (the payload's entries gain
+  `declared_mime`); `ScriptedConnector::push_mailbox_poll` keeps taking drafts, `push_mailbox_poll_mail` takes
+  emails with bytes. `usecases::inbox::attachments::{PolledFiles {store, screen, record, commit_started, settle},
+  AttachmentView, record_name, store_name, record_mime, MAX_INBOUND_FILE_BYTES, MAX_INBOUND_FILES,
+  MAX_INBOUND_DAILY_BYTES, INBOUND_DAY}` (the plan's `store_polled_attachments`), called from
+  `jobs::run_mail_inbox_poll`; `consumer::message` links, `consume_event` erases an erased sender's email's
+  files; `MessageView.attachments`; `studio::files::cleanup_files` keeps `MailFileRepo::kept`. jt_mail's tests read
+  drafts through a local `PollDrafts`. Tests: the plan's names in `jt_app/tests/inbox_attachments.rs` and jt_mail,
+  plus `an_erased_senders_email_keeps_no_files` and `the_store_sweep_keeps_mail_files`.
 
 ### Task L6-T3: outbound attachments, erasure, purge
 
@@ -1406,6 +1431,19 @@ migrations 20 → 21).
   `get_answers_a_download_address`, `erasure_deletes_files`, `purge_respects_retention_and_staging`,
   `attachments_require_inbox_work`.
 - [ ] Green; **commit** `feat(inbox): outbound attachments, erasure and retention`.
+- As built (`9b47e88f`, spec D85–D89): `attachments::{upload(UploadInput {request_key, filename, mime, data_base64})
+  -> AttachmentOut, get(file_id) -> AttachmentGetOut, staged_for_send, attached_for_claim, read_for_send, purge,
+  bytes_fit, wire_bytes, message_fits}` and the constants `MAX_UPLOAD_BYTES`, `MAX_UPLOAD_BODY_BYTES`,
+  `MAX_ATTACHMENTS`, `MESSAGE_BOUND_BYTES`, `HEADER_ROOM_BYTES`, `STAGED_FOR`, `DOWNLOAD_FOR`, `MAX_PURGE_BATCHES`,
+  `UPLOAD_TYPES`, `DOCX`, `XLSX`. `ReplyInput.attachments`, `replies::SendInput.attachments`,
+  `quotes::SendInput.attachments` (`#[serde(default)]`); files are attached at enqueue (D86, not in the result
+  transaction); the claim checks them, `send_step` reads them (D87). Erasure through `erase_person` (D88).
+  `Job::MailFilesPurge` `"mail_files_purge"` (daily, every status; `Job::ALL` 36, the scheduler's interval and its
+  pin, README job table). Rows `inbox.attachments_upload` (`POST /api/inbox/attachments`, 10 MiB body) and
+  `inbox.attachments_get` (`GET /api/inbox/attachments/{file_id}`), both `Exempt` and in `EXEMPT_INBOX`, MCP tools
+  `jeeta.inbox.attachments_{upload,get}`, schemas (and `attachments` on reply, send and quotes.send); the reply,
+  send, quotes and messages-list descriptions name the files. Pins: catalog 247, registry 209, inbox 55,
+  `POST_M4_ADDED` 84; README rows. Tests: the plan's names in `inbox_attachments.rs` (18 there in all).
 
 ---
 
