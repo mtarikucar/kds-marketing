@@ -230,7 +230,8 @@ async fn send_request_key_reuses_response() {
     assert!(matches!(
         &c.calls()[0],
         jt_testkit::fakes::ConnectorCall::SendSms {
-            commercial: true,
+            // A send resting on the person's consent goes out under the individual filter.
+            filter: jt_app::ports::connectors::SmsConsentFilter::Individual,
             ..
         }
     ));

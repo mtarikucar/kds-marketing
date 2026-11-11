@@ -385,13 +385,10 @@ async fn compliance_tenant_tables_force_rls() {
         "insert into suppressions(workspace_id,person_id,channel,reason) select w,p,'email','manual' from ctx",
         "insert into quotes(id,workspace_id,journey_id,amount_minor,currency,valid_until,channel,state,created_at) select id,w,j,100,'TRY',now(),'email','sent',now() from ctx",
         "insert into appointments(id,workspace_id,journey_id,starts_at,ends_at,location,state,created_at) select id,w,j,now(),now()+interval '1 hour','','booked',now() from ctx",
-        "insert into commissions(id,workspace_id,journey_id,amount_minor,currency,rate_bp,state,created_at) select id,w,j,100,'TRY',100,'no_payee',now() from ctx",
         "insert into erasure_log(workspace_id,person_id,requested_via,at) select w,p,'test',now() from ctx",
         "insert into erased_identities(workspace_id,channel,value_hash) select w,'email',repeat('a',64) from ctx",
         "insert into outbound_jobs(id,workspace_id,capability_id,state,created_at,updated_at) select id,w,c,'unknown',now(),now() from ctx",
         "insert into mail_cursors(workspace_id,capability_id,mailbox,uidvalidity,last_uid) select w,c,'INBOX',1,0 from ctx",
-        "insert into commission_default(workspace_id,rate_bp) select w,100 from ctx",
-        "insert into commission_user_rates(workspace_id,user_id,rate_bp) select w,u,200 from ctx",
         "insert into journey_attribution(workspace_id,journey_id,provider,leadgen_id,acquired_at) select w,j,'meta','lead-1',now() from ctx",
     ] {
         let sql = format!(
@@ -415,13 +412,10 @@ async fn compliance_tenant_tables_force_rls() {
         "suppressions",
         "quotes",
         "appointments",
-        "commissions",
         "erasure_log",
         "erased_identities",
         "outbound_jobs",
         "mail_cursors",
-        "commission_default",
-        "commission_user_rates",
         "journey_attribution",
     ] {
         let flags: Option<(bool, bool)> = sqlx::query_as(
@@ -518,37 +512,12 @@ async fn mail_provider_check_retained_with_mail_rows_down_idempotent() {
 }
 
 #[tokio::test]
-async fn commission_unique_per_journey_and_composite_tenant_references() {
+async fn composite_tenant_references() {
     let db = TestDb::new().await;
-    let (a, _) = db.seed_workspace("commission-a").await;
-    let (b, _) = db.seed_workspace("commission-b").await;
+    let (a, _) = db.seed_workspace("tenant-ref-a").await;
+    let (b, _) = db.seed_workspace("tenant-ref-b").await;
     let p = person(&db, a).await;
     let j = journey(&db, a, p).await;
-    let insert = "insert into commissions(id,workspace_id,journey_id,amount_minor,currency,rate_bp,state,created_at) values($1,$2,$3,123,'TRY',100,'no_payee',now())";
-    let mut tx = TenantTx::begin(&db.pool, a).await.unwrap();
-    sqlx::query(insert)
-        .bind(Uuid::now_v7())
-        .bind(a.as_uuid())
-        .bind(j)
-        .execute(tx.conn())
-        .await
-        .unwrap();
-    tx.commit().await.unwrap();
-    for (ws, code) in [(a, "23505"), (b, "23503")] {
-        let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
-        let err = sqlx::query(insert)
-            .bind(Uuid::now_v7())
-            .bind(ws.as_uuid())
-            .bind(j)
-            .execute(tx.conn())
-            .await
-            .unwrap_err();
-        assert_eq!(
-            err.as_database_error().unwrap().code().as_deref(),
-            Some(code)
-        );
-        tx.rollback().await.unwrap();
-    }
     for sql in [
         "insert into consents(id,workspace_id,person_id,channel,kind,source,at) values($1,$2,$3,'email','explicit','form',now())",
         "insert into quotes(id,workspace_id,journey_id,amount_minor,currency,valid_until,channel,state,created_at) values($1,$2,$3,100,'TRY',now(),'email','sent',now())",

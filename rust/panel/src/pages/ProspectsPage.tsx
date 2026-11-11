@@ -1,30 +1,33 @@
-import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { useMemo, useState } from 'react';
-import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
-import type { ColumnDef } from '@tanstack/react-table';
-import type { TFunction } from 'i18next';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link, useSearchParams } from 'react-router-dom';
-import { getPlaybook, listProspects, promoteProspects } from '@/api/prospects';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
+import { getPlaybook, listProspects, poolReport } from '@/api/prospects';
 import { listTasks } from '@/api/research';
 import {
-  PROSPECT_STATUSES,
   SCORE_BUCKETS,
   type NextPage,
-  type PromoteOutcome,
   type ProspectListQuery,
   type ProspectRow,
   type ProspectStatus,
-  type ResearchTask,
   type ScoreBucket,
 } from '@/api/types';
-import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
-import { Button, DataTable, Disclosure, EmptyState, Input, toast } from '@/components/ui';
-import { errorMessage } from '@/lib/errors';
-import { formatDateTime } from '@/lib/format';
-import { useDraftKey } from '@/lib/leads';
-import { can } from '@/lib/roles';
+import {
+  Button,
+  cn,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  EmptyState,
+  IconButton,
+  Input,
+  toast,
+} from '@/components/ui';
+import { formatRelative } from '@/lib/format';
 import { selectClass } from './InboxShared';
 import {
   BulkOutcomes,
@@ -32,10 +35,14 @@ import {
   ProspectStatusBadge,
   RejectDialog,
   useLeadsKey,
-  useLeadsRefresh,
   type BulkOutcome,
   type DecisionTarget,
 } from './LeadsShared';
+import { ProspectPane } from './ProspectDetail';
+import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
+import { taskLabel } from './prospects/words';
+
+export { promoteOutcomeText, taskLabel } from './prospects/words';
 
 /** Prospects per page; the server pages by `(created_at, id)`, newest first. */
 export const PROSPECTS_PAGE = 50;
@@ -48,77 +55,161 @@ interface Filters {
   task: string;
 }
 
-/** A promotion outcome in the panel's words. */
-export function promoteOutcomeText(t: TFunction, o: PromoteOutcome): string {
-  switch (o.outcome) {
-    case 'promoted':
-      return t('leads.outcome.promoted');
-    case 'already_promoted':
-      return t('leads.outcome.alreadyPromoted');
-    case 'refused':
-      return isPromoteRefusal(o.reason) ? t(`leads.promoteRefused.${o.reason}`) : t('leads.promoteRefused.other');
-  }
-}
+/** The status tabs, in the order a prospect moves through them. */
+const TABS: readonly { status: ProspectStatus | ''; label: PoolCopyKey }[] = [
+  { status: '', label: 'tabAll' },
+  { status: 'new', label: 'tabNew' },
+  { status: 'qualified', label: 'tabQualified' },
+  { status: 'promoted', label: 'tabContact' },
+  { status: 'rejected', label: 'tabRejected' },
+  { status: 'do_not_contact', label: 'tabBlocked' },
+];
 
-/** The refusal reasons of `prospects.promote` the panel has its own words for. */
-const PROMOTE_REFUSALS = [
-  'not_found',
-  'not_qualified',
-  'daily_cap',
-  'no_contact_identity',
-  'do_not_contact',
-  'erased_identity',
-  'identity_split',
-  'lost_journey_exists',
-  'person_already_linked',
-  'already_promoted',
-] as const;
-
-function isPromoteRefusal(reason: string): reason is (typeof PROMOTE_REFUSALS)[number] {
-  return (PROMOTE_REFUSALS as readonly string[]).includes(reason);
-}
-
-/** What a research task is called in a list: its ICP entry, or its brief's sectors. */
-export function taskLabel(t: TFunction, task: ResearchTask): string {
-  return task.kind.type === 'standing'
-    ? t('leads.tasks.kind.standing', { key: task.kind.icp_key })
-    : t('leads.tasks.kind.ad_hoc', { sectors: task.brief.sectors.join(', ') });
-}
-
-/** Whether a prospect may still be promoted, rejected or marked from its row. */
+/** Whether a prospect may still be rejected from the list. */
 const open = (p: ProspectRow) => p.status === 'new' || p.status === 'qualified';
 
-/** One row's promote button: its own mutation, so its pending state is its own (bug class "per-row mutation loading"). */
-function PromoteButton({ prospect }: { prospect: ProspectRow }) {
-  const { t } = useTranslation();
-  const refresh = useLeadsRefresh();
-  const draft = useDraftKey();
-  const promote = useMutation({
-    mutationFn: () =>
-      promoteProspects({ prospect_ids: [prospect.id], request_key: draft.keyFor({ ids: [prospect.id] }) }),
-    onSuccess: async (out) => {
-      const outcome = out.items[0];
-      if (outcome?.outcome === 'refused') toast.error(promoteOutcomeText(t, outcome));
-      else toast.success(t('leads.outcome.promoted'));
-      draft.reset();
-      await refresh();
-    },
-    onError: (err) => toast.error(errorMessage(t, err)),
-  });
+const SCORE_TONE: Record<ScoreBucket, string> = {
+  '75-100': 'bg-success-subtle text-success',
+  '50-74': 'bg-warning-subtle text-warning',
+  '25-49': 'bg-surface-muted text-muted-foreground',
+  '0-24': 'bg-surface-muted text-muted-foreground',
+};
+
+/** This month's funnel in one line, from the pool's report; nothing while it cannot be read. */
+function Funnel() {
+  const copy = usePoolCopy();
+  const key = useLeadsKey();
+  const [from, to] = useMemo(() => {
+    const now = new Date();
+    return [
+      new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+      new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
+    ];
+  }, []);
+  const report = useQuery({ queryKey: [...key, 'prospects', 'report', from, to], queryFn: () => poolReport(from, to), retry: false });
+  if (!report.data) return null;
+  const sum = (field: 'created' | 'qualified' | 'promoted' | 'replied' | 'won') =>
+    report.data.groups.reduce((total, group) => total + group[field], 0);
+  const parts: [number, PoolCopyKey][] = [
+    [sum('created'), 'found'],
+    [sum('qualified'), 'qualified'],
+    [sum('promoted'), 'inContact'],
+    [sum('replied'), 'replied'],
+    [sum('won'), 'won'],
+  ];
   return (
-    <Button size="sm" variant="outline" loading={promote.isPending} onClick={() => !promote.isPending && promote.mutate()}>
-      {t('leads.actions.promote')}
-    </Button>
+    <p className="hidden min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm text-muted-foreground md:flex" aria-label={copy('funnel')}>
+      <span>{copy('thisMonth')}:</span>
+      {parts.map(([n, label], i) => (
+        <span key={label}>
+          <span className="font-semibold tabular-nums text-foreground">{n}</span> {copy(label)}
+          {i < parts.length - 1 && <span aria-hidden="true"> ·</span>}
+        </span>
+      ))}
+    </p>
   );
 }
 
-/** `/prospects`: the pool, filtered and paged, with per-row and bulk actions (spec §9). */
-export function ProspectsPage() {
-  const { t, i18n } = useTranslation();
-  const session = useSession();
+/** The agents' playbook as served (`prospects.playbook`), read when its dialog opens. */
+function PlaybookDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const key = useLeadsKey();
-  const refresh = useLeadsRefresh();
-  const canPromote = can(session.data, 'inbox.work');
+  const playbook = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook });
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t('leads.prospects.playbook')}</DialogTitle>
+          <DialogDescription>
+            {playbook.data
+              ? t('leads.prospects.playbookFacts', {
+                  version: playbook.data.version,
+                  recorded: playbook.data.workspace.caps.recorded_today,
+                  cap: playbook.data.workspace.caps.daily_prospects,
+                })
+              : ' '}
+          </DialogDescription>
+        </DialogHeader>
+        <QueryState query={playbook}>
+          {playbook.data && (
+            <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 font-sans text-sm">{playbook.data.text}</pre>
+          )}
+        </QueryState>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** One prospect as a compact row: the name opens it (the link covers the row), the box selects it. */
+function Row({
+  row,
+  current,
+  showStatus,
+  checked,
+  onToggle,
+}: {
+  row: ProspectRow;
+  current: boolean;
+  showStatus: boolean;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const copy = usePoolCopy();
+  const place = [row.district, row.city].filter(Boolean).join(', ');
+  return (
+    <li
+      className={cn(
+        'relative flex items-center gap-2.5 border-b border-border/60 px-3 py-2',
+        current ? 'bg-primary-50 shadow-[inset_3px_0_0_var(--primary)] dark:bg-primary-950/50' : 'hover:bg-surface-muted',
+      )}
+      data-testid="prospect-row"
+    >
+      <input
+        type="checkbox"
+        className="relative z-10 shrink-0"
+        aria-label={t('leads.prospects.selectRow', { name: row.business_name })}
+        checked={checked}
+        onChange={onToggle}
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <Link
+          to={`/prospects/${encodeURIComponent(row.id)}`}
+          aria-current={current ? 'page' : undefined}
+          className="truncate text-sm font-medium text-foreground after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-ring"
+        >
+          {row.business_name}
+        </Link>
+        <span className="truncate text-xs text-muted-foreground">{[row.sector, place].filter(Boolean).join(' · ') || '—'}</span>
+      </div>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <span
+          className={cn('rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums', row.bucket ? SCORE_TONE[row.bucket] : 'text-muted-foreground')}
+          title={row.latest_score ? copy('score', { score: row.latest_score.score }) : copy('noScore')}
+        >
+          {row.latest_score?.score ?? '—'}
+        </span>
+        {showStatus ? (
+          <ProspectStatusBadge status={row.status} />
+        ) : (
+          <span className="text-[11px] text-muted-foreground">{formatRelative(row.created_at, i18n.language)}</span>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/**
+ * `/prospects` and `/prospects/:prospectId`: the pool as one working surface (spec
+ * 2026-11-10-prospects-pool-redesign-design.md). The list on the left, filtered and paged, with
+ * bulk reject and do-not-contact; the chosen prospect on the right. On a narrow screen the list
+ * comes first and a chosen prospect replaces it.
+ */
+export function ProspectsPage() {
+  const { t } = useTranslation();
+  const copy = usePoolCopy();
+  const key = useLeadsKey();
+  const { prospectId } = useParams();
   const [params] = useSearchParams();
   const [moreFilters, setMoreFilters] = useState(() => Boolean(params.get('task')));
   const [filters, setFilters] = useState<Filters>(() => ({
@@ -134,7 +225,7 @@ export function ProspectsPage() {
   const [rejecting, setRejecting] = useState<DecisionTarget[] | null>(null);
   const [blocking, setBlocking] = useState<DecisionTarget[] | null>(null);
   const [outcomes, setOutcomes] = useState<BulkOutcome[] | null>(null);
-  const bulkKey = useDraftKey();
+  const [playbook, setPlaybook] = useState(false);
 
   const page = cursors.at(-1);
   const query: ProspectListQuery = {
@@ -178,25 +269,7 @@ export function ProspectsPage() {
     else if (out[0]) toast.success(out[0].text);
   };
 
-  const bulkPromote = useMutation({
-    mutationFn: (ids: string[]) => promoteProspects({ prospect_ids: ids, request_key: bulkKey.keyFor({ ids }) }),
-    onSuccess: async (out) => {
-      const names = new Map(rows.map((r) => [r.id, r.business_name]));
-      setOutcomes(
-        out.items.map((o) => ({
-          id: o.prospect_id,
-          name: names.get(o.prospect_id) ?? o.prospect_id,
-          ok: o.outcome !== 'refused',
-          text: promoteOutcomeText(t, o),
-        })),
-      );
-      setSelected(new Set());
-      bulkKey.reset();
-      await refresh();
-    },
-    onError: (err) => toast.error(errorMessage(t, err)),
-  });
-
+  const extraFilters = [filters.bucket, filters.task, filters.city, filters.segment].filter(Boolean).length;
   const hasFilters = Object.values(filters).some(Boolean);
   const clearFilters = () => {
     setFilters({ status: '', bucket: '', city: '', segment: '', task: '' });
@@ -204,205 +277,106 @@ export function ProspectsPage() {
     setSelected(new Set());
   };
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
-  const columns = useMemo<ColumnDef<ProspectRow, unknown>[]>(
-    () => [
-      {
-        id: 'select',
-        enableSorting: false,
-        header: () => (
-          <input
-            type="checkbox"
-            aria-label={t('leads.prospects.selectPage')}
-            checked={allOnPage}
-            onChange={() => setSelected(allOnPage ? new Set() : new Set(rows.map((r) => r.id)))}
-          />
-        ),
-        cell: ({ row }) => (
-          <input
-            type="checkbox"
-            aria-label={t('leads.prospects.selectRow', { name: row.original.business_name })}
-            checked={selected.has(row.original.id)}
-            onChange={() => toggle(row.original.id)}
-          />
-        ),
-      },
-      {
-        id: 'business',
-        header: t('leads.prospects.columns.business'),
-        accessorFn: (p) => p.business_name,
-        cell: ({ row }) => (
-          <Link to={`/prospects/${encodeURIComponent(row.original.id)}`} className="font-medium text-foreground hover:underline">
-            {row.original.business_name}
-          </Link>
-        ),
-      },
-      { id: 'sector', header: t('leads.prospects.columns.sector'), accessorFn: (p) => p.sector ?? '—' },
-      { id: 'city', header: t('leads.prospects.columns.city'), accessorFn: (p) => p.city ?? '—' },
-      {
-        id: 'score',
-        header: t('leads.prospects.columns.score'),
-        accessorFn: (p) => p.latest_score?.score ?? -1,
-        cell: ({ row }) => <span className="tabular-nums">{row.original.latest_score?.score ?? '—'}</span>,
-      },
-      {
-        id: 'status',
-        header: t('leads.prospects.columns.status'),
-        accessorFn: (p) => p.status,
-        cell: ({ row }) => <ProspectStatusBadge status={row.original.status} />,
-      },
-      {
-        id: 'origin',
-        header: t('leads.prospects.columns.origin'),
-        accessorFn: (p) => (p.research_task_id ? 'task' : 'direct'),
-        cell: ({ row }) =>
-          row.original.research_task_id ? t('leads.prospects.origin.task') : t('leads.prospects.origin.direct'),
-      },
-      {
-        id: 'created',
-        header: t('leads.prospects.columns.created'),
-        accessorFn: (p) => p.created_at,
-        cell: ({ row }) => (
-          <span className="whitespace-nowrap text-muted-foreground">{formatDateTime(row.original.created_at, i18n.language)}</span>
-        ),
-      },
-      {
-        id: 'actions',
-        enableSorting: false,
-        header: () => <span className="sr-only">{t('common.actions')}</span>,
-        cell: ({ row }) => {
-          const p = row.original;
-          return (
-            <div className="flex flex-wrap justify-end gap-1">
-              {open(p) && canPromote && <PromoteButton prospect={p} />}
-              {open(p) && (
-                <Button size="sm" variant="ghost" onClick={() => setRejecting(targets([p]))}>
-                  {t('leads.actions.reject')}
-                </Button>
-              )}
-              {p.status !== 'promoted' && p.status !== 'do_not_contact' && (
-                <Button size="sm" variant="ghost" className="text-danger" onClick={() => setBlocking(targets([p]))}>
-                  {t('leads.actions.dnc')}
-                </Button>
-              )}
-            </div>
-          );
-        },
-      },
-    ],
-    [t, i18n.language, rows, selected, allOnPage, canPromote],
-  );
-
   const taskItems = tasks.data?.items ?? [];
+  const blockable = chosen.filter((r) => r.status !== 'promoted' && r.status !== 'do_not_contact');
+
   return (
-    <>
-      <WorkspaceHeader scene="research"
-        title={t('leads.prospects.title')}
-        description={t('leads.prospects.description')}
-        actions={
-          <Button asChild variant="outline">
+    <div className="flex min-w-0 flex-col lg:h-[calc(100dvh-61px)] lg:min-h-[36rem]">
+      <header className={cn('flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-2.5', prospectId && 'hidden lg:flex')}>
+        <h1 className="font-display text-xl font-medium">{t('leads.prospects.title')}</h1>
+        <Funnel />
+        <div className="ms-auto flex items-center gap-1">
+          <Button size="sm" variant="ghost" onClick={() => setPlaybook(true)}>
+            {t('leads.prospects.playbook')}
+          </Button>
+          <Button asChild size="sm" variant="outline">
             <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
           </Button>
-        }
-      />
-      <div className="border-y border-border py-2">
-        <Disclosure title={t('leads.prospects.playbook')}>
-          <Playbook />
-        </Disclosure>
-      </div>
-      <section className="flex min-w-0 flex-col gap-4" aria-label={t('leads.prospects.title')}>
-          <div className="border-b border-border pb-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <label className="flex flex-col gap-1 text-sm">
-              {t('leads.prospects.filters.status')}
-              <select
-                className={selectClass}
-                value={filters.status}
-                onChange={(e) => setFilter('status', e.target.value as ProspectStatus | '')}
-              >
-                <option value="">{t('leads.prospects.filters.all')}</option>
-                {PROSPECT_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {t(`leads.status.${s}`)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('leads.prospects.filters.bucket')}
-              <select
-                className={selectClass}
-                value={filters.bucket}
-                onChange={(e) => setFilter('bucket', e.target.value as ScoreBucket | '')}
-              >
-                <option value="">{t('leads.prospects.filters.all')}</option>
-                {SCORE_BUCKETS.map((b) => (
-                  <option key={b} value={b}>
-                    {b}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <button type="button" aria-expanded={moreFilters} aria-controls="prospect-more-filters"
-            className="mt-3 text-sm font-medium text-primary hover:underline"
-            onClick={() => setMoreFilters((open) => !open)}>
-            {moreFilters ? t('leads.ux.hideFilters', { defaultValue: 'Hide extra filters' }) : t('leads.ux.moreFilters', { defaultValue: 'More filters' })}
-            {[filters.task, filters.city, filters.segment].filter(Boolean).length > 0 && ` (${[filters.task, filters.city, filters.segment].filter(Boolean).length})`}
-          </button>
-          <div id="prospect-more-filters" hidden={!moreFilters} className={moreFilters ? "mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5" : "hidden"}>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('leads.prospects.filters.task')}
-              <select className={selectClass} value={filters.task} onChange={(e) => setFilter('task', e.target.value)}>
-                <option value="">{t('leads.prospects.filters.all')}</option>
-                {filters.task && !taskItems.some((x) => x.task.id === filters.task) && (
-                  <option value={filters.task}>{t('leads.prospects.filters.thisTask')}</option>
-                )}
-                {taskItems.map(({ task }) => (
-                  <option key={task.id} value={task.id}>
-                    {taskLabel(t, task)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('leads.prospects.filters.city')}
-              <Input value={filters.city} autoComplete="off" onChange={(e) => setFilter('city', e.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 text-sm">
-              {t('leads.prospects.filters.segment')}
-              <Input value={filters.segment} autoComplete="off" onChange={(e) => setFilter('segment', e.target.value)} />
-            </label>
-          </div>
-          </div>
+        </div>
+      </header>
 
-          {chosen.length > 0 && (
-            <div
-              role="toolbar"
-              aria-label={t('leads.bulk.label')}
-              className="flex flex-wrap items-center gap-2 rounded-lg bg-surface-muted px-3 py-2 text-sm"
-            >
-              <span>{t('leads.bulk.selected', { n: chosen.length })}</span>
-              {canPromote && (
-                <Button
-                  size="sm"
-                  loading={bulkPromote.isPending}
-                  disabled={!chosen.some(open)}
-                  onClick={() => !bulkPromote.isPending && bulkPromote.mutate(chosen.filter(open).map((r) => r.id))}
-                >
-                  {t('leads.bulk.promote')}
-                </Button>
+      <div className={cn('flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2', prospectId && 'hidden lg:flex')}>
+        <div role="group" aria-label={copy('tabs')} className="flex min-w-0 gap-0.5 overflow-x-auto">
+          {TABS.map(({ status, label }) => (
+            <button
+              key={label}
+              type="button"
+              aria-pressed={filters.status === status}
+              onClick={() => setFilter('status', status)}
+              className={cn(
+                'shrink-0 rounded-md px-2.5 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                filters.status === status ? 'bg-primary-50 font-semibold text-foreground dark:bg-primary-950/60' : 'text-muted-foreground hover:text-foreground',
               )}
+            >
+              {copy(label)}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          aria-expanded={moreFilters}
+          aria-controls="prospect-more-filters"
+          className="ms-auto flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={() => setMoreFilters((v) => !v)}
+        >
+          <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
+          {moreFilters ? t('leads.ux.hideFilters', { defaultValue: 'Hide extra filters' }) : t('leads.ux.moreFilters', { defaultValue: 'More filters' })}
+          {extraFilters > 0 && ` (${extraFilters})`}
+        </button>
+      </div>
+
+      <div
+        id="prospect-more-filters"
+        hidden={!moreFilters}
+        className={moreFilters ? cn('grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-2 xl:grid-cols-4', prospectId && 'hidden lg:grid') : 'hidden'}
+      >
+        <label className="flex flex-col gap-1 text-sm">
+          {t('leads.prospects.filters.bucket')}
+          <select className={selectClass} value={filters.bucket} onChange={(e) => setFilter('bucket', e.target.value as ScoreBucket | '')}>
+            <option value="">{t('leads.prospects.filters.all')}</option>
+            {SCORE_BUCKETS.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          {t('leads.prospects.filters.task')}
+          <select className={selectClass} value={filters.task} onChange={(e) => setFilter('task', e.target.value)}>
+            <option value="">{t('leads.prospects.filters.all')}</option>
+            {filters.task && !taskItems.some((x) => x.task.id === filters.task) && (
+              <option value={filters.task}>{t('leads.prospects.filters.thisTask')}</option>
+            )}
+            {taskItems.map(({ task }) => (
+              <option key={task.id} value={task.id}>
+                {taskLabel(t, task)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          {t('leads.prospects.filters.city')}
+          <Input value={filters.city} autoComplete="off" onChange={(e) => setFilter('city', e.target.value)} />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          {t('leads.prospects.filters.segment')}
+          <Input value={filters.segment} autoComplete="off" onChange={(e) => setFilter('segment', e.target.value)} />
+        </label>
+      </div>
+
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
+        <section
+          aria-label={copy('listLabel')}
+          className={cn('flex min-h-0 min-w-0 flex-col border-border lg:border-e', prospectId && 'hidden lg:flex')}
+        >
+          {chosen.length > 0 && (
+            <div role="toolbar" aria-label={t('leads.bulk.label')} className="flex flex-wrap items-center gap-1.5 border-b border-border bg-surface-muted px-3 py-2 text-sm">
+              <span className="me-auto">{t('leads.bulk.selected', { n: chosen.length })}</span>
               <Button size="sm" variant="outline" disabled={!chosen.some(open)} onClick={() => setRejecting(targets(chosen.filter(open)))}>
                 {t('leads.bulk.reject')}
               </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-danger"
-                onClick={() =>
-                  setBlocking(targets(chosen.filter((r) => r.status !== 'promoted' && r.status !== 'do_not_contact')))
-                }
-              >
+              <Button size="sm" variant="outline" className="text-danger" disabled={blockable.length === 0} onClick={() => setBlocking(targets(blockable))}>
                 {t('leads.bulk.dnc')}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
@@ -410,73 +384,105 @@ export function ProspectsPage() {
               </Button>
             </div>
           )}
-          {outcomes && <BulkOutcomes outcomes={outcomes} onDismiss={() => setOutcomes(null)} />}
-
+          {outcomes && (
+            <div className="border-b border-border p-3">
+              <BulkOutcomes outcomes={outcomes} onDismiss={() => setOutcomes(null)} />
+            </div>
+          )}
           <QueryState query={list}>
-            <DataTable
-              columns={columns}
-              data={rows}
-              emptyState={hasFilters ? (
-                <EmptyState title={t('leads.filteredEmpty.title')} description={t('leads.filteredEmpty.body')}
-                  action={<Button variant="outline" onClick={clearFilters}>{t('leads.filteredEmpty.clear')}</Button>} />
-              ) : (
-                <EmptyState icon={<img src="/brand/scenes/prospects.svg" width="120" height="96" alt="" />}
-                  title={t('leads.prospects.empty')} description={t('leads.prospects.emptyBody')}
-                  action={<Button asChild variant="outline"><Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link></Button>} />
-              )}
-            />
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="outline" size="sm" disabled={cursors.length === 0} onClick={() => setCursors((c) => c.slice(0, -1))}>
-                {t('leads.prospects.previous')}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!list.data?.next}
-                onClick={() => {
-                  const next = list.data?.next;
-                  if (next) {
-                    setCursors((c) => [...c, next]);
-                    setSelected(new Set());
-                  }
-                }}
-              >
-                {t('leads.prospects.next')}
-              </Button>
+            {rows.length === 0 ? (
+              <div className="p-4">
+                {hasFilters ? (
+                  <EmptyState
+                    title={t('leads.filteredEmpty.title')}
+                    description={t('leads.filteredEmpty.body')}
+                    action={
+                      <Button variant="outline" onClick={clearFilters}>
+                        {t('leads.filteredEmpty.clear')}
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<img src="/brand/scenes/prospects.svg" width="120" height="96" alt="" />}
+                    title={t('leads.prospects.empty')}
+                    description={t('leads.prospects.emptyBody')}
+                    action={
+                      <Button asChild variant="outline">
+                        <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
+                      </Button>
+                    }
+                  />
+                )}
+              </div>
+            ) : (
+              <ul className="min-h-0 flex-1 overflow-y-auto" aria-label={copy('listLabel')}>
+                {rows.map((row) => (
+                  <Row
+                    key={row.id}
+                    row={row}
+                    current={row.id === prospectId}
+                    showStatus={filters.status === ''}
+                    checked={selected.has(row.id)}
+                    onToggle={() => toggle(row.id)}
+                  />
+                ))}
+              </ul>
+            )}
+            <div className="flex items-center gap-2 border-t border-border px-3 py-1.5">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  aria-label={t('leads.prospects.selectPage')}
+                  disabled={rows.length === 0}
+                  checked={allOnPage}
+                  onChange={() => setSelected(allOnPage ? new Set() : new Set(rows.map((r) => r.id)))}
+                />
+                <span aria-hidden="true">{t('leads.prospects.selectPage')}</span>
+              </label>
+              <span className="ms-auto flex items-center gap-1">
+                <IconButton size="sm" variant="ghost" aria-label={t('leads.prospects.previous')} disabled={cursors.length === 0} onClick={() => setCursors((c) => c.slice(0, -1))}>
+                  <ChevronLeft className="h-4 w-4" />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t('leads.prospects.next')}
+                  disabled={!list.data?.next}
+                  onClick={() => {
+                    const next = list.data?.next;
+                    if (next) {
+                      setCursors((c) => [...c, next]);
+                      setSelected(new Set());
+                    }
+                  }}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </IconButton>
+              </span>
             </div>
           </QueryState>
-      </section>
+        </section>
+
+        <section className={cn('flex min-h-0 min-w-0 flex-col', !prospectId && 'hidden lg:flex')}>
+          {prospectId ? (
+            <ProspectPane prospectId={prospectId} />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-1 p-8 text-center">
+              <p className="text-sm font-medium">{copy('choose')}</p>
+              <p className="max-w-sm text-sm text-muted-foreground">{copy('chooseBody')}</p>
+            </div>
+          )}
+        </section>
+      </div>
+
+      {playbook && <PlaybookDialog onClose={() => setPlaybook(false)} />}
       {rejecting && rejecting.length > 0 && (
         <RejectDialog key={rejecting.map((x) => x.id).join()} targets={rejecting} onClose={() => setRejecting(null)} onDone={finished} />
       )}
       {blocking && blocking.length > 0 && (
         <DncDialog key={blocking.map((x) => x.id).join()} targets={blocking} onClose={() => setBlocking(null)} onDone={finished} />
       )}
-    </>
-  );
-}
-
-/** The agents' playbook as served (`prospects.playbook`), fetched only when opened. */
-function Playbook() {
-  const { t } = useTranslation();
-  const key = useLeadsKey();
-  const playbook = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook });
-  return (
-    <QueryState query={playbook}>
-      {playbook.data && (
-        <div className="flex flex-col gap-2 text-sm">
-          <p className="text-muted-foreground">
-            {t('leads.prospects.playbookFacts', {
-              version: playbook.data.version,
-              recorded: playbook.data.workspace.caps.recorded_today,
-              cap: playbook.data.workspace.caps.daily_prospects,
-            })}
-          </p>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 font-sans text-sm">
-            {playbook.data.text}
-          </pre>
-        </div>
-      )}
-    </QueryState>
+    </div>
   );
 }

@@ -94,7 +94,7 @@ export function InboxConversation({ id }: { id: string }) {
             <>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <h2 className="font-display text-2xl font-normal leading-8">
+                  <h2 className="font-display text-lg font-medium leading-7">
                     {ctx ? personName(t, ctx.person, person.data?.identities) : t('inbox.thread')}
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">{kindLabel(t, row.kind_key)}</p>
@@ -108,7 +108,7 @@ export function InboxConversation({ id }: { id: string }) {
                       : t('inbox.unassignedExecutor')}
                 </span>
               </div>
-              <div className="flex flex-wrap gap-2 border-b border-border pb-5" role="group" aria-label={t('inbox.thread')}>
+              <div className="flex flex-wrap gap-1.5 border-b border-border pb-3" role="group" aria-label={t('inbox.thread')}>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -172,7 +172,7 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('inbox.moreMessages')}
                   </Button>
                 )}
-                <ol className="flex max-h-[56dvh] min-h-48 min-w-0 scroll-py-4 flex-col gap-8 overflow-y-auto overscroll-contain py-4 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.messages')}>
+                <ol className="flex max-h-[56dvh] min-h-48 min-w-0 shrink-0 scroll-py-4 flex-col gap-3 overflow-y-auto overscroll-contain py-4 pr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={0} aria-label={t('inbox.messages')}>
                   {messages.data?.pages
                     .flatMap((page) => page.items)
                     .slice()
@@ -180,13 +180,13 @@ export function InboxConversation({ id }: { id: string }) {
                     .map((message) => (
                       <li
                         key={message.id}
-                        className={`max-w-[94%] ${message.direction === 'outbound' ? 'ml-auto rounded-md bg-surface-muted px-4 py-3' : 'mr-auto border-l-2 border-brand-accent pl-4 sm:pl-5'}`}
+                        className={`max-w-[92%] rounded-lg border px-3 py-2 ${message.direction === 'outbound' ? 'ml-auto border-primary-100 bg-primary-50/60 dark:border-primary-900 dark:bg-primary-950/40' : 'mr-auto border-border bg-surface'}`}
                       >
                         <div className="flex flex-wrap justify-between gap-2">
                           <InboxActorLabel actor={message.author} />
                           <InboxTime at={message.at} />
                         </div>
-                        <p className={`my-3 whitespace-pre-wrap [overflow-wrap:anywhere] ${message.direction === 'inbound' ? 'text-[17px] leading-7' : 'text-sm leading-6'}`}>
+                        <p className="my-1.5 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
                         <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>

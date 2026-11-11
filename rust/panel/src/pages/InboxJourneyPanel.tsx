@@ -258,7 +258,7 @@ export function InboxJourneyPanel({
   );
   const journey = data.data?.journey;
   return (
-    <aside className={`${journeyClass} xl:max-h-[calc(100dvh-8rem)] xl:overflow-y-auto`} aria-label={t('inbox.journey')}>
+    <aside className={journeyClass} aria-label={t('inbox.journey')}>
       <h2 className="text-sm font-medium">{t('inbox.journey')}</h2>
       <QueryState query={data}>
         {journey && (

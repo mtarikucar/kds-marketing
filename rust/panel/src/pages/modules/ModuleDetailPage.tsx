@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, Bot, Download, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { ArrowRight, Bot, Check, Download, Lock, Plus, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { listCapabilities } from '@/api/capabilities';
@@ -9,7 +10,8 @@ import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
 import { Button, Callout, ConfirmDialog, Input, PageHeader, Textarea, cn, toast } from '@/components/ui';
-import { modulePath, modulesKey, portableBlueprint, useModules } from '@/lib/modules';
+import { moduleMissing, modulePath, modulesKey, portableBlueprint, useModules } from '@/lib/modules';
+import { requirementLabel, requirementTerms } from '@/lib/requirements';
 import { can, currentMembership } from '@/lib/roles';
 import { FormField } from './FormField';
 import { ActivationNotice } from './ActivationNotice';
@@ -63,6 +65,9 @@ function ModuleSettings({ module }: { module: WorkspaceModule }) {
 }
 
 function InstalledModule({ module }: { module: WorkspaceModule }) {
+  const { t, i18n } = useTranslation();
+  const tr = i18n.language.startsWith('tr');
+  const missing = moduleMissing(useModules().data, module.blueprint.id);
   const copy = useModuleCopy();
   const session = useSession();
   const workspaceId = session.data?.current_workspace;
@@ -82,7 +87,7 @@ function InstalledModule({ module }: { module: WorkspaceModule }) {
   const nativePath = modulePath(module);
   const native = !nativePath.startsWith('/modules/');
   return <>
-    <PageHeader title={module.blueprint.name} description={module.blueprint.description} actions={native && <Button asChild size="sm"><Link to={nativePath}>{copy('builtInOpen')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>} />
+    <PageHeader breadcrumbs={[{ label: copy('catalog'), href: '/modules' }]} renderBreadcrumbLink={(item, children) => <Link to={item.href!}>{children}</Link>} title={module.blueprint.name} description={module.blueprint.description} actions={native && <Button asChild size="sm"><Link to={nativePath}>{copy('builtInOpen')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>} />
     {!workspaceActive && <ActivationNotice />}
     <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground"><span>{module.required ? copy('required') : copy('optional')}</span><span>{module.config.agent_ids.length} {copy('agentCount')}</span><span>{module.config.capability_ids.length} {copy('capabilityCount')}</span><span>v{module.blueprint.version}</span></div>
     <div role="group" aria-label={copy('chooseTab')} className="flex gap-5 border-b border-border">{(['summary', 'setup'] as const).map(value => <button type="button" key={value} aria-pressed={tab === value} onClick={() => setTab(value)} className={cn('min-h-12 border-b-2 px-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', tab === value ? 'border-primary font-medium' : 'border-transparent text-muted-foreground')}>{copy(value)}</button>)}</div>
@@ -92,7 +97,14 @@ function InstalledModule({ module }: { module: WorkspaceModule }) {
         <section><h2 className="mb-4 text-base font-medium">{copy('steps')}</h2>{module.blueprint.workflow.length ? <ol className="divide-y divide-border">{module.blueprint.workflow.map((step, index) => <li key={index} className="flex gap-4 py-4"><span className="w-6 shrink-0 font-mono text-xs tabular-nums text-muted-foreground">{String(index + 1).padStart(2, '0')}</span><p className="min-w-0 break-words text-sm leading-6 [overflow-wrap:anywhere]">{step}</p></li>)}</ol> : <p className="text-sm text-muted-foreground">{copy('emptyWorkflow')}</p>}</section>
         <Button variant="outline" size="sm" className="self-start" onClick={() => setTab('setup')}><SlidersHorizontal className="h-4 w-4" aria-hidden="true" />{copy('configure')}</Button>
       </div>
-      <aside className="flex min-w-0 flex-col gap-6 border-t border-border pt-6 lg:border-s lg:border-t-0 lg:ps-6 lg:pt-0"><section><h2 className="mb-3 text-sm font-medium">{copy('requirements')}</h2>{module.blueprint.requirements.length ? <ul className="space-y-3">{module.blueprint.requirements.map((requirement, index) => <li key={index} className="break-words border-s-2 border-border ps-3 text-sm text-muted-foreground">{requirement}</li>)}</ul> : <p className="text-sm text-muted-foreground">{copy('requirementsEmpty')}</p>}</section><p className="text-xs leading-5 text-muted-foreground">{copy('blueprintNote')}</p><Button type="button" variant="ghost" size="sm" className="self-start" onClick={download}><Download className="h-4 w-4" aria-hidden="true" />{copy('export')}</Button></aside>
+      <aside className="flex min-w-0 flex-col gap-6 border-t border-border pt-6 lg:border-s lg:border-t-0 lg:ps-6 lg:pt-0"><section><h2 className="mb-3 text-sm font-medium">{copy('requirements')}</h2>{module.blueprint.requirements.length ? <ul className="space-y-3">{module.blueprint.requirements.map((requirement, index) => {
+        const gating = requirementTerms(requirement) !== null;
+        const unmet = missing.includes(requirement.split('|').map(term => term.trim()).join('|'));
+        return <li key={index} className={cn('flex items-start gap-2 break-words border-s-2 ps-3 text-sm', !gating ? 'border-border text-muted-foreground' : unmet ? 'border-warning text-foreground' : 'border-success text-foreground')}>
+          {gating && (unmet ? <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-label={tr ? 'Bağlı değil' : 'Not connected'} /> : <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" aria-label={tr ? 'Bağlı' : 'Connected'} />)}
+          <span>{requirementLabel(t, requirement, tr ? 'veya' : 'or')}</span>
+        </li>;
+      })}</ul> : <p className="text-sm text-muted-foreground">{copy('requirementsEmpty')}</p>}</section><p className="text-xs leading-5 text-muted-foreground">{copy('blueprintNote')}</p><Button type="button" variant="ghost" size="sm" className="self-start" onClick={download}><Download className="h-4 w-4" aria-hidden="true" />{copy('export')}</Button></aside>
     </div> : <ModuleSettings key={module.blueprint.id} module={module} />}
     {!module.required && canManage && <div className="mt-2 border-t border-border pt-4"><Button variant="ghost" size="sm" onClick={() => setRemoving(true)}><Trash2 className="h-4 w-4" aria-hidden="true" />{copy('remove')}</Button><ErrorCallout error={remove.error} /></div>}
     <ConfirmDialog open={removing && canManage} onOpenChange={setRemoving} title={copy('removeTitle')} description={copy('removeBody')} confirmLabel={copy('remove')} loading={remove.isPending} onConfirm={() => { if (canManage) remove.mutate({ id: module.blueprint.id, workspaceId }); }} />
@@ -109,7 +121,7 @@ export function ModuleDetailPage() {
   const module = registry.data?.modules.find(item => item.blueprint.id === moduleId && item.installed);
   const blueprint = registry.data?.catalog.find(item => item.id === moduleId);
   const install = useMutation({ mutationFn: ({ id }: { id: string; workspaceId: typeof workspaceId }) => installModule(id), onSuccess: async (_, variables) => { await client.invalidateQueries({ queryKey: modulesKey(variables.workspaceId) }); } });
-  return <div className="flex min-w-0 flex-col gap-6 [overflow-wrap:anywhere]"><Button asChild variant="ghost" size="sm" className="self-start"><Link to="/modules"><ArrowLeft className="h-4 w-4" aria-hidden="true" />{copy('back')}</Link></Button>
-    <QueryState query={registry}>{module ? <InstalledModule key={module.blueprint.id} module={module} /> : registry.data && <><PageHeader title={blueprint?.name ?? copy('noModule')} description={blueprint?.description ?? copy('noModuleBody')} /><ErrorCallout error={install.error} />{currentMembership(session.data)?.workspace_status !== 'active' && <ActivationNotice />}{blueprint && currentMembership(session.data)?.workspace_status === 'active' && can(session.data, 'capabilities.manage') && <Button className="self-start" loading={install.isPending} onClick={() => install.mutate({ id: blueprint.id, workspaceId })}><Plus className="h-4 w-4" aria-hidden="true" />{copy('install')}</Button>}</>}</QueryState>
+  return <div className="flex min-w-0 flex-col gap-6 [overflow-wrap:anywhere]">
+    <QueryState query={registry}>{module ? <InstalledModule key={module.blueprint.id} module={module} /> : registry.data && <><PageHeader breadcrumbs={[{ label: copy('catalog'), href: '/modules' }]} renderBreadcrumbLink={(item, children) => <Link to={item.href!}>{children}</Link>} title={blueprint?.name ?? copy('noModule')} description={blueprint?.description ?? copy('noModuleBody')} /><ErrorCallout error={install.error} />{currentMembership(session.data)?.workspace_status !== 'active' && <ActivationNotice />}{blueprint && currentMembership(session.data)?.workspace_status === 'active' && can(session.data, 'capabilities.manage') && <Button className="self-start" loading={install.isPending} onClick={() => install.mutate({ id: blueprint.id, workspaceId })}><Plus className="h-4 w-4" aria-hidden="true" />{copy('install')}</Button>}</>}</QueryState>
   </div>;
 }

@@ -68,7 +68,6 @@ async fn erase_keeps_anonymous_ids_amounts_and_tombstone() {
     assert!(after.inbox.identities.is_empty());
     assert_eq!(after.inbox.erasure_logs.len(), 1);
     assert_eq!(after.inbox.erased_identities.len(), 1);
-    assert_eq!(after.inbox.commissions, before.inbox.commissions);
     assert_eq!(after.inbox.events[0].id, before.inbox.events[0].id);
     assert!(
         matches!(&after.inbox.events[0].kind,JourneyEventKind::Won{product,amount_minor:15000,..} if product.is_empty())

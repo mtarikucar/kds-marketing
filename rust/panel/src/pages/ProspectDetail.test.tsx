@@ -109,7 +109,7 @@ describe('ProspectDetail', () => {
     await user.click(within(dialog).getByRole('button', { name: tr.common.cancel }));
     // Another prospect, through its duplicate link: nothing typed for the first carries over.
     await user.click(screen.getByRole('link', { name: 'Örnek Kafe 2' }));
-    await screen.findByRole('heading', { name: 'Örnek Kafe 2', level: 1 }, LOADED);
+    await screen.findByRole('heading', { name: 'Örnek Kafe 2', level: 2 }, LOADED);
     await user.click(await screen.findByRole('button', { name: tr.leads.actions.reject }));
     dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('combobox', { name: tr.leads.reject.reason })).toHaveValue('');
@@ -121,7 +121,8 @@ describe('ProspectDetail', () => {
     const { calls } = await open({
       'POST /api/prospects/do-not-contact': { prospect_id: ID, prospects: [ID], people: [], kinds: ['phone', 'email'] },
     });
-    await user.click(screen.getByRole('button', { name: tr.leads.actions.dnc }));
+    await user.click(screen.getByRole('button', { name: 'Diğer işlemler' }));
+    await user.click(await screen.findByRole('menuitem', { name: tr.leads.actions.dnc }));
     const dialog = await screen.findByRole('dialog');
     const submit = within(dialog).getByRole('button', { name: tr.leads.dnc.submit });
     await user.selectOptions(within(dialog).getByRole('combobox', { name: tr.leads.dnc.reason }), 'objected');
@@ -146,7 +147,8 @@ describe('ProspectDetail', () => {
     const { calls, router } = await open({
       [`POST /api/prospects/${ID}/erase`]: { prospect_id: ID, erased: true, kinds: ['phone', 'email'] },
     });
-    await user.click(screen.getByRole('button', { name: tr.leads.actions.erase }));
+    await user.click(screen.getByRole('button', { name: 'Diğer işlemler' }));
+    await user.click(await screen.findByRole('menuitem', { name: tr.leads.actions.erase }));
     const dialog = await screen.findByRole('dialog');
     const submit = within(dialog).getByRole('button', { name: tr.leads.erase.submit });
     expect(submit).toBeDisabled();
@@ -162,7 +164,134 @@ describe('ProspectDetail', () => {
     mockFetch(answers({ 'GET /api/auth/me': leadsRep, [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'rejected' }) }));
     renderAt(`/prospects/${ID}`);
     await screen.findByRole('list', { name: tr.leads.prospect.fields }, LOADED);
-    expect(screen.queryByRole('button', { name: tr.leads.actions.erase })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: tr.leads.actions.reopen })).not.toBeInTheDocument();
+    // A rep's menu holds only what a rep may do.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Diğer işlemler' }));
+    expect(await screen.findByRole('menuitem', { name: tr.leads.actions.dnc })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: tr.leads.actions.erase })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: tr.leads.actions.reopen })).not.toBeInTheDocument();
+  });
+
+  it('shows where the prospect stands and its progress newest first, in plain words', async () => {
+    const out = prospectOut(1);
+    const entry = (id: number, at: string, action: string, payload: unknown, actor: unknown = { kind: 'human', user_id: leadsMe.user_id }) => ({
+      id,
+      entry: { workspace_id: leadsMe.current_workspace, at, actor, action, subject: null, payload, strategy_version_id: null },
+    });
+    await open({
+      [`GET /api/prospects/${ID}`]: {
+        ...out,
+        ledger: [
+          entry(43, '2026-11-01T09:10:00Z', 'prospects.qualified', { auto: true, score: 72 }, { kind: 'system', component: 'prospects.auto_qualify' }),
+          entry(42, '2026-11-01T09:10:00Z', 'prospects.scored', { score: 72, digest: 'abc123def456' }, { kind: 'agent', connection_id: agentsList[0].id, user_id: leadsMe.user_id }),
+          entry(41, '2026-11-01T09:00:00Z', 'prospects.created', { fields: ['sector', 'city', 'phone', 'email'], via: 'research_task' }, { kind: 'agent', connection_id: agentsList[0].id, user_id: leadsMe.user_id }),
+        ],
+      },
+    });
+    const steps = within(screen.getByRole('list', { name: 'Aşama' })).getAllByRole('listitem');
+    expect(steps.map((s) => s.getAttribute('data-state'))).toEqual(['done', 'done', 'now', 'todo', 'todo', 'todo', 'todo']);
+    expect(steps[2]).toHaveAttribute('aria-current', 'step');
+    expect(steps[2]).toHaveTextContent('Nitelikli');
+    const timeline = within(screen.getByRole('list', { name: 'Akış' })).getAllByRole('listitem');
+    expect(timeline).toHaveLength(3);
+    expect(timeline[0]).toHaveTextContent('Nitelikli sayıldı');
+    expect(timeline[0]).toHaveTextContent('otomatik · puan 72');
+    expect(timeline[1]).toHaveTextContent('Puanlandı: 72');
+    expect(timeline[1]).toHaveTextContent('sube_sayisi 30 · aktif_sosyal 42');
+    await waitFor(() => expect(timeline[2]).toHaveTextContent('arastirma-ajani kaydetti'));
+    // A new record is summed up by its contact fields and where it came from.
+    expect(timeline[2]).toHaveTextContent('Telefon, E-posta · Araştırma görevi');
+  });
+
+  it('a prospect in contact shows its journey: the message sent, the reply, and the way to the conversation', async () => {
+    const promoted = { person_id: 'person-1', journey_id: 'journey-1', at: '2026-11-02T10:00:00Z', score: 72, bucket: '50-74' as const };
+    const event = (id: string, at: string, kind: unknown, source: unknown = 'agent') => ({
+      id, workspace_id: leadsMe.current_workspace, journey_id: 'journey-1', source, kind, idempotency_key: id, reason_label: null, at,
+    });
+    await open({
+      [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'promoted', promoted }),
+      'GET /api/inbox/journeys/journey-1': {
+        appointments: [], status_labels: {}, status_label_overrides: {}, tasks: [],
+        journey: { id: 'journey-1', workspace_id: leadsMe.current_workspace, person_id: 'person-1', status: 'contacted', owner: null, opened_at: promoted.at, closed_at: null, updated_at: promoted.at, lost_reason: null, unreachable_attempts: 0, source: 'import' },
+        events: [
+          event('e2', '2026-11-03T08:00:00Z', 'message_received', 'system'),
+          event('e1', '2026-11-02T10:05:00Z', 'replied', { human: leadsMe.user_id }),
+        ],
+        notes: [{ id: 'n1', workspace_id: leadsMe.current_workspace, journey_id: 'journey-1', author: { human: leadsMe.user_id }, text: 'Sahibiyle konuşuldu.', at: '2026-11-02T10:06:00Z' }],
+      },
+      'GET /api/inbox/people/person-1': {
+        person: {}, identities: [], open_journey: null,
+        conversations: [{ id: 'conv-9', updated_at: '2026-11-03T08:00:00Z' }],
+      },
+    });
+    const steps = within(screen.getByRole('list', { name: 'Aşama' })).getAllByRole('listitem');
+    await waitFor(() => expect(steps[4]).toHaveAttribute('aria-current', 'step'));
+    expect(steps[4]).toHaveTextContent('Yanıt');
+    const timeline = within(screen.getByRole('list', { name: 'Akış' }));
+    const [reply, note, sent] = timeline.getAllByRole('listitem');
+    expect(reply).toHaveTextContent('Mesaj geldi');
+    expect(note).toHaveTextContent('Ada Sahip not ekledi');
+    expect(note).toHaveTextContent('Sahibiyle konuşuldu.');
+    expect(sent).toHaveTextContent('Mesaj gönderildi');
+    // Message entries and the header lead to the conversation itself.
+    expect(within(reply).getByRole('link', { name: 'Mesaj geldi' })).toHaveAttribute('href', '/inbox/conv-9');
+    expect(screen.getByRole('link', { name: 'Konuşmayı aç' })).toHaveAttribute('href', '/inbox/conv-9');
+    // In contact, the pool no longer edits or rejects it.
+    expect(screen.queryByRole('button', { name: tr.leads.actions.reject })).not.toBeInTheDocument();
+  });
+
+  it('a message handed off to WhatsApp counts as contact: the step moves and the timeline says who wrote', async () => {
+    const promoted = { person_id: 'person-1', journey_id: 'journey-1', at: '2026-11-02T10:00:00Z', score: 72, bucket: '50-74' as const };
+    await open({
+      [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'promoted', promoted }),
+      'GET /api/inbox/journeys/journey-1': {
+        appointments: [], status_labels: {}, status_label_overrides: {}, tasks: [], events: [],
+        journey: { id: 'journey-1', workspace_id: leadsMe.current_workspace, person_id: 'person-1', status: 'new', owner: null, opened_at: promoted.at, closed_at: null, updated_at: promoted.at, lost_reason: null, unreachable_attempts: 0, source: 'import' },
+        notes: [{ id: 'n1', workspace_id: leadsMe.current_workspace, journey_id: 'journey-1', author: { human: leadsMe.user_id }, text: '↗ WhatsApp: Merhaba, tanışmak isteriz.', at: '2026-11-02T10:06:00Z' }],
+      },
+      'GET /api/inbox/people/person-1': { person: {}, identities: [], open_journey: null, conversations: [] },
+    });
+    const steps = within(screen.getByRole('list', { name: 'Aşama' })).getAllByRole('listitem');
+    await waitFor(() => expect(steps[3]).toHaveAttribute('aria-current', 'step'));
+    expect(steps[3]).toHaveTextContent('Mesaj atıldı');
+    const [entry] = within(screen.getByRole('list', { name: 'Akış' })).getAllByRole('listitem');
+    expect(entry).toHaveTextContent('Ada Sahip WhatsApp üzerinden yazdı');
+    expect(entry).toHaveTextContent('Merhaba, tanışmak isteriz.');
+    expect(entry).not.toHaveTextContent('↗');
+    // No conversation exists yet (Jeeta sent nothing): the way in is the person in the inbox.
+    expect(screen.getByRole('link', { name: 'Konuşmayı aç' })).toHaveAttribute('href', '/inbox?person=person-1');
+  });
+
+  it('edits the note in place and saves it against the revision shown', async () => {
+    const user = userEvent.setup();
+    const { calls } = await open({ [`PATCH /api/prospects/${ID}`]: { prospect: prospectOut(1).prospect, flags: [] } });
+    await user.click(screen.getByRole('button', { name: 'Not ekle' }));
+    const box = screen.getByRole('textbox', { name: 'Not metni' });
+    const save = screen.getByRole('button', { name: 'Kaydet' });
+    expect(save).toBeDisabled();
+    await user.type(box, 'Sahibi hafta içi 10–12 arası müsait.');
+    await user.click(save);
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH' && c.path === `/api/prospects/${ID}`)?.body).toEqual({
+        expected_revision: 3,
+        set: { notes: 'Sahibi hafta içi 10–12 arası müsait.' },
+      }),
+    );
+  });
+
+  it('shows an existing note prominently and clears it when emptied', async () => {
+    const user = userEvent.setup();
+    const { calls } = await open({
+      [`GET /api/prospects/${ID}`]: prospectOut(1, { notes: 'Tek şubeli, sadakat kartı yok.' }),
+      [`PATCH /api/prospects/${ID}`]: { prospect: prospectOut(1).prospect, flags: [] },
+    });
+    expect(screen.getByTestId('prospect-notes')).toHaveTextContent('Tek şubeli, sadakat kartı yok.');
+    await user.click(screen.getByRole('button', { name: 'Düzenle' }));
+    const box = screen.getByRole('textbox', { name: 'Not metni' });
+    expect(box).toHaveValue('Tek şubeli, sadakat kartı yok.');
+    await user.clear(box);
+    await user.click(screen.getByRole('button', { name: 'Kaydet' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ expected_revision: 3, clear: ['notes'] }),
+    );
   });
 });

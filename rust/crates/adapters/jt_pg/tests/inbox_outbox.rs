@@ -327,9 +327,9 @@ async fn postgres_inbound_sender_is_durable_latest_and_unambiguous() {
         "sent"
     );
     match &connector.calls()[0] {
-        jt_testkit::fakes::ConnectorCall::SendSms { to, commercial, .. } => {
+        jt_testkit::fakes::ConnectorCall::SendSms { to, filter, .. } => {
             assert_eq!(to, "+905551234567");
-            assert!(!commercial);
+            assert_eq!(*filter, jt_app::ports::connectors::SmsConsentFilter::None);
         }
         other => panic!("unexpected call {other:?}"),
     }

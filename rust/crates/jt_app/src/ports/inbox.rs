@@ -257,7 +257,7 @@ pub trait JourneyRepo: Send + Sync {
 
     /// Durable workspace-wide key lookup, including events on other journeys.
     async fn event_by_key(&mut self, key: &str) -> Result<Option<JourneyEvent>, AppError>;
-    /// Change only the commission owner, never reducer-owned fields.
+    /// Change only the journey owner, never reducer-owned fields.
     async fn assign_owner(&mut self, id: JourneyId, owner: Option<UserId>) -> Result<(), AppError>;
     async fn open_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;
     async fn latest_for(&mut self, person: PersonId) -> Result<Option<Journey>, AppError>;

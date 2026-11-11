@@ -159,35 +159,6 @@ fn commercial_requires_consent_without_suppression() {
     }
 }
 
-#[test]
-fn commission_rounds_half_even() {
-    for (amount, rate, expected) in [
-        (1, 5000, 0),
-        (3, 5000, 2),
-        (5, 5000, 2),
-        (7, 5000, 4),
-        (-1, 5000, 0),
-        (-3, 5000, -2),
-        (-5, 5000, -2),
-        (-7, 5000, -4),
-        (1, 4999, 0),
-        (1, 5001, 1),
-        (-1, 4999, 0),
-        (-1, 5001, -1),
-        (12345, 250, 309),
-        (0, 10000, 0),
-        (12345, 0, 0),
-        (i64::MAX, 10000, i64::MAX),
-        (i64::MIN, 10000, i64::MIN),
-    ] {
-        assert_eq!(
-            commission_for(amount, rate),
-            expected,
-            "amount={amount}, rate={rate}"
-        );
-    }
-}
-
 fn appointment() -> Appointment {
     Appointment {
         journey_id: JourneyId::new_v7(),

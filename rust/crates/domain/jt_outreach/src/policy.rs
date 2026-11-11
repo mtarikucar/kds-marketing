@@ -10,9 +10,17 @@ use time::OffsetDateTime;
 
 use crate::{Frequency, WarmupPolicy, line};
 
-/// The channels the business-recipient basis may ever cover: this program allows email only
-/// (spec §3.12).
-pub const B2B_BASIS_CHANNELS: &[Channel] = &[Channel::Email];
+/// The channels the business-recipient basis may ever cover: every messaging channel (owner
+/// decision 2026-11-10, spec 2026-11-10-prospects-pool-redesign-design.md; email only before).
+/// Each workspace's owner still opens them one by one with the counsel's confirmation. A voice
+/// call and web chat are not contacts a workspace starts on this basis.
+pub const B2B_BASIS_CHANNELS: &[Channel] = &[
+    Channel::Email,
+    Channel::Sms,
+    Channel::WhatsApp,
+    Channel::InstagramDm,
+    Channel::Messenger,
+];
 
 /// The longest sender company name, in characters.
 pub const MAX_SENDER_COMPANY_CHARS: usize = 200;

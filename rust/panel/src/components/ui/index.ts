@@ -144,7 +144,7 @@ export {
   type TDProps,
 } from './Table';
 export { DataTable, type DataTableProps } from './DataTable';
-export { PageHeader, type PageHeaderProps } from './PageHeader';
+export { PageHeader, PageFrameContext, type PageHeaderProps } from './PageHeader';
 export { FilterBar, type FilterBarProps, type FilterBarSearchProps } from './FilterBar';
 export { LanguageSwitcher } from './LanguageSwitcher';
 export { Disclosure, type DisclosureProps } from './Disclosure';

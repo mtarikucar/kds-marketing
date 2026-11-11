@@ -103,7 +103,7 @@ pub struct Journey {
     /// Reducer-owned stage; absent historical values read as New.
     #[serde(default)]
     pub status: JourneyStatus,
-    /// Commission owner, separate from conversation executor.
+    /// Journey owner (the responsible rep), separate from conversation executor.
     #[serde(default)]
     pub owner: Option<UserId>,
     /// Time the journey was opened.
@@ -347,13 +347,6 @@ pub enum JourneyEffect {
         #[serde(with = "time::serde::rfc3339")]
         until: OffsetDateTime,
     },
-    /// Calculate the owner's commission for the won sale.
-    CommissionDue {
-        /// Sale amount in minor currency units.
-        amount_minor: i64,
-        /// Sale currency.
-        currency: String,
-    },
     /// Complete open tasks after a win.
     CloseTasks,
     /// Close conversations after a loss.
@@ -505,17 +498,9 @@ pub fn reduce(
             JourneyEventKind::MeetingHeld => advance(&mut patch, JourneyStatus::Met),
             JourneyEventKind::QuoteSent => advance(&mut patch, JourneyStatus::Quoted),
             JourneyEventKind::QuoteAccepted => advance(&mut patch, JourneyStatus::Pending),
-            JourneyEventKind::Won {
-                amount_minor,
-                currency,
-                ..
-            } => {
+            JourneyEventKind::Won { .. } => {
                 patch.status = JourneyStatus::Won;
                 patch.closed_at = Some(e.at);
-                effects.push(JourneyEffect::CommissionDue {
-                    amount_minor: *amount_minor,
-                    currency: currency.clone(),
-                });
                 effects.push(JourneyEffect::CloseTasks);
             }
             JourneyEventKind::Lost { reason_key } => {
@@ -609,7 +594,7 @@ pub fn v1_journey_status(raw: &str) -> Option<JourneyStatus> {
     })
 }
 
-/// Construct an import-only historical creation proof. No reducer events, commissions,
+/// Construct an import-only historical creation proof. No reducer events,
 /// provider actions or fabricated sale amounts are produced by importing a terminal stage.
 pub fn import_journey(input: ImportedJourney) -> Option<InitialJourney> {
     let status = v1_journey_status(&input.status)?;

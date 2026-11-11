@@ -80,3 +80,28 @@ export const getPoolSettings = () => request<PoolSettingsOut>('GET', `${root}/se
 /** `PUT /api/prospects/settings`: only the keys given change. */
 export const setPoolSettings = (input: PoolSettingsInput) =>
   request<PoolSettingsOut>('PUT', `${root}/settings`, { body: input });
+
+/** One group of `prospects.report`: the pool's funnel counts for the prospects created in a range. */
+export interface PoolReportGroup {
+  key: string | null;
+  created: number;
+  scored: number;
+  qualified: number;
+  promoted: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  quoted: number;
+  won: number;
+}
+export interface PoolReportOut {
+  from: string;
+  to: string;
+  groups: PoolReportGroup[];
+  truncated: boolean;
+}
+
+/** `GET /api/prospects/report`: the funnel of the prospects created in `[from, to)` (RFC 3339). */
+export const poolReport = (from: string, to: string) =>
+  request<PoolReportOut>('GET', `${root}/report`, { query: { from, to } });
+

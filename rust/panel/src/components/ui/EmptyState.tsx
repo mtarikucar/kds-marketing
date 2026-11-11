@@ -4,7 +4,7 @@ import { cn } from './cn';
 export interface EmptyStateProps {
   icon?: ReactNode;
   title: string;
-  description?: string;
+  description?: ReactNode;
   action?: ReactNode;
   className?: string;
   /** Standalone error pages can supply the page's primary heading. */

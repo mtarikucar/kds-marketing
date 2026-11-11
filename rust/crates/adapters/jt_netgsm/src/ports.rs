@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
     Connector, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus, InboundEventDraft,
-    IysAnswer, SendReceipt, SmsSender, Telephony,
+    IysAnswer, SendReceipt, SmsConsentFilter, SmsSender, Telephony,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -40,9 +40,9 @@ impl SmsSender for NetgsmConnector {
         to: &str,
         text: &str,
         reference: Option<&str>,
-        commercial: bool,
+        filter: SmsConsentFilter,
     ) -> Result<SendReceipt, ConnectorError> {
-        sms::send(self, cred, to, text, reference, commercial).await
+        sms::send(self, cred, to, text, reference, filter).await
     }
 }
 

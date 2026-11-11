@@ -283,7 +283,6 @@ async fn erase_keeps_anonymous_ids_amounts_and_tombstone() {
     assert!(
         matches!(&events[0].kind,JourneyEventKind::Won{product,amount_minor:1234,..} if product.is_empty())
     );
-    assert!(r.commissions().by_journey(j.id).await.unwrap().is_some());
 }
 #[tokio::test]
 async fn ordinary_append_only_still_enforced() {

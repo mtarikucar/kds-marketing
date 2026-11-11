@@ -10,14 +10,6 @@ pub fn input(action: &str) -> Value {
         &["channel", "value"],
     );
     match action {
-        "commissions.list" => object(
-            json!({"state":{"enum":["no_payee","pending","approved","paid",null]},"payee":{"type":["string","null"],"format":"uuid"}}),
-            &[],
-        ),
-        "commission_rates.set" => object(
-            json!({"user_id":{"type":["string","null"],"format":"uuid"},"rate_bp":{"type":"integer","minimum":0,"maximum":65535}}),
-            &["rate_bp"],
-        ),
         "quotes.send" => object(
             json!({"amount_minor":{"type":"integer","minimum":0},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"valid_until":{"type":"string","format":"date-time"},"file_ref":{"type":["string","null"]},"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
             &[
@@ -46,7 +38,7 @@ pub fn input(action: &str) -> Value {
             &["channel", "reason"],
         ),
         "send" => object(
-            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]}}),
+            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998}}),
             &["channel", "text", "intent"],
         ),
         "conversations.list" => object(
@@ -165,7 +157,6 @@ pub fn tool(action: &str) -> Value {
         "merges.apply" | "merges.undo" | "merges.refuse" => Some("merge_id"),
         "tasks.complete" => Some("task_id"),
         "quotes.accept" => Some("quote_id"),
-        "commissions.approve" | "commissions.pay" => Some("commission_id"),
         "appointments.cancel" | "appointments.held" => Some("appointment_id"),
         "public.hide" | "public.delete" | "public.report" => Some("item_id"),
         "public.approve" | "public.discard" => Some("outbox_id"),

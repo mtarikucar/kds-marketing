@@ -22,9 +22,17 @@ export interface WorkspaceModule {
   config: ModuleConfig;
   revision: number;
 }
+/** Whether a module's capability requirements are met (spec 2026-11-10 module gating). */
+export interface ModuleAvailability {
+  ready: boolean;
+  /** Unmet requirement expressions: kind or group keys joined by `|`. */
+  missing: string[];
+}
 export interface ModulesOut {
   modules: WorkspaceModule[];
   catalog: Blueprint[];
+  /** By module id; absent for a module the server did not judge (treated as ready). */
+  availability?: Record<string, ModuleAvailability>;
 }
 export function getModules(): Promise<ModulesOut> {
   return request('GET', '/api/workspace/modules');

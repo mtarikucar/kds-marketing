@@ -13,9 +13,9 @@ export const columnClass =
   'min-w-0 border-t border-border bg-surface p-4 sm:p-5 flex flex-col gap-4 [overflow-wrap:anywhere]';
 /** The inbox is one working surface. These panes share dividers, never individual card frames. */
 export const conversationClass =
-  'min-w-0 flex flex-col gap-5 bg-surface px-5 py-6 sm:px-8 [overflow-wrap:anywhere]';
+  'min-w-0 flex flex-col gap-4 bg-surface px-4 py-4 sm:px-6 lg:min-h-0 lg:overflow-y-auto [overflow-wrap:anywhere]';
 export const journeyClass =
-  'min-w-0 flex flex-col gap-5 border-t border-border bg-surface-muted px-5 py-6 text-sm xl:border-l xl:border-t-0 [overflow-wrap:anywhere]';
+  'inbox-journey min-w-0 flex flex-col gap-4 border-t border-border bg-surface-muted/60 px-4 py-4 text-sm lg:max-h-72 lg:overflow-y-auto xl:max-h-none xl:min-h-0 xl:border-l xl:border-t-0 [overflow-wrap:anywhere]';
 export function useInboxKey() {
   const session = useSession();
   return ['inbox', session.data?.current_workspace] as const;

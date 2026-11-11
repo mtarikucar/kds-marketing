@@ -10,7 +10,10 @@ import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogH
 import { lines, modulePath, moduleSettingsPath, moduleVisibleTo, modulesKey, parseBlueprint, useModules } from '@/lib/modules';
 import { can, currentMembership } from '@/lib/roles';
 import { useModuleCopy } from './copy';
+import { requirementLabel } from '@/lib/requirements';
+import { useTranslation } from 'react-i18next';
 import { FormField } from './FormField';
+import { RequirementPicker } from './RequirementPicker';
 import { ActivationNotice } from './ActivationNotice';
 
 function BlueprintDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -25,7 +28,7 @@ function BlueprintDialog({ open, onClose }: { open: boolean; onClose: () => void
   const [idEdited, setIdEdited] = useState(false);
   const [description, setDescription] = useState('');
   const [workflow, setWorkflow] = useState('');
-  const [requirements, setRequirements] = useState('');
+  const [requirements, setRequirements] = useState<string[]>([]);
   const [version, setVersion] = useState('1.0.0');
   const [fileError, setFileError] = useState<string | null>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -42,12 +45,12 @@ function BlueprintDialog({ open, onClose }: { open: boolean; onClose: () => void
     try {
       const parsed = parseBlueprint(JSON.parse(await selected.text()));
       if (!parsed) throw new Error('invalid');
-      setId(parsed.id); setIdEdited(true); setName(parsed.name); setDescription(parsed.description); setWorkflow(parsed.workflow.join('\n')); setRequirements(parsed.requirements.join('\n')); setVersion(parsed.version);
+      setId(parsed.id); setIdEdited(true); setName(parsed.name); setDescription(parsed.description); setWorkflow(parsed.workflow.join('\n')); setRequirements(parsed.requirements); setVersion(parsed.version);
     } catch { setFileError(copy('invalidFile')); }
   };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const blueprint = parseBlueprint({ id, name, description, version, requirements: lines(requirements), workflow: lines(workflow) });
+    const blueprint = parseBlueprint({ id, name, description, version, requirements, workflow: lines(workflow) });
     if (!blueprint) { setFileError(copy('invalidDefinition')); return; }
     setFileError(null); mutation.mutate({ blueprint, workspaceId });
   };
@@ -60,7 +63,7 @@ function BlueprintDialog({ open, onClose }: { open: boolean; onClose: () => void
       <FormField label={copy('description')} htmlFor="blueprint-description"><Textarea id="blueprint-description" value={description} onChange={event => setDescription(event.target.value)} maxLength={2000} rows={2} /></FormField>
       <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{copy('workflow')} · {copy('requirements')}</summary><div className="mt-4 flex flex-col gap-4">
         <FormField label={copy('workflow')} htmlFor="blueprint-workflow" hint={copy('workflowHint')}><Textarea id="blueprint-workflow" value={workflow} onChange={event => setWorkflow(event.target.value)} rows={3} maxLength={25000} /></FormField>
-        <FormField label={copy('requirements')} htmlFor="blueprint-requirements" hint={copy('requirementsHint')}><Textarea id="blueprint-requirements" value={requirements} onChange={event => setRequirements(event.target.value)} rows={3} maxLength={25000} /></FormField>
+        <fieldset className="flex min-w-0 flex-col gap-2"><legend className="mb-1 text-sm font-medium">{copy('requirements')}</legend><RequirementPicker value={requirements} onChange={setRequirements} /></fieldset>
         <FormField label={copy('version')} htmlFor="blueprint-version"><Input id="blueprint-version" value={version} onChange={event => setVersion(event.target.value)} required maxLength={32} /></FormField>
       </div></details>
       {fileError && <p role="alert" className="text-sm text-danger">{fileError}</p>}<ErrorCallout error={mutation.error} />
@@ -71,6 +74,8 @@ function BlueprintDialog({ open, onClose }: { open: boolean; onClose: () => void
 
 export function ModulesPage() {
   const copy = useModuleCopy();
+  const { t, i18n } = useTranslation();
+  const tr = i18n.language.startsWith('tr');
   const session = useSession();
   const workspaceId = session.data?.current_workspace;
   const registry = useModules();
@@ -100,7 +105,7 @@ export function ModulesPage() {
           const current = installed.find(module => module.blueprint.id === blueprint.id);
           return <article key={blueprint.id} className="flex min-w-0 flex-col rounded-lg border border-border bg-surface p-4 sm:p-6">
             <div className="flex items-start gap-3"><Layers className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1"><h2 className="break-words text-base font-medium sm:text-lg">{blueprint.name}</h2><span className="text-xs text-muted-foreground">{current?.required ? copy('required') : blueprint.builtin ? copy('builtIn') : copy('custom')}</span></div>{blueprint.description && <p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground sm:text-sm sm:leading-6">{blueprint.description}</p>}</div></div>
-            <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-4"><span className="text-xs text-muted-foreground">{blueprint.requirements.length > 0 && <>{blueprint.requirements.length} {copy('capabilityCount')}</>}</span>{current ? <div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="ghost"><Link to={moduleSettingsPath(blueprint.id)}>{copy('configure')}</Link></Button><Button asChild size="sm" variant="outline"><Link to={modulePath(current)}>{copy('open')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button></div> : manage && <Button size="sm" variant="outline" loading={install.isPending && install.variables?.id === blueprint.id} disabled={install.isPending} onClick={() => install.mutate({ id: blueprint.id, workspaceId })}><Plus className="h-4 w-4" aria-hidden="true" />{copy('install')}</Button>}</div>
+            <div className="mt-auto flex flex-wrap items-center justify-between gap-3 pt-4"><span className="text-xs text-muted-foreground">{blueprint.requirements.length > 0 && blueprint.requirements.map(line => requirementLabel(t, line, tr ? 'veya' : 'or')).join(' · ')}</span>{current ? <div className="flex flex-wrap gap-2"><Button asChild size="sm" variant="ghost"><Link to={moduleSettingsPath(blueprint.id)}>{copy('configure')}</Link></Button><Button asChild size="sm" variant="outline"><Link to={modulePath(current)}>{copy('open')}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button></div> : manage && <Button size="sm" variant="outline" loading={install.isPending && install.variables?.id === blueprint.id} disabled={install.isPending} onClick={() => install.mutate({ id: blueprint.id, workspaceId })}><Plus className="h-4 w-4" aria-hidden="true" />{copy('install')}</Button>}</div>
           </article>;
         })}
       </div>}

@@ -5,8 +5,7 @@
 //! not input validation: application code normalises identities before writing or matching.
 //!
 //! Consent/suppression govern commercial fences; quotes validate assigned ISO 4217 codes,
-//! appointments export escaped/folded UTC ICS, commissions use integer half-even rounding,
-//! and scoped identity hashes prevent erased identities from reappearing. `sms_segments`
+//! appointments export escaped/folded UTC ICS, and scoped identity hashes prevent erased identities from reappearing. `sms_segments`
 //! counts GSM-7 septets or UTF-16 units; send boundaries must validate body size first.
 //!
 //! Public surfaces ([`public`]): comments and marketplace questions are items of a public
@@ -14,7 +13,6 @@
 //! marketplace buyer messages relayed through the seller's mailbox.
 
 mod appointment;
-mod commission;
 mod consent;
 mod conversation;
 mod distribution;
@@ -36,7 +34,6 @@ mod task;
 mod text;
 
 pub use appointment::{Appointment, AppointmentError, AppointmentState, ics};
-pub use commission::{Commission, CommissionState, commission_for};
 pub use consent::{
     CommercialBasis, Consent, ConsentKind, ConsentSource, IzinYok, SyncState, commercial_allowed,
     commercial_basis, effective_consent,

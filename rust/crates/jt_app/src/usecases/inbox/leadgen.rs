@@ -193,7 +193,7 @@ pub(super) async fn intake(
     r.journeys()
         .apply_transition(journey.id, transition, event)
         .await?;
-    journeys::apply_effects(deps, ctx, r, &journey, &effects).await?;
+    journeys::apply_effects(r, &journey, &effects).await?;
     let task = Task {
         id: TaskId::from(deps.ids.uuid()),
         workspace_id: ctx.workspace_id,

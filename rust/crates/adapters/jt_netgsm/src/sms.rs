@@ -3,7 +3,7 @@
 //!
 //! | Call | Request | Answer read |
 //! |---|---|---|
-//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "1" | "0"}` | `jobid` (a string, or a number kept digit for digit), optional integer `cost_minor` |
+//! | send | `POST /sms/rest/v2/send {msgheader, messages: [{msg, no, referansID?}], encoding?: "TR", iysfilter: "0" | "11" | "12"}` | `jobid` (a string, or a number kept digit for digit), optional integer `cost_minor` |
 //! | report | `POST /sms/rest/v2/report {jobids}`, at most 50 per call | `jobs[] {jobid, telno, status, deliveredDate, errorCode}` |
 //! | inbox | `GET /sms/rest/v2/inbox?startdate&stopdate`, always both (`ddMMyyyyHHmm`, Turkish time) | `messages[] {msg, no, date, id}` |
 //! | balance | `POST /balance {stip: 3}` | rows `{balance_name, amount}`, bare or under `balance` |
@@ -26,7 +26,9 @@
 //! The balance, the sender names, reports and the inbox are reads (retried when no answer
 //! arrived); sending is an action, sent once.
 
-use jt_app::ports::connectors::{DeliveryState, DeliveryStatus, InboundEventDraft, SendReceipt};
+use jt_app::ports::connectors::{
+    DeliveryState, DeliveryStatus, InboundEventDraft, SendReceipt, SmsConsentFilter,
+};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::{Map, Value, json};
@@ -222,7 +224,7 @@ pub(crate) async fn send(
     to: &str,
     text_body: &str,
     reference: Option<&str>,
-    commercial: bool,
+    filter: SmsConsentFilter,
 ) -> Result<SendReceipt, ConnectorError> {
     let sms = SmsCred::of(cred, "send SMS")?;
     let no = phone_digits(to, "recipient")?;
@@ -241,10 +243,15 @@ pub(crate) async fn send(
     if text_body.contains(TURKISH_LETTERS) {
         body.insert("encoding".into(), json!("TR"));
     }
-    // Commercial SMS targets individuals ("11"); business recipients ("12") are not used yet.
+    // İYS's filter: none for an informational reply, the individual list ("11") for a commercial
+    // message resting on a consent, the merchant list ("12") for one to a business recipient.
     body.insert(
         "iysfilter".into(),
-        json!(if commercial { "11" } else { "0" }),
+        json!(match filter {
+            SmsConsentFilter::None => "0",
+            SmsConsentFilter::Individual => "11",
+            SmsConsentFilter::Business => "12",
+        }),
     );
     let answer = connector
         .call(
