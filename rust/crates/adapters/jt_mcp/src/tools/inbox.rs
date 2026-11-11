@@ -37,6 +37,30 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             run: people_set_kind,
         },
         ToolDef {
+            use_case: "inbox.attachments_upload",
+            description: "Upload a file to attach to an email: filename, mime (application/pdf, \
+                          image/png, image/jpeg, text/plain, text/csv, or the Word or Excel Open \
+                          XML type), data_base64 (at most 7 MiB decoded; the bytes must be what \
+                          the type begins with) and a request_key that replays it. The file is \
+                          staged for seven days: name its file_id in attachments on \
+                          jeeta.inbox.reply, jeeta.inbox.send or jeeta.inbox.quotes_send (email \
+                          only, at most five, one email per file). [risk: WRITE]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("attachments_upload")).expect("inbox schema"),
+            run: attachments_upload,
+        },
+        ToolDef {
+            use_case: "inbox.attachments_get",
+            description: "Read a mail file (file_id, as jeeta.inbox.messages_list lists them \
+                          under attachments, or as an upload answered it): name, declared type, \
+                          size, state (stored, staged, attached, skipped with skip_reason, \
+                          deleted), and while its bytes are kept a download_url valid ten \
+                          minutes, served only as a download. [risk: READ]",
+            permission: Permission::InboxWork,
+            schema: || Schema::try_from(schema::tool("attachments_get")).expect("inbox schema"),
+            run: attachments_get,
+        },
+        ToolDef {
             use_case: "inbox.commissions.list",
             description: "commissions.list for workspace commissions. [risk: READ]",
             permission: Permission::InboxWork,
@@ -68,7 +92,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.quotes.send",
-            description: "quotes.send for an internal journey. [risk: WRITE]",
+            description: "quotes.send for an internal journey. On email it may carry \
+                          attachments (file ids of jeeta.inbox.attachments_upload, at most \
+                          five); the quote's file_ref is then mail_file:<id> of the first, so \
+                          give one or the other. [risk: WRITE]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("quotes.send")).expect("inbox schema"),
             run: quotes_send,
@@ -138,7 +165,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.send",
-            description: "send for a workspace person. [risk: WRITE]",
+            description: "send for a workspace person. On email it may carry attachments \
+                          (file ids of jeeta.inbox.attachments_upload, at most five, within the \
+                          10 MiB message bound). [risk: WRITE]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("send")).expect("inbox schema"),
             run: send,
@@ -173,7 +202,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.messages.list",
-            description: "messages.list for workspace conversations. An outbound message that failed, or whose outcome is unknown, carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list\"); null otherwise. [risk: READ]",
+            description: "messages.list for workspace conversations. An outbound message that failed, or whose outcome is unknown, carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: meta: HTTP 400 OAuthException (#131030): Recipient phone number not in allowed list\"); null otherwise. An email's files are listed under attachments (file_id, filename, declared_mime, size_bytes, state, skip_reason); jeeta.inbox.attachments_get gives a download address. [risk: READ]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("messages.list")).expect("inbox schema"),
             run: messages_list,
@@ -215,7 +244,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.reply",
-            description: "reply for workspace conversations. [risk: WRITE]",
+            description: "reply for workspace conversations. On an email conversation it may \
+                          carry attachments (file ids of jeeta.inbox.attachments_upload, at most \
+                          five, within the 10 MiB message bound); elsewhere \
+                          attachments_require_email. [risk: WRITE]",
             permission: Permission::InboxWork,
             schema: || Schema::try_from(schema::tool("reply")).expect("inbox schema"),
             run: reply,
@@ -692,6 +724,20 @@ fn people_set_kind<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFutu
     Box::pin(async move {
         let id: PersonId = take_id(&mut raw, "person_id")?;
         to_json(&jt_app::usecases::inbox::people::set_kind(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn attachments_upload<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::inbox::attachments::upload(deps, ctx, args(raw)?).await?)
+    })
+}
+
+fn attachments_get<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let id: jt_app::ports::studio::FileId = take_id(&mut raw, "file_id")?;
+        let NoArgs {} = args(raw)?;
+        to_json(&jt_app::usecases::inbox::attachments::get(deps, ctx, id).await?)
     })
 }
 

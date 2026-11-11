@@ -25,6 +25,22 @@ pub async fn people_search(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&people::search(&state.deps, &ctx, input).await?)
 }
+/// `POST /api/inbox/attachments`: a file to attach to an email (body as MCP's).
+pub async fn attachments_upload(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<jt_app::usecases::inbox::attachments::UploadInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::attachments::upload(&state.deps, &ctx, input).await?)
+}
+/// `GET /api/inbox/attachments/{file_id}`: the file and its download address.
+pub async fn attachments_get(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<jt_app::ports::studio::FileId>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&jt_app::usecases::inbox::attachments::get(&state.deps, &ctx, id).await?)
+}
 pub async fn people_get(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

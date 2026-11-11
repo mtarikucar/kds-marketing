@@ -254,6 +254,8 @@ pub async fn test_send(
             references: Vec::new(),
             item_id: None,
             visibility: None,
+            // A test shows what recipients get: no file (spec D12).
+            attachments: Vec::new(),
         },
         Purpose::TestSend(&test),
     )

@@ -189,6 +189,7 @@ async fn enqueue_mail(
             references: vec![],
             item_id: None,
             visibility: None,
+            attachments: Vec::new(),
         },
         replies::Purpose::Appointment(appointment),
     )

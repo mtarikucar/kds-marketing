@@ -346,6 +346,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.public.report", Exempt, "jeeta.inbox.public_report", ("POST", "/api/inbox/items/{item_id}/report"), Write),
     twin("inbox.public.approve", Exempt, "jeeta.inbox.public_approve", ("POST", "/api/inbox/replies/{outbox_id}/approve"), Write),
     twin("inbox.public.discard", Exempt, "jeeta.inbox.public_discard", ("POST", "/api/inbox/replies/{outbox_id}/discard"), Write),
+    // Email attachments (leads spec §3.15, §7.1): files to answer customers with, and the ones
+    // they sent; answering customers needs no strategy (as `inbox.reply`).
+    twin("inbox.attachments_upload", Exempt, "jeeta.inbox.attachments_upload", ("POST", "/api/inbox/attachments"), Write),
+    twin("inbox.attachments_get", Exempt, "jeeta.inbox.attachments_get", ("GET", "/api/inbox/attachments/{file_id}"), Read),
 
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),

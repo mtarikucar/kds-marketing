@@ -304,6 +304,7 @@ fn every_job_has_a_lock_named_after_it() {
             "outreach_dispatch",
             "comments_poll",
             "purge_request_keys",
+            "mail_files_purge",
         ]
     );
     for job in Job::ALL {

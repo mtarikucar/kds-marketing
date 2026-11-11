@@ -5698,3 +5698,64 @@ async fn inbox_public_rows_have_http_mcp_parity() {
     assert_eq!(human, agent["structuredContent"]);
     assert_eq!(human["details"]["reason"], "reply_not_held");
 }
+
+/// The mail attachments' upload and read (leads L6-T3) answer the same over the panel and MCP:
+/// an upload replayed by its request key, and the file with its download address.
+#[tokio::test]
+async fn inbox_attachments_have_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("attachments-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    deps.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let upload = json!({
+        "request_key": "parity-file", "filename": "katalog.pdf",
+        "mime": "application/pdf", "data_base64": "JVBERi0xLjcK",
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/inbox/attachments",
+            Some(&cookie),
+            Some(upload.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    assert_eq!(human["state"], "staged");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.attachments_upload",
+        upload,
+    )
+    .await;
+    assert_eq!(human, agent);
+    let id = human["file_id"].as_str().unwrap().to_owned();
+    let path = format!("/api/inbox/attachments/{id}");
+    let resp = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.attachments_get",
+        json!({ "file_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert!(
+        human["download_url"]
+            .as_str()
+            .is_some_and(|u| u.contains("purpose=attachment")),
+        "{human}"
+    );
+}

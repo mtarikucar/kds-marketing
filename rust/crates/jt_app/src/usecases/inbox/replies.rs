@@ -49,6 +49,10 @@ pub struct ReplyInput {
     /// conversations only.
     #[serde(default)]
     pub visibility: Option<Visibility>,
+    /// Staged uploads to attach (`inbox.attachments_upload`): email only, at most five, within
+    /// the message bound (spec 2026-10-30-leads-pool-outreach-design.md §3.15).
+    #[serde(default)]
+    pub attachments: Vec<jt_studio::FileId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyOut {
@@ -144,6 +148,9 @@ pub struct SendInput {
     pub intent: SendIntent,
     #[serde(default)]
     pub request_key: Option<String>,
+    /// Staged uploads to attach, as [`ReplyInput::attachments`].
+    #[serde(default)]
+    pub attachments: Vec<jt_studio::FileId>,
 }
 
 pub async fn send(
@@ -168,6 +175,7 @@ pub async fn send(
         references: vec![],
         item_id: None,
         visibility: None,
+        attachments: input.attachments,
     };
     match enqueue_target(
         deps,
@@ -449,6 +457,8 @@ pub(crate) async fn enqueue_in(
         Actor::System { .. } => Author::System,
     };
     let cap = capability(r, &c).await?;
+    // An email's files are checked before any fence, so a refusal here records nothing.
+    let files = super::attachments::staged_for_send(r, &cap, &input.attachments, ctx.now).await?;
     let fenced = match fence_all(
         deps,
         r,
@@ -680,6 +690,13 @@ pub(crate) async fn enqueue_in(
             }
             None => None,
         };
+        let sizes: Vec<u64> = files.iter().map(|f| f.size_bytes).collect();
+        if !files.is_empty() && !super::attachments::message_fits(text.len(), &sizes) {
+            return Err(AppError::validation(
+                "the email and its files exceed the message bound",
+                json!({"field":"attachments","reason":"message_too_large"}),
+            ));
+        }
         intent["mail"] = serde_json::to_value(MailMessage {
             to: recipient,
             subject,
@@ -692,7 +709,7 @@ pub(crate) async fn enqueue_in(
                 .map(|s| s.from_name.clone())
                 .or(test.map(|t| t.from_name.clone())),
             list_unsubscribe,
-            attachment_files: Vec::new(),
+            attachment_files: files.iter().map(|f| f.id.0).collect(),
         })?;
     } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
     {
@@ -741,6 +758,15 @@ pub(crate) async fn enqueue_in(
         })
         .await?;
     r.outbox().insert(row.clone()).await?;
+    // Each file goes with this one message (re-upload to send it again).
+    if !files.is_empty() {
+        let ids: Vec<jt_studio::FileId> = files.iter().map(|f| f.id).collect();
+        if r.mail_files().attach(&ids, message_id, c.person_id).await? as usize != ids.len() {
+            return Err(AppError::internal(
+                "a staged file changed while it was attached",
+            ));
+        }
+    }
     if let Some(j) = &j {
         crate::usecases::distribution::touch(r, ctx, j.id).await?;
     }
@@ -1147,6 +1173,8 @@ struct Prepared {
     credential: Credential,
     recipient: String,
     provider: Provider,
+    /// The email's files, attached to its message when it was claimed.
+    files: Vec<crate::ports::mail_files::MailFileRow>,
 }
 enum Claim {
     Ready(Box<Prepared>),
@@ -1281,7 +1309,16 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await
         .map(|passed| passed.basis),
     };
-    let basis = match fenced.and_then(|basis| footer_ready(&row, &cap).map(|()| basis)) {
+    // The email's files are still its message's (an erasure takes them).
+    let (files, files_ready) =
+        match super::attachments::attached_for_claim(r.as_mut(), &row).await? {
+            Ok(files) => (files, Ok(())),
+            Err(e) => (Vec::new(), Err(e)),
+        };
+    let basis = match fenced
+        .and_then(|basis| footer_ready(&row, &cap).map(|()| basis))
+        .and_then(|basis| files_ready.map(|()| basis))
+    {
         Ok(basis) => basis,
         Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {
             return Err(e);
@@ -1399,6 +1436,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         credential,
         recipient,
         provider,
+        files,
     })))
 }
 async fn prepare(
@@ -1536,12 +1574,20 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 }),
         }
     } else if p.capability.kind_key == "mailbox" {
-        let mail: MailMessage = serde_json::from_value(p.row.intent["mail"].clone())?;
-        deps.connectors
-            .mail_sender(p.provider)
-            .ok_or_else(|| AppError::internal("sender disappeared"))?
-            .send(ctx.workspace_id, &p.credential, mail)
-            .await
+        let mut mail: MailMessage = serde_json::from_value(p.row.intent["mail"].clone())?;
+        // The files' bytes, read now, after the claim and before the provider call (spec
+        // §3.15): the intent holds their ids only.
+        match super::attachments::read_for_send(deps, ctx.workspace_id, &p.files).await {
+            Some(files) => {
+                mail.attachments.extend(files);
+                deps.connectors
+                    .mail_sender(p.provider)
+                    .ok_or_else(|| AppError::internal("sender disappeared"))?
+                    .send(ctx.workspace_id, &p.credential, mail)
+                    .await
+            }
+            None => Err(ConnectorError::permanent("attachment unavailable")),
+        }
     } else if p.capability.kind_key == "sms_line" {
         deps.connectors
             .sms(p.provider)

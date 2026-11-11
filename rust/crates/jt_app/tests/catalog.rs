@@ -237,6 +237,8 @@ fn catalog_is_the_release_table() {
         ("inbox.public.report", Some("jeeta.inbox.public_report"), Some(("POST", "/api/inbox/items/{item_id}/report")), false, Risk::Write),
         ("inbox.public.approve", Some("jeeta.inbox.public_approve"), Some(("POST", "/api/inbox/replies/{outbox_id}/approve")), false, Risk::Write),
         ("inbox.public.discard", Some("jeeta.inbox.public_discard"), Some(("POST", "/api/inbox/replies/{outbox_id}/discard")), false, Risk::Write),
+        ("inbox.attachments_upload", Some("jeeta.inbox.attachments_upload"), Some(("POST", "/api/inbox/attachments")), false, Risk::Write),
+        ("inbox.attachments_get", Some("jeeta.inbox.attachments_get"), Some(("GET", "/api/inbox/attachments/{file_id}")), false, Risk::Read),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
         ("auth.login", None, Some(("POST", "/api/auth/login")), true, Risk::Write),
         ("auth.logout", None, Some(("POST", "/api/auth/logout")), true, Risk::Write),
@@ -384,7 +386,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 245);
+    assert_eq!(CATALOG.len(), 247);
     for uc in CATALOG {
         assert_eq!(uc.gate, if uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

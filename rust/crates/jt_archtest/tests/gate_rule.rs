@@ -92,6 +92,9 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.public.report",
     "inbox.public.approve",
     "inbox.public.discard",
+    // Files to answer customers with, and the ones they sent (leads L6).
+    "inbox.attachments_upload",
+    "inbox.attachments_get",
 ];
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
@@ -318,7 +321,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 53);
+    assert_eq!(rows.len(), 55);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

@@ -9,6 +9,8 @@ pub fn input(action: &str) -> Value {
         json!({"channel":{"type":"string","enum":["phone","email","instagram_dm","messenger","webchat"]},"value":{"type":"string","minLength":1},"capability_id":{"type":["string","null"],"format":"uuid"}}),
         &["channel", "value"],
     );
+    // Staged uploads an email carries (spec 2026-10-30-leads-pool-outreach-design.md §3.15).
+    let attachments = json!({"type":"array","maxItems":super::attachments::MAX_ATTACHMENTS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}});
     match action {
         "commissions.list" => object(
             json!({"state":{"enum":["no_payee","pending","approved","paid",null]},"payee":{"type":["string","null"],"format":"uuid"}}),
@@ -19,7 +21,7 @@ pub fn input(action: &str) -> Value {
             &["rate_bp"],
         ),
         "quotes.send" => object(
-            json!({"amount_minor":{"type":"integer","minimum":0},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"valid_until":{"type":"string","format":"date-time"},"file_ref":{"type":["string","null"]},"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]},"request_key":{"type":["string","null"]}}),
+            json!({"amount_minor":{"type":"integer","minimum":0},"currency":{"type":"string","pattern":"^[A-Z]{3}$"},"valid_until":{"type":"string","format":"date-time"},"file_ref":{"type":["string","null"]},"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"attachments":attachments.clone()}),
             &[
                 "amount_minor",
                 "currency",
@@ -46,7 +48,7 @@ pub fn input(action: &str) -> Value {
             &["channel", "reason"],
         ),
         "send" => object(
-            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]}}),
+            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]},"attachments":attachments.clone()}),
             &["channel", "text", "intent"],
         ),
         "conversations.list" => object(
@@ -62,7 +64,7 @@ pub fn input(action: &str) -> Value {
             &["until"],
         ),
         "reply" => object(
-            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]}}),
+            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]},"attachments":attachments.clone()}),
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
@@ -135,6 +137,10 @@ pub fn input(action: &str) -> Value {
             json!({"labels":{"type":"object","propertyNames":{"enum":["new","contacted","unreachable","appointment","met","quoted","pending","won","lost"]},"additionalProperties":{"type":"string","minLength":1}}}),
             &["labels"],
         ),
+        "attachments_upload" => object(
+            json!({"request_key":{"type":"string","minLength":1,"maxLength":200},"filename":{"type":"string","minLength":1,"maxLength":255},"mime":{"enum":super::attachments::UPLOAD_TYPES},"data_base64":{"type":"string","minLength":1,"contentEncoding":"base64"}}),
+            &["request_key", "filename", "mime", "data_base64"],
+        ),
         _ => object(json!({}), &[]),
     }
 }
@@ -169,6 +175,7 @@ pub fn tool(action: &str) -> Value {
         "appointments.cancel" | "appointments.held" => Some("appointment_id"),
         "public.hide" | "public.delete" | "public.report" => Some("item_id"),
         "public.approve" | "public.discard" => Some("outbox_id"),
+        "attachments_get" => Some("file_id"),
         _ => None,
     };
     if let Some(id) = id {

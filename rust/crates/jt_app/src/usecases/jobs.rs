@@ -149,11 +149,12 @@ pub enum Job {
     OutreachDispatch,
     CommentsPoll,
     PurgeRequestKeys,
+    MailFilesPurge,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 35] = [
+    pub const ALL: [Job; 36] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -189,6 +190,7 @@ impl Job {
         Job::OutreachDispatch,
         Job::CommentsPoll,
         Job::PurgeRequestKeys,
+        Job::MailFilesPurge,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -230,6 +232,7 @@ impl Job {
             Job::OutreachDispatch => "outreach_dispatch",
             Job::CommentsPoll => "comments_poll",
             Job::PurgeRequestKeys => "purge_request_keys",
+            Job::MailFilesPurge => "mail_files_purge",
         }
     }
 
@@ -276,6 +279,7 @@ impl Job {
             Job::OutreachDispatch => run_outreach_dispatch(deps, now).await,
             Job::CommentsPoll => run_comments_poll(deps, now).await,
             Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
+            Job::MailFilesPurge => run_mail_files_purge(deps, now).await,
         }
     }
 }
@@ -1381,6 +1385,22 @@ pub async fn run_purge_request_keys(deps: &Deps, now: OffsetDateTime) -> JobRepo
             Ok::<u64, AppError>(n)
         };
         count_purged(job, ws, purged.await, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace whatever its status, the bytes of the mail files whose time came
+/// (spec 2026-10-30-leads-pool-outreach-design.md §3.15, §6.4): inbound files older than the
+/// leads policy's `attachments.retention_days` (180 by default) and uploads left staged past
+/// their seven days (`inbox::attachments::purge`); their rows stay, `deleted`. No ledger entry.
+/// `touched` and `changed` count the files, `failed` the workspaces that could not be purged
+/// (the others are purged all the same).
+pub async fn run_mail_files_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::MailFilesPurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let purged = super::inbox::attachments::purge(deps, ws, now).await;
+        count_purged(job, ws, purged, &mut report);
     }
     finish(job, report)
 }

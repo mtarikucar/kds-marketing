@@ -125,6 +125,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/inbox/conversations/{conversation_id}/context"),
     ("POST", "/api/inbox/people/{person_id}/erase"),
     ("POST", "/api/inbox/people/{person_id}/kind"),
+    ("POST", "/api/inbox/attachments"),
+    ("GET", "/api/inbox/attachments/{file_id}"),
     ("GET", "/api/inbox/conversations"),
     ("GET", "/api/inbox/conversations/{conversation_id}"),
     ("GET", "/api/inbox/conversations/{conversation_id}/messages"),
@@ -796,6 +798,18 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/inbox/people/{person_id}/kind",
             "inbox.people.set_kind",
             inbox::people_set_kind,
+        ),
+        api_route(
+            "POST",
+            "/inbox/attachments",
+            "inbox.attachments_upload",
+            inbox::attachments_upload,
+        ),
+        api_route(
+            "GET",
+            "/inbox/attachments/{file_id}",
+            "inbox.attachments_get",
+            inbox::attachments_get,
         ),
         api_route(
             "GET",

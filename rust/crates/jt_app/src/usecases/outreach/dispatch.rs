@@ -879,6 +879,8 @@ async fn one(
             references,
             item_id: None,
             visibility: None,
+            // A campaign step carries no file (spec D12).
+            attachments: Vec::new(),
         },
         Purpose::Outreach(&send),
     )
