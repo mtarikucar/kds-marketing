@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 /// A provider with an adapter inside the system (spec §13 M1: Meta, NetGSM, X; then mail,
 /// TikTok and LinkedIn; then the marketplaces, spec 2026-10-30-inbox-comments-marketplace-design
-/// §5.3, each its own egress scope).
+/// §5.3, each its own egress scope; then Google, for its ad accounts, design
+/// 2026-11-11-reklam-platformlari-design).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -24,6 +25,8 @@ pub enum Provider {
     Trendyol,
     /// Customer questions on a Hepsiburada merchant's products.
     Hepsiburada,
+    /// Ad campaigns in a Google Ads account.
+    Google,
 }
 
 const ALL: &[Provider] = &[
@@ -35,6 +38,7 @@ const ALL: &[Provider] = &[
     Provider::Linkedin,
     Provider::Trendyol,
     Provider::Hepsiburada,
+    Provider::Google,
 ];
 
 /// The capability kinds Meta serves.
@@ -74,7 +78,6 @@ pub const UNSUPPORTED_CONNECTOR_KINDS: &[&str] = &[
     "review_google",
     "tiktok_ads",
     "linkedin_ads",
-    "google_ads",
     "google_calendar",
     "outlook_calendar",
 ];
@@ -91,6 +94,7 @@ impl Provider {
             Provider::Linkedin => "linkedin",
             Provider::Trendyol => "trendyol",
             Provider::Hepsiburada => "hepsiburada",
+            Provider::Google => "google",
         }
     }
 
@@ -115,6 +119,7 @@ impl Provider {
             Provider::Linkedin => LINKEDIN_KINDS,
             Provider::Trendyol => &["trendyol"],
             Provider::Hepsiburada => &["hepsiburada"],
+            Provider::Google => &["google_ads"],
         }
     }
 }

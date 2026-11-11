@@ -92,7 +92,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Mail => self.mail.clone(),
             Provider::Tiktok => self.tiktok.clone(),
             Provider::Linkedin => self.linkedin.clone(),
-            Provider::Trendyol | Provider::Hepsiburada => return None,
+            Provider::Trendyol | Provider::Hepsiburada | Provider::Google => return None,
         })
     }
 
@@ -102,7 +102,11 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
+            Provider::Netgsm
+            | Provider::Mail
+            | Provider::Trendyol
+            | Provider::Hepsiburada
+            | Provider::Google => None,
         }
     }
 
@@ -124,7 +128,11 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
+            Provider::Netgsm
+            | Provider::Mail
+            | Provider::Trendyol
+            | Provider::Hepsiburada
+            | Provider::Google => None,
         }
     }
 
@@ -134,7 +142,11 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
+            Provider::Netgsm
+            | Provider::Mail
+            | Provider::Trendyol
+            | Provider::Hepsiburada
+            | Provider::Google => None,
         }
     }
 
@@ -221,8 +233,10 @@ mod tests {
     }
 
     /// The providers whose adapters are not in the binary yet: the marketplaces (tasks T1 and H1
-    /// of plan 2026-10-30-inbox-comments-marketplace-plan.md).
-    const NOT_YET_SERVED: [Provider; 2] = [Provider::Trendyol, Provider::Hepsiburada];
+    /// of plan 2026-10-30-inbox-comments-marketplace-plan.md) and Google (task 2 of plan
+    /// 2026-11-11-step4-ad-platforms.md).
+    const NOT_YET_SERVED: [Provider; 3] =
+        [Provider::Trendyol, Provider::Hepsiburada, Provider::Google];
 
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
@@ -276,6 +290,7 @@ mod tests {
             ),
             (Provider::Trendyol, vec![]),
             (Provider::Hepsiburada, vec![]),
+            (Provider::Google, vec![]),
         ];
         assert_eq!(expected.len(), Provider::all().len());
         assert_eq!(

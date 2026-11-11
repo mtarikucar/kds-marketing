@@ -24,16 +24,19 @@ function AdsPreview({ data }: { data: CampaignDetail }) {
   const [index, setIndex] = useState(0);
   const [placement, setPlacement] = useState<Placement>('facebook_feed');
   const ad = data.campaign.plan?.ads[index];
+  // Only some ad platforms show how an ad will look; elsewhere the plan's own texts are shown.
+  const previews =
+    data.platforms.find((p) => p.platform === (data.campaign.built?.platform ?? 'meta'))?.preview ?? true;
   const preview = useQuery({
     queryKey: [...key, 'preview', data.campaign.id, data.campaign.revision, index, placement],
     queryFn: () => adPreview(data.campaign.id, index, placement),
-    enabled: Boolean(ad),
+    enabled: Boolean(ad) && previews,
     retry: false,
     staleTime: 23 * 60 * 60 * 1000,
   });
   if (!ad)
     return <p>{t(isClosed(data.campaign) ? 'adCampaigns.noPlanClosed' : 'adCampaigns.noPlan')}</p>;
-  const material = data.materials.find((m) => ad.material_ids.includes(m.id) && !m.erased_at);
+  const material = data.materials.find((m) => ad.material_ids?.includes(m.id) && !m.erased_at);
   const built = data.campaign.built?.ads.find((a) => a.index === index);
   return (
     <section className="min-w-0 space-y-4" aria-label={t('adCampaigns.ads')}>
@@ -50,20 +53,22 @@ function AdsPreview({ data }: { data: CampaignDetail }) {
           </Button>
         ))}
       </div>
-      <label className="block text-sm">
-        {t('adCampaigns.placement')}
-        <select
-          className={`${inputClass} mt-1`}
-          value={placement}
-          onChange={(e) => setPlacement(e.target.value as Placement)}
-        >
-          {(['facebook_feed', 'instagram_feed', 'instagram_story', 'instagram_reels'] as const).map((p) => (
-            <option key={p} value={p}>
-              {t(`adCampaigns.placements.${p}`)}
-            </option>
-          ))}
-        </select>
-      </label>
+      {previews && (
+        <label className="block text-sm">
+          {t('adCampaigns.placement')}
+          <select
+            className={`${inputClass} mt-1`}
+            value={placement}
+            onChange={(e) => setPlacement(e.target.value as Placement)}
+          >
+            {(['facebook_feed', 'instagram_feed', 'instagram_story', 'instagram_reels'] as const).map((p) => (
+              <option key={p} value={p}>
+                {t(`adCampaigns.placements.${p}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       {preview.data?.html ? (
         <iframe
           title={ad.name || t('adCampaigns.adNumber', { n: index + 1 })}
@@ -75,15 +80,45 @@ function AdsPreview({ data }: { data: CampaignDetail }) {
       ) : (
         <article className="mx-auto max-w-lg space-y-3 rounded-lg border border-border bg-surface p-4">
           <p className="text-xs text-muted-foreground" role="status">
-            {preview.isLoading ? t('common.loading') : t('adCampaigns.fallback')}
+            {!previews
+              ? t('adCampaigns.noPreview')
+              : preview.isLoading
+                ? t('common.loading')
+                : t('adCampaigns.fallback')}
           </p>
           {material && <MaterialPreview material={material} controls />}
-          <p className="whitespace-pre-wrap break-words">{ad.primary_text}</p>
-          <h3 className="break-words font-medium">{ad.headline}</h3>
+          {ad.primary_text && <p className="whitespace-pre-wrap break-words">{ad.primary_text}</p>}
+          {ad.headline && <h3 className="break-words font-medium">{ad.headline}</h3>}
           {ad.description && <p className="break-words text-sm">{ad.description}</p>}
-          <span className="inline-block rounded border border-border px-3 py-2 text-sm">
-            {t(`adCampaigns.cta.${ad.call_to_action}`, { defaultValue: ad.call_to_action })}
-          </span>
+          {Boolean(ad.headlines?.length) && (
+            <div className="space-y-1">
+              <h3 className="text-sm font-medium">{t('adCampaigns.headlines')}</h3>
+              <ul className="list-disc space-y-1 ps-5">
+                {ad.headlines?.map((text, i) => (
+                  <li key={i} className="break-words">
+                    {text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {Boolean(ad.descriptions?.length) && (
+            <div className="space-y-1">
+              <h3 className="text-sm font-medium">{t('adCampaigns.descriptions')}</h3>
+              <ul className="list-disc space-y-1 ps-5 text-sm">
+                {ad.descriptions?.map((text, i) => (
+                  <li key={i} className="break-words">
+                    {text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {ad.call_to_action && (
+            <span className="inline-block rounded border border-border px-3 py-2 text-sm">
+              {t(`adCampaigns.cta.${ad.call_to_action}`, { defaultValue: ad.call_to_action })}
+            </span>
+          )}
         </article>
       )}
       {built && (
@@ -199,6 +234,7 @@ const PERSON_FINDINGS = [
   'eu_targeting_needs_payer',
   'lead_form_needs_the_inbox',
   'special_category_not_supported',
+  'duration_not_supported',
 ] as const;
 /** Why the agent's last plan was turned down, while the campaign still has no plan. */
 function PlanRefusal({ campaign: c }: { campaign: Campaign }) {
@@ -219,6 +255,8 @@ function PlanRefusal({ campaign: c }: { campaign: Campaign }) {
                     account: f.account_currency ?? '—',
                     budget: f.budget_currency ?? '—',
                     needs: f.needs?.join(', ') ?? '—',
+                    hours: f.least_hours ?? '—',
+                    days: f.most_days ?? '—',
                   })
                 : t('adCampaigns.findings.other', { field: f.field })}
             </li>
@@ -282,6 +320,12 @@ export function CampaignPage({ id, manage }: { id: string; manage: boolean }) {
                         ? c.plan.destination.url
                         : t('adCampaigns.leadDestination', { name: c.plan.destination.name })}
                     </p>
+                    {Boolean(c.plan.keywords?.length) && (
+                      <>
+                        <h3 className="pt-2 text-sm font-medium">{t('adCampaigns.keywords')}</h3>
+                        <p className="break-words text-sm">{c.plan.keywords?.join(' · ')}</p>
+                      </>
+                    )}
                   </section>
                 )}
                 <DailyResults data={data} />

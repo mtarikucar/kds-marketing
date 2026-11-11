@@ -56,6 +56,7 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("linkedin_page", Provider::Linkedin),
     ("trendyol", Provider::Trendyol),
     ("hepsiburada", Provider::Hepsiburada),
+    ("google_ads", Provider::Google),
 ];
 
 #[test]
@@ -109,7 +110,8 @@ fn provider_for_every_connector_kind() {
             "tiktok",
             "linkedin",
             "trendyol",
-            "hepsiburada"
+            "hepsiburada",
+            "google"
         ]
     );
     for p in Provider::all() {
@@ -164,7 +166,6 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
         "review_google",
         "tiktok_ads",
         "linkedin_ads",
-        "google_ads",
         "google_calendar",
         "outlook_calendar",
     ]

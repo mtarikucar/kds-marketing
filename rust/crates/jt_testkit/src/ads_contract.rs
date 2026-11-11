@@ -150,6 +150,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId, other: WorkspaceId)
     // closed after `since` or not confirmed paused there. Never one that was not activated.
     let built = |activated: bool, paused: bool| Built {
         account: jt_capability::CapabilityId::new_v7(),
+        platform: Default::default(),
         campaign_id: Some("c".into()),
         adset_id: None,
         form_id: None,

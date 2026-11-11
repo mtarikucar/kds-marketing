@@ -509,3 +509,22 @@ pub(crate) async fn check_content(
     let findings = check_caption(texts, subject, &refs, &lib.olays, &names, &lib.calendar);
     Ok((hard, findings))
 }
+
+/// The truth check alone, for content that shows no material (a search ad's texts): a text about
+/// nothing in particular must not name what only a confirmed event's own material may say.
+pub(crate) async fn check_texts(
+    r: &mut dyn TenantRepos,
+    texts: &[&str],
+    at: OffsetDateTime,
+) -> Result<Vec<CaptionFinding>, AppError> {
+    let lib = library(r, at).await?;
+    let names = client_names(r, &lib.olays).await?;
+    Ok(check_caption(
+        texts,
+        &Subject::Generic,
+        &[],
+        &lib.olays,
+        &names,
+        &lib.calendar,
+    ))
+}

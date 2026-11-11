@@ -1394,12 +1394,17 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
 const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \
     jeeta.ads.campaign_get (its goal, its total budget in minor units, its start), then claim it \
     with jeeta.ads.campaign_claim (campaign_id, expected_revision); the answer carries a \
-    claim_token. Read the strategy (jeeta.strategy.get) for the paid hypotheses, the ad account \
-    and the Facebook Page (jeeta.capability.list: kinds meta_ads and facebook_page) and the \
-    library's shareable images (jeeta.studio.materials_list). Decide the result (link_click to \
-    a website, or lead_form), the audience, the placements, an end time 24 hours to 90 days \
-    after the start, and one to six ads (one image, a primary text, a headline, a call to \
-    action each), and deliver them with jeeta.ads.plan_submit (campaign_id, claim_token, \
+    claim_token. Read the strategy (jeeta.strategy.get) for the paid hypotheses and the ad \
+    accounts (jeeta.capability.list, group ads). The ad account you choose decides the platform \
+    (the campaign's own account when a person chose one), and the platform decides what a plan \
+    carries: `platforms` in the campaign_get answer says it field by field. On Meta (meta_ads): \
+    the Facebook Page (kind facebook_page), one shareable image of the library per ad \
+    (jeeta.studio.materials_list), a primary text, a headline, a call to action; the result is \
+    link_click to a website or lead_form; an audience and placements. On Google (google_ads): \
+    search ads, each 3 to 15 headlines and 2 to 4 descriptions, the plan's keywords (the \
+    searches the ads answer), the countries and a website; no image, no page, no age range, \
+    and at least 72 hours of run. Choose an end time 24 hours to 90 days after the start and \
+    one to six ads, and deliver them with jeeta.ads.plan_submit (campaign_id, claim_token, \
     request_key, plan). You only decide: Jeeta checks the plan, holds the campaign's whole \
     budget against every limit and builds the campaign at the ad platform itself, paused first. \
     A refusal names each field to fix; the third in a row hands the campaign to a person. If \

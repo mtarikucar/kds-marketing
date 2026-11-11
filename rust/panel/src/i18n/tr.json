@@ -43,6 +43,10 @@
     "ads": "Reklamlar",
     "placement": "Yerleşim",
     "fallback": "Platform önizlemesi şu anda kullanılamıyor.",
+    "noPreview": "Bu reklam platformu önizleme göstermiyor; reklamın metinleri aşağıda.",
+    "headlines": "Başlıklar",
+    "descriptions": "Açıklamalar",
+    "keywords": "Anahtar sözcükler",
     "days": "Günlere göre sonuçlar",
     "day": "Gün",
     "spent": "Harcanan",
@@ -75,6 +79,7 @@
       "not_running": "Bu reklam kampanyası artık sürmüyor.",
       "not_stopped": "Bu reklam kampanyası durdurulmuş değil.",
       "not_a_proposal": "Bu reklam kampanyası onay bekleyen bir öneri değil.",
+      "duration_not_supported": "Seçtiğiniz reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az {{hours}} saat, en çok {{days}} gün.",
       "proposal_expired": "Bu önerinin onay süresi doldu."
     },
     "notes": {
@@ -104,6 +109,7 @@
       "eu_targeting_needs_payer": "Avrupa Birliği ülkelerine reklam bu sürümde desteklenmiyor.",
       "lead_form_needs_the_inbox": "Reklam formu için Gelen kutusu modülü kurulu olmalı.",
       "special_category_not_supported": "Özel reklam kategorileri bu sürümde desteklenmiyor.",
+      "duration_not_supported": "Reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az {{hours}} saat, en çok {{days}} gün. Bitiş tarihini değiştirin ya da başka bir reklam hesabı seçin.",
       "other": "Ajanın düzelteceği alan: {{field}}"
     },
     "endReasons": {

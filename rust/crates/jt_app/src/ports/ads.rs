@@ -34,6 +34,46 @@ pub const MAX_TEXT_CHARS: usize = 2000;
 /// reports as spent arrives late, and the last hours before the end would otherwise be lost.
 pub const SETTLE_WINDOW: Duration = Duration::hours(48);
 
+/// The ad platform a campaign runs on: the one its ad account is of (design 2026-11-11 B61).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdsPlatform {
+    /// A record written before a campaign could run anywhere else reads as Meta.
+    #[default]
+    Meta,
+    Google,
+}
+
+impl AdsPlatform {
+    /// Every platform a campaign can be built on, in a fixed order.
+    pub fn all() -> &'static [AdsPlatform] {
+        &[AdsPlatform::Meta, AdsPlatform::Google]
+    }
+
+    /// The capability kind of its ad accounts.
+    pub fn kind_key(self) -> &'static str {
+        match self {
+            AdsPlatform::Meta => "meta_ads",
+            AdsPlatform::Google => "google_ads",
+        }
+    }
+
+    /// The platform whose ad accounts are of capability kind `kind_key`, if one is.
+    pub fn of_kind(kind_key: &str) -> Option<AdsPlatform> {
+        AdsPlatform::all()
+            .iter()
+            .copied()
+            .find(|p| p.kind_key() == kind_key)
+    }
+}
+
+fn youngest() -> u8 {
+    18
+}
+fn oldest() -> u8 {
+    65
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CampaignOpenedBy {
@@ -108,7 +148,11 @@ pub struct PlanAudience {
     pub regions: Vec<String>,
     #[serde(default)]
     pub cities: Vec<String>,
+    /// 18 when left out.
+    #[serde(default = "youngest")]
     pub age_min: u8,
+    /// 65 (and older) when left out.
+    #[serde(default = "oldest")]
     pub age_max: u8,
     /// `1` men, `2` women; empty: everybody.
     #[serde(default)]
@@ -119,34 +163,49 @@ pub struct PlanAudience {
     pub broad: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Where the ads are shown: left to the platform (the default, and the only choice on a platform
+/// that has no placements to name), or on the named ones.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanPlacements {
+    #[default]
     Automatic,
     #[serde(untagged)]
-    Platforms {
-        platforms: Vec<String>,
-    },
+    Platforms { platforms: Vec<String> },
 }
 
-/// One ad of a plan.
+/// One ad of a plan. Which of its fields an ad carries is its platform's
+/// (`usecases::ads::platform`): an image ad its image, its texts, its call to action and the
+/// account it speaks as; a search ad its headlines and descriptions. A field the platform does
+/// not take is left out; one given anyway is refused.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlanAd {
     pub name: String,
-    /// One image material in this version.
+    /// One image material, on a platform whose ad shows an image.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub material_ids: Vec<MaterialId>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub primary_text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub headline: String,
     #[serde(default)]
     pub description: Option<String>,
     /// `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `CONTACT_US`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`,
     /// `BOOK_NOW`, `DOWNLOAD`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub call_to_action: String,
-    /// The Facebook Page the ad speaks as.
-    pub page: CapabilityId,
+    /// The account the ad speaks as: a Facebook Page on Meta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<CapabilityId>,
     #[serde(default)]
     pub instagram: Option<CapabilityId>,
+    /// A search ad's headlines, of which the platform shows a few at a time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headlines: Vec<String>,
+    /// A search ad's descriptions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descriptions: Vec<String>,
     pub hypothesis_id: HypothesisId,
 }
 
@@ -161,7 +220,11 @@ pub struct CampaignPlan {
     #[serde(default)]
     pub special_ad_categories: Vec<String>,
     pub audience: PlanAudience,
+    #[serde(default)]
     pub placements: PlanPlacements,
+    /// The searches the ads answer, on a platform that shows ads on searches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     #[serde(with = "jt_studio::time_compat")]
     pub end_at: OffsetDateTime,
     pub ads: Vec<PlanAd>,
@@ -211,6 +274,9 @@ pub struct BuiltAd {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Built {
     pub account: CapabilityId,
+    /// The platform of `account`.
+    #[serde(default)]
+    pub platform: AdsPlatform,
     #[serde(default)]
     pub campaign_id: Option<String>,
     #[serde(default)]

@@ -1887,9 +1887,10 @@ const PUBLISHING: &[Provider] = &[
     Provider::Tiktok,
     Provider::Linkedin,
 ];
-/// The providers whose adapters send direct messages, write ad budgets and fetch lead-gen
-/// submissions (Meta).
+/// The providers whose adapters send direct messages and fetch lead-gen submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
+/// The providers whose adapters build ad campaigns and switch their ads on and off (Meta, Google).
+const AD_PLATFORMS: &[Provider] = &[Provider::Meta, Provider::Google];
 /// The providers whose adapters send SMS, place calls, record consent and answer delivery-report
 /// and inbox polls (NetGSM).
 const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
@@ -1899,7 +1900,8 @@ const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];
 /// [`with_oauth`](Self::with_oauth) register adapters by their provider. A registered
 /// [`ScriptedConnector`] is handed out for its provider's operations where the real adapter offers
 /// them: SMS, calls, consent and delivery reports for NetGSM; publishing and counters for Meta,
-/// X, TikTok and LinkedIn; messaging, ad budgets and lead-gen for Meta. Clones share the adapters.
+/// X, TikTok and LinkedIn; messaging and lead-gen for Meta; ad campaigns and ad statuses for Meta
+/// and Google. Clones share the adapters.
 #[derive(Clone, Default)]
 pub struct ScriptedRegistry {
     connectors: BTreeMap<Provider, Arc<ScriptedConnector>>,
@@ -1995,12 +1997,12 @@ impl ConnectorRegistry for ScriptedRegistry {
     }
 
     fn ad_campaigns(&self, provider: Provider) -> Option<Arc<dyn AdCampaignWriter>> {
-        self.offered(provider, META_ONLY)
+        self.offered(provider, AD_PLATFORMS)
             .map(|c| c as Arc<dyn AdCampaignWriter>)
     }
 
     fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
-        self.offered(provider, META_ONLY)
+        self.offered(provider, AD_PLATFORMS)
             .map(|c| c as Arc<dyn AdBudgetWriter>)
     }
 

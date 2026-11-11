@@ -2,6 +2,12 @@
 //! campaign with its total budget, the ad set, each ad's image, creative and ad, all paused, and
 //! only then the activation.
 //!
+//! The steps are the same on every platform (design 2026-11-11 B70) and each adapter fits its
+//! own chain to them: the level under the campaign is Meta's ad set, Google's ad group,
+//! LinkedIn's campaign; an ad without an image (a search ad) has no image step; a platform
+//! without a creative object of its own answers the creative step without a call and builds the
+//! ad from the creative the ad step carries.
+//!
 //! The build is deterministic and can be cut off anywhere. Every provider object carries a name
 //! made of the campaign's id and its part (`jeeta:<campaign>:campaign`, `:adset`,
 //! `:creative:<n>:<generation>`, `:ad:<n>:<generation>`); its provider id is recorded before the
@@ -13,7 +19,7 @@
 //! Nothing is activated unless the campaign's budget still holds against every limit and
 //! nobody stopped the spending; a build stopped half way activates nothing, and goes on when
 //! the stop is lifted.
-use super::{check_money, load, save};
+use super::{check_money, load, platform, save};
 use crate::{
     ctx::Ctx,
     error::AppError,
@@ -138,8 +144,9 @@ async fn external_id(
     Ok(r.capabilities().find(id).await?.and_then(|c| c.external_id))
 }
 
-/// The creative of the plan's `n`-th ad, once its image is at the provider: `None` while the
-/// image, the page's id or (for a lead form) the form is not there yet.
+/// The creative of the plan's `n`-th ad, once what it refers to is at the provider: `None`
+/// while the image (of an ad that shows one), the id of the account it speaks as (of an ad that
+/// has one) or the form (of a lead form campaign) is not there yet.
 pub(crate) async fn creative(
     d: &Deps,
     c: &AdCampaign,
@@ -151,11 +158,17 @@ pub(crate) async fn creative(
     let (Some(ad), Some(made)) = (plan.ads.get(n), built.ads.get(n)) else {
         return Ok(None);
     };
-    let Some(image_hash) = made.image_hash.clone() else {
+    let rules = platform::rules(built.platform);
+    let image = made.image_hash.clone();
+    if rules.image && image.is_none() {
         return Ok(None);
-    };
-    let Some(page_id) = external_id(d, c.workspace_id, ad.page).await? else {
-        return Ok(None);
+    }
+    let identity_id = match ad.page {
+        Some(page) => match external_id(d, c.workspace_id, page).await? {
+            Some(id) => Some(id),
+            None => return Ok(None),
+        },
+        None => None,
     };
     let instagram_user_id = match ad.instagram {
         Some(id) => external_id(d, c.workspace_id, id).await?,
@@ -176,13 +189,15 @@ pub(crate) async fn creative(
     };
     Ok(Some(CreativeSpec {
         name: format!("jeeta:{}:creative:{n}:{}", c.id, made.generation),
-        page_id,
+        identity_id,
         instagram_user_id,
-        image_hash,
+        image,
         primary_text: ad.primary_text.clone(),
         headline: ad.headline.clone(),
         description: ad.description.clone(),
-        call_to_action: call_to_action(&ad.call_to_action),
+        headlines: ad.headlines.clone(),
+        descriptions: ad.descriptions.clone(),
+        call_to_action: (!ad.call_to_action.is_empty()).then(|| call_to_action(&ad.call_to_action)),
         action,
     }))
 }
@@ -277,6 +292,8 @@ pub async fn run(d: &Deps, ws: WorkspaceId, id: Uuid, now: OffsetDateTime) -> Re
                         AdResult::LeadForm => AdObjective::Leads,
                     },
                     lifetime_budget_minor: c.budget_minor,
+                    start_at: c.start_at.max(now),
+                    end_at: plan.end_at,
                 };
                 let made = found_or(&a, AdLevel::Campaign, &spec.name, || {
                     a.writer.create_campaign(&a.credential, &a.public, &spec)
@@ -348,6 +365,8 @@ pub async fn run(d: &Deps, ws: WorkspaceId, id: Uuid, now: OffsetDateTime) -> Re
                     placements: placements(&plan.placements),
                     start_at: c.start_at.max(now),
                     end_at: plan.end_at,
+                    budget_minor: c.budget_minor,
+                    keywords: plan.keywords.clone(),
                 };
                 let made = found_or(&a, AdLevel::AdSet, &spec.name, || {
                     a.writer.create_adset(&a.credential, &a.public, &spec)
@@ -363,21 +382,27 @@ pub async fn run(d: &Deps, ws: WorkspaceId, id: Uuid, now: OffsetDateTime) -> Re
                 .map_err(|e| ("ad set", ConnectorError::transient(e.message)))?;
                 return Ok(true);
             };
-            // 4. Each ad: its image, its creative, the ad itself, paused.
+            // 4. Each ad: its image where it shows one, its creative, the ad itself, paused.
+            let shows_image = platform::rules(built.platform).image;
             for (n, made) in built.ads.iter().enumerate() {
                 let Some(ad) = plan.ads.get(n) else { continue };
-                if made.image_hash.is_none() {
+                if shows_image && made.image_hash.is_none() {
                     let hash = image(d, &c, &a, ad, n).await.map_err(|e| ("image", e))?;
                     set_ad(d, ws, id, now, n, move |x| x.image_hash = Some(hash)).await?;
                     return Ok(true);
                 }
+                if made.creative_id.is_some() && made.ad_id.is_some() {
+                    continue;
+                }
+                // The creative as it stands now: the creative step makes it, and the ad step
+                // carries it for a platform whose ad holds its own content.
+                let spec = creative(d, &c, n).await.ok().flatten().ok_or_else(|| {
+                    (
+                        "creative",
+                        ConnectorError::permanent("the ad's page has no id"),
+                    )
+                })?;
                 if made.creative_id.is_none() {
-                    let spec = creative(d, &c, n).await.ok().flatten().ok_or_else(|| {
-                        (
-                            "creative",
-                            ConnectorError::permanent("the ad's page has no id"),
-                        )
-                    })?;
                     let creative_id = found_or(&a, AdLevel::Creative, &spec.name, || {
                         a.writer.create_creative(&a.credential, &a.public, &spec)
                     })
@@ -394,6 +419,7 @@ pub async fn run(d: &Deps, ws: WorkspaceId, id: Uuid, now: OffsetDateTime) -> Re
                         name: format!("jeeta:{id}:ad:{n}:{}", made.generation),
                         adset_id: adset_id.clone(),
                         creative_id: made.creative_id.clone().expect("checked above"),
+                        creative: spec,
                     };
                     let ad_id = found_or(&a, AdLevel::Ad, &spec.name, || {
                         a.writer.create_ad(&a.credential, &a.public, &spec)

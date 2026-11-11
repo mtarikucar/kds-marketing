@@ -1305,8 +1305,8 @@ günlükte (`budget.stop`). `studio.brake` olduğu gibi kalır (ajan çalışan�
 
 Tasarım §8. Bir hedef ve bütçeden, ajanın izleyip iyileştirdiği çalışan reklama. Ajan yalnızca karar
 verir: tek bir yapılandırılmış plan teslim eder. Jeeta planı denetler, kampanyanın bütün bütçesini
-her sınıra karşı tutar ve kampanyayı sağlayıcıda (ilk sürümde Meta) kendisi kurar: önce duraklatılmış,
-bütçe sağlayıcının kendi toplam bütçesi olarak (B32).
+her sınıra karşı tutar ve kampanyayı sağlayıcıda (reklam hesabının platformunda; aşağıda "Platformlar")
+kendisi kurar: önce duraklatılmış, bütçe sağlayıcının kendi toplam bütçesi olarak (B32).
 
 **İşlemler.**
 
@@ -1321,7 +1321,7 @@ bütçe sağlayıcının kendi toplam bütçesi olarak (B32).
 | `ads.campaign_move` | `ads.work`; onaylı strateji ister | Kurulmuş kampanyanın reklamlarını değiştirir: `pause_ad`, `resume_ad`, `add_ad` (en çok 6), `fix_ad` (sağlayıcının reddettiği reklamın yerine yenisi), `none`; her biri nedeni ve sonucuyla kampanyada kalır. Tutmayan yeni reklam `409 move_refused` |
 | `ads.campaign_pause` | `ads.work` | Kampanyayı nedeniyle durdurur; sağlayıcıda hemen duraklatılır. Ajan çalışanı durdurabilir |
 | `ads.campaign_resume`, `ads.campaign_end`, `ads.campaign_update` | insan, `ads.manage`; yalnızca panel | Sürdürür (para denetimiyle; bütçenin durdurduğu kampanya `stopped_by_budget`), bitirir, bütçeyi ya da bitiş tarihini değiştirir (yalnızca kurulmadan önce: `already_built`) |
-| `ads.ad_preview` | `ads.work` | Kurulmuş bir reklamın sağlayıcıdaki önizleme çerçevesi (`{html}`) |
+| `ads.ad_preview` | `ads.work` | Kurulmuş bir reklamın sağlayıcıdaki önizleme çerçevesi (`{html}`); yalnızca Meta'da, başka platformda `409 no_preview_on_this_platform` |
 
 **Durum**, ilk tutan kural: bitti → `ended`; reddedildi → `declined`; onaylanmamış öneri: yedi günü
 geçti → `expired`, değilse `proposed`; üç plan reddi ya da sağlayıcının kesin reddettiği kurulum →
@@ -1382,6 +1382,54 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 **İş listesi.** `ads_campaign_plan {campaign_id, expected_revision, rejected}` ve
 `ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
 `ads_campaign_held` reklamı yöneten insana.
+
+**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B77).** Bir kampanya tek bir
+reklam hesabında, yani tek bir platformda çalışır (B61); platform hesabın türünden gelir
+(`AdsPlatform::of_kind`) ve kurulan kampanyada `built.platform` olarak durur. Açma, planlama, kurma,
+izleme, durdurma ve para her platformda aynıdır; değişen, planın neyi taşıdığıdır. O kurallar tek bir
+tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `platforms` olarak gelir:
+
+| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) |
+|---|---|---|
+| `page` | canlı bir `facebook_page` | alınmaz |
+| `instagram` | isteğe bağlı | alınmaz |
+| `material_ids` | tam bir görsel | alınmaz |
+| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz |
+| `call_to_action` | listedeki dokuz değer | alınmaz |
+| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez |
+| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük |
+| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler |
+| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) |
+| sonuç | `link_click`, `lead_form` | `link_click` |
+| süre | 24 saat – 90 gün | 72 saat – 90 gün |
+| toplam bütçe kesin sınır mı | evet | evet |
+| önizleme | var | yok |
+
+- Platformun almadığı bir alan verilirse plan o alanın adıyla reddedilir (`VALIDATION`,
+  `field_not_for_this_platform`); gereken bir alan yoksa `required_on_this_platform`. Alan sessizce
+  atılmaz. Bunlar biçim hatasıdır, ret sayılmaz.
+- Platformun çalıştırmadığı bir süre (`duration_not_supported`, `least_hours` ve `most_days` ile;
+  kampanyanın gerçekten başlayacağı andan ölçülür) ve hesabın en düşük bütçesinin altındaki bütçe
+  (`below_the_accounts_minimum`: hesabın en düşük günlük bütçesi × gün ile en düşük toplam bütçesinden
+  büyük olanı) reddedilen planın bulgusudur (B66). Bir insan kampanyayı açarken hem reklam hesabı hem
+  bitiş verirse süre o an denetlenir (`VALIDATION`, `duration_not_supported`); bitişi sonradan
+  değiştirirken de.
+- Görseli olmayan reklamın metinleri materyalsiz doğruluk denetiminden geçer
+  (`materials::check_texts`): hiçbir şeye bağlı olmayan bir metin, yalnızca doğrulanmış bir olayın
+  kendi materyalinin söyleyebileceğini söyleyemez.
+- Kurulum adımları her platformda aynıdır (B70): kampanya → kampanyanın altındaki düzey (Meta'da
+  reklam seti, Google'da reklam grubu; anahtar sözcükler ve bütçe ona da verilir) → her reklam. Görseli
+  olmayan reklamda görsel adımı yoktur; kendi kreatif nesnesi olmayan platformda kreatif adımı çağrı
+  yapmaz ve reklam adımı kreatifin kendisini taşır (`AdSpec.creative`).
+- Tutulan (`pause_ad`) ya da yerine yenisi konan bir reklamı sağlayıcı hâlâ çalışıyor diye
+  bildirirse izleme onu her okumada yeniden duraklatır (B77): duraklatma isteği sağlayıcıya ulaşmamış
+  ya da sağlayıcı o an kabul etmemiş olabilir.
+- Reklam yönetimi modülü, türü ne olursa olsun bağlı bir reklam hesabı ister (B62).
+
+Bu sürümde Google'ın plan kuralları ve çekirdek davranışı vardır; **Google bağlayıcısı (`jt_google`)
+bir sonraki adımdır** (plan `2026-11-11-step4-ad-platforms.md`, görev 2). O gelene dek bir
+`google_ads` hesabı bağlanamaz. LinkedIn, TikTok ve X ondan sonra gelir. Hiçbir Google çağrısı
+yazılmadı, hiçbiri gerçek platformda çalıştırılmadı.
 
 **API sürümü.** Reklam hesabına giden çağrılar Marketing API `v27.0` ile gider (B54);
 `JEETA_META_GRAPH_VERSION` daha yeni bir sürüm veriyorsa onunla. Meta her sürümü yaklaşık bir yıl

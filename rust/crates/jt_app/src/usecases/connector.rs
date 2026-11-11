@@ -1665,7 +1665,9 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
             ));
         }
         None => return Err(AppError::conflict("no provider connects this kind yet")),
-        Some(Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin) => {}
+        Some(
+            Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin | Provider::Google,
+        ) => {}
     }
     // A declared capability is connected for the first time through a flow bound to it; any
     // other must name the account it reconnects.
@@ -1930,7 +1932,7 @@ fn fitted_name(name: &str, external_id: &str) -> String {
 /// The provider whose credentials `kind` takes by hand, else `VALIDATION` naming `kind_key`.
 fn manual_provider(kind: &CapabilityKind) -> Result<Provider, AppError> {
     match provider_for_kind(kind.key) {
-        Some(Provider::X | Provider::Tiktok | Provider::Linkedin) => {
+        Some(Provider::X | Provider::Tiktok | Provider::Linkedin | Provider::Google) => {
             Err(invalid("kind_key", "this kind connects through OAuth"))
         }
         Some(provider) => Ok(provider),

@@ -14,17 +14,39 @@ export type CampaignState =
   | 'held'
   | 'expired'
   | 'declined';
-export type Platform = 'facebook' | 'instagram';
+/** Where a Meta campaign's ads are shown. */
+export type MetaPlatform = 'facebook' | 'instagram';
+/** What the campaign list filters by: Meta's two surfaces, or another ad platform. */
+export type Platform = MetaPlatform | 'google';
+/** The ad platform a campaign's ad account is of (`jt_app::ports::ads::AdsPlatform`). */
+export type AdsPlatform = 'meta' | 'google';
+/**
+ * What a plan carries on one ad platform (`jt_app::usecases::ads::platform::PlatformRules`);
+ * only what the panel shows is listed.
+ */
+export interface PlatformRules {
+  platform: AdsPlatform;
+  account_kind: string;
+  image: boolean;
+  min_run_hours: number;
+  max_run_days: number;
+  hard_budget_cap: boolean;
+  preview: boolean;
+}
 export type Placement = 'facebook_feed' | 'instagram_feed' | 'instagram_story' | 'instagram_reels';
+/** One ad of a plan. Which fields it carries is its platform's: one left out is absent. */
 export interface Ad {
   name: string;
-  material_ids: string[];
-  primary_text: string;
-  headline: string;
+  material_ids?: string[];
+  primary_text?: string;
+  headline?: string;
   description: string | null;
-  call_to_action: string;
-  page: string;
+  call_to_action?: string;
+  page?: string;
   instagram: string | null;
+  /** A search ad's headlines and descriptions. */
+  headlines?: string[];
+  descriptions?: string[];
   hypothesis_id: string;
 }
 /** One finding of a refused plan (`jt_app::usecases::ads::plan`). */
@@ -38,6 +60,9 @@ export interface PlanFinding {
   budget_currency?: string;
   /** `credential_scope_missing`: the permissions one of which the connection must hold. */
   needs?: string[];
+  /** `duration_not_supported`: how long the ad account's platform lets a campaign run. */
+  least_hours?: number;
+  most_days?: number;
 }
 export interface CampaignPlan {
   ad_account: string;
@@ -63,7 +88,9 @@ export interface CampaignPlan {
     interests: { id: string; name: string }[];
     broad: boolean;
   };
-  placements: 'automatic' | { platforms: Platform[] };
+  placements: 'automatic' | { platforms: MetaPlatform[] };
+  /** The searches a search campaign's ads answer. */
+  keywords?: string[];
   end_at: string;
   ads: Ad[];
   summary: string;
@@ -87,6 +114,7 @@ export interface Campaign {
   plan: CampaignPlan | null;
   built: {
     account: string;
+    platform: AdsPlatform;
     ads: {
       index: number;
       status: 'active' | 'paused' | 'in_review' | 'disapproved';
@@ -126,6 +154,8 @@ export interface CampaignDetail {
   campaign: Campaign;
   days: AdDay[];
   materials: Material[];
+  /** What a plan carries on each ad platform. */
+  platforms: PlatformRules[];
 }
 export interface OpenCampaign {
   request_key: string;

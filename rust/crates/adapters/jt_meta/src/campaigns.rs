@@ -49,6 +49,8 @@ pub(crate) async fn account_limits(
             .ok_or_else(|| missing("account timezone"))?,
         min_daily_budget_minor: optional_counter(&row["min_daily_budget"])?
             .ok_or_else(|| missing("minimum daily budget"))?,
+        // Meta names a least daily budget only: the least total is that times the days.
+        min_total_budget_minor: 0,
     })
 }
 
@@ -269,7 +271,19 @@ pub(crate) async fn create_lead_form(
 }
 
 fn object_story(spec: &CreativeSpec) -> Result<Value, ConnectorError> {
-    node(&spec.page_id)?;
+    // A Meta ad speaks as a Page, shows one image and carries a call to action.
+    let page_id = spec
+        .identity_id
+        .as_deref()
+        .ok_or_else(|| ConnectorError::permanent("a Meta ad needs its page"))?;
+    let image_hash = spec
+        .image
+        .as_deref()
+        .ok_or_else(|| ConnectorError::permanent("a Meta ad needs its image"))?;
+    let call_to_action = spec
+        .call_to_action
+        .ok_or_else(|| ConnectorError::permanent("a Meta ad needs its call to action"))?;
+    node(page_id)?;
     let (url, value) = match &spec.action {
         CreativeAction::Link { url } => (url, json!({"link":url})),
         CreativeAction::LeadForm { form_id, url } => {
@@ -277,7 +291,7 @@ fn object_story(spec: &CreativeSpec) -> Result<Value, ConnectorError> {
             (url, json!({"lead_gen_form_id":form_id}))
         }
     };
-    let cta = match spec.call_to_action {
+    let cta = match call_to_action {
         CallToAction::LearnMore => "LEARN_MORE",
         CallToAction::SignUp => "SIGN_UP",
         CallToAction::ShopNow => "SHOP_NOW",
@@ -288,7 +302,7 @@ fn object_story(spec: &CreativeSpec) -> Result<Value, ConnectorError> {
         CallToAction::BookNow => "BOOK_NOW",
         CallToAction::Download => "DOWNLOAD",
     };
-    let mut story = json!({"page_id":spec.page_id,"link_data":{"link":url,"message":spec.primary_text,"name":spec.headline,"image_hash":spec.image_hash,"call_to_action":{"type":cta,"value":value}}});
+    let mut story = json!({"page_id":page_id,"link_data":{"link":url,"message":spec.primary_text,"name":spec.headline,"image_hash":image_hash,"call_to_action":{"type":cta,"value":value}}});
     if let Some(id) = &spec.instagram_user_id {
         node(id)?;
         story["instagram_user_id"] = json!(id);

@@ -2,7 +2,11 @@
 //! that is not well formed is the caller's mistake (`VALIDATION`, naming the field) and counts
 //! for nothing; a well-formed plan that breaks a rule is refused with every finding, counted,
 //! and after the third in a row the campaign waits for a person.
-use super::{build, check_money, live_claim, load, open_tx, refuse, save};
+use super::{
+    build, check_money, live_claim, load, open_tx,
+    platform::{self, MAX_KEYWORD_WORDS, PlatformRules, TextList},
+    refuse, save,
+};
 use crate::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
@@ -20,20 +24,9 @@ use jt_connector::provider_for_kind;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-pub(crate) const CALLS_TO_ACTION: [&str; 9] = [
-    "LEARN_MORE",
-    "SIGN_UP",
-    "SHOP_NOW",
-    "CONTACT_US",
-    "GET_QUOTE",
-    "SUBSCRIBE",
-    "APPLY_NOW",
-    "BOOK_NOW",
-    "DOWNLOAD",
-];
 const QUESTIONS: [&str; 3] = ["FULL_NAME", "EMAIL", "PHONE"];
 /// Targeting a country of the European Union needs the payer and the beneficiary named (DSA):
 /// not in this version.
@@ -41,10 +34,8 @@ const EU: [&str; 27] = [
     "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV",
     "LT", "LU", "MT", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE",
 ];
-/// The longest texts an ad carries here (within the provider's own limits).
-pub const MAX_PRIMARY_TEXT: usize = 1000;
-pub const MAX_HEADLINE: usize = 100;
-pub const MAX_DESCRIPTION: usize = 100;
+/// The longest name of an ad. How long an ad's texts may be is its platform's
+/// ([`platform::rules`]).
 pub const MAX_AD_NAME: usize = 100;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -75,37 +66,156 @@ fn length(value: &str, field: &str, max: usize) -> Result<(), AppError> {
     Ok(())
 }
 
-/// One ad's shape, as `ads[n]` or as the ad of a move.
-pub(crate) fn ad_shape(ad: &PlanAd, at: &str) -> Result<(), AppError> {
+/// A field the platform does not take was given.
+fn not_taken(field: &str) -> AppError {
+    malformed(field, "field_not_for_this_platform")
+}
+
+/// A text the platform takes at most `rule` characters of, or does not take at all.
+fn text(value: &str, field: &str, rule: Option<usize>) -> Result<(), AppError> {
+    match rule {
+        Some(max) => length(value, field, max),
+        None if value.trim().is_empty() => Ok(()),
+        None => Err(not_taken(field)),
+    }
+}
+
+/// A list of texts the platform takes as `rule` says, or does not take at all. No text twice:
+/// a platform that shows a few of them at a time refuses a list that repeats itself.
+fn texts(values: &[String], field: &str, rule: Option<TextList>) -> Result<(), AppError> {
+    let Some(rule) = rule else {
+        return if values.is_empty() {
+            Ok(())
+        } else {
+            Err(not_taken(field))
+        };
+    };
+    if values.len() < rule.min || values.len() > rule.max {
+        return Err(malformed(
+            field,
+            &format!("{}_to_{}_items", rule.min, rule.max),
+        ));
+    }
+    for (n, value) in values.iter().enumerate() {
+        length(value, &format!("{field}[{n}]"), rule.chars)?;
+        let same = |other: &String| other.trim().to_lowercase() == value.trim().to_lowercase();
+        if values[..n].iter().any(same) {
+            return Err(malformed(&format!("{field}[{n}]"), "given_twice"));
+        }
+    }
+    Ok(())
+}
+
+/// One ad's shape on its platform, as `ads[n]` or as the ad of a move.
+pub(crate) fn ad_shape(ad: &PlanAd, at: &str, rules: &PlatformRules) -> Result<(), AppError> {
     length(&ad.name, &format!("{at}.name"), MAX_AD_NAME)?;
-    length(
+    text(
         &ad.primary_text,
         &format!("{at}.primary_text"),
-        MAX_PRIMARY_TEXT,
+        rules.primary_text,
     )?;
-    length(&ad.headline, &format!("{at}.headline"), MAX_HEADLINE)?;
-    if let Some(description) = &ad.description {
-        length(description, &format!("{at}.description"), MAX_DESCRIPTION)?;
+    text(&ad.headline, &format!("{at}.headline"), rules.headline)?;
+    match (&ad.description, rules.description) {
+        (Some(description), Some(max)) => {
+            length(description, &format!("{at}.description"), max)?;
+        }
+        (Some(_), None) => return Err(not_taken(&format!("{at}.description"))),
+        (None, _) => {}
     }
-    if ad.material_ids.len() != 1 {
-        return Err(malformed(&format!("{at}.material_ids"), "one_image"));
+    if rules.image {
+        if ad.material_ids.len() != 1 {
+            return Err(malformed(&format!("{at}.material_ids"), "one_image"));
+        }
+    } else if !ad.material_ids.is_empty() {
+        return Err(not_taken(&format!("{at}.material_ids")));
     }
-    if !CALLS_TO_ACTION.contains(&ad.call_to_action.as_str()) {
+    if rules.calls_to_action.is_empty() {
+        if !ad.call_to_action.is_empty() {
+            return Err(not_taken(&format!("{at}.call_to_action")));
+        }
+    } else if !rules.calls_to_action.contains(&ad.call_to_action.as_str()) {
         return Err(malformed(
             &format!("{at}.call_to_action"),
             "a_listed_call_to_action",
         ));
     }
+    match (ad.page, rules.page_kind) {
+        (None, Some(_)) => {
+            return Err(malformed(
+                &format!("{at}.page"),
+                "required_on_this_platform",
+            ));
+        }
+        (Some(_), None) => return Err(not_taken(&format!("{at}.page"))),
+        _ => {}
+    }
+    if ad.instagram.is_some() && !rules.instagram {
+        return Err(not_taken(&format!("{at}.instagram")));
+    }
+    texts(&ad.headlines, &format!("{at}.headlines"), rules.headlines)?;
+    texts(
+        &ad.descriptions,
+        &format!("{at}.descriptions"),
+        rules.descriptions,
+    )
+}
+
+/// What of the plan itself its platform does not take.
+fn platform_shape(p: &CampaignPlan, rules: &PlatformRules) -> Result<(), AppError> {
+    let a = &p.audience;
+    if !rules.audience_places_and_interests {
+        for (given, field) in [
+            (!a.regions.is_empty(), "audience.regions"),
+            (!a.cities.is_empty(), "audience.cities"),
+            (!a.interests.is_empty(), "audience.interests"),
+        ] {
+            if given {
+                return Err(not_taken(field));
+            }
+        }
+    }
+    if a.broad && !rules.broad_audience {
+        return Err(not_taken("audience.broad"));
+    }
+    if !rules.audience_age_and_gender {
+        if a.age_min != 18 || a.age_max != 65 {
+            return Err(not_taken("audience.age_min"));
+        }
+        if !a.genders.is_empty() {
+            return Err(not_taken("audience.genders"));
+        }
+    }
+    if p.placements != PlanPlacements::Automatic && !rules.placements {
+        return Err(not_taken("placements"));
+    }
+    if p.result == AdResult::LeadForm && !rules.lead_form {
+        return Err(not_taken("result"));
+    }
+    texts(&p.keywords, "keywords", rules.keywords)?;
+    for (n, keyword) in p.keywords.iter().enumerate() {
+        if keyword.split_whitespace().count() > MAX_KEYWORD_WORDS
+            || keyword.chars().any(char::is_control)
+        {
+            return Err(malformed(
+                &format!("keywords[{n}]"),
+                "at_most_10_words_on_one_line",
+            ));
+        }
+    }
     Ok(())
 }
 
-/// The plan's shape against the campaign it is for, before anything is read.
-fn shape(c: &AdCampaign, p: &CampaignPlan) -> Result<(), AppError> {
+/// The plan's shape against the campaign it is for and the platform of its ad account (`rules`;
+/// `None` when the plan names no ad account at all: then only what every platform shares is
+/// looked at, and the account is what holds the plan), before anything is read.
+fn shape(c: &AdCampaign, p: &CampaignPlan, rules: Option<&PlatformRules>) -> Result<(), AppError> {
     if p.ads.is_empty() || p.ads.len() > MAX_ADS {
         return Err(malformed("ads", "1_to_6_ads"));
     }
-    for (n, ad) in p.ads.iter().enumerate() {
-        ad_shape(ad, &format!("ads[{n}]"))?;
+    if let Some(rules) = rules {
+        for (n, ad) in p.ads.iter().enumerate() {
+            ad_shape(ad, &format!("ads[{n}]"), rules)?;
+        }
     }
     length(&p.summary, "summary", MAX_TEXT_CHARS)?;
     length(&p.audience_summary, "audience_summary", MAX_TEXT_CHARS)?;
@@ -174,7 +284,7 @@ fn shape(c: &AdCampaign, p: &CampaignPlan) -> Result<(), AppError> {
     if c.end_at.is_some_and(|end| end != p.end_at) {
         return Err(malformed("end_at", "the_campaigns_own_end"));
     }
-    Ok(())
+    rules.map_or(Ok(()), |rules| platform_shape(p, rules))
 }
 
 /// A live capability of `kind`, or the finding that it is not one.
@@ -194,14 +304,16 @@ async fn live(
     }
 }
 
-/// What holds one ad of a plan: its page and Instagram account (live, and in a group of the ad
-/// account when the account is in one), its hypothesis, its image (live, an image, free to be
-/// shared) and its texts (the truth check), as for a post (B10).
+/// What holds one ad of a plan: the account it speaks as, where its platform's ad has one (live,
+/// and in a group of the ad account when the account is in one), its hypothesis, its image
+/// where it shows one (live, an image, free to be shared) and its texts (the truth check), as for
+/// a post (B10). An ad without an image is checked on its texts alone.
 pub(crate) async fn ad_findings(
     r: &mut dyn TenantRepos,
     ad: &PlanAd,
     at: &str,
     account: CapabilityId,
+    rules: &PlatformRules,
     hypotheses: &[jt_strategy::Hypothesis],
     now: OffsetDateTime,
 ) -> Result<Vec<Value>, AppError> {
@@ -215,7 +327,10 @@ pub(crate) async fn ad_findings(
         .filter(|ids| ids.contains(&account))
         .collect();
     let grouped = |id: CapabilityId| groups.is_empty() || groups.iter().any(|g| g.contains(&id));
-    let mut identities = vec![(ad.page, "facebook_page", format!("{at}.page"))];
+    let mut identities = Vec::new();
+    if let (Some(page), Some(kind)) = (ad.page, rules.page_kind) {
+        identities.push((page, kind, format!("{at}.page")));
+    }
     if let Some(instagram) = ad.instagram {
         identities.push((instagram, "instagram", format!("{at}.instagram")));
     }
@@ -238,21 +353,37 @@ pub(crate) async fn ad_findings(
                 "reason": "material_not_found", "material_id": id})),
         }
     }
-    if !shown.is_empty() {
+    // Everything the ad says, wherever its platform puts it.
+    let mut said: Vec<&str> = [ad.primary_text.as_str(), ad.headline.as_str()]
+        .into_iter()
+        .chain(ad.description.as_deref())
+        .chain(ad.headlines.iter().map(String::as_str))
+        .chain(ad.descriptions.iter().map(String::as_str))
+        .collect();
+    said.retain(|text| !text.trim().is_empty());
+    let field = if rules.primary_text.is_some() {
+        format!("{at}.primary_text")
+    } else {
+        format!("{at}.headlines")
+    };
+    let truth = if !shown.is_empty() {
         let subject = subject_of(&shown);
-        let mut texts = vec![ad.primary_text.as_str(), ad.headline.as_str()];
-        texts.extend(ad.description.as_deref());
-        let (hard, truth) = materials::check_content(r, &shown, &subject, &texts, now).await?;
+        let (hard, truth) = materials::check_content(r, &shown, &subject, &said, now).await?;
         findings.extend(hard.into_iter().map(|f| {
             json!({"field": format!("{at}.material_ids"), "kind": "material",
                    "reason": f.code, "material_id": f.material_id})
         }));
-        findings.extend(truth.into_iter().map(|f| {
-            json!({"field": format!("{at}.primary_text"), "kind": "text",
-                   "reason": f.code.code(), "material_id": f.material_id,
-                   "olay_id": f.olay_id, "matched": f.matched})
-        }));
-    }
+        truth
+    } else if !rules.image {
+        materials::check_texts(r, &said, now).await?
+    } else {
+        Vec::new()
+    };
+    findings.extend(truth.into_iter().map(|f| {
+        json!({"field": field, "kind": "text",
+               "reason": f.code.code(), "material_id": f.material_id,
+               "olay_id": f.olay_id, "matched": f.matched})
+    }));
     Ok(findings)
 }
 
@@ -261,9 +392,7 @@ async fn findings(
     r: &mut dyn TenantRepos,
     c: &AdCampaign,
     p: &CampaignPlan,
-    account: Option<&Capability>,
-    limits: Option<&AdAccountLimits>,
-    unusable: Option<&str>,
+    seen: &AccountView,
     now: OffsetDateTime,
 ) -> Result<Vec<Value>, AppError> {
     let mut out = Vec::new();
@@ -278,28 +407,34 @@ async fn findings(
     {
         out.push(json!({"field": "audience.countries", "reason": "eu_targeting_needs_payer"}));
     }
-    match account {
+    match &seen.account {
         // An ad account of the workspace that cannot be written to says why: a grant without
         // the scope names the scope, so that a person knows to reconnect and what to allow.
-        None => out.push(match unusable {
-            Some(chain::SCOPE_MISSING) => json!({"field": "ad_account",
-                "reason": chain::SCOPE_MISSING, "needs": chain::write_scopes("meta_ads")}),
-            Some(why) => json!({"field": "ad_account", "reason": why}),
-            None => json!({"field": "ad_account", "reason": "not_a_usable_ad_account"}),
+        None => out.push(match (seen.unusable.as_deref(), seen.rules) {
+            (Some(chain::SCOPE_MISSING), Some(rules)) => json!({"field": "ad_account",
+                "reason": chain::SCOPE_MISSING,
+                "needs": chain::write_scopes(rules.account_kind)}),
+            (Some(why), _) => json!({"field": "ad_account", "reason": why}),
+            (None, _) => json!({"field": "ad_account", "reason": "not_a_usable_ad_account"}),
         }),
         Some(account) => {
             if c.account_hint.is_some_and(|hint| hint != account.id) {
                 out.push(json!({"field": "ad_account", "reason": "not_the_campaigns_account"}));
             }
-            match limits {
+            match &seen.limits {
                 None => out.push(json!({"field": "ad_account", "reason": "account_unreadable"})),
                 Some(limits) => {
                     if limits.currency != c.currency {
                         out.push(json!({"field": "ad_account", "reason": "currency_mismatch",
                             "account_currency": limits.currency, "budget_currency": c.currency}));
                     }
+                    // The least the account takes: its least day times the days, and its least
+                    // total whatever the length.
                     let days = ((p.end_at - c.start_at).whole_hours() + 23) / 24;
-                    let least = limits.min_daily_budget_minor.saturating_mul(days.max(1));
+                    let least = limits
+                        .min_daily_budget_minor
+                        .saturating_mul(days.max(1))
+                        .max(limits.min_total_budget_minor);
                     if c.budget_minor < least {
                         out.push(json!({"field": "budget_minor",
                             "reason": "below_the_accounts_minimum", "least": least}));
@@ -307,6 +442,18 @@ async fn findings(
                 }
             }
         }
+    }
+    let Some(rules) = seen.rules else {
+        // No ad account, so no platform: what an ad may carry cannot be judged.
+        return Ok(out);
+    };
+    // How long the platform lets a campaign run, from when it would really start.
+    let run = p.end_at - c.start_at.max(now);
+    if run < Duration::hours(rules.min_run_hours) || run > Duration::days(rules.max_run_days) {
+        out.push(
+            json!({"field": "end_at", "reason": "duration_not_supported",
+            "least_hours": rules.min_run_hours, "most_days": rules.max_run_days}),
+        );
     }
     if let Destination::LeadForm { page, .. } = &p.destination {
         if !modules::installed(r, "inbox").await? {
@@ -321,55 +468,85 @@ async fn findings(
         .ok_or_else(AppError::strategy_required)?;
     let hypotheses = r.hypotheses().list(version.id).await?;
     for (n, ad) in p.ads.iter().enumerate() {
-        out.extend(ad_findings(r, ad, &format!("ads[{n}]"), p.ad_account, &hypotheses, now).await?);
+        out.extend(
+            ad_findings(
+                r,
+                ad,
+                &format!("ads[{n}]"),
+                p.ad_account,
+                rules,
+                &hypotheses,
+                now,
+            )
+            .await?,
+        );
     }
     Ok(out)
 }
 
-/// The ad account `id` when it can be written to now, its credential opened, and what the
-/// provider says of it (currency, smallest daily budget); `None` wherever one is missing. The
-/// third value is why an ad account of the workspace cannot be written to now (the refusal of
-/// [`chain::capability_access`]); `None` when it can, or when `id` is no ad account at all.
+/// What is known of a plan's ad account.
+pub(crate) struct AccountView {
+    /// Its platform's rules, whenever it is an ad account of the workspace.
+    pub rules: Option<&'static PlatformRules>,
+    /// The account itself, when it can be written to now.
+    pub account: Option<Capability>,
+    /// What the provider says of it (currency, smallest budgets), when it answered.
+    pub limits: Option<AdAccountLimits>,
+    /// Why an ad account of the workspace cannot be written to now (the refusal of
+    /// [`chain::capability_access`]).
+    pub unusable: Option<String>,
+}
+
+/// The ad account `id` as a plan sees it: its platform, the account when it can be written to
+/// now, and what the provider says of it. Something that is no ad account at all has none of
+/// them.
 pub(crate) async fn account_of(
     d: &Deps,
     ctx: &Ctx,
     id: CapabilityId,
-) -> Result<(Option<Capability>, Option<AdAccountLimits>, Option<String>), AppError> {
+) -> Result<AccountView, AppError> {
     const UNAVAILABLE: &str = "capability_unavailable";
+    let mut view = AccountView {
+        rules: None,
+        account: None,
+        limits: None,
+        unusable: None,
+    };
     let (account, sealed) = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         let Some(c) = r.capabilities().find(id).await? else {
-            return Ok((None, None, None));
+            return Ok(view);
         };
-        if c.kind_key != "meta_ads" {
-            return Ok((None, None, None));
+        view.rules = platform::rules_of_kind(&c.kind_key);
+        if view.rules.is_none() {
+            return Ok(view);
         }
         if let Err(e) = chain::capability_access(&c, ctx.now, true) {
-            let why = e.details["reason"]
-                .as_str()
-                .unwrap_or(UNAVAILABLE)
-                .to_owned();
-            return Ok((None, None, Some(why)));
+            view.unusable = Some(
+                e.details["reason"]
+                    .as_str()
+                    .unwrap_or(UNAVAILABLE)
+                    .to_owned(),
+            );
+            return Ok(view);
         }
         let sealed = r.capabilities().read_sealed(c.id).await?;
         (c, sealed)
     };
     let Some(sealed) = sealed else {
-        return Ok((None, None, Some(UNAVAILABLE.to_owned())));
+        view.unusable = Some(UNAVAILABLE.to_owned());
+        return Ok(view);
     };
-    let Some(writer) =
-        provider_for_kind(&account.kind_key).and_then(|p| d.connectors.ad_campaigns(p))
-    else {
-        return Ok((Some(account), None, None));
-    };
-    let Ok(credential) = open_credential(d, ctx.workspace_id, &sealed) else {
-        return Ok((Some(account), None, None));
-    };
-    let limits = writer
-        .account_limits(&credential, &adapter_public(&account))
-        .await
-        .ok();
-    Ok((Some(account), limits, None))
+    let writer = provider_for_kind(&account.kind_key).and_then(|p| d.connectors.ad_campaigns(p));
+    if let (Some(writer), Ok(credential)) = (writer, open_credential(d, ctx.workspace_id, &sealed))
+    {
+        view.limits = writer
+            .account_limits(&credential, &adapter_public(&account))
+            .await
+            .ok();
+    }
+    view.account = Some(account);
+    Ok(view)
 }
 
 /// `ads.plan_submit`: the claim's agent delivers the campaign's plan. A plan that holds is
@@ -403,10 +580,15 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
             .await?
             .ok_or_else(|| AppError::not_found("ad campaign"))?;
         live_claim(&c, ctx, &i.claim_token)?;
-        shape(&c, &i.plan)?;
+        let rules = r
+            .capabilities()
+            .find(i.plan.ad_account)
+            .await?
+            .and_then(|account| platform::rules_of_kind(&account.kind_key));
+        shape(&c, &i.plan, rules)?;
     }
     // What the provider says of the account: read with no transaction open.
-    let (account, limits, unusable) = account_of(d, ctx, i.plan.ad_account).await?;
+    let seen = account_of(d, ctx, i.plan.ad_account).await?;
 
     let mut r = open_tx(d, ctx, Permission::AdsWork).await?;
     let mut c = load(r.as_mut(), i.campaign_id, None).await?;
@@ -414,16 +596,7 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
     if c.plan.is_some() {
         return Err(refuse("plan_exists", "the campaign already has its plan"));
     }
-    let held = findings(
-        r.as_mut(),
-        &c,
-        &i.plan,
-        account.as_ref(),
-        limits.as_ref(),
-        unusable.as_deref(),
-        ctx.now,
-    )
-    .await?;
+    let held = findings(r.as_mut(), &c, &i.plan, &seen, ctx.now).await?;
     if !held.is_empty() {
         c.refused = c.refused.saturating_add(1);
         c.refusal = Some(json!(held));
@@ -444,12 +617,13 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
         r.as_mut(),
         c.id,
         c.committed_minor(ctx.now),
-        account.as_ref(),
+        seen.account.as_ref(),
         ctx.now,
     )
     .await?;
     c.built = Some(Built {
         account: i.plan.ad_account,
+        platform: seen.rules.map(|rules| rules.platform).unwrap_or_default(),
         campaign_id: None,
         adset_id: None,
         form_id: None,
@@ -492,21 +666,47 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
         .present(ctx.now))
 }
 
+/// The longest of each text any platform takes: the bound the schema states. The platform's own
+/// bound is in its rules and is what a plan is held against.
+fn longest(pick: fn(&PlatformRules) -> Option<usize>) -> usize {
+    platform::all_rules()
+        .into_iter()
+        .filter_map(pick)
+        .max()
+        .unwrap_or(0)
+}
+
+/// The JSON Schema of a list of texts some platform takes.
+fn list_schema(pick: fn(&PlatformRules) -> Option<TextList>, description: &str) -> Value {
+    let rules: Vec<TextList> = platform::all_rules().into_iter().filter_map(pick).collect();
+    json!({"type":"array",
+        "maxItems": rules.iter().map(|r| r.max).max().unwrap_or(0),
+        "items":{"type":"string","minLength":1,
+            "maxLength": rules.iter().map(|r| r.chars).max().unwrap_or(0)},
+        "description": description})
+}
+
 /// The JSON Schema of a plan's one ad.
 pub(crate) fn ad_schema() -> Value {
     let uuid = json!({"type":"string","format":"uuid"});
     json!({"type":"object","additionalProperties":false,
-        "required":["name","material_ids","primary_text","headline","call_to_action","page","hypothesis_id"],
+        "required":["name","hypothesis_id"],
+        "description":"What an ad carries is its platform's: the campaign's `platforms` (jeeta.ads.campaign_get) say which of these fields the platform of the plan's ad account takes and how long each may be. Leave out what it does not take: a field given anyway is refused (field_not_for_this_platform). Meta: page, material_ids, primary_text, headline, call_to_action (description and instagram optional). Google: headlines and descriptions only.",
         "properties":{
             "name":{"type":"string","minLength":1,"maxLength":MAX_AD_NAME},
-            "material_ids":{"type":"array","items":uuid,"minItems":1,"maxItems":1,
-                "description":"One image material of the library that may be shared."},
-            "primary_text":{"type":"string","minLength":1,"maxLength":MAX_PRIMARY_TEXT},
-            "headline":{"type":"string","minLength":1,"maxLength":MAX_HEADLINE},
-            "description":{"type":["string","null"],"maxLength":MAX_DESCRIPTION},
-            "call_to_action":{"type":"string","enum":CALLS_TO_ACTION},
-            "page":{"type":"string","format":"uuid","description":"The Facebook Page capability the ad speaks as."},
+            "material_ids":{"type":"array","items":uuid,"maxItems":1,
+                "description":"One image material of the library that may be shared, on a platform whose ad shows an image."},
+            "primary_text":{"type":"string","maxLength":longest(|r| r.primary_text)},
+            "headline":{"type":"string","maxLength":longest(|r| r.headline)},
+            "description":{"type":["string","null"],"maxLength":longest(|r| r.description)},
+            "call_to_action":{"type":"string","enum":platform::META_CALLS_TO_ACTION},
+            "page":{"type":["string","null"],"format":"uuid",
+                "description":"The capability of the account the ad speaks as: a Facebook Page on Meta."},
             "instagram":{"type":["string","null"],"format":"uuid"},
+            "headlines":list_schema(|r| r.headlines,
+                "A search ad's headlines (Google: 3 to 15, each at most 30 characters, none twice); the platform shows a few at a time."),
+            "descriptions":list_schema(|r| r.descriptions,
+                "A search ad's descriptions (Google: 2 to 4, each at most 90 characters, none twice)."),
             "hypothesis_id":uuid}})
 }
 
@@ -514,10 +714,12 @@ pub(crate) fn ad_schema() -> Value {
 pub(crate) fn plan_schema() -> Value {
     let https = json!({"type":"string","format":"uri","pattern":"^https://"});
     json!({"type":"object","additionalProperties":false,
-        "required":["ad_account","result","destination","audience","placements","end_at","ads","summary","audience_summary"],
+        "required":["ad_account","result","destination","audience","end_at","ads","summary","audience_summary"],
         "properties":{
-            "ad_account":{"type":"string","format":"uuid"},
-            "result":{"type":"string","enum":["link_click","lead_form"]},
+            "ad_account":{"type":"string","format":"uuid",
+                "description":"The ad account capability the campaign runs on (jeeta.capability.list, group ads). Its kind is the campaign's platform: meta_ads, google_ads."},
+            "result":{"type":"string","enum":["link_click","lead_form"],
+                "description":"lead_form on Meta only."},
             "destination":{"oneOf":[
                 {"type":"object","additionalProperties":false,"required":["kind","url"],
                  "properties":{"kind":{"const":"website"},"url":https}},
@@ -530,27 +732,32 @@ pub(crate) fn plan_schema() -> Value {
             "special_ad_categories":{"type":"array","maxItems":0,
                 "description":"Must be empty: a special ad category is not supported in this version."},
             "audience":{"type":"object","additionalProperties":false,
-                "required":["countries","age_min","age_max"],
+                "required":["countries"],
                 "properties":{
                     "countries":{"type":"array","minItems":1,"maxItems":25,
                         "items":{"type":"string","pattern":"^[A-Z]{2}$"},
                         "description":"A country of the European Union is refused in this version."},
-                    "regions":{"type":"array","items":{"type":"string"}},
-                    "cities":{"type":"array","items":{"type":"string"}},
-                    "age_min":{"type":"integer","minimum":18,"maximum":65},
-                    "age_max":{"type":"integer","minimum":18,"maximum":65},
-                    "genders":{"type":"array","items":{"type":"integer","enum":[1,2]}},
-                    "interests":{"type":"array","maxItems":25,"items":{"type":"object",
+                    "regions":{"type":"array","items":{"type":"string"},"description":"Meta only."},
+                    "cities":{"type":"array","items":{"type":"string"},"description":"Meta only."},
+                    "age_min":{"type":"integer","minimum":18,"maximum":65,
+                        "description":"18 when left out. Google search ads take no age range: leave it out."},
+                    "age_max":{"type":"integer","minimum":18,"maximum":65,
+                        "description":"65 when left out."},
+                    "genders":{"type":"array","items":{"type":"integer","enum":[1,2]},
+                        "description":"1 men, 2 women; empty: everybody. Not on Google."},
+                    "interests":{"type":"array","maxItems":25,"description":"Meta only.","items":{"type":"object",
                         "additionalProperties":false,"required":["id","name"],
                         "properties":{"id":{"type":"string"},"name":{"type":"string"}}}},
                     "broad":{"type":"boolean",
-                        "description":"Let the ad platform find the people itself (Advantage+ audience). Then age_min is 18 to 25 and age_max is 65; for a narrower age range leave it false."}}},
-            "placements":{"oneOf":[{"const":"automatic"},
+                        "description":"Meta only. Let the ad platform find the people itself (Advantage+ audience). Then age_min is 18 to 25 and age_max is 65; for a narrower age range leave it false."}}},
+            "placements":{"description":"automatic when left out; naming platforms is Meta's.","oneOf":[{"const":"automatic"},
                 {"type":"object","additionalProperties":false,"required":["platforms"],
                  "properties":{"platforms":{"type":"array","minItems":1,
                     "items":{"type":"string","enum":["facebook","instagram"]}}}}]},
+            "keywords":list_schema(|r| r.keywords,
+                "Google only: the searches the ads answer, 1 to 20, each at most 80 characters and 10 words, none twice. Jeeta sets them as phrase match."),
             "end_at":{"type":"string","format":"date-time",
-                "description":"24 hours to 90 days after the campaign's start; the campaign's own end when a person set one."},
+                "description":"24 hours to 90 days after the campaign's start (Google: at least 72 hours after it really starts); the campaign's own end when a person set one."},
             "ads":{"type":"array","minItems":1,"maxItems":MAX_ADS,"items":ad_schema()},
             "summary":{"type":"string","minLength":1,"maxLength":MAX_TEXT_CHARS},
             "audience_summary":{"type":"string","minLength":1,"maxLength":MAX_TEXT_CHARS}}})

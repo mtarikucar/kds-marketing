@@ -22,6 +22,8 @@ async fn every_campaign_operation_records_arguments_and_consumes_its_own_queue()
         name: "campaign".into(),
         objective: AdObjective::Leads,
         lifetime_budget_minor: 10000,
+        start_at: datetime!(2026-11-11 0:00 UTC),
+        end_at: datetime!(2026-11-12 0:00 UTC),
     };
     let adset = AdSetSpec {
         name: "set".into(),
@@ -42,6 +44,8 @@ async fn every_campaign_operation_records_arguments_and_consumes_its_own_queue()
         placements: AdPlacements::Automatic,
         start_at: datetime!(2026-11-11 0:00 UTC),
         end_at: datetime!(2026-11-12 0:00 UTC),
+        budget_minor: 10000,
+        keywords: vec!["synthetic search".into()],
     };
     let form = LeadFormSpec {
         name: "form".into(),
@@ -52,13 +56,15 @@ async fn every_campaign_operation_records_arguments_and_consumes_its_own_queue()
     };
     let creative = CreativeSpec {
         name: "creative".into(),
-        page_id: "page1".into(),
+        identity_id: Some("page1".into()),
         instagram_user_id: None,
-        image_hash: "hash1".into(),
+        image: Some("hash1".into()),
         primary_text: "synthetic".into(),
         headline: "headline".into(),
         description: None,
-        call_to_action: CallToAction::SignUp,
+        headlines: vec![],
+        descriptions: vec![],
+        call_to_action: Some(CallToAction::SignUp),
         action: CreativeAction::LeadForm {
             form_id: "form1".into(),
             url: Url::parse("https://example.test/").unwrap(),
@@ -68,12 +74,14 @@ async fn every_campaign_operation_records_arguments_and_consumes_its_own_queue()
         name: "ad".into(),
         adset_id: "s1".into(),
         creative_id: "creative1".into(),
+        creative: creative.clone(),
     };
     let limits = AdAccountLimits {
         currency: "TRY".into(),
         minor_unit_exponent: 2,
         timezone: "Europe/Istanbul".into(),
         min_daily_budget_minor: 100,
+        min_total_budget_minor: 0,
     };
     let state = CampaignProviderState {
         campaign: ProviderAdStatus::Paused,
@@ -270,7 +278,7 @@ async fn every_campaign_operation_records_arguments_and_consumes_its_own_queue()
 }
 
 #[test]
-fn campaign_registry_is_meta_only_and_absent_without_an_adapter() {
+fn campaign_registry_is_for_the_ad_platforms_and_absent_without_an_adapter() {
     let mut registry = ScriptedRegistry::new();
     for provider in Provider::all() {
         assert!(registry.ad_campaigns(*provider).is_none());
@@ -279,7 +287,14 @@ fn campaign_registry_is_meta_only_and_absent_without_an_adapter() {
     for provider in Provider::all() {
         assert_eq!(
             registry.ad_campaigns(*provider).is_some(),
-            *provider == Provider::Meta
+            matches!(provider, Provider::Meta | Provider::Google),
+            "{}",
+            provider.key()
+        );
+        assert_eq!(
+            registry.ads(*provider).is_some(),
+            registry.ad_campaigns(*provider).is_some(),
+            "an ad is switched on and off wherever a campaign is built"
         );
     }
 }
@@ -300,6 +315,8 @@ async fn missing_campaign_script_fails_loudly() {
                 name: "test".into(),
                 objective: AdObjective::Traffic,
                 lifetime_budget_minor: 1,
+                start_at: datetime!(2026-11-11 0:00 UTC),
+                end_at: datetime!(2026-11-12 0:00 UTC),
             },
         )
         .await

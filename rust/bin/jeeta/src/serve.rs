@@ -907,10 +907,13 @@ mod tests {
         // public address: an OAuth flow cannot start (the missing address is named first, before
         // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
-            // The marketplaces' adapters come with their own tasks (T1, H1).
+            // The marketplaces' adapters come with their own tasks (T1, H1), Google's with
+            // task 2 of plan 2026-11-11-step4-ad-platforms.md.
             if matches!(
                 provider,
-                jt_connector::Provider::Trendyol | jt_connector::Provider::Hepsiburada
+                jt_connector::Provider::Trendyol
+                    | jt_connector::Provider::Hepsiburada
+                    | jt_connector::Provider::Google
             ) {
                 assert!(deps.connectors.connector(*provider).is_none());
                 continue;

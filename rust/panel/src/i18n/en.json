@@ -43,6 +43,10 @@
     "ads": "Ads",
     "placement": "Placement",
     "fallback": "The platform preview is currently unavailable.",
+    "noPreview": "This ad platform shows no preview; the ad’s texts are below.",
+    "headlines": "Headlines",
+    "descriptions": "Descriptions",
+    "keywords": "Keywords",
     "days": "Daily results",
     "day": "Day",
     "spent": "Spent",
@@ -75,6 +79,7 @@
       "not_running": "This ad campaign is no longer running.",
       "not_stopped": "This ad campaign is not stopped.",
       "not_a_proposal": "This ad campaign is not a proposal awaiting approval.",
+      "duration_not_supported": "The platform of the ad account you chose does not run an ad campaign of this length: at least {{hours}} hours, at most {{days}} days.",
       "proposal_expired": "This proposal expired without approval."
     },
     "notes": {
@@ -104,6 +109,7 @@
       "eu_targeting_needs_payer": "Ads to European Union countries are not supported in this version.",
       "lead_form_needs_the_inbox": "An ad form needs the Inbox module installed.",
       "special_category_not_supported": "Special ad categories are not supported in this version.",
+      "duration_not_supported": "The ad account’s platform does not run an ad campaign of this length: at least {{hours}} hours, at most {{days}} days. Change the end date or choose another ad account.",
       "other": "For the agent to fix: {{field}}"
     },
     "endReasons": {

@@ -19,7 +19,13 @@ import {
 } from '@/components/ui';
 import { formatMoney } from '@/lib/format';
 import { inputClass } from '../StudioShared';
-import { CampaignError, useAdsKey, useCampaignMutation, validEnd } from './CampaignShared';
+import {
+  AD_ACCOUNT_KINDS,
+  CampaignError,
+  useAdsKey,
+  useCampaignMutation,
+  validEnd,
+} from './CampaignShared';
 
 export function OpenCampaignDialog({
   general,
@@ -44,7 +50,9 @@ export function OpenCampaignDialog({
   const currency = general?.item.unit.kind === 'currency' ? general.item.unit.value : 'TRY';
   const accounts = useQuery({
     queryKey: [...key, 'accounts'],
-    queryFn: () => listCapabilities({ kind: 'meta_ads' }),
+    // Every ad account a campaign can be built on, whatever its platform.
+    queryFn: () => listCapabilities({ group: 'ads' }),
+    select: (rows) => rows.filter((row) => row.capability.kind_key in AD_ACCOUNT_KINDS),
   });
   const valid =
     goal.trim() &&
@@ -136,7 +144,7 @@ export function OpenCampaignDialog({
                 <option value="">{t('adCampaigns.agentChooses')}</option>
                 {accounts.data?.map(({ capability: c }) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {`${c.name} · ${AD_ACCOUNT_KINDS[c.kind_key]}`}
                   </option>
                 ))}
               </select>

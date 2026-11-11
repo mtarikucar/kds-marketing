@@ -12,6 +12,8 @@ import { useModules } from '@/lib/modules';
 import { can } from '@/lib/roles';
 import { formatDateTime } from '@/lib/format';
 
+/** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`). */
+const AD_WRITE_SCOPES: Record<string, string> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords' };
 export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
   const { t, i18n } = useTranslation();
   const session = useSession();
@@ -22,7 +24,7 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
   const keys = useQuery({ queryKey: ['api-keys', workspace], queryFn: listKeys, enabled: can(session.data, 'api_keys.manage'), refetchInterval: 60_000 });
   const strategy = useQuery({ queryKey: ['strategy', workspace], queryFn: getStrategy });
   const budget = useQuery({ queryKey: ['budget-items', workspace], queryFn: listBudgetItems, enabled: module === 'ads' });
-  const adAccounts = useQuery({ queryKey: ['capabilities', workspace, 'meta_ads'], queryFn: () => listCapabilities({ kind: 'meta_ads' }), enabled: module === 'ads' });
+  const adAccounts = useQuery({ queryKey: ['capabilities', workspace, 'ads'], queryFn: () => listCapabilities({ group: 'ads' }), enabled: module === 'ads' });
   const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000 });
   const config = modules.data?.modules.find(m => m.blueprint.id === module)?.config;
   const assigned = config?.agent_ids ?? [];
@@ -47,10 +49,10 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
     if (budget.data && !general) rows.push({ key: 'budget', text: t('moduleStatus.budget'), href: '/budget' });
     // A connection may read an ad account without being allowed to create ads in it (the
     // server's rule, `studio::chain::capability_access`): every plan is then refused.
-    const connected = adAccounts.data?.filter(c => c.effective_status === 'verified');
+    const connected = adAccounts.data?.filter(c => c.effective_status === 'verified' && c.capability.kind_key in AD_WRITE_SCOPES);
     const creates = (c: NonNullable<typeof connected>[number]) => {
       const scopes = (c.capability.connector_public.access as { scopes?: unknown } | undefined)?.scopes;
-      return Array.isArray(scopes) && scopes.includes('ads_management');
+      return Array.isArray(scopes) && scopes.includes(AD_WRITE_SCOPES[c.capability.kind_key]);
     };
     if (connected?.length && !connected.some(creates)) rows.push({ key: 'ad-scope', text: t('moduleStatus.adScope'), href: '/capabilities' });
   }

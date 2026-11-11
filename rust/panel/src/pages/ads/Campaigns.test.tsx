@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
-import { adsAnswers, campaign } from '@/test/ads';
+import { adsAnswers, campaign, platforms } from '@/test/ads';
 
 it('leads with the campaign queue, its budget and results; legacy controls are secondary', async () => {
   mockFetch(adsAnswers);
@@ -38,7 +38,7 @@ it('requires a reason to decline a proposal and sends the revision', async () =>
   const proposed = { ...campaign, state: { state: 'proposed', note: null }, built: null };
   const calls = mockFetch({
     ...adsAnswers,
-    'GET /api/ads/campaigns/campaign-1': { campaign: proposed, days: [], materials: [] },
+    'GET /api/ads/campaigns/campaign-1': { campaign: proposed, days: [], materials: [], platforms },
     'POST /api/ads/campaigns/campaign-1/decline': {
       ...proposed,
       revision: 5,
@@ -191,6 +191,7 @@ it.each(['ended', 'expired', 'declined'])('keeps %s campaigns read-only', async 
       campaign: { ...campaign, state: { state, note: null } },
       days: [],
       materials: [],
+      platforms,
     },
   });
   renderAt('/ads?campaign=campaign-1');
@@ -223,6 +224,7 @@ it.each([
       campaign: { ...campaign, stop, state: { state, note: stop?.reason ?? null } },
       days: [],
       materials: [],
+      platforms,
     },
     [`POST /api/ads/campaigns/campaign-1/${action}`]: campaign,
   });
@@ -283,7 +285,7 @@ it('pauses with a required reason and updates budget and end time with the revis
   const queued = { ...campaign, built: null, state: { state: 'queued' as const, note: null } };
   const calls = mockFetch({
     ...adsAnswers,
-    'GET /api/ads/campaigns/campaign-1': { campaign: queued, days: [], materials: [] },
+    'GET /api/ads/campaigns/campaign-1': { campaign: queued, days: [], materials: [], platforms },
     'POST /api/ads/campaigns/campaign-1/pause': queued,
     'PATCH /api/ads/campaigns/campaign-1': queued,
   });
@@ -355,6 +357,7 @@ it('uses the ad’s authorized material preview in the fallback frame', async ()
       },
       days: [],
       materials: [material('m-ad', { title: 'Kupa fotoğrafı' })],
+      platforms,
     },
     'GET /api/studio/materials/m-ad/preview': {
       url: 'https://example.com/kupa.jpg',
@@ -377,6 +380,7 @@ it('offers no budget or end change on a built campaign, and no resume while the 
       },
       days: [],
       materials: [],
+      platforms,
     },
   });
   renderAt('/ads?campaign=campaign-1');
@@ -401,6 +405,7 @@ it('says why a campaign ended and when the ad platform has not confirmed its pau
       },
       days: [],
       materials: [],
+      platforms,
     },
   });
   renderAt('/ads?campaign=campaign-1');
@@ -446,6 +451,7 @@ it('tells a person why the agent’s plan was turned down, in words they can act
       },
       days: [],
       materials: [],
+      platforms,
     },
   });
   renderAt('/ads?campaign=campaign-1');
@@ -463,4 +469,75 @@ it('tells a person why the agent’s plan was turned down, in words they can act
   expect(screen.getByText('Ajanın düzelteceği alan: ads[0].primary_text')).toBeVisible();
   // The goal is not said twice when the title is the goal.
   expect(screen.getAllByText(campaign.title)).toHaveLength(1);
+});
+
+it('shows a search campaign by its headlines, descriptions and keywords, and asks for no preview', async () => {
+  const search = {
+    ...campaign,
+    plan: {
+      ...campaign.plan,
+      result: 'link_click',
+      placements: 'automatic',
+      keywords: ['el yapımı kupa', 'seramik kupa'],
+      ads: [
+        {
+          name: 'Arama reklamı',
+          description: null,
+          instagram: null,
+          headlines: ['El yapımı kupalar', 'Yeni seri çıktı', 'Hemen incele'],
+          descriptions: ['Her kupa tek tek elde yapılır.', 'Yeni seriyi şimdi görün.'],
+          hypothesis_id: 'h1',
+        },
+      ],
+    },
+    built: { ...campaign.built, platform: 'google' },
+    totals: { ...campaign.totals, result_kind: 'link_click' },
+  };
+  const calls = mockFetch({
+    ...adsAnswers,
+    'GET /api/ads/campaigns': { campaigns: [search], next_before: null },
+    'GET /api/ads/campaigns/campaign-1': { campaign: search, days: [], materials: [], platforms },
+  });
+  renderAt('/ads?campaign=campaign-1');
+  expect(await screen.findByText('Bu reklam platformu önizleme göstermiyor; reklamın metinleri aşağıda.')).toBeVisible();
+  expect(screen.getByText('Yeni seri çıktı')).toBeVisible();
+  expect(screen.getByText('Her kupa tek tek elde yapılır.')).toBeVisible();
+  expect(screen.getByText('el yapımı kupa · seramik kupa')).toBeVisible();
+  // No placement to choose, no call to action, and the provider is not asked for a preview.
+  expect(screen.queryByLabelText('Yerleşim')).not.toBeInTheDocument();
+  expect(calls.some((c) => c.path.endsWith('/preview'))).toBe(false);
+  // In the list it is a Google campaign.
+  renderAt('/ads');
+  expect(await screen.findByText('Google', { selector: 'p' })).toBeVisible();
+});
+
+it('tells a person when the chosen ad account’s platform does not run a campaign that short', async () => {
+  mockFetch({
+    ...adsAnswers,
+    'GET /api/capabilities': [
+      { capability: { id: 'g1', kind_key: 'google_ads', name: 'Arama hesabı' } },
+      { capability: { id: 'p1', kind_key: 'facebook_page', name: 'Sayfa' } },
+    ],
+    'POST /api/ads/campaigns': withStatus(422, {
+      code: 'VALIDATION',
+      message: 'duration_not_supported',
+      details: { field: 'end_at', reason: 'duration_not_supported', least_hours: 72, most_days: 90 },
+    }),
+  });
+  renderAt('/ads');
+  const dialog = await fillOpening();
+  // Only ad accounts are offered, each with its platform.
+  const account = within(dialog).getByLabelText('Reklam hesabı (isteğe bağlı)');
+  expect(await within(account).findByRole('option', { name: 'Arama hesabı · Google' })).toBeInTheDocument();
+  expect(within(account).queryByRole('option', { name: /Sayfa/ })).not.toBeInTheDocument();
+  fireEvent.change(within(dialog).getByLabelText('Bitiş tarihi (isteğe bağlı)'), {
+    target: { value: '2026-12-03T09:00' },
+  });
+  await userEvent.selectOptions(account, 'g1');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Reklam kampanyası aç' }));
+  expect(
+    await within(dialog).findByText(
+      'Seçtiğiniz reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az 72 saat, en çok 90 gün.',
+    ),
+  ).toBeVisible();
 });

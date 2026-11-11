@@ -12,8 +12,13 @@
 //! is checked against the same sums (`check_money`): the general ad budget's remainder in its
 //! period, the strategy's paid cap, the ad account's own cap. The provider gets the budget as
 //! the campaign's lifetime budget (B32): it cannot spend more than that whatever Jeeta does.
+//!
+//! **Platforms (design 2026-11-11).** A campaign runs on the platform of its ad account. What
+//! differs between platforms is what a plan carries ([`platform`]) and what the adapter sends;
+//! opening, planning, building, watching, stopping and the money are the same everywhere.
 pub mod build;
 pub mod plan;
+pub mod platform;
 pub mod watch;
 
 use crate::{
@@ -252,6 +257,25 @@ pub(crate) async fn check_money(
     Ok(())
 }
 
+/// Whether a campaign from `start` to `end` is one the platform of `rules` lets run: else
+/// `VALIDATION` on `end_at` (`duration_not_supported`, with the platform's bounds). For an end a
+/// person fixes on an ad account they chose; a plan's own end is a finding of the plan.
+fn run_fits(
+    rules: &platform::PlatformRules,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+) -> Result<(), AppError> {
+    let run = end - start;
+    if run < Duration::hours(rules.min_run_hours) || run > Duration::days(rules.max_run_days) {
+        return Err(AppError::validation(
+            "duration_not_supported",
+            json!({"field": "end_at", "reason": "duration_not_supported",
+                "least_hours": rules.min_run_hours, "most_days": rules.max_run_days}),
+        ));
+    }
+    Ok(())
+}
+
 fn instant(value: &str, field: &str) -> Result<OffsetDateTime, AppError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| invalid(field, "rfc3339"))
 }
@@ -341,6 +365,9 @@ pub struct CampaignDetail {
     pub days: Vec<AdDayRow>,
     /// The materials the plan's ads show.
     pub materials: Vec<jt_studio::Material>,
+    /// What a plan must look like on each ad platform: the one of the plan's ad account decides
+    /// which fields an ad carries, how long its texts may be and how long the campaign may run.
+    pub platforms: Vec<&'static platform::PlatformRules>,
 }
 
 pub(crate) async fn detail(
@@ -364,6 +391,7 @@ pub(crate) async fn detail(
         campaign: c.present(now),
         days,
         materials,
+        platforms: platform::all_rules(),
     })
 }
 
@@ -424,9 +452,15 @@ async fn new_campaign(
         None => projects::goal_title(&goal),
     };
     if let Some(account) = i.account {
-        let found = r.capabilities().find(account).await?;
-        if !found.is_some_and(|c| c.kind_key == "meta_ads" && c.status != StoredStatus::Retired) {
-            return Err(invalid("account", "not_a_live_ad_account"));
+        let rules = r
+            .capabilities()
+            .find(account)
+            .await?
+            .filter(|c| c.status != StoredStatus::Retired)
+            .and_then(|c| platform::rules_of_kind(&c.kind_key))
+            .ok_or_else(|| invalid("account", "not_a_live_ad_account"))?;
+        if let Some(end_at) = end_at {
+            run_fits(rules, start_at, end_at)?;
         }
     }
     Ok(AdCampaign {
@@ -913,6 +947,16 @@ pub async fn campaign_update(d: &Deps, ctx: &Ctx, i: UpdateInput) -> Result<AdCa
                 let end = instant(&end, "end_at")?;
                 if end - c.start_at < MIN_RUN || end - c.start_at > MAX_RUN {
                     return Err(invalid("end_at", "24_hours_to_90_days_after_the_start"));
+                }
+                // On the ad account the person chose, when they chose one.
+                if let Some(account) = c.account_hint
+                    && let Some(rules) = r
+                        .capabilities()
+                        .find(account)
+                        .await?
+                        .and_then(|a| platform::rules_of_kind(&a.kind_key))
+                {
+                    run_fits(rules, c.start_at, end)?;
                 }
                 Some(end)
             }

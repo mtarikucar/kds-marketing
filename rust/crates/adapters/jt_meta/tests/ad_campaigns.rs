@@ -29,6 +29,8 @@ fn campaign() -> CampaignSpec {
         name: "test campaign".into(),
         objective: AdObjective::Traffic,
         lifetime_budget_minor: 12345,
+        start_at: datetime!(2026-11-11 0:00 UTC),
+        end_at: datetime!(2026-11-13 0:00 UTC),
     }
 }
 fn adset() -> AdSetSpec {
@@ -52,18 +54,22 @@ fn adset() -> AdSetSpec {
         placements: AdPlacements::Platforms(vec![AdPlatform::Facebook, AdPlatform::Instagram]),
         start_at: datetime!(2026-11-11 0:00 UTC),
         end_at: datetime!(2026-11-13 0:00 UTC),
+        budget_minor: 12345,
+        keywords: Vec::new(),
     }
 }
 fn creative() -> CreativeSpec {
     CreativeSpec {
         name: "test creative".into(),
-        page_id: "page1".into(),
+        identity_id: Some("page1".into()),
         instagram_user_id: Some("ig1".into()),
-        image_hash: "hash1".into(),
+        image: Some("hash1".into()),
         primary_text: "Synthetic primary text".into(),
         headline: "Synthetic headline".into(),
         description: Some("Synthetic description".into()),
-        call_to_action: CallToAction::LearnMore,
+        headlines: Vec::new(),
+        descriptions: Vec::new(),
+        call_to_action: Some(CallToAction::LearnMore),
         action: CreativeAction::Link {
             url: Url::parse("https://example.test/landing").unwrap(),
         },
@@ -275,7 +281,7 @@ async fn creative_encodes_link_and_form_actions_and_all_ctas() {
         (CallToAction::BookNow, "BOOK_NOW"),
         (CallToAction::Download, "DOWNLOAD"),
     ] {
-        spec.call_to_action = cta;
+        spec.call_to_action = Some(cta);
         r.meta
             .create_creative(&cred(), &public(), &spec)
             .await
@@ -307,7 +313,8 @@ async fn ad_is_created_paused_with_its_creative() {
                 &AdSpec {
                     name: "test ad".into(),
                     adset_id: "set1".into(),
-                    creative_id: "creative1".into()
+                    creative_id: "creative1".into(),
+                    creative: creative(),
                 }
             )
             .await
@@ -336,7 +343,8 @@ async fn account_limits_use_currency_units_and_minimum_budget() {
             currency: "TRY".into(),
             minor_unit_exponent: 2,
             timezone: "Europe/Istanbul".into(),
-            min_daily_budget_minor: 500
+            min_daily_budget_minor: 500,
+            min_total_budget_minor: 0,
         }
     );
     let req = r.mock.request("GET", "/fb/v27.0/act_123");
@@ -679,6 +687,7 @@ async fn call_method(r: &support::Rig, method: usize) -> Result<(), jt_connector
                     name: "synthetic ad".into(),
                     adset_id: "set1".into(),
                     creative_id: "creative1".into(),
+                    creative: creative(),
                 },
             )
             .await

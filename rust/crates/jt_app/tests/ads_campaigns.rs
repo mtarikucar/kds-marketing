@@ -24,11 +24,13 @@ use jt_app::{
     },
 };
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
-use jt_connector::{ConnectorError, Credential};
+use jt_connector::{ConnectorError, Credential, Provider};
 use jt_ledger::Actor;
 use jt_studio::*;
 use jt_tenancy::{AgentConnectionId, WorkspaceStatus};
-use jt_testkit::fakes::{ConnectorCall, FIXED_NOW, FixedClock, files::MemoryFiles};
+use jt_testkit::fakes::{
+    ConnectorCall, FIXED_NOW, FixedClock, ScriptedConnector, ScriptedRegistry, files::MemoryFiles,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use support::*;
@@ -218,6 +220,7 @@ impl Ads {
             minor_unit_exponent: 2,
             timezone: "Europe/Istanbul".into(),
             min_daily_budget_minor: 100,
+            min_total_budget_minor: 0,
         }));
     }
 
@@ -1418,4 +1421,481 @@ async fn campaign_store_contract() {
     let t = ads_world().await;
     let other = jt_testkit::studio_contract::ready(&t.w.uow).await;
     jt_testkit::ads_contract::exercise(&t.w.uow, t.w.f.ws, other.ws).await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Other ad platforms (design 2026-11-11): the campaign is the same, the plan is the platform's.
+// ---------------------------------------------------------------------------------------------
+
+const ADWORDS: &str = "https://www.googleapis.com/auth/adwords";
+
+/// The ads world with a Google Ads account beside the Meta one, and Google's scripted adapter.
+struct Search {
+    t: Ads,
+    google: Arc<ScriptedConnector>,
+    account: CapabilityId,
+}
+
+async fn search_world() -> Search {
+    let mut t = ads_world().await;
+    let google = Arc::new(ScriptedConnector::new(Provider::Google));
+    t.w.d.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(t.w.ads.clone())
+            .with_connector(google.clone()),
+    );
+    let account = connection(&t.w, "google_ads", "1234567890", &[ADWORDS]).await;
+    Search { t, google, account }
+}
+
+impl Search {
+    fn ad(&self, name: &str) -> Value {
+        json!({"name":name,
+            "headlines":["Yeni sezon kayıtları","Kayıtlar açıldı","Hemen kayıt ol"],
+            "descriptions":["Yeni sezon başlıyor, yerini ayırt.","Kayıt birkaç dakika sürer."],
+            "hypothesis_id":self.t.w.f.slot.chain.hypothesis_id})
+    }
+
+    fn plan(&self, ads: Vec<Value>) -> Value {
+        json!({"ad_account":self.account,"result":"link_click",
+            "destination":{"kind":"website","url":"https://ornek.example/kayit"},
+            "audience":{"countries":["TR"]},
+            "keywords":["yeni sezon kayıt","kurs kayıt"],
+            "end_at":at(FIXED_NOW + Duration::days(7)),
+            "ads":ads,"summary":"Kayıt arayanlara metin reklamı",
+            "audience_summary":"Türkiye'de kayıt arayanlar"})
+    }
+
+    fn limits(&self, min_total: i64) {
+        self.google.push_account_limits(Ok(AdAccountLimits {
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "Europe/Istanbul".into(),
+            min_daily_budget_minor: 0,
+            min_total_budget_minor: min_total,
+        }));
+    }
+
+    fn calls(&self, pick: impl Fn(&ConnectorCall) -> bool) -> usize {
+        self.google.calls().iter().filter(|c| pick(c)).count()
+    }
+}
+
+/// What a malformed plan names: its field and why.
+fn refused_field(e: &jt_app::error::AppError) -> (String, String) {
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    (
+        e.details["field"].as_str().unwrap().to_owned(),
+        e.details["reason"].as_str().unwrap().to_owned(),
+    )
+}
+
+/// Review Focus 2 of plan 2026-11-11: a field the platform of the plan's ad account does not
+/// take is refused naming the field, on either platform, and counts for nothing.
+#[tokio::test]
+async fn a_plan_carries_only_what_its_platform_takes() {
+    let s = search_world().await;
+    let a = agent(&s.t.w);
+    let c = s.t.open("search", 50_000).await.unwrap();
+    let claim = ads::campaign_claim(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap();
+    let submit = |key: &str, plan: Value| {
+        let d = &s.t.w.d;
+        let a = &a;
+        let body = json!({"campaign_id":c.id,"claim_token":claim.claim_token,
+            "request_key":key,"plan":plan});
+        async move { ads::plan_submit(d, a, input(body)).await }
+    };
+    let not_taken = "field_not_for_this_platform";
+
+    // A search ad is its headlines and descriptions: it has no image, no page, no texts of an
+    // image ad and no call to action.
+    for (field, value) in [
+        ("primary_text", json!("Yeni sezon başlıyor")),
+        ("headline", json!("Kayıtlar açık")),
+        ("description", json!("Kısa açıklama")),
+        ("call_to_action", json!("LEARN_MORE")),
+        ("material_ids", json!([s.t.image])),
+        ("page", json!(s.t.page)),
+        ("instagram", json!(s.t.page)),
+    ] {
+        let mut plan = s.plan(vec![s.ad("a")]);
+        plan["ads"][0][field] = value;
+        let e = submit(&format!("g-{field}"), plan).await.unwrap_err();
+        assert_eq!(
+            refused_field(&e),
+            (format!("ads[0].{field}"), not_taken.to_owned()),
+            "{field}"
+        );
+    }
+    // How many headlines, how long, none twice.
+    let headlines = |list: Value| {
+        let mut plan = s.plan(vec![s.ad("a")]);
+        plan["ads"][0]["headlines"] = list;
+        plan
+    };
+    let e = submit("g-two", headlines(json!(["Bir", "İki"])))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[0].headlines".into(), "3_to_15_items".into())
+    );
+    let e = submit(
+        "g-long",
+        headlines(json!(["a".repeat(31), "İki başlık", "Üç başlık"])),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[0].headlines[0]".into(), "1_to_30_characters".into())
+    );
+    let e = submit("g-twice", headlines(json!(["Bir", "İki", "bir "])))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[0].headlines[2]".into(), "given_twice".into())
+    );
+    // The plan itself: its searches, and no audience or placement Google's search ads lack.
+    let changed = |path: &[&str], value: Value| {
+        let mut plan = s.plan(vec![s.ad("a")]);
+        let mut at = &mut plan;
+        for key in &path[..path.len() - 1] {
+            at = &mut at[*key];
+        }
+        at[path[path.len() - 1]] = value;
+        plan
+    };
+    for (path, value, field, reason) in [
+        (vec!["keywords"], json!([]), "keywords", "1_to_20_items"),
+        (
+            vec!["keywords"],
+            json!(["bir iki üç dört beş altı yedi sekiz dokuz on onbir"]),
+            "keywords[0]",
+            "at_most_10_words_on_one_line",
+        ),
+        (
+            vec!["audience", "age_min"],
+            json!(25),
+            "audience.age_min",
+            not_taken,
+        ),
+        (
+            vec!["audience", "genders"],
+            json!([2]),
+            "audience.genders",
+            not_taken,
+        ),
+        (
+            vec!["audience", "cities"],
+            json!(["Ankara"]),
+            "audience.cities",
+            not_taken,
+        ),
+        (
+            vec!["placements"],
+            json!({"platforms":["facebook"]}),
+            "placements",
+            not_taken,
+        ),
+    ] {
+        let key = format!("g-{field}-{reason}");
+        let e = submit(&key, changed(&path, value)).await.unwrap_err();
+        assert_eq!(
+            refused_field(&e),
+            (field.to_owned(), reason.to_owned()),
+            "{field}"
+        );
+    }
+    let mut broad = s.plan(vec![s.ad("a")]);
+    broad["audience"]["broad"] = json!(true);
+    let e = submit("g-broad", broad).await.unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("audience.broad".into(), not_taken.into())
+    );
+    let mut form = s.plan(vec![s.ad("a")]);
+    form["result"] = json!("lead_form");
+    form["destination"] = json!({"kind":"lead_form","page":s.t.page,"name":"Form",
+        "questions":["EMAIL"],"privacy_policy_url":"https://ornek.example/gizlilik",
+        "thank_you_url":"https://ornek.example/tesekkur"});
+    let e = submit("g-form", form).await.unwrap_err();
+    assert_eq!(refused_field(&e), ("result".into(), not_taken.into()));
+
+    // The other way round: a Meta ad takes no search headlines and no keywords, and needs the
+    // page it speaks as.
+    let mut meta = s.t.plan(vec![s.t.ad("a")]);
+    meta["keywords"] = json!(["kurs kayıt"]);
+    let e = submit("m-keywords", meta).await.unwrap_err();
+    assert_eq!(refused_field(&e), ("keywords".into(), not_taken.into()));
+    let mut meta = s.t.plan(vec![s.t.ad("a")]);
+    meta["ads"][0]["headlines"] = json!(["Bir", "İki", "Üç"]);
+    let e = submit("m-headlines", meta).await.unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[0].headlines".into(), not_taken.into())
+    );
+    let mut meta = s.t.plan(vec![s.t.ad("a")]);
+    meta["ads"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("page")
+        .unwrap();
+    let e = submit("m-page", meta).await.unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[0].page".into(), "required_on_this_platform".into())
+    );
+
+    // None of it counted, and nothing was asked of either provider.
+    assert_eq!(s.t.get(c.id).await.refused, 0);
+    assert!(s.google.calls().is_empty() && s.t.w.ads.calls().is_empty());
+}
+
+/// A search campaign from its plan to a running ad: what the platform's own limits refuse is a
+/// finding, the build has no image step, the specs carry what a search campaign is made of, and
+/// an ad that is held but still runs at the provider is paused again by the watch.
+#[tokio::test]
+async fn a_search_campaign_is_planned_built_without_an_image_and_watched() {
+    let s = search_world().await;
+    let a = agent(&s.t.w);
+    let c = s.t.open("search", 50_000).await.unwrap();
+    let finding = |e: &jt_app::error::AppError, field: &str| {
+        assert_eq!(e.details["reason"], "plan_refused", "{e:?}");
+        e.details["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["field"] == field)
+            .cloned()
+            .unwrap_or_else(|| panic!("no finding on {field}: {e:?}"))
+    };
+
+    // One claim carries the agent through its refused plans to the one that holds.
+    let claim = ads::campaign_claim(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap();
+    let submit = |key: &str, plan: Value| {
+        let d = &s.t.w.d;
+        let a = &a;
+        let body = json!({"campaign_id":c.id,"claim_token":claim.claim_token,
+            "request_key":key,"plan":plan});
+        async move { ads::plan_submit(d, a, input(body)).await }
+    };
+
+    // Google runs a campaign with a total budget for three days at least.
+    let mut short = s.plan(vec![s.ad("a")]);
+    short["end_at"] = json!(at(FIXED_NOW + Duration::days(2)));
+    s.limits(0);
+    let e = submit("short", short).await.unwrap_err();
+    assert_eq!(
+        finding(&e, "end_at"),
+        json!({"field":"end_at","reason":"duration_not_supported",
+            "least_hours":72,"most_days":90})
+    );
+    // And the account's own least total is a finding too.
+    s.limits(60_000);
+    let e = submit("small", s.plan(vec![s.ad("a")])).await.unwrap_err();
+    assert_eq!(
+        finding(&e, "budget_minor"),
+        json!({"field":"budget_minor","reason":"below_the_accounts_minimum","least":60_000})
+    );
+    assert_eq!(s.t.get(c.id).await.refused, 2);
+    assert_eq!(
+        s.calls(|c| matches!(c, ConnectorCall::CreateCampaign { .. })),
+        0
+    );
+
+    // The plan that holds: campaign, ad group, then each ad; no image is uploaded.
+    s.limits(0);
+    let x = &s.google;
+    x.push_find_by_name(Ok(None));
+    x.push_create_campaign(Ok("g-cmp".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_adset(Ok("g-grp".into()));
+    for i in 0..2 {
+        x.push_find_by_name(Ok(None));
+        x.push_create_creative(Ok("inline".into()));
+        x.push_find_by_name(Ok(None));
+        x.push_create_ad(Ok(format!("g-ad-{i}")));
+    }
+    for _ in 0..4 {
+        x.push_set_status(Ok(()));
+    }
+    let built = submit("good", s.plan(vec![s.ad("Bir"), s.ad("İki")]))
+        .await
+        .unwrap();
+    assert_eq!(Ads::state(&built), CampaignState::InReview);
+    let b = built.built.as_ref().unwrap();
+    assert_eq!(b.platform, AdsPlatform::Google);
+    assert_eq!(b.campaign_id.as_deref(), Some("g-cmp"));
+    assert_eq!(b.adset_id.as_deref(), Some("g-grp"));
+    assert!(b.ads.iter().all(|ad| ad.image_hash.is_none()));
+    assert!(b.activated_at.is_some());
+    assert_eq!(
+        s.calls(|c| matches!(c, ConnectorCall::UploadImage { .. })),
+        0
+    );
+    assert!(s.t.w.ads.calls().is_empty(), "nothing is asked of Meta");
+    let calls = s.google.calls();
+    // The campaign carries the total budget and the time it runs.
+    let campaign = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateCampaign { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(campaign.lifetime_budget_minor, 50_000);
+    assert_eq!(campaign.start_at, FIXED_NOW);
+    assert_eq!(campaign.end_at, FIXED_NOW + Duration::days(7));
+    // The level under it carries the searches, the country and the budget once more.
+    let group = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAdset { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(group.campaign_id, "g-cmp");
+    assert_eq!(group.keywords, ["yeni sezon kayıt", "kurs kayıt"]);
+    assert_eq!(group.budget_minor, 50_000);
+    assert_eq!(group.audience.countries, ["TR"]);
+    assert_eq!((group.audience.age_min, group.audience.age_max), (18, 65));
+    // The ad carries its own content: headlines and descriptions, no page, no image, no call
+    // to action; and the ad step is handed the same creative.
+    let ad = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAd { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ad.adset_id, "g-grp");
+    assert_eq!(ad.creative_id, "inline");
+    assert_eq!(ad.creative.headlines.len(), 3);
+    assert_eq!(ad.creative.descriptions.len(), 2);
+    assert_eq!(ad.creative.identity_id, None);
+    assert_eq!(ad.creative.image, None);
+    assert_eq!(ad.creative.call_to_action, None);
+    assert!(ad.creative.primary_text.is_empty());
+    // Activated last: the ads, the ad group, the campaign.
+    let statuses: Vec<(String, AdStatus)> = calls
+        .iter()
+        .filter_map(|c| match c {
+            ConnectorCall::SetAdStatus {
+                entity_id, status, ..
+            } => Some((entity_id.clone(), *status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("g-ad-0".to_owned(), AdStatus::Active),
+            ("g-ad-1".to_owned(), AdStatus::Active),
+            ("g-grp".to_owned(), AdStatus::Active),
+            ("g-cmp".to_owned(), AdStatus::Active)
+        ]
+    );
+    // What a plan must look like on each platform travels with the campaign.
+    let detail = ads::campaign_get(&s.t.w.d, &s.t.w.ctx, input(json!({"campaign_id":c.id})))
+        .await
+        .unwrap();
+    let rules = serde_json::to_value(&detail.platforms).unwrap();
+    assert_eq!(rules[0]["platform"], "meta");
+    assert_eq!(rules[1]["platform"], "google");
+    assert_eq!(rules[1]["headlines"], json!({"min":3,"max":15,"chars":30}));
+    assert_eq!(rules[1]["image"], false);
+    assert_eq!(rules[1]["min_run_hours"], 72);
+    // Google shows no preview of an ad.
+    let e = ads::ad_preview(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"index":0,"placement":"facebook_feed"})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "no_preview_on_this_platform");
+
+    // Review Focus 4: the agent holds the first ad, but its pause does not reach the provider.
+    x.push_set_status(Err(ConnectorError::transient("no answer")));
+    let moved = ads::campaign_move(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"request_key":"hold",
+            "move":{"kind":"pause_ad","ad":0,"reason":"İlk başlıklar zayıf"}})),
+    )
+    .await
+    .unwrap();
+    assert!(moved.built.as_ref().unwrap().ads[0].held);
+    // An hour later the provider still reports it as running: the watch pauses it again.
+    let later = FIXED_NOW + Duration::hours(2);
+    x.push_campaign_state(Ok(CampaignProviderState {
+        campaign: ProviderAdStatus::Active,
+        ads: ["g-ad-0", "g-ad-1"]
+            .iter()
+            .map(|id| ProviderAd {
+                ad_id: (*id).into(),
+                name: (*id).into(),
+                status: ProviderAdStatus::Active,
+                feedback: None,
+            })
+            .collect(),
+    }));
+    x.push_ad_days(Ok(vec![day("g-ad-1", 0, 900, Some(4))]));
+    x.push_set_status(Ok(()));
+    assert_eq!(watch_all(&s.t.w.d, s.t.w.f.ws, later).await.unwrap(), 1);
+    let last = s.google.calls().into_iter().next_back().unwrap();
+    assert!(
+        matches!(&last, ConnectorCall::SetAdStatus { entity_id, status, .. }
+            if entity_id == "g-ad-0" && *status == AdStatus::Paused),
+        "{last:?}"
+    );
+}
+
+/// A person who fixes the end of a campaign on an ad account they chose learns at once when
+/// that platform does not run a campaign so short.
+#[tokio::test]
+async fn an_end_the_chosen_accounts_platform_does_not_take_is_refused_at_opening() {
+    let s = search_world().await;
+    let open = |key: &str, account: CapabilityId, days: i64| {
+        let d = &s.t.w.d;
+        let ctx = &s.t.w.ctx;
+        let body = json!({"request_key":key,"goal":"Kayıtları duyur","budget_minor":20_000,
+            "start_at":at(FIXED_NOW),"end_at":at(FIXED_NOW + Duration::days(days)),
+            "account":account});
+        async move { ads::campaign_open(d, ctx, input(body)).await }
+    };
+    let e = open("two-days-google", s.account, 2).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(
+        e.details,
+        json!({"field":"end_at","reason":"duration_not_supported",
+            "least_hours":72,"most_days":90})
+    );
+    // The same two days are fine on Meta, and three are fine on Google.
+    open("two-days-meta", s.t.account, 2).await.unwrap();
+    let c = open("three-days-google", s.account, 3).await.unwrap();
+    // Changing the end afterwards is held against the same platform.
+    let e = ads::campaign_update(
+        &s.t.w.d,
+        &s.t.w.ctx,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision,
+            "end_at":at(FIXED_NOW + Duration::days(1))})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "duration_not_supported", "{e:?}");
 }

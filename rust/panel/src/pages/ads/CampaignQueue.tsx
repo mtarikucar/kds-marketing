@@ -8,7 +8,14 @@ import { Button } from '@/components/ui';
 import { QueryState } from '@/components/QueryState';
 import { formatDateTime, formatMoney } from '@/lib/format';
 import { inputClass } from '../StudioShared';
-import { CampaignNumbers, heldByCampaigns, isClosed, platforms, useAdsKey } from './CampaignShared';
+import {
+  CampaignNumbers,
+  PLATFORM_NAMES,
+  heldByCampaigns,
+  isClosed,
+  platforms,
+  useAdsKey,
+} from './CampaignShared';
 import { OpenCampaignDialog } from './OpenCampaignDialog';
 
 function CampaignRow({ campaign: c }: { campaign: Campaign }) {
@@ -24,7 +31,7 @@ function CampaignRow({ campaign: c }: { campaign: Campaign }) {
         </Link>
         <p className="text-xs text-muted-foreground">
           {platforms(c)
-            .map((p) => (p === 'facebook' ? 'Facebook' : 'Instagram'))
+            .map((p) => PLATFORM_NAMES[p])
             .join(', ') || t('adCampaigns.agentChooses')}
         </p>
         <p className="text-xs text-muted-foreground">
@@ -86,8 +93,11 @@ export function CampaignQueue({ manage }: { manage: boolean }) {
             onChange={(e) => setPlatform(e.target.value as Platform | '')}
           >
             <option value="">{t('adCampaigns.allPlatforms')}</option>
-            <option value="facebook">Facebook</option>
-            <option value="instagram">Instagram</option>
+            {(Object.keys(PLATFORM_NAMES) as Platform[]).map((p) => (
+              <option key={p} value={p}>
+                {PLATFORM_NAMES[p]}
+              </option>
+            ))}
           </select>
         </label>
         {manage && <Button onClick={() => setCreating(true)}>{t('adCampaigns.open')}</Button>}

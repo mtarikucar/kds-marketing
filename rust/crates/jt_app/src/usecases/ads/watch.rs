@@ -1,14 +1,15 @@
 //! Watching and improving a running campaign (design 2026-11-10 §8.6): the provider follows
 //! what Jeeta decided (a stop pauses it there, letting it go on activates it), what the
 //! provider reports is recorded (each ad's state and review feedback, its daily numbers, the
-//! spend), a campaign ends at its end date or when its budget is spent, every campaign stops
+//! spend), an ad that is held and still runs there is paused again, a campaign ends at its end
+//! date or when its budget is spent, every campaign stops
 //! while the general ad budget's period is exhausted or a person stopped the spending, and the
 //! agent's moves are applied and kept with their reasons.
 //!
 //! A number the provider does not give is absent, never zero.
 use super::{
     build::{self, record, runs, system},
-    general_budget, load, open_tx, plan, refuse, save,
+    general_budget, load, open_tx, plan, platform, refuse, save,
 };
 use crate::{
     ctx::Ctx,
@@ -27,8 +28,12 @@ use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-/// How often the provider is asked how a running campaign stands.
-pub const WATCH_EVERY: Duration = Duration::hours(1);
+/// How often the provider is asked how campaign `c` stands: its platform's interval (an hour;
+/// shorter on a platform whose own budget limit is not a hard one, B67).
+fn watch_every(c: &AdCampaign) -> Duration {
+    let platform = c.built.as_ref().map(|b| b.platform).unwrap_or_default();
+    Duration::minutes(platform::rules(platform).watch_minutes)
+}
 
 /// Makes the provider follow campaign `id` now (a stop pauses it, a release or a finished build
 /// activates it) and answers the campaign as it then stands. A provider that cannot be reached
@@ -146,7 +151,16 @@ async fn read(d: &Deps, c: &AdCampaign, now: OffsetDateTime) -> Result<bool, App
     let Some(b) = &mut c.built else {
         return Ok(false);
     };
+    // The ads that should be quiet and are not: one a move holds, or one a fix replaced, that
+    // the provider still reports as running (its pause never arrived, or the provider could
+    // not take it then). They are paused again after this reading is stored.
+    let mut quiet: Vec<String> = Vec::new();
     for ad in &mut b.ads {
+        for seen in &state.ads {
+            if seen.status == ProviderAdStatus::Active && ad.replaced_ad_ids.contains(&seen.ad_id) {
+                quiet.push(seen.ad_id.clone());
+            }
+        }
         let Some(seen) = state
             .ads
             .iter()
@@ -156,6 +170,9 @@ async fn read(d: &Deps, c: &AdCampaign, now: OffsetDateTime) -> Result<bool, App
         };
         ad.status = built_status(&seen.status);
         ad.feedback = seen.feedback.clone();
+        if ad.held && seen.status == ProviderAdStatus::Active {
+            quiet.push(seen.ad_id.clone());
+        }
     }
     b.watched_at = Some(now);
     if let Some(days) = days {
@@ -223,6 +240,13 @@ async fn read(d: &Deps, c: &AdCampaign, now: OffsetDateTime) -> Result<bool, App
     }
     save(r.as_mut(), &system(ws, now), c, "ads.campaign.watched").await?;
     r.commit().await?;
+    for ad_id in quiet {
+        // Best effort: the next reading sees whether it held, and asks again.
+        let _ = a
+            .status
+            .set_status(&a.credential, &ad_id, AdStatus::Paused)
+            .await;
+    }
     Ok(true)
 }
 
@@ -315,7 +339,7 @@ pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result
         }
         let _ = follow_provider(d, ws, id, now).await;
         let due = c.built.as_ref().is_some_and(|b| {
-            b.activated_at.is_some() && b.watched_at.is_none_or(|at| now - at >= WATCH_EVERY)
+            b.activated_at.is_some() && b.watched_at.is_none_or(|at| now - at >= watch_every(&c))
         });
         if due && read(d, &c, now).await? {
             changed += 1;
@@ -331,7 +355,7 @@ pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result
         let due = c
             .built
             .as_ref()
-            .is_some_and(|b| b.watched_at.is_none_or(|at| now - at >= WATCH_EVERY));
+            .is_some_and(|b| b.watched_at.is_none_or(|at| now - at >= watch_every(&c)));
         if due && read(d, &c, now).await? {
             changed += 1;
         }
@@ -427,7 +451,11 @@ pub async fn campaign_move(d: &Deps, ctx: &Ctx, i: MoveInput) -> Result<AdCampai
             json!({"field": "move.ad", "reason": "no_such_ad"}),
         ));
     }
-    let account = c.built.as_ref().map(|b| b.account).expect("built");
+    let (account, rules) = c
+        .built
+        .as_ref()
+        .map(|b| (b.account, platform::rules(b.platform)))
+        .expect("built");
     let hypotheses = r.hypotheses().list(version.id).await?;
     // What the provider is asked afterwards: (ad id, paused).
     let mut provider: Vec<(String, bool)> = Vec::new();
@@ -442,12 +470,20 @@ pub async fn campaign_move(d: &Deps, ctx: &Ctx, i: MoveInput) -> Result<AdCampai
             }
         }
         Move::AddAd { ad, .. } => {
-            plan::ad_shape(ad, "move.ad")?;
+            plan::ad_shape(ad, "move.ad", rules)?;
             if count >= MAX_ADS {
                 held.push(json!({"field": "move.ad", "reason": "six_ads_at_most"}));
             } else {
-                held = plan::ad_findings(r.as_mut(), ad, "move.ad", account, &hypotheses, ctx.now)
-                    .await?;
+                held = plan::ad_findings(
+                    r.as_mut(),
+                    ad,
+                    "move.ad",
+                    account,
+                    rules,
+                    &hypotheses,
+                    ctx.now,
+                )
+                .await?;
             }
             if held.is_empty() {
                 c.plan.as_mut().expect("planned").ads.push(ad.clone());
@@ -465,9 +501,17 @@ pub async fn campaign_move(d: &Deps, ctx: &Ctx, i: MoveInput) -> Result<AdCampai
             }
         }
         Move::FixAd { ad, with, .. } => {
-            plan::ad_shape(with, "move.with")?;
-            held = plan::ad_findings(r.as_mut(), with, "move.with", account, &hypotheses, ctx.now)
-                .await?;
+            plan::ad_shape(with, "move.with", rules)?;
+            held = plan::ad_findings(
+                r.as_mut(),
+                with,
+                "move.with",
+                account,
+                rules,
+                &hypotheses,
+                ctx.now,
+            )
+            .await?;
             if held.is_empty() {
                 c.plan.as_mut().expect("planned").ads[*ad] = with.clone();
                 let made = &mut c.built.as_mut().expect("built").ads[*ad];
@@ -585,7 +629,8 @@ pub struct PreviewOut {
 }
 
 /// `ads.ad_preview`: how the provider shows one ad of a built campaign in a placement. Asked of
-/// the provider each time; an ad whose image is not at the provider yet has none (`not_built`).
+/// the provider each time; an ad whose image is not at the provider yet has none (`not_built`),
+/// and neither has an ad on a platform that shows no preview (`no_preview_on_this_platform`).
 pub async fn ad_preview(d: &Deps, ctx: &Ctx, i: PreviewInput) -> Result<PreviewOut, AppError> {
     let placement = match i.placement.as_str() {
         "facebook_feed" => AdPlacement::FacebookFeed,
@@ -606,6 +651,13 @@ pub async fn ad_preview(d: &Deps, ctx: &Ctx, i: PreviewInput) -> Result<PreviewO
             .await?
             .ok_or_else(|| AppError::not_found("ad campaign"))?
     };
+    let platform = c.built.as_ref().map(|b| b.platform).unwrap_or_default();
+    if !platform::rules(platform).preview {
+        return Err(refuse(
+            "no_preview_on_this_platform",
+            "this ad platform shows no preview: the plan's texts are what the ad says",
+        ));
+    }
     let not_built = || refuse("not_built", "the ad is not at the provider yet");
     let spec = build::creative(d, &c, i.index)
         .await?

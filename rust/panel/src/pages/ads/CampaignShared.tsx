@@ -7,12 +7,18 @@ import { ErrorCallout } from '@/components/ErrorCallout';
 import { formatMoney, formatNumber } from '@/lib/format';
 
 export const isClosed = (c: Campaign) => ['ended', 'expired', 'declined'].includes(c.state.state);
+export const PLATFORM_NAMES: Record<Platform, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  google: 'Google',
+};
+/** The ad platforms a campaign can run on, by the capability kind of their ad accounts. */
+export const AD_ACCOUNT_KINDS: Record<string, string> = { meta_ads: 'Meta', google_ads: 'Google' };
+/** Where a planned campaign runs: Meta's surfaces of its placements, or its other platform. */
 export function platforms(c: Campaign): Platform[] {
-  return !c.plan
-    ? []
-    : c.plan.placements === 'automatic'
-      ? ['facebook', 'instagram']
-      : c.plan.placements.platforms;
+  if (!c.plan) return [];
+  if (c.built && c.built.platform !== 'meta') return [c.built.platform];
+  return c.plan.placements === 'automatic' ? ['facebook', 'instagram'] : c.plan.placements.platforms;
 }
 export function useAdsKey() {
   return ['ads', useSession().data?.current_workspace] as const;
@@ -60,6 +66,17 @@ const REFUSALS = [
 ] as const;
 export function CampaignError({ error, currency }: { error: unknown; currency: string }) {
   const { t, i18n } = useTranslation();
+  // An end the chosen ad account's platform does not run a campaign for.
+  if (isApiError(error) && error.details.reason === 'duration_not_supported') {
+    return (
+      <p role="alert" className="text-sm text-danger">
+        {t('adCampaigns.errors.duration_not_supported', {
+          hours: typeof error.details.least_hours === 'number' ? error.details.least_hours : '—',
+          days: typeof error.details.most_days === 'number' ? error.details.most_days : '—',
+        })}
+      </p>
+    );
+  }
   const reason = isApiError(error) ? REFUSALS.find((r) => r === error.details.reason) : undefined;
   if (isApiError(error) && reason) {
     return (

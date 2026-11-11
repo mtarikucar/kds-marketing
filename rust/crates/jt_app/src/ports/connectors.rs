@@ -263,6 +263,8 @@ impl OAuthCallback {
             Provider::X => Some(OAuthCallback::X),
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
+            // Google's sign-in comes with its adapter (plan 2026-11-11-step4-ad-platforms, task 2).
+            Provider::Google => None,
             Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
@@ -1668,23 +1670,33 @@ pub enum AdLevel {
     Ad,
     Creative,
 }
+/// What the provider says of an ad account, for a plan to be held against.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdAccountLimits {
     pub currency: String,
     pub minor_unit_exponent: u8,
     pub timezone: String,
+    /// The least one day of a campaign may cost on this account; 0 when the platform names none.
     pub min_daily_budget_minor: i64,
+    /// The least a campaign's whole budget may be on this account, however short it runs; 0 when
+    /// the platform names none.
+    #[serde(default)]
+    pub min_total_budget_minor: i64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdObjective {
     Traffic,
     Leads,
 }
+/// The campaign: its total budget and the time it runs. A platform that keeps the budget or the
+/// run on another level (Meta's ad set carries the run) reads what it needs and leaves the rest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CampaignSpec {
     pub name: String,
     pub objective: AdObjective,
     pub lifetime_budget_minor: i64,
+    pub start_at: OffsetDateTime,
+    pub end_at: OffsetDateTime,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AdGender {
@@ -1722,6 +1734,8 @@ pub enum AdSetGoal {
     LinkClicks,
     Leads { page_id: String },
 }
+/// The level under the campaign that says who sees the ads, where and when: Meta's ad set,
+/// Google's ad group, LinkedIn's campaign, TikTok's ad group, X's line item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdSetSpec {
     pub name: String,
@@ -1731,6 +1745,10 @@ pub struct AdSetSpec {
     pub placements: AdPlacements,
     pub start_at: OffsetDateTime,
     pub end_at: OffsetDateTime,
+    /// The campaign's whole budget once more, for a platform that wants it on this level too.
+    pub budget_minor: i64,
+    /// The search terms the ads answer, on a platform that shows ads on searches; else empty.
+    pub keywords: Vec<String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LeadQuestion {
@@ -1763,23 +1781,38 @@ pub enum CreativeAction {
     Link { url: Url },
     LeadForm { form_id: String, url: Url },
 }
+/// What one ad shows. Each platform's ad carries its own part of this: the use case fills only
+/// what the platform takes (an image ad its image, texts and the account it speaks as; a search
+/// ad its `headlines` and `descriptions`), and an adapter refuses a spec that lacks what its
+/// platform needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreativeSpec {
     pub name: String,
-    pub page_id: String,
+    /// The provider's id of the account the ad speaks as (a Facebook Page, a LinkedIn
+    /// organization, an X user); `None` where an ad has none (a search ad).
+    pub identity_id: Option<String>,
     pub instagram_user_id: Option<String>,
-    pub image_hash: String,
+    /// What [`AdCampaignWriter::upload_image`] answered for the ad's image; `None` for an ad
+    /// without one.
+    pub image: Option<String>,
     pub primary_text: String,
     pub headline: String,
     pub description: Option<String>,
-    pub call_to_action: CallToAction,
+    /// A search ad's headlines and descriptions, of which the platform shows a few at a time.
+    pub headlines: Vec<String>,
+    pub descriptions: Vec<String>,
+    pub call_to_action: Option<CallToAction>,
     pub action: CreativeAction,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdSpec {
     pub name: String,
     pub adset_id: String,
+    /// What [`AdCampaignWriter::create_creative`] answered.
     pub creative_id: String,
+    /// The creative itself, for a platform whose ad carries its content (no creative object of
+    /// its own to refer to).
+    pub creative: CreativeSpec,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderAdStatus {

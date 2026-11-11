@@ -1,4 +1,4 @@
-import type { Campaign } from '@/api/ads';
+import type { Campaign, PlatformRules } from '@/api/ads';
 import type { Breakdown, Stop } from '@/api/budget';
 import type { BudgetItemOut } from '@/api/types';
 import { studioAnswers } from './studio';
@@ -52,6 +52,7 @@ export const campaign = {
   },
   built: {
     account: 'account',
+    platform: 'meta',
     ads: [{ index: 0, status: 'active', feedback: null }],
     activated_at: '2026-11-11T09:00:00Z',
   },
@@ -70,6 +71,11 @@ export const campaign = {
   state: { state: 'live', note: null },
   totals: { spent_minor: 325000, results: 41, result_kind: 'lead_form', impressions: 4000, clicks: 200 },
 } satisfies Campaign;
+/** What a plan carries on each ad platform, as `GET /api/ads/campaigns/{id}` answers it. */
+export const platforms = [
+  { platform: 'meta', account_kind: 'meta_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: true },
+  { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 90, hard_budget_cap: true, preview: false },
+] satisfies PlatformRules[];
 export const generalBudget = {
   ...budgetItems[0],
   item: {
@@ -107,6 +113,7 @@ export const adsAnswers = {
   'GET /api/ads/campaigns/campaign-1': {
     campaign,
     materials: [],
+    platforms,
     days: [
       { day: '2026-11-12', ad: 0, spent_minor: 10000, impressions: 100, clicks: 20, results: 3 },
       { day: '2026-11-12', ad: 1, spent_minor: 20000, impressions: 200, clicks: 30, results: 4 },
