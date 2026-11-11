@@ -161,7 +161,7 @@ async fn hosts_are_the_fixed_linkedin_entries() {
     assert_eq!(r.li.provider(), Provider::Linkedin);
     assert_eq!(
         Provider::Linkedin.kinds(),
-        ["linkedin_member", "linkedin_page"]
+        ["linkedin_member", "linkedin_page", "linkedin_ads"]
     );
     // The production bases reach exactly those hosts.
     let production = LinkedinBases::production();
@@ -1689,7 +1689,7 @@ async fn kind_key_must_be_linkedin() {
         json!(null),
         json!({ "kind_key": null }),
         json!({ "kind_key": "LinkedIn_Page" }),
-        json!({ "kind_key": "linkedin_ads" }),
+        json!({ "kind_key": "tiktok_ads" }),
         json!({ "kind_key": "x", "external_id": SUB }),
     ] {
         let errors = [

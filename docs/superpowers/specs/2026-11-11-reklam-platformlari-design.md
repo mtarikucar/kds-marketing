@@ -31,8 +31,8 @@ harcamayacağını belgesinde söyleyip söylemediğidir.
 |---|---|---|---|---|
 | İlk sürümde kurulan | Arama kampanyası, metin reklamı (görsel yok) | Sponsorlu içerik, tek görselli | TikTok yerleşiminde tek görselli kaydırmalı reklam (müzik zorunlu) | Görselli web sitesi kartı taşıyan tanıtılan gönderi |
 | Kesin sınır | Var: "you will never be charged more than your total budget" | Var: "you spend no more than the full budget for the lifetime of the campaign" | Var (yardım sayfası; arama ile): "will never exceed the budget you set" | **Belgede yok**: analiz sayfası "credits for overspend" diyor |
-| En kısa süre, en düşük bütçe | 3 gün; en çok 90 gün. Alt bütçe belgede yok | Ömür boyu bütçe en az 100 (hesap para birimi); kitle en az 300 kişi | Kampanya en az 500 TL; reklam grubu en az 200 TL × gün | Belgede yok |
-| Reklamın sahibi görünen kimlik | Yok (reklam hesabı) | Şirket Sayfası | Müşterinin gerçek TikTok hesabı, reklam hesabına bağlı olmalı | X hesabı |
+| En kısa süre, en düşük bütçe | 3 gün; en çok 90 gün. Alt bütçe belgede yok | En düşük ömür boyu bütçe süreye göre değişir ve LinkedIn onu yalnızca reddederken söyler (belgedeki hata örneği: "cannot be lower than 100.00"); kitle en az 300 kişi (B86) | Kampanya en az 500 TL; reklam grubu en az 200 TL × gün | Belgede yok |
+| Reklamın sahibi görünen kimlik | Yok (reklam hesabı) | Reklam hesabının kendi şirket Sayfası (B85) | Müşterinin gerçek TikTok hesabı, reklam hesabına bağlı olmalı | X hesabı |
 | Eylem düğmesi | Yok | Var | Var | Yok (görselli web sitesi kartında) |
 | Tek reklamı duraklatma | Var | İncelemedeki reklam duraklatılamaz; kampanyadan durur | Var | Yok: tanıtılan gönderi silinir |
 | Önizleme | Yok | Yok | Yok | Yok |
@@ -57,14 +57,17 @@ harcamayacağını belgesinde söyleyip söylemediğidir.
 
 - **Kurulum zinciri.** Kampanya grubu (`totalBudget`, `runSchedule`) → kampanya
   (`SPONSORED_UPDATES`, `WEBSITE_VISIT`, `totalBudget`, `runSchedule`, `pacingStrategy: LIFETIME`,
-  hedefleme, `politicalIntent`) → görsel yükleme → karanlık gönderi (yazarı şirket Sayfası,
-  `adContext`, `contentLandingPage`, eylem düğmesi) → kreatif → etkinleştirme. Günlük bütçe
-  kullanılmaz: günlük bütçe aşım yapar.
+  hedefleme, `politicalIntent`, `PAUSED`) → görsel yükleme → karanlık gönderi (yazarı şirket
+  Sayfası, `adContext`, `contentLandingPage`, eylem düğmesi) ile kreatif tek çağrıda
+  (`creatives?action=createInline`, taslak olarak) → etkinleştirme: kreatifler, kampanya, kampanya
+  grubu. Günlük bütçe kullanılmaz: günlük bütçe aşım yapar.
 - **Durum ve sayılar.** Kreatifin `review.status` ve `rejectionReasons`; günlük sayılar `adAnalytics`
   (`pivot=CREATIVE`, `timeGranularity=DAILY`, `costInLocalCurrency`, `landingPageClicks`).
-- **Bağlantı.** Bugünkü LinkedIn uygulaması; ek kapsamlar `rw_ads`, `r_ads`, `r_ads_reporting`.
-  Farklı kapsamla yeni giriş eski belirteci geçersiz kılar: reklam açıkken giriş, Sayfa ve reklam
-  kapsamlarının birleşimini ister. Hesaplar `adAccountUsers?q=authenticatedUser` ile listelenir;
+- **Bağlantı.** Bugünkü LinkedIn uygulaması; ek kapsamlar `rw_ads`, `r_ads`, `r_ads_reporting` ve
+  reklamın kendi gönderisi için `w_organization_social`, `r_organization_social` (hepsi Advertising
+  API ürünüyle gelir). İşletmeci, ürün onaylanınca `JEETA_LINKEDIN_AD_SCOPES` ayarını açar; kapalıyken
+  `linkedin_ads` bağlantısı reddedilir. Farklı kapsamla yeni giriş eski belirteci geçersiz kılar:
+  ayar açıkken her LinkedIn girişi, açık olan bütün kapsamların birleşimini ister. Hesaplar `adAccountUsers?q=authenticatedUser` ile listelenir;
   kampanya için hesapta `CAMPAIGN_MANAGER` ya da üstü rol gerekir.
 - **Sürüm.** `Linkedin-Version: YYYYMM` başlığı; her sürüm en az bir yıl.
 
@@ -128,6 +131,9 @@ harcamayacağını belgesinde söyleyip söylemediğidir.
 | B82 | Google arama kampanyası yalnızca Google Arama'da gösterilir: Görüntülü Reklam Ağı ve arama ortakları kapalıdır (plan bir arama reklamıdır; planlanan ve denetlenen neyse o yayınlanır, B55 ile aynı gerekçe). Konum, ülkede *bulunanlar*dır (`PRESENCE`), ülkeyle yalnızca ilgilenenler değil. Teklif "tıklamaları en üst düzeye çıkar"dır |
 | B83 | Google'ın erişim belirteci yaklaşık bir saat yaşar; saatlik yenileme işi arada boşluk bırakır. Bu yüzden saklanan kimlik bitiş zamanı taşımaz (bağlantı yenileme belirteci kadar yaşar; bitiş saklansaydı bağlantı her saat bir süre "süresi dolmuş" okunurdu) ve bağlayıcı her çağrı için yenileme belirteciyle bir erişim belirteci alıp bitimine yakın olana dek bellekte tutar. Yenileme belirteci getirmeyen bir giriş reddedilir. Yönetici (MCC) hesabı üzerinden erişilen hesaplar sunulmaz (`login-customer-id` gönderilmez) |
 | B84 | Google API erişimi Google Cloud projesine verilir (geliştirici belirteci artık gönderilmez). Projenin erişim düzeyi yetmediğinde gelen hata (`CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` ve benzerleri) kiracının değil platformundur: "yeniden bağlan" denmez, platformun projesinin bu hesabı çağıramadığı söylenir |
+| B85 | LinkedIn'de reklam, reklam hesabının adına reklam verdiği şirket Sayfası adına konuşur (hesabın LinkedIn'deki `reference` alanı). Plan Sayfa taşımaz ve ayrıca bir `linkedin_page` bağlantısı gerekmez: görselin sahibi, gönderinin yazarı ve kampanyanın bağlı kurumu her adımda LinkedIn'den okunan o tek kurumdur. Böylece reklam, Sayfa bağlantısının istediği Community Management API onayına bağlı kalmaz. Bir kişi adına reklam veren hesap seçime sunulmaz. (B63'ün LinkedIn satırındaki "şirket Sayfası" alanının yerine geçer.) |
+| B86 | LinkedIn en düşük ömür boyu bütçeyi sürenin uzunluğuna göre belirler ve yalnızca reddederken söyler ("will be displayed if the set budget is too low"); `adBudgetPricing` hedeflemeye göre günlük alt sınır ve teklif verir, toplam alt sınır vermez. Bu yüzden LinkedIn'de alt sınır plan bulgusu olamaz: bütçe küçükse kurulum kampanya adımında LinkedIn'in kendi cümlesiyle durur, hiçbir şey harcanmaz ve kampanya bir insanı bekler. (B66'nın LinkedIn bölümünün yerine geçer; ilk gerçek denemede öğrenilen alt sınırlar buraya yazılır.) |
+| B87 | LinkedIn'de ilk sürümün kitlesi yalnızca ülkelerdir; yaş ve cinsiyet gönderilmez. LinkedIn, hedeflemesinin cinsiyet ve yaş gibi kişisel özelliklere göre ayrımcılık için kullanılmasını yasaklar ve hedefleme yapan uygulamaların bunu arayüzünde bildirmesini ister: panel bildirimi LinkedIn hesabı seçilirken ve LinkedIn kampanyasının sayfasında gösterir, ajan aracı da söyler. LinkedIn ülkeyi kendi konum varlığı olarak, koda göre değil ada göre verir: ad LinkedIn'in ülke kodu tablosundan alınır ve arama yanıtında tam o adı taşıyan tek bir varlık yoksa kampanya kurulmaz. Kampanyanın dili ilk ülkenin LinkedIn'de listelenen dilidir (yoksa İngilizce) ve LinkedIn'in kendi örneğinde olduğu gibi kitleye de yazılır (`interfaceLocales`): LinkedIn'i başka dilde kullanan üyeler reklamı görmez (Campaign Manager'daki "profil dili" ile aynı davranış). Görsel JPG, PNG ya da GIF olmalıdır; başka türde görsel plan bulgusudur (`image_type_not_taken`). (B64'ün LinkedIn için daraltılmış hâli.) |
 
 ## 5. Ortak çekirdekte değişenler
 

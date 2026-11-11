@@ -1,7 +1,7 @@
 //! The LinkedIn credential, the capability's kind and account as the use cases hand them in
 //! `public`, and the URNs built from them.
 
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{ConnectorError, Credential};
 use serde_json::Value;
 
 use crate::client::text;
@@ -37,10 +37,10 @@ pub(crate) enum Kind {
 /// else `Permanent` ([`KIND_MISSING`]).
 pub(crate) fn kind_of(public: &Value) -> Result<Kind, ConnectorError> {
     match public["kind_key"].as_str() {
-        Some(kind) if Provider::Linkedin.kinds().contains(&kind) => Ok(match kind {
-            "linkedin_page" => Kind::Page,
-            _ => Kind::Member,
-        }),
+        Some("linkedin_page") => Ok(Kind::Page),
+        Some("linkedin_member") => Ok(Kind::Member),
+        // An ad account (`linkedin_ads`) posts nothing and has no counters of a feed: it has its
+        // own operations (`crate::ads`).
         _ => Err(ConnectorError::permanent(KIND_MISSING)),
     }
 }

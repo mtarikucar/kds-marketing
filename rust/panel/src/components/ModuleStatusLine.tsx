@@ -13,7 +13,7 @@ import { can } from '@/lib/roles';
 import { formatDateTime } from '@/lib/format';
 
 /** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`). */
-const AD_WRITE_SCOPES: Record<string, string> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords' };
+const AD_WRITE_SCOPES: Record<string, string> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads' };
 export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
   const { t, i18n } = useTranslation();
   const session = useSession();

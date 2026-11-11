@@ -15,7 +15,7 @@ import { Button } from '@/components/ui';
 import { formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { MaterialPreview } from '../materials/MaterialsShared';
 import { inputClass } from '../StudioShared';
-import { CampaignNumbers, isClosed, useAdsKey } from './CampaignShared';
+import { CampaignNumbers, isClosed, LinkedinTargetingNotice, useAdsKey } from './CampaignShared';
 import { CampaignControls } from './CampaignControls';
 
 function AdsPreview({ data }: { data: CampaignDetail }) {
@@ -314,6 +314,7 @@ export function CampaignPage({ id, manage }: { id: string; manage: boolean }) {
                     <h2 className="font-medium">{t('adCampaigns.audience')}</h2>
                     <p className="break-words">{c.plan.audience_summary}</p>
                     <p className="break-words text-sm text-muted-foreground">{c.plan.summary}</p>
+                    {c.built?.platform === 'linkedin' && <LinkedinTargetingNotice />}
                     <h3 className="pt-2 text-sm font-medium">{t('adCampaigns.destination')}</h3>
                     <p className="break-all text-sm">
                       {c.plan.destination.kind === 'website'

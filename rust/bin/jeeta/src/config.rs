@@ -105,6 +105,10 @@ pub const LINKEDIN_CLIENT_SECRET: &str = "JEETA_LINKEDIN_CLIENT_SECRET";
 /// LinkedIn approved the Community Management API for the app, which enables `linkedin_page`
 /// connections. Requires the LinkedIn app.
 pub const LINKEDIN_ORG_SCOPES: &str = "JEETA_LINKEDIN_ORG_SCOPES";
+/// Whether LinkedIn flows ask for the ad scopes (`1`/`true`; default off): set once LinkedIn
+/// approved the Advertising API for the app, which enables `linkedin_ads` connections. Requires
+/// the LinkedIn app.
+pub const LINKEDIN_AD_SCOPES: &str = "JEETA_LINKEDIN_AD_SCOPES";
 /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (default
 /// [`jt_linkedin::DEFAULT_API_VERSION`]). Requires the LinkedIn app.
 pub const LINKEDIN_API_VERSION: &str = "JEETA_LINKEDIN_API_VERSION";
@@ -165,6 +169,7 @@ const VARS: &[&str] = &[
     LINKEDIN_CLIENT_ID,
     LINKEDIN_CLIENT_SECRET,
     LINKEDIN_ORG_SCOPES,
+    LINKEDIN_AD_SCOPES,
     LINKEDIN_API_VERSION,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
@@ -718,12 +723,17 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
                 client_id,
                 client_secret,
                 organization_scopes: parse_flag(LINKEDIN_ORG_SCOPES, get(LINKEDIN_ORG_SCOPES))?,
+                ad_scopes: parse_flag(LINKEDIN_AD_SCOPES, get(LINKEDIN_AD_SCOPES))?,
                 api_version: Some(api_version),
             })
         }
         None => {
             // The LinkedIn app's settings mean nothing without it: half a configuration.
-            for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+            for setting in [
+                LINKEDIN_ORG_SCOPES,
+                LINKEDIN_AD_SCOPES,
+                LINKEDIN_API_VERSION,
+            ] {
                 if get(setting).is_some() {
                     return Err(ConfigError::new(
                         LINKEDIN_CLIENT_ID,
@@ -1290,7 +1300,7 @@ mod tests {
             ("li-id-1", "LI-SECRET-SENTINEL")
         );
         assert!(
-            !linkedin.organization_scopes,
+            !linkedin.organization_scopes && !linkedin.ad_scopes,
             "off until the operator enables them"
         );
         assert_eq!(
@@ -1385,27 +1395,35 @@ mod tests {
             assert!(err.to_string().contains(setting), "{err}");
             assert!(!err.to_string().contains("HALF-SENTINEL"), "{err}");
         }
-        // The LinkedIn app's settings: the organization scopes (a flag) and the API version.
+        // The LinkedIn app's settings: the organization scopes and the ad scopes (flags) and
+        // the API version.
         let mut tuned = with(ALL_APPS);
         tuned.insert(LINKEDIN_ORG_SCOPES.to_owned(), "1".to_owned());
+        tuned.insert(LINKEDIN_AD_SCOPES.to_owned(), "true".to_owned());
         tuned.insert(LINKEDIN_API_VERSION.to_owned(), " 202609 ".to_owned());
         let linkedin = Config::from_map(&tuned)
             .unwrap()
             .apps
             .linkedin_app()
             .unwrap();
-        assert!(linkedin.organization_scopes);
+        assert!(linkedin.organization_scopes && linkedin.ad_scopes);
         assert_eq!(linkedin.api_version.as_deref(), Some("202609"));
         for bad in ["2026-10", "20261", "202613", "202600", "latest"] {
             let mut vars = with(ALL_APPS);
             vars.insert(LINKEDIN_API_VERSION.to_owned(), bad.to_owned());
             assert_eq!(error(&vars).var, LINKEDIN_API_VERSION, "{bad}");
         }
-        let mut vars = with(ALL_APPS);
-        vars.insert(LINKEDIN_ORG_SCOPES.to_owned(), "yes".to_owned());
-        assert_eq!(error(&vars).var, LINKEDIN_ORG_SCOPES);
+        for flag in [LINKEDIN_ORG_SCOPES, LINKEDIN_AD_SCOPES] {
+            let mut vars = with(ALL_APPS);
+            vars.insert(flag.to_owned(), "yes".to_owned());
+            assert_eq!(error(&vars).var, flag);
+        }
         // A LinkedIn setting without the LinkedIn app is half a configuration too.
-        for setting in [LINKEDIN_ORG_SCOPES, LINKEDIN_API_VERSION] {
+        for setting in [
+            LINKEDIN_ORG_SCOPES,
+            LINKEDIN_AD_SCOPES,
+            LINKEDIN_API_VERSION,
+        ] {
             let err = error(&with(&[(setting, "1"), base]));
             assert_eq!(err.var, LINKEDIN_CLIENT_ID, "{setting}");
             assert!(err.to_string().contains(setting), "{err}");
@@ -1430,6 +1448,7 @@ mod tests {
             (LINKEDIN_CLIENT_ID, ""),
             (LINKEDIN_CLIENT_SECRET, ""),
             (LINKEDIN_ORG_SCOPES, ""),
+            (LINKEDIN_AD_SCOPES, ""),
             (LINKEDIN_API_VERSION, ""),
             (GOOGLE_CLIENT_ID, ""),
             (GOOGLE_CLIENT_SECRET, ""),
@@ -1631,6 +1650,7 @@ mod tests {
             LINKEDIN_CLIENT_ID,
             LINKEDIN_CLIENT_SECRET,
             LINKEDIN_ORG_SCOPES,
+            LINKEDIN_AD_SCOPES,
             LINKEDIN_API_VERSION,
             GOOGLE_CLIENT_ID,
             GOOGLE_CLIENT_SECRET,

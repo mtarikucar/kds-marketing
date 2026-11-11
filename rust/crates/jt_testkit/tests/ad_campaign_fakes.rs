@@ -287,7 +287,10 @@ fn campaign_registry_is_for_the_ad_platforms_and_absent_without_an_adapter() {
     for provider in Provider::all() {
         assert_eq!(
             registry.ad_campaigns(*provider).is_some(),
-            matches!(provider, Provider::Meta | Provider::Google),
+            matches!(
+                provider,
+                Provider::Meta | Provider::Google | Provider::Linkedin
+            ),
             "{}",
             provider.key()
         );

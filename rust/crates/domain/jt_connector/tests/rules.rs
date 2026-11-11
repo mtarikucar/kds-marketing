@@ -54,6 +54,7 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("tiktok", Provider::Tiktok),
     ("linkedin_member", Provider::Linkedin),
     ("linkedin_page", Provider::Linkedin),
+    ("linkedin_ads", Provider::Linkedin),
     ("trendyol", Provider::Trendyol),
     ("hepsiburada", Provider::Hepsiburada),
     ("google_ads", Provider::Google),
@@ -165,7 +166,6 @@ fn unsupported_connector_kinds_are_listed_explicitly() {
         "reddit",
         "review_google",
         "tiktok_ads",
-        "linkedin_ads",
         "google_calendar",
         "outlook_calendar",
     ]

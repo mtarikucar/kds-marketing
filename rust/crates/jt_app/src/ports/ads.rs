@@ -42,12 +42,17 @@ pub enum AdsPlatform {
     #[default]
     Meta,
     Google,
+    Linkedin,
 }
 
 impl AdsPlatform {
     /// Every platform a campaign can be built on, in a fixed order.
     pub fn all() -> &'static [AdsPlatform] {
-        &[AdsPlatform::Meta, AdsPlatform::Google]
+        &[
+            AdsPlatform::Meta,
+            AdsPlatform::Google,
+            AdsPlatform::Linkedin,
+        ]
     }
 
     /// The capability kind of its ad accounts.
@@ -55,6 +60,7 @@ impl AdsPlatform {
         match self {
             AdsPlatform::Meta => "meta_ads",
             AdsPlatform::Google => "google_ads",
+            AdsPlatform::Linkedin => "linkedin_ads",
         }
     }
 

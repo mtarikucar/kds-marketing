@@ -75,6 +75,7 @@ export const campaign = {
 export const platforms = [
   { platform: 'meta', account_kind: 'meta_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: true },
   { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 89, hard_budget_cap: true, preview: false },
+  { platform: 'linkedin', account_kind: 'linkedin_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: false },
 ] satisfies PlatformRules[];
 export const generalBudget = {
   ...budgetItems[0],

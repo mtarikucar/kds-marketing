@@ -8,7 +8,7 @@ use time::{Duration, OffsetDateTime};
 use url::Url;
 
 use crate::client::{Answer, Auth, Body, Endpoint, Grant, join, missing};
-use crate::{LinkedinConnector, MEMBER_SCOPES, ORGANIZATION_SCOPES};
+use crate::{AD_SCOPES, LinkedinConnector, MEMBER_SCOPES, ORGANIZATION_SCOPES};
 
 /// `pairs` as a query string, each value percent-encoded, a space as `%20` (not `+`: the
 /// serializer encodes a literal `+` as `%2B`, so every `+` it leaves is a space). LinkedIn's
@@ -34,12 +34,20 @@ fn linkedin_app_of(app: &OAuthApp) -> Result<&LinkedinApp, ConnectorError> {
     }
 }
 
-/// The scopes a flow with `app` asks for: [`MEMBER_SCOPES`], and [`ORGANIZATION_SCOPES`] when
-/// the flow's app sets `organization_scopes`.
+/// The scopes a flow with `app` asks for: [`MEMBER_SCOPES`], [`ORGANIZATION_SCOPES`] when the
+/// flow's app sets `organization_scopes` and [`AD_SCOPES`] when it sets `ad_scopes`, each once.
 pub(crate) fn scopes_for(app: &LinkedinApp) -> Vec<String> {
     let mut scopes: Vec<String> = MEMBER_SCOPES.iter().map(|s| (*s).to_owned()).collect();
-    if app.organization_scopes {
-        scopes.extend(ORGANIZATION_SCOPES.iter().map(|s| (*s).to_owned()));
+    let more = [
+        (app.organization_scopes, ORGANIZATION_SCOPES),
+        (app.ad_scopes, AD_SCOPES),
+    ];
+    for (asked, list) in more {
+        for scope in list.iter().filter(|_| asked) {
+            if !scopes.iter().any(|held| held == scope) {
+                scopes.push((*scope).to_owned());
+            }
+        }
     }
     scopes
 }
@@ -311,6 +319,7 @@ mod tests {
             client_id: "id".into(),
             client_secret: "s".into(),
             organization_scopes: false,
+            ad_scopes: false,
             api_version: None,
         };
         assert_eq!(scopes_for(&app), MEMBER_SCOPES);
@@ -318,6 +327,34 @@ mod tests {
         assert_eq!(
             scopes_for(&app),
             [MEMBER_SCOPES, ORGANIZATION_SCOPES].concat()
+        );
+    }
+
+    #[test]
+    fn flows_ask_for_the_ad_scopes_when_their_app_says_each_scope_once() {
+        let mut app = LinkedinApp {
+            client_id: "id".into(),
+            client_secret: "s".into(),
+            organization_scopes: false,
+            ad_scopes: true,
+            api_version: None,
+        };
+        assert_eq!(scopes_for(&app), [MEMBER_SCOPES, AD_SCOPES].concat());
+        // With both products, the two scopes they share are asked for once.
+        app.organization_scopes = true;
+        assert_eq!(
+            scopes_for(&app),
+            [
+                "openid",
+                "profile",
+                "w_member_social",
+                "r_organization_social",
+                "w_organization_social",
+                "rw_organization_admin",
+                "rw_ads",
+                "r_ads",
+                "r_ads_reporting",
+            ]
         );
     }
 }

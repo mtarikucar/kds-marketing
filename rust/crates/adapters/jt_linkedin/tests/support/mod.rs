@@ -134,6 +134,7 @@ pub fn linkedin_app(organization_scopes: bool) -> LinkedinApp {
         client_id: CLIENT_ID.into(),
         client_secret: CLIENT_SECRET.into(),
         organization_scopes,
+        ad_scopes: false,
         api_version: None,
     }
 }

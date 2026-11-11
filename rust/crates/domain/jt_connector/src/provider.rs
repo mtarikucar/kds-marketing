@@ -61,8 +61,9 @@ const X_KINDS: &[&str] = &["x"];
 /// The capability kinds TikTok serves.
 const TIKTOK_KINDS: &[&str] = &["tiktok"];
 
-/// The capability kinds LinkedIn serves: a member's own feed, and an organization page.
-const LINKEDIN_KINDS: &[&str] = &["linkedin_member", "linkedin_page"];
+/// The capability kinds LinkedIn serves: a member's own feed, an organization page, and an ad
+/// account.
+const LINKEDIN_KINDS: &[&str] = &["linkedin_member", "linkedin_page", "linkedin_ads"];
 
 /// The connector kinds of the closed list ([`jt_capability::KINDS`] whose reach is
 /// [`jt_capability::Reach::Connector`]) that no provider serves yet. Every connector kind is
@@ -77,7 +78,6 @@ pub const UNSUPPORTED_CONNECTOR_KINDS: &[&str] = &[
     "reddit",
     "review_google",
     "tiktok_ads",
-    "linkedin_ads",
     "google_calendar",
     "outlook_calendar",
 ];

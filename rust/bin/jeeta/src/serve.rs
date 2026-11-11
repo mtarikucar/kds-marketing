@@ -947,11 +947,16 @@ mod tests {
                 .oauth(jt_connector::Provider::Google)
                 .is_some()
         );
-        assert!(
-            deps.connectors
-                .ad_campaigns(jt_connector::Provider::Google)
-                .is_some()
-        );
+        for provider in [
+            jt_connector::Provider::Google,
+            jt_connector::Provider::Linkedin,
+        ] {
+            assert!(
+                deps.connectors.ad_campaigns(provider).is_some(),
+                "{}",
+                provider.key()
+            );
+        }
         assert!(
             deps.connectors
                 .sms(jt_connector::Provider::Netgsm)

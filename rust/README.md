@@ -207,6 +207,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LINKEDIN_CLIENT_ID` | — | Platformun LinkedIn uygulamasının (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn) istemci kimliği; sırla birlikte verilir |
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
+| `JEETA_LINKEDIN_AD_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları reklam kapsamlarını da ister (`rw_ads`, `r_ads`, `r_ads_reporting`, `w_organization_social`, `r_organization_social`) ve `linkedin_ads` (LinkedIn reklam hesabı) bağlanabilir. Yalnız LinkedIn uygulamaya Advertising API'yi onayladıktan sonra açılır; kapalıyken `linkedin_ads` akışı `409` `details.reason = "provider_product_not_enabled"`. Açıldığında her LinkedIn akışı bu kapsamları ister: daha önce farklı kapsamla bağlanmış LinkedIn bağlantıları, aynı üye yeniden giriş yaptığında geçersiz kalır ve yeniden bağlanmalıdır. LinkedIn uygulaması olmadan verilemez |
 | `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
 | `JEETA_GOOGLE_CLIENT_ID` | — | Platformun Google uygulamasının OAuth istemci kimliği: Google Ads API'si açık olan Google Cloud projesinin "Web application" istemcisi. Google Ads API erişimi projeye verilir (geliştirici belirteci gönderilmez); üretim hesaplarını çağırmak için projenin erişim düzeyi en az "Explorer" olmalıdır. Sırla birlikte verilir |
 | `JEETA_GOOGLE_CLIENT_SECRET` | — | Google uygulamasının istemci sırrı; kimlikle birlikte verilir |
@@ -908,7 +909,7 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | Instagram (Instagram Login) | `JEETA_INSTAGRAM_APP_ID`, `JEETA_INSTAGRAM_APP_SECRET` | Meta uygulamasının Instagram ürünü → API setup with Instagram login: Instagram uygulama kimliği ve sırrı; "Business login settings" → OAuth redirect URIs | `{genel adres}/oauth/callback/instagram` |
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
 | TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
-| LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
+| LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_AD_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; reklam hesapları için **Advertising API** onayı → `JEETA_LINKEDIN_AD_SCOPES=1` (Development kademesinde en çok beş reklam hesabı, hesaplar geliştirici portalında uygulamaya eşlenir); Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
 | Google (Google Ads) | `JEETA_GOOGLE_CLIENT_ID`, `JEETA_GOOGLE_CLIENT_SECRET` | console.cloud.google.com → proje → APIs & Services: **Google Ads API**'yi etkinleştir; OAuth consent screen (kapsam `https://www.googleapis.com/auth/adwords`; "Testing" durumunda yenileme belirteçleri 7 günde bir düşer, yayına alınıp doğrulanmalıdır); Credentials → OAuth client ID, tür "Web application" → Authorized redirect URIs. Projenin Google Ads API erişim düzeyi (Test → Explorer → Basic → Standard) Google Ads API Center'dan yükseltilir | `{genel adres}/oauth/callback/google` |
 
 (Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
@@ -1387,28 +1388,28 @@ harcamaları okunmaya devam eder; çalışma alanı yeniden etkinleşince kendil
 `ads_campaign_review {campaign_id}` (canlı kampanya, günde bir) ajana; `ads_campaign_proposal` ve
 `ads_campaign_held` reklamı yöneten insana.
 
-**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B77).** Bir kampanya tek bir
+**Platformlar (tasarım `2026-11-11-reklam-platformlari-design.md`, B61–B87).** Bir kampanya tek bir
 reklam hesabında, yani tek bir platformda çalışır (B61); platform hesabın türünden gelir
 (`AdsPlatform::of_kind`) ve kurulan kampanyada `built.platform` olarak durur. Açma, planlama, kurma,
 izleme, durdurma ve para her platformda aynıdır; değişen, planın neyi taşıdığıdır. O kurallar tek bir
 tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `platforms` olarak gelir:
 
-| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) |
-|---|---|---|
-| `page` | canlı bir `facebook_page` | alınmaz |
-| `instagram` | isteğe bağlı | alınmaz |
-| `material_ids` | tam bir görsel | alınmaz |
-| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz |
-| `call_to_action` | listedeki dokuz değer | alınmaz |
-| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez |
-| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük |
-| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler |
-| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) |
-| sonuç | `link_click`, `lead_form` | `link_click` |
-| süre | 24 saat – 90 gün | 72 saat – 89 gün |
-| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur |
-| toplam bütçe kesin sınır mı | evet | evet |
-| önizleme | var | yok |
+| | Meta (`meta_ads`) | Google (`google_ads`): arama reklamı (B68) | LinkedIn (`linkedin_ads`): tek görselli sponsorlu içerik |
+|---|---|---|---|
+| `page` | canlı bir `facebook_page` | alınmaz | alınmaz: reklam, reklam hesabının kendi şirket Sayfası adına konuşur (B85) |
+| `instagram` | isteğe bağlı | alınmaz | alınmaz |
+| `material_ids` | tam bir görsel | alınmaz | tam bir görsel; JPG, PNG ya da GIF (başkası `image_type_not_taken` bulgusudur) |
+| `primary_text`, `headline`, `description` | en çok 1000, 100, 100 karakter (`description` isteğe bağlı) | alınmaz | en çok 3000 ve 200 karakter; `description` alınmaz |
+| `call_to_action` | listedeki dokuz değer | alınmaz | yedi değer: `LEARN_MORE`, `SIGN_UP`, `SHOP_NOW`, `GET_QUOTE`, `SUBSCRIBE`, `APPLY_NOW`, `DOWNLOAD` |
+| `headlines`, `descriptions` | alınmaz | 3–15 başlık (en çok 30 karakter), 2–4 açıklama (en çok 90 karakter); hiçbiri iki kez | alınmaz |
+| planın `keywords` alanı | alınmaz | 1–20 anahtar sözcük, her biri en çok 80 karakter ve 10 sözcük | alınmaz |
+| kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler | yalnızca ülkeler (B87) |
+| `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) | `automatic` (verilmezse o) |
+| sonuç | `link_click`, `lead_form` | `link_click` | `link_click` |
+| süre | 24 saat – 90 gün | 72 saat – 89 gün | 24 saat – 90 gün |
+| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur | evet |
+| toplam bütçe kesin sınır mı | evet | evet | evet |
+| önizleme | var | yok | yok |
 
 - Platformun almadığı bir alan verilirse plan o alanın adıyla reddedilir (`VALIDATION`,
   `field_not_for_this_platform`); gereken bir alan yoksa `required_on_this_platform`. Alan sessizce
@@ -1423,13 +1424,48 @@ tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `
   (`materials::check_texts`): hiçbir şeye bağlı olmayan bir metin, yalnızca doğrulanmış bir olayın
   kendi materyalinin söyleyebileceğini söyleyemez.
 - Kurulum adımları her platformda aynıdır (B70): kampanya → kampanyanın altındaki düzey (Meta'da
-  reklam seti, Google'da reklam grubu; anahtar sözcükler ve bütçe ona da verilir) → her reklam. Görseli
+  reklam seti, Google'da reklam grubu, LinkedIn'de kampanya; anahtar sözcükler ve bütçe ona da
+  verilir) → her reklam. Görseli
   olmayan reklamda görsel adımı yoktur; kendi kreatif nesnesi olmayan platformda kreatif adımı çağrı
   yapmaz ve reklam adımı kreatifin kendisini taşır (`AdSpec.creative`).
 - Tutulan (`pause_ad`) ya da yerine yenisi konan bir reklamı sağlayıcı hâlâ çalışıyor diye
   bildirirse izleme onu her okumada yeniden duraklatır (B77): duraklatma isteği sağlayıcıya ulaşmamış
   ya da sağlayıcı o an kabul etmemiş olabilir.
 - Reklam yönetimi modülü, türü ne olursa olsun bağlı bir reklam hesabı ister (B62).
+
+**LinkedIn reklam bağlayıcısı (`jt_linkedin`, B85–B87).** `linkedin_ads` hesabı LinkedIn girişiyle
+bağlanır; bunun için platformun LinkedIn uygulamasında Advertising API onaylı ve
+`JEETA_LINKEDIN_AD_SCOPES` açık olmalıdır. Giriş yapan üyenin kampanya yöneticisi ya da üstü rolde
+olduğu, etkin ve bir şirket Sayfası adına reklam veren her reklam hesabı para birimiyle seçime
+sunulur. Hiçbir çağrı LinkedIn'e karşı çalıştırılmadı; ilk gerçek kampanya sahibin kendi hesabında,
+küçük bütçeyle ve o anki onayıyladır (B38). Çağrıların tamamı ve ilk gerçek çalıştırmanın
+göstereceği noktalar `jt_linkedin`'in crate belgesindedir; özeti:
+
+- **Üç düzey.** Jeeta'nın "kampanya"sı LinkedIn'de kampanya grubudur (toplam bütçe ve süre),
+  altındaki düzey LinkedIn kampanyasıdır (ülkeler, süre, bütçe bir kez daha ömür boyu bütçe olarak:
+  `pacingStrategy: LIFETIME`), reklam ise gönderisiyle birlikte tek çağrıda oluşturulan kreatiftir.
+  Günlük bütçe hiç kullanılmaz.
+- **Önce duraklatılmış.** Kampanya `PAUSED`, kreatifler taslak (`DRAFT`) olarak oluşturulur; kurulum
+  bitince kreatifler, kampanya ve kampanya grubu bu sırayla etkinleştirilir. LinkedIn'in incelemesi
+  kreatif taslaktan çıkınca başlar.
+- **Sayfa.** Reklamın görselinin sahibi, gönderinin yazarı ve kampanyanın bağlı kurumu, reklam
+  hesabının adına reklam verdiği şirket Sayfasıdır; plan Sayfa taşımaz, ayrıca bir `linkedin_page`
+  bağlantısı gerekmez (B85). Bir kişi adına reklam veren hesap sunulmaz.
+- **Kitle** yalnızca ülkelerdir (B87). LinkedIn ülkeyi kendi konum varlığı olarak ister ve onu koda
+  göre değil ada göre verir: ad LinkedIn'in ülke kodu tablosundan alınır, arama yanıtında tam o adı
+  taşıyan tek bir varlık yoksa kampanya kurulmaz (yer tahmin edilmez). Kampanyanın dili ilk ülkenin
+  LinkedIn'de listelenen dilidir (yoksa İngilizce) ve kitleye de yazılır (`interfaceLocales`):
+  LinkedIn'i başka dilde kullanan üyeler reklamı görmez.
+- **En düşük bütçe.** LinkedIn en düşük ömür boyu bütçeyi süreye göre belirler ve yalnızca reddederken
+  söyler. Bu yüzden LinkedIn'de `below_the_accounts_minimum` bulgusu yoktur: bütçe küçükse kurulum
+  kampanya adımında LinkedIn'in kendi cümlesiyle durur, hiçbir şey harcanmaz, kampanya bir insanı
+  bekler (B86).
+- **İncelemedeki reklam.** LinkedIn incelemedeki bir kreatifin duraklatılmasını reddeder; tutma yine
+  kaydedilir ve izleme, reklam çalışmaya başladığında onu duraklatır (B77).
+- **Bildirim.** LinkedIn, hedefleme yapan uygulamaların arayüzünde "LinkedIn araçları kişisel
+  özelliklere göre ayrımcılık yapmak için kullanılamaz" bildirimini göstermesini ister: panel bunu
+  kampanya açılırken LinkedIn hesabı seçildiğinde ve LinkedIn kampanyasının sayfasında gösterir; ajan
+  aracının açıklaması da söyler.
 
 **Google bağlayıcısı (`jt_google`, B68, B76).** `google_ads` hesabı Google girişiyle bağlanır
 (`JEETA_GOOGLE_CLIENT_ID` / `JEETA_GOOGLE_CLIENT_SECRET`; çevrimdışı erişim, kapsam `adwords`): girişin

@@ -83,6 +83,7 @@ struct Rig {
     netgsm: Arc<ScriptedConnector>,
     x_oauth: Arc<ScriptedOAuth>,
     tiktok_oauth: Arc<ScriptedOAuth>,
+    linkedin: Arc<ScriptedConnector>,
     linkedin_oauth: Arc<ScriptedOAuth>,
     google: Arc<ScriptedConnector>,
     google_oauth: Arc<ScriptedOAuth>,
@@ -110,7 +111,7 @@ async fn rig() -> Rig {
         .with_connector(netgsm.clone())
         .with_connector(x)
         .with_connector(tiktok)
-        .with_connector(linkedin)
+        .with_connector(linkedin.clone())
         .with_connector(google.clone())
         .with_oauth(google_oauth.clone())
         .with_oauth(meta_oauth.clone())
@@ -126,6 +127,7 @@ async fn rig() -> Rig {
         netgsm,
         x_oauth,
         tiktok_oauth,
+        linkedin,
         linkedin_oauth,
         google,
         google_oauth,
@@ -740,6 +742,102 @@ async fn linkedin_page_refused_without_org_scopes() {
             "{kind}"
         );
     }
+}
+
+/// A LinkedIn ad account needs the ad scopes, which LinkedIn grants only once it approved the
+/// Advertising API for the platform's app: until the operator enables them a `linkedin_ads` flow
+/// is `CONFLICT` "provider product not enabled" and nothing is asked of LinkedIn. Once enabled,
+/// every LinkedIn flow asks for them, and the ad account the sign-in offers is connected with a
+/// credential that may write to it.
+#[tokio::test]
+async fn a_linkedin_ad_account_connects_once_the_ad_scopes_are_enabled() {
+    let r = rig().await;
+    let o = &r.w.owner_ctx;
+    let e = err(connector::start_oauth(&r.w.deps, o, start("linkedin_ads")).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({ "reason": "provider_product_not_enabled", "provider": "linkedin" })
+    );
+    assert!(r.pending_rows().is_empty());
+    assert!(r.linkedin_oauth.calls().is_empty());
+    // The member's own feed connects meanwhile, without the ad scopes.
+    let member = r.start("linkedin_member").await;
+    assert_eq!(query(&member, "ad_scopes"), None);
+
+    let mut enabled = FakeAppConfig::with_all_apps();
+    enabled.linkedin.as_mut().unwrap().ad_scopes = true;
+    let mut deps = r.w.deps.clone();
+    deps.apps = Arc::new(enabled);
+    // A page still needs the organization scopes, which are another product's.
+    let e = err(connector::start_oauth(&deps, o, start("linkedin_page")).await);
+    assert_eq!(e.details["reason"], "provider_product_not_enabled");
+    let member = connector::start_oauth(&deps, o, start("linkedin_member"))
+        .await
+        .unwrap();
+    assert_eq!(query(&member, "ad_scopes").as_deref(), Some("true"));
+    let out = connector::start_oauth(&deps, o, start("linkedin_ads"))
+        .await
+        .unwrap();
+    assert_eq!(query(&out, "ad_scopes").as_deref(), Some("true"));
+    assert_eq!(query(&out, "organization_scopes"), None);
+    assert_eq!(
+        redirect_of(&out),
+        "https://panel.test/oauth/callback/linkedin"
+    );
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.state_hash == hash_token(&state_of(&out)))
+        .expect("a pending flow");
+    assert_eq!(
+        (row.provider, row.app),
+        (Provider::Linkedin, OAuthCallback::Linkedin)
+    );
+    assert_eq!(row.kind_key, "linkedin_ads");
+
+    let scopes = ["openid", "profile", "w_member_social", "rw_ads", "r_ads"];
+    let credential = Credential::OAuth {
+        access_token: "li-test-access".into(),
+        refresh_token: None,
+        expires_at: Some(FIXED_NOW + time::Duration::days(60)),
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    r.linkedin_oauth.push_exchange(Ok(credential.clone()));
+    r.linkedin_oauth.push_assets(Ok(vec![
+        Asset {
+            kind_key: "linkedin_member".into(),
+            external_id: "a1B2c3D4e5".into(),
+            name: "Jeeta Test".into(),
+            credential: credential.clone(),
+            public: json!({}),
+        },
+        Asset {
+            kind_key: "linkedin_ads".into(),
+            external_id: "512000001".into(),
+            name: "Reklam hesabı".into(),
+            credential: credential.clone(),
+            public: json!({"currency":"USD","organization_id":"90000001","test_account":false}),
+        },
+    ]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&deps, &owner, &state_of(&out), "code-li")
+        .await
+        .unwrap();
+    r.linkedin.push_probe(ok_probe("512000001"));
+    let mut connected = r.confirm(&pending, &["512000001"]).await;
+    assert_eq!(connected.len(), 1);
+    let capability = connected.remove(0).capability;
+    assert_eq!(capability.kind_key, "linkedin_ads");
+    assert_eq!(capability.external_id.as_deref(), Some("512000001"));
+    assert_eq!(capability.status, StoredStatus::Verified);
+    assert_eq!(capability.connector_public["access"]["app"], "linkedin");
+    assert_eq!(
+        capability.connector_public["access"]["scopes"],
+        json!(scopes)
+    );
+    assert_eq!(r.sealed_credential(capability.id), credential);
 }
 
 /// Without a configured public base URL there is no redirect URI and no webhook address: starting

@@ -12,8 +12,8 @@ use jt_app::{
         UnitOfWork,
         ads::*,
         connectors::{
-            AdAccountLimits, AdDay, AdLevel, AdStatus, CampaignProviderState, ProviderAd,
-            ProviderAdStatus,
+            AdAccountLimits, AdDay, AdLevel, AdStatus, CallToAction, CampaignProviderState,
+            ProviderAd, ProviderAdStatus,
         },
         files::StoredFile,
     },
@@ -105,7 +105,12 @@ async fn connection(w: &World, kind: &str, external: &str, scopes: &[&str]) -> C
 }
 
 async fn image(w: &World) -> MaterialId {
-    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    image_of(w, b"\x89PNG\r\n\x1a\n", "image/png").await
+}
+
+/// A shareable image of the library that starts with `magic` and is of type `mime`.
+async fn image_of(w: &World, magic: &[u8], mime: &str) -> MaterialId {
+    let mut bytes = magic.to_vec();
     bytes.extend(Uuid::now_v7().as_bytes());
     let file: StoredFile =
         w.d.files
@@ -114,14 +119,15 @@ async fn image(w: &World) -> MaterialId {
                 FileId::new_v7(),
                 MediaUpload {
                     bytes,
-                    mime: "image/png".into(),
-                    filename: "ad.png".into(),
+                    mime: mime.into(),
+                    filename: "ad".into(),
                 },
             )
             .await
             .unwrap();
     let olay = jt_testkit::studio_contract::confirmed_olay(w.f.ws);
-    let m = jt_testkit::studio_contract::eligible_material(&olay, file.id);
+    let mut m = jt_testkit::studio_contract::eligible_material(&olay, file.id);
+    m.mime = mime.into();
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
     r.studio().save_file(file).await.unwrap();
     r.studio_materials().insert_olay(olay).await.unwrap();
@@ -1923,4 +1929,277 @@ async fn an_end_the_chosen_accounts_platform_does_not_take_is_refused_at_opening
     .await
     .unwrap_err();
     assert_eq!(e.details["reason"], "duration_not_supported", "{e:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// LinkedIn (design 2026-11-11 §3.2, B85 to B87)
+
+/// The ads world with a LinkedIn ad account beside the Meta one, and LinkedIn's scripted adapter.
+struct Sponsored {
+    t: Ads,
+    linkedin: Arc<ScriptedConnector>,
+    account: CapabilityId,
+}
+
+async fn sponsored_world() -> Sponsored {
+    let mut t = ads_world().await;
+    let linkedin = Arc::new(ScriptedConnector::new(Provider::Linkedin));
+    t.w.d.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(t.w.ads.clone())
+            .with_connector(linkedin.clone()),
+    );
+    let account = connection(&t.w, "linkedin_ads", "512000001", &["rw_ads", "r_ads"]).await;
+    Sponsored {
+        t,
+        linkedin,
+        account,
+    }
+}
+
+impl Sponsored {
+    fn ad(&self, name: &str) -> Value {
+        json!({"name":name,"material_ids":[self.t.image],
+            "primary_text":"Yeni sezon başlıyor","headline":"Kayıtlar açık",
+            "call_to_action":"SIGN_UP",
+            "hypothesis_id":self.t.w.f.slot.chain.hypothesis_id})
+    }
+
+    fn plan(&self, ads: Vec<Value>) -> Value {
+        json!({"ad_account":self.account,"result":"link_click",
+            "destination":{"kind":"website","url":"https://ornek.example/kayit"},
+            "audience":{"countries":["TR"]},
+            "end_at":at(FIXED_NOW + Duration::days(7)),
+            "ads":ads,"summary":"Kayıt sayfasına trafik",
+            "audience_summary":"Türkiye'deki LinkedIn üyeleri"})
+    }
+
+    fn limits(&self) {
+        self.linkedin.push_account_limits(Ok(AdAccountLimits {
+            currency: "TRY".into(),
+            minor_unit_exponent: 2,
+            timezone: "UTC".into(),
+            min_daily_budget_minor: 0,
+            min_total_budget_minor: 0,
+        }));
+    }
+}
+
+/// A LinkedIn campaign from its plan to its activation: the ad is an image, a text, a headline
+/// and a button under the company page of its ad account (the plan names no page), the audience
+/// is the countries alone, an image of a type LinkedIn does not take is a finding before the
+/// build, and the build uploads the image and activates the creative, the campaign and the
+/// campaign group, in that order.
+#[tokio::test]
+async fn a_linkedin_campaign_shows_an_image_as_its_accounts_page_and_is_built_and_activated() {
+    let s = sponsored_world().await;
+    let a = agent(&s.t.w);
+    let c = s.t.open("sponsored", 50_000).await.unwrap();
+    let claim = ads::campaign_claim(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap();
+    let submit = |key: &str, plan: Value| {
+        let d = &s.t.w.d;
+        let a = &a;
+        let body = json!({"campaign_id":c.id,"claim_token":claim.claim_token,
+            "request_key":key,"plan":plan});
+        async move { ads::plan_submit(d, a, input(body)).await }
+    };
+    let not_taken = "field_not_for_this_platform";
+
+    // What an ad of another platform carries is refused naming the field.
+    for (field, value, reason) in [
+        ("page", json!(s.t.page), not_taken),
+        ("instagram", json!(s.t.page), not_taken),
+        ("description", json!("Kısa açıklama"), not_taken),
+        ("headlines", json!(["Bir", "İki", "Üç"]), not_taken),
+        (
+            "descriptions",
+            json!(["Bir açıklama", "İki açıklama"]),
+            not_taken,
+        ),
+        // LinkedIn has no button for it.
+        (
+            "call_to_action",
+            json!("BOOK_NOW"),
+            "a_listed_call_to_action",
+        ),
+        ("material_ids", json!([]), "one_image"),
+    ] {
+        let mut plan = s.plan(vec![s.ad("a")]);
+        plan["ads"][0][field] = value;
+        let e = submit(&format!("li-{field}"), plan).await.unwrap_err();
+        assert_eq!(
+            refused_field(&e),
+            (format!("ads[0].{field}"), reason.to_owned()),
+            "{field}"
+        );
+    }
+    // The audience is the countries: no age range, no gender, nothing left to the platform.
+    for (field, value, named) in [
+        ("age_min", json!(25), "audience.age_min"),
+        ("genders", json!([2]), "audience.genders"),
+        ("regions", json!(["3886"]), "audience.regions"),
+    ] {
+        let mut plan = s.plan(vec![s.ad("a")]);
+        plan["audience"][field] = value;
+        let e = submit(&format!("li-audience-{field}"), plan)
+            .await
+            .unwrap_err();
+        assert_eq!(refused_field(&e), (named.to_owned(), not_taken.to_owned()));
+    }
+    let mut searched = s.plan(vec![s.ad("a")]);
+    searched["keywords"] = json!(["kayıt"]);
+    let e = submit("li-keywords", searched).await.unwrap_err();
+    assert_eq!(refused_field(&e), ("keywords".into(), not_taken.into()));
+    assert_eq!(s.t.get(c.id).await.refused, 0);
+    assert!(s.linkedin.calls().is_empty());
+
+    // LinkedIn takes a JPG, a PNG or a GIF: another image is a finding of the plan, not a
+    // refusal at the build after the plan was accepted.
+    let webp = image_of(&s.t.w, b"RIFF\x00\x00\x00\x00WEBPVP8 ", "image/webp").await;
+    let mut other = s.ad("a");
+    other["material_ids"] = json!([webp]);
+    s.limits();
+    let e = submit("li-webp", s.plan(vec![other])).await.unwrap_err();
+    assert_eq!(e.details["reason"], "plan_refused", "{e:?}");
+    let found = e.details["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["reason"] == "image_type_not_taken")
+        .cloned()
+        .unwrap_or_else(|| panic!("{e:?}"));
+    assert_eq!(
+        found,
+        json!({"field":"ads[0].material_ids","reason":"image_type_not_taken",
+            "material_id":webp,"takes":["image/jpeg","image/png","image/gif"]})
+    );
+    assert_eq!(s.t.get(c.id).await.refused, 1);
+
+    // The plan that holds.
+    s.limits();
+    let x = &s.linkedin;
+    x.push_find_by_name(Ok(None));
+    x.push_create_campaign(Ok("li:512000001:group:9".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_adset(Ok("li:512000001:campaign:7".into()));
+    x.push_upload_image(Ok("urn:li:image:C4E10AQtest".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_creative(Ok("inline".into()));
+    x.push_find_by_name(Ok(None));
+    x.push_create_ad(Ok("li:512000001:creative:1".into()));
+    for _ in 0..3 {
+        x.push_set_status(Ok(()));
+    }
+    let built = submit("li-good", s.plan(vec![s.ad("Bir")])).await.unwrap();
+    assert_eq!(Ads::state(&built), CampaignState::InReview);
+    let b = built.built.as_ref().unwrap();
+    assert_eq!(b.platform, AdsPlatform::Linkedin);
+    assert_eq!(b.campaign_id.as_deref(), Some("li:512000001:group:9"));
+    assert_eq!(b.adset_id.as_deref(), Some("li:512000001:campaign:7"));
+    assert_eq!(
+        b.ads[0].image_hash.as_deref(),
+        Some("urn:li:image:C4E10AQtest")
+    );
+    assert!(b.activated_at.is_some());
+    assert!(s.t.w.ads.calls().is_empty(), "nothing is asked of Meta");
+
+    let calls = s.linkedin.calls();
+    let level = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAdset { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(level.campaign_id, "li:512000001:group:9");
+    assert_eq!(level.budget_minor, 50_000);
+    assert_eq!(level.audience.countries, ["TR"]);
+    assert!(level.audience.genders.is_empty() && !level.audience.broad);
+    // The ad carries its image, its texts and its button, and names no page: it speaks as the
+    // company page of the ad account, which the adapter reads at LinkedIn.
+    let ad = calls
+        .iter()
+        .find_map(|c| match c {
+            ConnectorCall::CreateAd { spec, .. } => Some(spec.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(ad.adset_id, "li:512000001:campaign:7");
+    assert_eq!(ad.creative.identity_id, None);
+    assert_eq!(
+        ad.creative.image.as_deref(),
+        Some("urn:li:image:C4E10AQtest")
+    );
+    assert_eq!(ad.creative.primary_text, "Yeni sezon başlıyor");
+    assert_eq!(ad.creative.headline, "Kayıtlar açık");
+    assert_eq!(ad.creative.call_to_action, Some(CallToAction::SignUp));
+    // Activated last: the creative, the campaign, the campaign group.
+    let statuses: Vec<(String, AdStatus)> = calls
+        .iter()
+        .filter_map(|c| match c {
+            ConnectorCall::SetAdStatus {
+                entity_id, status, ..
+            } => Some((entity_id.clone(), *status)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("li:512000001:creative:1".to_owned(), AdStatus::Active),
+            ("li:512000001:campaign:7".to_owned(), AdStatus::Active),
+            ("li:512000001:group:9".to_owned(), AdStatus::Active)
+        ]
+    );
+    // What a LinkedIn plan must look like travels with the campaign.
+    let detail = ads::campaign_get(&s.t.w.d, &s.t.w.ctx, input(json!({"campaign_id":c.id})))
+        .await
+        .unwrap();
+    let rules = serde_json::to_value(&detail.platforms).unwrap();
+    assert_eq!(rules[2]["platform"], "linkedin");
+    assert_eq!(rules[2]["account_kind"], "linkedin_ads");
+    assert_eq!(rules[2]["page_kind"], Value::Null);
+    assert_eq!(rules[2]["image"], true);
+    assert_eq!(
+        rules[2]["image_types"],
+        json!(["image/jpeg", "image/png", "image/gif"])
+    );
+    assert_eq!(rules[2]["primary_text"], 3000);
+    assert_eq!(rules[2]["headline"], 200);
+    assert_eq!(rules[2]["description"], Value::Null);
+    assert_eq!(rules[2]["audience_age_and_gender"], false);
+    assert_eq!(rules[2]["hard_budget_cap"], true);
+    assert_eq!(rules[2]["preview"], false);
+    assert_eq!(rules[0]["image_types"], json!([]), "Meta takes any image");
+}
+
+/// A LinkedIn ad account whose connection may only read names the permission that is missing.
+#[tokio::test]
+async fn a_linkedin_ad_account_that_may_only_be_read_names_the_missing_permission() {
+    let mut s = sponsored_world().await;
+    s.account = connection(&s.t.w, "linkedin_ads", "512000002", &["r_ads"]).await;
+    let a = agent(&s.t.w);
+    let c = s.t.open("read-only", 50_000).await.unwrap();
+    let e =
+        s.t.submit(&a, &c, "li-read-only", s.plan(vec![s.ad("a")]))
+            .await
+            .unwrap_err();
+    let found = e.details["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["field"] == "ad_account")
+        .cloned()
+        .unwrap_or_else(|| panic!("{e:?}"));
+    assert_eq!(
+        found,
+        json!({"field":"ad_account","reason":"credential_scope_missing","needs":["rw_ads"]})
+    );
+    assert!(s.linkedin.calls().is_empty());
 }

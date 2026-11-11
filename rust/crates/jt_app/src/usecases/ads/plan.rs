@@ -379,7 +379,17 @@ pub(crate) async fn ad_findings(
     let mut shown = Vec::new();
     for id in &ad.material_ids {
         match r.studio_materials().get_material(*id).await? {
-            Some(m) if m.erased_at.is_none() && m.mime.starts_with("image/") => shown.push(m),
+            Some(m) if m.erased_at.is_none() && m.mime.starts_with("image/") => {
+                // An image of a type the platform does not take would only be refused at the
+                // build, after the plan was accepted.
+                let mime = m.mime.trim().to_ascii_lowercase();
+                if !rules.image_types.is_empty() && !rules.image_types.contains(&mime.as_str()) {
+                    findings.push(json!({"field": format!("{at}.material_ids"),
+                        "reason": "image_type_not_taken", "material_id": id,
+                        "takes": rules.image_types}));
+                }
+                shown.push(m);
+            }
             Some(_) => findings.push(json!({"field": format!("{at}.material_ids"),
                 "reason": "not_a_live_image", "material_id": id})),
             None => findings.push(json!({"field": format!("{at}.material_ids"),

@@ -116,6 +116,7 @@ impl FakeAppConfig {
                 client_id: "linkedin-client-id".into(),
                 client_secret: "linkedin-client-secret".into(),
                 organization_scopes: false,
+                ad_scopes: false,
                 api_version: None,
             }),
             google: Some(GoogleApp {
@@ -1812,6 +1813,9 @@ impl OAuthProvider for ScriptedOAuth {
             if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.organization_scopes) {
                 query.append_pair("organization_scopes", "true");
             }
+            if matches!(app, OAuthApp::Linkedin(linkedin) if linkedin.ad_scopes) {
+                query.append_pair("ad_scopes", "true");
+            }
         }
         Ok(url)
     }
@@ -1899,8 +1903,9 @@ const PUBLISHING: &[Provider] = &[
 ];
 /// The providers whose adapters send direct messages and fetch lead-gen submissions (Meta).
 const META_ONLY: &[Provider] = &[Provider::Meta];
-/// The providers whose adapters build ad campaigns and switch their ads on and off (Meta, Google).
-const AD_PLATFORMS: &[Provider] = &[Provider::Meta, Provider::Google];
+/// The providers whose adapters build ad campaigns and switch their ads on and off (Meta,
+/// Google, LinkedIn).
+const AD_PLATFORMS: &[Provider] = &[Provider::Meta, Provider::Google, Provider::Linkedin];
 /// The providers whose adapters send SMS, place calls, record consent and answer delivery-report
 /// and inbox polls (NetGSM).
 const NETGSM_ONLY: &[Provider] = &[Provider::Netgsm];

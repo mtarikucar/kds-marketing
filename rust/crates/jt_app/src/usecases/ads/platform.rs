@@ -3,7 +3,8 @@
 //! A campaign runs on one platform, the one its ad account is of. The campaign itself (a goal, a
 //! total budget, a start and an end, one plan, Jeeta building it paused first) is the same on
 //! every platform; what an ad carries is not: a Meta ad shows an image under a Page's name, a
-//! Google search ad is a handful of headlines and descriptions answering searches. This table says
+//! Google search ad is a handful of headlines and descriptions answering searches, a LinkedIn ad
+//! is an image and a text under the company page of its ad account. This table says
 //! which fields of the one plan each platform takes, how long its texts may be and how long a
 //! campaign may run there. A plan is held against its platform's row before anything is read or
 //! sent: a field the platform does not take is refused naming the field, never dropped.
@@ -32,6 +33,8 @@ pub struct PlatformRules {
     pub instagram: bool,
     /// Whether an ad shows one image (`material_ids`).
     pub image: bool,
+    /// The media types the platform takes an ad's image in; empty: any image.
+    pub image_types: &'static [&'static str],
     /// The longest `primary_text`, `headline` and `description` (the last is optional where
     /// taken).
     pub primary_text: Option<usize>,
@@ -92,6 +95,7 @@ const META: PlatformRules = PlatformRules {
     page_kind: Some("facebook_page"),
     instagram: true,
     image: true,
+    image_types: &[],
     primary_text: Some(1000),
     headline: Some(100),
     description: Some(100),
@@ -133,6 +137,7 @@ const GOOGLE: PlatformRules = PlatformRules {
     page_kind: None,
     instagram: false,
     image: false,
+    image_types: &[],
     primary_text: None,
     headline: None,
     description: None,
@@ -165,6 +170,57 @@ const GOOGLE: PlatformRules = PlatformRules {
     distinct_ads: true,
 };
 
+/// The calls to action a LinkedIn ad takes: those of Jeeta's list LinkedIn has a button for
+/// (`GET_QUOTE` is its `VIEW_QUOTE`, `APPLY_NOW` its `APPLY`; it has none for "contact us" or
+/// "book now").
+pub(crate) const LINKEDIN_CALLS_TO_ACTION: &[&str] = &[
+    "LEARN_MORE",
+    "SIGN_UP",
+    "SHOP_NOW",
+    "GET_QUOTE",
+    "SUBSCRIBE",
+    "APPLY_NOW",
+    "DOWNLOAD",
+];
+
+/// LinkedIn: single-image sponsored content. The ad speaks as the company page its ad account
+/// advertises for, so a plan names no page. Introductory text at most 3,000 characters, headline
+/// at most 200, the image a JPG, a PNG or a GIF
+/// (<https://www.linkedin.com/help/lms/answer/a426534>, read 2026-11-11); the description shows
+/// only outside LinkedIn's own feed, where these ads do not run, so it is not taken. The
+/// audience is the plan's countries: LinkedIn forbids using its targeting to discriminate by
+/// age or gender, and this version does not narrow by either. LinkedIn never spends more than a
+/// campaign's lifetime budget (<https://www.linkedin.com/help/lms/answer/a422101>). It names
+/// its least lifetime budget, which follows the length of the run, only when it refuses one: a
+/// budget that is too small is learnt at the build, which then stops with LinkedIn's own words
+/// and nothing spent.
+const LINKEDIN: PlatformRules = PlatformRules {
+    platform: AdsPlatform::Linkedin,
+    account_kind: "linkedin_ads",
+    page_kind: None,
+    instagram: false,
+    image: true,
+    image_types: &["image/jpeg", "image/png", "image/gif"],
+    primary_text: Some(3000),
+    headline: Some(200),
+    description: None,
+    calls_to_action: LINKEDIN_CALLS_TO_ACTION,
+    headlines: None,
+    descriptions: None,
+    keywords: None,
+    lead_form: false,
+    audience_age_and_gender: false,
+    audience_places_and_interests: false,
+    broad_audience: false,
+    placements: false,
+    min_run_hours: 24,
+    max_run_days: 90,
+    hard_budget_cap: true,
+    watch_minutes: 60,
+    preview: false,
+    distinct_ads: false,
+};
+
 /// The most words a keyword carries.
 pub(crate) const MAX_KEYWORD_WORDS: usize = 10;
 
@@ -173,6 +229,7 @@ pub fn rules(platform: AdsPlatform) -> &'static PlatformRules {
     match platform {
         AdsPlatform::Meta => &META,
         AdsPlatform::Google => &GOOGLE,
+        AdsPlatform::Linkedin => &LINKEDIN,
     }
 }
 

@@ -123,8 +123,8 @@ impl fmt::Debug for TiktokApp {
 }
 
 /// The platform's LinkedIn app (Sign In with LinkedIn using OpenID Connect, Share on LinkedIn
-/// and, once LinkedIn approves it, the Community Management API). `Debug` masks the client
-/// secret.
+/// and, once LinkedIn approves each, the Community Management API and the Advertising API).
+/// `Debug` masks the client secret.
 #[derive(Clone, PartialEq, Eq)]
 pub struct LinkedinApp {
     pub client_id: String,
@@ -137,6 +137,12 @@ pub struct LinkedinApp {
     /// when a flow asks for another set of scopes); without them, `linkedin_page` flows are
     /// refused.
     pub organization_scopes: bool,
+    /// Whether flows may ask for the ad scopes (`rw_ads`, `r_ads`, `r_ads_reporting`, and the
+    /// two an ad's own post needs, `w_organization_social` and `r_organization_social`): set by
+    /// the operator once LinkedIn has approved the Advertising API for the app
+    /// (`JEETA_LINKEDIN_AD_SCOPES`). As with the organization scopes, every LinkedIn flow then
+    /// asks for them, and without them `linkedin_ads` flows are refused.
+    pub ad_scopes: bool,
     /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (`JEETA_LINKEDIN_API_VERSION`);
     /// `None` lets the adapter use its pinned default.
     pub api_version: Option<String>,
@@ -148,6 +154,7 @@ impl fmt::Debug for LinkedinApp {
             .field("client_id", &self.client_id)
             .field("client_secret", &Masked)
             .field("organization_scopes", &self.organization_scopes)
+            .field("ad_scopes", &self.ad_scopes)
             .field("api_version", &self.api_version)
             .finish()
     }
@@ -298,7 +305,7 @@ impl OAuthCallback {
 /// The app an OAuth flow runs under. Meta serves two login flows: Facebook Login with the Meta
 /// app, and Instagram Login with the Instagram app; the variant tells the adapter which. A
 /// LinkedIn flow's app says whether the flow asks for the organization scopes
-/// ([`LinkedinApp::organization_scopes`]).
+/// ([`LinkedinApp::organization_scopes`]) and the ad scopes ([`LinkedinApp::ad_scopes`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OAuthApp {
     Meta(MetaApp),
@@ -2023,6 +2030,7 @@ mod tests {
             client_id: "li-id".into(),
             client_secret: "li-secret-value".into(),
             organization_scopes: true,
+            ad_scopes: true,
             api_version: Some("202610".into()),
         };
         let printed = format!(

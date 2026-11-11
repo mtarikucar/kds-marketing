@@ -1,6 +1,6 @@
-//! What a credential reaches: the member it signs in as (`GET /v2/userinfo`) and the
-//! organizations the member administers (`GET /rest/organizationAcls`), as the assets an OAuth
-//! flow offers and as the probe's identity.
+//! What a credential reaches: the member it signs in as (`GET /v2/userinfo`), the organizations
+//! the member administers (`GET /rest/organizationAcls`) and the ad accounts the member manages
+//! campaigns in (`crate::ads`), as the assets an OAuth flow offers and as the probe's identity.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -228,6 +228,9 @@ pub(crate) async fn list_assets(
             });
         }
     }
+    if granted(cred, "rw_ads") {
+        assets.extend(crate::ads::list_assets(connector, cred).await?);
+    }
     Ok(assets)
 }
 
@@ -238,6 +241,9 @@ pub(crate) async fn probe(
     cred: &Credential,
     public: &Value,
 ) -> ProbeResult {
+    if public["kind_key"].as_str() == Some(crate::ads::ADS_KIND) {
+        return crate::ads::probe(connector, cred, public).await;
+    }
     let started = Instant::now();
     let outcome = facts(connector, cred, public).await;
     let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);

@@ -147,6 +147,10 @@ fn studio_scopes(kind: &str, write: bool) -> Option<&'static [&'static str]> {
         // Google Ads has one scope, for reading and for writing
         // (<https://developers.google.com/google-ads/api/docs/oauth/multi-user-authentication>).
         ("google_ads", _) => &["https://www.googleapis.com/auth/adwords"],
+        // LinkedIn's ad accounts are written with `rw_ads` and read with either
+        // (<https://learn.microsoft.com/en-us/linkedin/marketing/increasing-access>).
+        ("linkedin_ads", true) => &["rw_ads"],
+        ("linkedin_ads", false) => &["r_ads", "rw_ads"],
         ("instagram", true) => &[
             "instagram_content_publish",
             "instagram_business_content_publish",

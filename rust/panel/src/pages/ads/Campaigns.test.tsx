@@ -541,3 +541,61 @@ it('tells a person when the chosen ad account’s platform does not run a campai
     ),
   ).toBeVisible();
 });
+
+it('shows LinkedIn’s targeting notice on a LinkedIn campaign and where a LinkedIn ad account is chosen', async () => {
+  const notice =
+    'LinkedIn araçları; cinsiyet, yaş, ırk ya da etnik köken gibi kişisel özelliklere göre ayrımcılık yapmak için kullanılamaz.';
+  const sponsored = {
+    ...campaign,
+    plan: {
+      ...campaign.plan,
+      result: 'link_click',
+      placements: 'automatic',
+      ads: [
+        {
+          name: 'Sponsorlu içerik',
+          material_ids: [],
+          primary_text: 'Yeni seri çıktı',
+          headline: 'El yapımı kupalar',
+          description: null,
+          call_to_action: 'LEARN_MORE',
+          instagram: null,
+          hypothesis_id: 'h1',
+        },
+      ],
+    },
+    built: { ...campaign.built, platform: 'linkedin' },
+    totals: { ...campaign.totals, result_kind: 'link_click' },
+  };
+  const calls = mockFetch({
+    ...adsAnswers,
+    'GET /api/capabilities': [
+      { capability: { id: 'l1', kind_key: 'linkedin_ads', name: 'Şirket reklam hesabı' } },
+      { capability: { id: 'm1', kind_key: 'meta_ads', name: 'Meta hesabı' } },
+    ],
+    'GET /api/ads/campaigns': { campaigns: [sponsored], next_before: null },
+    'GET /api/ads/campaigns/campaign-1': { campaign: sponsored, days: [], materials: [], platforms },
+  });
+  renderAt('/ads?campaign=campaign-1');
+  // The campaign's page: LinkedIn's notice by the audience, the ad's own texts, no preview asked.
+  expect(await screen.findByText(notice)).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Daha fazla bilgi' })).toHaveAttribute(
+    'href',
+    'https://www.linkedin.com/help/lms/answer/86856',
+  );
+  expect(screen.getByText('Bu reklam platformu önizleme göstermiyor; reklamın metinleri aşağıda.')).toBeVisible();
+  expect(screen.getByText('Yeni seri çıktı')).toBeVisible();
+  expect(calls.some((c) => c.path.endsWith('/preview'))).toBe(false);
+
+  // Opening a campaign: the notice appears once a LinkedIn ad account is chosen, not before
+  // and not for another platform's account.
+  renderAt('/ads');
+  const dialog = await fillOpening();
+  const account = within(dialog).getByLabelText('Reklam hesabı (isteğe bağlı)');
+  expect(await within(account).findByRole('option', { name: 'Şirket reklam hesabı · LinkedIn' })).toBeInTheDocument();
+  expect(within(dialog).queryByText(notice)).not.toBeInTheDocument();
+  await userEvent.selectOptions(account, 'm1');
+  expect(within(dialog).queryByText(notice)).not.toBeInTheDocument();
+  await userEvent.selectOptions(account, 'l1');
+  expect(within(dialog).getByText(notice)).toBeVisible();
+});

@@ -21,6 +21,7 @@ import { formatMoney } from '@/lib/format';
 import { inputClass } from '../StudioShared';
 import {
   AD_ACCOUNT_KINDS,
+  LinkedinTargetingNotice,
   CampaignError,
   useAdsKey,
   useCampaignMutation,
@@ -150,6 +151,9 @@ export function OpenCampaignDialog({
               </select>
             )}
           </Field>
+          {accounts.data?.some((row) => row.capability.id === account && row.capability.kind_key === 'linkedin_ads') && (
+            <LinkedinTargetingNotice />
+          )}
           <Field label={t('adCampaigns.end')}>
             {(ids) => (
               <Input

@@ -3,14 +3,22 @@
 
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
-    AccountMetrics, Asset, Connector, InsightsReader, OAuthApp, OAuthProvider, PostMetrics,
-    PublishReceipt, PublishRequest, Publisher,
+    AccountMetrics, AdAccountLimits, AdBudgetWriter, AdCampaignWriter, AdDay, AdInsights, AdLevel,
+    AdObjective, AdPlacement, AdSet, AdSetSpec, AdSpec, AdStatus, Asset, CampaignProviderState,
+    CampaignSpec, Connector, CreativeSpec, InsightsReader, LeadFormSpec, OAuthApp, OAuthProvider,
+    PostMetrics, PublishReceipt, PublishRequest, Publisher,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
+use time::Date;
 use url::Url;
 
-use crate::{LINKEDIN_HOSTS, LinkedinConnector, account, insights, oauth, publish};
+use crate::{LINKEDIN_HOSTS, LinkedinConnector, account, ads, insights, oauth, publish};
+
+/// What this adapter does not do for an ad account of LinkedIn's: `what`, as a refusal.
+fn not_offered(what: &str) -> ConnectorError {
+    ConnectorError::permanent(format!("{what} is not offered for a LinkedIn ad account"))
+}
 
 #[async_trait]
 impl Connector for LinkedinConnector {
@@ -92,5 +100,158 @@ impl InsightsReader for LinkedinConnector {
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError> {
         insights::account_metrics(self, cred, public).await
+    }
+}
+
+/// Switching a campaign group, a campaign or a creative on and off. The budget operations on ad
+/// sets that already exist (design 2026-11-10's bound ad sets) are Meta's alone.
+#[async_trait]
+impl AdBudgetWriter for LinkedinConnector {
+    async fn set_status(
+        &self,
+        cred: &Credential,
+        entity_id: &str,
+        status: AdStatus,
+    ) -> Result<(), ConnectorError> {
+        ads::set_status(self, cred, entity_id, status).await
+    }
+
+    async fn set_daily_budget(
+        &self,
+        _cred: &Credential,
+        _entity_id: &str,
+        _minor: i64,
+    ) -> Result<(), ConnectorError> {
+        Err(not_offered("changing a daily budget"))
+    }
+
+    async fn list_adsets(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+    ) -> Result<Vec<AdSet>, ConnectorError> {
+        Err(not_offered("listing ad sets"))
+    }
+
+    async fn insights(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _since: Date,
+        _until: Date,
+    ) -> Result<Vec<AdInsights>, ConnectorError> {
+        Err(not_offered("the account's results by campaign"))
+    }
+}
+
+/// A campaign as LinkedIn holds it (see the crate docs, "Ad campaigns"): the campaign is a
+/// campaign group, the level under it a campaign, an ad a creative made with its post.
+#[async_trait]
+impl AdCampaignWriter for LinkedinConnector {
+    async fn account_limits(
+        &self,
+        cred: &Credential,
+        public: &Value,
+    ) -> Result<AdAccountLimits, ConnectorError> {
+        ads::account_limits(self, cred, public).await
+    }
+
+    async fn find_by_name(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        level: AdLevel,
+        name: &str,
+    ) -> Result<Option<String>, ConnectorError> {
+        ads::find_by_name(self, cred, public, level, name).await
+    }
+
+    async fn create_campaign(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &CampaignSpec,
+    ) -> Result<String, ConnectorError> {
+        ads::create_campaign(self, cred, public, spec).await
+    }
+
+    async fn create_adset(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSetSpec,
+    ) -> Result<String, ConnectorError> {
+        ads::create_adset(self, cred, public, spec).await
+    }
+
+    /// The image is the company page's; LinkedIn gives it no name.
+    async fn upload_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        bytes: &[u8],
+        _name: &str,
+    ) -> Result<String, ConnectorError> {
+        ads::upload_image(self, cred, public, bytes).await
+    }
+
+    async fn create_lead_form(
+        &self,
+        _page_cred: &Credential,
+        _page_public: &Value,
+        _spec: &LeadFormSpec,
+    ) -> Result<String, ConnectorError> {
+        Err(not_offered("a lead form"))
+    }
+
+    /// Nothing is sent: the ad step makes the post and the creative together.
+    async fn create_creative(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+        spec: &CreativeSpec,
+    ) -> Result<String, ConnectorError> {
+        ads::create_creative(public, spec)
+    }
+
+    async fn create_ad(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        spec: &AdSpec,
+    ) -> Result<String, ConnectorError> {
+        ads::create_ad(self, cred, public, spec).await
+    }
+
+    async fn campaign_state(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+    ) -> Result<CampaignProviderState, ConnectorError> {
+        ads::campaign_state(self, cred, public, campaign_id).await
+    }
+
+    async fn ad_days(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        campaign_id: &str,
+        objective: AdObjective,
+        since: Date,
+        until: Date,
+    ) -> Result<Vec<AdDay>, ConnectorError> {
+        ads::ad_days(self, cred, public, campaign_id, objective, since, until).await
+    }
+
+    /// LinkedIn's ad preview is not read here.
+    async fn preview(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _creative: &CreativeSpec,
+        _placement: AdPlacement,
+    ) -> Result<String, ConnectorError> {
+        Err(not_offered("an ad preview"))
     }
 }

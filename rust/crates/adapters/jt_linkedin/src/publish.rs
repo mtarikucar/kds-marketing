@@ -259,13 +259,25 @@ fn upload_url(value: &Value) -> Result<Url, ConnectorError> {
         .ok_or_else(|| missing("upload URL"))
 }
 
-/// Uploads one image owned by `owner` and returns its URN: `initializeUpload`, then `PUT` the
-/// bytes to the URL LinkedIn hands out, with the token (the Assets API's rule for images).
+/// Uploads one image owned by `owner` and returns its URN (see [`upload_image_bytes`]).
 async fn upload_image(
     connector: &LinkedinConnector,
     token: &str,
     owner: &str,
     image: &MediaUpload,
+    mime: &str,
+) -> Result<String, ConnectorError> {
+    upload_image_bytes(connector, token, owner, &image.bytes, mime).await
+}
+
+/// Uploads the image `bytes` of type `mime`, owned by `owner`, and returns its URN:
+/// `initializeUpload`, then `PUT` the bytes to the URL LinkedIn hands out, with the token (the
+/// Assets API's rule for images). A post's image and an ad's go up the same way.
+pub(crate) async fn upload_image_bytes(
+    connector: &LinkedinConnector,
+    token: &str,
+    owner: &str,
+    bytes: &[u8],
     mime: &str,
 ) -> Result<String, ConnectorError> {
     let init = connector
@@ -285,10 +297,7 @@ async fn upload_image(
             Method::PUT,
             url,
             Auth::Bearer(token),
-            &Body::Bytes {
-                bytes: &image.bytes,
-                mime,
-            },
+            &Body::Bytes { bytes, mime },
             Endpoint::Upload,
         )
         .await?;

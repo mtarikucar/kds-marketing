@@ -171,6 +171,10 @@ const PRODUCT_NOT_ENABLED: &str = "provider product not enabled";
 ///
 /// [`LinkedinApp::organization_scopes`]: crate::ports::connectors::LinkedinApp::organization_scopes
 const LINKEDIN_PAGE: &str = "linkedin_page";
+/// The LinkedIn kind whose flows need the ad scopes ([`LinkedinApp::ad_scopes`]).
+///
+/// [`LinkedinApp::ad_scopes`]: crate::ports::connectors::LinkedinApp::ad_scopes
+const LINKEDIN_ADS: &str = "linkedin_ads";
 const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
@@ -1355,6 +1359,11 @@ async fn begin_oauth(
     {
         return Err(product_not_enabled(provider));
     }
+    if kind_key == LINKEDIN_ADS
+        && matches!(&app, OAuthApp::Linkedin(linkedin) if !linkedin.ad_scopes)
+    {
+        return Err(product_not_enabled(provider));
+    }
     if flow == Some(OAuthFlow::WhatsappBusinessApp)
         && !matches!(&app, OAuthApp::Meta(meta)
             if meta.whatsapp_config_id.as_deref().is_some_and(|c| !c.trim().is_empty()))
@@ -1474,8 +1483,8 @@ fn connector_kind(kind_key: &str) -> Result<&'static CapabilityKind, AppError> {
 }
 
 /// The configured app a flow signed in with `app` runs under, if it is configured. Every LinkedIn
-/// flow asks for the same scopes, the organization scopes included once the platform's app may
-/// ([`LinkedinApp::organization_scopes`]): LinkedIn invalidates a member's earlier tokens when a
+/// flow asks for the same scopes, the organization scopes and the ad scopes included once the
+/// platform's app may ([`LinkedinApp::organization_scopes`], `ad_scopes`): LinkedIn invalidates a member's earlier tokens when a
 /// flow asks for another set of scopes, so a page connected after the member's own feed would
 /// otherwise cut the feed's capability off.
 ///

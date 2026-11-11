@@ -11,9 +11,35 @@ export const PLATFORM_NAMES: Record<Platform, string> = {
   facebook: 'Facebook',
   instagram: 'Instagram',
   google: 'Google',
+  linkedin: 'LinkedIn',
 };
 /** The ad platforms a campaign can run on, by the capability kind of their ad accounts. */
-export const AD_ACCOUNT_KINDS: Record<string, string> = { meta_ads: 'Meta', google_ads: 'Google' };
+export const AD_ACCOUNT_KINDS: Record<string, string> = {
+  meta_ads: 'Meta',
+  google_ads: 'Google',
+  linkedin_ads: 'LinkedIn',
+};
+/**
+ * LinkedIn's own rule for a tool that sets an ad's audience on its platform: the tool shows this
+ * notice wherever that audience is chosen or shown
+ * (learn.microsoft.com/en-us/linkedin/marketing/integrations/ads/advertising-targeting/ads-targeting).
+ */
+export function LinkedinTargetingNotice() {
+  const { t } = useTranslation();
+  return (
+    <p className="border-s-2 border-border ps-3 text-xs text-muted-foreground">
+      {t('adCampaigns.linkedinTargeting')}{' '}
+      <a
+        className="underline"
+        href="https://www.linkedin.com/help/lms/answer/86856"
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        {t('adCampaigns.linkedinTargetingMore')}
+      </a>
+    </p>
+  );
+}
 /** Where a planned campaign runs: Meta's surfaces of its placements, or its other platform. */
 export function platforms(c: Campaign): Platform[] {
   if (!c.plan) return [];

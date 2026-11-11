@@ -110,7 +110,7 @@ assets with currency, time zone and status, probe, `AdCampaignWriter` + `AdBudge
 - [x] 2.1 Crate, client, error table, OAuth + refresh, assets, probe; tests against an in-process mock.
 - [x] 2.2 Writer: budget → campaign → ad group (+ country, keywords) → ad; idempotent by name; status.
 - [x] 2.3 Reads: state and daily numbers; tests.
-- [ ] 2.4 Wiring, panel, README; `make check`; commit, push; staging release when the owner agrees.
+- [x] 2.4 Wiring, panel, README; `make check`; commit, push (`e892fb18`). Staging release: when the owner agrees.
 
 ## Task 3 — LinkedIn ads (in `jt_linkedin`)
 
@@ -191,3 +191,41 @@ was decided on the way:
 - Not built: manager-account access, Demand Gen, a keyword forecast, conversion tracking.
 - A local run of `m4_deployment::production_build_refuses_test_loopback` fails on this machine
   because `target/release/jeeta` is older than migrations 0039 and 0040; CI builds its own.
+
+### Task 3 (2026-11-11)
+
+LinkedIn ad campaigns, in `jt_linkedin` (`src/ads.rs`, `src/countries.rs`, `tests/ads.rs`). What
+differs from the plan's sketch, each recorded in the design (B85 to B87):
+
+- **No page in the plan.** The ad speaks as the company page its ad account advertises for (the
+  account's `reference`), read at LinkedIn at each step. The port did not change
+  (`upload_image` keeps its shape); a plan on a LinkedIn account that names a `page` is refused
+  naming the field. This keeps ads independent of the Community Management API, which
+  `linkedin_page` needs.
+- **The post and the creative are one call** (`creatives?action=createInline`), so the creative
+  step sends nothing and the ad step makes both; a creative carries the build's own name and is
+  found by it after a lost answer.
+- **The campaign group is created active**, the campaign paused and the creatives as drafts
+  (LinkedIn creates a group "in ACTIVE or DRAFT state"; whether a paused campaign may sit in a
+  draft group is not documented).
+- **No minimum budget finding.** LinkedIn names its least lifetime budget only when it refuses
+  one: the limits answer none, and a budget that is too small ends the build at the campaign step
+  with LinkedIn's own words.
+- **Countries only**, each found by its name in LinkedIn's own country table; no age, no gender.
+  The panel shows LinkedIn's targeting notice where a LinkedIn account is chosen and on a
+  LinkedIn campaign's page.
+- **A new finding**, `image_type_not_taken` (`PlatformRules.image_types`): LinkedIn takes a JPG,
+  a PNG or a GIF, and another image would otherwise only be refused at the build.
+- **`JEETA_LINKEDIN_AD_SCOPES`** (`LinkedinApp.ad_scopes`): off until LinkedIn approved the
+  Advertising API; while off a `linkedin_ads` flow is `provider_product_not_enabled`. No
+  migration: `oauth_pending` already takes the provider and the app `linkedin`.
+- An independent pass held every key, enum, query and header of `ads.rs` against the saved
+  LinkedIn pages. What it changed: the creatives finder now names its Rest.li method
+  (`X-RestLi-Method: FINDER`, which LinkedIn requires), the audience carries the campaign's
+  locale as `interfaceLocales` (as LinkedIn's website-visit sample does), a cancelled group is
+  read in both of LinkedIn's spellings, a rejection reason may be an object, and the ad accounts
+  are read to the total the finder names. What stays open is listed in the crate docs ("What only
+  a first real run can tell").
+- Tests: `jt_linkedin/tests/ads.rs` (22, against the in-process mock), two more in
+  `jt_app/tests/ads_campaigns.rs`, one in `jt_app/tests/connector.rs`, the scope test in
+  `jt_linkedin/src/oauth.rs`. Nothing was run against LinkedIn.

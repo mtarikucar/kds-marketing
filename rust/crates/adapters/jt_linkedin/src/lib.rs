@@ -1,11 +1,14 @@
 //! The LinkedIn adapter (spec `docs/superpowers/specs/2026-10-27-tiktok-linkedin-connectors-design.md`
 //! §3): a LinkedIn member's own feed (`linkedin_member`) and the organization pages the member
 //! administers (`linkedin_page`), connected with OAuth 2.0; their posts (text, a link, images or
-//! one video) and the organizations' counters.
+//! one video) and the organizations' counters. And the ad accounts the member manages campaigns
+//! in (`linkedin_ads`, design `docs/superpowers/specs/2026-11-11-reklam-platformlari-design.md`
+//! §3.2): single-image sponsored content, built paused and then activated (see "Ad campaigns").
 //!
 //! [`LinkedinConnector`] implements the connector ports of `jt_app` ([`Connector`],
-//! [`OAuthProvider`], [`Publisher`], [`InsightsReader`]). LinkedIn sends no webhooks here, and it
-//! publishes synchronously: [`Publisher::resolve`] keeps its default (the receipt is the post).
+//! [`OAuthProvider`], [`Publisher`], [`InsightsReader`], [`AdCampaignWriter`],
+//! [`AdBudgetWriter`]). LinkedIn sends no webhooks here, and it publishes synchronously:
+//! [`Publisher::resolve`] keeps its default (the receipt is the post).
 //!
 //! **Transport.** The adapter holds no HTTP client: every call is built with
 //! [`jt_outbound::Egress::prepare`] and sent under `EgressScope::Connector("linkedin")`, so it can
@@ -22,7 +25,7 @@
 //!
 //! | Step | Call |
 //! |---|---|
-//! | authorize | `{authorize}/oauth/v2/authorization?response_type=code&client_id&redirect_uri&state&scope`, the scopes joined by spaces (`%20`): [`MEMBER_SCOPES`], and [`ORGANIZATION_SCOPES`] too when the flow's app sets `organization_scopes` (the use case sets it for `linkedin_page` flows once the operator enabled them) |
+//! | authorize | `{authorize}/oauth/v2/authorization?response_type=code&client_id&redirect_uri&state&scope`, the scopes joined by spaces (`%20`): [`MEMBER_SCOPES`], [`ORGANIZATION_SCOPES`] too when the flow's app sets `organization_scopes` and [`AD_SCOPES`] when it sets `ad_scopes` (the operator sets each once LinkedIn approved its product for the app), each scope once |
 //! | exchange | `POST {oauth}/oauth/v2/accessToken`, form `grant_type=authorization_code, code, redirect_uri, client_id, client_secret` |
 //! | refresh | `POST {oauth}/oauth/v2/accessToken`, form `grant_type=refresh_token, refresh_token, client_id, client_secret` |
 //!
@@ -139,6 +142,98 @@
 //! A member's posts and account have no counters LinkedIn opens to apps (`r_member_social` is
 //! restricted): both reads fail `Permanent` without a call.
 //!
+//! **Ad campaigns** (`linkedin_ads`; design 2026-11-11 §3.2 and decisions B85 to B87). Every
+//! call below was written from LinkedIn's Marketing API pages of version `202610`
+//! (`learn.microsoft.com/en-us/linkedin/marketing/integrations/ads/...`: `account-structure/
+//! create-and-manage-account-users`, `create-and-manage-accounts`,
+//! `create-and-manage-campaign-groups`, `create-and-manage-campaigns`,
+//! `create-and-manage-creatives`, `advertising-targeting/ads-targeting`, and
+//! `ads-reporting/ads-reporting`), read 2026-11-11. **Nothing here has been run against
+//! LinkedIn**: the tests answer from an in-process mock, and the first real campaign is the
+//! owner's, on their own account, with a small budget and their approval at that moment (B38).
+//!
+//! A LinkedIn campaign is three levels, and the build's steps sit on them as follows. An object
+//! is reached under its ad account, which its own URN does not name, so the ids this adapter
+//! hands out carry both: `li:{account}:{group|campaign|creative}:{number}` (B70); an id of
+//! another shape, or of another account than the capability's, is refused before any call.
+//!
+//! | Step | Call |
+//! |---|---|
+//! | the ad accounts of a sign-in ([`OAuthProvider::list_assets`] with `rw_ads` granted) | `GET {api}/rest/adAccountUsers?q=authenticatedUser` (and `&start=N` while the answer's `paging.total` names more) → each element's `account` and `role`; an account is offered when the role is `CAMPAIGN_MANAGER`, `ACCOUNT_MANAGER` or `ACCOUNT_BILLING_ADMIN`, it is `ACTIVE`, and it advertises for a company page; at most [`MAX_AD_ACCOUNTS`] |
+//! | an ad account (the probe, the limits, and before each write that needs its currency or its page) | `GET {api}/rest/adAccounts/{id}` → `currency`, `status`, `reference` (`urn:li:organization:N`), `test` |
+//! | finding an object by its name (before each creation, B71) | `GET .../adCampaignGroups` and `.../adCampaigns` with `q=search&search=(name:(values:List({name})),status:(values:List(ACTIVE,DRAFT,PAUSED)))`, paged by `metadata.nextPageToken` to at most [`MAX_AD_PAGES`] pages; two objects of one name are refused |
+//! | the campaign (`create_campaign`) | a campaign group: `POST .../adAccounts/{id}/adCampaignGroups {account, name, runSchedule: {start, end}, status: "ACTIVE", totalBudget: {amount, currencyCode}}` → its number in `x-restli-id` |
+//! | a country | `GET {api}/rest/adTargetingEntities?q=typeahead&queryVersion=QUERY_USES_URNS&facet=urn%3Ali%3AadTargetingFacet%3Alocations&query={name}&locale=(language:en,country:US)`: the one element whose `name` is the country's own, from LinkedIn's country table |
+//! | the level under it (`create_adset`) | a campaign: `POST .../adCampaigns {account, campaignGroup, name, type: "SPONSORED_UPDATES", format: "STANDARD_UPDATE", objectiveType: "WEBSITE_VISIT", optimizationTargetType: "MAX_CLICK", costType: "CPM", unitCost: {amount: "0"}, locale, offsiteDeliveryEnabled: false, audienceExpansionEnabled: false, creativeSelection: "OPTIMIZED", associatedEntity, politicalIntent: "NOT_POLITICAL", pacingStrategy: "LIFETIME", totalBudget, runSchedule, targetingCriteria: {include: {and: [{or: {"urn:li:adTargetingFacet:interfaceLocales": [locale]}}, {or: {"urn:li:adTargetingFacet:locations": [...]}}]}}, status: "PAUSED"}` |
+//! | the image (`upload_image`) | as a post's image, owned by the account's company page |
+//! | the creative (`create_creative`) | no call: the ad's parts are checked and `"inline"` is answered |
+//! | the ad (`create_ad`) | `GET .../creatives?q=criteria&campaigns=List({campaign urn})&sortOrder=ASCENDING` with `X-RestLi-Method: FINDER` (a creative that carries the ad's name is adopted), else `POST .../creatives?action=createInline {creative: {inlineContent: {post}, campaign, intendedStatus: "DRAFT", name}}`: the post and the creative in one call |
+//! | switching on and off ([`AdBudgetWriter::set_status`]) | `POST` the object with `X-RestLi-Method: PARTIAL_UPDATE` and `{patch: {$set: {status}}}` (a group, a campaign) or `{patch: {$set: {intendedStatus}}}` (a creative, its URN percent-encoded in the path) |
+//! | the state (`campaign_state`) | `GET .../adCampaignGroups/{id}` → `status`; the group's campaigns (`q=search&search=(campaignGroup:(values:List({group urn})),status:...)`); each campaign's creatives (the finder above) → `intendedStatus`, `review.status`, `review.rejectionReasons` |
+//! | the days (`ad_days`) | `GET {api}/rest/adAnalytics?q=analytics&pivot=CREATIVE&timeGranularity=DAILY&dateRange=(start:(year,month,day),end:(...))&campaigns=List(...)&fields=dateRange,pivotValues,impressions,clicks,landingPageClicks,costInLocalCurrency` |
+//!
+//! The choices made here, each with its reason:
+//!
+//! - **The page.** An ad is the company page's post. The page is the organization the ad
+//!   account advertises for (its `reference`): the image's owner, the post's `author` and the
+//!   campaign's `associatedEntity` are all that one organization, read from LinkedIn at each
+//!   step and never taken from a plan (B85). An account that advertises for a member is not
+//!   offered and fails its probe ("the LinkedIn ad account advertises for no company page").
+//! - **The budget.** The campaign's whole budget is the group's `totalBudget` and, once more,
+//!   the campaign's own with `pacingStrategy: "LIFETIME"`: LinkedIn says of it "you spend no more
+//!   than the full budget for the lifetime of the campaign". A daily budget is never set (LinkedIn
+//!   may spend more than a daily budget on a day). Amounts go out as decimal text in the account's
+//!   currency. LinkedIn names its least lifetime budget, which follows the length of the run, only
+//!   when it refuses one: the limits answer no minimum, and a budget that is too small ends the
+//!   build at the campaign step with LinkedIn's own words, nothing spent (B86).
+//! - **Paused first.** The group is created `ACTIVE` (LinkedIn creates a group active or as a
+//!   draft), the campaign `PAUSED` and each creative as a `DRAFT`: nothing is served. The build
+//!   then activates the creatives (LinkedIn's review of a creative starts when it leaves the
+//!   draft state), the campaign and the group, in that order.
+//! - **The run.** `runSchedule` is in milliseconds since the epoch; a start that is now is put
+//!   five minutes ahead (LinkedIn refuses a start in the past).
+//! - **The audience** is the plan's countries and nothing else (B87). LinkedIn takes a country
+//!   only as its own `urn:li:geo` entity, which it serves by name, not by code: the country's
+//!   English name comes from LinkedIn's country code table (`countries.rs`), and the typeahead
+//!   answer is taken only when exactly one element carries exactly that name; anything else is
+//!   refused, never guessed. The campaign's `locale` is the listed locale of the first country,
+//!   else `en_US`; the audience names it too (`interfaceLocales`, the language of the members'
+//!   LinkedIn interface), as LinkedIn's website-visit sample and Campaign Manager's "profile
+//!   language" do: members who use LinkedIn in another language are not shown the ads.
+//!   `politicalIntent` is always `NOT_POLITICAL` (B79: no political advertising, and no country
+//!   of the European Union is targeted).
+//! - **The ad.** Single-image sponsored content leading to a website: the post is the page's,
+//!   shown to nobody but through the ad (`feedDistribution: "NONE"`, `adContext.dscAdAccount`),
+//!   its text in LinkedIn's little text format, the headline as the image's `title`, the address
+//!   as `contentLandingPage` and the button as `contentCallToActionLabel` (`LEARN_MORE`,
+//!   `SIGN_UP`, `SHOP_NOW`, `VIEW_QUOTE`, `SUBSCRIBE`, `APPLY`, `DOWNLOAD`). The image must be a
+//!   JPG, a PNG or a GIF, told by its first bytes. The creative carries the build's own name, by
+//!   which a creative made before a lost answer is found again.
+//! - **States.** A creative LinkedIn rejected is `Disapproved` whatever its switch says, with
+//!   its `rejectionReasons` as feedback; an active creative whose review is not `APPROVED` is in
+//!   review; a draft or a paused one is paused. LinkedIn refuses to pause a creative in review
+//!   (400): the refusal is passed on, and the use cases pause the ad again once it runs (B77).
+//! - **Numbers.** A day's `costInLocalCurrency` (decimal text in the account's currency) becomes
+//!   minor units, rounded to the nearest; its result is `landingPageClicks`. A number LinkedIn
+//!   leaves out is absent, never zero. LinkedIn counts days in UTC.
+//!
+//! What only a first real run can tell: whether a campaign may be created `PAUSED`; whether
+//! the inline post takes the `distribution` the Posts API requires of a post (LinkedIn's two
+//! inline samples leave it out) and the inline creative a `DRAFT` status (its samples create it
+//! active); whether the creatives finder answers each creative's `name` (its sample row does not
+//! show one: without it a creative made before a lost answer is not found, and a second one is
+//! made, still under the campaign's one budget); whether the member's ad account role is enough
+//! to upload the page's image (LinkedIn: "the caller must have ADMIN or DSC permissions for the
+//! company page"; a 403 there ends the build with LinkedIn's words); whether a
+//! created group's number comes back in `x-restli-id` as a campaign's and a creative's do (the
+//! group page does not say; without it the creation is `Unknown` and the next run finds the group
+//! by its name); whether a paused group goes back to `ACTIVE` (the page names only the way from
+//! active to paused); whether `objectiveType` is `WEBSITE_VISIT` (LinkedIn's samples) rather than
+//! `WEBSITE_VISITS` (one of its schema tables); whether the typeahead names each country exactly
+//! as the country table does; the least lifetime budget in each currency; and whether a test ad
+//! account behaves as documented (its creatives are rejected by themselves and it reports no
+//! numbers).
+//!
 //! **The probe** names, as `facts.account_id`, the identity the credential itself reaches, never
 //! an id taken from `public`:
 //!
@@ -146,14 +241,16 @@
 //! |---|---|---|
 //! | `linkedin_member` | `GET /v2/userinfo` | its `sub`: the member the token authenticates as |
 //! | `linkedin_page` | the credential's `organizationAcls` (`ADMINISTRATOR`, `APPROVED`) | the organization number of the ACL element naming `public["external_id"]`: a node LinkedIn serves only to the member's own token, and only for organizations the member administers; none → `Permission` ("the credential administers no such organization") |
+//! | `linkedin_ads` | `GET /rest/adAccounts/{id}` | the ad account LinkedIn answers for, which must be the one asked for, `ACTIVE` and advertising for a company page; with `currency`, `organization_id` and `test_account` |
 //!
 //! with `name` (the member's name; the page's `localizedName`, best effort). The organization
 //! lookup is never the identity: LinkedIn answers it for organizations a member does not
 //! administer too.
 //!
-//! **Kinds.** LinkedIn serves `linkedin_member` and `linkedin_page`. Every operation that takes
-//! `public` refuses one without either in `public["kind_key"]` (`Permanent`, "kind_key missing")
-//! and calls nothing.
+//! **Kinds.** LinkedIn serves `linkedin_member`, `linkedin_page` and `linkedin_ads`. Posting and
+//! counters are the first two's: every such operation refuses a `public` without either in
+//! `public["kind_key"]` (`Permanent`, "kind_key missing") and calls nothing. Campaigns are the
+//! ad account's: every such operation refuses another kind ("not a LinkedIn ad account").
 //!
 //! [`Connector`]: jt_app::ports::connectors::Connector
 //! [`Connector::refresh`]: jt_app::ports::connectors::Connector::refresh
@@ -162,11 +259,16 @@
 //! [`Publisher`]: jt_app::ports::connectors::Publisher
 //! [`Publisher::resolve`]: jt_app::ports::connectors::Publisher::resolve
 //! [`InsightsReader`]: jt_app::ports::connectors::InsightsReader
+//! [`AdCampaignWriter`]: jt_app::ports::connectors::AdCampaignWriter
+//! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
+//! [`AdBudgetWriter::set_status`]: jt_app::ports::connectors::AdBudgetWriter::set_status
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
 mod account;
+mod ads;
 mod client;
+mod countries;
 mod credential;
 mod insights;
 mod oauth;
@@ -202,6 +304,27 @@ pub const ORGANIZATION_SCOPES: &[&str] = &[
     "w_organization_social",
     "rw_organization_admin",
 ];
+
+/// The scopes a flow whose app sets `ad_scopes` asks for too (the Advertising API): managing and
+/// reading the member's ad accounts (`rw_ads`, `r_ads`), their numbers (`r_ads_reporting`), and
+/// posting as the company page an ad speaks as (`w_organization_social`,
+/// `r_organization_social`: an ad's image and its post are the page's)
+/// (<https://learn.microsoft.com/en-us/linkedin/marketing/increasing-access>). As with
+/// [`ORGANIZATION_SCOPES`], only an app LinkedIn approved for them may ask.
+pub const AD_SCOPES: &[&str] = &[
+    "rw_ads",
+    "r_ads",
+    "r_ads_reporting",
+    "w_organization_social",
+    "r_organization_social",
+];
+
+/// The most ad accounts of a sign-in offered for connection.
+pub const MAX_AD_ACCOUNTS: usize = 50;
+
+/// The most pages of one list of an ad account read (its campaign groups, campaigns or
+/// creatives by a search).
+pub const MAX_AD_PAGES: usize = 20;
 
 /// The `Linkedin-Version` of the REST calls when the app names none: `202610`, the latest
 /// version (October 2026) on LinkedIn's versioning page, whose versions are supported for at

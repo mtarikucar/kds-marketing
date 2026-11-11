@@ -10,7 +10,7 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   x: ['x'],
   mail: ['mailbox'],
   tiktok: ['tiktok'],
-  linkedin: ['linkedin_member', 'linkedin_page'],
+  linkedin: ['linkedin_member', 'linkedin_page', 'linkedin_ads'],
   google: ['google_ads'],
 };
 

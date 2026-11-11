@@ -44,6 +44,10 @@ const VERSION_HEADER: &str = "linkedin-version";
 const RESTLI_HEADER: &str = "x-restli-protocol-version";
 const RESTLI_VERSION: &str = "2.0.0";
 
+/// The header naming the Rest.li method of a call that is not a plain create, read or delete:
+/// the Advertising API's partial updates carry `PARTIAL_UPDATE`.
+const RESTLI_METHOD_HEADER: &str = "x-restli-method";
+
 /// Which grant a token call asks for: the errors of the two read differently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Grant {
@@ -302,6 +306,20 @@ impl LinkedinConnector {
         body: &Body<'_>,
         endpoint: Endpoint,
     ) -> Result<Answer, ConnectorError> {
+        self.call_as(method, url, auth, body, endpoint, None).await
+    }
+
+    /// [`call`](Self::call), naming the call's Rest.li method in `X-RestLi-Method` when
+    /// `restli_method` is given.
+    pub(crate) async fn call_as(
+        &self,
+        method: Method,
+        url: Url,
+        auth: Auth<'_>,
+        body: &Body<'_>,
+        endpoint: Endpoint,
+        restli_method: Option<&'static str>,
+    ) -> Result<Answer, ConnectorError> {
         let read_only = method == Method::GET;
         let attempts = if read_only { READ_ATTEMPTS.max(1) } else { 1 };
         let timeout = if endpoint == Endpoint::Upload {
@@ -345,6 +363,9 @@ impl LinkedinConnector {
                 request = request
                     .header(VERSION_HEADER, version.as_str())
                     .header(RESTLI_HEADER, RESTLI_VERSION);
+            }
+            if let Some(restli_method) = restli_method {
+                request = request.header(RESTLI_METHOD_HEADER, restli_method);
             }
             request = body.apply(request);
             match request.send(SCOPE).await {
