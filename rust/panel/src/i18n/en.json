@@ -321,7 +321,8 @@
     "strategy": "No approved strategy; preparation can continue, but publishing and spending wait.",
     "paid": "The strategy does not allow ad spending; campaigns are waiting.",
     "noPosting": "No hypothesis of the approved strategy posts; posts are waiting. If no posting cadence was ever written, submitting the strategy again completes it.",
-    "budget": "No ad budget has been set in Budget; campaigns are waiting."
+    "budget": "No ad budget has been set in Budget; campaigns are waiting.",
+    "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen."
   },
   "modulePages": {
       "materials": "Materials library",

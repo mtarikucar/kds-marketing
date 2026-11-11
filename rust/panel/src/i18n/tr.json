@@ -321,7 +321,8 @@
     "strategy": "Onaylı strateji yok; hazırlık yapılır, paylaşım ve harcama bekler.",
     "paid": "Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.",
     "noPosting": "Onaylı stratejide hiçbir hipotez paylaşım yapmıyor; paylaşımlar bekler. Paylaşım sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar.",
-    "budget": "Bütçe’de reklam bütçesi yok; kampanyalar bekler."
+    "budget": "Bütçe’de reklam bütçesi yok; kampanyalar bekler.",
+    "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin."
   },
   "modulePages": {
       "materials": "Materyal kütüphanesi",

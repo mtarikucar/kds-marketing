@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { listKeys } from '@/api/apiKeys';
 import { listBudgetItems } from '@/api/budget';
+import { listCapabilities } from '@/api/capabilities';
 import { getStrategy } from '@/api/strategy';
 import { getPending } from '@/api/work';
 import { useSession } from '@/auth/useSession';
@@ -21,6 +22,7 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
   const keys = useQuery({ queryKey: ['api-keys', workspace], queryFn: listKeys, enabled: can(session.data, 'api_keys.manage'), refetchInterval: 60_000 });
   const strategy = useQuery({ queryKey: ['strategy', workspace], queryFn: getStrategy });
   const budget = useQuery({ queryKey: ['budget-items', workspace], queryFn: listBudgetItems, enabled: module === 'ads' });
+  const adAccounts = useQuery({ queryKey: ['capabilities', workspace, 'meta_ads'], queryFn: () => listCapabilities({ kind: 'meta_ads' }), enabled: module === 'ads' });
   const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000 });
   const config = modules.data?.modules.find(m => m.blueprint.id === module)?.config;
   const assigned = config?.agent_ids ?? [];
@@ -43,6 +45,14 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
     const sections = strategy.data?.approved?.sections;
     if (sections && !(sections.paid_enabled && sections.budget_frame.lanes.some(l => l.lane === 'paid' && (!currency || l.currency === currency)))) rows.push({ key: 'paid', text: t('moduleStatus.paid'), href: '/strategy' });
     if (budget.data && !general) rows.push({ key: 'budget', text: t('moduleStatus.budget'), href: '/budget' });
+    // A connection may read an ad account without being allowed to create ads in it (the
+    // server's rule, `studio::chain::capability_access`): every plan is then refused.
+    const connected = adAccounts.data?.filter(c => c.effective_status === 'verified');
+    const creates = (c: NonNullable<typeof connected>[number]) => {
+      const scopes = (c.capability.connector_public.access as { scopes?: unknown } | undefined)?.scopes;
+      return Array.isArray(scopes) && scopes.includes('ads_management');
+    };
+    if (connected?.length && !connected.some(creates)) rows.push({ key: 'ad-scope', text: t('moduleStatus.adScope'), href: '/capabilities' });
   }
   if (!rows.length) return null;
   return <section aria-label={t('moduleStatus.label')} className="space-y-2 border-s-2 border-warning bg-warning-subtle px-4 py-3 text-sm">{rows.map(row => <p key={row.key}><Link className="break-words underline underline-offset-4" to={row.href}>{row.text}</Link></p>)}</section>;
