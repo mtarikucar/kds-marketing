@@ -9,7 +9,7 @@ fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
 [[ $# == 3 ]] || fail 'usage: staging FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
 [[ "$ENVIRONMENT" == staging ]] || fail 'this reviewed operation is authorized for staging only'
-PINNED_REV=a00fe6cc48a51ef024fbf6bd8827b3750d7daad2
+PINNED_REV=f7be8eb1beefc92c713c6f807c89ff1192945fad
 # This candidate carries no migration: the database is at schema 40 before and after. The checks
 # below refuse a candidate that would apply one.
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
@@ -24,7 +24,7 @@ case "$ENVIRONMENT" in
     UNIT=jeeta-staging.service LINK=/opt/jeeta/staging-current OTHER_LINK=/opt/jeeta/current
     ENVFILE=/etc/jeeta-staging/jeeta.env PORT=5437 HTTP_PORT=8091 REHEARSAL_PORT=18091
     SERVICE_USER=jeeta-staging FILES=/var/lib/jeeta-staging/files HOST=staging.jeetagrowth.com
-    PREDECESSOR=a621e9aefea62f4a546d50d6f43b16b5c80b5b1f
+    PREDECESSOR=a00fe6cc48a51ef024fbf6bd8827b3750d7daad2
     UPGRADE=/root/staging-upgrade.sh
     UPGRADE_SHA256=120ff74c1b8ae34cc6f9a23328b5425f2c67818a4b9a3b32fd56a9c3b5935929
     BACKUP_ROOT=/var/backups/jeeta-staging/release-operations
