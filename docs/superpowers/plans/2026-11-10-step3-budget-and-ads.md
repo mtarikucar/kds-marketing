@@ -423,6 +423,8 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     first real run. Every call on an ad account (the account, its campaigns, ad sets, ads,
     creatives, previews, insights, lead forms; listing and probing ad accounts) now goes out on
     `v27.0` or on a newer version the Meta app names (B54, `jt_meta::ADS_API_VERSION`,
-    `GraphApp::for_ads`). The other Meta calls are unchanged. Staging release `7891020b` does
-    not carry this; there, setting `JEETA_META_GRAPH_VERSION=v27.0` has the same effect on the
-    ad calls but moves every other Meta call too.
+    `GraphApp::for_ads`). The other Meta calls are unchanged. Committed as `d0e0f893`; CI run
+    `42962669127` passed all nine jobs. Published to staging on 2026-11-11 at 05:31 UTC as a
+    release without a migration (record `ops/staging-d0e0f893.md` on `ops/release-dd66e8dc`);
+    the operator script printed the serving binary as the candidate's. Tested against the Graph
+    mock only: no call has been made to Meta on any version.
