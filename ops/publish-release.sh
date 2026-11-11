@@ -9,11 +9,9 @@ fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
 [[ $# == 3 ]] || fail 'usage: staging FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
 [[ "$ENVIRONMENT" == staging ]] || fail 'this reviewed operation is authorized for staging only'
-PINNED_REV=7891020bb3f88c4db0b52185213d26465d6db1ac
-# Migration 33 drops the three commission tables with their rows, and its down does not bring the
-# rows back. The counts the owner has seen and accepted to lose, as commissions|commission_default|
-# commission_user_rates: any other count stops the operation before the swap.
-EXPECTED_COMMISSION_ROWS='0|0|0'
+PINNED_REV=d0e0f893f2a6cfa2bb763735b303df41c89f24c7
+# This candidate carries no migration: the database is at schema 40 before and after. The checks
+# below refuse a candidate that would apply one.
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid archive digest'
 [[ "$EUID" == 0 ]] || fail 'run as root on the audited installation'
@@ -26,7 +24,7 @@ case "$ENVIRONMENT" in
     UNIT=jeeta-staging.service LINK=/opt/jeeta/staging-current OTHER_LINK=/opt/jeeta/current
     ENVFILE=/etc/jeeta-staging/jeeta.env PORT=5437 HTTP_PORT=8091 REHEARSAL_PORT=18091
     SERVICE_USER=jeeta-staging FILES=/var/lib/jeeta-staging/files HOST=staging.jeetagrowth.com
-    PREDECESSOR=afe69bd490dd0555e403b6c2e165d8684839a87a
+    PREDECESSOR=7891020bb3f88c4db0b52185213d26465d6db1ac
     UPGRADE=/root/staging-upgrade.sh
     UPGRADE_SHA256=120ff74c1b8ae34cc6f9a23328b5425f2c67818a4b9a3b32fd56a9c3b5935929
     BACKUP_ROOT=/var/backups/jeeta-staging/release-operations
@@ -139,9 +137,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 # Verify all archive members and contents before any application is stopped. Secret values stay
 # inside this process or protected files; never source/print the environment or pass a DSN in argv.
-python3 -I - "$ARCHIVE" "$CANDIDATE" "$REV" "$ENVIRONMENT" "$ENVFILE" "$FILES" "$PORT" "$HTTP_PORT" "$HOST" "$PREVIOUS" "$EXPECTED_COMMISSION_ROWS" <<'PY'
+python3 -I - "$ARCHIVE" "$CANDIDATE" "$REV" "$ENVIRONMENT" "$ENVFILE" "$FILES" "$PORT" "$HTTP_PORT" "$HOST" "$PREVIOUS" <<'PY'
 import hashlib,json,os,pathlib,re,shlex,stat,subprocess,sys,tarfile,urllib.parse
-archive,dest,rev,environment,envfile,files,port,http_port,host,previous,expected_commission_rows=sys.argv[1:]
+archive,dest,rev,environment,envfile,files,port,http_port,host,previous=sys.argv[1:]
 root=pathlib.Path(dest)
 with tarfile.open(archive) as source:
     seen=set()
@@ -217,18 +215,14 @@ def sql(query):
 assert sql("SELECT rolsuper,rolbypassrls,rolcanlogin FROM pg_roles WHERE rolname='"+role+"'").strip()=='f|f|t', 'Application role must be ordinary'
 rows=sql("SELECT version,encode(checksum,'hex'),success FROM _sqlx_migrations ORDER BY version")
 actual=[line.split('|') for line in rows.splitlines()]
-versions=list(range(1,33)) if environment=='staging' else list(range(1,20))+list(range(21,26))
+versions=list(range(1,41)) if environment=='staging' else list(range(1,20))+list(range(21,26))
 assert [int(row[0]) for row in actual]==versions, 'Unexpected applied migration set'
 assert all(row==[str(int(row[0])),expected[int(row[0])]['up_sha384'],'t'] for row in actual), 'Changed or failed migration'
-assert set(expected)-set(versions)==(set(range(33,41)) if environment=='staging' else {20,*range(26,41)})
+assert set(expected)-set(versions)==(set() if environment=='staging' else {20,*range(26,41)})
 if environment=='staging':
-    assert sql("SELECT to_regclass('public.social_account_days') IS NULL AND to_regclass('public.ads_campaigns') IS NULL").strip()=='t', 'Unexpected pre-existing social account or ad campaign table'
-    assert sql("SELECT to_regclass('public.workspace_modules') IS NOT NULL").strip()=='t', 'Module registry of the predecessor is missing'
-    # Nothing is stopped or changed while the commission tables hold other rows than the owner
-    # accepted to lose (EXPECTED_COMMISSION_ROWS): the owner sees the counts first.
-    commission_rows=sql("SELECT (SELECT count(*) FROM commissions),(SELECT count(*) FROM commission_default),(SELECT count(*) FROM commission_user_rates)").strip()
-    print('Commission rows before migration 33 (commissions|commission_default|commission_user_rates):',commission_rows)
-    assert commission_rows==expected_commission_rows, 'Commission rows differ from the accepted counts; migration 33 would delete them'
+    # The predecessor's schema 40, as its release left it.
+    assert sql("SELECT to_regclass('public.social_account_days') IS NOT NULL AND to_regclass('public.ads_campaigns') IS NOT NULL AND to_regclass('public.workspace_modules') IS NOT NULL").strip()=='t', 'A table of the predecessor is missing'
+    assert sql("SELECT to_regclass('public.commissions') IS NULL AND to_regclass('public.commission_default') IS NULL AND to_regclass('public.commission_user_rates') IS NULL").strip()=='t', 'Unexpected commission table'
 old=json.loads((pathlib.Path(previous)/'manifest.json').read_text())
 assert old['source_revision']==pathlib.Path(previous).name
 assert [x['version'] for x in old['migrations']]==versions
@@ -237,7 +231,7 @@ assert all(entry==expected[entry['version']] for entry in old['migrations']), 'P
 (root/'database-migrations').write_text(rows)
 (root/'database-role').write_text(role)
 (root/'environment.sha256').write_text(hashlib.sha256(pathlib.Path(envfile).read_bytes()).hexdigest())
-print('Complete candidate verified; exact predecessor and reviewed migration delta match')
+print('Complete candidate verified; exact predecessor matches and the candidate carries no migration')
 PY
 # A complete content comparison prevents the upgraders' existing-directory shortcut from
 # accepting stale scripts/docs/extra assets. Installed paths must be root-owned and immutable.
@@ -344,24 +338,11 @@ values.update(JEETA_BIND='127.0.0.1:'+port,JEETA_ALLOWED_HOSTS='127.0.0.1:'+port
 (root/'rehearsal.env').write_text(''.join(k+'='+json.dumps(v,ensure_ascii=False)+'\n' for k,v in values.items()));(root/'rehearsal.env').chmod(0o600)
 PY
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT format('SELECT %L, count(*) FROM %I.%I;', tablename, schemaname, tablename) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('_sqlx_migrations','commissions','commission_default','commission_user_rates','workspace_modules') ORDER BY tablename" > "$BACKUP/count-original-tables.sql"
+  "SELECT format('SELECT %L, count(*) FROM %I.%I;', tablename, schemaname, tablename) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('_sqlx_migrations') ORDER BY tablename" > "$BACKUP/count-original-tables.sql"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 < "$BACKUP/count-original-tables.sql" > "$BACKUP/rows-before"
-# The checks below are written for staging's predecessor (schema 32); the retained production
-# branch has no workspace_modules before its migration and must be reworked before it is enabled.
-# The commission rows once more, now that the service is stopped (the restored copy is the stopped
-# database): a row written between the first check and the stop must not be lost unseen. The
-# counts are what migration 33 deletes; the rows themselves stay in the recovery set's dump.
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT (SELECT count(*) FROM commissions),(SELECT count(*) FROM commission_default),(SELECT count(*) FROM commission_user_rates)" > "$BACKUP/rows-dropped-by-migration-33"
-[[ $(cat "$BACKUP/rows-dropped-by-migration-33") == "$EXPECTED_COMMISSION_ROWS" ]] || fail 'commission rows changed after the pre-check; migration 33 would delete rows the owner has not seen'
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT count(*) FROM workspace_modules" > "$BACKUP/module-registries-before"
-# What the split must carry over: the registries that hold a growth-studio entry, and the roles
-# and keys that hold the studio work permission.
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT count(*) FROM workspace_modules w WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.data->'modules')='array' THEN w.data->'modules' ELSE '[]'::jsonb END) e WHERE e->'blueprint'->>'id'='growth-studio')" > "$BACKUP/growth-studio-registries-before"
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT (SELECT count(*) FROM roles WHERE permissions @> ARRAY['studio.work']::text[])+(SELECT count(*) FROM api_keys WHERE scopes @> ARRAY['studio.work']::text[])" > "$BACKUP/studio-work-grants-before"
+# The checks below are written for staging's predecessor (schema 40) and a candidate without a
+# migration: every table keeps its row count through the candidate's start, the module registry
+# included. The retained production branch must be reworked before it is enabled.
 VERIFY_UNIT=jeeta-${ENVIRONMENT}-rehearsal-${REV:0:8}-$(date +%s)
 UNSET_ENV='JEETA_PLATFORM_BOOTSTRAP_EMAIL JEETA_PLATFORM_BOOTSTRAP_PASSWORD JEETA_PLATFORM_BOOTSTRAP_RESET JEETA_META_APP_ID JEETA_META_APP_SECRET JEETA_META_VERIFY_TOKEN JEETA_META_LOGIN_CONFIG_ID JEETA_META_WHATSAPP_CONFIG_ID JEETA_META_GRAPH_VERSION JEETA_META_COMMENT_SCOPES JEETA_INSTAGRAM_APP_ID JEETA_INSTAGRAM_APP_SECRET JEETA_INSTAGRAM_COMMENT_SCOPES JEETA_X_CLIENT_ID JEETA_X_CLIENT_SECRET JEETA_TIKTOK_CLIENT_KEY JEETA_TIKTOK_CLIENT_SECRET JEETA_LINKEDIN_CLIENT_ID JEETA_LINKEDIN_CLIENT_SECRET JEETA_LINKEDIN_API_VERSION JEETA_LINKEDIN_ORG_SCOPES JEETA_HEPSIBURADA_INTEGRATOR_USER JEETA_RECOVERY_STATUS_DIR JEETA_WAL_ARCHIVE_DIR JEETA_ALLOW_SUPERUSER JEETA_ALLOW_TEST_LOOPBACK JEETA_STDIO_API_KEY JEETA_TEST_DATABASE_URL'
 systemd-run --quiet --unit="$VERIFY_UNIT" --property=Type=simple --property=User="$SERVICE_USER" --property=Group="$SERVICE_USER" \
@@ -386,23 +367,6 @@ cmp "$BACKUP/rows-before" "$BACKUP/rows-after"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*) FROM pg_class WHERE relname IN ('social_account_days','ads_campaigns') AND relnamespace='public'::regnamespace AND relrowsecurity AND relforcerowsecurity" > "$BACKUP/analysis-rls"
 [[ $(cat "$BACKUP/analysis-rls") == 2 ]] || fail 'social account and ad campaign tables must force RLS'
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT to_regclass('public.commissions') IS NULL AND to_regclass('public.commission_default') IS NULL AND to_regclass('public.commission_user_rates') IS NULL" > "$BACKUP/commission-tables-gone"
-[[ $(cat "$BACKUP/commission-tables-gone") == t ]] || fail 'commission tables remain after migration 33'
-# Migration 34: no registry keeps a growth-studio entry, no registry is lost, and every workspace
-# has one. Migration 35: no role or key keeps a permission the split replaced.
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT NOT EXISTS (SELECT 1 FROM workspace_modules w, jsonb_array_elements(CASE WHEN jsonb_typeof(w.data->'modules')='array' THEN w.data->'modules' ELSE '[]'::jsonb END) e WHERE e->'blueprint'->>'id'='growth-studio') AND (SELECT count(*) FROM workspace_modules)>=$(cat "$BACKUP/module-registries-before") AND (SELECT count(*) FROM workspace_modules)=(SELECT count(*) FROM workspaces)" > "$BACKUP/module-split"
-[[ $(cat "$BACKUP/module-split") == t ]] || fail 'module registries differ after the growth studio split'
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT NOT EXISTS (SELECT 1 FROM roles WHERE permissions && ARRAY['studio.work','studio.manage']::text[]) AND NOT EXISTS (SELECT 1 FROM api_keys WHERE scopes && ARRAY['studio.work','studio.manage']::text[])" > "$BACKUP/permission-split"
-[[ $(cat "$BACKUP/permission-split") == t ]] || fail 'a role or key keeps a studio permission after the permission split'
-# Replaced, not merely removed: at least as many registries hold the four new modules as held the
-# growth studio, and at least as many roles and keys hold the four work permissions as held
-# studio.work.
-sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
-  "SELECT (SELECT count(*) FROM workspace_modules w WHERE (SELECT count(DISTINCT e->'blueprint'->>'id') FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.data->'modules')='array' THEN w.data->'modules' ELSE '[]'::jsonb END) e WHERE e->'blueprint'->>'id' IN ('content','social','ads','materials'))=4)>=$(cat "$BACKUP/growth-studio-registries-before") AND (SELECT count(*) FROM roles WHERE permissions @> ARRAY['content.work','social.work','ads.work','materials.work']::text[])+(SELECT count(*) FROM api_keys WHERE scopes @> ARRAY['content.work','social.work','ads.work','materials.work']::text[])>=$(cat "$BACKUP/studio-work-grants-before")" > "$BACKUP/split-carried-over"
-[[ $(cat "$BACKUP/split-carried-over") == t ]] || fail 'the module or permission split lost what it replaced'
 sudo -u postgres dropdb -p "$PORT" "$VERIFY_DB"
 VERIFY_DB=''
 (cd "$BACKUP" && sha256sum database.dump files.tar jeeta.env manifest.json REVISION database-migrations > SHA256SUMS && sha256sum --check --status SHA256SUMS)
@@ -425,6 +389,10 @@ check_digest "$(cat "$CANDIDATE/environment.sha256")" "$ENVFILE" || fail 'enviro
 systemctl is-active --quiet "$UNIT"
 curl --fail --silent --show-error --max-time 10 --noproxy '*' -H "Host: $HOST" "http://127.0.0.1:$HTTP_PORT/readyz" > "$BACKUP/local-readyz"
 curl --fail --silent --show-error --max-time 20 --noproxy '*' "https://$HOST/readyz" > "$BACKUP/public-readyz"
+# A candidate without a migration leaves no trace in the database: say which binary serves.
+# Printed, not enforced: the unit's start command is not this script's to assume.
+SERVING=$(readlink -f "/proc/$(systemctl show "$UNIT" -p MainPID --value)/exe" 2>/dev/null || true)
+printf 'Serving binary: %s (candidate: %s/jeeta)\n' "${SERVING:-unknown}" "$DEST"
 migration_snapshot jeeta > "$BACKUP/published-migrations"
 cmp "$CANDIDATE/expected-migrations" "$BACKUP/published-migrations"
 install -d -m 0700 "$PROMOTIONS"
