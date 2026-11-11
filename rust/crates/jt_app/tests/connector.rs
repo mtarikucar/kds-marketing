@@ -84,7 +84,12 @@ struct Rig {
     x_oauth: Arc<ScriptedOAuth>,
     tiktok_oauth: Arc<ScriptedOAuth>,
     linkedin_oauth: Arc<ScriptedOAuth>,
+    google: Arc<ScriptedConnector>,
+    google_oauth: Arc<ScriptedOAuth>,
 }
+
+/// The hosts the Google adapter reaches (`jt_google::GOOGLE_HOSTS`).
+const GOOGLE_HOSTS: &[&str] = &["googleads.googleapis.com", "oauth2.googleapis.com"];
 
 async fn rig() -> Rig {
     let mut w = world().await;
@@ -98,12 +103,16 @@ async fn rig() -> Rig {
     let x_oauth = Arc::new(ScriptedOAuth::new(Provider::X));
     let tiktok_oauth = Arc::new(ScriptedOAuth::new(Provider::Tiktok));
     let linkedin_oauth = Arc::new(ScriptedOAuth::new(Provider::Linkedin));
+    let google = Arc::new(ScriptedConnector::new(Provider::Google).with_hosts(GOOGLE_HOSTS));
+    let google_oauth = Arc::new(ScriptedOAuth::new(Provider::Google));
     let registry = ScriptedRegistry::new()
         .with_connector(meta.clone())
         .with_connector(netgsm.clone())
         .with_connector(x)
         .with_connector(tiktok)
         .with_connector(linkedin)
+        .with_connector(google.clone())
+        .with_oauth(google_oauth.clone())
         .with_oauth(meta_oauth.clone())
         .with_oauth(x_oauth.clone())
         .with_oauth(tiktok_oauth.clone())
@@ -118,6 +127,8 @@ async fn rig() -> Rig {
         x_oauth,
         tiktok_oauth,
         linkedin_oauth,
+        google,
+        google_oauth,
     }
 }
 
@@ -569,7 +580,12 @@ async fn each_app_starts_and_exchanges_with_its_own_redirect_uri() {
             ("x", Provider::X),
             ("tiktok", Provider::Tiktok),
             ("linkedin", Provider::Linkedin),
+            ("google", Provider::Google),
         ]
+    );
+    assert_eq!(
+        OAuthCallback::of_flow(Provider::Google, "google_ads"),
+        Some(OAuthCallback::Google)
     );
     assert_eq!(OAuthCallback::of_flow(Provider::Netgsm, "sms_line"), None);
     // Both LinkedIn kinds come back to the one LinkedIn callback.
@@ -610,6 +626,78 @@ async fn tiktok_and_linkedin_start_oauth_build_redirect() {
     assert_eq!(started.len(), 2);
     assert_eq!(started[0].payload["provider"], "tiktok");
     assert_eq!(started[1].payload["provider"], "linkedin");
+}
+
+/// A Google Ads account connects through Google's sign-in like any OAuth kind: the flow is kept
+/// under Google and its own app, the accounts the sign-in reaches are offered, and the one chosen
+/// becomes a verified `google_ads` capability holding the sign-in's credential.
+#[tokio::test]
+async fn a_google_ads_account_connects_through_googles_sign_in() {
+    const ADWORDS: &str = "https://www.googleapis.com/auth/adwords";
+    let r = rig().await;
+    let out = r.start("google_ads").await;
+    assert_eq!(query(&out, "code_challenge"), None);
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.state_hash == hash_token(&state_of(&out)))
+        .expect("a pending flow");
+    assert_eq!(
+        (row.provider, row.app),
+        (Provider::Google, OAuthCallback::Google)
+    );
+    assert_eq!(row.kind_key, "google_ads");
+    let credential = Credential::OAuth {
+        access_token: "ya29.test-access".into(),
+        refresh_token: Some("1//test-refresh".into()),
+        expires_at: Some(FIXED_NOW + time::Duration::hours(1)),
+        scopes: vec![ADWORDS.into()],
+    };
+    r.google_oauth.push_exchange(Ok(credential.clone()));
+    r.google_oauth.push_assets(Ok(vec![Asset {
+        kind_key: "google_ads".into(),
+        external_id: "1234567890".into(),
+        name: "Arama hesabı".into(),
+        credential: credential.clone(),
+        public: json!({"currency":"TRY","time_zone":"Europe/Istanbul","test_account":false}),
+    }]));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&r.w.deps, &owner, &state_of(&out), "code-g")
+        .await
+        .unwrap();
+    r.google.push_probe(ok_probe("1234567890"));
+    let mut connected = r.confirm(&pending, &["1234567890"]).await;
+    assert_eq!(connected.len(), 1);
+    let capability = connected.remove(0).capability;
+    assert_eq!(capability.kind_key, "google_ads");
+    assert_eq!(capability.external_id.as_deref(), Some("1234567890"));
+    assert_eq!(capability.status, StoredStatus::Verified);
+    assert_eq!(capability.connector_public["access"]["app"], "google");
+    assert_eq!(
+        capability.connector_public["access"]["scopes"],
+        json!([ADWORDS])
+    );
+    assert_eq!(r.sealed_credential(capability.id), credential);
+    // Its credentials come from the sign-in only: none are entered by hand.
+    assert_eq!(
+        err(connector::set_credentials(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            SetCredentials {
+                capability_id: None,
+                kind_key: Some("google_ads".into()),
+                name: Some("Elle".into()),
+                external_id: Some("1234567890".into()),
+                credential: CredentialInput::MetaToken {
+                    access_token: "x".into(),
+                },
+            },
+        )
+        .await)
+        .code,
+        ErrorCode::Validation
+    );
 }
 
 /// A LinkedIn page needs the organization scopes, which LinkedIn grants only once it approved

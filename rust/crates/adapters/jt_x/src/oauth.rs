@@ -33,7 +33,8 @@ fn x_app_of(app: &OAuthApp) -> Result<&XApp, ConnectorError> {
         OAuthApp::Meta(_)
         | OAuthApp::Instagram(_)
         | OAuthApp::Tiktok(_)
-        | OAuthApp::Linkedin(_) => Err(ConnectorError::permanent("only the X app signs in to X")),
+        | OAuthApp::Linkedin(_)
+        | OAuthApp::Google(_) => Err(ConnectorError::permanent("only the X app signs in to X")),
     }
 }
 

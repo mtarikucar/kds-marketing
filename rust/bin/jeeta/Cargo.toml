@@ -29,6 +29,7 @@ jt_netgsm.workspace = true
 jt_x.workspace = true
 jt_tiktok.workspace = true
 jt_linkedin.workspace = true
+jt_google.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true

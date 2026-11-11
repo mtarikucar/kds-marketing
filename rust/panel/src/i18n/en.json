@@ -1580,11 +1580,12 @@
       "tls": "TLS mode"
     },
     "title": "Connect an account",
-    "description": "Connect your provider accounts to the workspace. For Meta, X, TikTok and LinkedIn you sign in at the provider; for NetGSM you enter your credentials.",
+    "description": "Connect your provider accounts to the workspace. For Meta, X, TikTok, LinkedIn and Google you sign in at the provider; for NetGSM you enter your credentials.",
     "open": "Connect an account",
     "kindsLabel": "Kind of account to connect",
     "chooseKind": "Choose the kind of account to connect first.",
     "providers": {
+      "google": "Google",
       "linkedin": "LinkedIn",
       "mail": "Email",
       "meta": "Meta",

@@ -23,7 +23,10 @@ is written in its crate docs with the page it was read from.
 - The campaign budget is the platform's own total budget (B32). X documents no hard cap (B67).
 - No `cargo fmt --all` (use `rustfmt --edition 2024 <files>`); `jobs = 8`; one heavy cargo job at a
   time; i18n keys line by line; commits carry no AI attribution; only own files by explicit path.
-- Migrations: none expected (the campaign is one JSON record; new fields are `serde(default)`).
+- Migrations: the campaign needs none (it is one JSON record; new fields are `serde(default)`).
+  A provider that signs in through OAuth needs one: `oauth_pending` checks its `provider` and
+  `app` against a closed list (task 2 found this with a real database: `0041_google_provider`).
+  Every migration is a reversible pair whose round trip is tested.
 
 ## Review focus
 
@@ -92,7 +95,7 @@ findings of a refused plan.
 - [x] 1.2 `plan.rs` by rules + schema; tests for the Google shape and the Meta shape unchanged.
 - [x] 1.3 `build.rs`, `watch.rs`, `mod.rs`; tests for the Google build order and the held-ad pause.
 - [x] 1.4 MCP descriptions, agent brief, panel, i18n; panel tests.
-- [ ] 1.5 `make check`, README, design/plan log, commit, push.
+- [x] 1.5 `make check`, README, design/plan log, commit, push.
 
 ## Task 2 — Google Ads adapter (`jt_google`)
 
@@ -104,9 +107,9 @@ assets with currency, time zone and status, probe, `AdCampaignWriter` + `AdBudge
 `JEETA_GOOGLE_ADS_DEVELOPER_TOKEN` when the API still asks for one), `OAuthCallback::Google`,
 `FIXED_HOSTS`, registry, connect use case, panel connect card, deployment env docs.
 
-- [ ] 2.1 Crate, client, error table, OAuth + refresh, assets, probe; tests against an in-process mock.
-- [ ] 2.2 Writer: budget → campaign → ad group (+ country, keywords) → ad; idempotent by name; status.
-- [ ] 2.3 Reads: state and daily numbers; tests.
+- [x] 2.1 Crate, client, error table, OAuth + refresh, assets, probe; tests against an in-process mock.
+- [x] 2.2 Writer: budget → campaign → ad group (+ country, keywords) → ad; idempotent by name; status.
+- [x] 2.3 Reads: state and daily numbers; tests.
 - [ ] 2.4 Wiring, panel, README; `make check`; commit, push; staging release when the owner agrees.
 
 ## Task 3 — LinkedIn ads (in `jt_linkedin`)
@@ -157,3 +160,34 @@ Done as planned, with these differences and additions:
   and 10 words: the API reference of `KeywordInfo`).
 - Builder's calls added to the design: B76 (phrase match), B77 (held ads paused again, replacing
   the refusal of B73), B78 (truth check of text-only ads), B79 (no EU targeting on any platform).
+
+### Task 2 (2026-11-11)
+
+`jt_google` is built as planned (crate docs hold every call). What differs from the plan and what
+was decided on the way:
+
+- **No developer token.** Google gives API access per Google Cloud project now; the only settings
+  are `JEETA_GOOGLE_CLIENT_ID` and `JEETA_GOOGLE_CLIENT_SECRET`.
+- **Field names come from Google's own REST description** (the v26 discovery document), not from
+  the guide pages, which mix spellings.
+- **Idempotency.** Campaign and ad group are looked up by name. A search ad has no name at Google,
+  so the ad step adopts an ad of the ad group that already says the same (B81); the core therefore
+  refuses two ads that say the same on Google (`same_as_another_ad`, in a plan and in a move).
+- **Atomic steps.** Budget + campaign are one mutate; ad group + its country criteria + its
+  keywords are one mutate. Nothing of ours can exist half built.
+- **Days, not instants** (B80): the core's longest run on Google became 89 days.
+- **The stored credential names no end** (B83): found while reading the access check
+  (`chain::capability_access` refuses a connection whose `access.expires_at` passed, and Google's
+  access token lives exactly as long as the refresh job's round). The adapter gets an access token
+  per call with the refresh token and keeps it in memory.
+- **A migration after all**: `0041_google_provider` widens the two checks of `oauth_pending`
+  (`provider`, `app`) to take `google`. The in-memory tests could not see the need; the server's
+  own test against a real database did (`500` on `connector.start_oauth`). Its down keeps the
+  widened checks while a Google flow is pending and touches no row; up, down, up is tested.
+  LinkedIn and X ads reuse their providers and callbacks; TikTok ads will need the same kind of
+  migration for its second app.
+- **Platform project errors are the platform's** (B84).
+- Only Google Search, people present in the countries, phrase match, maximize clicks (B76, B82).
+- Not built: manager-account access, Demand Gen, a keyword forecast, conversion tracking.
+- A local run of `m4_deployment::production_build_refuses_test_loopback` fails on this machine
+  because `target/release/jeeta` is older than migrations 0039 and 0040; CI builds its own.

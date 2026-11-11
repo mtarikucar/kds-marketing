@@ -52,9 +52,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Start connecting an account through its provider's sign-in (OAuth): \
                           kind_key is a Meta kind (instagram, facebook_page, whatsapp_cloud, \
                           instagram_dm, messenger, meta_ads), x, tiktok, linkedin_member (a \
-                          LinkedIn member's own feed) or linkedin_page (an organization page; \
+                          LinkedIn member's own feed), linkedin_page (an organization page; \
                           CONFLICT provider_product_not_enabled until the platform's LinkedIn app \
-                          is approved for organizations) (review_facebook cannot be connected \
+                          is approved for organizations) or google_ads (the Google Ads accounts \
+                          the signed-in user reaches directly) (review_facebook cannot be connected \
                           yet: no sign-in finds Facebook comments); NetGSM kinds (sms_line, \
                           netgsm_pbx) take credentials instead (jeeta.connector.set_credentials). \
                           flow whatsapp_business_app (with whatsapp_cloud only) connects a number \
@@ -253,13 +254,15 @@ struct CapabilityArgs {
     capability_id: Uuid,
 }
 
-/// The JSON Schema of a kind OAuth connects: every kind Meta, X, TikTok or LinkedIn serves.
+/// The JSON Schema of a kind OAuth connects: every kind Meta, X, TikTok, LinkedIn or Google
+/// serves.
 fn oauth_kind_schema(_: &mut SchemaGenerator) -> Schema {
     let kinds: Vec<&str> = [
         jt_connector::Provider::Meta,
         jt_connector::Provider::X,
         jt_connector::Provider::Tiktok,
         jt_connector::Provider::Linkedin,
+        jt_connector::Provider::Google,
     ]
     .iter()
     .flat_map(|p| p.kinds().iter().copied())

@@ -1,0 +1,36 @@
+[package]
+name = "jt_google"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The Google adapter: OAuth 2.0 (a confidential web client with offline access), the Google Ads
+# accounts the signed-in user reaches directly, and search campaigns built in them through the
+# Google Ads API's REST interface: a total budget, the campaign, its ad group with its keywords
+# and countries, responsive search ads, their states and their daily numbers. It holds no HTTP
+# client: every call goes through `jt_outbound::Egress` under the `google` connector scope
+# (`jt_archtest` asserts no HTTP client crate is listed or named here).
+[dependencies]
+jt_app.workspace = true
+jt_connector.workspace = true
+jt_outbound.workspace = true
+serde_json.workspace = true
+time.workspace = true
+url.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+# A campaign's start and end are given to Google in the ad account's own time zone.
+chrono.workspace = true
+chrono-tz.workspace = true
+# `time`: the pause before a read that got no answer is tried again.
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+# Plain http to the in-process mock on 127.0.0.1, for the tests only (see jt_outbound's docs).
+jt_outbound = { workspace = true, features = ["test-loopback"] }
+axum.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+
+[lints]
+workspace = true

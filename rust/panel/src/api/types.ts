@@ -865,8 +865,8 @@ export const MAX_CHECKIN_INTERVAL_MINUTES = 10_080;
 // ---------------------------------------------------------------------------------------------
 
 /** `jt_connector::Provider`. */
-export type Provider = 'meta' | 'netgsm' | 'x' | 'mail' | 'tiktok' | 'linkedin';
-export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin'];
+export type Provider = 'meta' | 'netgsm' | 'x' | 'mail' | 'tiktok' | 'linkedin' | 'google';
+export const PROVIDERS: readonly Provider[] = ['meta', 'netgsm', 'x', 'mail', 'tiktok', 'linkedin', 'google'];
 
 /** `jt_app::usecases::connector::StartOut`: where to send the browser, until when. */
 export interface StartOut {

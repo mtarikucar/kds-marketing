@@ -1,18 +1,19 @@
 //! The provider adapters the server runs: Meta (`jt_meta`), NetGSM (`jt_netgsm`), X (`jt_x`),
-//! TikTok (`jt_tiktok`), LinkedIn (`jt_linkedin`) and mail (`jt_mail`),
+//! TikTok (`jt_tiktok`), LinkedIn (`jt_linkedin`), Google (`jt_google`) and mail (`jt_mail`),
 //! each sending to its production hosts through the one egress client the server builds, behind
 //! the use cases' [`ConnectorRegistry`] port.
 //!
 //! Each adapter is offered for exactly the operations it implements:
 //!
-//! | provider | connector | OAuth | SMS, calls, consent, delivery reports | publishing, counters | messaging, ad budgets, lead-gen |
-//! |---|---|---|---|---|---|
-//! | Meta | ✓ | ✓ | — | ✓ | ✓ |
-//! | NetGSM | ✓ | — (credentials by hand) | ✓ | — | — |
-//! | X | ✓ | ✓ | — | ✓ | — |
-//! | TikTok | ✓ | ✓ | — | ✓ | — |
-//! | LinkedIn | ✓ | ✓ | — | ✓ | — |
-//! | Trendyol, Hepsiburada | — (their adapters come with the marketplace tasks T1 and H1) | — | — | — | — |
+//! | provider | connector | OAuth | SMS, calls, consent, delivery reports | publishing, counters | messaging, lead-gen | ad campaigns, ad statuses |
+//! |---|---|---|---|---|---|---|
+//! | Meta | ✓ | ✓ | — | ✓ | ✓ | ✓ |
+//! | NetGSM | ✓ | — (credentials by hand) | ✓ | — | — | — |
+//! | X | ✓ | ✓ | — | ✓ | — | — |
+//! | TikTok | ✓ | ✓ | — | ✓ | — | — |
+//! | LinkedIn | ✓ | ✓ | — | ✓ | — | — |
+//! | Google | ✓ | ✓ | — | — | — | ✓ |
+//! | Trendyol, Hepsiburada | — (their adapters come with the marketplace tasks T1 and H1) | — | — | — | — | — |
 //!
 //! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
 //!
@@ -29,6 +30,7 @@ use jt_app::ports::connectors::{
     PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
 use jt_connector::Provider;
+use jt_google::{GoogleBases, GoogleConnector};
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
 use jt_mail::MailConnector;
 use jt_meta::{MetaBases, MetaConnector};
@@ -66,8 +68,13 @@ pub fn registry(
             Arc::clone(&apps),
         )),
         linkedin: Arc::new(LinkedinConnector::new(
-            egress,
+            Arc::clone(&egress),
             LinkedinBases::production(),
+            Arc::clone(&apps),
+        )),
+        google: Arc::new(GoogleConnector::new(
+            egress,
+            GoogleBases::production(),
             apps,
         )),
     })
@@ -81,6 +88,7 @@ struct ProviderRegistry {
     x: Arc<XConnector>,
     tiktok: Arc<TiktokConnector>,
     linkedin: Arc<LinkedinConnector>,
+    google: Arc<GoogleConnector>,
 }
 
 impl ConnectorRegistry for ProviderRegistry {
@@ -92,7 +100,8 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Mail => self.mail.clone(),
             Provider::Tiktok => self.tiktok.clone(),
             Provider::Linkedin => self.linkedin.clone(),
-            Provider::Trendyol | Provider::Hepsiburada | Provider::Google => return None,
+            Provider::Google => self.google.clone(),
+            Provider::Trendyol | Provider::Hepsiburada => return None,
         })
     }
 
@@ -102,11 +111,8 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm
-            | Provider::Mail
-            | Provider::Trendyol
-            | Provider::Hepsiburada
-            | Provider::Google => None,
+            Provider::Google => Some(self.google.clone()),
+            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
 
@@ -155,11 +161,19 @@ impl ConnectorRegistry for ProviderRegistry {
     }
 
     fn ad_campaigns(&self, provider: Provider) -> Option<Arc<dyn AdCampaignWriter>> {
-        (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn AdCampaignWriter>)
+        match provider {
+            Provider::Meta => Some(self.meta.clone()),
+            Provider::Google => Some(self.google.clone()),
+            _ => None,
+        }
     }
 
     fn ads(&self, provider: Provider) -> Option<Arc<dyn AdBudgetWriter>> {
-        (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn AdBudgetWriter>)
+        match provider {
+            Provider::Meta => Some(self.meta.clone()),
+            Provider::Google => Some(self.google.clone()),
+            _ => None,
+        }
     }
 
     fn leadgen(&self, provider: Provider) -> Option<Arc<dyn LeadGenFetcher>> {
@@ -233,10 +247,8 @@ mod tests {
     }
 
     /// The providers whose adapters are not in the binary yet: the marketplaces (tasks T1 and H1
-    /// of plan 2026-10-30-inbox-comments-marketplace-plan.md) and Google (task 2 of plan
-    /// 2026-11-11-step4-ad-platforms.md).
-    const NOT_YET_SERVED: [Provider; 3] =
-        [Provider::Trendyol, Provider::Hepsiburada, Provider::Google];
+    /// of plan 2026-10-30-inbox-comments-marketplace-plan.md).
+    const NOT_YET_SERVED: [Provider; 2] = [Provider::Trendyol, Provider::Hepsiburada];
 
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
@@ -290,7 +302,10 @@ mod tests {
             ),
             (Provider::Trendyol, vec![]),
             (Provider::Hepsiburada, vec![]),
-            (Provider::Google, vec![]),
+            (
+                Provider::Google,
+                vec!["connector", "oauth", "ads", "ad_campaigns"],
+            ),
         ];
         assert_eq!(expected.len(), Provider::all().len());
         assert_eq!(
@@ -323,7 +338,11 @@ mod tests {
             scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(provider)));
             if matches!(
                 provider,
-                Provider::Meta | Provider::X | Provider::Tiktok | Provider::Linkedin
+                Provider::Meta
+                    | Provider::X
+                    | Provider::Tiktok
+                    | Provider::Linkedin
+                    | Provider::Google
             ) {
                 scripted = scripted.with_oauth(Arc::new(ScriptedOAuth::new(provider)));
             }

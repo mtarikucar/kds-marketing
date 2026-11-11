@@ -129,6 +129,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0038_lane_approval_to_connections` | Şeridin kendi "insan onayı ister" ayarı kalktı (2026-11-10, S18/B35): ayarı açık olan çalışma alanında o şeridin bugünkü bağlantılarının hepsi kendi `policy.requires_human_approval` işaretini alır (organik şerit: sosyal hesaplar; ücretli şerit: reklam hesabı), böylece dün insan bekleyen paylaşım bugün de bekler; ayar şerit kayıtlarından silinir. Göçten sonra yapılan bağlantı her bağlantı gibi işaretsiz başlar. `studio_control.lane_approval_moved` yalnızca geri alma içindir (hangi şeridin ayarı açıktı, göç hangi bağlantıları işaretledi); uygulama okumaz. Geri alma, kayıttaki şeritlerin ayarını geri açar, göçün işaretlediği bağlantıların işaretini kaldırır (kişinin kendi koyduğu işarete dokunmaz), her şerit kaydına alanı geri yazar ve sütunu kaldırır. Tablo eklemez. |
 | `0039_general_ad_budget` | Bütçe (2026-11-10, B37): `budget_items.general` (çalışma alanının genel reklam bütçesi; yalnızca para birimli, dönemi `total` olmayan bir `ad_budget` kalemi, çalışma alanı başına en çok bir canlı kalem: `budget_items_general_rule` CHECK ve `budget_items_one_general` kısmi tekil dizini). Sütun geldiği anda tam bir uygun canlı kalemi olan çalışma alanında o kalem işaretlenir; hiç yoksa ya da birden çoksa kişi Bütçe'de seçer. `budget_spend_entries.module` (`ads`, `inbox`, `outreach`, `calls`, `social`; elle girilen harcamada boş) ve `campaign_id`. Geri alma işareti, kuralı, dizini ve iki sütunu kaldırır; kalemler ve harcama kayıtları kalır. Tablo eklemez. |
 | `0040_ads_campaigns` | Reklam yönetimi (2026-11-10, §8): `ads_campaigns` (kampanya başına tek belge: hedef, bütçe, plan, sağlayıcıda kurulanlar, ajanın hamleleri, günlük sonuçlar; `start_at` açık kampanyaları, `closed_at` bitenleri sıralar; zorunlu RLS; 103 tablo). Geri alma, saklı bir kampanya varken reddeder (kampanya paranın kaydıdır ve sağlayıcıda çalışıyor olabilir); yoksa tabloyu kaldırır. |
+| `0041_google_provider` | Google Ads hesapları OAuth ile bağlanır (tasarım `2026-11-11-reklam-platformlari-design.md`): `oauth_pending`'in `provider` ve `app` denetimleri `google`'ı da kabul eder. Başka hiçbir tablo değişmez. Geri alma, bekleyen bir Google akışı varken denetimleri genişletilmiş bırakır (akışlar 30 dakikada biter; sonra yeniden çalıştırılır) ve hiçbir satıra dokunmaz |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -207,6 +208,8 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
 | `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
+| `JEETA_GOOGLE_CLIENT_ID` | — | Platformun Google uygulamasının OAuth istemci kimliği: Google Ads API'si açık olan Google Cloud projesinin "Web application" istemcisi. Google Ads API erişimi projeye verilir (geliştirici belirteci gönderilmez); üretim hesaplarını çağırmak için projenin erişim düzeyi en az "Explorer" olmalıdır. Sırla birlikte verilir |
+| `JEETA_GOOGLE_CLIENT_SECRET` | — | Google uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz: aday havuzundaki «Mesaj gönder» de (e-posta ve SMS) bu dayanağa dayandığı için rızası olmayan bir adaya gitmez (`403` `IZIN_YOK`). Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
@@ -906,6 +909,7 @@ panelinde birebir girilir (`{genel adres}` = `JEETA_PUBLIC_BASE_URL`):
 | X | `JEETA_X_CLIENT_ID`, `JEETA_X_CLIENT_SECRET` | developer.x.com → proje → uygulama → User authentication settings: OAuth 2.0, tür "Web App, Automated App or Bot" (gizli istemci), okuma ve yazma izni (Jeeta `tweet.read`, `tweet.write`, `users.read`, `offline.access`, `media.write` ister), Callback URI; Keys and tokens → OAuth 2.0 Client ID ve Client Secret | `{genel adres}/oauth/callback/x` |
 | TikTok | `JEETA_TIKTOK_CLIENT_KEY`, `JEETA_TIKTOK_CLIENT_SECRET` | developers.tiktok.com → uygulama: ürünler **Login Kit** ve **Content Posting API** (Direct Post); Login Kit → Redirect URI; kapsamlar `user.info.basic`, `video.publish`, `video.upload`, `video.list`, `user.info.stats`; Webhooks → Callback URL `{genel adres}/hooks/tiktok` (imza client secret ile); denetimden (audit) önce yalnız gizli hesaplara ve yalnız test kullanıcılarıyla paylaşım; fotoğraf paylaşımı için dosya deposunun genel alan adı URL properties altında doğrulanır. Ayrıntı: [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) | `{genel adres}/oauth/callback/tiktok` |
 | LinkedIn | `JEETA_LINKEDIN_CLIENT_ID`, `JEETA_LINKEDIN_CLIENT_SECRET`; isteğe bağlı `JEETA_LINKEDIN_ORG_SCOPES`, `JEETA_LINKEDIN_API_VERSION` | linkedin.com/developers → uygulama (bir Şirket Sayfasına bağlı): ürünler **Sign In with LinkedIn using OpenID Connect** ve **Share on LinkedIn** (kişisel akış, `openid profile w_member_social`); kurum sayfaları için **Community Management API** onayı → `JEETA_LINKEDIN_ORG_SCOPES=1`; Auth → Authorized redirect URLs; programatik yenileme yoksa erişim 60 günde biter ve bağlantı yeniden kurulur | `{genel adres}/oauth/callback/linkedin` |
+| Google (Google Ads) | `JEETA_GOOGLE_CLIENT_ID`, `JEETA_GOOGLE_CLIENT_SECRET` | console.cloud.google.com → proje → APIs & Services: **Google Ads API**'yi etkinleştir; OAuth consent screen (kapsam `https://www.googleapis.com/auth/adwords`; "Testing" durumunda yenileme belirteçleri 7 günde bir düşer, yayına alınıp doğrulanmalıdır); Credentials → OAuth client ID, tür "Web application" → Authorized redirect URIs. Projenin Google Ads API erişim düzeyi (Test → Explorer → Basic → Standard) Google Ads API Center'dan yükseltilir | `{genel adres}/oauth/callback/google` |
 
 (Panel menülerinin adları sağlayıcıların arayüzüne göre değişebilir; aranan alanlar uygulama kimliği, sırrı,
 OAuth yönlendirme adresleri ve Meta için webhook geri çağırma adresi ile doğrulama anahtarıdır.)
@@ -1401,7 +1405,8 @@ tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `
 | kitle | ülkeler, bölge, şehir, yaş, cinsiyet, ilgi alanı, `broad` | yalnızca ülkeler |
 | `placements` | `automatic` ya da platformlar | `automatic` (verilmezse o) |
 | sonuç | `link_click`, `lead_form` | `link_click` |
-| süre | 24 saat – 90 gün | 72 saat – 90 gün |
+| süre | 24 saat – 90 gün | 72 saat – 89 gün |
+| iki reklam aynı şeyi söyleyebilir mi | evet | hayır (`same_as_another_ad`): Google'da reklamın adı yoktur |
 | toplam bütçe kesin sınır mı | evet | evet |
 | önizleme | var | yok |
 
@@ -1426,10 +1431,45 @@ tablodur (`jt_app::usecases::ads::platform`) ve `ads.campaign_get` yanıtında `
   ya da sağlayıcı o an kabul etmemiş olabilir.
 - Reklam yönetimi modülü, türü ne olursa olsun bağlı bir reklam hesabı ister (B62).
 
-Bu sürümde Google'ın plan kuralları ve çekirdek davranışı vardır; **Google bağlayıcısı (`jt_google`)
-bir sonraki adımdır** (plan `2026-11-11-step4-ad-platforms.md`, görev 2). O gelene dek bir
-`google_ads` hesabı bağlanamaz. LinkedIn, TikTok ve X ondan sonra gelir. Hiçbir Google çağrısı
-yazılmadı, hiçbiri gerçek platformda çalıştırılmadı.
+**Google bağlayıcısı (`jt_google`, B68, B76).** `google_ads` hesabı Google girişiyle bağlanır
+(`JEETA_GOOGLE_CLIENT_ID` / `JEETA_GOOGLE_CLIENT_SECRET`; çevrimdışı erişim, kapsam `adwords`): girişin
+doğrudan eriştiği, etkin ve yönetici olmayan her Google Ads hesabı para birimi ve saat dilimiyle
+seçime sunulur. Yönetici (MCC) hesabı üzerinden erişilen hesaplar bu sürümde sunulmaz. Çağrıların
+tamamı `jt_google`'ın crate belgesindedir; özeti:
+
+- **Kampanya** tek işlemde iki nesnedir: toplam bütçe (`period: CUSTOM_PERIOD`, `totalAmountMicros`,
+  paylaşılmayan) ve onun üstünde arama kampanyası (`SEARCH`, `PAUSED`, "tıklamaları en üst düzeye
+  çıkar", yalnızca Google Arama: Görüntülü Reklam Ağı ve arama ortakları kapalı, ülkede *bulunanlar*,
+  "AB siyasi reklamı içermez" beyanı). Bütçe kampanyasız, kampanya bütçesiz kalamaz.
+- **Reklam grubu** yine tek işlemdir: reklam grubu, her ülke için konum ölçütü, her anahtar sözcük için
+  sıralı eşlemeli (`PHRASE`) ölçüt. Reklam grubu ülkeleri olmadan var olamaz.
+- **Reklam** duyarlı arama reklamıdır. Google'da reklamın adı olmadığından, oluşturmadan önce reklam
+  grubunda aynı şeyi söyleyen bir reklam aranır ve varsa benimsenir: kaybolan bir yanıt ikinci bir
+  reklam oluşturmaz. Bu yüzden bir kampanyanın iki reklamı aynı şeyi söyleyemez.
+- **Günler.** Google başlangıç ve bitişi hesabın saat diliminde, gün ayrıntısında alır: kampanya
+  başlangıç gününün 00:00:00'ından bitiş gününün 23:59:59'una kurulur. Tam bitiş anı Jeeta'nındır
+  (izleme kampanyayı bitiş saatinde duraklatır); Google'ınki yedektir, toplam bütçe her durumda
+  sınırdır. Gün sayımı bir gün fazla çıkabildiği için Google'da en uzun süre 89 gündür.
+- **Erişim belirteci.** Google'ın erişim belirteci yaklaşık bir saat yaşar; bağlantının kendisi ise
+  yenileme belirteci kadar. Saklanan kimlik bu yüzden bitiş zamanı taşımaz (taşısaydı bağlantı her
+  saat bir süre "süresi dolmuş" görünürdü); bağlayıcı her çağrı için yenileme belirteciyle bir erişim
+  belirteci alır ve bitimine yakın olana dek bellekte tutar (bağlantı başına saatte bir belirteç
+  çağrısı).
+- **Sayılar.** Maliyet mikro birimden hesabın para biriminin küçük birimine en yakın değere
+  yuvarlanır; günler hesabın kendi günüdür (sorgu bir gün önce ve bir gün sonrasını da kapsar).
+- **Hatalar.** Platformun Google Cloud projesinin erişim düzeyi yetmiyorsa
+  (`CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION` gibi) hata kiracının değil platformundur ve öyle
+  söylenir; yeniden bağlanmak onu düzeltmez.
+
+- **Kota.** Google, API işlemlerini projenin erişim düzeyine göre günlük sayar ("Explorer": günde
+  2.880, "Basic": 15.000; reddedilen istekler de sayılır). Çalışan bir kampanya saatte üç okuma
+  yapar (durum iki, günlük sayılar bir: günde 72), bağlı her hesap saatte bir yoklanır (günde 24).
+  "Explorer" düzeyi yaklaşık otuz çalışan kampanyaya yeter; daha fazlası için "Basic" gerekir. Kota
+  dolduğunda çağrılar `throttle` olarak döner ve izleme sonraki turda yeniden dener.
+
+LinkedIn, TikTok ve X bundan sonra gelir. **Hiçbir Google çağrısı gerçek platformda
+çalıştırılmadı:** alan adları Google'ın kendi REST tanımından (v26) alındı, çağrılar süreç içi sahte
+sunucuya karşı sınandı. İlk gerçek kampanya sahibinin kendi hesabında yapılır (B38).
 
 **API sürümü.** Reklam hesabına giden çağrılar Marketing API `v27.0` ile gider (B54);
 `JEETA_META_GRAPH_VERSION` daha yeni bir sürüm veriyorsa onunla. Meta her sürümü yaklaşık bir yıl

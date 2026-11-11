@@ -153,6 +153,23 @@ impl fmt::Debug for LinkedinApp {
     }
 }
 
+/// The platform's Google app: the OAuth client of the Google Cloud project whose access level
+/// the Google Ads API calls run under (design 2026-11-11 §3.1). `Debug` masks the client secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct GoogleApp {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+impl fmt::Debug for GoogleApp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoogleApp")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &Masked)
+            .finish()
+    }
+}
+
 /// The platform's provider apps and its public address, read-only. The binary implements it from
 /// the environment; an app that is not configured is `None`, and the kinds it serves cannot be
 /// connected by OAuth.
@@ -166,6 +183,10 @@ pub trait PlatformAppConfig: Send + Sync {
     }
     /// The LinkedIn app; `None` (the default) while it is not configured.
     fn linkedin_app(&self) -> Option<LinkedinApp> {
+        None
+    }
+    /// The Google app; `None` (the default) while it is not configured.
+    fn google_app(&self) -> Option<GoogleApp> {
         None
     }
     /// The platform's Hepsiburada integrator user (`JEETA_HEPSIBURADA_INTEGRATOR_USER`), the
@@ -202,6 +223,7 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | `x` | the X app | `x` | `x` |
 /// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
 /// | `linkedin` | the LinkedIn app | `linkedin_member`, `linkedin_page` (the latter only with the organization scopes) | the same |
+/// | `google` | the Google app | `google_ads` | `google_ads` |
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OAuthCallback {
@@ -210,6 +232,7 @@ pub enum OAuthCallback {
     X,
     Tiktok,
     Linkedin,
+    Google,
 }
 
 impl OAuthCallback {
@@ -221,11 +244,12 @@ impl OAuthCallback {
             OAuthCallback::X,
             OAuthCallback::Tiktok,
             OAuthCallback::Linkedin,
+            OAuthCallback::Google,
         ]
     }
 
-    /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`
-    /// or `linkedin`.
+    /// The redirect URI's last segment, also what is stored: `meta`, `instagram`, `x`, `tiktok`,
+    /// `linkedin` or `google`.
     pub fn key(self) -> &'static str {
         match self {
             OAuthCallback::Meta => "meta",
@@ -233,6 +257,7 @@ impl OAuthCallback {
             OAuthCallback::X => "x",
             OAuthCallback::Tiktok => "tiktok",
             OAuthCallback::Linkedin => "linkedin",
+            OAuthCallback::Google => "google",
         }
     }
 
@@ -251,6 +276,7 @@ impl OAuthCallback {
             OAuthCallback::X => Provider::X,
             OAuthCallback::Tiktok => Provider::Tiktok,
             OAuthCallback::Linkedin => Provider::Linkedin,
+            OAuthCallback::Google => Provider::Google,
         }
     }
 
@@ -263,8 +289,7 @@ impl OAuthCallback {
             Provider::X => Some(OAuthCallback::X),
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
-            // Google's sign-in comes with its adapter (plan 2026-11-11-step4-ad-platforms, task 2).
-            Provider::Google => None,
+            Provider::Google => Some(OAuthCallback::Google),
             Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
         }
     }
@@ -281,11 +306,12 @@ pub enum OAuthApp {
     X(XApp),
     Tiktok(TiktokApp),
     Linkedin(LinkedinApp),
+    Google(GoogleApp),
 }
 
 impl OAuthApp {
-    /// The public client id: the Meta or Instagram app id, the X or LinkedIn client id, or the
-    /// TikTok client key.
+    /// The public client id: the Meta or Instagram app id, the X, LinkedIn or Google client id, or
+    /// the TikTok client key.
     pub fn client_id(&self) -> &str {
         match self {
             OAuthApp::Meta(app) => &app.app_id,
@@ -293,6 +319,7 @@ impl OAuthApp {
             OAuthApp::X(app) => &app.client_id,
             OAuthApp::Tiktok(app) => &app.client_key,
             OAuthApp::Linkedin(app) => &app.client_id,
+            OAuthApp::Google(app) => &app.client_id,
         }
     }
 
@@ -304,6 +331,7 @@ impl OAuthApp {
             OAuthApp::X(app) => &app.client_secret,
             OAuthApp::Tiktok(app) => &app.client_secret,
             OAuthApp::Linkedin(app) => &app.client_secret,
+            OAuthApp::Google(app) => &app.client_secret,
         }
     }
 }

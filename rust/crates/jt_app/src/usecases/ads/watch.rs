@@ -157,7 +157,13 @@ async fn read(d: &Deps, c: &AdCampaign, now: OffsetDateTime) -> Result<bool, App
     let mut quiet: Vec<String> = Vec::new();
     for ad in &mut b.ads {
         for seen in &state.ads {
-            if seen.status == ProviderAdStatus::Active && ad.replaced_ad_ids.contains(&seen.ad_id) {
+            // (An adapter that knows an ad by what it says may hand back, for a fix that says
+            // what an earlier ad of this place said, that earlier ad: then it is the place's
+            // own ad again, not one to keep quiet.)
+            if seen.status == ProviderAdStatus::Active
+                && ad.replaced_ad_ids.contains(&seen.ad_id)
+                && ad.ad_id.as_ref() != Some(&seen.ad_id)
+            {
                 quiet.push(seen.ad_id.clone());
             }
         }
@@ -471,6 +477,7 @@ pub async fn campaign_move(d: &Deps, ctx: &Ctx, i: MoveInput) -> Result<AdCampai
         }
         Move::AddAd { ad, .. } => {
             plan::ad_shape(ad, "move.ad", rules)?;
+            plan::distinct(ad, &c.plan.as_ref().expect("planned").ads, "move.ad", rules)?;
             if count >= MAX_ADS {
                 held.push(json!({"field": "move.ad", "reason": "six_ads_at_most"}));
             } else {
@@ -502,6 +509,13 @@ pub async fn campaign_move(d: &Deps, ctx: &Ctx, i: MoveInput) -> Result<AdCampai
         }
         Move::FixAd { ad, with, .. } => {
             plan::ad_shape(with, "move.with", rules)?;
+            // The ad it replaces included: a fix that says the same again fixes nothing.
+            plan::distinct(
+                with,
+                &c.plan.as_ref().expect("planned").ads,
+                "move.with",
+                rules,
+            )?;
             held = plan::ad_findings(
                 r.as_mut(),
                 with,

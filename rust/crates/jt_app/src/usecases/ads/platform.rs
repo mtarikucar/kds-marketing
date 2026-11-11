@@ -66,6 +66,10 @@ pub struct PlatformRules {
     pub watch_minutes: i64,
     /// Whether the platform shows how an ad will look (`ads.ad_preview`).
     pub preview: bool,
+    /// Whether no two ads of a campaign may say the same. On a platform where an ad has no
+    /// name, what it says is the only thing it is known by: the build finds an ad it already
+    /// made by its texts, and two ads saying the same could not be told apart.
+    pub distinct_ads: bool,
 }
 
 /// The calls to action a Meta ad takes.
@@ -105,6 +109,7 @@ const META: PlatformRules = PlatformRules {
     hard_budget_cap: true,
     watch_minutes: 60,
     preview: true,
+    distinct_ads: false,
 };
 
 /// Google: a responsive search ad (B68). No image and no Page; three to 15 headlines and two to
@@ -117,7 +122,11 @@ const META: PlatformRules = PlatformRules {
 /// a total budget runs 3 to 90 days
 /// (<https://developers.google.com/google-ads/api/docs/campaigns/budgets/create-budgets>), and
 /// Google never charges more than that total (<https://support.google.com/google-ads/answer/10486938>).
-/// All read 2026-11-11.
+/// All read 2026-11-11. The adapter gives Google whole days in the account's time zone (the day
+/// of the start from midnight, the day of the end to midnight), which can span a day more than
+/// the campaign runs: so the longest run here is 89 days, and the shortest, 72 hours, always
+/// spans at least Google's three days. An ad has no name at Google, so no two ads of a campaign
+/// may say the same (`distinct_ads`).
 const GOOGLE: PlatformRules = PlatformRules {
     platform: AdsPlatform::Google,
     account_kind: "google_ads",
@@ -149,10 +158,11 @@ const GOOGLE: PlatformRules = PlatformRules {
     broad_audience: false,
     placements: false,
     min_run_hours: 72,
-    max_run_days: 90,
+    max_run_days: 89,
     hard_budget_cap: true,
     watch_minutes: 60,
     preview: false,
+    distinct_ads: true,
 };
 
 /// The most words a keyword carries.

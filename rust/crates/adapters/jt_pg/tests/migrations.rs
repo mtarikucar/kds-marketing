@@ -48,8 +48,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0040_ads_campaigns`.
-const MIGRATIONS: i64 = 40;
+/// Migrations `0001_foundation` through `0041_google_provider`.
+const MIGRATIONS: i64 = 41;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -261,6 +261,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0041_google_provider",
         "0040_ads_campaigns",
         "0039_general_ad_budget",
         "0038_lane_approval_to_connections",
@@ -3749,6 +3750,96 @@ async fn general_ad_budget_migration_marks_the_only_ad_budget_and_keeps_the_rule
     assert_eq!(items, 2);
     try_run(&db.pool, GENERAL_BUDGET_UP).await.unwrap();
     assert!(is_general(&db.pool, only).await);
+}
+
+/// `0041_google_provider` lets a Google sign-in be a pending flow: its up and its down are
+/// repeatable, the round trip up, down, up leaves the schema as it was, and its down keeps the
+/// widened checks while a Google flow is pending (it touches no row).
+#[tokio::test]
+async fn google_provider_migration_is_repeatable_and_its_down_keeps_pending_google_flows() {
+    const UP: &str = include_str!("../../../../migrations/0041_google_provider.up.sql");
+    const DOWN: &str = include_str!("../../../../migrations/0041_google_provider.down.sql");
+    let db = TestDb::new().await; // already migrated up, 0041 included
+    let (ws, owner) = db.seed_workspace("google-provider").await;
+    // A pending flow of `provider` signed in with `app`: `None` when it is stored, else the
+    // database's refusal.
+    let insert = |provider: &'static str, app: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into oauth_pending(id,workspace_id,provider,kind_key,app,state_hash,\
+                 started_by,assets_public,expires_at,created_at) \
+                 values($1,$2,$3,'google_ads',$4,$5,$6,'[]',now(),now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(provider)
+            .bind(app)
+            .bind(Uuid::now_v7().to_string())
+            .bind(owner.as_uuid())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+    let clear = || {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            sqlx::query("delete from oauth_pending")
+                .execute(tx.conn())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+    const CHECK_VIOLATION: &str = "23514";
+
+    // Up, twice: a Google flow is stored; a provider nobody knows still is not.
+    for _ in 0..2 {
+        try_run(&db.pool, UP).await.unwrap();
+    }
+    assert_eq!(insert("google", "google").await, None);
+    assert_eq!(
+        insert("bing", "google").await.as_deref(),
+        Some(CHECK_VIOLATION)
+    );
+    assert_eq!(
+        insert("google", "bing").await.as_deref(),
+        Some(CHECK_VIOLATION)
+    );
+    // Down while that flow is pending: the flow stays, and so do the widened checks.
+    for _ in 0..2 {
+        try_run(&db.pool, DOWN).await.unwrap();
+    }
+    assert_eq!(insert("google", "google").await, None);
+    // Down once no Google flow is pending: the checks are 0014's again, twice over.
+    clear().await;
+    for _ in 0..2 {
+        try_run(&db.pool, DOWN).await.unwrap();
+        assert_eq!(
+            insert("google", "google").await.as_deref(),
+            Some(CHECK_VIOLATION)
+        );
+        // What 0014 let in is still let in.
+        assert_eq!(insert("linkedin", "linkedin").await, None);
+    }
+    // And up again.
+    try_run(&db.pool, UP).await.unwrap();
+    assert_eq!(insert("google", "google").await, None);
+    assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
 }
 
 /// `0040_ads_campaigns`: repeatable, and its down refuses while a campaign is stored (a

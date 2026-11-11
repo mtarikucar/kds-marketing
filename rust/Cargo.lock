@@ -1327,6 +1327,7 @@ dependencies = [
  "jt_capability",
  "jt_connector",
  "jt_files",
+ "jt_google",
  "jt_ledger",
  "jt_linkedin",
  "jt_mail",
@@ -1569,6 +1570,24 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "jt_google"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "chrono-tz",
+ "jt_app",
+ "jt_connector",
+ "jt_outbound",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

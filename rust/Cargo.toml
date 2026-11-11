@@ -26,6 +26,7 @@ members = [
     "crates/adapters/jt_x",
     "crates/adapters/jt_tiktok",
     "crates/adapters/jt_linkedin",
+    "crates/adapters/jt_google",
     "crates/adapters/jt_webhook",
     "crates/jt_testkit",
     "crates/jt_archtest",
@@ -67,6 +68,7 @@ jt_mail = { path = "crates/adapters/jt_mail" }
 jt_x = { path = "crates/adapters/jt_x" }
 jt_tiktok = { path = "crates/adapters/jt_tiktok" }
 jt_linkedin = { path = "crates/adapters/jt_linkedin" }
+jt_google = { path = "crates/adapters/jt_google" }
 jt_webhook = { path = "crates/adapters/jt_webhook" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }

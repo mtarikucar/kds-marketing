@@ -1487,6 +1487,7 @@ fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthAp
         OAuthCallback::X => apps.x_app().map(OAuthApp::X),
         OAuthCallback::Tiktok => apps.tiktok_app().map(OAuthApp::Tiktok),
         OAuthCallback::Linkedin => apps.linkedin_app().map(OAuthApp::Linkedin),
+        OAuthCallback::Google => apps.google_app().map(OAuthApp::Google),
     }
 }
 

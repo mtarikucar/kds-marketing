@@ -521,7 +521,7 @@ it('tells a person when the chosen ad account’s platform does not run a campai
     'POST /api/ads/campaigns': withStatus(422, {
       code: 'VALIDATION',
       message: 'duration_not_supported',
-      details: { field: 'end_at', reason: 'duration_not_supported', least_hours: 72, most_days: 90 },
+      details: { field: 'end_at', reason: 'duration_not_supported', least_hours: 72, most_days: 89 },
     }),
   });
   renderAt('/ads');
@@ -537,7 +537,7 @@ it('tells a person when the chosen ad account’s platform does not run a campai
   await userEvent.click(within(dialog).getByRole('button', { name: 'Reklam kampanyası aç' }));
   expect(
     await within(dialog).findByText(
-      'Seçtiğiniz reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az 72 saat, en çok 90 gün.',
+      'Seçtiğiniz reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az 72 saat, en çok 89 gün.',
     ),
   ).toBeVisible();
 });

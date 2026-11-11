@@ -230,8 +230,8 @@ describe('OAuthCallbackPage', () => {
     expect(calls.some((c) => c.path === CALLBACK)).toBe(false);
   });
 
-  it('completes TikTok and LinkedIn flows at their own callbacks, sending only the state and code', async () => {
-    for (const provider of ['tiktok', 'linkedin']) {
+  it('completes TikTok, LinkedIn and Google flows at their own callbacks, sending only the state and code', async () => {
+    for (const provider of ['tiktok', 'linkedin', 'google']) {
       const path = `/api/connectors/oauth/callback/${provider}`;
       const calls = mockFetch({ 'GET /api/auth/me': me, [`GET ${path}`]: pendingAssets });
       // TikTok adds the granted scopes to its redirect; the panel passes on the state and code only.

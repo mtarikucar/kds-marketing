@@ -600,6 +600,7 @@ fn start_oauth_offers_every_kind_an_oauth_provider_serves() {
         jt_connector::Provider::X,
         jt_connector::Provider::Tiktok,
         jt_connector::Provider::Linkedin,
+        jt_connector::Provider::Google,
     ]
     .iter()
     .flat_map(|p| p.kinds().iter().copied())

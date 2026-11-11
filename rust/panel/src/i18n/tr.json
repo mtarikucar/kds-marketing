@@ -1580,11 +1580,12 @@
       "tls": "TLS modu"
     },
     "title": "Hesap bağla",
-    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta, X, TikTok ve LinkedIn için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
+    "description": "Sağlayıcı hesaplarınızı çalışma alanına bağlayın. Meta, X, TikTok, LinkedIn ve Google için sağlayıcıda oturum açarsınız; NetGSM için kimlik bilgilerinizi girersiniz.",
     "open": "Hesap bağla",
     "kindsLabel": "Bağlanacak hesap türü",
     "chooseKind": "Önce bağlanacak hesap türünü seçin.",
     "providers": {
+      "google": "Google",
       "linkedin": "LinkedIn",
       "mail": "E-posta",
       "meta": "Meta",

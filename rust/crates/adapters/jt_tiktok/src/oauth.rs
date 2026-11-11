@@ -30,9 +30,13 @@ fn query(pairs: &[(&str, &str)]) -> String {
 fn tiktok_app_of(app: &OAuthApp) -> Result<&TiktokApp, ConnectorError> {
     match app {
         OAuthApp::Tiktok(tiktok) => Ok(tiktok),
-        OAuthApp::Meta(_) | OAuthApp::Instagram(_) | OAuthApp::X(_) | OAuthApp::Linkedin(_) => Err(
-            ConnectorError::permanent("only the TikTok app signs in to TikTok"),
-        ),
+        OAuthApp::Meta(_)
+        | OAuthApp::Instagram(_)
+        | OAuthApp::X(_)
+        | OAuthApp::Linkedin(_)
+        | OAuthApp::Google(_) => Err(ConnectorError::permanent(
+            "only the TikTok app signs in to TikTok",
+        )),
     }
 }
 

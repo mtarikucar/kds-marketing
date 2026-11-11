@@ -1642,6 +1642,14 @@ async fn a_plan_carries_only_what_its_platform_takes() {
         refused_field(&e),
         ("ads[0].headlines".into(), not_taken.into())
     );
+    // Google knows an ad only by what it says: two ads of a plan may not say the same.
+    let e = submit("g-same", s.plan(vec![s.ad("a"), s.ad("b")]))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("ads[1]".into(), "same_as_another_ad".into())
+    );
     let mut meta = s.t.plan(vec![s.t.ad("a")]);
     meta["ads"][0]
         .as_object_mut()
@@ -1702,7 +1710,7 @@ async fn a_search_campaign_is_planned_built_without_an_image_and_watched() {
     assert_eq!(
         finding(&e, "end_at"),
         json!({"field":"end_at","reason":"duration_not_supported",
-            "least_hours":72,"most_days":90})
+            "least_hours":72,"most_days":89})
     );
     // And the account's own least total is a finding too.
     s.limits(60_000);
@@ -1733,7 +1741,9 @@ async fn a_search_campaign_is_planned_built_without_an_image_and_watched() {
     for _ in 0..4 {
         x.push_set_status(Ok(()));
     }
-    let built = submit("good", s.plan(vec![s.ad("Bir"), s.ad("İki")]))
+    let mut second = s.ad("İki");
+    second["headlines"] = json!(["Kayıt için son hafta", "Yerini şimdi ayırt", "Kayıt ol"]);
+    let built = submit("good", s.plan(vec![s.ad("Bir"), second.clone()]))
         .await
         .unwrap();
     assert_eq!(Ads::state(&built), CampaignState::InReview);
@@ -1819,6 +1829,21 @@ async fn a_search_campaign_is_planned_built_without_an_image_and_watched() {
     assert_eq!(rules[1]["headlines"], json!({"min":3,"max":15,"chars":30}));
     assert_eq!(rules[1]["image"], false);
     assert_eq!(rules[1]["min_run_hours"], 72);
+    assert_eq!(rules[1]["max_run_days"], 89);
+    assert_eq!(rules[1]["distinct_ads"], true);
+    // An ad added later may not say what an ad of the campaign already says.
+    let e = ads::campaign_move(
+        &s.t.w.d,
+        &a,
+        input(json!({"campaign_id":c.id,"request_key":"same",
+            "move":{"kind":"add_ad","ad":second,"reason":"Bir tane daha"}})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        refused_field(&e),
+        ("move.ad".into(), "same_as_another_ad".into())
+    );
     // Google shows no preview of an ad.
     let e = ads::ad_preview(
         &s.t.w.d,
@@ -1883,7 +1908,7 @@ async fn an_end_the_chosen_accounts_platform_does_not_take_is_refused_at_opening
     assert_eq!(
         e.details,
         json!({"field":"end_at","reason":"duration_not_supported",
-            "least_hours":72,"most_days":90})
+            "least_hours":72,"most_days":89})
     );
     // The same two days are fine on Meta, and three are fine on Google.
     open("two-days-meta", s.t.account, 2).await.unwrap();

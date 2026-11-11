@@ -332,6 +332,22 @@ it('offers TikTok and LinkedIn kinds as sign-ins at their providers', async () =
   expect(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'TikTok' }) })).toBeInTheDocument();
 });
 
+it('offers a Google Ads account as a sign-in at Google', async () => {
+  const user = userEvent.setup();
+  const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});
+  const calls = mockFetch({ 'GET /api/auth/me': me, 'POST /api/connectors/oauth/start': started });
+  renderAt('/connect');
+  await screen.findByRole('heading', { level: 1, name: tr.connect.title });
+  await user.click(
+    within(providerSection(tr.connect.providers.google)).getByRole('button', { name: tr.capabilities.kinds.google_ads }),
+  );
+  // Google's accounts come from its sign-in: no credentials are asked for.
+  expect(screen.queryByLabelText(tr.connect.credentials.password)).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: i18n.t('connect.oauth.submit', { provider: 'Google' }) }));
+  await waitFor(() => expect(assign).toHaveBeenCalledWith(started.authorize_url));
+  expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ kind_key: 'google_ads' });
+});
+
 it('says a LinkedIn page needs the provider product before it can connect', async () => {
   const user = userEvent.setup();
   const assign = vi.spyOn(browser, 'assign').mockImplementation(() => {});

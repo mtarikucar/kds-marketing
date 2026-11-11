@@ -966,6 +966,7 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
     assert_eq!(config.x_app(), None);
     assert_eq!(config.tiktok_app(), None);
     assert_eq!(config.linkedin_app(), None);
+    assert_eq!(config.google_app(), None);
     assert_eq!(
         config.public_base_url().unwrap().as_str(),
         "https://panel.test/"
@@ -975,6 +976,7 @@ fn fake_app_config_defaults_to_no_apps_and_the_test_panel() {
     assert!(all.meta_app().is_some());
     assert!(all.instagram_app().is_some());
     assert_eq!(all.tiktok_app().unwrap().client_key, "tiktok-client-key");
+    assert_eq!(all.google_app().unwrap().client_id, "google-client-id");
     let linkedin = all.linkedin_app().unwrap();
     assert_eq!(linkedin.client_id, "linkedin-client-id");
     assert!(

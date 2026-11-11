@@ -443,6 +443,7 @@ async fn provider_apps_require_public_url_and_complete_credentials() {
         vec!["JEETA_X_CLIENT_ID", "JEETA_X_CLIENT_SECRET"],
         vec!["JEETA_TIKTOK_CLIENT_KEY", "JEETA_TIKTOK_CLIENT_SECRET"],
         vec!["JEETA_LINKEDIN_CLIENT_ID", "JEETA_LINKEDIN_CLIENT_SECRET"],
+        vec!["JEETA_GOOGLE_CLIENT_ID", "JEETA_GOOGLE_CLIENT_SECRET"],
     ] {
         for missing in 0..=group.len() {
             let mut c = command(

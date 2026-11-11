@@ -907,13 +907,10 @@ mod tests {
         // public address: an OAuth flow cannot start (the missing address is named first, before
         // any app, and nothing reaches a provider), and no webhook address is shown.
         for provider in jt_connector::Provider::all() {
-            // The marketplaces' adapters come with their own tasks (T1, H1), Google's with
-            // task 2 of plan 2026-11-11-step4-ad-platforms.md.
+            // The marketplaces' adapters come with their own tasks (T1, H1).
             if matches!(
                 provider,
-                jt_connector::Provider::Trendyol
-                    | jt_connector::Provider::Hepsiburada
-                    | jt_connector::Provider::Google
+                jt_connector::Provider::Trendyol | jt_connector::Provider::Hepsiburada
             ) {
                 assert!(deps.connectors.connector(*provider).is_none());
                 continue;
@@ -943,6 +940,16 @@ mod tests {
         assert!(
             deps.connectors
                 .oauth(jt_connector::Provider::Linkedin)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
+                .oauth(jt_connector::Provider::Google)
+                .is_some()
+        );
+        assert!(
+            deps.connectors
+                .ad_campaigns(jt_connector::Provider::Google)
                 .is_some()
         );
         assert!(
@@ -990,6 +997,8 @@ mod tests {
             (config::TIKTOK_CLIENT_SECRET, "tt-secret-1"),
             (config::LINKEDIN_CLIENT_ID, "li-id-1"),
             (config::LINKEDIN_CLIENT_SECRET, "li-secret-1"),
+            (config::GOOGLE_CLIENT_ID, "g-id-1"),
+            (config::GOOGLE_CLIENT_SECRET, "g-secret-1"),
             (config::PUBLIC_BASE_URL, "https://jeeta.example"),
         ]);
         let (mut deps, _) = ports(db.pool.clone(), &config);
@@ -1021,6 +1030,7 @@ mod tests {
             // TikTok names its client id the client key.
             ("tiktok", "client_key", "tt-key-1", "tiktok"),
             ("linkedin_member", "client_id", "li-id-1", "linkedin"),
+            ("google_ads", "client_id", "g-id-1", "google"),
         ] {
             let (status, _, body) = call(
                 &app,
@@ -1050,6 +1060,7 @@ mod tests {
                 "x-secret-1",
                 "tt-secret-1",
                 "li-secret-1",
+                "g-secret-1",
                 "verify-1",
             ] {
                 assert!(!body.to_string().contains(secret), "{kind}: {body}");

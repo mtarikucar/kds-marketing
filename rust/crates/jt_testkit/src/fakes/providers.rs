@@ -26,9 +26,9 @@ use jt_app::ports::connectors::{
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
-    DeliveryStatus, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer, LeadGenFetcher,
-    LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor, MailboxPoller,
-    MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
+    DeliveryStatus, GoogleApp, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer,
+    LeadGenFetcher, LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor,
+    MailboxPoller, MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
     PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt, PublicPoller,
     PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
     RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony,
@@ -58,6 +58,7 @@ pub struct FakeAppConfig {
     pub x: Option<XApp>,
     pub tiktok: Option<TiktokApp>,
     pub linkedin: Option<LinkedinApp>,
+    pub google: Option<GoogleApp>,
     /// The Hepsiburada integrator user; `None` by default (the merchant id stands in for it).
     pub hepsiburada_integrator_user: Option<String>,
     pub public_base_url: Option<Url>,
@@ -73,6 +74,7 @@ impl Default for FakeAppConfig {
             x: None,
             tiktok: None,
             linkedin: None,
+            google: None,
             hepsiburada_integrator_user: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
             outreach_enabled: false,
@@ -84,8 +86,8 @@ impl FakeAppConfig {
     /// Every app configured, with test values (`meta-app-id`/`meta-app-secret`, verify token
     /// `meta-verify-token`; `instagram-app-id`/`instagram-app-secret`;
     /// `x-client-id`/`x-client-secret`; `tiktok-client-key`/`tiktok-client-secret`;
-    /// `linkedin-client-id`/`linkedin-client-secret`, without the organization scopes) and no
-    /// optional Meta or LinkedIn settings.
+    /// `linkedin-client-id`/`linkedin-client-secret`, without the organization scopes;
+    /// `google-client-id`/`google-client-secret`) and no optional Meta or LinkedIn settings.
     pub fn with_all_apps() -> Self {
         FakeAppConfig {
             meta: Some(MetaApp {
@@ -116,6 +118,10 @@ impl FakeAppConfig {
                 organization_scopes: false,
                 api_version: None,
             }),
+            google: Some(GoogleApp {
+                client_id: "google-client-id".into(),
+                client_secret: "google-client-secret".into(),
+            }),
             ..FakeAppConfig::default()
         }
     }
@@ -140,6 +146,10 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         self.linkedin.clone()
+    }
+
+    fn google_app(&self) -> Option<GoogleApp> {
+        self.google.clone()
     }
 
     fn hepsiburada_integrator_user(&self) -> Option<String> {

@@ -11,6 +11,7 @@ export const PROVIDER_KINDS: Record<Provider, readonly KindKey[]> = {
   mail: ['mailbox'],
   tiktok: ['tiktok'],
   linkedin: ['linkedin_member', 'linkedin_page'],
+  google: ['google_ads'],
 };
 
 /**
@@ -38,6 +39,7 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   mail: 'Email',
   tiktok: 'TikTok',
   linkedin: 'LinkedIn',
+  google: 'Google',
 };
 
 /** The provider that serves `kind`, or `null` for a kind none serves yet. */
@@ -48,10 +50,10 @@ export function providerOf(kind: string): Provider | null {
   return null;
 }
 
-/** Meta, X, TikTok and LinkedIn kinds connect by signing in at the provider (OAuth). */
+/** Meta, X, TikTok, LinkedIn and Google kinds connect by signing in at the provider (OAuth). */
 export function connectsByOAuth(kind: string): boolean {
   const provider = providerOf(kind);
-  return provider === 'meta' || provider === 'x' || provider === 'tiktok' || provider === 'linkedin';
+  return provider !== null && ['meta', 'x', 'tiktok', 'linkedin', 'google'].includes(provider);
 }
 
 /** The credentials a NetGSM kind takes by hand, or `null` for any other kind. */

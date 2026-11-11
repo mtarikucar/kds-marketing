@@ -74,7 +74,7 @@ export const campaign = {
 /** What a plan carries on each ad platform, as `GET /api/ads/campaigns/{id}` answers it. */
 export const platforms = [
   { platform: 'meta', account_kind: 'meta_ads', image: true, min_run_hours: 24, max_run_days: 90, hard_budget_cap: true, preview: true },
-  { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 90, hard_budget_cap: true, preview: false },
+  { platform: 'google', account_kind: 'google_ads', image: false, min_run_hours: 72, max_run_days: 89, hard_budget_cap: true, preview: false },
 ] satisfies PlatformRules[];
 export const generalBudget = {
   ...budgetItems[0],

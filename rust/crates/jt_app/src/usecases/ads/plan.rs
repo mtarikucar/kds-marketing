@@ -160,6 +160,37 @@ pub(crate) fn ad_shape(ad: &PlanAd, at: &str, rules: &PlatformRules) -> Result<(
     )
 }
 
+/// Whether two ads say the same: every text, the image, the account they speak as and the call
+/// to action are equal (texts compared trimmed; names and hypotheses are not what an ad says).
+fn says_the_same(a: &PlanAd, b: &PlanAd) -> bool {
+    let trimmed = |list: &[String]| -> Vec<String> {
+        list.iter().map(|text| text.trim().to_owned()).collect()
+    };
+    a.primary_text.trim() == b.primary_text.trim()
+        && a.headline.trim() == b.headline.trim()
+        && a.description.as_deref().map(str::trim) == b.description.as_deref().map(str::trim)
+        && a.call_to_action == b.call_to_action
+        && a.material_ids == b.material_ids
+        && a.page == b.page
+        && a.instagram == b.instagram
+        && trimmed(&a.headlines) == trimmed(&b.headlines)
+        && trimmed(&a.descriptions) == trimmed(&b.descriptions)
+}
+
+/// On a platform that knows an ad only by what it says ([`PlatformRules::distinct_ads`]), `ad`
+/// (named `at`) must not say the same as any of `others`.
+pub(crate) fn distinct<'a>(
+    ad: &PlanAd,
+    others: impl IntoIterator<Item = &'a PlanAd>,
+    at: &str,
+    rules: &PlatformRules,
+) -> Result<(), AppError> {
+    if rules.distinct_ads && others.into_iter().any(|other| says_the_same(ad, other)) {
+        return Err(malformed(at, "same_as_another_ad"));
+    }
+    Ok(())
+}
+
 /// What of the plan itself its platform does not take.
 fn platform_shape(p: &CampaignPlan, rules: &PlatformRules) -> Result<(), AppError> {
     let a = &p.audience;
@@ -214,7 +245,9 @@ fn shape(c: &AdCampaign, p: &CampaignPlan, rules: Option<&PlatformRules>) -> Res
     }
     if let Some(rules) = rules {
         for (n, ad) in p.ads.iter().enumerate() {
-            ad_shape(ad, &format!("ads[{n}]"), rules)?;
+            let at = format!("ads[{n}]");
+            ad_shape(ad, &at, rules)?;
+            distinct(ad, &p.ads[..n], &at, rules)?;
         }
     }
     length(&p.summary, "summary", MAX_TEXT_CHARS)?;
@@ -704,7 +737,7 @@ pub(crate) fn ad_schema() -> Value {
                 "description":"The capability of the account the ad speaks as: a Facebook Page on Meta."},
             "instagram":{"type":["string","null"],"format":"uuid"},
             "headlines":list_schema(|r| r.headlines,
-                "A search ad's headlines (Google: 3 to 15, each at most 30 characters, none twice); the platform shows a few at a time."),
+                "A search ad's headlines (Google: 3 to 15, each at most 30 characters, none twice); the platform shows a few at a time. No two ads of a Google campaign may say the same."),
             "descriptions":list_schema(|r| r.descriptions,
                 "A search ad's descriptions (Google: 2 to 4, each at most 90 characters, none twice)."),
             "hypothesis_id":uuid}})
@@ -757,7 +790,7 @@ pub(crate) fn plan_schema() -> Value {
             "keywords":list_schema(|r| r.keywords,
                 "Google only: the searches the ads answer, 1 to 20, each at most 80 characters and 10 words, none twice. Jeeta sets them as phrase match."),
             "end_at":{"type":"string","format":"date-time",
-                "description":"24 hours to 90 days after the campaign's start (Google: at least 72 hours after it really starts); the campaign's own end when a person set one."},
+                "description":"24 hours to 90 days after the campaign's start (Google: 72 hours to 89 days after it really starts); the campaign's own end when a person set one."},
             "ads":{"type":"array","minItems":1,"maxItems":MAX_ADS,"items":ad_schema()},
             "summary":{"type":"string","minLength":1,"maxLength":MAX_TEXT_CHARS},
             "audience_summary":{"type":"string","minLength":1,"maxLength":MAX_TEXT_CHARS}}})

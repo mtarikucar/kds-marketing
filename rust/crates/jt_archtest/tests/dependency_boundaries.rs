@@ -350,6 +350,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_x",
         "jt_tiktok",
         "jt_linkedin",
+        "jt_google",
         "jt_webhook",
         "jt_testkit",
         "jeeta",
@@ -528,6 +529,7 @@ const CONNECTOR_ADAPTERS: &[&str] = &[
     "jt_x",
     "jt_tiktok",
     "jt_linkedin",
+    "jt_google",
     "jt_mail",
 ];
 
@@ -540,7 +542,9 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
                 CONNECTOR_ADAPTER_ALLOW.contains(&d.as_str())
                     || (*c == "jt_mail" && MAIL_ADAPTER_EXTRA_ALLOW.contains(&d.as_str()))
                     // X measures visible emoji clusters before publishing.
-                    || (*c == "jt_x" && d == "unicode-segmentation"),
+                    || (*c == "jt_x" && d == "unicode-segmentation")
+                    // Google takes a campaign's days in the ad account's own time zone.
+                    || (*c == "jt_google" && matches!(d.as_str(), "chrono" | "chrono-tz")),
                 "{c} depends on {d}, which is not on its allowlist"
             );
         }

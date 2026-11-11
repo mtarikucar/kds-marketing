@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use axum::http::uri::Authority;
 use jt_app::ports::connectors::{
-    InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokApp, Url, XApp,
+    GoogleApp, InstagramApp, LinkedinApp, MetaApp, PlatformAppConfig, TiktokApp, Url, XApp,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -108,6 +108,12 @@ pub const LINKEDIN_ORG_SCOPES: &str = "JEETA_LINKEDIN_ORG_SCOPES";
 /// The `LinkedIn-Version` of the REST API calls, `YYYYMM` (default
 /// [`jt_linkedin::DEFAULT_API_VERSION`]). Requires the LinkedIn app.
 pub const LINKEDIN_API_VERSION: &str = "JEETA_LINKEDIN_API_VERSION";
+/// The platform's Google app: the OAuth client id of the Google Cloud project whose Google Ads
+/// API access level the calls run under (no developer token is sent any more; design
+/// 2026-11-11 §3.1).
+pub const GOOGLE_CLIENT_ID: &str = "JEETA_GOOGLE_CLIENT_ID";
+/// The Google app's client secret; set together with [`GOOGLE_CLIENT_ID`].
+pub const GOOGLE_CLIENT_SECRET: &str = "JEETA_GOOGLE_CLIENT_SECRET";
 /// Where the panel is reached from outside (`https://host[:port]`), for OAuth redirect URIs and
 /// webhook URLs; required whenever a provider app is configured.
 pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
@@ -160,6 +166,8 @@ const VARS: &[&str] = &[
     LINKEDIN_CLIENT_SECRET,
     LINKEDIN_ORG_SCOPES,
     LINKEDIN_API_VERSION,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
     HEPSIBURADA_INTEGRATOR_USER,
     PUBLIC_BASE_URL,
     OUTREACH_ENABLED,
@@ -252,6 +260,7 @@ pub struct EnvPlatformApps {
     x: Option<XApp>,
     tiktok: Option<TiktokApp>,
     linkedin: Option<LinkedinApp>,
+    google: Option<GoogleApp>,
     hepsiburada_integrator_user: Option<String>,
     public_base_url: Option<Url>,
     /// [`OUTREACH_ENABLED`].
@@ -260,7 +269,7 @@ pub struct EnvPlatformApps {
 
 impl EnvPlatformApps {
     /// The keys of the configured apps, for the start log: `meta`, `instagram`, `x`, `tiktok`,
-    /// `linkedin`.
+    /// `linkedin`, `google`.
     pub fn configured(&self) -> Vec<&'static str> {
         [
             ("meta", self.meta.is_some()),
@@ -268,6 +277,7 @@ impl EnvPlatformApps {
             ("x", self.x.is_some()),
             ("tiktok", self.tiktok.is_some()),
             ("linkedin", self.linkedin.is_some()),
+            ("google", self.google.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, on)| on.then_some(name))
@@ -283,6 +293,7 @@ impl fmt::Debug for EnvPlatformApps {
             .field("x", &self.x)
             .field("tiktok", &self.tiktok)
             .field("linkedin", &self.linkedin)
+            .field("google", &self.google)
             .field(
                 "hepsiburada_integrator_user",
                 &self.hepsiburada_integrator_user,
@@ -315,6 +326,10 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn linkedin_app(&self) -> Option<LinkedinApp> {
         self.linkedin.clone()
+    }
+
+    fn google_app(&self) -> Option<GoogleApp> {
+        self.google.clone()
     }
 
     fn hepsiburada_integrator_user(&self) -> Option<String> {
@@ -722,6 +737,13 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
             None
         }
     };
+    let google =
+        pair(&get, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)?.map(|(client_id, client_secret)| {
+            GoogleApp {
+                client_id,
+                client_secret,
+            }
+        });
 
     let public_base_url = get(PUBLIC_BASE_URL)
         .map(|raw| parse_public_base_url(raw.trim()))
@@ -730,7 +752,8 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         || instagram.is_some()
         || x.is_some()
         || tiktok.is_some()
-        || linkedin.is_some();
+        || linkedin.is_some()
+        || google.is_some();
     if any_app && public_base_url.is_none() {
         return Err(ConfigError::new(
             PUBLIC_BASE_URL,
@@ -744,6 +767,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         x,
         tiktok,
         linkedin,
+        google,
         hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
         public_base_url,
         outreach_enabled: parse_flag(OUTREACH_ENABLED, get(OUTREACH_ENABLED))?,
@@ -1221,6 +1245,8 @@ mod tests {
         (TIKTOK_CLIENT_SECRET, "TT-SECRET-SENTINEL"),
         (LINKEDIN_CLIENT_ID, "li-id-1"),
         (LINKEDIN_CLIENT_SECRET, "LI-SECRET-SENTINEL"),
+        (GOOGLE_CLIENT_ID, "g-id-1"),
+        (GOOGLE_CLIENT_SECRET, "G-SECRET-SENTINEL"),
         (PUBLIC_BASE_URL, "https://jeeta.example"),
     ];
 
@@ -1232,6 +1258,7 @@ mod tests {
         "X-SECRET-SENTINEL",
         "TT-SECRET-SENTINEL",
         "LI-SECRET-SENTINEL",
+        "G-SECRET-SENTINEL",
     ];
 
     #[test]
@@ -1245,7 +1272,12 @@ mod tests {
         let all = Config::from_map(&with(ALL_APPS)).unwrap();
         assert_eq!(
             all.apps.configured(),
-            ["meta", "instagram", "x", "tiktok", "linkedin"]
+            ["meta", "instagram", "x", "tiktok", "linkedin", "google"]
+        );
+        let google = all.apps.google_app().unwrap();
+        assert_eq!(
+            (google.client_id.as_str(), google.client_secret.as_str()),
+            ("g-id-1", "G-SECRET-SENTINEL")
         );
         let tiktok = all.apps.tiktok_app().unwrap();
         assert_eq!(
@@ -1320,6 +1352,8 @@ mod tests {
             ((X_CLIENT_SECRET, "HALF-SENTINEL"), X_CLIENT_ID),
             ((TIKTOK_CLIENT_KEY, "tt-key-1"), TIKTOK_CLIENT_SECRET),
             ((TIKTOK_CLIENT_SECRET, "HALF-SENTINEL"), TIKTOK_CLIENT_KEY),
+            ((GOOGLE_CLIENT_ID, "g-id-1"), GOOGLE_CLIENT_SECRET),
+            ((GOOGLE_CLIENT_SECRET, "HALF-SENTINEL"), GOOGLE_CLIENT_ID),
             ((LINKEDIN_CLIENT_ID, "li-id-1"), LINKEDIN_CLIENT_SECRET),
             (
                 (LINKEDIN_CLIENT_SECRET, "HALF-SENTINEL"),
@@ -1397,6 +1431,8 @@ mod tests {
             (LINKEDIN_CLIENT_SECRET, ""),
             (LINKEDIN_ORG_SCOPES, ""),
             (LINKEDIN_API_VERSION, ""),
+            (GOOGLE_CLIENT_ID, ""),
+            (GOOGLE_CLIENT_SECRET, ""),
             (PUBLIC_BASE_URL, ""),
         ]))
         .unwrap();
@@ -1482,6 +1518,7 @@ mod tests {
             &[(X_CLIENT_ID, "x"), (X_CLIENT_SECRET, "s")][..],
             &[(TIKTOK_CLIENT_KEY, "t"), (TIKTOK_CLIENT_SECRET, "s")][..],
             &[(LINKEDIN_CLIENT_ID, "l"), (LINKEDIN_CLIENT_SECRET, "s")][..],
+            &[(GOOGLE_CLIENT_ID, "g"), (GOOGLE_CLIENT_SECRET, "s")][..],
         ] {
             let err = error(&with(app));
             assert_eq!(err.var, PUBLIC_BASE_URL, "{app:?}");
@@ -1595,6 +1632,8 @@ mod tests {
             LINKEDIN_CLIENT_SECRET,
             LINKEDIN_ORG_SCOPES,
             LINKEDIN_API_VERSION,
+            GOOGLE_CLIENT_ID,
+            GOOGLE_CLIENT_SECRET,
             HEPSIBURADA_INTEGRATOR_USER,
             PUBLIC_BASE_URL,
         ] {

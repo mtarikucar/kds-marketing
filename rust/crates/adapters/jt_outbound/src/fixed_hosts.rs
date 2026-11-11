@@ -32,7 +32,9 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 ///   account);
 /// - `linkedin`: the REST API and OpenID userinfo (`api.linkedin.com`), and the OAuth token
 ///   endpoint and media uploads (`www.linkedin.com`, the host of the `uploadUrl` the Images and
-///   Videos APIs return).
+///   Videos APIs return);
+/// - `google`: the Google Ads API (`googleads.googleapis.com`) and the OAuth token and revoke
+///   endpoints (`oauth2.googleapis.com`).
 pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("meta", "graph.facebook.com"),
     host("meta", "graph.instagram.com"),
@@ -49,6 +51,8 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("tiktok", "open-upload-sg.tiktokapis.com"),
     host("linkedin", "api.linkedin.com"),
     host("linkedin", "www.linkedin.com"),
+    host("google", "googleads.googleapis.com"),
+    host("google", "oauth2.googleapis.com"),
 ];
 
 /// The endpoints reached over plain `http`, as `(connector, host, port)`: only NetGSM's
@@ -100,6 +104,8 @@ mod tests {
                 ("tiktok", "open-upload-sg.tiktokapis.com"),
                 ("linkedin", "api.linkedin.com"),
                 ("linkedin", "www.linkedin.com"),
+                ("google", "googleads.googleapis.com"),
+                ("google", "oauth2.googleapis.com"),
             ]
         );
         // Every provider host is on the public internet, and the table builds a client.
@@ -134,13 +140,18 @@ mod tests {
             ),
             ("linkedin", "https://api.linkedin.com/rest/posts"),
             ("linkedin", "https://www.linkedin.com/oauth/v2/accessToken"),
+            (
+                "google",
+                "https://googleads.googleapis.com/v26/customers:listAccessibleCustomers",
+            ),
+            ("google", "https://oauth2.googleapis.com/token"),
         ] {
             let target = url(allowed);
             assert!(
                 egress.permits(EgressScope::Connector(connector), &target),
                 "{connector}: {allowed}"
             );
-            for other in ["meta", "netgsm", "x", "tiktok", "linkedin"] {
+            for other in ["meta", "netgsm", "x", "tiktok", "linkedin", "google"] {
                 if other != connector {
                     assert!(
                         !egress.permits(EgressScope::Connector(other), &target),
