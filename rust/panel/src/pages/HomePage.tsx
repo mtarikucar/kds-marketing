@@ -306,6 +306,20 @@ function itemText(t: TFunction, item: WorkItem): string {
         count: item.count,
         n: item.count >= INBOUND_EVENTS_COUNT_CAP ? `${INBOUND_EVENTS_COUNT_CAP}+` : String(item.count),
       });
+    // The leads program's kinds (spec 2026-10-30-leads-pool-outreach-design.md §3.17).
+    case 'research_due':
+      return t('home.pending.research_due', { n: item.remaining_today });
+    case 'prospects_to_score':
+    case 'prospects_to_promote':
+    case 'ownerless_journeys':
+    case 'assignment_stalled':
+    case 'promoted_not_contacted':
+    case 'personalization_due':
+      return t(`home.pending.${item.kind}`, { n: item.count });
+    case 'campaign_approval':
+      return t('home.pending.campaign_approval', { revision: item.revision });
+    case 'campaign_blocked':
+      return t('home.pending.campaign_blocked', { reason: t(`leads.pauseReasons.${item.reason}`) });
     default:
       return t(`home.pending.${item.kind}`);
   }
@@ -331,6 +345,20 @@ function itemLink(item: WorkItem): string | null {
       return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
     case 'inbound_events':
       return null;
+    case 'research_due':
+      return '/prospects/tasks';
+    case 'prospects_to_score':
+    case 'prospects_to_promote':
+      return '/prospects';
+    case 'ownerless_journeys':
+    case 'assignment_stalled':
+      return '/team/distribution';
+    case 'promoted_not_contacted':
+      return '/outreach';
+    case 'campaign_approval':
+    case 'campaign_blocked':
+    case 'personalization_due':
+      return `/outreach/${encodeURIComponent(item.campaign_id)}`;
     default:
       return '/capabilities';
   }

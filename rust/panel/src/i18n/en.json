@@ -337,15 +337,15 @@
       "task_due": "Task due",
       "voice_bridge_offline": "{{name}} is not registering: agent calls are refused until the bridge registers again.",
       "phone_offline": "{{name}} is not listed by a device bridge: commands for it are refused until a bridge lists it again.",
-      "research_due": "An open research task is waiting for new prospects today.",
-      "prospects_to_score": "Prospects are waiting to be scored.",
-      "prospects_to_promote": "Qualified prospects are waiting to be promoted into the inbox.",
-      "ownerless_journeys": "Open journeys have no owner.",
-      "assignment_stalled": "Assignments past their SLA could not be given to anyone else.",
-      "promoted_not_contacted": "Promoted prospects have not been written to yet.",
-      "campaign_approval": "A campaign is waiting for your approval.",
-      "campaign_blocked": "A campaign has stopped; check why.",
-      "personalization_due": "A campaign's recipients are waiting for personalization."
+      "research_due": "A research task may still record {{n}} prospects today.",
+      "prospects_to_score": "{{n}} prospects are waiting to be scored.",
+      "prospects_to_promote": "{{n}} qualified prospects are waiting to be promoted into the inbox.",
+      "ownerless_journeys": "{{n}} open journeys have no owner.",
+      "assignment_stalled": "{{n}} assignments are past their SLA and could not go to anyone else.",
+      "promoted_not_contacted": "{{n}} promoted prospects have not been written to yet.",
+      "campaign_approval": "Revision {{revision}} of a campaign is waiting for your approval.",
+      "campaign_blocked": "A campaign has stopped: {{reason}}.",
+      "personalization_due": "{{n}} recipients of a campaign are waiting for personalization."
     }
   },
   "team": {
@@ -1392,7 +1392,8 @@
       "ours": "Ours",
       "unassigned": "Unassigned",
       "snoozed": "Snoozed",
-      "all": "All"
+      "all": "All",
+      "ownerless": "Ownerless"
     },
     "state": {
       "open": "Open",
@@ -1442,7 +1443,8 @@
       "lost": "Lost",
       "snoozed": "Snoozed",
       "reopened": "Reopened",
-      "merged": "Merged"
+      "merged": "Merged",
+      "outreach_sent": "Campaign email sent"
     },
     "taskStatus": {
       "open": "Open",
@@ -1664,6 +1666,50 @@
       },
       "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
       "approvalNote": "On this account the agent's replies wait for your approval."
+    },
+    "outreachStep": "Step {{n}}",
+    "leads": {
+      "prospect": "Prospect record",
+      "origin": "From: {{via}}",
+      "kind": "Recipient kind",
+      "setKind": "Save the recipient kind",
+      "newKind": "New kind",
+      "kindNote": "Note (optional)",
+      "sequence": "Campaign sequence",
+      "campaign": "Campaign",
+      "nextStep": "Next step: {{n}} · {{at}}",
+      "stopSequence": "Stop the sequence",
+      "looking": "Looking…",
+      "noSequence": "This person is in no campaign sequence right now.",
+      "assignments": "Assignment history",
+      "noAssignments": "No assignments.",
+      "ownerlessCount": "Open journeys without an owner: {{n}}",
+      "stalledCount": "Assignments past their SLA: {{n}}",
+      "oldest": "Open the longest waiting",
+      "distributionLink": "Distribution settings"
+    },
+    "attachments": {
+      "add": "Attach a file",
+      "staged": "Files to attach",
+      "remove": "Remove {{name}}",
+      "download": "Download {{name}}",
+      "gone": "The file is no longer kept.",
+      "tooMany": "An email takes {{n}} files at most.",
+      "badType": "This file type cannot be attached: choose a PDF, PNG, JPEG, text, CSV, Word or Excel file.",
+      "tooLarge": "The file is over 7 MB.",
+      "skipped": {
+        "file_too_large": "File too large",
+        "too_many_files": "Past the email's file limit",
+        "daily_limit": "Past the daily file limit"
+      },
+      "states": {
+        "stored": "Kept",
+        "staged": "Not sent",
+        "attached": "Sent",
+        "skipped": "Not taken",
+        "deleted": "Deleted"
+      },
+      "of": "Attachments"
     }
   },
   "studio": {
@@ -2897,7 +2943,13 @@
       "not_enrollable": "Recipients cannot be added to a campaign in this state.",
       "enrollment_not_active": "The campaign is not running for this recipient anymore.",
       "archived": "The template is archived.",
-      "campaign_not_running": "The campaign is not sending right now."
+      "campaign_not_running": "The campaign is not sending right now.",
+      "attachments_require_email": "Files can be attached in email conversations only.",
+      "too_many_attachments": "An email takes 5 files at most.",
+      "attachment_repeated": "The same file is attached twice.",
+      "attachment_not_staged": "The file can no longer be attached; upload it again.",
+      "message_too_large": "The email is too large with its files.",
+      "not_active": "The campaign is not running for this recipient anymore."
     },
     "teamTabs": {
       "label": "Team sections",
