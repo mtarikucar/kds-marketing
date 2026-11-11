@@ -47,7 +47,6 @@ pub async fn attribution_for_ad(
     ctx: &Ctx,
     input: AttributionQuery,
 ) -> Result<Vec<AttributedJourney>, AppError> {
-    ctx.require(Permission::StudioWork)?;
     if input.from >= input.to || input.ad_id.trim().is_empty() || input.ad_id.len() > 200 {
         return Err(AppError::validation(
             "invalid attribution query",
@@ -55,6 +54,7 @@ pub async fn attribution_for_ad(
         ));
     }
     let before = {
+        ctx.require(Permission::AdsWork)?;
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         active(r.as_mut()).await?;
         proof_context(r.as_mut(), input.binding_id, d.clock.now()).await?

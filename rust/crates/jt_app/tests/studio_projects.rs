@@ -76,7 +76,7 @@ async fn idempotent_creation_revision_conflicts_and_manage_permission() {
     .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict);
     let mut read = w.ctx.clone();
-    read.permissions.remove(&Permission::StudioManage);
+    read.permissions.remove(&Permission::ContentManage);
     assert!(
         projects::project_get(&w.d, &read, projects::ProjectIdInput { project_id: p.id })
             .await
@@ -347,7 +347,7 @@ async fn archive_revokes_an_inflight_external_worker_lease() {
 }
 
 #[tokio::test]
-async fn pending_project_work_respects_manage_permission_and_archival() {
+async fn pending_project_work_respects_work_permission_and_archival() {
     use jt_app::usecases::work::{self, WorkKind};
     let (w, _) = publishing_world().await;
     let p = create(&w, "work-project").await;
@@ -357,17 +357,17 @@ async fn pending_project_work_respects_manage_permission_and_archival() {
         pending
             .items
             .iter()
-            .any(|i| matches!(i.kind,WorkKind::StudioProject{project_id,..} if project_id==p.id))
+            .any(|i| matches!(i.kind,WorkKind::ContentArea{project_id,..} if project_id==p.id))
     );
     let mut read = a.clone();
-    read.permissions.remove(&Permission::StudioManage);
+    read.permissions.remove(&Permission::ContentWork);
     assert!(
         !work::pending(&w.d, &read)
             .await
             .unwrap()
             .items
             .iter()
-            .any(|i| matches!(i.kind, WorkKind::StudioProject { .. }))
+            .any(|i| matches!(i.kind, WorkKind::ContentArea { .. }))
     );
     projects::project_update(
         &w.d,
@@ -382,6 +382,6 @@ async fn pending_project_work_respects_manage_permission_and_archival() {
             .unwrap()
             .items
             .iter()
-            .any(|i| matches!(i.kind, WorkKind::StudioProject { .. }))
+            .any(|i| matches!(i.kind, WorkKind::ContentArea { .. }))
     );
 }

@@ -33,11 +33,20 @@ pub struct ProjectQuery {
     #[serde(default)]
     pub archived: bool,
     pub before: Option<Uuid>,
+    pub scope: Option<AreaScope>,
+    pub done_before: Option<String>,
+}
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AreaScope {
+    Open,
+    Done,
 }
 #[derive(Debug, Serialize)]
 pub struct ProjectListOut {
     pub projects: Vec<ProductionProject>,
     pub next_cursor: Option<Uuid>,
+    pub next_done_before: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,8 +57,14 @@ pub struct ProjectIdInput {
 #[serde(deny_unknown_fields)]
 pub struct ProjectCreateInput {
     pub request_key: String,
-    pub title: String,
+    pub title: Option<String>,
     pub brief: String,
+    #[serde(default, with = "jt_studio::time_compat::option")]
+    pub start_at: Option<OffsetDateTime>,
+    #[serde(default)]
+    pub formats: Vec<PostFormat>,
+    #[serde(default)]
+    pub capability_ids: Vec<CapabilityId>,
     #[serde(default)]
     pub material_ids: Vec<MaterialId>,
 }
@@ -142,7 +157,12 @@ pub struct ProjectProductionOut {
 fn invalid(field: &str, message: &str) -> AppError {
     AppError::validation(message, json!({"field":field}))
 }
-fn text(value: &str, field: &str, max: usize, required: bool) -> Result<String, AppError> {
+pub(crate) fn text(
+    value: &str,
+    field: &str,
+    max: usize,
+    required: bool,
+) -> Result<String, AppError> {
     let v = value.trim();
     if (required && v.is_empty())
         || v.chars().count() > max
@@ -165,7 +185,13 @@ fn ids(values: &[MaterialId], field: &str, max: usize) -> Result<(), AppError> {
     Ok(())
 }
 fn write(ctx: &Ctx) -> Result<(), AppError> {
-    ctx.require(Permission::StudioManage)
+    ctx.require(Permission::ContentManage)
+}
+/// A tenant bundle of an active workspace for a use case whose own permission check has run.
+async fn open_checked(d: &Deps, ctx: &Ctx) -> Result<Box<dyn TenantRepos>, AppError> {
+    let mut r = d.uow.tenant(ctx.workspace_id).await?;
+    super::chain::active(r.as_mut()).await?;
+    Ok(r)
 }
 pub(crate) async fn load(
     r: &mut dyn TenantRepos,
@@ -186,7 +212,10 @@ pub(crate) async fn load(
     }
     Ok(p)
 }
-async fn material(r: &mut dyn TenantRepos, id: MaterialId) -> Result<Material, AppError> {
+pub(crate) async fn material(
+    r: &mut dyn TenantRepos,
+    id: MaterialId,
+) -> Result<Material, AppError> {
     let m = r
         .studio_materials()
         .get_material(id)
@@ -209,6 +238,7 @@ pub(crate) async fn save(
         .checked_add(1)
         .ok_or_else(|| AppError::conflict("project revision overflow"))?;
     p.updated_at = ctx.now;
+    p = p.present(ctx.now);
     r.studio_projects()
         .save_project(p.clone(), Some(previous))
         .await?;
@@ -368,21 +398,62 @@ pub async fn project_list(
     ctx: &Ctx,
     q: ProjectQuery,
 ) -> Result<ProjectListOut, AppError> {
-    let mut r = library::open(d, ctx).await?;
-    let mut projects = r
-        .studio_projects()
-        .list_projects(q.archived, q.before)
-        .await?;
-    let more = projects.len() > 100;
-    projects.truncate(100);
-    let next_cursor = if more {
-        projects.last().map(|p| p.id)
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_list",
+    ))?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let cursor = q
+        .done_before
+        .as_deref()
+        .map(|v| {
+            let bytes = URL_SAFE_NO_PAD
+                .decode(v)
+                .map_err(|_| invalid("done_before", "invalid cursor"))?;
+            serde_json::from_slice::<DoneCursor>(&bytes)
+                .map_err(|_| invalid("done_before", "invalid cursor"))
+        })
+        .transpose()?;
+    if q.done_before.is_some() && !matches!(q.scope, Some(AreaScope::Done)) {
+        return Err(invalid("done_before", "cursor requires done scope"));
+    }
+    let mut rows = match q.scope {
+        None => {
+            r.studio_projects()
+                .list_projects(q.archived, q.before)
+                .await?
+        }
+        Some(scope) => {
+            r.studio_projects()
+                .list_areas(matches!(scope, AreaScope::Done), cursor)
+                .await?
+        }
+    };
+    let limit = match q.scope {
+        None => 100,
+        Some(AreaScope::Open) => 200,
+        Some(AreaScope::Done) => 50,
+    };
+    let more = rows.len() > limit;
+    rows.truncate(limit);
+    let next_cursor = if more && q.scope.is_none() {
+        rows.last().map(|p| p.id)
+    } else {
+        None
+    };
+    let next_done_before = if more && matches!(q.scope, Some(AreaScope::Done)) {
+        rows.last()
+            .and_then(|p| p.done_at().map(|at| DoneCursor { at, id: p.id }))
+            .map(|c| serde_json::to_vec(&c).map(|b| URL_SAFE_NO_PAD.encode(b)))
+            .transpose()
+            .map_err(|_| AppError::internal("cursor encoding"))?
     } else {
         None
     };
     Ok(ProjectListOut {
-        projects,
+        projects: rows.into_iter().map(|p| p.present(ctx.now)).collect(),
         next_cursor,
+        next_done_before,
     })
 }
 pub async fn project_get(
@@ -390,9 +461,12 @@ pub async fn project_get(
     ctx: &Ctx,
     i: ProjectIdInput,
 ) -> Result<ProjectDetail, AppError> {
-    let mut r = library::open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_get",
+    ))?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     let p = load(r.as_mut(), i.project_id, None, false).await?;
-    detail(r.as_mut(), p).await
+    detail(r.as_mut(), p.present(ctx.now)).await
 }
 fn payload<T: Serialize>(i: &T) -> Result<Value, AppError> {
     Ok(json!(hash_token(&encode(i)?.to_string())))
@@ -425,16 +499,41 @@ pub async fn project_create(
     ctx: &Ctx,
     i: ProjectCreateInput,
 ) -> Result<ProductionProject, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_create",
+    ))?;
     write(ctx)?;
     key(&i.request_key)?;
-    let title = text(&i.title, "title", 160, true)?;
-    let brief = text(&i.brief, "brief", 5000, false)?;
+    let brief = text(&i.brief, "brief", MAX_GOAL_CHARS, true)?;
+    let title = match &i.title {
+        Some(t) => text(t, "title", 160, true)?,
+        None => goal_title(&brief),
+    };
+    let start_at = whole_micros(i.start_at.unwrap_or(ctx.now));
+    if start_at > ctx.now + time::Duration::days(365) {
+        return Err(invalid("start_at", "at most a year ahead"));
+    }
+    if i.formats.len() > 5 || i.capability_ids.len() > 100 {
+        return Err(invalid("hints", "too many hints"));
+    }
+    if i.capability_ids.iter().collect::<BTreeSet<_>>().len() != i.capability_ids.len()
+        || i.formats
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != i.formats.len()
+    {
+        return Err(invalid("hints", "duplicate hints"));
+    }
     ids(&i.material_ids, "material_ids", MAX_SOURCES)?;
     let hash = payload(&i)?;
-    let mut r = library::open(d, ctx).await?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentManage).await?;
     r.studio_control().lock_control().await?;
     if let Some(id) = replay(r.as_mut(), "studio.project_create", &i.request_key, &hash).await? {
-        return load(r.as_mut(), id, None, false).await;
+        return Ok(load(r.as_mut(), id, None, false).await?.present(ctx.now));
+    }
+    for cap in &i.capability_ids {
+        validate_account(d, r.as_mut(), ctx, *cap, None).await?;
     }
     let mut sources = Vec::new();
     for id in i.material_ids {
@@ -456,9 +555,23 @@ pub async fn project_create(
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        start_at: Some(start_at),
+        opened_by: Default::default(),
+        hints: AreaHints {
+            formats: i.formats,
+            capability_ids: i.capability_ids,
+        },
+        claim: None,
+        progress: None,
+        packages: vec![],
+        redo: None,
+        refused: 0,
+        refusal: None,
+        state: None,
         created_at: ctx.now,
         updated_at: ctx.now,
-    };
+    }
+    .present(ctx.now);
     r.studio_projects().save_project(p.clone(), None).await?;
     receipt(
         r.as_mut(),
@@ -485,8 +598,11 @@ pub async fn project_update(
     ctx: &Ctx,
     i: ProjectUpdateInput,
 ) -> Result<ProductionProject, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_update",
+    ))?;
     write(ctx)?;
-    let mut r = library::open(d, ctx).await?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentManage).await?;
     r.studio_control().lock_control().await?;
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), false).await?;
     if p.archived
@@ -509,7 +625,7 @@ pub async fn project_update(
         p.title = text(&title, "title", 160, true)?;
     }
     if let Some(brief) = i.brief {
-        p.brief = text(&brief, "brief", 5000, false)?;
+        p.brief = text(&brief, "brief", MAX_GOAL_CHARS, true)?;
     }
     if let Some(outputs) = i.outputs {
         if outputs.len() > MAX_OUTPUTS {
@@ -569,13 +685,19 @@ pub async fn project_materials(
     ctx: &Ctx,
     i: ProjectMaterialsInput,
 ) -> Result<ProductionProject, AppError> {
-    write(ctx)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_materials",
+    ))?;
+    // Whoever works an area adds to it; taking a chosen source out is the manager's decision.
+    if !i.remove.is_empty() {
+        write(ctx)?;
+    }
     ids(&i.add, "add", MAX_SOURCES)?;
     ids(&i.remove, "remove", MAX_SOURCES)?;
     if i.add.iter().any(|id| i.remove.contains(id)) {
         return Err(invalid("add", "cannot add and remove same material"));
     }
-    let mut r = library::open(d, ctx).await?;
+    let mut r = open_checked(d, ctx).await?;
     r.studio_control().lock_control().await?;
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), true).await?;
     // Linked publications retain their exact source context; changing project membership cannot silently unlink it.
@@ -631,14 +753,16 @@ pub async fn project_request(
     ctx: &Ctx,
     i: ProjectRequestInput,
 ) -> Result<ProductionProject, AppError> {
-    write(ctx)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_request",
+    ))?;
     key(&i.request_key)?;
     let text = text(&i.text, "text", 2000, true)?;
     let hash = payload(&i)?;
-    let mut r = library::open(d, ctx).await?;
+    let mut r = open_checked(d, ctx).await?;
     r.studio_control().lock_control().await?;
     if let Some(id) = replay(r.as_mut(), "studio.project_request", &i.request_key, &hash).await? {
-        return load(r.as_mut(), id, None, false).await;
+        return Ok(load(r.as_mut(), id, None, false).await?.present(ctx.now));
     }
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), true).await?;
     if p.requests.len() >= MAX_REQUESTS {
@@ -669,7 +793,9 @@ pub async fn project_request_update(
     ctx: &Ctx,
     i: ProjectRequestUpdateInput,
 ) -> Result<ProductionProject, AppError> {
-    write(ctx)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_request_update",
+    ))?;
     ids(&i.material_ids, "material_ids", MAX_SOURCES)?;
     if i.status == RequestStatus::Done && i.material_ids.is_empty() {
         return Err(invalid(
@@ -683,7 +809,7 @@ pub async fn project_request_update(
             "only completed requests take deliveries",
         ));
     }
-    let mut r = library::open(d, ctx).await?;
+    let mut r = open_checked(d, ctx).await?;
     r.studio_control().lock_control().await?;
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), true).await?;
     let index = p
@@ -728,12 +854,15 @@ pub async fn project_production(
     ctx: &Ctx,
     i: ProjectProductionInput,
 ) -> Result<ProjectProductionOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_production",
+    ))?;
     write(ctx)?;
     library::decider(ctx).ok_or_else(|| library::person_required("material_production"))?;
     key(&i.request_key)?;
     ids(&i.material_ids, "material_ids", 5)?;
     let hash = payload(&i)?;
-    let mut r = library::open(d, ctx).await?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentManage).await?;
     r.studio_control().lock_control().await?;
     if let Some(id) = replay(
         r.as_mut(),
@@ -809,8 +938,10 @@ pub async fn project_publication(
     ctx: &Ctx,
     i: ProjectPublicationInput,
 ) -> Result<ProductionProject, AppError> {
-    write(ctx)?;
-    let mut r = library::open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_publication",
+    ))?;
+    let mut r = library::open(d, ctx, jt_tenancy::Permission::SocialWork).await?;
     r.studio_control().lock_control().await?;
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), true).await?;
     let slot = r
@@ -873,14 +1004,17 @@ pub fn schema(name: &str) -> Value {
     let ids = json!({"type":"array","items":uuid,"maxItems":100,"uniqueItems":true});
     let output = json!({"type":"object","additionalProperties":false,"properties":{"id":uuid,"title":{"type":"string","minLength":1,"maxLength":160},"format":{"type":"string","enum":["story","feed_post","carousel","reel","tiktok_video"]},"target_at":{"type":["string","null"],"format":"date-time"},"capability_id":{"type":["string","null"],"format":"uuid"}},"required":["title","format"]});
     let (properties, required) = match name {
-        "list" => (json!({"archived":{"type":"boolean"},"before":uuid}), vec![]),
+        "list" => (
+            json!({"archived":{"type":"boolean"},"before":uuid,"scope":{"enum":["open","done"]},"done_before":string}),
+            vec![],
+        ),
         "get" => (json!({"project_id":uuid}), vec!["project_id"]),
         "create" => (
-            json!({"request_key":string,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","maxLength":5000},"material_ids":ids}),
-            vec!["request_key", "title", "brief"],
+            json!({"request_key":string,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","minLength":1,"maxLength":2000},"material_ids":ids,"start_at":{"type":["string","null"],"format":"date-time"},"formats":{"type":"array","items":{"enum":["story","feed_post","carousel","reel","tiktok_video"]},"maxItems":5,"uniqueItems":true},"capability_ids":ids}),
+            vec!["request_key", "brief"],
         ),
         "update" => (
-            json!({"project_id":uuid,"expected_revision":rev,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","maxLength":5000},"archived":{"type":"boolean"},"outputs":{"type":"array","items":output,"maxItems":20}}),
+            json!({"project_id":uuid,"expected_revision":rev,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","minLength":1,"maxLength":2000},"archived":{"type":"boolean"},"outputs":{"type":"array","items":output,"maxItems":20}}),
             vec!["project_id", "expected_revision"],
         ),
         "materials" => (
@@ -902,4 +1036,49 @@ pub fn schema(name: &str) -> Value {
         _ => panic!("unknown production project schema"),
     };
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required})
+}
+
+/// `at` without what the database does not keep: the stored column holds microseconds, and an
+/// area's start and delivery times are mirrored into columns that must equal the document's.
+pub(crate) fn whole_micros(at: OffsetDateTime) -> OffsetDateTime {
+    at.replace_nanosecond(at.nanosecond() / 1_000 * 1_000)
+        .unwrap_or(at)
+}
+/// An area's title when the person gave none: the goal itself when it is short, else its first
+/// words (up to 60 characters, cut at a word) with an ellipsis.
+pub(crate) fn goal_title(goal: &str) -> String {
+    const MAX: usize = 60;
+    if goal.chars().count() <= MAX {
+        return goal.to_owned();
+    }
+    let prefix: String = goal.chars().take(MAX).collect();
+    let cut = prefix
+        .rsplit_once(char::is_whitespace)
+        .map_or(prefix.as_str(), |(head, _)| head);
+    format!("{}…", cut.trim_end_matches(|c: char| !c.is_alphanumeric()))
+}
+pub(crate) async fn validate_account(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: CapabilityId,
+    format: Option<PostFormat>,
+) -> Result<(), AppError> {
+    let c = r
+        .capabilities()
+        .find(id)
+        .await?
+        .ok_or_else(|| invalid("capability_ids", "unknown account"))?;
+    if !super::chain::ORGANIC_KINDS.contains(&c.kind_key.as_str())
+        || !super::posts::postable(d, &c, ctx.now)
+    {
+        return Err(invalid(
+            "capability_ids",
+            "account is not a live social account",
+        ));
+    }
+    if format.is_some_and(|f| !jt_studio::supported_formats(&c.kind_key).contains(&f)) {
+        return Err(invalid("format", "format_unsupported"));
+    }
+    Ok(())
 }

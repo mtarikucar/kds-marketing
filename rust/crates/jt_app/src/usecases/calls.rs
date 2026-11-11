@@ -883,6 +883,7 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
 
     // 1. The first fence, and the session.
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    super::spending::refuse_if_stopped(r.as_mut(), "calls").await?;
     let gathered = facts(
         r.as_mut(),
         ctx,
@@ -1052,6 +1053,7 @@ async fn place_agent(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOu
 
     // 1. The first fence, and the session.
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    super::spending::refuse_if_stopped(r.as_mut(), "calls").await?;
     let gathered = facts(
         r.as_mut(),
         ctx,
@@ -1585,13 +1587,15 @@ pub(crate) async fn charge(
         let already = session.cost_minor.unwrap_or(0);
         let add = total - already;
         if total > 0 && add > 0 {
-            super::budget::spend_in(
+            super::budget::spend_in_for(
                 deps,
                 ctx,
                 r,
                 item.id,
                 add,
                 Some(format!("call:{}", session.id)),
+                Some("calls"),
+                None,
             )
             .await?;
             session.cost_minor = Some(total);

@@ -140,7 +140,15 @@ async fn library_tools_listed_with_schemas_and_no_tool_for_a_humans_decision() {
         let name = format!("jeeta.studio.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("studio.{action}"), "{name}");
-        assert_eq!(tool.permission, Permission::StudioWork, "{name}");
+        assert_eq!(
+            tool.permissions,
+            if action.starts_with("material_production_") || *action == "calendar_list" {
+                &[Permission::ContentWork][..]
+            } else {
+                &[Permission::MaterialsWork][..]
+            },
+            "{name}"
+        );
         assert_eq!(tool.risk, *risk, "{name}");
         assert!(
             tool.description.ends_with(jt_mcp::risk_tag(*risk)),
@@ -471,7 +479,7 @@ async fn an_agent_builds_the_library_through_the_tools_without_a_strategy() {
         jt_app::error::ErrorCode::Forbidden
     );
     let mut restricted = agent.clone();
-    restricted.permissions.remove(&Permission::StudioWork);
+    restricted.permissions.remove(&Permission::MaterialsWork);
     assert_eq!(
         (tools["jeeta.studio.material_intelligence_get"].run)(
             &deps,

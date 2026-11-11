@@ -147,6 +147,15 @@ pub struct PublishAttempt {
     /// categories of `outcome`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+    /// When the provider's own scheduler sends the post (design 2026-11-10 §7.3): the attempt
+    /// left the post with the provider ahead of its time instead of sending it. `None` for a
+    /// post Jeeta sent itself. Never written when `None`.
+    #[serde(
+        default,
+        with = "crate::time_compat::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    held_until: Option<OffsetDateTime>,
 }
 /// The longest failure reason an attempt keeps.
 pub const MAX_FAILURE_REASON: usize = 300;
@@ -180,6 +189,7 @@ impl PublishAttempt {
             state: PublishState::Sending,
             outcome: None,
             failure_reason: None,
+            held_until: None,
         };
         attempt.validate()?;
         Ok(attempt)
@@ -212,8 +222,27 @@ impl PublishAttempt {
         self.account_id = account_id;
         self
     }
+    /// Mark this new Sending attempt as one that leaves the post with the provider's own
+    /// scheduler until `at`, before persisting it.
+    pub fn with_hold(mut self, at: Option<OffsetDateTime>) -> Self {
+        self.held_until = at;
+        self
+    }
+    /// When the provider's scheduler sends the post this attempt left with it; `None` for a post
+    /// Jeeta sent itself.
+    pub fn held_until(&self) -> Option<OffsetDateTime> {
+        self.held_until
+    }
+    /// Whether the post is with the provider's scheduler and has not gone out: left there, its
+    /// receipt captured, and neither settled nor taken back.
+    pub fn is_held(&self) -> bool {
+        self.held_until.is_some() && matches!(self.outcome, Some(PublishOutcome::Observed(_)))
+    }
     pub fn validate(&self) -> Result<(), StudioError> {
         self.piece.validate_persisted()?;
+        if self.held_until.is_some_and(|at| at < self.claimed_at) {
+            return Err(StudioError::InvalidEvidence("held_until"));
+        }
         for (id, key) in [
             (self.id.0, "attempt_id"),
             (self.slot_id.0, "slot_id"),

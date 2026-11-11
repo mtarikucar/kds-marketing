@@ -25,7 +25,7 @@ describe('Materyaller · Olaylar', () => {
       ...answers,
       'POST /api/studio/olays/o2/confirm': { ...proposedA, status: 'confirmed', revision: 2 },
     });
-    renderAt('/studio?tab=materials&view=olays');
+    renderAt('/materials?view=olays');
     const row = await screen.findByTestId('olay-o2');
     expect(within(row).getByText('Onay bekliyor')).toBeInTheDocument();
     expect(within(row).getByText('Sipariş / proje', { exact: false })).toBeInTheDocument();
@@ -48,7 +48,7 @@ describe('Materyaller · Olaylar', () => {
       ...answers,
       'POST /api/studio/olays/o2/confirm': delayed(500, { ...proposedA, status: 'confirmed' }),
     });
-    renderAt('/studio?tab=materials&view=olays');
+    renderAt('/materials?view=olays');
     const a = await screen.findByTestId('olay-o2');
     const b = screen.getByTestId('olay-o3');
     await userEvent.click(within(a).getByRole('button', { name: 'Onayla' }));
@@ -93,7 +93,7 @@ describe('Materyaller · Olaylar', () => {
       },
       'POST /api/studio/shoot-requests/r1/resolve': shoot('r1', { status: 'done' }),
     });
-    renderAt('/studio?tab=materials&view=olays');
+    renderAt('/materials?view=olays');
     await userEvent.click(await within(await screen.findByTestId('olay-o1')).findByRole('button', { name: /Kadıköy atölyesi/ }));
     const detail = await screen.findByTestId('olay-detail');
     expect(await within(detail).findByRole('heading', { name: 'Kadıköy atölyesi' })).toBeInTheDocument();
@@ -119,7 +119,7 @@ describe('Materyaller · Olaylar', () => {
       ...answers,
       'GET /api/studio/materials': [material('m3', { title: 'Tepki videosu', share: null })],
     });
-    renderAt('/studio?tab=materials&view=olays');
+    renderAt('/materials?view=olays');
     await userEvent.click(await screen.findByRole('button', { name: 'İncelenmeyi bekleyen 1 materyal' }));
     expect(await screen.findByRole('img', { name: 'Tepki videosu' })).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/api/studio/materials' && c.search === '?state=needs_review')).toBe(true);

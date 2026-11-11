@@ -120,3 +120,26 @@ pub async fn spend(
         budget::spend(&state.deps, &ctx, item, limit, before).await?,
     ))
 }
+
+/// `200` with what each budget item spent in the period, by module and ad campaign, and what is
+/// stopped (design 2026-11-10 S6, S7).
+pub async fn breakdown(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiQuery(query): ApiQuery<jt_app::usecases::spending::BreakdownQuery>,
+) -> Result<Json<jt_app::usecases::spending::Breakdown>, ApiError> {
+    Ok(Json(
+        jt_app::usecases::spending::breakdown(&state.deps, &ctx, query).await?,
+    ))
+}
+
+/// `200` with the stop state: a person stops all spending or one module's, or lets it go on.
+pub async fn stop(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(body): ApiJson<jt_app::usecases::spending::StopInput>,
+) -> Result<Json<jt_app::usecases::spending::StopState>, ApiError> {
+    Ok(Json(
+        jt_app::usecases::spending::stop(&state.deps, &ctx, body).await?,
+    ))
+}

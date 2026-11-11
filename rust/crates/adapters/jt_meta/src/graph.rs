@@ -366,6 +366,18 @@ impl MetaConnector {
         self.pages(first, app.auth(token)).await
     }
 
+    /// Campaign reconciliation must not turn malformed or incomplete pages into absence.
+    pub(crate) async fn graph_pages_checked(
+        &self,
+        app: &GraphApp,
+        token: &str,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<Vec<Value>, ConnectorError> {
+        let first = self.graph_url(&app.version, segments, query);
+        self.pages_impl(first, app.auth(token), true).await
+    }
+
     /// Every item of a paged read starting at `first`, as [`MetaConnector::graph_pages`] does. A
     /// paging link to another origin than `first`'s is `Permanent` and not followed.
     pub(crate) async fn pages(
@@ -373,11 +385,35 @@ impl MetaConnector {
         first: Url,
         auth: Auth<'_>,
     ) -> Result<Vec<Value>, ConnectorError> {
+        self.pages_impl(first, auth, false).await
+    }
+
+    async fn pages_impl(
+        &self,
+        first: Url,
+        auth: Auth<'_>,
+        checked: bool,
+    ) -> Result<Vec<Value>, ConnectorError> {
         let origin = first.origin();
         let mut url = first;
         let mut items = Vec::new();
         for _ in 0..MAX_PAGES {
             let page = self.call(Method::GET, url, auth, Body::Empty).await?;
+            if checked {
+                if !page["data"].is_array() {
+                    return Err(ConnectorError::permanent("invalid Graph page data"));
+                }
+                if let Some(paging) = page.get("paging") {
+                    if !paging.is_object() {
+                        return Err(ConnectorError::permanent("invalid Graph paging envelope"));
+                    }
+                    if let Some(next) = paging.get("next")
+                        && next.as_str().is_none_or(|s| s.is_empty())
+                    {
+                        return Err(ConnectorError::permanent("invalid Graph continuation"));
+                    }
+                }
+            }
             if let Some(data) = page["data"].as_array() {
                 items.extend(data.iter().cloned());
             }
@@ -534,8 +570,37 @@ fn call_secrets(auth: Auth<'_>, url: &Url, body: &Body) -> Vec<String> {
                 .map(|(_, value)| value.clone()),
         );
     }
+    if let Body::Json(value) = body {
+        secrets.push(value.to_string());
+        request_texts(value, &mut secrets);
+    }
+    // Preview's creative travels as JSON in the query, not in a body.
+    for (key, value) in url.query_pairs() {
+        if key == "creative" {
+            secrets.push(value.to_string());
+            if let Ok(value) = serde_json::from_str::<Value>(&value) {
+                request_texts(&value, &mut secrets);
+            }
+        }
+    }
     secrets.retain(|s| !s.is_empty());
     secrets
+}
+
+// Avoid echoing ad copy, URLs, image bytes, or an entire submitted object in errors.
+fn request_texts(value: &Value, secrets: &mut Vec<String>) {
+    match value {
+        Value::String(text) => {
+            secrets.push(text.clone());
+            // Providers may quote a field as JSON inside their message. Keep the escaped
+            // contents too, so newlines, quotes and backslashes cannot bypass masking.
+            let quoted = value.to_string();
+            secrets.push(quoted[1..quoted.len() - 1].to_owned());
+        }
+        Value::Array(values) => values.iter().for_each(|v| request_texts(v, secrets)),
+        Value::Object(values) => values.values().for_each(|v| request_texts(v, secrets)),
+        _ => {}
+    }
 }
 
 /// `text` with every spelling of a secret of `secrets` replaced by [`SECRET_MASK`], the text
@@ -769,6 +834,8 @@ struct GraphError<'a> {
     subcode: Option<i64>,
     kind: Option<&'a str>,
     message: Option<&'a str>,
+    user_title: Option<&'a str>,
+    user_message: Option<&'a str>,
     transient: bool,
 }
 
@@ -781,12 +848,16 @@ impl<'a> GraphError<'a> {
                 subcode: integer(&error["error_subcode"]),
                 kind: error["type"].as_str(),
                 message: error["message"].as_str(),
+                user_title: error["error_user_title"].as_str(),
+                user_message: error["error_user_msg"].as_str(),
                 transient: error["is_transient"].as_bool() == Some(true),
             }
         } else {
             GraphError {
                 code: None,
                 subcode: None,
+                user_title: None,
+                user_message: None,
                 kind: json["error_type"].as_str(),
                 message: json["error_message"]
                     .as_str()
@@ -809,7 +880,12 @@ impl<'a> GraphError<'a> {
             (None, Some(sub)) => out.push_str(&format!(" (subcode {sub})")),
             (None, None) => {}
         }
-        if let Some(message) = self.message {
+        for message in self
+            .user_title
+            .into_iter()
+            .chain(self.user_message)
+            .chain(self.message.filter(|_| self.user_message.is_none()))
+        {
             out.push_str(": ");
             out.push_str(message);
         }

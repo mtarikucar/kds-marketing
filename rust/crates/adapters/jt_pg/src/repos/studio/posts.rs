@@ -1,5 +1,6 @@
 //! Olay-driven publishing's storage (migration `0022_studio_posts`): each slot's planned post, the
-//! package requests the triggers write and the workspace's posting policy with its time zone.
+//! package requests the triggers write and the workspace's posting policy with its time zone;
+//! and the social accounts' daily snapshots and paused accounts (`0037_social_accounts`).
 //! Records are kept whole in `data`; the columns are what the checks, keys and indexes need,
 //! written from the same record.
 use super::{decode, encode};
@@ -9,6 +10,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use jt_app::{error::AppError, ports::posts::*};
+use jt_capability::CapabilityId;
 use jt_studio::SlotId;
 use serde_json::Value;
 use uuid::Uuid;
@@ -263,19 +265,86 @@ impl PostRepo for PgTenantRepos {
     }
 
     async fn posting_settings(&mut self) -> Result<PostingSettings, AppError> {
-        let row: Option<(Value, String)> =
-            sqlx::query_as("select data,tz from studio_posting_policy where workspace_id=$1")
-                .bind(self.workspace_id().0)
-                .fetch_optional(self.tx.conn())
-                .await
-                .map_err(|e| map_sqlx(e, "read posting policy"))?;
+        let row: Option<(Value, String, Vec<Uuid>, i64, bool)> = sqlx::query_as(
+            "select data,tz,paused_capability_ids,revision,provider_scheduling \
+             from studio_posting_policy where workspace_id=$1",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read posting policy"))?;
         Ok(match row {
             None => PostingSettings::default(),
-            Some((data, tz)) => PostingSettings {
+            Some((data, tz, paused, revision, provider_scheduling)) => PostingSettings {
                 policy: decode(data)?,
                 tz,
+                paused_capability_ids: paused.into_iter().map(CapabilityId).collect(),
+                revision: u64::try_from(revision)
+                    .map_err(|_| AppError::internal("invalid stored posting policy revision"))?,
+                provider_scheduling,
             },
         })
+    }
+
+    async fn insert_account_day(&mut self, day: AccountDay) -> Result<bool, AppError> {
+        same_workspace(self.workspace_id(), day.workspace_id)?;
+        let done = sqlx::query(
+            "insert into social_account_days(workspace_id,capability_id,day,data,read_at) \
+             values($1,$2,$3,$4,$5) on conflict do nothing",
+        )
+        .bind(self.workspace_id().0)
+        .bind(day.capability_id.0)
+        .bind(day.day)
+        .bind(encode(&day)?)
+        .bind(day.read_at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "insert account day"))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn account_days(
+        &mut self,
+        capability: CapabilityId,
+        from: time::Date,
+        until: time::Date,
+    ) -> Result<Vec<AccountDay>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from social_account_days where workspace_id=$1 and capability_id=$2 \
+             and day between $3 and $4 order by day",
+        )
+        .bind(self.workspace_id().0)
+        .bind(capability.0)
+        .bind(from)
+        .bind(until)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read account days"))?;
+        rows.into_iter().map(decode).collect()
+    }
+
+    async fn latest_account_days(&mut self) -> Result<Vec<AccountDay>, AppError> {
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select distinct on (capability_id) data from social_account_days \
+             where workspace_id=$1 order by capability_id, day desc",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read latest account days"))?;
+        rows.into_iter().map(decode).collect()
+    }
+
+    async fn purge_account_days(&mut self, before: time::Date) -> Result<u64, AppError> {
+        Ok(
+            sqlx::query("delete from social_account_days where workspace_id=$1 and day<$2")
+                .bind(self.workspace_id().0)
+                .bind(before)
+                .execute(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "purge account days"))?
+                .rows_affected(),
+        )
     }
 
     async fn save_posting_settings(&mut self, settings: PostingSettings) -> Result<(), AppError> {
@@ -286,13 +355,19 @@ impl PostRepo for PgTenantRepos {
         }
         let debounce = i32::try_from(p.debounce_minutes)
             .map_err(|_| AppError::internal("studio_posting_policy check: debounce_minutes"))?;
+        let revision = i64::try_from(settings.revision)
+            .map_err(|_| AppError::internal("studio_posting_policy check: revision"))?;
+        let paused: Vec<Uuid> = settings.paused_capability_ids.iter().map(|c| c.0).collect();
         sqlx::query(
             "insert into studio_posting_policy(workspace_id,data,tz,floor_days,debounce_minutes,\
-             horizon_days,quiet_start_hour,quiet_end_hour) values($1,$2,$3,$4,$5,$6,$7,$8) \
+             horizon_days,quiet_start_hour,quiet_end_hour,paused_capability_ids,revision,\
+             provider_scheduling) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) \
              on conflict (workspace_id) do update set data=excluded.data,tz=excluded.tz,\
              floor_days=excluded.floor_days,debounce_minutes=excluded.debounce_minutes,\
              horizon_days=excluded.horizon_days,quiet_start_hour=excluded.quiet_start_hour,\
-             quiet_end_hour=excluded.quiet_end_hour",
+             quiet_end_hour=excluded.quiet_end_hour,\
+             paused_capability_ids=excluded.paused_capability_ids,revision=excluded.revision,\
+             provider_scheduling=excluded.provider_scheduling",
         )
         .bind(self.workspace_id().0)
         .bind(encode(&p)?)
@@ -302,6 +377,9 @@ impl PostRepo for PgTenantRepos {
         .bind(i32::from(p.horizon_days))
         .bind(i32::from(p.quiet_start_hour))
         .bind(i32::from(p.quiet_end_hour))
+        .bind(paused)
+        .bind(revision)
+        .bind(settings.provider_scheduling)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save posting policy"))?;

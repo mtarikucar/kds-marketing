@@ -41,6 +41,8 @@ pub(crate) const MATERIAL_HOLD: &str = "material_check_hold";
 pub(crate) struct Library {
     pub olays: Vec<Olay>,
     pub calendar: Calendar,
+    /// The materials policy's `ai_standalone`.
+    pub ai_standalone: bool,
 }
 
 impl Library {
@@ -49,12 +51,13 @@ impl Library {
             at,
             olays: &self.olays,
             calendar: &self.calendar,
+            ai_standalone: self.ai_standalone,
         }
     }
 }
 
-/// The workspace's olays and its calendar over every year from its earliest olay to the year after
-/// `at`.
+/// The workspace's olays, its calendar over every year from its earliest olay to the year after
+/// `at`, and its materials policy's standalone setting.
 pub(crate) async fn library(
     r: &mut dyn TenantRepos,
     at: OffsetDateTime,
@@ -69,9 +72,11 @@ pub(crate) async fn library(
         .unwrap_or(year)
         .min(year)
         - 1;
+    let ai_standalone = r.studio_materials().material_policy().await?.ai_standalone;
     Ok(Library {
         olays,
         calendar: Calendar::effective(first.max(2000)..=(year + 1).min(2100), &rows),
+        ai_standalone,
     })
 }
 
@@ -286,32 +291,6 @@ pub(crate) async fn material_check(
             .ok_or_else(|| AppError::internal("a recorded material is missing"))?;
         materials.push(m);
     }
-    let lib = library(r, at).await?;
-    let refs: Vec<&Material> = materials.iter().collect();
-    let mut hard = match piece_roles(&refs, &recorded.subject, &lib.context(at)) {
-        Ok(_) => Vec::new(),
-        Err(PieceRefusal::NoAnchor) => vec![HardFinding {
-            code: "no_eligible_material".into(),
-            material_id: None,
-        }],
-        Err(PieceRefusal::Refused(list)) => list
-            .iter()
-            .map(|(id, refusal)| HardFinding {
-                code: refusal.code().into(),
-                material_id: Some(*id),
-            })
-            .collect(),
-    };
-    let blocked = super::library::blocked_derivatives(r).await?;
-    hard.extend(
-        materials
-            .iter()
-            .filter(|m| blocked.contains(&m.id))
-            .map(|m| HardFinding {
-                code: "source_permission_restricted".into(),
-                material_id: Some(m.id),
-            }),
-    );
     // The texts that go out: the piece's, each adaptation's, and the title a human left on the
     // TikTok posting screen, which replaces the drafted text there.
     let title = r
@@ -331,15 +310,7 @@ pub(crate) async fn material_check(
     {
         texts.clear();
     }
-    let names = client_names(r, &lib.olays).await?;
-    let findings = check_caption(
-        &texts,
-        &recorded.subject,
-        &refs,
-        &lib.olays,
-        &names,
-        &lib.calendar,
-    );
+    let (hard, findings) = check_content(r, &materials, &recorded.subject, &texts, at).await?;
     let digest = findings_digest(&findings);
     let released = r
         .studio_materials()
@@ -424,9 +395,17 @@ pub async fn material_check_release(
     ctx: &Ctx,
     i: MaterialCheckReleaseInput,
 ) -> Result<SlotOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_check_release",
+    ))?;
     let by = human_approver(ctx)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.material_check_release"),
+    )
+    .await?;
     if i.digest.len() != 64
         || !i
             .digest
@@ -490,4 +469,43 @@ pub async fn material_check_release(
     let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
     r.commit().await?;
     Ok(out)
+}
+
+/// The common eligibility and truth checks, independent of whether content has a slot yet.
+pub(crate) async fn check_content(
+    r: &mut dyn TenantRepos,
+    materials: &[Material],
+    subject: &Subject,
+    texts: &[&str],
+    at: OffsetDateTime,
+) -> Result<(Vec<HardFinding>, Vec<CaptionFinding>), AppError> {
+    let lib = library(r, at).await?;
+    let refs: Vec<&Material> = materials.iter().collect();
+    let mut hard = match piece_roles(&refs, subject, &lib.context(at)) {
+        Ok(_) => Vec::new(),
+        Err(PieceRefusal::NoAnchor) => vec![HardFinding {
+            code: "no_eligible_material".into(),
+            material_id: None,
+        }],
+        Err(PieceRefusal::Refused(list)) => list
+            .iter()
+            .map(|(id, refusal)| HardFinding {
+                code: refusal.code().into(),
+                material_id: Some(*id),
+            })
+            .collect(),
+    };
+    let blocked = super::library::blocked_derivatives(r).await?;
+    hard.extend(
+        materials
+            .iter()
+            .filter(|m| blocked.contains(&m.id))
+            .map(|m| HardFinding {
+                code: "source_permission_restricted".into(),
+                material_id: Some(m.id),
+            }),
+    );
+    let names = client_names(r, &lib.olays).await?;
+    let findings = check_caption(texts, subject, &refs, &lib.olays, &names, &lib.calendar);
+    Ok((hard, findings))
 }

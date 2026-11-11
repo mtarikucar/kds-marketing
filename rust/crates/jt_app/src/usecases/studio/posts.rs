@@ -4,7 +4,7 @@
 //! (`studio.posts_propose`), the planned posts (`studio.posts_list`), the owner's weekly summary
 //! (`studio.weekly_summary`) and the posting policy, a human's (`studio.posting_policy_set`).
 //!
-//! Each needs an approved strategy (they plan content) and `studio.work`. Nothing is published
+//! Each needs an approved strategy (they plan content) and `social.work`. Nothing is published
 //! without an eligible material: a package's posts are checked here at their time, and their
 //! pieces again at submission and at publish (spec D1). Ledger entries carry ids, codes and
 //! times, never captions or the owner's words.
@@ -120,7 +120,7 @@ pub(crate) struct Channel {
 
 /// The content types `h`'s organic cadence names for a channel of kind `kind`, the cadence's
 /// order kept; none when `h` is retired, posts elsewhere or has no usable organic cadence.
-fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
+pub(crate) fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
     let Some(cadence) = h.cadence.get(&LaneKind::Organic) else {
         return Vec::new();
     };
@@ -140,7 +140,7 @@ fn content_types(h: &Hypothesis, kind: &str) -> Vec<String> {
 }
 
 /// Whether the strategy `frame` chose a channel of kind `kind` in one of `group_ids` (or any).
-fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
+pub(crate) fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
     frame.sections.channels.iter().any(|choice| {
         (choice.channel == "any" || choice.channel == kind)
             && choice
@@ -149,7 +149,10 @@ fn selected(frame: &StrategyVersion, kind: &str, group_ids: &[Uuid]) -> bool {
     })
 }
 
-async fn group_ids(r: &mut dyn TenantRepos, c: CapabilityId) -> Result<Vec<Uuid>, AppError> {
+pub(crate) async fn group_ids(
+    r: &mut dyn TenantRepos,
+    c: CapabilityId,
+) -> Result<Vec<Uuid>, AppError> {
     Ok(r.capability_groups()
         .list()
         .await?
@@ -161,7 +164,7 @@ async fn group_ids(r: &mut dyn TenantRepos, c: CapabilityId) -> Result<Vec<Uuid>
 
 /// Whether capability `c` may take a post at `now`: an organic kind, connected for writing, with
 /// a publisher built for its provider.
-fn postable(d: &Deps, c: &Capability, now: OffsetDateTime) -> bool {
+pub(crate) fn postable(d: &Deps, c: &Capability, now: OffsetDateTime) -> bool {
     ORGANIC_KINDS.contains(&c.kind_key.as_str())
         && capability_access(c, now, true).is_ok()
         && jt_connector::provider_for_kind(&c.kind_key)
@@ -176,9 +179,18 @@ pub(crate) async fn channels(
     now: OffsetDateTime,
 ) -> Result<Vec<Channel>, AppError> {
     let hypotheses = r.hypotheses().list(frame.id).await?;
+    // An account a person paused takes no post (design 2026-11-10 §7.6).
+    let paused = r
+        .studio_posts()
+        .posting_settings()
+        .await?
+        .paused_capability_ids;
     let mut out = Vec::new();
     for c in r.capabilities().list(CapabilityFilter::default()).await? {
-        if !postable(d, &c, now) || !selected(frame, &c.kind_key, &group_ids(r, c.id).await?) {
+        if paused.contains(&c.id)
+            || !postable(d, &c, now)
+            || !selected(frame, &c.kind_key, &group_ids(r, c.id).await?)
+        {
             continue;
         }
         let mut options = Vec::new();
@@ -496,8 +508,16 @@ pub async fn post_requests(
     ctx: &Ctx,
     q: PackageQuery,
 ) -> Result<Vec<PackageRequest>, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.post_requests",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.post_requests"),
+    )
+    .await?;
     Ok(r.studio_posts()
         .list_package_requests()
         .await?
@@ -560,7 +580,7 @@ pub struct PackageProposalOut {
     pub posts: Vec<PostOut>,
 }
 
-fn post_out(post: PlannedPost, slot: Slot, now: OffsetDateTime) -> PostOut {
+pub(crate) fn post_out(post: PlannedPost, slot: Slot, now: OffsetDateTime) -> PostOut {
     PostOut {
         pending: now >= post.prep_start_at
             && post.retired.is_none()
@@ -638,9 +658,17 @@ pub async fn posts_propose(
     ctx: &Ctx,
     i: PackageProposalInput,
 ) -> Result<PackageProposalOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posts_propose",
+    ))?;
     validate_proposal(&i)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posts_propose"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     let out = posts_propose_locked(d, ctx, r.as_mut(), &frame, i).await?;
     r.commit().await?;
@@ -895,6 +923,14 @@ async fn check_item(
     if !postable(d, &c, now) {
         return refuse("channel_unavailable");
     }
+    if r.studio_posts()
+        .posting_settings()
+        .await?
+        .paused_capability_ids
+        .contains(&c.id)
+    {
+        return refuse(super::chain::ACCOUNT_PAUSED);
+    }
     if !request.covers(c.id) {
         return refuse("other_channel");
     }
@@ -1028,8 +1064,16 @@ pub struct PostsOut {
 /// The planned posts, by `publish_at`, each with its slot and whether it is pending: a post
 /// before its preparation start is listed here only (spec §14.3).
 pub async fn posts_list(d: &Deps, ctx: &Ctx, q: PostsQuery) -> Result<PostsOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posts_list",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posts_list"),
+    )
+    .await?;
     let mut posts = Vec::new();
     for p in r.studio_posts().list_posts().await? {
         if q.from.is_some_and(|f| p.publish_at < f) || q.until.is_some_and(|u| p.publish_at >= u) {
@@ -1124,8 +1168,16 @@ pub async fn weekly_summary(
     ctx: &Ctx,
     q: SummaryQuery,
 ) -> Result<WeeklySummaryOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.weekly_summary",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.weekly_summary"),
+    )
+    .await?;
     let settings = r.studio_posts().posting_settings().await?;
     let tz = zone_or_default(&settings.tz);
     let week_start = match q.week {
@@ -1271,6 +1323,9 @@ pub async fn posting_policy_set(
     ctx: &Ctx,
     i: PostingSettings,
 ) -> Result<PostingSettings, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.posting_policy_set",
+    ))?;
     human_approver(ctx)?;
     i.policy.validate().map_err(|e| {
         let field = match &e {
@@ -1286,8 +1341,24 @@ pub async fn posting_policy_set(
         ));
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.posting_policy_set"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
+    // The paused accounts are `social.account_pause`'s: setting the policy keeps them, and
+    // moves the settings' revision as every change does.
+    let stored = r.studio_posts().posting_settings().await?;
+    let i = PostingSettings {
+        paused_capability_ids: stored.paused_capability_ids,
+        revision: stored
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::conflict("posting settings revision overflow"))?,
+        ..i
+    };
     r.studio_posts().save_posting_settings(i.clone()).await?;
     let mut e = ledger_entry(
         ctx,

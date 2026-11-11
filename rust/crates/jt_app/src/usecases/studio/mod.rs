@@ -27,3 +27,5 @@ pub mod budget;
 pub mod attribution;
 
 pub mod views;
+
+pub mod permissions;

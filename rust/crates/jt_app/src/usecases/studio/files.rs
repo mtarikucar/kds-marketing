@@ -7,7 +7,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use jt_studio::*;
-use jt_tenancy::{Permission, WorkspaceId};
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::Duration;
@@ -185,10 +185,13 @@ impl Staging {
         }
     }
 }
-/// Stores a medium for Studio, replayed by `request_key`. Needs `studio.work` and an active
+/// Stores a medium for Studio, replayed by `request_key`. Needs `materials.work` and an active
 /// workspace, not an approved strategy (spec 2026-11-03 D35): the owner gathers materials before
 /// and while the strategy is worked out.
 pub async fn file_upload(d: &Deps, ctx: &Ctx, i: FileUploadInput) -> Result<StoredFile, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.file_upload",
+    ))?;
     let mut stage = Staging::new();
     let result = file_upload_in(d, ctx, i, &mut stage).await;
     stage.compensate(d, ctx.workspace_id).await;
@@ -200,7 +203,6 @@ async fn file_upload_in(
     i: FileUploadInput,
     stage: &mut Staging,
 ) -> Result<StoredFile, AppError> {
-    ctx.require(Permission::StudioWork)?;
     key(&i.request_key)?;
     limit(&i.mime)?;
     // Only a digest of bytes/URLs reaches request storage.

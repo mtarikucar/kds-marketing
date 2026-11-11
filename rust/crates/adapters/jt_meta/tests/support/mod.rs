@@ -9,6 +9,8 @@
 
 #![allow(dead_code)]
 
+pub mod workspace;
+
 use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};

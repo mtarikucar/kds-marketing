@@ -225,7 +225,7 @@ export function ProjectMaterials({
                 className="min-w-0 space-y-3 rounded-md border border-border bg-surface p-3"
               >
                 <Link
-                  to={`/studio?tab=materials&view=library&material=${encodeURIComponent(material.id)}`}
+                  to={`/materials?view=library&material=${encodeURIComponent(material.id)}`}
                   className="block space-y-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <MaterialPreview material={material} />

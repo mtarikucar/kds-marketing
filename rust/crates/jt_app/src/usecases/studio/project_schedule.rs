@@ -18,7 +18,6 @@ use jt_studio::{
     MAX_POST_MATERIALS, MaterialId, PackageHints, PackageRequest, PackageRequestId, PackageStatus,
     PackageTrigger, Subject,
 };
-use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -52,7 +51,9 @@ pub async fn project_schedule(
     ctx: &Ctx,
     i: ProjectScheduleInput,
 ) -> Result<ProjectScheduleOut, AppError> {
-    ctx.require(Permission::StudioManage)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.project_schedule",
+    ))?;
     key(&i.request_key)?;
     if i.material_ids.is_empty()
         || i.material_ids.len() > MAX_POST_MATERIALS
@@ -68,7 +69,12 @@ pub async fn project_schedule(
     }
     let payload = json!(hash_token(&encode(&i)?.to_string()));
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.project_schedule"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     // Check current tenant and archive state even for an idempotent replay. Replays do not
     // require the old project revision, which changed on the successful original request.

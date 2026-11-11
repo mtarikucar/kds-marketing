@@ -56,7 +56,7 @@ fn ends_as_video(url: &Url) -> bool {
 
 /// Whether the `index`-th medium of `request` is a video: by its type when the request names
 /// the types of its media, else by its URL's ending.
-fn is_video(request: &PublishRequest, index: usize) -> bool {
+pub(crate) fn is_video(request: &PublishRequest, index: usize) -> bool {
     match request.media_mimes.get(index) {
         Some(mime) if request.media_mimes.len() == request.media_urls.len() => {
             mime.trim().to_ascii_lowercase().starts_with("video/")
@@ -66,7 +66,7 @@ fn is_video(request: &PublishRequest, index: usize) -> bool {
 }
 
 /// `text`, and `link` on a line of its own after it when given.
-fn with_link(text: &str, link: Option<&Url>) -> String {
+pub(crate) fn with_link(text: &str, link: Option<&Url>) -> String {
     match link {
         Some(link) if text.trim().is_empty() => link.to_string(),
         Some(link) => format!("{text}\n\n{link}"),

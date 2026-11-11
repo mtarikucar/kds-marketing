@@ -23,23 +23,12 @@ async fn default_policy_does_not_wait_for_human() {
     assert!(w.uow.snapshot().studio.approvals.is_empty());
 }
 #[tokio::test]
-async fn lane_and_capability_approval_compose() {
-    for (lane, cap) in [(false, false), (true, false), (false, true), (true, true)] {
+async fn only_the_connections_own_flag_asks_for_approval() {
+    // Design 2026-11-10 B35: a lane has no approval switch; the connection's own flag decides.
+    for required in [false, true] {
         let w = support::world().await;
-        if lane {
-            w.policy(true, 0).await;
-        }
-        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
-        let mut c = r
-            .capabilities()
-            .lock(w.f.slot.capability_id)
-            .await
-            .unwrap()
-            .unwrap();
-        c.policy.requires_human_approval = cap;
-        r.capabilities().update(c).await.unwrap();
-        r.commit().await.unwrap();
-        assert_eq!(w.permit().await.is_err(), lane || cap);
+        w.approval(required).await;
+        assert_eq!(w.permit().await.is_err(), required);
         w.approve().await;
         w.permit().await.unwrap();
     }
@@ -47,7 +36,7 @@ async fn lane_and_capability_approval_compose() {
 #[tokio::test]
 async fn approval_cannot_authorize_changed_payload() {
     let w = support::world().await;
-    w.policy(true, 0).await;
+    w.approval(true).await;
     w.approve().await;
     w.permit().await.unwrap();
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
@@ -166,7 +155,7 @@ async fn strategy_change_racing_dispatch_uses_current_frame() {
 async fn archive_repeat_has_one_cancellation_effect() {
     let w = support::world().await;
     let (_, m) = w.paid().await;
-    w.policy(true, 0).await;
+    w.approval(true).await;
     w.archive().await;
     let before = w.uow.snapshot().studio;
     let change = StrategyChange {
@@ -593,21 +582,12 @@ async fn execution_work_hours_resolve_iana_timezone() {
 #[tokio::test]
 async fn resume_honors_revision_bound_budget_move_consent() {
     let w = support::world().await;
-    let (_, m) = w.paid().await;
-    policy_set(
-        &w.d,
-        &w.ctx,
-        StudioPolicyInput {
-            lane: LaneKind::Paid,
-            requires_human_approval: true,
-            expected_revision: 0,
-        },
-    )
-    .await
-    .unwrap();
+    let (b, m) = w.paid().await;
+    // The ad account's own flag asks for a person's approval of a budget move.
+    w.approval_of(b.capability_id, true).await;
     w.provider_status("ACTIVE", 10);
     w.ads.push_set_status(Ok(()));
-    w.brake(true, None, 1).await;
+    w.brake(true, None, 0).await;
     approve(
         &w.d,
         &w.ctx,
@@ -620,7 +600,7 @@ async fn resume_honors_revision_bound_budget_move_consent() {
     .unwrap();
     w.provider_status("PAUSED", 10);
     w.ads.push_set_status(Ok(()));
-    w.brake(false, None, 2).await;
+    w.brake(false, None, 1).await;
     assert_eq!(
         w.uow.snapshot().studio.binding_controls[0].observed,
         Some(AdStatus::Active)
@@ -783,7 +763,8 @@ async fn resume_reservation_stable_across_control_revisions() {
         .push_set_status(Err(jt_connector::ConnectorError::unknown("lost")));
     w.brake(false, None, 1).await;
     let original = w.uow.snapshot().studio.reservations[0].0.clone();
-    w.policy(true, 2).await;
+    // Another control revision that leaves the paid lane as it is.
+    w.brake(true, Some(LaneKind::Organic), 2).await;
     w.provider_status("PAUSED", 10);
     w.ads.push_set_status(Ok(()));
     reconcile_bindings(&w.d, w.f.ws).await.unwrap();
@@ -836,4 +817,159 @@ async fn liability_uses_each_item_period() {
         );
         assert_eq!(s.studio.reservations.len(), 1);
     }
+}
+
+/// A module that is not installed stops its lane as a brake does, and nothing is stored for it:
+/// installing it again lets the lane run without anybody releasing anything (design 2026-11-10
+/// S25). Social media owns the organic lane.
+#[tokio::test]
+async fn removed_social_holds_publication_and_reinstall_resumes() {
+    use jt_app::usecases::modules::{self, InstallInput, SOCIAL};
+    let w = support::world().await;
+    w.permit().await.unwrap();
+    modules::remove(&w.d, &w.ctx, SOCIAL).await.unwrap();
+    assert_eq!(
+        w.permit().await.unwrap_err().details["reason"],
+        "studio_braked"
+    );
+    assert!(
+        w.uow
+            .snapshot()
+            .studio
+            .controls
+            .iter()
+            .all(|c| !c.brake_engaged && c.lanes.values().all(|l| !l.brake_engaged))
+    );
+    modules::install(&w.d, &w.ctx, SOCIAL, InstallInput::default())
+        .await
+        .unwrap();
+    w.permit().await.unwrap();
+}
+
+/// Advertising owns the paid lane: removing it pauses the bound ad set at its provider, as the
+/// brake does, and leaves the organic lane alone; installing it again resumes what it paused.
+#[tokio::test]
+async fn removed_ads_pauses_bound_adset_and_reinstall_resumes() {
+    use jt_app::usecases::modules::{self, ADS, InstallInput};
+    let w = support::world().await;
+    let (b, _) = w.paid().await;
+    w.provider_status("ACTIVE", 10);
+    w.ads.push_set_status(Ok(()));
+    modules::remove(&w.d, &w.ctx, ADS).await.unwrap();
+    let saved = w
+        .uow
+        .snapshot()
+        .studio
+        .binding_controls
+        .into_iter()
+        .find(|c| c.binding_id == b.id)
+        .unwrap();
+    assert!(saved.confirmed_paused());
+    assert!(saved.paused_by_brake);
+    assert!(w.ads.calls().iter().any(|c| matches!(
+        c,
+        ConnectorCall::SetAdStatus {
+            status: jt_app::ports::connectors::AdStatus::Paused,
+            ..
+        }
+    )));
+    // The organic lane is social media's.
+    w.permit().await.unwrap();
+    // No brake is stored.
+    assert!(
+        w.uow
+            .snapshot()
+            .studio
+            .controls
+            .iter()
+            .all(|c| !c.brake_engaged && c.lanes.values().all(|l| !l.brake_engaged))
+    );
+    w.provider_status("PAUSED", 10);
+    w.ads.push_set_status(Ok(()));
+    modules::install(&w.d, &w.ctx, ADS, InstallInput::default())
+        .await
+        .unwrap();
+    let state = w.uow.snapshot();
+    assert_eq!(
+        state.studio.binding_controls[0].observed,
+        Some(AdStatus::Active)
+    );
+    assert!(!state.studio.binding_controls[0].paused_by_brake);
+}
+
+/// A brake a human engages or releases and a removed module do not mix: releasing a brake does
+/// not start a removed module's lane, and installing a module does not release a brake.
+#[tokio::test]
+async fn a_human_brake_and_a_removed_module_do_not_mix() {
+    use jt_app::usecases::modules::{self, InstallInput, SOCIAL};
+    let w = support::world().await;
+    modules::remove(&w.d, &w.ctx, SOCIAL).await.unwrap();
+    let control = w.brake(true, Some(LaneKind::Organic), 0).await;
+    assert!(control.removed.contains(&LaneKind::Organic));
+    let control = w.brake(false, Some(LaneKind::Organic), 1).await;
+    assert!(control.is_braked(LaneKind::Organic));
+    assert!(!control.is_braked(LaneKind::Paid));
+    assert!(w.permit().await.is_err());
+    modules::install(&w.d, &w.ctx, SOCIAL, InstallInput::default())
+        .await
+        .unwrap();
+    w.permit().await.unwrap();
+
+    w.brake(true, Some(LaneKind::Organic), 2).await;
+    modules::remove(&w.d, &w.ctx, SOCIAL).await.unwrap();
+    modules::install(&w.d, &w.ctx, SOCIAL, InstallInput::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        w.permit().await.unwrap_err().details["reason"],
+        "studio_braked"
+    );
+    w.brake(false, Some(LaneKind::Organic), 3).await;
+    w.permit().await.unwrap();
+}
+
+/// The planner follows: a removed module's lane is planned no more than a braked one, and the
+/// other module's lane still is.
+#[tokio::test]
+async fn the_planner_plans_no_lane_whose_module_is_removed() {
+    use jt_app::usecases::modules::{self, ADS, InstallInput, SOCIAL};
+    use jt_app::usecases::studio::planner;
+    use time::macros::datetime;
+    let now = datetime!(2026-10-25 21:00 UTC);
+    let paid_slots = |w: &support::World| {
+        let s = w.uow.snapshot().studio;
+        s.slots
+            .iter()
+            .filter(|slot| {
+                s.arms
+                    .iter()
+                    .any(|a| a.id == slot.chain.arm_id && a.key.lane == LaneKind::Paid)
+            })
+            .count()
+    };
+    // Advertising removed: no paid position is opened.
+    let w = support::world().await;
+    w.paid().await;
+    modules::remove(&w.d, &w.ctx, ADS).await.unwrap();
+    planner::plan(&w.d, w.f.ws, now).await.unwrap();
+    assert_eq!(paid_slots(&w), 0);
+    modules::install(&w.d, &w.ctx, ADS, InstallInput::default())
+        .await
+        .unwrap();
+    planner::plan(&w.d, w.f.ws, now).await.unwrap();
+    assert_eq!(paid_slots(&w), 7);
+    // Social media removed, and no content module either: no package and no material is asked
+    // for; the paid lane is planned. (With the content module, the olay and calendar triggers
+    // keep opening production areas: content_triggers.)
+    let w = support::world().await;
+    w.paid().await;
+    modules::remove(&w.d, &w.ctx, SOCIAL).await.unwrap();
+    modules::remove(&w.d, &w.ctx, modules::CONTENT)
+        .await
+        .unwrap();
+    planner::plan(&w.d, w.f.ws, now).await.unwrap();
+    let s = w.uow.snapshot();
+    assert!(s.posts.requests.is_empty());
+    assert!(s.materials.shoot_requests.is_empty());
+    assert_eq!(paid_slots(&w), 7);
 }

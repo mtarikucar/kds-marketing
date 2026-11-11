@@ -55,7 +55,7 @@ fn agent(w: &World) -> Ctx {
     }
 }
 
-/// A person in the panel who is neither owner nor manager (a role with `studio.work`).
+/// A person in the panel who is neither owner nor manager (a role with `materials.work`).
 fn member(w: &World) -> Ctx {
     Ctx {
         role_key: Some("studio_helper".into()),
@@ -400,7 +400,7 @@ async fn the_library_needs_no_strategy_but_an_active_workspace() {
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::WorkspaceInactive);
-    // `studio.work` is needed.
+    // `materials.work` is needed.
     let mut rep = w.ctx.clone();
     rep.permissions = jt_tenancy::SystemRole::Rep.permissions();
     let e = library::materials_list(&w.d, &rep, input(json!({})))
@@ -1063,7 +1063,7 @@ async fn the_panels_decisions_are_an_owners_or_a_managers_in_person() {
         .await
         .unwrap_err();
         assert_eq!(e.code, ErrorCode::Forbidden);
-        let e = library::material_policy_set(&w.d, &ctx, MaterialPolicy::default())
+        let e = library::material_policy_set(&w.d, &ctx, MaterialPolicy::default().into())
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::Forbidden);
@@ -1204,17 +1204,32 @@ async fn the_calendar_and_the_policy_are_the_owners_to_set() {
         lead_days: 30,
         reuse_days: 7,
         recap_days: 60,
+        ai_standalone: false,
     };
-    library::material_policy_set(&w.d, &w.ctx, policy)
+    let days = json!({"lead_days":30,"reuse_days":7,"recap_days":60});
+    // The standalone setting is on until a person turns it off, and the days alone leave it be.
+    let set = library::material_policy_set(&w.d, &w.ctx, input(days.clone()))
         .await
         .unwrap();
+    assert!(set.ai_standalone);
+    let mut off = days.clone();
+    off["ai_standalone"] = json!(false);
+    assert_eq!(
+        library::material_policy_set(&w.d, &w.ctx, input(off))
+            .await
+            .unwrap(),
+        policy
+    );
+    assert_eq!(
+        library::material_policy_set(&w.d, &w.ctx, input(days))
+            .await
+            .unwrap(),
+        policy
+    );
     let e = library::material_policy_set(
         &w.d,
         &w.ctx,
-        MaterialPolicy {
-            lead_days: 91,
-            ..policy
-        },
+        input(json!({"lead_days":91,"reuse_days":7,"recap_days":60})),
     )
     .await
     .unwrap_err();

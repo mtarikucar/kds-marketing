@@ -23,7 +23,7 @@ export function MaterialProduction({
 }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
-  const decider = useDecider();
+  const decider = useDecider('content.manage');
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<m.MaterialProductionKind>('edit');
   const [instructions, setInstructions] = useState('');

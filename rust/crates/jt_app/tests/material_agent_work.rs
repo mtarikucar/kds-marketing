@@ -10,9 +10,11 @@ use jt_testkit::{fakes::FIXED_NOW, studio_contract::seed_material};
 use time::Duration;
 
 #[tokio::test]
-async fn analysis_work_is_agent_scoped_recovers_expired_leases_and_covers_legacy_materials() {
+async fn analysis_work_is_module_scoped_recovers_expired_leases_and_covers_legacy_materials() {
     let w = support::world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    // An agent's work is offered only for an installed module.
+    jt_testkit::studio_contract::install_all_modules(&w.uow, w.ws).await;
     let material = seed_material(&w.uow, w.ws).await;
     let connection_id = AgentConnectionId::new_v7();
     let mut agent = w.owner_ctx.clone();
@@ -38,9 +40,9 @@ async fn analysis_work_is_agent_scoped_recovers_expired_leases_and_covers_legacy
             .contains("Never infer capture or event dates from upload time")
     );
     assert!(item.hint.contains("Nothing wakes you"));
-    assert!(!has(&work::pending(&w.deps, &w.owner_ctx).await.unwrap()));
+    assert!(has(&work::pending(&w.deps, &w.owner_ctx).await.unwrap()));
     let mut restricted = agent.clone();
-    restricted.permissions.remove(&Permission::StudioWork);
+    restricted.permissions.remove(&Permission::MaterialsWork);
     assert!(!has(&work::pending(&w.deps, &restricted).await.unwrap()));
     let mut row = MaterialAnalysisRecord::pending(material.id, FIXED_NOW, DateSource::Unknown);
     row.intelligence.status = AnalysisStatus::Running;
@@ -90,10 +92,12 @@ async fn analysis_work_is_agent_scoped_recovers_expired_leases_and_covers_legacy
 }
 
 #[tokio::test]
-async fn production_work_tracks_lease_expiry_and_omits_terminal_or_human_work() {
+async fn production_work_tracks_lease_expiry_and_omits_terminal_work() {
     use jt_app::ports::material_productions::*;
     let w = support::world().await;
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    // An agent's work is offered only for an installed module.
+    jt_testkit::studio_contract::install_all_modules(&w.uow, w.ws).await;
     let source = seed_material(&w.uow, w.ws).await;
     let connection_id = AgentConnectionId::new_v7();
     let mut agent = w.owner_ctx.clone();
@@ -132,7 +136,7 @@ async fn production_work_tracks_lease_expiry_and_omits_terminal_or_human_work() 
         p.items.iter().any(|i|matches!(i.kind,WorkKind::StudioMaterialProduction{production_id:id,..} if id==production_id))
     };
     assert!(has(&work::pending(&w.deps, &agent).await.unwrap()));
-    assert!(!has(&work::pending(&w.deps, &w.owner_ctx).await.unwrap()));
+    assert!(has(&work::pending(&w.deps, &w.owner_ctx).await.unwrap()));
     row.production.status = ProductionStatus::Running;
     row.production.revision = 2;
     row.lease = Some(ProductionLease {

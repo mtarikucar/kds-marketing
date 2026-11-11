@@ -31,7 +31,7 @@ use time::{Duration, OffsetDateTime, macros::datetime};
 
 /// The test world without its fixture's material: nothing in the library yet.
 async fn posting_world() -> World {
-    let mut w = world().await;
+    let mut w = without_content(world().await).await;
     w.d.files = Arc::new(MemoryFiles::default());
     w.uow.edit(|s| s.materials = Default::default());
     w
@@ -343,7 +343,7 @@ async fn an_occasion_its_olay_request_covers_asks_for_nothing_more() {
 /// format first.
 #[tokio::test]
 async fn a_measured_post_ranks_its_format_for_its_olay_kind() {
-    let mut w = world().await;
+    let mut w = without_content(world().await).await;
     w.d.files = Arc::new(MemoryFiles::default());
     let o = workshop(&w).await;
     jt_testkit::studio_contract::attach_post(&w.uow, &w.f).await;
@@ -916,6 +916,8 @@ async fn the_posting_policy_is_a_humans_and_validated() {
     let saved = posts::posting_policy_set(&w.d, &w.ctx, settings.clone())
         .await
         .unwrap();
+    // Every change moves the settings' revision (pausing an account names the one it saw).
+    settings.revision = 1;
     assert_eq!(saved, settings);
     let list = posts::posts_list(&w.d, &w.ctx, Default::default())
         .await
@@ -1103,7 +1105,7 @@ async fn an_expired_requests_materials_are_asked_for_again() {
 /// post there (review MEDIUM 2).
 #[tokio::test]
 async fn a_failed_post_past_its_grace_retires_and_the_floor_asks_again() {
-    let mut w = world().await;
+    let mut w = without_content(world().await).await;
     w.d.files = Arc::new(MemoryFiles::default());
     // The fixture's own material asks for nothing: no olay request covers the channel.
     let own = w.uow.snapshot().materials.materials[0].id;
@@ -1141,7 +1143,7 @@ async fn a_failed_post_past_its_grace_retires_and_the_floor_asks_again() {
 /// grace it is no longer pending work: the floor asks for another post on its channel.
 #[tokio::test]
 async fn a_post_in_flight_past_its_grace_stays_but_does_not_hold_the_floor() {
-    let mut w = world().await;
+    let mut w = without_content(world().await).await;
     w.d.files = Arc::new(MemoryFiles::default());
     // The fixture's own material asks for nothing: no olay request covers the channel.
     let own = w.uow.snapshot().materials.materials[0].id;
@@ -1270,6 +1272,7 @@ async fn quiet_hours_take_each_posts_own_offset() {
         PostingSettings {
             policy: PostingPolicy::default(),
             tz: "Europe/Berlin".into(),
+            ..Default::default()
         },
     )
     .await

@@ -238,7 +238,7 @@ async fn concurrent_proposals_append_both_under_draft_lock() {
 #[tokio::test]
 async fn pending_context_has_brand_rules_and_learning() {
     let w = world().await;
-    w.policy(true, 0).await;
+    w.approval(true).await;
     let out = work::slot_get(&w.d, &w.ctx, w.f.slot.id).await.unwrap();
     assert_eq!(out.slot.id, w.f.slot.id);
     assert!(out.piece.is_some());
@@ -298,7 +298,17 @@ async fn cancellation_is_revision_bound_and_ledgered() {
 async fn work_rows_require_permissions_and_current_strategy() {
     let w = world().await;
     let mut ctx = w.ctx.clone();
-    ctx.permissions.remove(&jt_tenancy::Permission::StudioWork);
+    for grant in [
+        jt_tenancy::Permission::ContentWork,
+        jt_tenancy::Permission::SocialWork,
+        jt_tenancy::Permission::AdsWork,
+        jt_tenancy::Permission::MaterialsWork,
+        jt_tenancy::Permission::SocialManage,
+        jt_tenancy::Permission::AdsManage,
+        jt_tenancy::Permission::BudgetManage,
+    ] {
+        ctx.permissions.remove(&grant);
+    }
     assert_eq!(
         work::pending(&w.d, &ctx).await.unwrap_err().code,
         ErrorCode::Forbidden

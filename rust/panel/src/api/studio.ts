@@ -239,14 +239,6 @@ export const slotCancel = (id: string, expected_revision: number, reason: string
   });
 export const brake = (engaged: boolean, lane: LaneKind | null, expected_revision: number) =>
   request<Control>('POST', '/api/studio/brake', { body: { engaged, lane, expected_revision } });
-export const policySet = (
-  lane: LaneKind,
-  requires_human_approval: boolean,
-  expected_revision: number,
-) =>
-  request<Control>('PUT', '/api/studio/policy', {
-    body: { lane, requires_human_approval, expected_revision },
-  });
 export const approve = (target: Target, expected_revision: number) =>
   request('POST', '/api/studio/approvals', { body: { target, expected_revision } });
 export const hypothesisPropose = (body: HypothesisInput) =>

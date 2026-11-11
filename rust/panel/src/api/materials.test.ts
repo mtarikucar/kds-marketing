@@ -54,7 +54,7 @@ describe('materials API', () => {
       lead_days: null,
       enabled: true,
     });
-    await m.materialPolicySet({ lead_days: 21, reuse_days: 14, recap_days: 30 });
+    await m.materialPolicySet({ lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: true });
     await m.shootList('all');
     await m.shootRequest({ request_key: 'k', text: 'Afiş yükle' });
     await m.shootResolve('r1', 'dismissed');

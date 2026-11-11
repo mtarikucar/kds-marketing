@@ -6,22 +6,13 @@ use crate::{
 };
 use axum::{Json, extract::State};
 use jt_app::ports::studio::StudioControl;
-use jt_app::usecases::studio::control::{
-    self, ApprovalInput, ApprovalOut, BrakeInput, StudioPolicyInput,
-};
+use jt_app::usecases::studio::control::{self, ApprovalInput, ApprovalOut, BrakeInput};
 pub async fn brake(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<BrakeInput>,
 ) -> Result<Json<StudioControl>, ApiError> {
     Ok(Json(control::brake(&s.deps, &ctx, body).await?))
-}
-pub async fn policy_set(
-    State(s): State<AppState>,
-    WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiJson(body): ApiJson<StudioPolicyInput>,
-) -> Result<Json<StudioControl>, ApiError> {
-    Ok(Json(control::policy_set(&s.deps, &ctx, body).await?))
 }
 pub async fn approve(
     State(s): State<AppState>,
@@ -240,7 +231,7 @@ use jt_app::usecases::studio::library;
 
 /// The JSON `body` with the path's `fields` added, read as `T`: a path field in the body is
 /// `VALIDATION`.
-fn path_body<T: serde::de::DeserializeOwned>(
+pub(super) fn path_body<T: serde::de::DeserializeOwned>(
     mut body: serde_json::Value,
     fields: &[(&str, serde_json::Value)],
 ) -> Result<T, ApiError> {
@@ -455,11 +446,12 @@ pub async fn calendar_set(
     )?;
     Ok(Json(library::calendar_set(&s.deps, &ctx, input).await?))
 }
-/// A human owner or manager sets the materials policy (`{lead_days, reuse_days, recap_days}`).
+/// A human owner or manager sets the materials policy (`{lead_days, reuse_days, recap_days}`, and
+/// `ai_standalone` when it changes).
 pub async fn material_policy_set(
     State(s): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiJson(body): ApiJson<MaterialPolicy>,
+    ApiJson(body): ApiJson<library::MaterialPolicyInput>,
 ) -> Result<Json<MaterialPolicy>, ApiError> {
     Ok(Json(
         library::material_policy_set(&s.deps, &ctx, body).await?,

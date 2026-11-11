@@ -392,10 +392,10 @@ fn approval_bound_to_piece_or_move_revision() {
         at: NOW,
         tiktok: None,
     };
-    for (lane, capability) in [(true, false), (false, true), (true, true)] {
+    // The approval that remains is the connection's own (design 2026-11-10 B35).
+    {
         let mut rules = StudioPolicy {
-            requires_human_approval: lane,
-            capability_requires_human_approval: capability,
+            capability_requires_human_approval: true,
             ..policy(3)
         };
         assert!(transition_slot(&slot, &event, &rules).is_err());
@@ -709,7 +709,7 @@ fn paid_move_checks_binding_revision_currency_and_execution_fence() {
     round_trip(&binding);
     round_trip(&movement);
     let mut rules = StudioPolicy {
-        requires_human_approval: true,
+        capability_requires_human_approval: true,
         ..policy(1)
     };
     assert!(movement.check_approval(&rules).is_err());
@@ -743,6 +743,7 @@ fn paid_move_checks_binding_revision_currency_and_execution_fence() {
 fn unknown_pause_is_not_confirmed_stopped_and_brakes_are_lane_scoped() {
     let f = Fixture::new();
     let mut control = StudioControl {
+        spend_stopped: Default::default(),
         workspace_id: f.chain.workspace_id,
         brake_engaged: false,
         revision: 1,
@@ -750,14 +751,26 @@ fn unknown_pause_is_not_confirmed_stopped_and_brakes_are_lane_scoped() {
             LaneKind::Paid,
             LaneControl {
                 brake_engaged: true,
-                requires_human_approval: false,
             },
         )]),
+        removed: Default::default(),
     };
     control.validate().unwrap();
     round_trip(&control);
     assert!(control.is_braked(LaneKind::Paid));
     assert!(!control.is_braked(LaneKind::Organic));
+    // A lane whose module is removed reads as braked, and that is never stored or sent.
+    control.removed.insert(LaneKind::Organic);
+    assert!(control.is_braked(LaneKind::Organic));
+    // ...but it is no brake: spend that is not Studio's does not stop on it.
+    assert!(!control.brake_engaged_for(LaneKind::Organic));
+    assert!(control.brake_engaged_for(LaneKind::Paid));
+    let stored = serde_json::to_value(&control).unwrap();
+    assert!(stored.get("removed").is_none());
+    let read: StudioControl = serde_json::from_value(stored).unwrap();
+    assert!(read.removed.is_empty());
+    assert!(!read.is_braked(LaneKind::Organic));
+    control.removed.clear();
     control.brake_engaged = true;
     assert!(control.is_braked(LaneKind::Organic));
     let binding = BindingControl {
@@ -848,6 +861,8 @@ fn trends_reservations_and_measurement_windows_round_trip() {
         item_amounts: Default::default(),
         id: ReservationId::new_v7(),
         request: ReserveSpend {
+            module: None,
+            campaign_id: None,
             binding_id: None,
             chain: None,
             replaces: None,

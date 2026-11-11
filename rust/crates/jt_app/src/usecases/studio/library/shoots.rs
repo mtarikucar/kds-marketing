@@ -76,7 +76,10 @@ fn monday(day: Date) -> Date {
 
 /// The çekim listesi: open requests unless `status` says otherwise, newest week first.
 pub async fn shoot_list(d: &Deps, ctx: &Ctx, q: ShootQuery) -> Result<Vec<ShootRequest>, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.shoot_list",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     Ok(r.studio_materials()
         .list_shoot_requests()
         .await?
@@ -98,6 +101,9 @@ pub async fn shoot_request(
     ctx: &Ctx,
     i: ShootRequestInput,
 ) -> Result<ShootRequest, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.shoot_request",
+    ))?;
     key(&i.request_key)?;
     if i.week_start.is_some_and(|w| monday(w) != w) {
         return Err(refused(
@@ -113,7 +119,7 @@ pub async fn shoot_request(
         if is_agent(ctx) { "agent" } else { "human" },
         i.request_key
     );
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     if let Some(v) = r
         .studio()
         .request_replay("studio.shoot_request", &shoot_key, &payload)
@@ -181,11 +187,14 @@ pub async fn shoot_resolve(
     ctx: &Ctx,
     i: ShootResolveInput,
 ) -> Result<ShootRequest, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.shoot_resolve",
+    ))?;
     let status = match i.status {
         ShootResolution::Done => ShootStatus::Done,
         ShootResolution::Dismissed => ShootStatus::Dismissed,
     };
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let current = r
         .studio_materials()

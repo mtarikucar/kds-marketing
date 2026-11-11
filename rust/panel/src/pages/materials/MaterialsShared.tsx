@@ -5,6 +5,7 @@ import type { TFunction } from 'i18next';
 import { Film, File as FileIcon, Image as ImageIcon } from 'lucide-react';
 import { isApiError } from '@/api/client';
 import * as m from '@/api/materials';
+import type { Permission } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { Badge } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -27,11 +28,11 @@ export function useMaterialsKey() {
 
 /**
  * Whether the session may take the library's consent decisions (D4): an owner or manager with
- * `studio.manage`. The server checks again and refuses an agent whatever its role.
+ * the operation’s permission. The server checks again and refuses an agent whatever its role.
  */
-export function useDecider(): boolean {
+export function useDecider(permission: Permission = 'materials.work'): boolean {
   const session = useSession();
-  return can(session.data, 'studio.manage') && isOwnerOrManager(session.data);
+  return can(session.data, permission) && isOwnerOrManager(session.data);
 }
 
 /**
@@ -83,6 +84,14 @@ export const FINDING_CODES = [
   'date_in_generic',
   'archive_year_missing',
   'client_named_product_only',
+  // What else may hold a version of a delivered content package (design 2026-11-10 §5.4).
+  'source_permission_restricted',
+  'material_not_in_area',
+  'material_not_found',
+  'media_count',
+  'media_type',
+  'account_refused',
+  'hypothesis_not_in_approved_strategy',
 ] as const;
 export type FindingCode = (typeof FINDING_CODES)[number];
 const isFindingCode = (code: unknown): code is FindingCode =>

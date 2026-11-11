@@ -580,14 +580,15 @@ impl MaterialRepo for PgTenantRepos {
     }
 
     async fn material_policy(&mut self) -> Result<MaterialPolicy, AppError> {
-        let row: Option<(i32, i32, i32)> = sqlx::query_as(
-            "select lead_days,reuse_days,recap_days from studio_material_policy where workspace_id=$1",
+        let row: Option<(i32, i32, i32, bool)> = sqlx::query_as(
+            "select lead_days,reuse_days,recap_days,ai_standalone from studio_material_policy \
+             where workspace_id=$1",
         )
         .bind(self.workspace_id().0)
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read materials policy"))?;
-        let Some((lead, reuse, recap)) = row else {
+        let Some((lead, reuse, recap, ai_standalone)) = row else {
             return Ok(MaterialPolicy::default());
         };
         let days =
@@ -596,20 +597,24 @@ impl MaterialRepo for PgTenantRepos {
             lead_days: days(lead)?,
             reuse_days: days(reuse)?,
             recap_days: days(recap)?,
+            ai_standalone,
         })
     }
 
     async fn save_material_policy(&mut self, p: MaterialPolicy) -> Result<(), AppError> {
         checked("studio_material_policy", p.validate())?;
         sqlx::query(
-            "insert into studio_material_policy(workspace_id,lead_days,reuse_days,recap_days) values($1,$2,$3,$4) \
+            "insert into studio_material_policy\
+             (workspace_id,lead_days,reuse_days,recap_days,ai_standalone) values($1,$2,$3,$4,$5) \
              on conflict (workspace_id) do update set lead_days=excluded.lead_days,\
-             reuse_days=excluded.reuse_days,recap_days=excluded.recap_days",
+             reuse_days=excluded.reuse_days,recap_days=excluded.recap_days,\
+             ai_standalone=excluded.ai_standalone",
         )
         .bind(self.workspace_id().0)
         .bind(i32::from(p.lead_days))
         .bind(i32::from(p.reuse_days))
         .bind(i32::from(p.recap_days))
+        .bind(p.ai_standalone)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save materials policy"))?;

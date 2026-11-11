@@ -19,6 +19,16 @@ pub struct MaterialPolicy {
     pub reuse_days: u16,
     /// Days after an olay ends during which its material is a recap's first choice.
     pub recap_days: u16,
+    /// Whether a visual an agent made, bound to no olay, may be the main visual of content that
+    /// speaks about nothing specific (design 2026-11-10 B39). Off: it is a supporting visual
+    /// beside a real material only, as before (spec 2026-11-03 D10). A policy stored before the
+    /// setting existed reads as on.
+    #[serde(default = "yes")]
+    pub ai_standalone: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for MaterialPolicy {
@@ -27,6 +37,7 @@ impl Default for MaterialPolicy {
             lead_days: 21,
             reuse_days: 14,
             recap_days: 30,
+            ai_standalone: true,
         }
     }
 }

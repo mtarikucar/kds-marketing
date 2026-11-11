@@ -28,7 +28,6 @@ fn studio_routes_have_exact_catalog_twins() {
             ("POST", "/api/studio/trends"),
             ("POST", "/api/studio/hypotheses/proposals"),
             ("POST", "/api/studio/brake"),
-            ("PUT", "/api/studio/policy"),
             ("POST", "/api/studio/approvals"),
             ("GET", "/api/studio/slots/{slot_id}/tiktok"),
             ("POST", "/api/studio/slots/{slot_id}/tiktok"),

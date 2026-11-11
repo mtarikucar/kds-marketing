@@ -262,6 +262,8 @@ export interface MaterialPolicy {
   lead_days: number;
   reuse_days: number;
   recap_days: number;
+  /** Whether a visual the agent made may be content's only material (design B39). */
+  ai_standalone: boolean;
 }
 export interface CalendarOut {
   year: number;

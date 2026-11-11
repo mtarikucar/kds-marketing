@@ -347,6 +347,7 @@ async fn calendar_rows_shoot_requests_policy_and_releases() {
         lead_days: 28,
         reuse_days: 7,
         recap_days: 45,
+        ai_standalone: false,
     };
     tx.studio_materials()
         .save_material_policy(policy)

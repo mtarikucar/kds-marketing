@@ -391,6 +391,7 @@ fn a_slots_materials_rank_as_selection_picks_and_name_the_refusals() {
         at: now,
         olays: &olays,
         calendar: &calendar,
+        ai_standalone: false,
     };
     let policy = MaterialPolicy::default();
     // No need: the upcoming olay's material first, then the recap; the AI visual supports.
@@ -489,6 +490,7 @@ fn strategy_label_selects_only_materials_carrying_it() {
         at: now,
         olays: &olays,
         calendar: &calendar,
+        ai_standalone: false,
     };
     let need = SlotNeed::from_keys("label:fresh bread", "existing_segment");
     let pick = select_anchor(

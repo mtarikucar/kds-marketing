@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -89,6 +90,10 @@ export function StudioError({ error, onRetry }: { error: unknown; onRetry?: () =
   const { t } = useTranslation();
   if (!error) return null;
   const code = isApiError(error) ? error.code : '';
+  if (isApiError(error) && code === 'MODULE_NOT_INSTALLED') return <div role="alert" className="space-y-2 rounded-md bg-danger-subtle p-3 text-sm">
+    <p>{t('errors.MODULE_NOT_INSTALLED')}</p>
+    <Link className="underline" to={typeof error.details.module === 'string' ? `/modules/${encodeURIComponent(error.details.module)}` : '/modules'}>{t('gates.moduleLink')}</Link>
+  </div>;
   const reason = isApiError(error) ? String(error.details.reason ?? error.message) : '';
   const key: StudioKey =
     code === 'STRATEGY_REQUIRED'
@@ -158,4 +163,12 @@ export function Reason({ reason }: { reason: string }) {
       )}
     </div>
   );
+}
+
+/** Stable overview window shared by pages without date filters. */
+export function useOverviewWindow() {
+  return useState(() => ({
+    from: `${new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)}T00:00:00+03:00`,
+    until: `${new Date(Date.now() + 8 * 86400000).toISOString().slice(0, 10)}T00:00:00+03:00`,
+  }))[0];
 }

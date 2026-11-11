@@ -5,7 +5,7 @@ pub mod world;
 use jt_app::{
     ports::{
         UnitOfWork,
-        connectors::{PostMetrics, PublishReceipt},
+        connectors::{AccountMetrics, PostMetrics, PublishReceipt},
         studio::ApprovalTarget,
     },
     usecases::{
@@ -47,6 +47,13 @@ pub fn receipt() -> PublishReceipt {
 pub fn metrics(x: &ScriptedConnector) {
     x.push_post_metrics(Ok(PostMetrics {
         metrics: [("impressions".into(), 100), ("engagements".into(), 20)].into(),
+    }));
+}
+/// The measure job also asks each account's platform for its day (design 2026-11-10 §7.1):
+/// this one gives no account numbers, so nothing is stored for it.
+pub fn no_account_numbers(x: &ScriptedConnector) {
+    x.push_account_metrics(Ok(AccountMetrics {
+        metrics: Default::default(),
     }));
 }
 pub fn sends(x: &ScriptedConnector) -> usize {
@@ -120,6 +127,7 @@ pub async fn historical_jobs() {
     w.archive().await;
     w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(1)));
     metrics(&x);
+    no_account_numbers(&x);
     let report = Job::StudioMeasure.run(&w.d, w.d.clock.now()).await;
     assert_eq!((report.changed, report.failed), (1, 0));
     assert_eq!(

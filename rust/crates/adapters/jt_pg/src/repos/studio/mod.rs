@@ -1,5 +1,6 @@
 //! Tenant-transaction Studio storage. The control row serializes request receipts and claims;
 //! callers commit the frozen Sending snapshot before doing any provider I/O.
+mod campaigns;
 mod control;
 mod materials;
 mod paid;
@@ -478,14 +479,25 @@ impl StudioRepo for PgTenantRepos {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        self.studio_claim(now, None).await
+        self.studio_claim(now, None, None).await
     }
     async fn claim_publication_for(
         &mut self,
         slot: SlotId,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        self.studio_claim(now, Some(slot)).await
+        self.studio_claim(now, Some(slot), None).await
+    }
+    async fn claim_publication_held(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+        at: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        if at <= now {
+            return Ok(None);
+        }
+        self.studio_claim(now, Some(slot), Some(at)).await
     }
     async fn finish_publication(
         &mut self,

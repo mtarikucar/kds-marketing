@@ -420,7 +420,10 @@ pub async fn materials_list(
     ctx: &Ctx,
     q: MaterialsQuery,
 ) -> Result<Vec<Material>, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.materials_list",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     Ok(r.studio_materials()
         .list_materials()
         .await?
@@ -441,7 +444,10 @@ pub async fn material_get(
     ctx: &Ctx,
     i: MaterialIdInput,
 ) -> Result<MaterialDetail, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_get",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let m = load(r.as_mut(), i.material_id).await?;
     detail(r.as_mut(), m).await
 }
@@ -581,9 +587,12 @@ pub async fn material_add(
     ctx: &Ctx,
     i: MaterialAddInput,
 ) -> Result<MaterialAddOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_add",
+    ))?;
     key(&i.request_key)?;
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     if let Some(v) = r
         .studio()
         .request_replay("studio.material_add", &i.request_key, &payload)
@@ -633,7 +642,7 @@ pub async fn material_add(
         erased_at: None,
     };
     material.validate().map_err(invalid)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     if !material.people.is_empty() {
         r.people().lock_workspace().await?;
     }
@@ -721,6 +730,9 @@ pub async fn material_add(
 /// a human gave it: an owner or manager decides again, and meanwhile it is listed as needing
 /// review (D5, D17, D38, D45). Removing a marker keeps the permission.
 pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Material, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_tag",
+    ))?;
     let given = [
         ("title", i.title.is_some()),
         ("labels", i.labels.is_some()),
@@ -736,7 +748,7 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     if fields.is_empty() {
         return Err(crate::usecases::nothing_to_change(&given.map(|(f, _)| f)));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     if i.people.as_ref().is_some_and(|p| !p.is_empty()) {
         r.people().lock_workspace().await?;
     }
@@ -859,8 +871,11 @@ pub async fn material_permission(
     ctx: &Ctx,
     i: MaterialPermissionInput,
 ) -> Result<Material, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_permission",
+    ))?;
     let by = super::super::control::human_approver(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let mut m = next(live(r.as_mut(), i.material_id, i.expected_revision).await?)?;
     m.share = Some(ShareDecision {
@@ -897,8 +912,11 @@ pub async fn material_free(
     ctx: &Ctx,
     i: MaterialFreeInput,
 ) -> Result<Material, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_free",
+    ))?;
     let by = super::super::control::human_approver(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let mut m = next(live(r.as_mut(), i.material_id, i.expected_revision).await?)?;
     if m.is_ai() {
@@ -939,8 +957,11 @@ pub async fn material_bind(
     ctx: &Ctx,
     i: MaterialBindInput,
 ) -> Result<Material, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_bind",
+    ))?;
     let by = super::super::control::human_approver(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let mut m = next(live(r.as_mut(), i.material_id, i.expected_revision).await?)?;
     if let Binding::Olay { olay_id } = i.binding
@@ -971,6 +992,9 @@ pub async fn material_delete(
     ctx: &Ctx,
     i: MaterialDeleteInput,
 ) -> Result<Material, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_delete",
+    ))?;
     super::super::control::human_approver(ctx)?;
     if !i.confirm {
         return Err(crate::usecases::invalid(
@@ -978,7 +1002,7 @@ pub async fn material_delete(
             "confirm must be true to delete a material",
         ));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let current = load(r.as_mut(), i.material_id).await?;
     let m = if current.erased_at.is_some() {
@@ -1028,7 +1052,10 @@ pub async fn slot_materials(
     ctx: &Ctx,
     i: SlotMaterialsInput,
 ) -> Result<SlotMaterialsOut, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.slot_materials",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let slot = r
         .studio()
         .get_slot(i.slot_id)

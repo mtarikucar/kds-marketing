@@ -45,10 +45,14 @@ use serde::{Deserialize, Deserializer};
 use serde_json::json;
 use uuid::Uuid;
 
-/// A tenant bundle for a library use case: the caller holds `studio.work` and the workspace is
+/// A tenant bundle for a library use case: the caller holds its module permission and the workspace is
 /// active.
-pub(crate) async fn open(d: &Deps, ctx: &Ctx) -> Result<Box<dyn TenantRepos>, AppError> {
-    ctx.require(Permission::StudioWork)?;
+pub(crate) async fn open(
+    d: &Deps,
+    ctx: &Ctx,
+    permission: Permission,
+) -> Result<Box<dyn TenantRepos>, AppError> {
+    ctx.require(permission)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     active(r.as_mut()).await?;
     Ok(r)

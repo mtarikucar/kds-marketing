@@ -15,7 +15,7 @@ export const studioMe = {
   memberships: [
     {
       ...inboxMe.memberships[0],
-      permissions: [...inboxMe.memberships[0].permissions, 'studio.work', 'studio.manage'],
+      permissions: [...inboxMe.memberships[0].permissions, 'materials.work', 'content.work', 'content.manage', 'social.work', 'social.manage', 'ads.work', 'ads.manage'],
     },
   ],
 };
@@ -26,7 +26,7 @@ export const repMe = {
     {
       ...inboxMe.memberships[0],
       role_key: 'rep',
-      permissions: [...inboxMe.memberships[0].permissions, 'studio.work'],
+      permissions: [...inboxMe.memberships[0].permissions.filter(p => !['content.manage', 'social.manage', 'ads.manage'].includes(p)), 'materials.work', 'content.work', 'social.work', 'ads.work'],
     },
   ],
 };

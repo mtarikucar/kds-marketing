@@ -69,6 +69,7 @@ impl World {
 }
 async fn setup(uow: Arc<dyn UnitOfWork>) -> World {
     let f = crate::inbox_contract::Fixture::new(uow.clone()).await;
+    crate::studio_contract::install_all_modules(uow.as_ref(), f.ws).await;
     let mut d = deps(uow.clone());
     let ads = Arc::new(ScriptedConnector::new(Provider::Meta));
     d.connectors = Arc::new(ScriptedRegistry::new().with_connector(ads.clone()));

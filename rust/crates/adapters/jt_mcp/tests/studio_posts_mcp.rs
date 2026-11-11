@@ -41,7 +41,7 @@ async fn posting_tools_are_gated_twins_and_the_policy_has_no_tool() {
         let name = format!("jeeta.studio.{action}");
         let tool = &tools[name.as_str()];
         assert_eq!(tool.use_case, format!("studio.{action}"), "{name}");
-        assert_eq!(tool.permission, Permission::StudioWork, "{name}");
+        assert_eq!(tool.permissions, &[Permission::SocialWork], "{name}");
         assert_eq!(tool.risk, *risk, "{name}");
         assert!(
             tool.description.ends_with(jt_mcp::risk_tag(*risk)),
@@ -110,13 +110,25 @@ async fn an_agent_answers_a_request_and_reads_its_posts_and_the_week() {
     );
     jt_testkit::studio_contract::make_postable(uow.as_ref(), &f, deps.seal.as_ref(), FIXED_NOW)
         .await;
+    let connection_id = jt_tenancy::AgentConnectionId::new_v7();
+    let user = jt_tenancy::UserId::new_v7();
+    // Without the content module the planner asks agents for posts (design 2026-11-10 B18).
+    let owner = Ctx {
+        workspace_id: f.ws,
+        actor: Actor::Human { user_id: user },
+        permissions: SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    jt_app::usecases::modules::remove(&deps, &owner, jt_app::usecases::modules::CONTENT)
+        .await
+        .unwrap();
     // The fixture's material settled half an hour ago: the planner asks for a package.
     let at = FIXED_NOW + time::Duration::minutes(31);
     jt_app::usecases::studio::planner::plan(&deps, f.ws, at)
         .await
         .unwrap();
-    let connection_id = jt_tenancy::AgentConnectionId::new_v7();
-    let user = jt_tenancy::UserId::new_v7();
     let agent = Ctx {
         workspace_id: f.ws,
         actor: Actor::Agent {

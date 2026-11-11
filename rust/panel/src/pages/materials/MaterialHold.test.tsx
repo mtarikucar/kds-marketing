@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt } from '@/test/render';
+import { mockFetch } from '@/test/render';
+import { renderMaterialHold } from '@/test/materialHold';
 import { materialsAnswers, repMe, shoot } from '@/test/materials';
 import tr from '@/i18n/tr.json';
 import en from '@/i18n/en.json';
@@ -50,7 +51,7 @@ const base = {
   'GET /api/studio/slots/s1': detail(),
 };
 
-describe('Today · material check hold', () => {
+describe('Material check hold component', () => {
   it.each([
     ['other_olay', 'Bu materyal başka bir olaya ait.'],
     ['out_of_season', 'Sezon penceresinin dışında.'],
@@ -63,13 +64,13 @@ describe('Today · material check hold', () => {
       ...base,
       'GET /api/studio/overview': overview([{ kind: 'hard', code, material_id: 'm1' }]),
     });
-    renderAt('/studio');
+    renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
     expect(within(hold).getByText('Materyal kontrolü bu içeriği durduruyor')).toBeInTheDocument();
     expect(within(hold).getByText(sentence, { exact: false })).toBeInTheDocument();
     expect(within(hold).getByRole('link', { name: 'Materyali aç' })).toHaveAttribute(
       'href',
-      '/studio?tab=materials&view=olays&material=m1',
+      '/materials?view=olays&material=m1',
     );
   });
 
@@ -88,15 +89,14 @@ describe('Today · material check hold', () => {
         shoot('r2'),
       ]),
     });
-    const { router } = renderAt('/studio');
+    const { router } = renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
     expect(within(hold).getByText(/Çekim listesinde 2 açık istek var\./)).toBeInTheDocument();
-    expect(screen.getByTestId('today-shoots')).toHaveTextContent('Çekim listesinde 2 açık istek var.');
     // A hard finding is never released.
     expect(within(hold).queryByRole('button', { name: 'Metni bu hâliyle yayınla' })).not.toBeInTheDocument();
     await userEvent.click(within(hold).getByRole('link', { name: 'Çekim listesini aç' }));
     await screen.findByTestId('materials-shoots');
-    expect(router.state.location.search).toBe('?tab=materials&view=shoots');
+    expect(router.state.location.search).toBe('?view=shoots');
   });
 
   it('lets an owner release caption findings with the digest the check shows', async () => {
@@ -117,7 +117,7 @@ describe('Today · material check hold', () => {
       }),
       'POST /api/studio/slots/s1/material-check/release': detail(),
     });
-    renderAt('/studio');
+    renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
     expect(within(hold).getByText(/Metindeki tarih olayın günlerinin dışında\. \(“16 kasım”\)/)).toBeInTheDocument();
     await userEvent.click(await within(hold).findByRole('button', { name: 'Metni bu hâliyle yayınla' }));
@@ -138,7 +138,7 @@ describe('Today · material check hold', () => {
       'GET /api/studio/overview': overview([{ kind: 'caption', code: 'archive_year_missing', matched: '2025' }], 'fix_piece_or_release'),
       'GET /api/studio/slots/s1': detail({ revision: 4, findings: [{ code: 'archive_year_missing', matched: '2025' }], digest: 'b'.repeat(64), released: false, hard: [], holds: true }),
     });
-    renderAt('/studio');
+    renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
     expect(within(hold).getByText(/olayın yılı metinde geçmiyor/)).toBeInTheDocument();
     expect(within(hold).queryByRole('button', { name: 'Metni bu hâliyle yayınla' })).not.toBeInTheDocument();

@@ -27,7 +27,7 @@ use time::{Duration, OffsetDateTime, macros::datetime};
 /// The test world on an Instagram account: the fixture's channel is Instagram, connected for
 /// publishing, and the strategy chooses it; the library starts empty.
 async fn instagram_world() -> World {
-    let mut w = world().await;
+    let mut w = without_content(world().await).await;
     w.d.files = Arc::new(MemoryFiles::default());
     let (channel, current) = (w.f.slot.capability_id, w.current);
     w.uow.edit(|s| {

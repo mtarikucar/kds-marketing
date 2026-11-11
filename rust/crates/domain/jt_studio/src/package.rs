@@ -181,7 +181,9 @@ impl PackageRequest {
                     && self.year.is_none()
                     && self.capability_id.is_some()
                     && self.hints.max_posts == Some(1)
-                    && self.hints.subject == Some(crate::Subject::Generic)
+                    // A project output speaks about nothing specific; a content package's
+                    // version about the olay its materials come from, when they come from one.
+                    && self.hints.subject.is_some()
             }
         };
         if !fields_ok {

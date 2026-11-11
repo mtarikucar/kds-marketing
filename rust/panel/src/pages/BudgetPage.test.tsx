@@ -169,3 +169,23 @@ describe('BudgetPage', () => {
     expect(within(sheet).queryByRole('button', { name: tr.budget.spendSheet.record })).not.toBeInTheDocument();
   });
 });
+
+
+import { studioAnswers } from '@/test/studio';
+import { adsAnswers, stop } from '@/test/ads';
+
+it('allows budget managers to stop spending with the current revision', async () => {
+  const calls = mockFetch({ ...adsAnswers, 'POST /api/budget/stop': { ...stop, revision: 9, all: true } });
+  renderAt('/budget');
+  await userEvent.click(await screen.findByRole('button', { name: 'Tüm harcamayı durdur' }));
+  await waitFor(() => expect(calls.find(c => c.path === '/api/budget/stop')?.body).toEqual({ scope: 'all', stopped: true, expected_revision: 8 }));
+});
+
+it.each(['social.manage', 'ads.manage'])('does not give %s the budget stop permission', async permission => {
+  const session = studioAnswers['GET /api/auth/me'];
+  const calls = mockFetch({ ...adsAnswers, 'GET /api/auth/me': { ...session, memberships: [{ ...session.memberships[0], permissions: [permission] }] } });
+  renderAt('/budget');
+  await screen.findByRole('heading', { name: tr.budget.title });
+  expect(screen.queryByRole('button', { name: 'Tüm harcamayı durdur' })).not.toBeInTheDocument();
+  expect(calls.some(c => c.path === '/api/budget/stop')).toBe(false);
+});

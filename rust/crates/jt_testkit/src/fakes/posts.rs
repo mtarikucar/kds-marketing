@@ -19,6 +19,8 @@ pub struct MemPosts {
     pub posts: Vec<PlannedPost>,
     pub requests: Vec<PackageRequest>,
     pub settings: Vec<(WorkspaceId, PostingSettings)>,
+    /// The social accounts' daily snapshots: one per account and day.
+    pub account_days: Vec<AccountDay>,
 }
 
 impl MemTenant {
@@ -221,6 +223,89 @@ impl PostRepo for MemTenant {
             .collect();
         out.sort_by_key(|r| std::cmp::Reverse((r.created_at, r.id)));
         Ok(out)
+    }
+
+    async fn insert_account_day(&mut self, day: AccountDay) -> Result<bool, AppError> {
+        self.call(|this| {
+            if day.workspace_id != this.ws {
+                return Err(AppError::internal("account day of another workspace"));
+            }
+            // The account is the same workspace's (the table's composite foreign key).
+            exists(
+                this.state().capabilities.iter().any(|c| {
+                    c.capability.workspace_id == this.ws && c.capability.id == day.capability_id
+                }),
+                "social_account_days.capability_id",
+            )?;
+            if this.store().account_days.iter().any(|d| {
+                d.workspace_id == day.workspace_id
+                    && d.capability_id == day.capability_id
+                    && d.day == day.day
+            }) {
+                return Ok(false);
+            }
+            this.tx
+                .write(move |s| s.posts.account_days.push(day.clone()));
+            Ok(true)
+        })
+    }
+
+    async fn account_days(
+        &mut self,
+        capability: jt_capability::CapabilityId,
+        from: time::Date,
+        until: time::Date,
+    ) -> Result<Vec<AccountDay>, AppError> {
+        let ws = self.ws;
+        let mut days: Vec<_> = self
+            .store()
+            .account_days
+            .iter()
+            .filter(|d| {
+                d.workspace_id == ws
+                    && d.capability_id == capability
+                    && d.day >= from
+                    && d.day <= until
+            })
+            .cloned()
+            .collect();
+        days.sort_by_key(|d| d.day);
+        Ok(days)
+    }
+
+    async fn latest_account_days(&mut self) -> Result<Vec<AccountDay>, AppError> {
+        let ws = self.ws;
+        let mut latest: std::collections::BTreeMap<jt_capability::CapabilityId, AccountDay> =
+            Default::default();
+        for d in self
+            .store()
+            .account_days
+            .iter()
+            .filter(|d| d.workspace_id == ws)
+        {
+            if latest.get(&d.capability_id).is_none_or(|x| x.day < d.day) {
+                latest.insert(d.capability_id, d.clone());
+            }
+        }
+        Ok(latest.into_values().collect())
+    }
+
+    async fn purge_account_days(&mut self, before: time::Date) -> Result<u64, AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            let gone = this
+                .store()
+                .account_days
+                .iter()
+                .filter(|d| d.workspace_id == ws && d.day < before)
+                .count();
+            this.tx.write(move |s| {
+                s.posts
+                    .account_days
+                    .retain(|d| d.workspace_id != ws || d.day >= before)
+            });
+            Ok(gone as u64)
+        })
     }
 
     async fn posting_settings(&mut self) -> Result<PostingSettings, AppError> {

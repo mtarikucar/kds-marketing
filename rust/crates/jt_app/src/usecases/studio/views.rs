@@ -11,7 +11,6 @@ use crate::{
 };
 use jt_strategy::{Goals, Hypothesis, HypothesisId, LaneKind, StrategyVersion};
 use jt_studio::{AdSetBinding, Chain, Slot, StudioControl};
-use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -83,10 +82,17 @@ fn window(from: OffsetDateTime, until: OffsetDateTime) -> Result<(), AppError> {
     Ok(())
 }
 pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverview, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.overview",
+    ))?;
     window(q.from, q.until)?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let strategy = work::gated(r.as_mut(), ctx).await?;
+    let strategy = work::gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.overview"),
+    )
+    .await?;
     let hypotheses = r
         .hypotheses()
         .list(strategy.id)
@@ -196,7 +202,13 @@ pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverv
         .retain(|a| bindings.iter().any(|b| json!(b.id) == a["binding_id"]));
     // Release the tenant bundle before entering another shared service (the fake serializes it).
     drop(r);
-    let learned = learning::learned(d, ctx, q).await?;
+    let learned = learning::learned_for(
+        d,
+        ctx,
+        q,
+        super::permissions::for_use_case("studio.overview"),
+    )
+    .await?;
     Ok(StudioOverview {
         goals: strategy.sections.goals.clone(),
         strategy,
@@ -334,7 +346,9 @@ pub async fn ledger(
     ctx: &Ctx,
     q: StudioLedgerQuery,
 ) -> Result<StudioLedgerPage, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.ledger",
+    ))?;
     window(q.from, q.until)?;
     if !(1..=500).contains(&q.limit) || q.before.is_some_and(|b| b <= 0) {
         return Err(AppError::validation(
@@ -418,6 +432,9 @@ pub async fn ledger_export(
     ctx: &Ctx,
     input: StudioLedgerExportInput,
 ) -> Result<LedgerExportOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.ledger_export",
+    ))?;
     let mut q = input.filter;
     let mut content = "id,time,actor,action,target,version,evidence\r\n".to_owned();
     loop {

@@ -7,7 +7,6 @@ use jt_app::{
         studio::{control, library, posts, schema, trends, work},
     },
 };
-use jt_tenancy::Permission;
 use schemars::Schema;
 use serde_json::Value;
 pub(super) fn definitions() -> Vec<ToolDef> {
@@ -15,105 +14,105 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "studio.overview",
             description: "Read shared five-region Studio overview. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.overview"),
             schema: || Schema::try_from(schema::input("overview")).expect("studio schema"),
             run: overview,
         },
         ToolDef {
             use_case: "studio.ledger",
             description: "Read tenant-filtered Studio evidence, also after strategy archive. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.ledger"),
             schema: || Schema::try_from(schema::input("ledger")).expect("studio schema"),
             run: ledger,
         },
         ToolDef {
             use_case: "studio.ledger_export",
             description: "Export the same filtered, redacted ledger as formula-safe CSV. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.ledger_export"),
             schema: || Schema::try_from(schema::input("ledger_export")).expect("studio schema"),
             run: ledger_export,
         },
         ToolDef {
             use_case: "studio.adsets_list",
             description: "Manage externally created ad sets and hard spend caps. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.adsets_list"),
             schema: || Schema::try_from(schema::input("adsets_list")).expect("studio schema"),
             run: adsets_list,
         },
         ToolDef {
             use_case: "studio.adset_bind",
             description: "Manage externally created ad sets and hard spend caps. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.adset_bind"),
             schema: || Schema::try_from(schema::input("adset_bind")).expect("studio schema"),
             run: adset_bind,
         },
         ToolDef {
             use_case: "studio.budget_move",
             description: "Manage externally created ad sets and hard spend caps. [risk: SPEND]",
-            permission: Permission::StudioManage,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.budget_move"),
             schema: || Schema::try_from(schema::input("budget_move")).expect("studio schema"),
             run: budget_move,
         },
         ToolDef {
             use_case: "studio.learned",
             description: "Read hypothesis results and evidence, lane performance and spend versus caps. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.learned"),
             schema: || Schema::try_from(schema::input("learned")).expect("studio schema"),
             run: learned,
         },
         ToolDef {
             use_case: "studio.judgment_record",
             description: "Record an evidence-linked judgment separately from measured results. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.judgment_record"),
             schema: || Schema::try_from(schema::input("judgment_record")).expect("studio schema"),
             run: judgment_record,
         },
         ToolDef {
             use_case: "studio.file_upload",
             description: "Store validated tenant media with a replay key; needs no approved strategy. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.file_upload"),
             schema: || Schema::try_from(schema::input("file_upload")).expect("studio schema"),
             run: file_upload,
         },
         ToolDef {
             use_case: "studio.piece_submit",
             description: "Submit agent content and revision-bound Ready work atomically. The caption truth check never refuses a submission: its findings come back as material_check (what the texts name that the piece's olays do not back); until fixed by a new piece, or released by an owner or manager in the panel, they hold the publish. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.piece_submit"),
             schema: || Schema::try_from(schema::input("piece_submit")).expect("studio schema"),
             run: piece_submit,
         },
         ToolDef {
             use_case: "studio.pending",
             description: "Read pending Studio slots, revision consent, budget moves and blockers. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.pending"),
             schema: || Schema::try_from(schema::input("pending")).expect("studio schema"),
             run: pending,
         },
         ToolDef {
             use_case: "studio.slot_get",
             description: "Read slot content, hypothesis, brand rules, learning and evidence, and the piece's material_check: caption findings (code, matched words), their digest, whether a human released them, and hard findings (never releasable). A failed or uncertain publish attempt carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: x: HTTP 402 CreditsDepleted: ...\"); the outcome itself keeps only the closed category. [risk: READ]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.slot_get"),
             schema: || Schema::try_from(schema::input("slot_get")).expect("studio schema"),
             run: slot_get,
         },
         ToolDef {
             use_case: "studio.slot_cancel",
             description: "Cancel a Planned or Ready slot at its expected revision with a reason. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
             schema: || Schema::try_from(schema::input("slot_cancel")).expect("studio schema"),
             run: slot_cancel,
         },
         ToolDef {
             use_case: "studio.trend_record",
             description: "Record agent-observed context; trends never influence M3 selection. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.trend_record"),
             schema: || Schema::try_from(schema::input("trend_record")).expect("studio schema"),
             run: trend_record,
         },
         ToolDef {
             use_case: "studio.hypothesis_propose",
-            description: "Append one hypothesis to the strategy draft, requiring team.manage as well as studio.work. [risk: WRITE]",
-            permission: Permission::StudioWork,
+            description: "Append one hypothesis to the strategy draft, requiring team.manage as well as content.work, social.work or ads.work. [risk: WRITE]",
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.hypothesis_propose"),
             schema: || {
                 Schema::try_from(schema::input("hypothesis_propose")).expect("studio schema")
             },
@@ -121,22 +120,15 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.brake",
-            description: "Engage or release the workspace or lane brake. Flags persist before Meta status calls. Requires studio.manage. [risk: WRITE]",
-            permission: Permission::StudioManage,
+            description: "Engage or release the workspace or lane brake. Flags persist before Meta status calls. Requires social.manage, ads.manage or budget.manage. [risk: WRITE]",
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.brake"),
             schema: || Schema::try_from(schema::input("brake")).expect("studio schema"),
             run: brake,
         },
         ToolDef {
-            use_case: "studio.policy_set",
-            description: "Set optional lane human consent policy at the expected control revision. [risk: WRITE]",
-            permission: Permission::StudioManage,
-            schema: || Schema::try_from(schema::input("policy_set")).expect("studio schema"),
-            run: policy_set,
-        },
-        ToolDef {
             use_case: "studio.approve",
             description: "Record revision-bound consent. Only an owner or manager human can approve; agent credentials cannot satisfy human consent. [risk: WRITE]",
-            permission: Permission::StudioManage,
+            permissions: jt_app::usecases::studio::permissions::for_use_case("studio.approve"),
             schema: || Schema::try_from(schema::input("approve")).expect("studio schema"),
             run: approve,
         },
@@ -156,7 +148,7 @@ fn posting_definitions() -> Vec<ToolDef> {
                run: crate::registry::ToolRun| ToolDef {
         use_case,
         description,
-        permission: Permission::StudioWork,
+        permissions: jt_app::usecases::studio::permissions::for_use_case(use_case),
         schema,
         run,
     };
@@ -245,7 +237,7 @@ fn library_definitions() -> Vec<ToolDef> {
                run: crate::registry::ToolRun| ToolDef {
         use_case,
         description,
-        permission: Permission::StudioWork,
+        permissions: jt_app::usecases::studio::permissions::for_use_case(use_case),
         schema,
         run,
     };
@@ -418,7 +410,10 @@ fn library_definitions() -> Vec<ToolDef> {
             "Read a year's calendar (year; this year when left out): the Turkish special days \
              and seasons with their windows, overlaid by the owner's edits. An entry with no \
              window is inactive (the lunar holidays wait for the owner's dates). Also rows (the \
-             owner's own entries of that year) and policy (lead_days, reuse_days, recap_days). \
+             owner's own entries of that year) and policy (lead_days, reuse_days, recap_days, \
+             and ai_standalone: whether a visual an agent made, showing no person, may be the \
+             only material of content that speaks about nothing specific; off, every content \
+             shows at least one real capture). \
              Only an owner or manager edits the calendar and the policy, in the panel. \
              [risk: READ]",
             || library_schema("calendar_list"),
@@ -496,9 +491,6 @@ fn shoot_resolve<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
 }
 fn brake<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&control::brake(d, c, args(v)?).await?) })
-}
-fn policy_set<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
-    Box::pin(async move { to_json(&control::policy_set(d, c, args(v)?).await?) })
 }
 fn approve<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&control::approve(d, c, args(v)?).await?) })

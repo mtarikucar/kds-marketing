@@ -19,6 +19,20 @@ pub struct Fixture {
     pub slot: Slot,
     pub piece: Piece,
 }
+/// Installs every builtin module in workspace `ws`, as in a workspace from before the module
+/// registry, unless the test already stored a registry for it. A module that is not installed
+/// stops its lane (`StudioControl::removed`) and the gate refuses its use cases (design
+/// 2026-11-10 S25), which is not what a Studio fixture is about.
+pub async fn install_all_modules(uow: &dyn UnitOfWork, ws: WorkspaceId) {
+    let mut tx = uow.tenant(ws).await.unwrap();
+    if tx.workspace().module_registry().await.unwrap().is_none() {
+        tx.workspace()
+            .save_module_registry(serde_json::json!({"legacy": true, "modules": []}))
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
 pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
     let ws = WorkspaceId::new_v7();
     let user = UserId::new_v7();
@@ -48,6 +62,7 @@ pub async fn fixture(uow: &dyn UnitOfWork) -> Fixture {
 /// [`fixture`]'s approved strategy (approved by `user`), hypothesis, X capability, arm, slot and
 /// piece in the existing, active workspace `ws`; the arm, slot and piece are not stored.
 pub async fn fixture_in(uow: &dyn UnitOfWork, ws: WorkspaceId, user: UserId) -> Fixture {
+    install_all_modules(uow, ws).await;
     let v = StrategyVersion {
         id: StrategyVersionId::new_v7(),
         workspace_id: ws,
@@ -656,6 +671,7 @@ pub async fn budget_price_and_hypothesis_fields_round_trip(uow: &dyn UnitOfWork)
         .await
         .unwrap();
     let mut b = jt_capability::BudgetItem {
+        general: false,
         id: jt_capability::BudgetItemId::new_v7(),
         workspace_id: f.ws,
         name: "priced".into(),
@@ -730,6 +746,7 @@ pub async fn budget_fixture(
     let f = fixture(uow).await;
     let mut tx = uow.tenant(f.ws).await.unwrap();
     let b = jt_capability::BudgetItem {
+        general: false,
         id: jt_capability::BudgetItemId::new_v7(),
         workspace_id: f.ws,
         name: "cap".into(),
@@ -746,6 +763,8 @@ pub async fn budget_fixture(
     tx.budget().link(f.slot.capability_id, b.id).await.unwrap();
     tx.commit().await.unwrap();
     let r = ReserveSpend {
+        module: None,
+        campaign_id: None,
         binding_id: None,
         chain: None,
         replaces: None,
@@ -860,7 +879,15 @@ pub async fn agent_inherits_issuer_scope_rep_has_no_studio_grants(
         &ctx,
         api_keys::CreateKey {
             name: "studio agent".into(),
-            scopes: vec!["studio.work".into(), "studio.manage".into()],
+            scopes: vec![
+                "content.work".into(),
+                "social.work".into(),
+                "ads.work".into(),
+                "materials.work".into(),
+                "content.manage".into(),
+                "social.manage".into(),
+                "ads.manage".into(),
+            ],
         },
     )
     .await
@@ -868,12 +895,20 @@ pub async fn agent_inherits_issuer_scope_rep_has_no_studio_grants(
     let p = api_keys::authenticate(&deps, &key.plaintext).await.unwrap();
     assert_eq!(
         p.permissions,
-        std::collections::BTreeSet::from([Permission::StudioWork, Permission::StudioManage])
+        std::collections::BTreeSet::from([
+            Permission::ContentWork,
+            Permission::SocialWork,
+            Permission::AdsWork,
+            Permission::MaterialsWork,
+            Permission::ContentManage,
+            Permission::SocialManage,
+            Permission::AdsManage
+        ])
     );
     let mut tx = uow.tenant(ws).await.unwrap();
     let rep = tx.roles().find_by_key("rep").await.unwrap().unwrap();
-    assert!(!rep.permissions.contains(&Permission::StudioWork));
-    assert!(!rep.permissions.contains(&Permission::StudioManage));
+    assert!(!rep.permissions.contains(&Permission::MaterialsWork));
+    assert!(!rep.permissions.contains(&Permission::SocialManage));
     let member = tx
         .memberships()
         .find_by_user(principal.user_id)
@@ -891,12 +926,6 @@ pub async fn controls_approval_and_transition_are_atomic(uow: &dyn UnitOfWork) {
     let f = ready(uow).await;
     let mut r = uow.tenant(f.ws).await.unwrap();
     let v = r.strategy().lock_execution_frame().await.unwrap().unwrap();
-    let c = r
-        .studio_control()
-        .set_policy(0, LaneKind::Organic, true)
-        .await
-        .unwrap();
-    assert_eq!(c.revision, 1);
     let approval = ApprovalReceipt {
         revision: 1,
         by: v.approved_by.unwrap(),

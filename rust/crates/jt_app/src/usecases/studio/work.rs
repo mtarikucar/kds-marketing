@@ -86,8 +86,12 @@ pub struct CancelSlotInput {
 #[serde(deny_unknown_fields)]
 pub struct EmptyInput {}
 
-pub(crate) async fn gated(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<StrategyVersion, AppError> {
-    ctx.require(Permission::StudioWork)?;
+pub(crate) async fn gated(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    permissions: &[Permission],
+) -> Result<StrategyVersion, AppError> {
+    ctx.require_any(permissions)?;
     let frame = r
         .strategy()
         .lock_execution_frame()
@@ -97,9 +101,16 @@ pub(crate) async fn gated(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Strategy
     Ok(frame)
 }
 pub async fn pending(d: &Deps, ctx: &Ctx) -> Result<PendingStudioOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.pending",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    gated(r.as_mut(), ctx).await?;
+    gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.pending"),
+    )
+    .await?;
     pending_in(r.as_mut(), ctx).await
 }
 pub(crate) async fn pending_in(
@@ -157,6 +168,13 @@ pub(crate) async fn pending_in(
                     | jt_studio::PublishOutcome::Unknown(e)
                     | jt_studio::PublishOutcome::Refused(e),
                 ) => Some(*e),
+                // Left with its platform's scheduler until its time (design 2026-11-10 §7.3):
+                // nothing is stuck, it is where it should be.
+                Some(jt_studio::PublishOutcome::Observed(_))
+                    if a.held_until().is_some_and(|at| ctx.now < at) =>
+                {
+                    None
+                }
                 // The receipt is captured: the provider is still processing the post (TikTok
                 // publishes in the background), or its bookkeeping is being finished. It is
                 // asked about, never sent again: no duplicate to review.
@@ -226,12 +244,7 @@ pub(crate) async fn pending_in(
         // A TikTok piece waits for a human on its posting screen whatever the policies say,
         // and only an approval carrying the screen's choice releases it.
         let screen = jt_studio::requires_posting_screen(&cap.kind_key);
-        let required = screen
-            || cap.policy.requires_human_approval
-            || control
-                .lanes
-                .get(&arm.key.lane)
-                .is_some_and(|l| l.requires_human_approval);
+        let required = screen || cap.policy.requires_human_approval;
         // A slot with an attempt is never claimed again, whatever revision it reaches: no
         // approval can send it.
         if s.state == SlotState::Ready
@@ -330,11 +343,7 @@ pub(crate) async fn pending_in(
                 reason: e.message,
             });
         }
-        if (cap.policy.requires_human_approval
-            || control
-                .lanes
-                .get(&jt_strategy::LaneKind::Paid)
-                .is_some_and(|l| l.requires_human_approval))
+        if cap.policy.requires_human_approval
             && r.studio().get_approval(target, m.revision).await?.is_none()
         {
             out.approvals.push(target);
@@ -349,9 +358,16 @@ pub(crate) async fn pending_in(
     Ok(out)
 }
 pub async fn slot_get(d: &Deps, ctx: &Ctx, id: SlotId) -> Result<SlotOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.slot_get",
+    ))?;
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.slot_get"),
+    )
+    .await?;
     slot_in(r.as_mut(), id, &frame, ctx.now).await
 }
 /// The slot's detail at `now`: its piece shown with that piece's material check, at the time the
@@ -419,15 +435,44 @@ pub(crate) async fn slot_in(
     })
 }
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {
-    ctx.require(Permission::StudioWork)?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.slot_cancel",
+    ))?;
     if input.reason.trim().is_empty() || input.reason.len() > 2000 {
         return Err(AppError::validation(
             "cancellation reason required (max 2000 bytes)",
             json!({"field":"reason"}),
         ));
     }
+    // A post waiting at its platform's scheduler is taken back there first (design 2026-11-10
+    // §7.3): cancelled here and still going out there would be the worst of both.
+    {
+        let mut r = d.uow.tenant(ctx.workspace_id).await?;
+        gated(
+            r.as_mut(),
+            ctx,
+            crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
+        )
+        .await?;
+        let s = r
+            .studio()
+            .get_slot(input.slot_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("slot"))?;
+        if s.revision != input.expected_revision {
+            return Err(AppError::conflict("slot revision changed"));
+        }
+        drop(r);
+        super::publish::withdraw_for_person(d, ctx.workspace_id, input.slot_id, "cancelled")
+            .await?;
+    }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(r.as_mut(), ctx).await?;
+    let frame = gated(
+        r.as_mut(),
+        ctx,
+        crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
+    )
+    .await?;
     r.studio_control().lock_control().await?;
     let s = r
         .studio()

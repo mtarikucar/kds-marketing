@@ -72,6 +72,7 @@
 
 mod ads;
 mod assets;
+mod campaigns;
 mod comments;
 mod credential;
 mod graph;
@@ -82,6 +83,7 @@ mod oauth;
 mod ports;
 mod probe;
 mod publish;
+mod schedule;
 pub mod webhook;
 
 use std::fmt;

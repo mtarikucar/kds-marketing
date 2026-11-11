@@ -10,8 +10,12 @@ pub use jt_studio::{
 };
 
 use async_trait::async_trait;
+use jt_capability::CapabilityId;
 use jt_studio::SlotId;
+use jt_tenancy::WorkspaceId;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use time::{Date, OffsetDateTime};
 
 use crate::error::AppError;
 
@@ -27,6 +31,18 @@ pub struct PostingSettings {
     pub policy: PostingPolicy,
     #[serde(default = "default_tz")]
     pub tz: String,
+    /// The accounts whose posting a person paused (design 2026-11-10 §7.6): nothing is planned
+    /// for one and nothing goes out on it, as under a brake, for that account alone.
+    #[serde(default)]
+    pub paused_capability_ids: BTreeSet<CapabilityId>,
+    /// Counts the changes of the settings; pausing an account names the revision it saw.
+    #[serde(default)]
+    pub revision: u64,
+    /// Whether a post is left with its platform's own scheduler where the platform has one open
+    /// to applications (design 2026-11-10 §7.3, B47: Facebook Page text and link posts). Off
+    /// until a person switches it on: Jeeta then sends every post itself at its time.
+    #[serde(default)]
+    pub provider_scheduling: bool,
 }
 
 fn default_tz() -> String {
@@ -38,12 +54,56 @@ impl Default for PostingSettings {
         PostingSettings {
             policy: PostingPolicy::default(),
             tz: default_tz(),
+            paused_capability_ids: BTreeSet::new(),
+            revision: 0,
+            provider_scheduling: false,
         }
     }
 }
 
+/// The five numbers of an account the module shows (design §7.1); one the platform does not
+/// give is `None`, never zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountNumbers {
+    pub followers: Option<i64>,
+    pub reach: Option<i64>,
+    pub views: Option<i64>,
+    pub engagement: Option<i64>,
+    pub profile_visits: Option<i64>,
+}
+
+/// What a social account's platform said on one day (`social_account_days`): the first
+/// successful read of the day stands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountDay {
+    pub workspace_id: WorkspaceId,
+    pub capability_id: CapabilityId,
+    /// The day in the workspace's posting time zone.
+    #[serde(with = "jt_studio::time_compat::date")]
+    pub day: Date,
+    pub numbers: AccountNumbers,
+    /// The provider's own counters, as it named them.
+    pub raw: BTreeMap<String, i64>,
+    #[serde(with = "jt_studio::time_compat")]
+    pub read_at: OffsetDateTime,
+}
+
 #[async_trait]
 pub trait PostRepo: Send + Sync {
+    /// Stores `day` unless its account has a snapshot of that day already: `false` then.
+    async fn insert_account_day(&mut self, day: AccountDay) -> Result<bool, AppError>;
+    /// The account's snapshots with `from <= day <= until`, by day.
+    async fn account_days(
+        &mut self,
+        capability: CapabilityId,
+        from: Date,
+        until: Date,
+    ) -> Result<Vec<AccountDay>, AppError>;
+    /// Each account's most recent snapshot, by capability id.
+    async fn latest_account_days(&mut self) -> Result<Vec<AccountDay>, AppError>;
+    /// Deletes the workspace's snapshots of days before `before`; answers how many.
+    async fn purge_account_days(&mut self, before: Date) -> Result<u64, AppError>;
+
     /// Stores the planned post of a stored slot of the workspace (`NOT_FOUND` otherwise), naming a
     /// stored package request (`NOT_FOUND`) and, when it has one, an olay of the workspace
     /// (`NOT_FOUND`). `CONFLICT` when the slot has a post already. A post is stored without a

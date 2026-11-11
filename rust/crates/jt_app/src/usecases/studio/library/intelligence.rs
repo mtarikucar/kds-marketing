@@ -176,7 +176,10 @@ pub async fn material_intelligence_get(
     ctx: &Ctx,
     i: MaterialIdInput,
 ) -> Result<MaterialIntelligenceOut, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_intelligence_get",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let material = live(r.as_mut(), i.material_id, None).await?;
     let row = record(r.as_mut(), &material, ctx.now).await?;
     Ok(MaterialIntelligenceOut {
@@ -213,7 +216,10 @@ pub async fn material_preview(
     ctx: &Ctx,
     i: MaterialIdInput,
 ) -> Result<MaterialPreview, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_preview",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let material = live(r.as_mut(), i.material_id, None).await?;
     check_file(r.as_mut(), ctx, &material).await?;
     drop(r);
@@ -225,8 +231,11 @@ pub async fn material_analysis_claim(
     ctx: &Ctx,
     i: MaterialAnalysisClaimInput,
 ) -> Result<MaterialAnalysisClaimOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_analysis_claim",
+    ))?;
     let owner = agent(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
@@ -298,6 +307,9 @@ pub async fn material_analysis_complete(
     ctx: &Ctx,
     i: MaterialAnalysisCompleteInput,
 ) -> Result<MaterialIntelligenceOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_analysis_complete",
+    ))?;
     agent(ctx)?;
     let description = bounded(&i.description, 4000, false, "description")?;
     let title = i
@@ -321,7 +333,7 @@ pub async fn material_analysis_complete(
             json!({"field":"date_source"}),
         ));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let mut material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
@@ -412,6 +424,9 @@ pub async fn material_analysis_fail(
     ctx: &Ctx,
     i: MaterialAnalysisFailInput,
 ) -> Result<MaterialIntelligenceOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_analysis_fail",
+    ))?;
     agent(ctx)?;
     if i.error_code.is_empty()
         || i.error_code.len() > 64
@@ -425,7 +440,7 @@ pub async fn material_analysis_fail(
             json!({"field":"error_code"}),
         ));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
@@ -456,7 +471,10 @@ pub async fn material_analysis_retry(
     ctx: &Ctx,
     i: MaterialAnalysisClaimInput,
 ) -> Result<MaterialIntelligenceOut, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_analysis_retry",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
@@ -539,6 +557,9 @@ pub async fn material_intelligence_update(
     ctx: &Ctx,
     i: MaterialIntelligenceUpdateInput,
 ) -> Result<MaterialIntelligenceOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_intelligence_update",
+    ))?;
     if person(ctx).is_none() {
         return Err(super::person_required("intelligence"));
     }
@@ -562,7 +583,7 @@ pub async fn material_intelligence_update(
                 .transpose()
         })
         .transpose()?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let mut material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
@@ -606,7 +627,10 @@ pub async fn material_intelligence_list(
     d: &Deps,
     ctx: &Ctx,
 ) -> Result<Vec<MaterialIntelligenceOut>, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_intelligence_list",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     let materials = r.studio_materials().list_materials().await?;
     let rows = r.studio_materials().list_intelligence().await?;
     Ok(materials

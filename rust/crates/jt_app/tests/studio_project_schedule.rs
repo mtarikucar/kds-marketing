@@ -170,7 +170,7 @@ async fn existing_material_gate_refusal_rolls_back_request_and_project_link() {
 async fn refuses_other_tenant_and_missing_manage_permission() {
     let (w, p, m) = prepared().await;
     let mut ctx = w.ctx.clone();
-    ctx.permissions.remove(&Permission::StudioManage);
+    ctx.permissions.remove(&Permission::SocialManage);
     assert_eq!(
         project_schedule(&w.d, &ctx, input(&w, &p, &m))
             .await

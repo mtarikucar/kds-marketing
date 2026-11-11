@@ -132,30 +132,6 @@ impl MemTenant {
 }
 #[async_trait]
 impl StudioControlRepo for MemTenant {
-    async fn set_policy(
-        &mut self,
-        expected: u64,
-        lane: LaneKind,
-        required: bool,
-    ) -> Result<StudioControl, AppError> {
-        let mut c = self.lock_control().await?;
-        if c.revision != expected {
-            return Err(AppError::conflict("control revision changed"));
-        }
-        c.lanes.entry(lane).or_default().requires_human_approval = required;
-        c.revision = c
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| AppError::conflict("revision overflow"))?;
-        self.studio_write(|s, _| {
-            *s.controls
-                .iter_mut()
-                .find(|r| r.workspace_id == c.workspace_id)
-                .expect("locked") = c.clone();
-            Ok(())
-        })?;
-        Ok(c)
-    }
     async fn binding_control(
         &mut self,
         id: AdSetBindingId,
@@ -185,6 +161,16 @@ impl StudioControlRepo for MemTenant {
     }
     async fn lock_control(&mut self) -> Result<StudioControl, AppError> {
         self.tx.lock_studio().await;
+        // A removed module stops its lane (design 2026-11-10 S25); derived here, never stored.
+        let removed = {
+            let state = self.state();
+            let registry = state
+                .module_registries
+                .iter()
+                .find(|(ws, _)| *ws == self.ws)
+                .map(|(_, data)| data);
+            jt_app::usecases::modules::removed_lanes(registry)?
+        };
         if let Some(c) = self
             .state()
             .studio
@@ -192,19 +178,24 @@ impl StudioControlRepo for MemTenant {
             .iter()
             .find(|c| c.workspace_id == self.ws)
         {
-            return Ok(c.clone());
+            return Ok(StudioControl {
+                removed,
+                ..c.clone()
+            });
         }
         let c = StudioControl {
+            spend_stopped: Default::default(),
             workspace_id: self.ws,
             brake_engaged: false,
             revision: 0,
             lanes: Default::default(),
+            removed: Default::default(),
         };
         self.studio_write(|s, _| {
             s.controls.push(c.clone());
             Ok(())
         })?;
-        Ok(c)
+        Ok(StudioControl { removed, ..c })
     }
     async fn set_brake(
         &mut self,
@@ -226,6 +217,48 @@ impl StudioControlRepo for MemTenant {
             c.lanes.entry(l).or_default().brake_engaged = engaged;
         } else {
             c.brake_engaged = engaged;
+        }
+        c.revision = c
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| AppError::conflict("revision overflow"))?;
+        self.studio_write(|s, _| {
+            *s.controls
+                .iter_mut()
+                .find(|r| r.workspace_id == c.workspace_id)
+                .expect("locked") = c.clone();
+            Ok(())
+        })?;
+        Ok(c)
+    }
+    async fn spend_stop(&mut self) -> Result<jt_studio::SpendStop, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .studio
+            .controls
+            .iter()
+            .find(|c| c.workspace_id == ws)
+            .map(|c| c.spend_stopped.clone())
+            .unwrap_or_default())
+    }
+    async fn set_spend_stop(
+        &mut self,
+        expected: u64,
+        stop: jt_studio::SpendStop,
+        paid_brake: Option<bool>,
+        release_workspace_brake: bool,
+    ) -> Result<StudioControl, AppError> {
+        let mut c = self.lock_control().await?;
+        if c.revision != expected {
+            return Err(AppError::conflict("control revision changed"));
+        }
+        c.spend_stopped = stop;
+        if release_workspace_brake {
+            c.brake_engaged = false;
+        }
+        if let Some(engaged) = paid_brake {
+            c.lanes.entry(LaneKind::Paid).or_default().brake_engaged = engaged;
         }
         c.revision = c
             .revision
@@ -750,14 +783,25 @@ impl StudioRepo for MemTenant {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        self.claim_studio(now, None).await
+        self.claim_studio(now, None, None).await
     }
     async fn claim_publication_for(
         &mut self,
         slot: SlotId,
         now: OffsetDateTime,
     ) -> Result<Option<PublishAttempt>, AppError> {
-        self.claim_studio(now, Some(slot)).await
+        self.claim_studio(now, Some(slot), None).await
+    }
+    async fn claim_publication_held(
+        &mut self,
+        slot: SlotId,
+        now: OffsetDateTime,
+        at: OffsetDateTime,
+    ) -> Result<Option<PublishAttempt>, AppError> {
+        if at <= now {
+            return Ok(None);
+        }
+        self.claim_studio(now, Some(slot), Some(at)).await
     }
     async fn attempt_by_receipt(
         &mut self,
@@ -1397,6 +1441,8 @@ impl MemTenant {
         &mut self,
         now: OffsetDateTime,
         target: Option<SlotId>,
+        // As `jt_pg`: the time a provider's scheduler sends the post, for a claim made ahead.
+        hold: Option<OffsetDateTime>,
     ) -> Result<Option<PublishAttempt>, AppError> {
         let Some(v) = StrategyRepo::lock_execution_frame(self).await? else {
             return Ok(None);
@@ -1408,7 +1454,7 @@ impl MemTenant {
         let slot = self
             .list_slots(SlotQuery {
                 from: OffsetDateTime::UNIX_EPOCH,
-                until: now + time::Duration::nanoseconds(1),
+                until: hold.unwrap_or(now) + time::Duration::nanoseconds(1),
                 hypothesis_id: None,
                 lane: Some(LaneKind::Organic),
             })
@@ -1434,7 +1480,7 @@ impl MemTenant {
             .ok_or_else(|| AppError::not_found("capability"))?;
         if let Some(cap) = capability.policy.daily_ops_cap {
             let offset = time::UtcOffset::from_hms(3, 0, 0).expect("Istanbul offset");
-            let day = now.to_offset(offset).date();
+            let day = hold.unwrap_or(now).to_offset(offset).date();
             let used = self
                 .state()
                 .studio
@@ -1443,7 +1489,11 @@ impl MemTenant {
                 .filter(|a| {
                     a.piece().chain.workspace_id == self.ws
                         && a.capability_id() == slot.capability_id
-                        && a.claimed_at().to_offset(offset).date() == day
+                        && a.held_until()
+                            .unwrap_or(a.claimed_at())
+                            .to_offset(offset)
+                            .date()
+                            == day
                 })
                 .count();
             if used as u64 >= u64::from(cap) {
@@ -1482,7 +1532,8 @@ impl MemTenant {
             now,
         )
         .map_err(invalid)?
-        .with_account(account);
+        .with_account(account)
+        .with_hold(hold);
         self.studio_write(|s, _| {
             s.attempts.push(a.clone());
             Ok(())

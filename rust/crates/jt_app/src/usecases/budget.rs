@@ -55,6 +55,11 @@ pub struct BudgetItemInput {
     #[serde(default)]
     pub unit_cost_minor: Option<i64>,
     pub period: Period,
+    /// Whether it is the workspace's general ad budget (design 2026-11-10 B37): only an
+    /// `ad_budget` in a currency with a period that is not `total`, at most one per workspace,
+    /// its cap within the approved strategy's paid cap.
+    #[serde(default)]
+    pub general: bool,
 }
 
 /// What an edit of a budget item changes: each field given replaces the item's, each left out
@@ -75,6 +80,9 @@ pub struct UpdateBudgetItem {
     /// The new period.
     #[serde(default)]
     pub period: Option<Period>,
+    /// Makes it the workspace's general ad budget, or stops it being one.
+    #[serde(default)]
+    pub general: Option<bool>,
 }
 
 /// A budget item with what was spent from it in its current period and what remains (negative
@@ -114,6 +122,7 @@ pub async fn create_item(
         cap,
         unit_cost_minor,
         period,
+        general,
     } = input;
     validate_price(unit_cost_minor)?;
     let mut item = BudgetItem::new(
@@ -143,6 +152,10 @@ pub async fn create_item(
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
     item.strategy_version_id = in_force.map(|v| v.as_uuid());
+    item.general = general;
+    if general {
+        check_general(repos.as_mut(), &item).await?;
+    }
     repos.budget().insert_item(item.clone()).await?;
     append(
         repos.as_mut(),
@@ -158,6 +171,7 @@ pub async fn create_item(
             "cap": item.cap,
             "unit_cost_minor": item.unit_cost_minor,
             "period": item.period,
+            "general": item.general,
         }),
     )
     .await?;
@@ -192,16 +206,23 @@ pub async fn update_item(
         cap,
         period,
         unit_cost_minor,
+        general,
     } = input;
     if let Some(price) = unit_cost_minor {
         validate_price(price)?;
     }
-    if name.is_none() && cap.is_none() && period.is_none() && unit_cost_minor.is_none() {
+    if name.is_none()
+        && cap.is_none()
+        && period.is_none()
+        && unit_cost_minor.is_none()
+        && general.is_none()
+    {
         return Err(nothing_to_change(&[
             "name",
             "cap",
             "period",
             "unit_cost_minor",
+            "general",
         ]));
     }
     let name = match name {
@@ -239,8 +260,17 @@ pub async fn update_item(
         changed.insert("unit_cost_minor".into(), json!(price));
         item.unit_cost_minor = price;
     }
+    if let Some(general) = general.filter(|g| *g != item.general) {
+        previous.insert("general".into(), json!(item.general));
+        changed.insert("general".into(), json!(general));
+        item.general = general;
+    }
     if changed.is_empty() {
         return item_out(repos.as_mut(), item, ctx.now).await;
+    }
+    // The general ad budget keeps its rules through every edit of it.
+    if item.general {
+        check_general(repos.as_mut(), &item).await?;
     }
     repos.budget().update_item(item.clone()).await?;
     changed.insert("previous".into(), Value::Object(previous));
@@ -352,6 +382,22 @@ pub(crate) async fn spend_in(
     amount: i64,
     reference: Option<String>,
 ) -> Result<BudgetSpendOut, AppError> {
+    spend_in_for(deps, ctx, repos, item, amount, reference, None, None).await
+}
+
+/// [`spend_in`] naming the module the spend belongs to (design 2026-11-10 S6) and, for
+/// advertising, its ad campaign.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spend_in_for(
+    deps: &Deps,
+    ctx: &Ctx,
+    repos: &mut dyn TenantRepos,
+    item: BudgetItemId,
+    amount: i64,
+    reference: Option<String>,
+    module: Option<&str>,
+    campaign_id: Option<uuid::Uuid>,
+) -> Result<BudgetSpendOut, AppError> {
     let source = match &ctx.actor {
         Actor::Agent { .. } => SpendSource::Agent,
         Actor::Human { .. } => SpendSource::Human,
@@ -365,6 +411,8 @@ pub(crate) async fn spend_in(
         ctx.workspace_id,
         item,
         NewBudgetSpend {
+            module: module.map(str::to_owned),
+            campaign_id,
             amount,
             source,
             reference,
@@ -475,6 +523,73 @@ async fn item_out(
         spent_in_period,
         item,
     })
+}
+
+/// How many days a period counts as when two caps are compared (design 2026-11-10 B37: daily
+/// × 7 = weekly, daily × 30 = monthly); `None` for `total`, which has no rate.
+fn period_days(period: Period) -> Option<i128> {
+    match period {
+        Period::Daily => Some(1),
+        Period::Weekly => Some(7),
+        Period::Monthly => Some(30),
+        Period::Total => None,
+    }
+}
+
+/// The rules of the general ad budget for `item`, about to be stored as one (design 2026-11-10
+/// B37): it is an `ad_budget` in a currency with a period that is not `total` (`VALIDATION`
+/// naming `general`); the workspace has no other live one (`CONFLICT`, `general_exists`); and
+/// its cap is within the approved strategy's paid cap for its currency, both brought to the
+/// item's period (`VALIDATION` naming `cap`, `above_strategy_cap` with the most allowed). A
+/// workspace without an approved strategy, or whose strategy has no paid lane in that currency,
+/// has no cap to compare with: the item is stored, and nothing can be spent on ads until there
+/// is one.
+async fn check_general(repos: &mut dyn TenantRepos, item: &BudgetItem) -> Result<(), AppError> {
+    let (Unit::Currency(currency), Some(days), true) =
+        (&item.unit, period_days(item.period), item.can_be_general())
+    else {
+        return Err(AppError::validation(
+            "the general ad budget is an ad budget in a currency, with a period other than total",
+            json!({ "field": "general", "reason": "not_a_periodic_ad_budget" }),
+        ));
+    };
+    if repos
+        .budget()
+        .list_items()
+        .await?
+        .iter()
+        .any(|i| i.id != item.id && i.general && i.retired_at.is_none())
+    {
+        return Err(AppError {
+            code: crate::error::ErrorCode::Conflict,
+            message: "the workspace already has a general ad budget".into(),
+            details: json!({ "field": "general", "reason": "general_exists" }),
+        });
+    }
+    let Some(version) = repos.strategy().current_approved().await? else {
+        return Ok(());
+    };
+    let Some(lane) = version
+        .sections
+        .budget_frame
+        .lanes
+        .iter()
+        .find(|l| l.lane == jt_strategy::LaneKind::Paid && l.currency == *currency)
+    else {
+        return Ok(());
+    };
+    let lane_days: i128 = match lane.period {
+        jt_strategy::Period::Weekly => 7,
+        jt_strategy::Period::Monthly => 30,
+    };
+    let allowed = i128::from(lane.cap_minor) * days / lane_days;
+    if i128::from(item.cap) > allowed {
+        return Err(AppError::validation(
+            "the general ad budget may not exceed the strategy's paid cap",
+            json!({ "field": "cap", "reason": "above_strategy_cap", "cap": allowed as i64 }),
+        ));
+    }
+    Ok(())
 }
 
 /// Budget item `id` as it now stands in this bundle, as [`item_out`] answers it at `now`.

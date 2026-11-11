@@ -29,10 +29,10 @@ const calendar = {
     entry('kulup_sezon_basi', 'Kulüp sezon başı', null, { kind: 'season' }),
   ],
   rows: [entry('anneler_gunu', 'Anneler Günü', ['2027-04-25', '2027-05-09'], { lead_days: 30 })],
-  policy: { lead_days: 21, reuse_days: 14, recap_days: 30 },
+  policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: true },
 };
 const answers = { ...materialsAnswers, 'GET /api/studio/calendar': calendar };
-const open = () => renderAt('/studio?tab=materials&view=calendar&year=2027');
+const open = () => renderAt('/content?tab=calendar&year=2027');
 
 describe('Materyaller · Takvim', () => {
   it('shows "tarih girilmeli" for the undated lunar holidays and the dated windows', async () => {
@@ -91,18 +91,23 @@ describe('Materyaller · Takvim', () => {
   it('saves the materials policy', async () => {
     const calls = mockFetch({
       ...answers,
-      'PUT /api/studio/materials/policy': { lead_days: 28, reuse_days: 14, recap_days: 30 },
+      'PUT /api/studio/materials/policy': { lead_days: 28, reuse_days: 14, recap_days: 30, ai_standalone: false },
     });
     open();
     const lead = await screen.findByLabelText(/^Hazırlık \(gün\)/, { selector: 'input[inputmode]:not([placeholder])' });
     await userEvent.clear(lead);
     await userEvent.type(lead, '28');
+    // On unless the workspace turned it off; the form sends it with the days.
+    const standalone = screen.getByRole('checkbox', { name: /Ajanın ürettiği görsel tek başına paylaşılabilsin/ });
+    expect(standalone).toBeChecked();
+    await userEvent.click(standalone);
     await userEvent.click(screen.getByRole('button', { name: 'Kuralları kaydet' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path === '/api/studio/materials/policy')?.body).toEqual({
         lead_days: 28,
         reuse_days: 14,
         recap_days: 30,
+        ai_standalone: false,
       }),
     );
   });

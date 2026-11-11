@@ -37,16 +37,18 @@ struct ItemRecord {
     strategy_version_id: Option<Uuid>,
     created_at: OffsetDateTime,
     retired_at: Option<OffsetDateTime>,
+    general: bool,
 }
 
 /// The columns an [`ItemRecord`] is read from.
-const ITEM_COLUMNS: &str = "id, workspace_id, name, kind, unit, cap, unit_cost_minor, period, strategy_version_id, created_at, retired_at";
+const ITEM_COLUMNS: &str = "id, workspace_id, name, kind, unit, cap, unit_cost_minor, period, strategy_version_id, created_at, retired_at, general";
 
 impl ItemRecord {
     fn into_item(self) -> Result<BudgetItem, AppError> {
         let unit: Unit = serde_json::from_value(self.unit)
             .map_err(|_| AppError::internal("stored budget item unit cannot be read"))?;
         Ok(BudgetItem {
+            general: self.general,
             unit_cost_minor: self.unit_cost_minor,
             id: BudgetItemId(self.id),
             workspace_id: WorkspaceId(self.workspace_id),
@@ -71,6 +73,8 @@ struct SpendRecord {
     amount: i64,
     source: serde_json::Value,
     reference: Option<String>,
+    module: Option<String>,
+    campaign_id: Option<Uuid>,
 }
 
 impl SpendRecord {
@@ -85,6 +89,8 @@ impl SpendRecord {
             amount: self.amount,
             source,
             reference: self.reference,
+            module: self.module,
+            campaign_id: self.campaign_id,
         })
     }
 }
@@ -116,8 +122,8 @@ impl BudgetRepo for PgTenantRepos {
             .map_err(|e| AppError::internal(format!("a budget unit cannot be stored: {e}")))?;
         let done = sqlx::query(
             "insert into budget_items (id, workspace_id, name, kind, unit, cap, period, \
-             strategy_version_id, created_at, retired_at, unit_cost_minor) \
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing",
+             strategy_version_id, created_at, retired_at, unit_cost_minor, general) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) on conflict do nothing",
         )
         .bind(item.id.as_uuid())
         .bind(ws.as_uuid())
@@ -130,6 +136,7 @@ impl BudgetRepo for PgTenantRepos {
         .bind(item.created_at)
         .bind(item.retired_at)
         .bind(item.unit_cost_minor)
+        .bind(item.general)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "insert budget item"))?;
@@ -185,8 +192,8 @@ impl BudgetRepo for PgTenantRepos {
         let ws = self.workspace_id();
         same_workspace(ws, item.workspace_id)?;
         let done = sqlx::query(
-            "update budget_items set name = $3, cap = $4, period = $5, retired_at = $6, unit_cost_minor = $7 \
-             where workspace_id = $1 and id = $2",
+            "update budget_items set name = $3, cap = $4, period = $5, retired_at = $6, unit_cost_minor = $7, \
+             general = $8 where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
         .bind(item.id.as_uuid())
@@ -195,6 +202,7 @@ impl BudgetRepo for PgTenantRepos {
         .bind(item.period.key())
         .bind(item.retired_at)
         .bind(item.unit_cost_minor)
+        .bind(item.general)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "change budget item"))?;
@@ -266,7 +274,8 @@ impl BudgetRepo for PgTenantRepos {
             .map_err(|e| AppError::internal(format!("a spend source cannot be stored: {e}")))?;
         let done = sqlx::query(
             "insert into budget_spend_entries (id, workspace_id, budget_item_id, at, amount, \
-             source, reference) values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing",
+             source, reference, module, campaign_id) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9) on conflict do nothing",
         )
         .bind(spend.id.as_uuid())
         .bind(ws.as_uuid())
@@ -275,6 +284,8 @@ impl BudgetRepo for PgTenantRepos {
         .bind(spend.amount)
         .bind(source)
         .bind(&spend.reference)
+        .bind(&spend.module)
+        .bind(spend.campaign_id)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "append budget spend"))?;
@@ -315,8 +326,8 @@ impl BudgetRepo for PgTenantRepos {
     ) -> Result<Vec<BudgetSpend>, AppError> {
         let ws = self.workspace_id();
         let records: Vec<SpendRecord> = sqlx::query_as(
-            "select id, workspace_id, budget_item_id, at, amount, source, reference \
-             from budget_spend_entries where workspace_id = $1 and budget_item_id = $2 \
+            "select id, workspace_id, budget_item_id, at, amount, source, reference, module, \
+             campaign_id from budget_spend_entries where workspace_id = $1 and budget_item_id = $2 \
              and ($3::timestamptz is null or (at, id) < ($3::timestamptz, $4::uuid)) \
              order by at desc, id desc \
              limit $5",
@@ -330,5 +341,36 @@ impl BudgetRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "list budget spend"))?;
         records.into_iter().map(SpendRecord::into_spend).collect()
+    }
+
+    async fn spend_slices(
+        &mut self,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<jt_app::ports::SpendSlice>, AppError> {
+        let rows: Vec<(Uuid, Option<String>, Option<Uuid>, i64)> = sqlx::query_as(
+            "select budget_item_id, module, campaign_id, \
+             least(sum(amount), 9223372036854775807)::bigint from budget_spend_entries \
+             where workspace_id = $1 and at >= $2 and at < $3 \
+             group by budget_item_id, module, campaign_id \
+             order by budget_item_id, module nulls last, campaign_id nulls last",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(from)
+        .bind(to)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "sum budget spend by module"))?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(item, module, campaign_id, amount)| jt_app::ports::SpendSlice {
+                    budget_item_id: BudgetItemId(item),
+                    module,
+                    campaign_id,
+                    amount,
+                },
+            )
+            .collect())
     }
 }

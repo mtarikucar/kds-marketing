@@ -30,7 +30,7 @@ const answers = {
   'GET /api/studio/materials/m1/intelligence': { material: suggested, intelligence: null },
   'GET /api/studio/materials/m1/preview': { url: '/material-test.jpg', expires_at: '2030-01-01T00:00:00Z' },
 };
-const open = () => renderAt('/studio?tab=materials&view=olays&material=m1');
+const open = () => renderAt('/materials?view=olays&material=m1');
 
 describe('Materyaller · Materyal', () => {
   it('preserves a hidden draft after another section saves and submits it at the refreshed revision', async () => {

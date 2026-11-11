@@ -37,6 +37,17 @@ async fn a_package_answers_a_request_and_the_week_shows_its_posts() {
     let f = jt_testkit::studio_contract::ready_in(&p.uow, ws, user).await;
     let now = OffsetDateTime::now_utc();
     jt_testkit::studio_contract::make_postable(&p.uow, &f, p.deps.seal.as_ref(), now).await;
+    // Without the content module the planner asks agents for posts (design 2026-11-10 B18);
+    // with it, the same trigger opens a production area instead.
+    let removed = p
+        .send(
+            axum::http::Method::DELETE,
+            "/api/workspace/modules/content",
+            Some(&owner),
+            None,
+        )
+        .await;
+    assert_eq!(removed.status(), StatusCode::OK);
     jt_app::usecases::studio::planner::plan(&p.deps, ws, now + Duration::minutes(31))
         .await
         .unwrap();

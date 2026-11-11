@@ -24,6 +24,17 @@ export interface ProjectOutput {
   slot_id: string | null;
 }
 export interface ProductionProject {
+  start_at?: string | null;
+  opened_by?: { kind: 'human' } | { kind: 'system'; trigger: 'olay' | 'calendar' | 'floor'; key: string };
+  hints?: { formats: PostFormat[]; capability_ids: string[] };
+  claim?: { agent: string; token: string; at: string; lease_until: string } | null;
+  progress?: { step: number; note: string; at: string } | null;
+  packages?: import('./content').ContentPackage[];
+  redo?: { note: string; by: string; at: string } | null;
+  refused?: number;
+  /** The delivery the checks last refused, while it is the area's open matter. */
+  refusal?: import('./content').RefusedDelivery | null;
+  state?: { state: import('./content').AreaState; step: number | null; note: string | null; starts_at: string };
   id: string;
   workspace_id: string;
   title: string;
@@ -54,8 +65,11 @@ export const projectsList = (archived = false, before?: string) =>
 export const projectGet = (id: string) => request<ProjectDetail>('GET', path(id));
 export const projectCreate = (body: {
   request_key: string;
-  title: string;
+  title?: string;
   brief: string;
+  start_at?: string;
+  formats?: PostFormat[];
+  capability_ids?: string[];
   material_ids?: string[];
 }) => request<ProductionProject>('POST', root, { body });
 export const projectUpdate = (

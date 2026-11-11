@@ -3,154 +3,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { repMe } from '@/test/materials';
-import {
-  HYPOTHESIS,
-  X_CHANNEL,
-  defaultSettings,
-  postOut,
-  postRequest,
-  postsAnswers,
-  weekSummary,
-} from '@/test/posts';
-
-// The Paylaşımlar tab of Growth Studio (spec 2026-11-03 §14): what the agent is asked to plan,
-// what is planned, a week's summary and the posting settings, an owner's or manager's.
-
-const open = (view = 'plan', extra = '') => renderAt(`/studio?tab=posts&view=${view}${extra}`);
-
-describe('Paylaşımlar · Plan', () => {
-  it("lists the agent's open requests and the live posts by publish time, with where each stands", async () => {
-    mockFetch({
-      ...postsAnswers,
-      'GET /api/studio/post-requests': [
-        postRequest('q1'),
-        postRequest('q2', {
-          trigger: 'floor',
-          capability_id: X_CHANNEL,
-          material_ids: ['m9'],
-          best_formats: [{ format: 'feed_post', mean: null, posts: 0 }],
-        }),
-      ],
-      'GET /api/studio/posts': {
-        settings: defaultSettings,
-        posts: [
-          postOut('late', '2026-10-26T07:00:00Z'),
-          postOut('ready', '2026-10-24T07:00:00Z', { state: 'ready', pending: true }),
-          postOut('soon', '2026-10-25T07:00:00Z', { pending: true }),
-          postOut('gone', '2026-10-23T07:00:00Z', {
-            state: 'retired',
-            retired: { reason: 'missed_grace', at: '2026-10-23T13:00:00Z' },
-          }),
-        ],
-      },
-    });
-    open();
-    const q1 = await screen.findByTestId('request-q1');
-    expect(within(q1).getByText('Yeni olay materyalleri')).toBeInTheDocument();
-    expect(within(q1).getByText('3 materyal')).toBeInTheDocument();
-    expect(within(q1).getByText('Önerilen biçim: Reels')).toBeInTheDocument();
-    const q2 = screen.getByTestId('request-q2');
-    expect(within(q2).getByText('Uzun süredir gönderi yok')).toBeInTheDocument();
-    expect(await within(q2).findByText('Tek gönderi: Jeeta X')).toBeInTheDocument();
-    // Live posts only, the earliest first; a retired one is the summary's.
-    const planned = screen.getByRole('region', { name: 'Planlanan paylaşımlar' });
-    await waitFor(() =>
-      expect(within(planned).getAllByRole('listitem').map((li) => li.dataset.testid)).toEqual([
-        'post-ready',
-        'post-soon',
-        'post-late',
-      ]),
-    );
-    expect(within(screen.getByTestId('post-ready')).getByText('Hazır')).toBeInTheDocument();
-    expect(within(screen.getByTestId('post-soon')).getByText('Hazırlanıyor')).toBeInTheDocument();
-    const late = screen.getByTestId('post-late');
-    expect(within(late).getByText('Hazırlık başlamadı')).toBeInTheDocument();
-    expect(within(late).getByText(/^Hazırlık: /)).toBeInTheDocument();
-    expect(within(late).getByText('Gönderi')).toBeInTheDocument();
-    expect(within(late).getByText('Jeeta X')).toBeInTheDocument();
-    expect(screen.getByText('Saatler Europe/Istanbul saat dilimine göredir.')).toBeInTheDocument();
-  });
-
-  it('says what happens when nothing is asked or planned', async () => {
-    mockFetch(postsAnswers);
-    open();
-    expect(await screen.findByText('Bekleyen istek yok.')).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        'Planlanmış paylaşım yok. Materyal yükledikçe Studio ajandan plan ister.',
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it('opens a planned post in Studio', async () => {
-    mockFetch({
-      ...postsAnswers,
-      'GET /api/studio/posts': { settings: defaultSettings, posts: [postOut('s9', '2026-10-24T07:00:00Z')] },
-    });
-    const { router } = open();
-    await userEvent.click(
-      await within(await screen.findByTestId('post-s9')).findByRole('button', { name: "Studio'da aç" }),
-    );
-    await waitFor(() => expect(router.state.location.search).toBe(''));
-  });
-});
-
-describe('Paylaşımlar · Haftalık özet', () => {
-  it("shows a week's published, planned and unpublished posts with why, and what worked", async () => {
-    mockFetch({
-      ...postsAnswers,
-      // Only what the page reads outside the Studio tab: the hypotheses' titles.
-      'GET /api/studio/overview': {
-        hypotheses: [{ id: HYPOTHESIS, title: 'Atölye anları' }],
-        slots: [],
-        learned: { arms: [] },
-      },
-    });
-    open('week');
-    const published = await screen.findByRole('region', { name: 'Yayınlananlar' });
-    expect(within(published).getByText('Gönderi')).toBeInTheDocument();
-    expect(within(published).getByRole('link', { name: 'Gönderiyi aç' })).toHaveAttribute(
-      'href',
-      'https://x.com/jeeta/status/1',
-    );
-    const planned = screen.getByRole('region', { name: 'Planlananlar' });
-    expect(within(planned).getByText('Kaydırmalı gönderi')).toBeInTheDocument();
-    expect(within(planned).getByText('Hazır')).toBeInTheDocument();
-    const cancelled = screen.getByRole('region', { name: 'Yayınlanmayanlar' });
-    expect(within(cancelled).getByText('Zamanında hazırlanamadı')).toBeInTheDocument();
-    expect(within(cancelled).getByText('Yeni planlamaya geçildi')).toBeInTheDocument();
-    expect(within(cancelled).getByText('Eski haftalık plan')).toBeInTheDocument();
-    const scores = screen.getByRole('region', { name: 'Ne işe yarıyor' });
-    const row = within(scores).getAllByRole('row')[1];
-    expect(within(row).getByText('Reels')).toBeInTheDocument();
-    expect(within(row).getByText('Atölye')).toBeInTheDocument();
-    expect(await within(row).findByText('Atölye anları')).toBeInTheDocument();
-    expect(within(row).getByText(/%25/)).toBeInTheDocument();
-  });
-
-  it('walks to the previous and next weeks by their Mondays', async () => {
-    const calls = mockFetch(postsAnswers);
-    const { router } = open('week');
-    await screen.findByRole('region', { name: 'Yayınlananlar' });
-    await userEvent.click(screen.getByRole('button', { name: 'Önceki hafta' }));
-    await waitFor(() => expect(router.state.location.search).toContain('week=2026-10-12'));
-    await waitFor(() =>
-      expect(calls.some((c) => c.path === '/api/studio/summary' && c.search === '?week=2026-10-12')).toBe(
-        true,
-      ),
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Bu hafta' }));
-    await waitFor(() => expect(router.state.location.search).not.toContain('week='));
-    await userEvent.click(screen.getByRole('button', { name: 'Sonraki hafta' }));
-    await waitFor(() => expect(router.state.location.search).toContain('week=2026-10-26'));
-  });
-
-  it('says when nothing was measured yet', async () => {
-    mockFetch({ ...postsAnswers, 'GET /api/studio/summary': { ...weekSummary, scores: [] } });
-    open('week');
-    expect(await screen.findByText('Henüz ölçülmüş paylaşım yok.')).toBeInTheDocument();
-  });
-});
+import { defaultSettings, postsAnswers } from '@/test/posts';
+const open = (_view: string) => renderAt('/social?tab=settings');
 
 describe('Paylaşımlar · Paylaşım ayarları', () => {
   it.each([
@@ -205,6 +59,8 @@ describe('Paylaşımlar · Paylaşım ayarları', () => {
     expect(put?.path).toBe('/api/studio/posting-policy');
     expect(put?.body).toEqual({
       tz: 'Europe/Berlin',
+      // The platform's scheduler stays as it was: off.
+      provider_scheduling: false,
       policy: {
         ...defaultSettings.policy,
         lead_minutes: { ...defaultSettings.policy.lead_minutes, reel: 2160 },

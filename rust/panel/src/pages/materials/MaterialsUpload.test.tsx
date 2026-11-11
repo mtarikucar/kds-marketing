@@ -38,7 +38,7 @@ const answers = {
 
 async function pickPhoto() {
   const user = userEvent.setup();
-  renderAt('/studio?tab=materials&view=upload');
+  renderAt('/materials?view=upload');
   const input = await screen.findByLabelText('Galeriden seç', { selector: 'input' });
   await user.upload(input, photo());
   await screen.findByText('Yüklendi');
@@ -220,7 +220,7 @@ describe('Materyaller · Yükle', () => {
   it('refuses a file type the store does not take before sending it', async () => {
     const calls = mockFetch(answers);
     const user = userEvent.setup({ applyAccept: false });
-    renderAt('/studio?tab=materials&view=upload');
+    renderAt('/materials?view=upload');
     const input = await screen.findByLabelText('Galeriden seç', { selector: 'input' });
     await user.upload(input, new File(['x'], 'foto.heic', { type: 'image/heic' }));
     expect(await screen.findByText('Kabul edilmedi')).toBeInTheDocument();

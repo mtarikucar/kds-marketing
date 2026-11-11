@@ -34,6 +34,8 @@ export interface PostingPolicy {
 export interface PostingSettings {
   policy: PostingPolicy;
   tz: string;
+  /** Leave a post with its platform's own scheduler where it has one (off unless switched on). */
+  provider_scheduling?: boolean;
 }
 
 export type RetirementReason =

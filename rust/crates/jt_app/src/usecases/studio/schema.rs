@@ -27,7 +27,6 @@ pub fn input(action: &str) -> Value {
         return object(properties, required);
     }
     let revision = json!({"type":"integer","minimum":0,"maximum":18446744073709551615_u64});
-    let lane = json!({"type":"string","enum":["organic","paid"]});
     let (properties, required) = match action {
         "adsets_list" => (
             json!({"capability_id":{"type":"string","format":"uuid"}}),
@@ -98,10 +97,6 @@ pub fn input(action: &str) -> Value {
         "brake" => (
             json!({"engaged":{"type":"boolean"},"lane":{"enum":["organic","paid",null]},"expected_revision":revision}),
             vec!["engaged", "expected_revision"],
-        ),
-        "policy_set" => (
-            json!({"lane":lane,"requires_human_approval":{"type":"boolean"},"expected_revision":revision}),
-            vec!["lane", "requires_human_approval", "expected_revision"],
         ),
         "approve" => (
             json!({"target":{"oneOf":[{"type":"object","additionalProperties":false,"required":["slot"],"properties":{"slot":{"type":"string","format":"uuid"}}},{"type":"object","additionalProperties":false,"required":["budget_move"],"properties":{"budget_move":{"type":"string","format":"uuid"}}}]},"expected_revision":revision}),

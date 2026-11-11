@@ -36,7 +36,7 @@ const detailAnswers = {
     expires_at: '2030-01-01T00:00:00Z',
   },
 };
-const open = () => renderAt('/studio?tab=materials&view=olays&material=source');
+const open = () => renderAt('/materials?view=olays&material=source');
 
 describe('Material intelligence workflow', () => {
   it('explains agent waiting and saves only the metadata fields manually changed', async () => {
@@ -99,7 +99,7 @@ describe('Material intelligence workflow', () => {
       'GET /api/studio/materials/other/preview': { url: '/team.webp', expires_at: '2030-01-01T00:00:00Z' },
     });
     const user = userEvent.setup();
-    const page = renderAt('/studio?tab=materials&view=library');
+    const page = renderAt('/materials?view=library');
     await screen.findByText('Kahve servisi');
     await user.selectOptions(screen.getByRole('combobox', { name: 'Grup' }), 'Ekip');
     expect(screen.getByText('Ekip fotoğrafı')).toBeVisible();

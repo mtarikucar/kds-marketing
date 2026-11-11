@@ -24,7 +24,7 @@ const ADSET_FIELDS: &str = "id,name,status,campaign_id,daily_budget,lifetime_bud
 const INSIGHT_FIELDS: &str = "campaign_id,campaign_name,spend,impressions,clicks,date_start";
 
 /// The user token of an ads credential.
-fn ads_token(cred: &Credential) -> Result<&str, ConnectorError> {
+pub(crate) fn ads_token(cred: &Credential) -> Result<&str, ConnectorError> {
     match MetaCred::of(cred, "manage ads")? {
         MetaCred::User { token } => Ok(token),
         _ => Err(ConnectorError::permanent(
@@ -34,7 +34,7 @@ fn ads_token(cred: &Credential) -> Result<&str, ConnectorError> {
 }
 
 /// `act_<number>` of the capability's ad account.
-fn act(public: &Value) -> Result<String, ConnectorError> {
+pub(crate) fn act(public: &Value) -> Result<String, ConnectorError> {
     let account = account_of(public).ok_or_else(|| {
         ConnectorError::permanent("the capability names no ad account (external_id)")
     })?;
@@ -260,7 +260,7 @@ pub(crate) async fn account_context(
     })
 }
 
-fn optional_counter(value: &Value) -> Result<Option<i64>, ConnectorError> {
+pub(crate) fn optional_counter(value: &Value) -> Result<Option<i64>, ConnectorError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -269,7 +269,7 @@ fn optional_counter(value: &Value) -> Result<Option<i64>, ConnectorError> {
         .map(Some)
         .ok_or_else(|| ConnectorError::permanent("invalid ad insight counter"))
 }
-fn optional_money(value: &Value, exponent: u8) -> Result<Option<i64>, ConnectorError> {
+pub(crate) fn optional_money(value: &Value, exponent: u8) -> Result<Option<i64>, ConnectorError> {
     if value.is_null() {
         return Ok(None);
     }

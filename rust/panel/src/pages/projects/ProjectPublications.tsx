@@ -1,3 +1,5 @@
+import { useSession } from '@/auth/useSession';
+import { can } from '@/lib/roles';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -7,7 +9,6 @@ import { listCapabilities } from '@/api/capabilities';
 import { getStrategy } from '@/api/strategy';
 import { POST_FORMATS, postsList, type PostFormat } from '@/api/posts';
 import type { CapabilityOut, Hypothesis } from '@/api/types';
-import { SlotEditor } from '../StudioToday';
 import { useStudioKey, contentTypeLabel } from '../StudioShared';
 import {
   MaterialsReadStatus,
@@ -344,6 +345,9 @@ export function ProjectPublications({
 }) {
   const { t, i18n } = useTranslation();
   const key = useStudioKey();
+  const session = useSession();
+  const canPublish = can(session.data, 'social.manage') && !detail.project.archived;
+  const canLink = can(session.data, 'social.work') && !detail.project.archived;
   const { project } = detail;
   const channels = useQuery({
     queryKey: [...key, 'project-channels'],
@@ -353,7 +357,6 @@ export function ProjectPublications({
   const hypotheses = strategy.data?.approved?.hypotheses ?? [];
   const [editing, setEditing] = useState<string | null>(null);
   const [scheduling, setScheduling] = useState<string | null>(null);
-  const [slotEditor, setSlotEditor] = useState<string | null>(null);
   const remove = useMaterialsMutation((id: string) =>
     api.projectUpdate(project.id, {
       expected_revision: project.revision,
@@ -424,7 +427,7 @@ export function ProjectPublications({
                 <div className="flex flex-wrap gap-2">
                   <button
                     className={primaryClass}
-                    disabled={!canSchedule}
+                    disabled={!canSchedule || !canPublish}
                     onClick={() => setScheduling(scheduling === output.id ? null : output.id)}
                   >
                     {t('projects.schedule')}
@@ -468,15 +471,14 @@ export function ProjectPublications({
                   onClose={() => setScheduling(null)}
                 />
               )}
-              {writable && !output.slot_id && (
+              {canLink && !output.slot_id && (
                 <ExistingPublication detail={detail} output={output} onLinked={() => setScheduling(null)} />
               )}
               {output.slot_id && (
                 <div className="flex flex-wrap gap-2">
                   <button
                     className={primaryClass}
-                    aria-expanded={slotEditor === output.slot_id}
-                    onClick={() => setSlotEditor(slotEditor === output.slot_id ? null : output.slot_id)}
+                    onClick={() => onOpenSlot(output.slot_id!)}
                   >
                     {t('projects.preparePublication')}
                   </button>
@@ -487,14 +489,6 @@ export function ProjectPublications({
               )}
               {publication?.slot.state === 'planned' && (
                 <p className="text-sm text-muted-foreground">{t('projects.plannedHelp')}</p>
-              )}
-              {slotEditor === output.slot_id && output.slot_id && (
-                <SlotEditor
-                  key={output.slot_id}
-                  id={output.slot_id}
-                  tiktok={output.format === 'tiktok_video'}
-                  close={() => setSlotEditor(null)}
-                />
               )}
             </article>
           );

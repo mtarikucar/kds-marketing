@@ -170,7 +170,10 @@ pub async fn material_production_list(
     ctx: &Ctx,
     q: MaterialProductionQuery,
 ) -> Result<Vec<MaterialProduction>, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_production_list",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     Ok(r.studio_productions()
         .list_productions()
         .await?
@@ -187,7 +190,10 @@ pub async fn material_production_request(
     ctx: &Ctx,
     i: MaterialProductionRequestInput,
 ) -> Result<MaterialProduction, AppError> {
-    let mut r = open(d, ctx).await?;
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_production_request",
+    ))?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     r.studio_control().lock_control().await?;
     let production = request_production_in(r.as_mut(), d, ctx, i).await?;
     r.commit().await?;
@@ -288,8 +294,11 @@ pub async fn material_production_claim(
     ctx: &Ctx,
     i: MaterialProductionClaimInput,
 ) -> Result<MaterialProductionClaimOut, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_production_claim",
+    ))?;
     let owner = agent(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     r.studio_control().lock_control().await?;
     let mut row = load(r.as_mut(), i.production_id, Some(i.expected_revision)).await?;
     if !row.claimable(ctx.now) {
@@ -331,8 +340,11 @@ pub async fn material_production_complete(
     ctx: &Ctx,
     i: MaterialProductionCompleteInput,
 ) -> Result<MaterialProduction, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_production_complete",
+    ))?;
     agent(ctx)?;
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     r.people().lock_workspace().await?;
     r.studio_control().lock_control().await?;
     let mut row = load(r.as_mut(), i.production_id, Some(i.expected_revision)).await?;
@@ -427,6 +439,9 @@ pub async fn material_production_fail(
     ctx: &Ctx,
     i: MaterialProductionFailInput,
 ) -> Result<MaterialProduction, AppError> {
+    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
+        "studio.material_production_fail",
+    ))?;
     agent(ctx)?;
     if i.error_code.is_empty()
         || i.error_code.len() > 64
@@ -440,7 +455,7 @@ pub async fn material_production_fail(
             json!({"field":"error_code"}),
         ));
     }
-    let mut r = open(d, ctx).await?;
+    let mut r = open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
     r.studio_control().lock_control().await?;
     let mut row = load(r.as_mut(), i.production_id, Some(i.expected_revision)).await?;
     owns(&row, ctx, &i.claim_token)?;

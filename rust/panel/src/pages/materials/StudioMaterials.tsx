@@ -1,41 +1,39 @@
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import * as m from '@/api/materials';
 import { MaterialsLibrary } from './MaterialsLibrary';
 import { MaterialEditor } from './MaterialEditor';
-import { MaterialsCalendar } from './MaterialsCalendar';
 import { MaterialsOlays } from './MaterialsOlays';
 import { MaterialsShoots } from './MaterialsShoots';
 import { MaterialsUpload } from './MaterialsUpload';
 import { useMaterialsKey } from './MaterialsShared';
 
-export const MATERIAL_VIEWS = ['upload', 'library', 'olays', 'calendar', 'shoots'] as const;
+export const MATERIAL_VIEWS = ['upload', 'library', 'olays', 'shoots'] as const;
 export type MaterialView = (typeof MATERIAL_VIEWS)[number];
 
-/** Where the Materyaller tab is: its view and, in Olaylar, an olay or a material; in Takvim, a year. */
+/** A library view and an optional olay or material detail. */
 export function materialsHref(view: MaterialView, extra: Record<string, string> = {}): string {
-  return `/studio?${new URLSearchParams({ tab: 'materials', view, ...extra }).toString()}`;
+  return `/materials?${new URLSearchParams({ view, ...extra }).toString()}`;
 }
 
 /**
- * The Materyaller tab of Growth Studio (spec §10): Yükle, Olaylar (with an olay's and a
- * material's detail), Takvim and Çekim listesi. Where it is lives in the address, so the phone's
+ * The material library: uploads, library, events and shoots. Its location lives in the address, so the phone's
  * back button walks back through it and Today links straight into it.
  */
 export function StudioMaterials({ onOpenSlot }: { onOpenSlot: (id: string) => void }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const raw = params.get('view');
   const view: MaterialView = (MATERIAL_VIEWS as readonly string[]).includes(raw ?? '')
     ? (raw as MaterialView)
     : 'upload';
   const go = (next: MaterialView, extra: Record<string, string> = {}) =>
-    setParams({ tab: 'materials', view: next, ...extra });
+    setParams({ view: next, ...extra });
   const olay = params.get('olay') ?? undefined;
   const material = params.get('material') ?? undefined;
-  const year = Number(params.get('year')) || Number(m.istanbulDay(new Date()).slice(0, 4));
   // The count on the Çekim listesi button: what waits to be shot or uploaded.
   const shoots = useQuery({ queryKey: [...key, 'shoots', 'open'], queryFn: () => m.shootList('open') });
   const openOlay = (id: string | null) => go('olays', id ? { olay: id } : {});
@@ -88,13 +86,10 @@ export function StudioMaterials({ onOpenSlot }: { onOpenSlot: (id: string) => vo
             onUpload={(id) => go('upload', { olay: id })}
           />
         ))}
-      {view === 'calendar' && (
-        <MaterialsCalendar year={year} onYear={(y) => go('calendar', { year: String(y) })} />
-      )}
       {view === 'shoots' && (
         <MaterialsShoots
           onOpenOlay={(id) => openOlay(id)}
-          onOpenCalendar={(y) => go('calendar', { year: String(y) })}
+          onOpenCalendar={(y) => navigate(`/content?tab=calendar&year=${y}`)}
         />
       )}
     </div>

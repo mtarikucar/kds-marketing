@@ -109,6 +109,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
   const [invalid, setInvalid] = useState(false);
   const [saved, setSaved] = useState(false);
   const [group, setGroup] = useState<SettingGroup>('formats');
+  const [providerScheduling, setProviderScheduling] = useState(settings.provider_scheduling === true);
   const save = useMaterialsMutation(
     (s: p.PostingSettings) => p.postingPolicySet(s),
     () => setSaved(true),
@@ -143,7 +144,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
         if (!decider || save.isPending) return;
         const next = settingsOf(draft, settings, setGroup);
         setInvalid(next === null);
-        if (next) save.mutate(next);
+        if (next) save.mutate({ ...next, provider_scheduling: providerScheduling });
       }}
     >
       <h3 className="font-semibold">{t('posts.settings.title')}</h3>
@@ -227,6 +228,19 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
           </datalist>
         </label>
       </div>
+      <label className="mt-4 flex min-h-11 items-start gap-3 text-sm">
+        <input
+          type="checkbox"
+          className="mt-1 h-4 w-4 shrink-0"
+          checked={providerScheduling}
+          disabled={!decider}
+          onChange={(e) => { setSaved(false); setProviderScheduling(e.target.checked); }}
+        />
+        <span className="min-w-0">
+          <span className="block">{t('posts.settings.providerScheduling')}</span>
+          <span className="block text-xs text-muted-foreground">{t('posts.settings.providerSchedulingHelp')}</span>
+        </span>
+      </label>
       </div>
       {invalid && (
         <p role="alert" className="text-sm text-danger">
@@ -263,7 +277,7 @@ function SettingsForm({ settings, decider }: { settings: p.PostingSettings; deci
  */
 export function PostsSettings() {
   const posts = usePosts();
-  const decider = useDecider();
+  const decider = useDecider('social.work');
   const settings = posts.data?.settings;
   return (
     <div data-testid="posts-settings">

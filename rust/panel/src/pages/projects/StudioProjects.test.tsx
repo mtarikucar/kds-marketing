@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt, withStatus, type FetchRoutes } from '@/test/render';
+import { mockFetch, withStatus, type FetchRoutes } from '@/test/render';
+import { renderLegacyProjects as renderAt } from '@/test/legacyProjects';
 import { material, materialsAnswers, repMe } from '@/test/materials';
 import tr from '@/i18n/tr.json';
 
@@ -32,11 +33,11 @@ function answers(extra: FetchRoutes = {}): FetchRoutes {
     ...extra,
   };
 }
-const path = (view = '') => `/studio?tab=projects&project=p1${view ? `&projectView=${view}` : ''}`;
+const path = (view = '') => `/content?tab=projects&project=p1${view ? `&projectView=${view}` : ''}`;
 
 it('creates and navigates into a project before a strategy exists without reading gated overview', async () => {
   const calls = mockFetch(answers({ 'POST /api/studio/projects': project }));
-  const { router } = renderAt('/studio?tab=projects');
+  const { router } = renderAt('/content?tab=projects');
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: p.create }));
   await user.type(screen.getByLabelText(p.title), 'Lansman');
@@ -173,7 +174,7 @@ it('retains an edited brief after a revision conflict and never silently overwri
 
 it('does not offer project mutations to a studio reader', async () => {
   mockFetch(answers({ 'GET /api/auth/me': repMe }));
-  renderAt('/studio?tab=projects');
+  renderAt('/content?tab=projects');
   await screen.findByTestId('studio-projects');
   expect(screen.queryByRole('button', { name: p.create })).not.toBeInTheDocument();
 });
@@ -233,7 +234,7 @@ it('schedules selected project materials through the canonical posting bridge', 
   );
 });
 
-it('prepares a real scheduled piece without leaving the production workspace', async () => {
+it('opens a scheduled piece on the social accounts screen without a human editor', async () => {
   const slot = {
     id: 's1',
     chain: { workspace_id: 'w', born_version_id: 'v1', hypothesis_id: 'h1', arm_id: 'a1' },
@@ -280,19 +281,11 @@ it('prepares a real scheduled piece without leaving the production workspace', a
   const { router } = renderAt(path('publications'));
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: p.preparePublication }));
-  const editor = await screen.findByTestId('slot-detail');
-  await user.type(await within(editor).findByLabelText('İçerik metni'), 'Yeni ürünümüzle tanışın.');
-  await user.click(await within(editor).findByRole('checkbox', { name: /Yeni ürün/ }));
-  await user.click(within(editor).getByRole('button', { name: 'İçeriği teslim et' }));
-  await waitFor(() =>
-    expect(calls.find((c) => c.path.endsWith('/piece'))?.body).toMatchObject({
-      expected_revision: 7,
-      text: 'Yeni ürünümüzle tanışın.',
-      media: [{ kind: 'file', id: 'file-m1' }],
-      subject: { kind: 'generic' },
-    }),
-  );
-  expect(router.state.location.search).toBe('?tab=projects&project=p1&projectView=publications');
+  expect(await screen.findByRole('tab', { name: 'Hesaplar' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.queryByLabelText('İçerik metni')).not.toBeInTheDocument();
+  expect(calls.some(call => call.method === 'POST' && call.path.endsWith('/piece'))).toBe(false);
+  expect(router.state.location.pathname).toBe('/social');
+  expect(router.state.location.search).toBe('?slot=s1');
 });
 
 it('retries project attachment after upload without duplicating the library material request', async () => {

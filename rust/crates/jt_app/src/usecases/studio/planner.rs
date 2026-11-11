@@ -7,11 +7,15 @@
 //! - retires each planned post not sent by the end of its grace (`missed_grace`, D28, D46);
 //! - expires the package requests nobody answered within seven days;
 //! - with an approved strategy, keeps the paid lane's weekly positions as they were (D13, D33);
-//! - unless the organic lane is braked, runs the three triggers that ask agents for packages,
-//!   for the channels a live hypothesis can post on: an olay's new eligible materials, 30 minutes
-//!   after their last change (D24); an occasion within its lead (D25); a channel without a feed
-//!   post for `floor_days` (D26). With nothing eligible, the calendar and floor triggers add a
-//!   çekim listesi item instead; the system's items close themselves once their condition holds.
+//! - unless a person braked the organic lane, runs the three triggers: an olay's new eligible
+//!   materials, 30 minutes after their last change (D24); an occasion within its lead (D25); a
+//!   channel without a feed post for `floor_days` (D26). With nothing eligible, the calendar and
+//!   floor triggers add a çekim listesi item instead; the system's items close themselves once
+//!   their condition holds. What a trigger writes depends on the installed modules (design
+//!   2026-11-10 §6.3): with the content module it opens a production area, whose agent makes the
+//!   content (the olay and calendar triggers also without a channel or the social module); without
+//!   it, and with the social module, it asks agents for a package of posts as before, for the
+//!   channels a live hypothesis can post on. The floor trigger needs the social module.
 //!
 //! No provider I/O or agent wake-up.
 use super::chain::{active, capability_access};
@@ -19,14 +23,16 @@ use super::posts::{self as post_rules, Channel};
 use crate::{
     ctx::Ctx,
     error::AppError,
+    ports::production_projects::{AreaHints, AreaTrigger, OpenedBy},
     ports::{
         CapabilityFilter, TenantRepos,
         materials::{ShootReason, ShootRequest, ShootRequestId, ShootStatus},
         posts::{PackageHints, PackageRequest, PackageRequestId, PackageStatus, PackageTrigger},
         studio::SlotQuery,
     },
-    usecases::{Deps, ledger_entry},
+    usecases::{Deps, content, ledger_entry, modules},
 };
+use jt_capability::CapabilityId;
 use jt_ledger::Actor;
 use jt_strategy::{LaneKind, StrategyVersion};
 use jt_studio::*;
@@ -301,13 +307,39 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
         return Ok(changed);
     };
     changed += plan_paid(d, r.as_mut(), &ctx, &frame, &slots, &control).await?;
-    if !control.is_braked(LaneKind::Organic) {
+    // A person's brake stops the triggers; a removed social module stops only what needs it.
+    let registry = r.workspace().module_registry().await?;
+    let areas = modules::installed_in(registry.as_ref(), modules::CONTENT)?;
+    let social = modules::installed_in(registry.as_ref(), modules::SOCIAL)?;
+    if !control.brake_engaged_for(LaneKind::Organic) && (areas || social) {
+        // The channels a floor area is being made for: none asks for a second one.
+        let mut floor_areas = BTreeSet::new();
+        if areas {
+            let mut live = r.studio_projects().list_areas(false, None).await?;
+            live.extend(r.studio_projects().list_areas_waiting().await?);
+            for p in live {
+                if matches!(
+                    p.opened_by,
+                    OpenedBy::System {
+                        trigger: AreaTrigger::Floor,
+                        ..
+                    }
+                ) {
+                    floor_areas.extend(p.hints.capability_ids.iter().copied());
+                }
+            }
+        }
+        let ai_standalone = r.studio_materials().material_policy().await?.ai_standalone;
         let mut t = Triggers {
             d,
             ctx: &ctx,
             frame: &frame,
             requests,
             changed: 0,
+            areas,
+            social,
+            floor_areas,
+            ai_standalone,
         };
         t.run(r.as_mut(), &slots, &posts).await?;
         changed += t.changed;
@@ -480,6 +512,17 @@ async fn plan_paid(
     Ok(count)
 }
 
+/// The goal sentence of an area opened because an account went quiet.
+fn quiet_goal(account: &str, last: Option<OffsetDateTime>, now: OffsetDateTime) -> String {
+    match last {
+        Some(at) => format!(
+            "{account} hesabında {} gündür paylaşım yok; yeni bir paylaşım hazırla",
+            (now - at).whole_days().max(1)
+        ),
+        None => format!("{account} hesabında henüz paylaşım yok; ilk paylaşımı hazırla"),
+    }
+}
+
 /// The three triggers of one run (D23–D26).
 struct Triggers<'a> {
     d: &'a Deps,
@@ -488,6 +531,14 @@ struct Triggers<'a> {
     /// Every package request, the run's own included as it adds them.
     requests: Vec<PackageRequest>,
     changed: u64,
+    /// The content module is installed: a trigger opens a production area.
+    areas: bool,
+    /// The social module is installed: posts can be planned, and a quiet channel matters.
+    social: bool,
+    /// The channels a system-opened floor area is still being made or scheduled for.
+    floor_areas: BTreeSet<CapabilityId>,
+    /// The materials policy lets an agent's own visual stand alone (design B39).
+    ai_standalone: bool,
 }
 
 impl Triggers<'_> {
@@ -512,11 +563,14 @@ impl Triggers<'_> {
         let policy = settings.policy;
         let outcomes = post_rules::outcomes(r, posts, &lib.olays).await?;
         let mut shoots = r.studio_materials().list_shoot_requests().await?;
-        if !channels.is_empty() {
+        let posting = self.social && !channels.is_empty();
+        if self.areas || posting {
             // The calendar first: within an occasion's lead its olay's materials are its.
             self.calendar(r, &lib, &materials, &outcomes, &policy, &mut shoots)
                 .await?;
             self.olays(r, &lib, &materials, &outcomes, &policy).await?;
+        }
+        if posting {
             self.floor(
                 r,
                 &lib,
@@ -534,8 +588,20 @@ impl Triggers<'_> {
             .await
     }
 
-    /// Stores `q` unless its key is taken, with its ledger entry.
-    async fn open(&mut self, r: &mut dyn TenantRepos, q: PackageRequest) -> Result<(), AppError> {
+    /// Stores `q` unless its key is taken, with its ledger entry. With the content module the
+    /// request's work is a production area's, opened here with `goal` as its goal sentence
+    /// (design 2026-11-10 §6.3): the request is kept, answered at once, as the record of which
+    /// materials were asked for, so that nobody is asked for posts and nothing is asked twice.
+    async fn open(
+        &mut self,
+        r: &mut dyn TenantRepos,
+        mut q: PackageRequest,
+        goal: String,
+    ) -> Result<(), AppError> {
+        if self.areas {
+            q.status = PackageStatus::Answered;
+            q.answered_at = Some(self.ctx.now);
+        }
         if !r.studio_posts().insert_package_request(q.clone()).await? {
             return Ok(());
         }
@@ -550,8 +616,53 @@ impl Triggers<'_> {
         )?;
         e.strategy_version_id = Some(self.frame.id.0);
         r.ledger().append(e).await?;
+        if self.areas {
+            let trigger = match q.trigger {
+                PackageTrigger::Olay => AreaTrigger::Olay,
+                PackageTrigger::Calendar => AreaTrigger::Calendar,
+                PackageTrigger::Floor | PackageTrigger::Project => AreaTrigger::Floor,
+            };
+            let hints = AreaHints {
+                formats: q.best_formats.iter().map(|f| f.format).take(3).collect(),
+                capability_ids: q.capability_id.into_iter().collect(),
+            };
+            self.area(r, trigger, &q.key, &goal, &q.material_ids, hints)
+                .await?;
+        }
         self.requests.push(q);
         self.changed += 1;
+        Ok(())
+    }
+
+    /// Opens the production area of trigger key `key`, once.
+    async fn area(
+        &mut self,
+        r: &mut dyn TenantRepos,
+        trigger: AreaTrigger,
+        key: &str,
+        goal: &str,
+        sources: &[MaterialId],
+        hints: AreaHints,
+    ) -> Result<(), AppError> {
+        let floor = trigger == AreaTrigger::Floor;
+        let channels = hints.capability_ids.clone();
+        let (_, created) = content::open_by_system(
+            r,
+            self.ctx,
+            trigger,
+            key,
+            goal,
+            sources,
+            self.ctx.now,
+            hints,
+        )
+        .await?;
+        if floor {
+            self.floor_areas.extend(channels);
+        }
+        if created {
+            self.changed += 1;
+        }
         Ok(())
     }
 
@@ -707,7 +818,11 @@ impl Triggers<'_> {
             q.material_ids = ids;
             q.best_formats = format_scores(outcomes, Some(o.kind));
             q.hints.subject = Some(subject);
-            self.open(r, q).await?;
+            let goal = format!(
+                "“{}” olayının yeni materyallerinden paylaşım hazırla",
+                o.title
+            );
+            self.open(r, q, goal).await?;
         }
         Ok(())
     }
@@ -764,7 +879,8 @@ impl Triggers<'_> {
                     q.hints.subject = Some(Subject::Olay { olay_id: o.id });
                     q.hints.window_start = Some(start);
                     q.hints.window_end = Some(end);
-                    self.open(r, q).await?;
+                    self.open(r, q, format!("{} için paylaşım hazırla", entry.name))
+                        .await?;
                 }
                 // Material waits for the window to come within the horizon.
                 Some(_) => {}
@@ -847,7 +963,9 @@ impl Triggers<'_> {
                         .get(&p.slot_id)
                         .is_some_and(|s| matches!(s, SlotState::Planned | SlotState::Ready))
             });
-            if pending_request || pending_post {
+            // A production area opened for the channel is still being made or waits for a time.
+            let pending_area = self.floor_areas.contains(&ch.capability.id);
+            if pending_request || pending_post || pending_area {
                 continue;
             }
             let Some(choice) = post_rules::best_option(&ch.options, &arms, kind) else {
@@ -874,7 +992,20 @@ impl Triggers<'_> {
                         content_type: Some(choice.content_type.clone()),
                         ..Default::default()
                     };
-                    self.open(r, q).await?;
+                    self.open(r, q, quiet_goal(&ch.capability.name, last, now))
+                        .await?;
+                }
+                // No generic material, but the agent may make the visual itself (design B39):
+                // an area with no source, and nobody is asked to shoot.
+                None if self.areas && self.ai_standalone => {
+                    let key = floor_package_key(ch.capability.id, post_rules::local_day(tz, now));
+                    let hints = AreaHints {
+                        formats: feed.iter().copied().take(3).collect(),
+                        capability_ids: vec![ch.capability.id],
+                    };
+                    let goal = quiet_goal(&ch.capability.name, last, now);
+                    self.area(r, AreaTrigger::Floor, &key, &goal, &[], hints)
+                        .await?;
                 }
                 None => {
                     let week = post_rules::monday(istanbul_day(now));

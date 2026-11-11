@@ -15,7 +15,7 @@ import { EmptyNote, MaterialChoice, OpenMaterial, ProjectError, useRequestKey } 
 export function ProjectProduction({ detail, writable }: { detail: api.ProjectDetail; writable: boolean }) {
   const { t } = useTranslation();
   const { project, materials, productions } = detail;
-  const decider = useDecider();
+  const decider = useDecider('content.manage');
   const [creating, setCreating] = useState(false);
   const [revision, setRevision] = useState(project.revision);
   const [kind, setKind] = useState<MaterialProductionKind>('crop');
