@@ -20,17 +20,17 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 80); do
-            gh api repos/mtarikucar/kds-marketing/actions/runs/42790342595 > "$RUNNER_TEMP/candidate-run.json"
+            gh api repos/mtarikucar/kds-marketing/actions/runs/42957581297 > "$RUNNER_TEMP/candidate-run.json"
             python3 - "$RUNNER_TEMP/candidate-run.json" <<'PY'
           import json,sys
           r=json.load(open(sys.argv[1]))
-          assert r['head_sha']=='afe69bd490dd0555e403b6c2e165d8684839a87a'
+          assert r['head_sha']=='7891020bb3f88c4db0b52185213d26465d6db1ac'
           assert r['event']=='push' and r['path']=='.github/workflows/rust.yml'
           print('Candidate CI:',r['status'],r['conclusion'])
           PY
             if test "$(jq -r .status "$RUNNER_TEMP/candidate-run.json")" = completed; then
               test "$(jq -r .conclusion "$RUNNER_TEMP/candidate-run.json")" = success
-              gh api 'repos/mtarikucar/kds-marketing/actions/runs/42790342595/jobs?per_page=100' > "$RUNNER_TEMP/candidate-jobs.json"
+              gh api 'repos/mtarikucar/kds-marketing/actions/runs/42957581297/jobs?per_page=100' > "$RUNNER_TEMP/candidate-jobs.json"
               python3 - "$RUNNER_TEMP/candidate-jobs.json" <<'PY'
           import json,sys
           jobs=json.load(open(sys.argv[1]))['jobs']
@@ -53,16 +53,16 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: '13751363542'
-          run-id: '42790342595'
+          artifact-ids: '13828310895'
+          run-id: '42957581297'
           github-token: ${{ github.token }}
           path: candidate
           merge-multiple: true
       - name: Verify the reviewed archive and operator script
         run: |
           set -euo pipefail
-          printf '%s  %s\n' 2a2f137cc4a2850c3861d537fdaee976513eb8f1a4ed7a597dc7a7854b1259e0 candidate/jeeta-release.tar | sha256sum --check --status
-          printf '%s  %s\n' 487b99f4fbd1340616f8493ecc4f6eea7e4bd459053139eb89b64bd8ac4baeca ops/publish-release.sh | sha256sum --check --status
+          printf '%s  %s\n' 22726f19af1630b576de6a2ba25acc79e80d73198799fa04963ab3b1821a711c candidate/jeeta-release.tar | sha256sum --check --status
+          printf '%s  %s\n' 57515fa07dbf0e0a253c5eb1f6ff8415dc6294814618dd5d6071b207b89417ae ops/publish-release.sh | sha256sum --check --status
           bash -n ops/publish-release.sh
           chmod 0600 candidate/jeeta-release.tar
       - uses: ./.github/actions/setup-ssh
@@ -73,18 +73,18 @@ jobs:
       - name: Transfer the verified complete candidate
         run: |
           set -euo pipefail
-          scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-afe69bd4.tar
-          ssh -o BatchMode=yes root@38.242.233.166 'chmod 0600 /root/jeeta-release-afe69bd4.tar'
+          scp -o BatchMode=yes candidate/jeeta-release.tar root@38.242.233.166:/root/jeeta-release-7891020b.tar
+          ssh -o BatchMode=yes root@38.242.233.166 'chmod 0600 /root/jeeta-release-7891020b.tar'
       - name: Verify backup restoration and migration before staging swap
         run: |
           ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=8 root@38.242.233.166 \
-            'bash -s -- staging afe69bd490dd0555e403b6c2e165d8684839a87a 2a2f137cc4a2850c3861d537fdaee976513eb8f1a4ed7a597dc7a7854b1259e0' < ops/publish-release.sh
+            'bash -s -- staging 7891020bb3f88c4db0b52185213d26465d6db1ac 22726f19af1630b576de6a2ba25acc79e80d73198799fa04963ab3b1821a711c' < ops/publish-release.sh
       - name: Read nonsecret publication receipt
         run: |
-          ssh -o BatchMode=yes root@38.242.233.166 'cat /var/backups/jeeta-release/promotions/afe69bd490dd0555e403b6c2e165d8684839a87a.staging.json' > staging-receipt.json
+          ssh -o BatchMode=yes root@38.242.233.166 'cat /var/backups/jeeta-release/promotions/7891020bb3f88c4db0b52185213d26465d6db1ac.staging.json' > staging-receipt.json
           cat staging-receipt.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: jeeta-staging-afe69bd4-receipt
+          name: jeeta-staging-7891020b-receipt
           path: staging-receipt.json
           retention-days: 14
