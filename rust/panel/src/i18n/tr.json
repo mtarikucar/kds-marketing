@@ -94,6 +94,9 @@
     "refusalTitle": "Ajanın son planı geri çevrildi ({{n}}/3)",
     "findings": {
       "not_a_usable_ad_account": "Reklam hesabı kullanılamıyor: bağlı ve doğrulanmış bir reklam hesabı gerekli.",
+      "credential_scope_missing": "Reklam hesabının bağlantısında reklam oluşturma izni yok ({{needs}}). Hesabı Yetenekler ve bağlantılar'dan yeniden bağlayın ve izin ekranında bu izni verin.",
+      "capability_unavailable": "Reklam hesabının bağlantısı şu an kullanılamıyor: doğrulanmamış ya da yeniden bağlanması gerekiyor.",
+      "access_expired": "Reklam hesabının bağlantısının süresi dolmuş; hesabı yeniden bağlayın.",
       "account_unreadable": "Reklam hesabı okunamadı; bağlantısını yenileyin.",
       "not_the_campaigns_account": "Plan, bu reklam kampanyası için seçtiğiniz reklam hesabını kullanmıyor.",
       "currency_mismatch": "Reklam hesabının para birimi ({{account}}) genel reklam bütçesininkinden ({{budget}}) farklı.",

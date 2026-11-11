@@ -189,6 +189,9 @@ function StateNote({ campaign: c }: { campaign: Campaign }) {
 /** The findings a person can do something about; any other is the agent's to fix. */
 const PERSON_FINDINGS = [
   'not_a_usable_ad_account',
+  'credential_scope_missing',
+  'capability_unavailable',
+  'access_expired',
   'account_unreadable',
   'not_the_campaigns_account',
   'currency_mismatch',
@@ -215,6 +218,7 @@ function PlanRefusal({ campaign: c }: { campaign: Campaign }) {
                       typeof f.least === 'number' ? formatMoney(f.least, c.currency, i18n.language) : '—',
                     account: f.account_currency ?? '—',
                     budget: f.budget_currency ?? '—',
+                    needs: f.needs?.join(', ') ?? '—',
                   })
                 : t('adCampaigns.findings.other', { field: f.field })}
             </li>

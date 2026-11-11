@@ -157,35 +157,75 @@ async fn a_text_and_link_post_is_left_unpublished_with_its_time() {
 }
 
 #[tokio::test]
-async fn a_single_photo_post_is_left_unpublished_and_must_name_its_post() {
+async fn a_single_photo_post_is_uploaded_unpublished_and_scheduled_on_the_feed() {
     let r = rig().await;
     let (cred, public) = page();
     let at = datetime!(2026-10-24 10:00 UTC);
-    r.mock.set(
-        "POST",
-        "/fb/v19.0/123/photos",
-        ok(json!({"id":"777","post_id":"123_456"})),
-    );
+    r.mock
+        .set("POST", "/fb/v19.0/123/photos", ok(json!({"id":"777"})));
+    r.mock
+        .set("POST", "/fb/v19.0/123/feed", ok(json!({"id":"123_456"})));
     let receipt = r
         .meta
         .schedule(&cred, &public, &photo("image/jpeg"), at)
         .await
         .unwrap();
     assert_eq!(receipt, scheduled_post());
+    // The photo carries no time of its own: scheduled on the photos edge, Meta answers without
+    // the post's id (seen on a real Page), and the post could be neither read nor taken back.
+    let upload = r.mock.request("POST", "/fb/v19.0/123/photos");
+    assert_graph_auth(&upload, "test");
     assert_eq!(
-        r.mock.request("POST", "/fb/v19.0/123/photos").json(),
-        json!({"url":"https://files.example/a","caption":"hello","published":false,
-               "scheduled_publish_time":at.unix_timestamp()})
+        upload.json(),
+        json!({"url":"https://files.example/a","published":false,"temporary":true})
     );
-    // Without the post's id the scheduled post could be neither read nor taken back: unknown.
-    r.mock
-        .set("POST", "/fb/v19.0/123/photos", ok(json!({"id":"777"})));
+    assert_eq!(
+        r.mock.request("POST", "/fb/v19.0/123/feed").json(),
+        json!({"message":"hello","attached_media":[{"media_fbid":"777"}],"published":false,
+               "scheduled_publish_time":at.unix_timestamp(),
+               "unpublished_content_type":"SCHEDULED"})
+    );
+    // A feed answer without the post's id: a post may be scheduled that nobody can follow.
+    r.mock.set("POST", "/fb/v19.0/123/feed", ok(json!({})));
     let e = r
         .meta
         .schedule(&cred, &public, &photo("image/jpeg"), at)
         .await
         .unwrap_err();
     assert_eq!(e.kind(), "unknown");
+}
+
+#[tokio::test]
+async fn a_photo_upload_that_fails_schedules_nothing_and_is_never_unknown() {
+    let r = rig().await;
+    let (cred, public) = page();
+    let at = datetime!(2026-10-24 10:00 UTC);
+    r.mock
+        .set("POST", "/fb/v19.0/123/feed", ok(json!({"id":"123_456"})));
+    for (answer, kind) in [
+        (ok(json!({})), "permanent"),
+        (ok(json!({"id":"../x"})), "permanent"),
+        (raw(502, "bad gateway"), "transient"),
+        (
+            status(
+                400,
+                json!({"error":{"message":"(#100) Invalid url","type":"OAuthException","code":100}}),
+            ),
+            "permanent",
+        ),
+    ] {
+        r.mock.set("POST", "/fb/v19.0/123/photos", answer);
+        let e = r
+            .meta
+            .schedule(&cred, &public, &photo("image/jpeg"), at)
+            .await
+            .unwrap_err();
+        assert_eq!(e.kind(), kind, "{e}");
+    }
+    assert!(
+        r.mock.requests("POST", "/fb/v19.0/123/feed").is_empty(),
+        "no post is scheduled without its photo"
+    );
 }
 
 #[tokio::test]

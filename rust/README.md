@@ -1197,7 +1197,9 @@ saat), **varsayılan kapalı**: kapalıyken her paylaşımı saatinde Jeeta gön
 tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına bırakılır.
 
 - **Hangi paylaşım.** Bugün yalnızca Facebook Sayfası: metin, bağlantı ve tek görselli gönderi
-  (`jt_meta::schedule`; 15 dakika ile 29 gün arası önceden). Hikâye, video, çoklu görsel ve başka her
+  (`jt_meta::schedule`; 15 dakika ile 29 gün arası önceden). Tek görselli gönderi iki çağrıyla
+  bırakılır (B56): görsel geçici ve yayımlanmamış yüklenir, gönderi `/feed` üzerinde
+  `attached_media` ile zamanlanır; yükleme başarısız olursa hiçbir şey zamanlanmaz. Hikâye, video, çoklu görsel ve başka her
   platform Jeeta'da kalır (`Publisher::schedule_window` → `None`).
 - **Nasıl.** Bırakma, yuvanın tek yayın denemesidir, erken yapılır (`publish::hold_ahead`,
   `claim_publication_held`): gönderimle aynı yetki, aynı talep çiti, aynı harcama rezervasyonu;
@@ -1220,10 +1222,17 @@ tutabiliyorsa hazır paylaşım saatinden önce platformun zamanlayıcısına b�
   silinmez). Platformun reddettiği geri çekme bilinmeyen sonuç olarak kaydedilir
   (`studio.publish.withdraw_unconfirmed`) ve yuva bir daha gönderilmez; geçici hata bir sonraki
   dakikada yeniden denenir.
-- **Doğrulanmadı.** Facebook çağrıları belgelenmiş biçimlerle yazıldı ve sahte Graph sunucusuna karşı
-  sınandı; gerçek bir Sayfa'da çalıştırılmadı. Belgeler tek görselli zamanlamanın yanıtını ve
-  zamanlanmış gönderinin silinmesini her uygulamaya açık olarak garanti etmiyor. Ayar bu yüzden
-  kapalı gelir; açmadan önce kendi Sayfa'nda bir paylaşımın zamanlandığını ve geri çekildiğini gör.
+- **Gerçek Sayfada ilk deneme (2026-11-11).** Tek görselli bir gönderi sahibin kendi Sayfasına
+  bırakıldı: eski tek çağrılı yolu (`/photos` + `scheduled_publish_time`) Facebook kabul etti ama
+  yanıtta gönderi kimliği yoktu; sonuç "bilinmeyen" kaydedildi ve Facebook'ta izlenemeyen bir
+  zamanlanmış gönderi kalmış olabilir. Bırakma bu yüzden iki çağrılı yola çevrildi (B56). Yeni yol,
+  metin gönderisi, durum okuma ve geri çekme sahte Graph sunucusuna karşı sınandı; gerçek Sayfada
+  henüz çalıştırılmadı. Ayar bu yüzden kapalı gelir; açmadan önce kendi Sayfa'nda bir paylaşımın
+  zamanlandığını ve geri çekildiğini gör.
+- **Saat değiştirme (B57).** Ajan, bir içerik sürümünün planlanmış paylaşımını hiçbir şey
+  gönderilmeden iptal ederse (`studio.slot_cancel`) sürüm yeniden saat bekler ve
+  `social.version_schedule` ona yeni saat verir. İnsanın iptali paylaşmama kararıdır; denenmiş
+  (sonucu bilinmeyen dahil) paylaşım yeniden sunulmaz.
 
 **Bir sürümün yolu hiç kapanmaz (B53).** Paylaşım motoru yalnızca organik sıklığı
 (`hypotheses[n].cadence.organic`, haftada sıfırdan çok paylaşım ve en az bir içerik türü) olan bir
@@ -1319,7 +1328,8 @@ bütçeyi kampanyanın ömür boyu bütçesi olarak alır: Jeeta ne yaparsa yaps
 24 saat–90 gün sonra), 1–6 reklam (tek görsel, metinler, eylem çağrısı, Facebook Sayfası). Biçimi bozuk
 plan `VALIDATION` döner ve ret sayılmaz. Kural bozan plan bütün bulgularıyla reddedilir
 (`409 plan_refused`): özel reklam kategorisi (B33), AB ülkesi (`eu_targeting_needs_payer`), canlı
-olmayan hesap ya da sayfa, hesabın para birimi bütçeninkinden farklı (B24), bütçe hesabın en düşük
+olmayan hesap ya da sayfa (çalışma alanının reklam hesabına yazılamıyorsa nedeni söylenir, B58:
+`credential_scope_missing` ve gereken izin `needs`, `capability_unavailable`, `access_expired`), hesabın para birimi bütçeninkinden farklı (B24), bütçe hesabın en düşük
 günlük bütçesi × gün sayısının altında, gelen kutusu kurulu değilken form (B25), onaylı stratejide
 olmayan hipotez, canlı ve paylaşılabilir olmayan görsel, doğruluk denetiminden geçmeyen metin (B10).
 Art arda üç ret kampanyayı insana bırakır.

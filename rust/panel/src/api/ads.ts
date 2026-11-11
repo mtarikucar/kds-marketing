@@ -36,6 +36,8 @@ export interface PlanFinding {
   /** `currency_mismatch`. */
   account_currency?: string;
   budget_currency?: string;
+  /** `credential_scope_missing`: the permissions one of which the connection must hold. */
+  needs?: string[];
 }
 export interface CampaignPlan {
   ad_account: string;

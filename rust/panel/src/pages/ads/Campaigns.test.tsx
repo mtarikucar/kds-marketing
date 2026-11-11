@@ -438,6 +438,7 @@ it('tells a person why the agent’s plan was turned down, in words they can act
         refused: 2,
         refusal: [
           { field: 'ad_account', reason: 'not_a_usable_ad_account' },
+          { field: 'ad_account', reason: 'credential_scope_missing', needs: ['ads_management'] },
           { field: 'budget_minor', reason: 'below_the_accounts_minimum', least: 700000 },
           { field: 'ads[0].primary_text', reason: 'claim_not_in_strategy' },
         ],
@@ -451,6 +452,10 @@ it('tells a person why the agent’s plan was turned down, in words they can act
   expect(await screen.findByText('Ajanın son planı geri çevrildi (2/3)')).toBeVisible();
   expect(
     screen.getByText('Reklam hesabı kullanılamıyor: bağlı ve doğrulanmış bir reklam hesabı gerekli.'),
+  ).toBeVisible();
+  // A connection that may only read says which permission to allow when reconnecting.
+  expect(
+    screen.getByText((text) => text.includes('reklam oluşturma izni yok (ads_management)')),
   ).toBeVisible();
   expect(
     screen.getByText((text) => text.includes(`En az: ${formatMoney(700000, 'TRY', 'tr')}.`)),

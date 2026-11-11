@@ -177,41 +177,55 @@ pub async fn version_schedule(
         _ => None,
     };
 
-    // The engine plans one post for a request: the version's own, keyed by the version.
-    let package_key = format!("project:{}:version:{}", project.id, version.id);
-    let request = PackageRequest {
-        id: PackageRequestId(stable_id(ctx.workspace_id, &package_key)),
-        workspace_id: ctx.workspace_id,
-        key: package_key.clone(),
-        trigger: PackageTrigger::Project,
-        status: PackageStatus::Open,
-        olay_id: None,
-        occasion: None,
-        year: None,
-        capability_id: Some(i.capability_id),
-        material_ids: version.material_ids.clone(),
-        best_formats: vec![],
-        hints: PackageHints {
-            max_posts: Some(1),
-            subject: Some(subject),
-            hypothesis_id: Some(version.hypothesis_id),
-            content_type: content_type.clone(),
-            ..Default::default()
-        },
-        created_at: ctx.now,
-        answered_at: None,
-        closed_at: None,
-    };
-    request
-        .validate()
-        .map_err(|e| AppError::internal(format!("version package: {e}")))?;
-    if !r
-        .studio_posts()
-        .insert_package_request(request.clone())
-        .await?
-    {
-        return Err(chain::refuse("version_already_scheduled"));
+    // The engine plans one post for a request: the version's own, keyed by the version. A
+    // version whose planned post was taken back or moved has no post now (checked above, under
+    // the control lock) and is planned again under the next key of its own (`…:2`, `…:3`).
+    let base_key = format!("project:{}:version:{}", project.id, version.id);
+    let mut request = None;
+    for round in 1..=MAX_ROUNDS {
+        let package_key = if round == 1 {
+            base_key.clone()
+        } else {
+            format!("{base_key}:{round}")
+        };
+        let candidate = PackageRequest {
+            id: PackageRequestId(stable_id(ctx.workspace_id, &package_key)),
+            workspace_id: ctx.workspace_id,
+            key: package_key,
+            trigger: PackageTrigger::Project,
+            status: PackageStatus::Open,
+            olay_id: None,
+            occasion: None,
+            year: None,
+            capability_id: Some(i.capability_id),
+            material_ids: version.material_ids.clone(),
+            best_formats: vec![],
+            hints: PackageHints {
+                max_posts: Some(1),
+                subject: Some(subject),
+                hypothesis_id: Some(version.hypothesis_id),
+                content_type: content_type.clone(),
+                ..Default::default()
+            },
+            created_at: ctx.now,
+            answered_at: None,
+            closed_at: None,
+        };
+        candidate
+            .validate()
+            .map_err(|e| AppError::internal(format!("version package: {e}")))?;
+        if r.studio_posts()
+            .insert_package_request(candidate.clone())
+            .await?
+        {
+            request = Some(candidate);
+            break;
+        }
     }
+    let Some(request) = request else {
+        return Err(chain::refuse("version_already_scheduled"));
+    };
+    let package_key = request.key.clone();
     let planned = posts_propose_locked(
         d,
         ctx,
@@ -362,9 +376,13 @@ pub(crate) async fn withdraw_planned(
     Ok(cancelled)
 }
 
+/// How many times one version can be planned (each planning after a post was taken back or
+/// moved takes the next key).
+const MAX_ROUNDS: u32 = 50;
+
 /// Frees the content version whose planned post was `slot`, when the post was a version's
-/// (its package request is keyed `project:<area>:version:<version>`): the version waits for a
-/// time again. Nothing for any other post.
+/// (its package request is keyed `project:<area>:version:<version>`, with `:<round>` after it
+/// from its second planning on): the version waits for a time again. Nothing for any other post.
 pub(crate) async fn free_version_of(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -381,15 +399,19 @@ pub(crate) async fn free_version_of(
         return Ok(());
     };
     let mut parts = request.key.split(':');
-    let (Some("project"), Some(project), Some("version"), Some(_), None) = (
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-        parts.next(),
-    ) else {
+    let (Some("project"), Some(project), Some("version"), Some(_)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
         return Ok(());
     };
+    // Nothing after the version, or its planning round and nothing after that.
+    if parts
+        .next()
+        .is_some_and(|round| round.parse::<u32>().is_err())
+        || parts.next().is_some()
+    {
+        return Ok(());
+    }
     let Ok(project) = Uuid::parse_str(project) else {
         return Ok(());
     };

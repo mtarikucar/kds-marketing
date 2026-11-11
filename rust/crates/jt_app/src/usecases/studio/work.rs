@@ -479,6 +479,13 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
         .retire_slot(input.slot_id, input.expected_revision, "cancelled")
         .await?;
     super::posts::retire_post_of(r.as_mut(), s.id, RetirementReason::Cancelled, ctx.now).await?;
+    // An agent that cancels the planned post of a content version before anything was sent is
+    // changing its time: the version waits for a time again (it has no other way to move it).
+    // A person's cancel is a decision not to post it, and a post that was attempted, even with
+    // an unknown outcome, is never offered again.
+    if ctx.agent_connection_id.is_some() && r.studio().slot_evidence(s.id).await?.0.is_empty() {
+        crate::usecases::social::schedule::free_version_of(r.as_mut(), ctx, s.id).await?;
+    }
     let mut e = ledger_entry(
         ctx,
         "studio.slot_cancel",

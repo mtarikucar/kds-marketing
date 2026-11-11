@@ -1374,6 +1374,46 @@ async fn three_refused_plans_hand_the_campaign_to_a_person() {
 }
 
 #[tokio::test]
+async fn a_plan_on_an_ad_account_that_may_only_be_read_names_the_missing_permission() {
+    let t = ads_world().await;
+    let a = agent(&t.w);
+    let finding = |e: &jt_app::error::AppError| {
+        assert_eq!(e.details["reason"], "plan_refused", "{e:?}");
+        e.details["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["field"] == "ad_account")
+            .cloned()
+            .expect("the ad account is what holds the plan")
+    };
+
+    // An ad account whose grant only reads: what Meta gives when the sign-in leaves
+    // `ads_management` out. The refusal says so, so that a person knows what to allow.
+    let read_only = connection(&t.w, "meta_ads", "act_10", &["ads_read"]).await;
+    let c = t.open("read-only", 30_000).await.unwrap();
+    let mut plan = t.plan(vec![t.ad("a")]);
+    plan["ad_account"] = json!(read_only);
+    let e = t.submit(&a, &c, "read-only", plan).await.unwrap_err();
+    assert_eq!(
+        finding(&e),
+        json!({"field":"ad_account","reason":"credential_scope_missing",
+            "needs":["ads_management"]})
+    );
+    assert!(t.calls(|c| matches!(c, ConnectorCall::CreateCampaign { .. })) == 0);
+
+    // Something that is no ad account at all is still just that.
+    let c = t.open("no-account", 30_000).await.unwrap();
+    let mut plan = t.plan(vec![t.ad("a")]);
+    plan["ad_account"] = json!(t.page);
+    let e = t.submit(&a, &c, "no-account", plan).await.unwrap_err();
+    assert_eq!(
+        finding(&e),
+        json!({"field":"ad_account","reason":"not_a_usable_ad_account"})
+    );
+}
+
+#[tokio::test]
 async fn campaign_store_contract() {
     let t = ads_world().await;
     let other = jt_testkit::studio_contract::ready(&t.w.uow).await;

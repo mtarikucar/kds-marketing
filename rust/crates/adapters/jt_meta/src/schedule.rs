@@ -1,10 +1,14 @@
 //! A Facebook Page post left with Facebook's own scheduler (design 2026-11-10 §7.3, B47).
 //!
 //! - **What.** A text or link post, `POST /{page}/feed {message, link, published: false,
-//!   scheduled_publish_time}`, and a single-photo post, `POST /{page}/photos {url, caption,
-//!   published: false, scheduled_publish_time}` (the time a Unix timestamp in seconds). Not a
-//!   story, a video, several photos or anything on Instagram: those Jeeta sends itself, at their
-//!   time.
+//!   scheduled_publish_time}` (the time a Unix timestamp in seconds), and a single-photo post, in
+//!   the two calls Meta's Page photos reference gives for a scheduled post with photos
+//!   (<https://developers.facebook.com/docs/graph-api/reference/page/photos>): the photo is
+//!   uploaded unpublished and temporary, `POST /{page}/photos {url, published: false, temporary:
+//!   true}`, and the post is scheduled on the feed with it attached, `POST /{page}/feed {message,
+//!   attached_media: [{media_fbid}], published: false, scheduled_publish_time,
+//!   unpublished_content_type: "SCHEDULED"}`. Not a story, a video, several photos or anything
+//!   on Instagram: those Jeeta sends itself, at their time.
 //! - **When.** Meta takes a time between 10 minutes and 30 days from the request (Pages API,
 //!   Posts: <https://developers.facebook.com/docs/pages-api/posts>); a post is handed over
 //!   between 15 minutes and 29 days ahead.
@@ -15,10 +19,13 @@
 //! - **Taking it back.** The same read first, so that a post that is out is never deleted, then
 //!   `DELETE /{post}` (`{"success": true}`).
 //!
-//! The photo call's answer must name the post (`post_id`, as the reference's return type does):
-//! an answer without it is `Unknown`, because the scheduled post could then be neither read nor
-//! taken back. These are the documented shapes, tested against the Graph mock; they have not
-//! been run against Meta.
+//! The feed call's answer must name the post (`id`): an answer without it is `Unknown`, because
+//! the scheduled post could then be neither read nor taken back. The photo is not scheduled on
+//! the photos edge itself: run against a real Page on 2026-11-11, Meta took `POST /{page}/photos`
+//! with `scheduled_publish_time` and answered without a `post_id`, which left a scheduled post
+//! nobody could follow. An upload that fails schedules nothing (a temporary photo nobody
+//! attaches expires by itself), so its failure is never `Unknown`. The text post and the two
+//! reads are the documented shapes, tested against the Graph mock.
 
 use jt_app::ports::connectors::{PostFormat, PublishReceipt, PublishRequest, Scheduled};
 use jt_connector::{ConnectorError, Credential};
@@ -92,7 +99,7 @@ pub(crate) async fn schedule(
     }
     let app = connector.graph_app()?;
     let time = at.unix_timestamp();
-    let (edge, body, id_field) = match request.media_urls.first() {
+    let body = match request.media_urls.first() {
         None => {
             let mut body = json!({
                 "message": request.text,
@@ -102,24 +109,47 @@ pub(crate) async fn schedule(
             if let Some(link) = &request.link {
                 body["link"] = json!(link.as_str());
             }
-            ("feed", body, "id")
+            body
         }
-        Some(url) => (
-            "photos",
+        Some(url) => {
+            // The photo first, unpublished and temporary: this schedules nothing, so whatever
+            // goes wrong here is a plain failure, never an unknown outcome.
+            let photo = connector
+                .graph_post(
+                    &app,
+                    token,
+                    &[page, "photos"],
+                    &[],
+                    json!({"url": url.as_str(), "published": false, "temporary": true}),
+                )
+                .await
+                .map_err(|e| match e {
+                    ConnectorError::Unknown { .. } => ConnectorError::transient(
+                        "the photo upload was not confirmed; nothing was scheduled",
+                    ),
+                    e => e,
+                })?;
+            let photo = text(&photo["id"])
+                .filter(|id| node(id).is_ok())
+                .ok_or_else(|| {
+                    ConnectorError::permanent(
+                        "the photo upload named no photo; nothing was scheduled",
+                    )
+                })?;
             json!({
-                "url": url.as_str(),
-                "caption": with_link(&request.text, request.link.as_ref()),
+                "message": with_link(&request.text, request.link.as_ref()),
+                "attached_media": [{"media_fbid": photo}],
                 "published": false,
                 "scheduled_publish_time": time,
-            }),
-            "post_id",
-        ),
+                "unpublished_content_type": "SCHEDULED",
+            })
+        }
     };
     // A write Meta takes once: an answer that neither took nor refused it is `Unknown`.
     let answer = connector
-        .graph_post_once(&app, token, &[page, edge], &[], body)
+        .graph_post_once(&app, token, &[page, "feed"], &[], body)
         .await?;
-    let id = text(&answer[id_field])
+    let id = text(&answer["id"])
         .ok_or_else(|| ConnectorError::unknown("accepted response lacks post id"))?;
     // A scheduled post has no page of its own yet.
     node(&id).map_err(|_| ConnectorError::unknown("accepted response names no post"))?;

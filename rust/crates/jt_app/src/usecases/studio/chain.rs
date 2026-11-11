@@ -118,6 +118,10 @@ pub(crate) fn capability_access(
 /// [`capability_access`]'s refusal of a grant without the scope Studio needs: reconnecting the
 /// account (which asks for it) fixes it.
 pub(crate) const SCOPE_MISSING: &str = "credential_scope_missing";
+/// The scopes one of which a grant of `kind` must hold to be written with; none for another kind.
+pub(crate) fn write_scopes(kind: &str) -> &'static [&'static str] {
+    studio_scopes(kind, true).unwrap_or(&[])
+}
 /// Whether `c`'s grant lacks every scope of `required` (an empty list needs none).
 fn lacks_studio_scope(c: &Capability, required: &[&str]) -> bool {
     let scopes = granted_scopes(c);

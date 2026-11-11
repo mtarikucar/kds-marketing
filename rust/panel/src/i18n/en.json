@@ -94,6 +94,9 @@
     "refusalTitle": "The agent’s last plan was turned down ({{n}}/3)",
     "findings": {
       "not_a_usable_ad_account": "The ad account cannot be used: a connected, verified ad account is needed.",
+      "credential_scope_missing": "The ad account’s connection may not create ads (it lacks {{needs}}). Reconnect the account under Capabilities and connections and allow that permission on the consent screen.",
+      "capability_unavailable": "The ad account’s connection cannot be used now: it is not verified, or it has to be reconnected.",
+      "access_expired": "The ad account’s connection has expired; reconnect the account.",
       "account_unreadable": "The ad account could not be read; renew its connection.",
       "not_the_campaigns_account": "The plan does not use the ad account you chose for this ad campaign.",
       "currency_mismatch": "The ad account’s currency ({{account}}) differs from the general ad budget’s ({{budget}}).",

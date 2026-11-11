@@ -440,3 +440,17 @@ in Bütçe pauses it). The real Meta run waits for the owner (B38).
     and `/version26.0`. Committed as `fa2da400`; CI run `42967783601` passed all nine jobs;
     published to staging on 2026-11-11 at 06:14 UTC without a migration (record
     `ops/staging-fa2da400.md` on `ops/release-dd66e8dc`). Tested against the Graph mock only.
+  - **First real run, on staging (release `4cafc3b6`), with the owner's own Meta account
+    (2026-11-11).** As the connected agent over MCP: the strategy was revised with a paid lane
+    (100 TL a month) and approved by the owner; the general ad budget was created (100 TL); two
+    real ad accounts came in verified and probe against Meta on v27.0 (one TRY, one USD); the
+    agent proposed a campaign (100 TL, two days), the owner approved it in the panel, and the
+    budget shows 100 TL held. The plan was refused before any write to Meta: the sign-in's
+    Facebook Login for Business configuration does not grant `ads_management` (the connection
+    reads with `ads_read` only), and the refusal said only `not_a_usable_ad_account`. Fixed: the
+    finding now names the missing permission (B58). Also learnt: a campaign can be taken by an
+    agent only from its start time on. Nothing was built at Meta and nothing was spent; the
+    campaign waits for its plan (one of three refusals used). The first real build needs the
+    owner to add `ads_management` and `pages_manage_ads` to the login configuration and reconnect
+    the ad account, and the Meta app to be in live mode (Meta refuses a creative whose post an
+    app in development mode made).

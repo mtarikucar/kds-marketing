@@ -286,3 +286,27 @@ Independent of Tasks 1–3 (fixtures).
   `blocked: "no_connected_account"`, and "Hazır paketler" says so in words. (The accounts of that
   database have no credential; with a real connect the version would be offered to its account,
   as `social_post_flow.rs` shows.)
+
+- 2026-11-11 **First real run, on staging (release `4cafc3b6`), with the owner's own Meta
+  account** (the workspace is the staging demo; the owner connected a real Facebook Page). What
+  was seen signed in, as the connected agent over MCP:
+  - Connecting Meta works: the Page and its ad accounts came in verified and probe against Meta.
+  - Resubmitting the strategy gave its three hypotheses the default organic cadence (B53).
+  - With a Page connected the system opened an area by itself ("no post on this account yet").
+    The agent took it; its first delivery was refused because the image had never been analysed
+    (`quality` finding), which is the rule; after the agent analysed the image the package was
+    accepted and its version waited with the Page as its account.
+  - The owner turned on "Platformun kendi zamanlayıcısını kullan" (a person's setting; an agent
+    cannot). The agent scheduled the version two days ahead; within two minutes the publish job
+    handed it to Facebook's scheduler: the first real write to Meta. **Facebook accepted
+    `POST /{page}/photos` with `scheduled_publish_time` and answered without a `post_id`**: the
+    outcome was recorded as unknown (`studio.publish.failure`, "accepted response lacks post
+    id"), so a scheduled post may exist on the Page that Jeeta cannot follow or take back. The
+    owner checks the Page's scheduled posts by hand.
+  - Fixed after it: the single-photo post is left in Meta's documented two calls (B56); an
+    agent's cancel of an untouched planned version lets it be given another time, and a version
+    can be planned again at all (B57: it could not, even after the system's own withdrawal).
+  - Also seen: a feed post cannot be scheduled nearer than its preparation lead (24 hours by
+    default, `lead_too_short`), so the nearest test time is a day ahead; MCP sessions on staging
+    answer 404 after a few idle minutes and the client must initialise again.
+  Box 5.3 stays open: the two-call hand-over and a withdrawal have not yet been seen on the Page.

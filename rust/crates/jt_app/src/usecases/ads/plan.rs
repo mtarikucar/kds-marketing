@@ -263,6 +263,7 @@ async fn findings(
     p: &CampaignPlan,
     account: Option<&Capability>,
     limits: Option<&AdAccountLimits>,
+    unusable: Option<&str>,
     now: OffsetDateTime,
 ) -> Result<Vec<Value>, AppError> {
     let mut out = Vec::new();
@@ -278,7 +279,14 @@ async fn findings(
         out.push(json!({"field": "audience.countries", "reason": "eu_targeting_needs_payer"}));
     }
     match account {
-        None => out.push(json!({"field": "ad_account", "reason": "not_a_usable_ad_account"})),
+        // An ad account of the workspace that cannot be written to says why: a grant without
+        // the scope names the scope, so that a person knows to reconnect and what to allow.
+        None => out.push(match unusable {
+            Some(chain::SCOPE_MISSING) => json!({"field": "ad_account",
+                "reason": chain::SCOPE_MISSING, "needs": chain::write_scopes("meta_ads")}),
+            Some(why) => json!({"field": "ad_account", "reason": why}),
+            None => json!({"field": "ad_account", "reason": "not_a_usable_ad_account"}),
+        }),
         Some(account) => {
             if c.account_hint.is_some_and(|hint| hint != account.id) {
                 out.push(json!({"field": "ad_account", "reason": "not_the_campaigns_account"}));
@@ -319,39 +327,49 @@ async fn findings(
 }
 
 /// The ad account `id` when it can be written to now, its credential opened, and what the
-/// provider says of it (currency, smallest daily budget); `None` wherever one is missing.
+/// provider says of it (currency, smallest daily budget); `None` wherever one is missing. The
+/// third value is why an ad account of the workspace cannot be written to now (the refusal of
+/// [`chain::capability_access`]); `None` when it can, or when `id` is no ad account at all.
 pub(crate) async fn account_of(
     d: &Deps,
     ctx: &Ctx,
     id: CapabilityId,
-) -> Result<(Option<Capability>, Option<AdAccountLimits>), AppError> {
+) -> Result<(Option<Capability>, Option<AdAccountLimits>, Option<String>), AppError> {
+    const UNAVAILABLE: &str = "capability_unavailable";
     let (account, sealed) = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         let Some(c) = r.capabilities().find(id).await? else {
-            return Ok((None, None));
+            return Ok((None, None, None));
         };
-        if c.kind_key != "meta_ads" || chain::capability_access(&c, ctx.now, true).is_err() {
-            return Ok((None, None));
+        if c.kind_key != "meta_ads" {
+            return Ok((None, None, None));
+        }
+        if let Err(e) = chain::capability_access(&c, ctx.now, true) {
+            let why = e.details["reason"]
+                .as_str()
+                .unwrap_or(UNAVAILABLE)
+                .to_owned();
+            return Ok((None, None, Some(why)));
         }
         let sealed = r.capabilities().read_sealed(c.id).await?;
         (c, sealed)
     };
     let Some(sealed) = sealed else {
-        return Ok((None, None));
+        return Ok((None, None, Some(UNAVAILABLE.to_owned())));
     };
     let Some(writer) =
         provider_for_kind(&account.kind_key).and_then(|p| d.connectors.ad_campaigns(p))
     else {
-        return Ok((Some(account), None));
+        return Ok((Some(account), None, None));
     };
     let Ok(credential) = open_credential(d, ctx.workspace_id, &sealed) else {
-        return Ok((Some(account), None));
+        return Ok((Some(account), None, None));
     };
     let limits = writer
         .account_limits(&credential, &adapter_public(&account))
         .await
         .ok();
-    Ok((Some(account), limits))
+    Ok((Some(account), limits, None))
 }
 
 /// `ads.plan_submit`: the claim's agent delivers the campaign's plan. A plan that holds is
@@ -388,7 +406,7 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
         shape(&c, &i.plan)?;
     }
     // What the provider says of the account: read with no transaction open.
-    let (account, limits) = account_of(d, ctx, i.plan.ad_account).await?;
+    let (account, limits, unusable) = account_of(d, ctx, i.plan.ad_account).await?;
 
     let mut r = open_tx(d, ctx, Permission::AdsWork).await?;
     let mut c = load(r.as_mut(), i.campaign_id, None).await?;
@@ -402,6 +420,7 @@ pub async fn plan_submit(d: &Deps, ctx: &Ctx, i: PlanInput) -> Result<AdCampaign
         &i.plan,
         account.as_ref(),
         limits.as_ref(),
+        unusable.as_deref(),
         ctx.now,
     )
     .await?;

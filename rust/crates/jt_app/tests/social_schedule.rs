@@ -609,3 +609,81 @@ async fn a_label_the_strategy_does_not_know_still_goes_out_and_a_blocked_version
     r.commit().await.unwrap();
     assert_eq!(blocked().await, (vec![], Some("no_connected_account")));
 }
+
+#[tokio::test]
+async fn an_agent_that_cancels_a_planned_version_gives_it_another_time_and_a_persons_cancel_ends_it()
+ {
+    use jt_app::usecases::studio::work::{CancelSlotInput, slot_cancel};
+    let (w, _) = social_world().await;
+    let m = material(&w, true).await;
+    let p = finished(&w, "move", &[&m], vec![version(&w, &m, json!({}))]).await;
+    let a = agent(&w);
+    let first = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, WHEN, "t-1")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+
+    // The agent has no other way to move a planned post: it cancels it before anything was
+    // sent, and the version waits for a time again.
+    slot_cancel(
+        &w.d,
+        &a,
+        CancelSlotInput {
+            slot_id: first.id,
+            expected_revision: first.revision,
+            reason: "another time".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let waiting = social::versions_waiting(&w.d, &a, input(json!({})))
+        .await
+        .unwrap();
+    assert_eq!(waiting.len(), 1, "the version waits again");
+    assert_eq!(
+        waiting[0].versions[0].version_id,
+        p.packages[0].versions[0].id
+    );
+    let later = WHEN + time::Duration::hours(4);
+    let second = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, later, "t-2")))
+        .await
+        .unwrap()
+        .publication;
+    assert_ne!(second.slot.id, first.id);
+    assert_eq!(second.slot.state, SlotState::Ready);
+    assert_eq!(second.post.publish_at, later);
+
+    // A person who cancels it decided it does not go out: it is not offered again.
+    slot_cancel(
+        &w.d,
+        &w.ctx,
+        CancelSlotInput {
+            slot_id: second.slot.id,
+            expected_revision: second.slot.revision,
+            reason: "not this one".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        social::versions_waiting(&w.d, &a, input(json!({})))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let e = social::version_schedule(
+        &w.d,
+        &a,
+        input(schedule_input(
+            &p,
+            0,
+            &w,
+            later + time::Duration::hours(4),
+            "t-3",
+        )),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "version_already_scheduled");
+}
