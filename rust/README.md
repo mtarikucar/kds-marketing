@@ -2985,8 +2985,9 @@ checked all-or-nothing (formats per kind, materials at their time, lead, horizon
 and caps in the posting policy's zone, each post at its own offset) and materialized as planned
 slots at once. A post enters the pending work at its preparation start (story 2 h, feed post
 and carousel 24 h, reel and TikTok video 48 h), is never claimed past its grace, and retires
-`missed_grace` then, unless an attempt may still be going out. Stories are refused
-(`format_unsupported`) on every channel until an adapter publishes them (D30). Once per
+`missed_grace` then, unless an attempt may still be going out. Stories go out on Instagram
+only (D60): one JPEG of at most 8 MB or one MP4 of 3 to 60 s, without text, never measured
+nor learned from; everywhere else a story is `format_unsupported`. Once per
 workspace the planner retires the weekly quotas' planned and ready organic slots
 (`replanned`), never one whose publish is in flight; the paid lane keeps its weekly positions.
 

@@ -368,7 +368,11 @@ pub(crate) async fn outcomes(
         else {
             continue;
         };
-        let Some(post) = posts.iter().find(|p| p.slot_id == publication.slot_id) else {
+        // A story is left out of learning: its insights last a day only.
+        let Some(post) = posts
+            .iter()
+            .find(|p| p.slot_id == publication.slot_id && p.format != PostFormat::Story)
+        else {
             continue;
         };
         out.push(PostOutcome {
@@ -382,6 +386,27 @@ pub(crate) async fn outcomes(
         });
     }
     Ok(out)
+}
+
+/// What is wrong with material `m` as a story's one medium (Instagram's `STORIES`): its file's
+/// type and size and, for a video, its length read from its `moov` box; `None` when Instagram
+/// takes it.
+pub(crate) async fn story_refusal(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    m: &Material,
+) -> Result<Option<StoryMediaRefusal>, AppError> {
+    let f = r
+        .studio()
+        .get_file(m.file_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("file"))?;
+    let (ms, moov_first) = if is_video_mime(&f.mime) {
+        super::library::video_facts_of(d, &f).await?
+    } else {
+        (None, true)
+    };
+    Ok(story_media_refusal(&f.mime, f.size_bytes, ms, moov_first))
 }
 
 /// Records why the post of `slot`, when it has one, was retired at `at`.
@@ -938,6 +963,11 @@ async fn check_item(
     let mimes: Vec<&str> = materials.iter().map(|m| m.mime.as_str()).collect();
     if !media_types_ok(p.format, &kind, &mimes) {
         return refuse(PostRefusal::MediaType.code());
+    }
+    if p.format == PostFormat::Story
+        && let Some(refusal) = story_refusal(d, r, &materials[0]).await?
+    {
+        return refuse(refusal.code());
     }
     let refs: Vec<&Material> = materials.iter().collect();
     match piece_roles(&refs, &p.subject, &lib.context(p.publish_at)) {

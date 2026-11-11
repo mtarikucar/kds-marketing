@@ -794,6 +794,15 @@ impl Publisher for ScriptedConnector {
         self.after_send().await;
         self.next(&self.publish, "publish result")
     }
+    /// The post is there: a scripted provider reads back what it published.
+    async fn read_back(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        _external_id: &str,
+    ) -> Result<(), ConnectorError> {
+        Ok(())
+    }
 
     async fn resolve(
         &self,

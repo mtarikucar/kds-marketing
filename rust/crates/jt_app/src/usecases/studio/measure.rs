@@ -143,17 +143,31 @@ pub(crate) async fn access(
     Ok((p.capability, cred))
 }
 pub async fn measure_due(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
-    let (publications, bindings, rows) = {
+    let (publications, bindings, rows, stories) = {
         let mut r = d.uow.tenant(ws).await?;
+        // A story is left out of measurement and learning: its insights last a day only
+        // (Instagram's media insights reference), shorter than the first window's reading.
+        let stories: std::collections::BTreeSet<_> = r
+            .studio_posts()
+            .list_posts()
+            .await?
+            .into_iter()
+            .filter(|p| p.format == jt_studio::PostFormat::Story)
+            .map(|p| p.slot_id)
+            .collect();
         (
             r.studio().list_publications().await?,
             r.studio().list_bindings().await?,
             r.studio().list_measurements().await?,
+            stories,
         )
     };
     let now = d.clock.now();
     let mut changed = 0;
-    for p in publications {
+    for p in publications
+        .into_iter()
+        .filter(|p| !stories.contains(&p.slot_id))
+    {
         for window in [
             MeasurementWindow::Hours24,
             MeasurementWindow::Hours72,
