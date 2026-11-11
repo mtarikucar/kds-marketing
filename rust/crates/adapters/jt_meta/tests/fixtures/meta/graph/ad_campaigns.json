@@ -1,0 +1,10 @@
+{
+  "campaign": {"id": "campaign1"},
+  "adset": {"id": "set1"},
+  "image": {"images": {"test.png": {"hash": "hash1", "url": "https://example.test/image.png", "width": 1080, "height": 1080}}},
+  "lead_form": {"id": "form1"},
+  "creative": {"id": "creative1"},
+  "ad": {"id": "ad1"},
+  "limits": {"account_id": "123", "currency": "TRY", "timezone_name": "Europe/Istanbul", "min_daily_budget": "500"},
+  "preview": {"data": [{"body": "<iframe>synthetic</iframe>"}]}
+}
