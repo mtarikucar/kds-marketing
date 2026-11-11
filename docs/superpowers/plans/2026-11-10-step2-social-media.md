@@ -329,3 +329,7 @@ Independent of Tasks 1–3 (fixtures).
   had scheduled it although its answer carried no post id, and the agent's cancel of the slot
   had left it there to go out. The owner could not find it on Meta's screens. The recovery job
   now takes such a post back itself when it is provably Jeeta's own (B60).
+- 2026-11-11 On release `d66152a4` the recovery job took that post back within a minute
+  (`studio.publish.withdrawn`, reason `unknown_hand_over`, slot `6774c80d`); the account view's
+  list of what Facebook holds no longer has a post Jeeta does not know. Nothing was published
+  on the Page from either run.
