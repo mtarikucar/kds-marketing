@@ -90,6 +90,10 @@ pub fn run(args: &[OsString]) -> ExitCode {
         let key = std::env::var("JEETA_SECRET_KEY").map_err(|_| "configuration_failed")?;
         let mut decoded = [0u8; 32];
         hex::decode_to_slice(key.trim(), &mut decoded).map_err(|_| "configuration_failed")?;
+        // The blocklist's keyed hashes (v1 opt-outs of pool leads) are the server's: the same
+        // master key, the same `prospects.blocklist` purpose.
+        let seal = jt_seal::AesSecretBox::new(decoded);
+        decoded.fill(0);
         let url = std::env::var("JEETA_DATABASE_URL").map_err(|_| "configuration_failed")?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -106,6 +110,7 @@ pub fn run(args: &[OsString]) -> ExitCode {
                     .map_err(|_| "rls_failed")?;
                 jt_app::usecases::v1_import::run(
                     &jt_pg::v1_import::PgImportStore(pool.clone()),
+                    &seal,
                     opts.workspace,
                     &leads,
                     opts.mode,

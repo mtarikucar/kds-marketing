@@ -51,8 +51,9 @@ use sha2::Sha256;
 
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
-use crate::ports::{LeadsPolicy, TenantRepos};
+use crate::ports::{LeadsPolicy, SecretBox, TenantRepos};
 use crate::usecases::Deps;
+use jt_tenancy::WorkspaceId;
 
 /// The `SecretBox::hmac_key` purpose of the blocklist's keyed hashes.
 pub const BLOCKLIST_PURPOSE: &str = "prospects.blocklist";
@@ -144,7 +145,15 @@ pub(crate) async fn forget_requests(
 /// the entries a master-key change would orphan can be counted (a hash cannot be computed
 /// again: the value is gone).
 pub(crate) fn blocklist_fingerprint(deps: &Deps, ctx: &Ctx) -> Result<String, AppError> {
-    let secret = deps.seal.hmac_key(ctx.workspace_id, BLOCKLIST_PURPOSE)?;
+    blocklist_fingerprint_in(deps.seal.as_ref(), ctx.workspace_id)
+}
+
+/// [`blocklist_fingerprint`] of workspace `ws` under `seal` (the v1 importer has no `Deps`).
+pub(crate) fn blocklist_fingerprint_in(
+    seal: &dyn SecretBox,
+    ws: WorkspaceId,
+) -> Result<String, AppError> {
+    let secret = seal.hmac_key(ws, BLOCKLIST_PURPOSE)?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_ref())
         .map_err(|_| AppError::internal("blocklist key unavailable"))?;
     mac.update(FINGERPRINT_LABEL);
@@ -172,7 +181,16 @@ pub(crate) async fn record(
 /// The blocklist hash of `key` in workspace `ctx.workspace_id`: lowercase hex HMAC-SHA256 under
 /// the workspace's [`BLOCKLIST_PURPOSE`] key, over `jt_prospects::blocklist_material`.
 pub(crate) fn blocklist_hash(deps: &Deps, ctx: &Ctx, key: &Key) -> Result<String, AppError> {
-    let secret = deps.seal.hmac_key(ctx.workspace_id, BLOCKLIST_PURPOSE)?;
+    blocklist_hash_in(deps.seal.as_ref(), ctx.workspace_id, key)
+}
+
+/// [`blocklist_hash`] of `key` in workspace `ws` under `seal` (the v1 importer has no `Deps`).
+pub(crate) fn blocklist_hash_in(
+    seal: &dyn SecretBox,
+    ws: WorkspaceId,
+    key: &Key,
+) -> Result<String, AppError> {
+    let secret = seal.hmac_key(ws, BLOCKLIST_PURPOSE)?;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_ref())
         .map_err(|_| AppError::internal("blocklist key unavailable"))?;
     mac.update(&jt_prospects::blocklist_material(key.kind, &key.value));
