@@ -100,6 +100,19 @@ impl FileStore for MemoryFiles {
             .parse()
             .unwrap())
     }
+    async fn attachment_url(
+        &self,
+        ws: WorkspaceId,
+        id: FileId,
+        _: OffsetDateTime,
+    ) -> Result<Url, AppError> {
+        self.read(ws, id).await?;
+        Ok(
+            format!("https://files.example.com/files/{id}?purpose=attachment")
+                .parse()
+                .unwrap(),
+        )
+    }
 }
 
 /// A [`ByteSource`] over chunks held in memory: a test's upload.

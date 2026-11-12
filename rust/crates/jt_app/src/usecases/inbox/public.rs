@@ -443,6 +443,7 @@ pub(crate) async fn intake(
             source: Source::Channel(channel),
         },
         Some(0),
+        None,
         false,
     )
     .await?

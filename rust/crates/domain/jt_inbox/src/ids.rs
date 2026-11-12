@@ -43,6 +43,14 @@ define_id!(
     ConsentId
 );
 define_id!(
+    /// A distribution rule.
+    RuleId
+);
+define_id!(
+    /// One distribution decision in a journey's assignment log.
+    AssignmentId
+);
+define_id!(
     /// One public item: a comment or a marketplace question.
     PublicItemId
 );

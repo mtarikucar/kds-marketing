@@ -11,6 +11,20 @@ const COMPLIANCE_UP: &str = include_str!("../../../../migrations/0008_inbox_comp
 const COMPLIANCE_DOWN: &str = include_str!("../../../../migrations/0008_inbox_compliance.down.sql");
 /// The call tables of `0015_voice_calls` reference `journeys`, so they go before the inbox's own.
 const CALLS_DOWN: &str = include_str!("../../../../migrations/0015_voice_calls.down.sql");
+/// The mail files and the leads tables reference `people`, `messages`, `journeys` and one another,
+/// so they go first, newest first: the mail files of `0028_mail_files` (they name messages and
+/// people), the assignment log of `0027_distribution` (it names journeys), the outreach tables of
+/// `0026_outreach` (enrollments name prospects), then the pool of `0020_prospects`.
+const PROSPECTS_DOWN: &str = concat!(
+    include_str!("../../../../migrations/0028_mail_files.down.sql"),
+    "
+",
+    include_str!("../../../../migrations/0027_distribution.down.sql"),
+    "\n",
+    include_str!("../../../../migrations/0026_outreach.down.sql"),
+    "\n",
+    include_str!("../../../../migrations/0020_prospects.down.sql"),
+);
 /// Public items reference the inbox tables: their migration goes first.
 const PUBLIC_DOWN: &str = include_str!("../../../../migrations/0019_inbox_public.down.sql");
 const TABLES: &[&str] = &[
@@ -191,6 +205,10 @@ async fn inbox_force_rls_and_composite_foreign_keys() {
 #[tokio::test]
 async fn schema_down_drops_lost_reasons() {
     let db = TestDb::new().await;
+    sqlx::raw_sql(PROSPECTS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
@@ -227,6 +245,10 @@ async fn schema_down_drops_lost_reasons() {
     assert_eq!(row, ("Edited".into(), false));
     tx.commit().await.unwrap();
     for _ in 0..2 {
+        sqlx::raw_sql(PROSPECTS_DOWN)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)
@@ -245,6 +267,10 @@ async fn schema_down_drops_lost_reasons() {
 async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("roles").await;
+    sqlx::raw_sql(PROSPECTS_DOWN)
+        .execute(&db.pool)
+        .await
+        .unwrap();
     sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
     sqlx::raw_sql(COMPLIANCE_DOWN)
@@ -279,6 +305,10 @@ async fn role_backfill_is_idempotent_reversible_and_preserves_custom_grants() {
     }
     tx.commit().await.unwrap();
     for _ in 0..2 {
+        sqlx::raw_sql(PROSPECTS_DOWN)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)
@@ -311,6 +341,10 @@ async fn call_lookup_index_round_trip_is_idempotent() {
     );
     sqlx::raw_sql(PUBLIC_DOWN).execute(&db.pool).await.unwrap();
     for _ in 0..2 {
+        sqlx::raw_sql(PROSPECTS_DOWN)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         sqlx::raw_sql(CALLS_DOWN).execute(&db.pool).await.unwrap();
         sqlx::raw_sql(COMPLIANCE_DOWN)
             .execute(&db.pool)

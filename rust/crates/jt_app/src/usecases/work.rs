@@ -33,7 +33,22 @@
 //!   caller with `studio.work` while a strategy is approved;
 //! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
 //!   only from its preparation start;
-//! - `DeclareFirstCapability` (3): no capability that is not retired.
+//! - `DeclareFirstCapability` (3): no capability that is not retired;
+//! - `ResearchDue` (3): each open research task that may still record prospects today, and
+//!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, and
+//!   `ProspectsToPromote` (3): qualified prospects not promoted yet, only for a
+//!   caller holding `prospects.work` while the approved strategy has prospecting on (spec
+//!   2026-10-30-leads-pool-outreach-design.md §3.17);
+//! - `OwnerlessJourneys` (2): every open journey without an owner, whatever the cause (nobody
+//!   eligible, the manual mode, a v1 import, a manager's unassignment), with the longest-open
+//!   one, and `AssignmentStalled` (2): assignments past their SLA after the last reassignment,
+//!   only for a caller holding `inbox.manage` (spec §3.9: no journey is silently ownerless);
+//! - `PersonalizationDue` (2): a campaign's enrollments due within a day whose next step misses
+//!   a `custom.*` value, `CampaignBlocked` (2): a campaign paused for its bounces, complaints,
+//!   mailbox or strategy, `CampaignApproval` (2): a campaign waiting for approval (a person with
+//!   `outreach.manage` only), and `PromotedNotContacted` (3): promoted prospects nobody wrote to
+//!   in two days, for a caller holding `outreach.work` (leads spec §3.17, D69;
+//!   `usecases::outreach::work`).
 //!
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
 //! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
@@ -235,6 +250,41 @@ pub enum WorkKind {
         #[serde(with = "time::serde::rfc3339::option")]
         last_seen_at: Option<OffsetDateTime>,
     },
+    /// An open research task may still record `remaining_today` prospects today.
+    ResearchDue {
+        task_id: jt_prospects::ResearchTaskId,
+        remaining_today: u32,
+    },
+    /// `count` new prospects have no score under the approved rubric.
+    ProspectsToScore { count: u32 },
+    /// `count` qualified prospects wait for promotion into the inbox.
+    ProspectsToPromote { count: u32 },
+    /// `count` open journeys have no owner; `oldest_journey_id` has waited longest.
+    OwnerlessJourneys {
+        count: u32,
+        oldest_journey_id: Option<jt_inbox::JourneyId>,
+    },
+    /// `count` assignments passed their SLA after the last reassignment.
+    AssignmentStalled { count: u32 },
+    /// `count` active enrollments of a campaign are due within a day and miss a `custom.*` value
+    /// their next step needs.
+    PersonalizationDue {
+        campaign_id: jt_outreach::CampaignId,
+        count: u32,
+    },
+    /// A campaign was paused for `reason` (its bounces, its complaints, its mailbox, the
+    /// strategy), not by hand.
+    CampaignBlocked {
+        campaign_id: jt_outreach::CampaignId,
+        reason: jt_outreach::PauseReason,
+    },
+    /// A campaign's `revision` waits for a person's approval.
+    CampaignApproval {
+        campaign_id: jt_outreach::CampaignId,
+        revision: u32,
+    },
+    /// `count` prospects promoted two to thirty days ago were not written to since.
+    PromotedNotContacted { count: u32 },
 }
 
 impl WorkKind {
@@ -263,6 +313,16 @@ impl WorkKind {
             WorkKind::InboundEvents { .. } => "events.ack",
             WorkKind::VoiceBridgeOffline { .. } => "calls.bridge.register",
             WorkKind::PhoneOffline { .. } => "devices.bridge.register",
+            WorkKind::ResearchDue { .. } => "prospects.create",
+            WorkKind::ProspectsToScore { .. } => "prospects.score",
+            WorkKind::ProspectsToPromote { .. } => "prospects.promote",
+            WorkKind::OwnerlessJourneys { .. } | WorkKind::AssignmentStalled { .. } => {
+                "inbox.journeys.assign_owner"
+            }
+            WorkKind::PersonalizationDue { .. } => "outreach.personalize",
+            WorkKind::CampaignBlocked { .. } => "outreach.campaigns_control",
+            WorkKind::CampaignApproval { .. } => "outreach.campaigns_approve",
+            WorkKind::PromotedNotContacted { .. } => "outreach.enroll",
         }
     }
 }
@@ -333,6 +393,46 @@ async fn pending_as_seen(
         && strategy.approved.is_some()
     {
         Some(super::studio::work::pending_in(repos.as_mut(), ctx).await?)
+    } else {
+        None
+    };
+    // The pool's work, for who works it, while the approved strategy has prospecting on.
+    let pool = if ctx.permissions.contains(&Permission::ProspectsWork)
+        && status_exemption("prospects.create").allows(status)
+    {
+        match repos.strategy().current_approved().await? {
+            Some(v) => Some(super::prospects::playbook::pending_in(repos.as_mut(), ctx, &v).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    // Ownerless and stalled journeys, for who may assign them.
+    let distribution = if ctx.permissions.contains(&Permission::InboxManage)
+        && status_exemption("inbox.journeys.assign_owner").allows(status)
+    {
+        let max = repos
+            .workspace_policy()
+            .read()
+            .await?
+            .leads
+            .distribution
+            .max_reassignments;
+        Some((
+            repos.assignments().count_ownerless().await?,
+            repos
+                .assignments()
+                .count_stalled(ctx.now, u32::from(max))
+                .await?,
+        ))
+    } else {
+        None
+    };
+    // Outreach's work, for who works it.
+    let outreach = if ctx.permissions.contains(&Permission::OutreachWork)
+        && status_exemption("outreach.enroll").allows(status)
+    {
+        Some(super::outreach::work::pending_in(repos.as_mut(), ctx).await?)
     } else {
         None
     };
@@ -458,6 +558,121 @@ async fn pending_as_seen(
                 "Review the queued Studio budget move and its blockers.".into()
             },
         }));
+    }
+    if let Some(p) = pool {
+        items.extend(
+            p.research_due
+                .into_iter()
+                .map(|(task_id, remaining_today)| WorkItem {
+                    kind: WorkKind::ResearchDue {
+                        task_id,
+                        remaining_today,
+                    },
+                    priority: 3,
+                    hint: "Read jeeta.prospects.playbook and the task (jeeta.research.tasks_get), \
+                           claim it (jeeta.research.tasks_claim), research businesses with your \
+                           own tools and record each with jeeta.prospects.create."
+                        .into(),
+                }),
+        );
+        if p.to_promote > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::ProspectsToPromote {
+                    count: p.to_promote,
+                },
+                priority: 3,
+                hint: "Promote the qualified prospects (jeeta.prospects.list with status \
+                       qualified) with jeeta.prospects.promote: each becomes an inbox person \
+                       with an owner."
+                    .into(),
+            });
+        }
+        if p.to_score > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::ProspectsToScore { count: p.to_score },
+                priority: 3,
+                hint: "Score the new prospects (jeeta.prospects.list with status new) with \
+                       jeeta.prospects.score, sending the playbook's rubric_digest."
+                    .into(),
+            });
+        }
+    }
+    if let Some((ownerless, stalled)) = distribution {
+        if ownerless.count > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::OwnerlessJourneys {
+                    count: ownerless.count,
+                    oldest_journey_id: ownerless.oldest_journey_id,
+                },
+                priority: 2,
+                hint: "Open journeys have no owner: assign each with \
+                       jeeta.inbox.journeys_assign_owner, or hand them out with \
+                       jeeta.distribution.backfill (jeeta.distribution.get shows who is eligible)."
+                    .into(),
+            });
+        }
+        if stalled > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::AssignmentStalled { count: stalled },
+                priority: 2,
+                hint: "Assignments passed their SLA after the last reassignment: find them with \
+                       jeeta.distribution.assignments_list and give each an owner with \
+                       jeeta.inbox.journeys_assign_owner."
+                    .into(),
+            });
+        }
+    }
+    if let Some(p) = outreach {
+        items.extend(p.approvals.into_iter().map(|(campaign_id, revision)| {
+            WorkItem {
+                kind: WorkKind::CampaignApproval {
+                    campaign_id,
+                    revision,
+                },
+                priority: 2,
+                hint: "Read the campaign (jeeta.outreach.campaigns_get) and its audience \
+                           (jeeta.outreach.audience_preview); a person with outreach.manage \
+                           approves its revision with jeeta.outreach.campaigns_approve."
+                    .into(),
+            }
+        }));
+        items.extend(p.blocked.into_iter().map(|(campaign_id, reason)| {
+            WorkItem {
+                kind: WorkKind::CampaignBlocked {
+                    campaign_id,
+                    reason,
+                },
+                priority: 2,
+                hint: "The campaign was paused for its bounces, complaints, mailbox or strategy: \
+                       read jeeta.outreach.report and the campaign, fix the cause (the audience, \
+                       the mailbox), then resume or cancel it with \
+                       jeeta.outreach.campaigns_control."
+                    .into(),
+            }
+        }));
+        items.extend(
+            p.personalization_due
+                .into_iter()
+                .map(|(campaign_id, count)| WorkItem {
+                    kind: WorkKind::PersonalizationDue { campaign_id, count },
+                    priority: 2,
+                    hint: "Enrollments send within a day and miss custom values their step \
+                           needs: read them with jeeta.outreach.enrollments_list (status \
+                           active) and write the values with jeeta.outreach.personalize."
+                        .into(),
+                }),
+        );
+        if p.promoted_not_contacted > 0 {
+            items.push(WorkItem {
+                kind: WorkKind::PromotedNotContacted {
+                    count: p.promoted_not_contacted,
+                },
+                priority: 3,
+                hint: "Promoted prospects were not written to: enroll them in a campaign with \
+                       jeeta.outreach.enroll (person_ids), or reach them from the inbox."
+                    .into(),
+            });
+        }
     }
     items.extend(shoots.into_iter().map(|q| {
         WorkItem {

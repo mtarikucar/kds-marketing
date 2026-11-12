@@ -66,6 +66,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
    ```text
    INFO jeeta::serve: provider apps: OAuth needs a configured app; webhook and redirect addresses need the public base URL providers="none" public_base_url="unset (JEETA_PUBLIC_BASE_URL)"
+   INFO jeeta::serve: outreach email: campaigns launch and send only while JEETA_OUTREACH_ENABLED is on outreach_enabled=false
    INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=4
    ```
 
@@ -83,7 +84,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
 
 `migrations/` içindeki her göç bir `NNNN_ad.up.sql` / `NNNN_ad.down.sql` çiftidir; ikisi de yeniden
 çalıştırılabilir (idempotent) ve `jt_pg/tests/migrations.rs` bütün kümeyi yukarı → aşağı → yukarı
-döndürür. Yirmi dört göç vardır (`0020` ve `0026`–`0028` başka dallardadır):
+döndürür. Yirmi yedi göç vardır (`0028` bu dalın ekleri için L6 ile gelir):
 
 | Göç | Ne yapar |
 |---|---|
@@ -106,11 +107,15 @@ döndürür. Yirmi dört göç vardır (`0020` ve `0026`–`0028` başka dallard
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
 | `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
-| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 84 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
-| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 87 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
+| `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 82 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
+| `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 89 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
+| `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 92 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
 | `0023_oauth_flow` | `oauth_pending.flow`: the variant of the app's sign-in a started OAuth flow runs (`null` for the app's own; `whatsapp_business_app` for Meta's WhatsApp Embedded Signup of a number already in the WhatsApp Business app), kept to its completion. No new table. Down deletes the pending flows that run a variant, then drops the column. `0020` belongs to a parallel branch. |
 | `0024_whatsapp_erasure` | Erasure finds a person in the events of a number onboarded beside the WhatsApp Business app: `inbox_event_person` also matches a history message's `thread` and `from`/`to`, a phone-app echo's `to` and an app contact's `phone_number`; `inbox_mask_personal` also masks `thread`, `phone_number`, `full_name`, `first_name` (the Rust mask holds the same keys). No new table. Down puts back 0008's functions, and is refused once such events are stored. |
 | `0025_inbox_public_erasure` | Puts the erasure additions of `0019` and `0024` in one definition (each replaced 0008's functions on its own branch, so the later one dropped the other's: version order runs 0024 last, production ran 0019 last): the mask and the event matching cover public items and the WhatsApp Business app alike. No new table. Down puts back 0024's functions, and is refused once a comment or a question is stored. |
+| `0026_outreach` | E-posta kampanyaları (leads L4): `outreach_templates`, `outreach_campaigns`, `outreach_enrollments` (bir kişinin aynı anda en fazla bir etkin kaydı), `outreach_sends` (forced RLS; 96 tables), and `outreach.work` and `outreach.manage` for the system owner/manager; `rep` holds neither. Nothing here sends: the platform switch `JEETA_OUTREACH_ENABLED` (off by default) is checked at launch, dispatch and claim. Down refuses nothing (an unsubscribe is the inbox's suppression). |
+| `0027_distribution` | Dağıtım (leads L3): `people.recipient_kind` (`unknown` by default), `rep_profiles`, `distribution_rules`, `journey_assignments` (one live decision per journey; append-only but `acted_at`/`superseded_at`, each once; goes with its journey) (forced RLS; 99 tables). Down drops the three tables, and `recipient_kind` only while every person reads `unknown`. |
+| `0028_mail_files` | E-posta ekleri (leads L6): `mail_files`, one row per attachment kept or skipped (inbound `stored`/`skipped`, outbound `staged`/`attached`, `deleted` once its bytes went; the bytes live in the file store as `application/octet-stream`, never here) (forced RLS; 100 tables). Down drops the table (the files left in the store go with the store's daily sweep of files no record keeps), and is refused while an outbox entry waiting to be sent names mail files. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -189,6 +194,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_LINKEDIN_CLIENT_SECRET` | — | LinkedIn uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_LINKEDIN_ORG_SCOPES` | kapalı | `1`/`true`: LinkedIn akışları kurum kapsamlarını da ister (`r_organization_social`, `w_organization_social`, `rw_organization_admin`) ve `linkedin_page` bağlanabilir. Yalnız LinkedIn uygulamaya Community Management API'yi onayladıktan sonra açılır (onaysız kapsam isteyen yetkilendirmeyi LinkedIn tümden reddeder); kapalıyken `linkedin_page` akışı `409` `details.reason = "provider_product_not_enabled"`. LinkedIn uygulaması olmadan verilemez |
 | `JEETA_LINKEDIN_API_VERSION` | adaptörün sabit sürümü | REST çağrılarının `LinkedIn-Version` başlığı, `YYYYMM`. Sürüm emekliye ayrılınca hata satırı `426` ile sürümü adıyla söyler; LinkedIn uygulaması olmadan verilemez |
+| `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz. Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:
@@ -644,6 +650,10 @@ Sistem rollerinin izinleri:
 | `calls.bridge` (ses köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
 | `devices.work` (telefonları kullanma) | ✓ | ✓ | — |
 | `devices.bridge` (cihaz köprüsü olarak çalışma; yalnızca köprünün anahtarı) | ✓ | ✓ | — |
+| `prospects.work` (aday havuzunda çalışma) | ✓ | ✓ | — |
+| `prospects.manage` (aday havuzunu yönetme: yeniden açma, iletişim yasağını kaldırma, silme, saklama süreleri) | ✓ | ✓ | — |
+| `outreach.work` (e-posta kampanyalarında çalışma) | ✓ | ✓ | — |
+| `outreach.manage` (kampanyaları onaylama, iptal etme, ayarlar; işletme alıcısı dayanağını yalnızca sahip, avukat onayıyla açar) | ✓ | ✓ | — |
 
 `calls.bridge` ve `devices.bridge` bir köprünün API anahtarının izinleridir; sahip ve yönetici onları o anahtarı
 verebilmek için taşır.
@@ -829,6 +839,18 @@ Genel adres yapılandırılmamışsa liste `409 CONFLICT`'tır (`details.reason 
 | `GET /hooks/meta` (doğrulama) | `hub.mode=subscribe` ve doğru `hub.verify_token` için `hub.challenge` düz metin olarak, `200`; başka her şey `403`; Meta uygulaması yapılandırılmamışsa `404` |
 | `POST /hooks/meta` | imza başlığı yoksa ya da Meta uygulaması yoksa gövde okunmadan `401`; 3 MB üstü `413`; imza tutmazsa `401`; olaylar yazılınca (ya da kurala göre atılınca) `200 EVENT_RECEIVED`; veritabanı hatası `500` (Meta yeniden gönderir) |
 | `POST /hooks/netgsm/{workspace_id}/{anahtar}/{amaç}` | bozuk ya da bilinmeyen parça, yanlış anahtar, var olmayan ya da askıya alınmış (`suspended`) alan: gövde okunmadan çıplak `404`; 256 KB üstü `413`; okunamayan gövde `202` (hiçbir şey yazılmaz); olaylar yazılınca `202`; veritabanı hatası `503` (NetGSM yeniden gönderir) |
+| `GET /u/{workspace_id}/{belirteç}/{mac}` | ticari bir e-postanın abonelikten çıkma sayfası (e-postanın alt bilgisinin dilinde, tek düğme aynı adrese `POST` eder); abonelikten **çıkarmaz** |
+| `POST /u/{workspace_id}/{belirteç}/{mac}` | RFC 8058 tek tıkla çıkış (`List-Unsubscribe=One-Click`) ya da sayfanın formu: çerez, oturum, CSRF belirteci istenmez; alanın durumu ne olursa olsun abonelikten çıkarır (tekrarı hiçbir şey yazmaz), `200` küçük bir sayfa; 1 KB üstü gövde `413` |
+| `GET`, `HEAD /c/{workspace_id}/{belirteç}/{bağlantı}/{mac}` | tıklama izleyen bir kampanyanın e-postasındaki bağlantıya `302`; `HEAD`, `User-Agent`'sız istek ve gönderimden sonraki 60 saniye içindeki tıklama otomatik sayılır; askıdaki alan yönlendirir ama sayılmaz |
+
+**Genel bağlantılar** (`/u/…`, `/c/…`): belirteç e-postanın giden kutusu kaydının kimliğidir, MAC alanın
+o amaç için türetilen anahtarıyla (`outreach.unsubscribe`, `outreach.click`) hesaplanır ve sabit zamanda
+karşılaştırılır; her şeyden önce denetlenir. Tutmayan MAC, standart biçimde olmayan belirteç ya da bağlantı
+sırası, hiçbir e-postanın olmayan belirteç: hepsi aynı `404` sayfası, hiçbir şey yazılmaz. Silinmiş
+(erasure) bir alıcının çıkışı `200` döner, hiçbir şey yazmaz ve kişi hakkında hiçbir şey söylemez. İstemci
+hakkında hiçbir şey (adres, tarayıcı dizesi) saklanmaz ya da günlüğe yazılmaz. Sayfalar `Cache-Control:
+no-store`, `Referrer-Policy: no-referrer` ve `Content-Security-Policy: default-src 'none'; style-src
+'unsafe-inline'; form-action 'self'; frame-ancestors 'none'` taşır.
 
 **Alanın durumu.** Meta olayları hesaba göre yönlendirilir ve hesabı tutan alan **etkin** ya da **ödeme
 bekliyor** (`pending_payment`) ise yazılır: ödeme beklerken bağlı hesapların olayları kaybolmaz. Alan
@@ -980,7 +1002,11 @@ zamanlayıcı (`bin/jeeta/src/scheduler.rs`) onu aralığında, kilidinin altın
 | `device_bridge_health` | 1 dakika | Her alanda, on dakikadır hiçbir kaydın listelemediği (köprüsü kayıt göndermeyen ya da onu artık listelemeyen) ama hâlâ doğrulanmış görünen her telefonu `unreachable` yapar ve telefon başına bir kez `devices.bridge.offline` yazar; onu listeleyen bir sonraki kayıt telefonu yeniden doğrular. Son listelenmesinden bir dakika sonra telefon bu iş olmadan da bayattır ve komut almaz | `jeeta.jobs.device_bridge_health` |
 | `device_command_expiry` | 1 dakika | Her alanda, süresi dolmuş, hâlâ `queued` ya da `leased` her telefon komutunu `expired` yapar ve her biri için `devices.command.finished` (`status: expired`) yazar, işlem başına en çok 200 komut; komut satırları hiç silinmez. Kiralanmış bir komutun geç gelen sonucu `expired`'ın yerine geçer ve ikinci bir `devices.command.finished` yazar | `jeeta.jobs.device_command_expiry` |
 | `device_file_purge` | 1 saat | Her alanda, yedi günlük saklama süresi dolan cihaz dosyalarını (ekran görüntüleri, telefondan çekilen dosyalar) önce dosya deposundan, sonra kaydından siler; silinemeyen bir dosyayı geçip sonrakilere devam eder, yarıda kalan bir silme bir sonraki çalışmada tamamlanır. Günlüğe kayıt yazmaz; dosyayı anan komutlar kalır | `jeeta.jobs.device_file_purge` |
+| `prospects_purge` | 1 gün | Her alanda (durumu ne olursa olsun), alanın **güncel** saklama sürelerine göre zamanı gelen adayları 500'lük partiler hâlinde (her parti kendi işleminde, çalışma başına en çok 20 parti) siler: reddedilen bir adayın sert anahtarları (telefon, e-posta, Instagram, TikTok) önce `rejected_memory_days` (365 gün) boyunca anahtarlı özet olarak hatırlanır; silinen adayın istek anahtarları da silinir; ardından süresi dolmuş red özetlerini siler. Bir şey silen her parti için bir `prospects.purged {count}` sistem kaydı yazar; hiçbir değer ya da kimlik günlüğe geçmez | `jeeta.jobs.prospects_purge` |
+| `research_plan` | 1 saat | Onaylı stratejisi olan her `active` alanda, onaylı sürümün her ICP girdisine açık bir sürekli araştırma görevi açar (`Recorder::System { job: "research_plan" }`) ve eski sürümlerin açık sürekli görevlerini `superseded` yapar; anlık (ad-hoc) görevlere dokunmaz. Aynı iş strateji onayında da onayın işleminde çalışır. Görev başına bir `research.task_created` ya da `research.task_closed {outcome}` sistem kaydı yazar; brief metni günlüğe geçmez | `jeeta.jobs.research_plan` |
 | `whatsapp_app_sync` | 5 dakika | WhatsApp Business uygulamasının yanında bağlanan her numara için (`connector_public.business_app`), active ve pending_payment alanlarda, uygulamanın kişilerini sonra sohbet geçmişini Meta'dan bir kez ister (`POST /{phone_number_id}/smb_app_data`), bağlanmadan sonraki 24 saat içinde. Her istek bir karşılaştır-ve-değiştir adımıdır: `requesting` işlenir, sağlayıcı işlem açıkken çağrılmaz; yanıt `requested` (istek kimliğiyle) ya da `refused` (nedeniyle) yazılır, meşgul ya da ulaşılamayan sağlayıcı bir sonraki çalışmada yeniden sorulur, kaybolmuş bir yanıt (`unknown`) asla yeniden sorulmaz, süresi dolan `expired` olur (doğrulanmamış bir kabiliyet sorulmaz, süresi yine dolar). Her yerleşen adım `connector.app_sync` yazar | `jeeta.jobs.whatsapp_app_sync` |
+| `purge_request_keys` | 1 gün | Her alanda (durumu ne olursa olsun) süresi dolmuş istek anahtarlarını siler: 24 saatten (`REQUEST_KEY_TTL`) önce saklanmış, hiçbir tekrarın artık okuyamadığı anahtarlar (`RequestKeyRepo::purge_expired`); her alan kendi işleminde, ulaşılamayan alan sayılır, ötekiler yine silinir. Günlüğe kayıt yazmaz (anahtar yanıtı değil, yalnız bir kimliği tutar) | `jeeta.jobs.purge_request_keys` |
+| `mail_files_purge` | 1 gün | Her alanda (durumu ne olursa olsun) zamanı gelen e-posta eklerinin baytlarını dosya deposundan siler: leads politikasının `attachments.retention_days` (varsayılan 180 gün) süresinden eski gelen ekler ve yedi gün içinde bir e-postaya eklenmemiş yüklemeler; satırları `deleted` olarak kalır (`inbox::attachments::purge`, 500'lük partiler, her parti kendi işleminde, çalışma başına en çok 20 parti; baytlar parti işlendikten sonra silinir, arada kalan baytları deponun günlük süpürmesi siler). Günlüğe kayıt yazmaz, dosya adı günlüğe geçmez | `jeeta.jobs.mail_files_purge` |
 
 - **Kilit: üst üste binme yok.** Her tıkta iş kendi kilidini ister
   (`pg_try_advisory_lock(hashtext('<kilit>'))`); kilidi başka bir koşucu (aynı ya da başka bir örnek)
@@ -1279,6 +1305,9 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | Kişi arama (`q`, `limit`) | `GET /api/inbox/people` | `jeeta.inbox.people_search` | READ / `inbox.work` |
 | Kişi, kimlikler, açık yolculuk, konuşmalar | `GET /api/inbox/people/{person_id}` | `jeeta.inbox.people_get` | READ / `inbox.work` |
 | Kişi eşleştir/oluştur | `POST /api/inbox/people` | `jeeta.inbox.people_create` | WRITE / `inbox.work` |
+| Alıcı türü (işletme/bireysel) | `POST /api/inbox/people/{person_id}/kind` | `jeeta.inbox.people_set_kind` | WRITE / `inbox.work` |
+| E-posta eki yükle (`request_key`, `filename`, `mime`, `data_base64`; PDF, PNG, JPEG, metin, CSV, Word/Excel OOXML; ilk baytlarıyla doğrulanır, en çok 7 MiB; yedi gün bekler) | `POST /api/inbox/attachments` | `jeeta.inbox.attachments_upload` | WRITE / `inbox.work` |
+| E-posta eki: ad, tür, boyut, durum ve baytlar duruyorsa on dakikalık, yalnız indirilen adres | `GET /api/inbox/attachments/{file_id}` | `jeeta.inbox.attachments_get` | READ / `inbox.work` |
 | Kimlik ekle / birleştirme öner | `POST /api/inbox/people/{person_id}/identities` | `jeeta.inbox.identities_add` | WRITE / `inbox.work` |
 | Yolculuk aç | `POST /api/inbox/people/{person_id}/journeys` | `jeeta.inbox.journeys_open` | WRITE / `inbox.work` |
 | Yolculuk, son 50 olay, görevler, notlar | `GET /api/inbox/journeys/{journey_id}` | `jeeta.inbox.journeys_get` | READ / `inbox.work` |
@@ -2058,6 +2087,134 @@ removes their calls' commands and the bridge's event notes, and empties their ca
 | `calls.listen` | `GET /api/calls/{call_id}/events?after_seq&wait_s` | `jeeta.calls.listen` | READ | `calls.work`; long-poll of at most 25 s: `{call_id, state, events, timed_out}` |
 | `calls.say` | `POST /api/calls/{call_id}/say` | `jeeta.calls.say` | WRITE | `calls.work`; `{text ≤ 600, expect_reply, allow_barge_in}`; `409 not_live` off the line |
 | `calls.transfer` | `POST /api/calls/{call_id}/transfer` | `jeeta.calls.transfer` | WRITE | `calls.work`; to `to_extension` or the policy's `handoff_extension`; ends the agent's part |
+
+#### The prospect pool (`jeeta.prospects.*`, leads L1)
+
+Businesses that agents research with their own tools and record with evidence (spec
+`docs/superpowers/specs/2026-10-30-leads-pool-outreach-design.md`). Jeeta never researches and calls
+no data service; it stores, validates, dedupes and fences what is recorded. A prospect is never in
+the inbox, and is never contacted, until it is promoted (L3). Every contact field carries its source
+URL, `captured_at` and the recorder, which Jeeta takes from the caller (an agent's connection and
+issuer, or the person); input never names it. Only hard keys (phone, email, Instagram, TikTok)
+refuse, in order: `erased_identity`, `do_not_contact`, `previously_rejected`, `in_inbox`,
+`duplicate`; soft keys (the website's domain, name and city) come back as non-blocking `flags`
+(`possible_duplicate`, `previously_rejected_soft`; `distinct_from` silences a candidate). A website
+on a platform host (social profiles, marketplaces, maps, link-in-bio pages, short links) is refused
+with its kind's reason. Daily caps count in the workspace's time zone (500 a day, and each research
+task's own cap). Retention, evaluated against the current policy at each purge: rejected 30 days
+after the decision, unpromoted 180 days after the last update, a purged rejection's hard keys
+remembered 365 days; the do-not-contact list is per-workspace keyed hashes of hard keys (HMAC under
+the `prospects.blocklist` key, each entry with its key's fingerprint) and survives every purge.
+Request keys store the prospect id only. Ledger payloads carry ids, kinds, reasons and field names,
+never values. Gated by the strategy, except do-not-contact and erasure, which run in any workspace
+status (an objection is always recordable); `prospects.work` (`prospects.manage` where noted),
+which the rep role does not hold.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `prospects.playbook` | `GET /api/prospects/playbook` | `jeeta.prospects.playbook` | READ | the playbook (Appendix A, versioned) and the workspace's ICP, rubric digest, caps, remaining per task, retention and blocklist rules |
+| `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok, flags}` or the refusal create would meet; writes nothing |
+| `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `{prospect, flags}`; `request_key` replays the recorded prospect 24 h |
+| `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
+| `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters, newest first, no contact values |
+| `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores, duplicate candidates, history |
+| `prospects.score` | `POST /api/prospects/{prospect_id}/scores` | `jeeta.prospects.score` | WRITE | under the approved rubric's digest; `qualify_at` qualifies |
+| `prospects.decide` | `POST /api/prospects/{prospect_id}/decision` | `jeeta.prospects.decide` | WRITE | qualify, reject (fixed reasons), reopen (a person with `prospects.manage`) |
+| `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed, scores deleted) or raw hard keys (their holders marked too); agents too; any workspace status |
+| `prospects.dnc_lift` | `POST /api/prospects/do-not-contact/lift` | `jeeta.prospects.dnc_lift` | WRITE | a person with `prospects.manage`; an erasure never lifts |
+| `prospects.erase` | `POST /api/prospects/{prospect_id}/erase` | `jeeta.prospects.erase` | DESTRUCTIVE | `confirm`; a person with `prospects.manage`; hard keys kept as erased hashes; any workspace status |
+| `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
+| `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
+| `prospects.promote` | `POST /api/prospects/promote` | `jeeta.prospects.promote` | WRITE | 1 to 50, each in its own transaction; also `inbox.work`; a person, an identity per deliverable phone and email, a business recipient, a journey of source `prospect`, no consent; distributed at once; one outcome per prospect; `prospects_to_promote` in `work.pending` |
+| `prospects.report` | `GET /api/prospects/report` | `jeeta.prospects.report` | READ | `?from&to&group_by` (`[from, to)`, RFC 3339, at most 366 days); computed at read time; per group the prospects created in the range (created, scored, qualified, rejected by reason) and those promoted in it (contacted, replied, meetings, quoted, won, lost by reason, won revenue per currency, never summed across currencies, and the funnel's rates); grouped by the record at promotion (source, research task, segment, sector, city, score bucket, rubric digest) |
+
+#### Research tasks (`jeeta.research.*`, leads L2)
+
+The briefs agents fill the pool from (spec §3.7). Approving a strategy whose `prospecting` section
+has ICP entries plans one open **standing** task per entry (in the approval's transaction, and
+hourly with `research_plan`); a newer version supersedes the older versions' standing tasks, and
+nobody closes a standing task by hand. **Ad-hoc** tasks are a person's or an agent's brief and
+target, while prospecting is on; one closes itself once its target is recorded. A task's
+`remaining_today` is its daily cap less today's records, never past the workspace's ceiling (500)
+or an ad-hoc task's target, and zero for a standing task while its segment's backlog is at the ICP
+entry's `backlog_target` (0 sets no limit). The claim is a two-hour advisory lease. `work.pending`
+lists `research_due` (each task with something left today) and `prospects_to_score` (new prospects
+without a score under the approved rubric) to keys with `prospects.work`. Gated by the strategy;
+`prospects.work`.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `research.tasks_list` | `GET /api/research/tasks` | `jeeta.research.tasks_list` | READ | `?status&limit&before_at&before_id`; each `{task, remaining_today}` |
+| `research.tasks_get` | `GET /api/research/tasks/{task_id}` | `jeeta.research.tasks_get` | READ | the task, `remaining_today`, `found` and its 20 newest prospects (rows) |
+| `research.tasks_create` | `POST /api/research/tasks` | `jeeta.research.tasks_create` | WRITE | an ad-hoc `{brief, target_count, daily_cap}`; `prospecting_off` without ICP; `request_key` replays 24 h |
+| `research.tasks_claim` | `POST /api/research/tasks/{task_id}/claim` | `jeeta.research.tasks_claim` | WRITE | two hours; another recorder's live claim is answered (`held_by_other`), never taken |
+| `research.tasks_close` | `POST /api/research/tasks/{task_id}/close` | `jeeta.research.tasks_close` | WRITE | an ad-hoc task, `done` or `canceled`; a standing one is `standing_task` |
+
+#### Lead distribution (`jeeta.distribution.*`, leads L3)
+
+Who owns a new journey (spec §3.9). The ordered rules (`when`: sources, cities, sectors,
+languages, segments, minimum score; `to`: listed members or every eligible one; round robin or
+least loaded; an optional SLA in working minutes), then the implicit default rule (every
+eligible member, round robin) unless the mode is `manual`. A member is eligible while active
+with `inbox.work`, accepting, not away and under their `max_open`; members on shift come first.
+It runs inline at promotion and every minute (`lead_distribution`) for each open journey without
+an owner that no decision settled; a v1-imported journey waits for a manager's backfill. Every
+decision is a row of the assignment log (`rule`, `default`, `manual`, `sla_reassign`,
+`member_left`, `import`, `no_eligible`), so no open journey is ever silently ownerless:
+`work.pending` lists `ownerless_journeys` and `assignment_stalled` to `inbox.manage`. An
+assignment past its SLA moves to the next member of its rule (earlier owners excluded), at most
+`max_reassignments` times. A person's reply, journey event, note, completed task or call marks
+it acted on; an agent's does not. `inbox.journeys.assign_owner` writes a `manual` decision.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `distribution.get` | `GET /api/distribution` | `jeeta.distribution.get` | READ | mode, rules, members with load and eligibility, ownerless and stalled counts |
+| `distribution.rules_set` | `PUT /api/distribution/rules` | `jeeta.distribution.rules_set` | WRITE | `inbox.manage`; replaces every rule; optional `mode`, `max_reassignments` |
+| `distribution.rep_set` | `PUT /api/distribution/reps/{user_id}` | `jeeta.distribution.rep_set` | WRITE | own profile with `inbox.work`, another's with `inbox.manage`; replaced whole |
+| `distribution.assignments_list` | `GET /api/distribution/assignments` | `jeeta.distribution.assignments_list` | READ | the log, newest first; `?journey_id&user_id&limit&before_at&before_id` |
+| `distribution.backfill` | `POST /api/distribution/backfill` | `jeeta.distribution.backfill` | WRITE | `inbox.manage`; up to 200 ownerless journeys, whatever their decision |
+
+#### Email outreach (`jeeta.outreach.*`, leads L4)
+
+Plain-text email campaigns from the workspace's own mailbox (spec §3.10–§3.17). **Cold email is
+locked**: campaigns can be prepared, but a launch, a resume, an approval that starts one, the
+dispatcher (`outreach_dispatch`, every minute) and a test email refuse while
+`JEETA_OUTREACH_ENABLED` is off (`403 outreach_disabled_on_platform`), and every send is fenced
+again at claim. Outreach reaches consented people only, unless a human owner turned on the
+business-recipient basis (email only) with the counsel's confirmation recorded, and it counts
+only while the switch is on. Every email carries the opt-out footer and an RFC 8058 one-click
+unsubscribe (one place, `replies::enqueue_in`), honoured by the public routes `/u/…` (the
+suppression, a withdrawal, the sequence stopped `unsubscribed`, whatever the workspace's status) and
+by an emailed `unsubscribe` to the mailbox; a campaign with click tracking on gets `/c/…` redirects
+to its own links (see the webhook gate's table). A campaign is 1 to 6 steps; its audience is
+frozen into enrollments at launch, one active enrollment per person; approval is revision-bound
+and needed when the outreach settings or the mailbox require it. A reply, a bounce, a
+complaint, withdrawn consent, a meeting, a won or lost journey, an erasure and a merge stop the
+person's enrollment at once (and the dispatcher checks each again). `work.pending` lists
+`personalization_due`, `campaign_blocked`, `campaign_approval` (people with `outreach.manage`)
+and `promoted_not_contacted` to keys with `outreach.work`. Gated by the strategy;
+`outreach.work` (`outreach.manage` where noted), which the rep role does not hold.
+
+| Use case | Panel | MCP | Risk | Notes |
+|---|---|---|---|---|
+| `outreach.templates_list` | `GET /api/outreach/templates` | `jeeta.outreach.templates_list` | READ | `?include_archived&limit&before_at&before_id`; each template with its variables and links |
+| `outreach.templates_save` | `POST /api/outreach/templates` | `jeeta.outreach.templates_save` | WRITE | new, or the next revision (`template_id`, `expected_revision`); fixed variables and `custom.<key>`; `http(s)` links only |
+| `outreach.templates_archive` | `POST /api/outreach/templates/{template_id}/archive` | `jeeta.outreach.templates_archive` | WRITE | hidden from new campaigns; snapshots keep sending |
+| `outreach.campaigns_list` | `GET /api/outreach/campaigns` | `jeeta.outreach.campaigns_list` | READ | `?status&limit&before_at&before_id`, newest first |
+| `outreach.campaigns_get` | `GET /api/outreach/campaigns/{campaign_id}` | `jeeta.outreach.campaigns_get` | READ | definition, status, revision, approval, active enrollments |
+| `outreach.campaigns_save` | `POST /api/outreach/campaigns` | `jeeta.outreach.campaigns_save` | WRITE | draft or paused only; each save the next revision, the approval voided |
+| `outreach.audience_preview` | `POST /api/outreach/audience-preview` | `jeeta.outreach.audience_preview` | READ | eligible, by skip reason, by basis, promotions needed; writes nothing |
+| `outreach.campaigns_launch` | `POST /api/outreach/campaigns/{campaign_id}/launch` | `jeeta.outreach.campaigns_launch` | WRITE | the switch, then the sender identity; awaits approval or runs; snapshots and enrolls |
+| `outreach.campaigns_approve` | `POST /api/outreach/campaigns/{campaign_id}/approve` | `jeeta.outreach.campaigns_approve` | WRITE | a person with `outreach.manage`; bound to `expected_revision` |
+| `outreach.campaigns_control` | `POST /api/outreach/campaigns/{campaign_id}/control` | `jeeta.outreach.campaigns_control` | WRITE | `pause`, `resume` (approval again), `cancel` (`outreach.manage`; stops every enrollment) |
+| `outreach.enroll` | `POST /api/outreach/campaigns/{campaign_id}/enrollments` | `jeeta.outreach.enroll` | WRITE | `audience: true`, `person_ids` or `prospect_ids` (promoted first); skips with reasons |
+| `outreach.enrollments_list` | `GET /api/outreach/campaigns/{campaign_id}/enrollments` | `jeeta.outreach.enrollments_list` | READ | `?status&limit&after`; `{items, next}` |
+| `outreach.enrollments_stop` | `POST /api/outreach/enrollments/{enrollment_id}/stop` | `jeeta.outreach.enrollments_stop` | WRITE | body `{}`; stops an active enrollment (`manual`), `409 not_active` otherwise |
+| `outreach.personalize` | `POST /api/outreach/enrollments/personalization` | `jeeta.outreach.personalize` | WRITE | 1 to 100 enrollments' `custom.*` values; the whole personalization replaced |
+| `outreach.test_send` | `POST /api/outreach/campaigns/{campaign_id}/test` | `jeeta.outreach.test_send` | WRITE | body `{}` (or `{step, to}`); one step to the caller's own login address only (`403 not_a_members_login_address` for any other), through the outbox with the footer; locked like every send |
+| `outreach.report` | `GET /api/outreach/report` | `jeeta.outreach.report` | READ | `?campaign_id&from&to&group_by` (`campaign`, `step`, `template`); computed at read time over `[from, to)` |
+| `outreach.settings_get` | `GET /api/outreach/settings` | `jeeta.outreach.settings_get` | READ | the policy, `sender_identity_complete`, `platform_enabled`, `b2b_channels_in_force` |
+| `outreach.settings_set` | `PUT /api/outreach/settings` | `jeeta.outreach.settings_set` | WRITE | `outreach.manage`; the business basis and the İYS lookup's waiver need a human owner and `legal_ack` |
 
 #### The voice bridge (voice V1)
 

@@ -25,6 +25,11 @@ pub struct SendInput {
     pub text: String,
     pub intent: SendIntent,
     pub request_key: Option<String>,
+    /// Staged uploads to attach (email only, at most five, spec
+    /// 2026-10-30-leads-pool-outreach-design.md §3.15); the quote's `file_ref` becomes
+    /// `mail_file:<id>` of the first, so it is given in place of `file_ref`.
+    #[serde(default)]
+    pub attachments: Vec<jt_studio::FileId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SendOut {
@@ -71,6 +76,16 @@ pub async fn enqueue(
         ));
     }
     let j = lock_live_journey(r.as_mut(), journey).await?;
+    let file_ref = match (input.file_ref, input.attachments.first()) {
+        (Some(_), Some(_)) => {
+            return Err(AppError::validation(
+                "file_ref and attachments are exclusive",
+                json!({"field":"file_ref","reason":"file_ref_and_attachments"}),
+            ));
+        }
+        (None, Some(first)) => Some(format!("mail_file:{}", first.0)),
+        (file_ref, None) => file_ref,
+    };
     let quote = QuoteRow {
         id: deps.ids.uuid(),
         workspace_id: ctx.workspace_id,
@@ -80,7 +95,7 @@ pub async fn enqueue(
             amount_minor: input.amount_minor,
             currency: input.currency,
             valid_until: input.valid_until,
-            file_ref: input.file_ref,
+            file_ref,
             channel: input.channel,
             state: QuoteState::Sent,
         },
@@ -109,6 +124,7 @@ pub async fn enqueue(
             references: vec![],
             item_id: None,
             visibility: None,
+            attachments: input.attachments,
         },
         replies::Purpose::Quote(&quote, key.as_deref()),
     )

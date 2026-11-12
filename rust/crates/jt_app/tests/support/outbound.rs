@@ -77,5 +77,9 @@ pub async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedCo
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
+    if kind == "mailbox" {
+        // Every commercial email carries the footer's sender identity (spec D62).
+        sender_identity(&w).await;
+    }
     (w, id, connector)
 }

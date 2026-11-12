@@ -72,6 +72,8 @@ pub struct ContextOut {
     pub recent_conversations: Vec<RecentConversation>,
     pub strategy_guidance: Option<StrategyGuidance>,
     pub prohibitions: Vec<String>,
+    /// The prospect this person was promoted from: why this business was chosen.
+    pub prospect: Option<crate::usecases::prospects::ProspectSummary>,
     /// For a comment or question conversation (spec §6.8); absent for a direct one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public: Option<PublicContext>,
@@ -468,6 +470,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         None
     };
     let labels = super::dictionaries::status_labels(r.as_mut()).await?;
+    let prospect = crate::usecases::prospects::promote::summary_for(r.as_mut(), person.id).await?;
     let public = public_context(r.as_mut(), &conversation).await?;
     Ok(ContextOut {
         status_labels: labels.effective,
@@ -479,12 +482,14 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         recent_conversations,
         strategy_guidance,
         prohibitions,
+        prospect,
         public,
     })
 }
 
 /// Runs in the membership-removal transaction under the inbox workspace lock.
 pub(crate) async fn departure(
+    deps: &Deps,
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     user: UserId,
@@ -514,6 +519,7 @@ pub(crate) async fn departure(
     }
     for j in r.journeys().open_owned_by(user).await? {
         r.journeys().assign_owner(j.id, None).await?;
+        crate::usecases::distribution::record_member_left(deps, ctx, r, j.id).await?;
         super::record(
             r,
             ctx,

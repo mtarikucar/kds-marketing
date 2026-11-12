@@ -47,4 +47,31 @@ impl RequestKeyRepo for PgTenantRepos {
             .execute(self.tx.conn()).await.map_err(|e| map_sqlx(e,"store request key"))?;
         Ok(done.rows_affected() == 1)
     }
+
+    async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError> {
+        // `left(...) = prefix`, not `like`: a prefix may hold `_` or `%`.
+        let done = sqlx::query(
+            "delete from request_keys where workspace_id = $1 \
+             and left(key, char_length($2)) = $2 and response->>$3 = $4",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(prefix)
+        .bind(field)
+        .bind(value)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "forget request keys"))?;
+        Ok(done.rows_affected())
+    }
+
+    async fn purge_expired(&mut self, before: OffsetDateTime) -> Result<u64, AppError> {
+        // `request_keys_expiry (workspace_id, at)` serves it.
+        let done = sqlx::query("delete from request_keys where workspace_id = $1 and at <= $2")
+            .bind(self.workspace_id().as_uuid())
+            .bind(before)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "purge expired request keys"))?;
+        Ok(done.rows_affected())
+    }
 }

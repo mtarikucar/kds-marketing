@@ -162,6 +162,41 @@ export function errorMessage(t: TFunction, err: unknown): string {
       return t('errors.useSetCredentials');
     case 'account_mismatch':
       return t('errors.accountMismatch');
+    // The leads program's refusals (spec 2026-10-30-leads-pool-outreach-design.md).
+    case 'not_editable':
+    case 'stale_revision':
+    case 'promoted':
+    case 'erase_the_person':
+    case 'human_only':
+    case 'prospecting_off':
+    case 'task_closed':
+    case 'standing_task':
+    case 'not_scorable':
+    case 'invalid_transition':
+    case 'daily_cap':
+    case 'duplicate':
+    case 'in_inbox':
+    case 'previously_rejected':
+    case 'do_not_contact':
+    case 'system_actor':
+    case 'rubric_mismatch':
+    case 'outreach_disabled_on_platform':
+    case 'sender_identity_missing':
+    case 'approval_required':
+    case 'human_required':
+    case 'owner_required':
+    case 'not_yet':
+    case 'not_enrollable':
+    case 'enrollment_not_active':
+    case 'archived':
+    case 'campaign_not_running':
+    case 'not_active':
+    case 'attachments_require_email':
+    case 'too_many_attachments':
+    case 'attachment_repeated':
+    case 'attachment_not_staged':
+    case 'message_too_large':
+      return t(`leads.errors.${err.details.reason}`);
     default:
       break;
   }

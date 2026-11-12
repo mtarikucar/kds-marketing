@@ -1,8 +1,9 @@
-//! The webhook gate (spec §4.4, §11): where providers call the system. An inbound HTTP adapter
-//! beside the panel's: `jeeta serve` merges [`router`] into its server at `/hooks/*`, outside the
-//! panel's session and request-header checks (a provider holds no session) but inside the
-//! server's security headers and access log, which names a route by its template, so no hook
-//! token reaches the log.
+//! The webhook gate (spec §4.4, §11): where providers call the system, and where a commercial
+//! email's recipient follows its public links ([`links`]). An inbound HTTP adapter beside the
+//! panel's: `jeeta serve` merges [`router`] into its server at `/hooks/*`, `/u/*` and `/c/*`,
+//! outside the panel's session and request-header checks (a provider or a recipient holds no
+//! session) but inside the server's security headers and access log, which names a route by its
+//! template, so no hook token or link MAC reaches the log.
 //!
 //! | Route | Answers |
 //! |---|---|
@@ -10,6 +11,8 @@
 //! | `POST /hooks/meta` | `200 EVENT_RECEIVED` once every event is stored or dropped; see **Meta** below |
 //! | `POST /hooks/netgsm/{workspace_id}/{token}/{purpose}` | `202` once every event is stored; see **NetGSM** below |
 //! | `POST /hooks/tiktok` | `200` once the event is stored or dropped; see **TikTok** below |
+//! | `GET`, `POST /u/{workspace_id}/{token}/{mac}` | a commercial email's one-click unsubscribe; see [`links`] |
+//! | `GET`, `HEAD /c/{workspace_id}/{token}/{link}/{mac}` | an outreach email's click redirect; see [`links`] |
 //!
 //! **Meta** (synchronous: a delivery is answered only after its events are stored, so a lost
 //! answer is a redelivery, never a lost event): no Meta app configured, or no
@@ -72,6 +75,7 @@
 //! provider id (TikTok's: the event's identity, `jt_tiktok::webhook`). No answer, log line or
 //! counter carries a body, an account id, a signature or a secret.
 
+pub mod links;
 mod meta;
 mod netgsm;
 mod raw;
@@ -164,5 +168,10 @@ pub fn router(state: WebhookState) -> Router {
             post(netgsm::receive),
         )
         .route(TIKTOK_HOOK_PATH, post(tiktok::receive))
+        .route(
+            links::UNSUBSCRIBE_ROUTE,
+            get(links::unsubscribe_page).post(links::unsubscribe),
+        )
+        .route(links::CLICK_ROUTE, get(links::click))
         .with_state(state)
 }

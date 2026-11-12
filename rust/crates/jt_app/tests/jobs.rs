@@ -297,8 +297,14 @@ fn every_job_has_a_lock_named_after_it() {
             "device_bridge_health",
             "device_command_expiry",
             "device_file_purge",
+            "prospects_purge",
+            "research_plan",
+            "lead_distribution",
             "whatsapp_app_sync",
+            "outreach_dispatch",
             "comments_poll",
+            "purge_request_keys",
+            "mail_files_purge",
         ]
     );
     for job in Job::ALL {
@@ -2225,4 +2231,106 @@ async fn app_sync_never_repeats_an_unrecorded_request_and_waits_for_verification
     assert_eq!(sync_state(&r, lapsed, "contacts")["state"], "expired");
     assert_eq!(sync_state(&r, lapsed, "history")["state"], "requested");
     assert!(r.meta.app_sync_calls().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// purge_request_keys (plan L9-T3, spec 2026-10-30-leads-pool-outreach-design.md D33)
+// ---------------------------------------------------------------------------------------------
+
+/// Stores request key `key` in `ws` as recorded at `at`.
+async fn request_key(r: &Rig, ws: WorkspaceId, key: &str, at: OffsetDateTime) {
+    let mut t = r.w.uow.tenant(ws).await.unwrap();
+    assert!(
+        t.request_keys()
+            .store(key, json!({ "prospect_id": key }), at)
+            .await
+            .unwrap()
+    );
+    t.commit().await.unwrap();
+}
+
+/// The request keys of `ws` still stored, by key.
+fn request_keys_of(r: &Rig, ws: WorkspaceId) -> Vec<String> {
+    let mut keys: Vec<String> =
+        r.w.uow
+            .snapshot()
+            .inbox
+            .request_keys
+            .iter()
+            .filter(|k| k.workspace_id == ws)
+            .map(|k| k.key.clone())
+            .collect();
+    keys.sort();
+    keys
+}
+
+/// A request key expires 24 hours after it was stored (`RequestKeyRepo::get` no longer answers
+/// it): the job deletes those, and only those; a second run has nothing to do.
+#[tokio::test]
+async fn purge_request_keys_deletes_only_expired() {
+    let r = rig().await;
+    let ws = r.ws();
+    request_key(&r, ws, "old", NOW - Duration::days(3)).await;
+    request_key(&r, ws, "just-expired", NOW - Duration::hours(24)).await;
+    request_key(
+        &r,
+        ws,
+        "still-live",
+        NOW - Duration::hours(24) + Duration::seconds(1),
+    )
+    .await;
+    request_key(&r, ws, "new", NOW).await;
+    assert_eq!(Job::PurgeRequestKeys.name(), "purge_request_keys");
+    assert_eq!(
+        jobs::run_purge_request_keys(&r.w.deps, NOW).await,
+        report(2, 2, 0, 0)
+    );
+    assert_eq!(request_keys_of(&r, ws), ["new", "still-live"]);
+    // What is left still answers a replay.
+    let mut t = r.w.uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.request_keys().get("still-live", NOW).await.unwrap(),
+        Some(json!({ "prospect_id": "still-live" }))
+    );
+    drop(t);
+    assert_eq!(
+        Job::PurgeRequestKeys.run(&r.w.deps, NOW).await,
+        report(0, 0, 0, 0)
+    );
+}
+
+/// Every workspace, whatever its status: a suspended or held workspace's keys expire too; a
+/// workspace that cannot be reached is counted and the others are purged all the same.
+#[tokio::test]
+async fn purge_request_keys_runs_in_suspended_workspaces() {
+    let r = rig().await;
+    let active = r.ws();
+    let held = workspace(&r, "held", WorkspaceStatus::PendingPayment).await;
+    let suspended = workspace(&r, "suspended", WorkspaceStatus::Suspended).await;
+    for ws in [active, held, suspended] {
+        request_key(&r, ws, "old", NOW - Duration::days(2)).await;
+        request_key(&r, ws, "new", NOW - Duration::hours(1)).await;
+    }
+    assert_eq!(
+        jobs::run_purge_request_keys(&r.w.deps, NOW).await,
+        report(3, 3, 0, 0)
+    );
+    for ws in [active, held, suspended] {
+        assert_eq!(request_keys_of(&r, ws), ["new"], "{ws}");
+    }
+    // The first workspace listed cannot be reached: counted, the other two purged.
+    for ws in [active, held, suspended] {
+        request_key(&r, ws, "older", NOW - Duration::days(5)).await;
+    }
+    let watched = Watched::over(&r, Some(active));
+    let mut deps = r.w.deps.clone();
+    deps.uow = Arc::new(watched.clone());
+    assert_eq!(
+        jobs::run_purge_request_keys(&deps, NOW).await,
+        report(2, 2, 0, 1)
+    );
+    assert_eq!(request_keys_of(&r, active), ["new", "older"]);
+    for ws in [held, suspended] {
+        assert_eq!(request_keys_of(&r, ws), ["new"], "{ws}");
+    }
 }

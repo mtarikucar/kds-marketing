@@ -88,6 +88,10 @@ async fn setup_channel(kind: &str) -> (World, ConversationId, Arc<ScriptedConnec
     r.conversations().upsert_on_inbound(c).await.unwrap();
     r.commit().await.unwrap();
     jt_testkit::flows::price_sms(&w.deps, w.ws).await;
+    if kind == "mailbox" {
+        // Every commercial email carries the footer's sender identity (spec D62).
+        sender_identity(&w).await;
+    }
     (w, id, connector)
 }
 fn input(key: Option<&str>) -> replies::ReplyInput {

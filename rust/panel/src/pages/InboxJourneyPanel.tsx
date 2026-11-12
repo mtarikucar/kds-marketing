@@ -13,6 +13,7 @@ import { Badge, Button, Disclosure, Input, Textarea } from '@/components/ui';
 import { formatMoney } from '@/lib/format';
 import { InboxQuotes, InboxAppointments } from './InboxOffers';
 import { InboxMergeBanner } from './InboxMerges';
+import { ActiveSequence, AssignmentHistory, ProspectFacts } from './InboxLeads';
 import {
   columnClass,
   InboxActorLabel,
@@ -29,6 +30,7 @@ function eventName(kind: InboxEvent['kind']) {
   if ('won' in kind) return 'won';
   if ('lost' in kind) return 'lost';
   if ('snoozed' in kind) return 'snoozed';
+  if ('outreach_sent' in kind) return 'outreach_sent';
   return 'merged';
 }
 
@@ -47,6 +49,7 @@ function EventDetails({ event }: { event: InboxEvent }) {
     );
   if ('snoozed' in kind) return <InboxTime at={kind.snoozed.until} />;
   if ('merged' in kind) return <p>{kind.merged.target}</p>;
+  if ('outreach_sent' in kind) return <p>{t('inbox.outreachStep', { n: kind.outreach_sent.step })}</p>;
   return null;
 }
 
@@ -308,7 +311,10 @@ export function InboxJourneyPanel({
               <ErrorCallout error={assign.error} />
               <ErrorCallout error={team.error} />
             </div>
+            <AssignmentHistory journeyId={journeyId} />
             <InboxMergeBanner personId={personId ?? journey.person_id} />
+            <ProspectFacts personId={personId ?? journey.person_id} />
+            <ActiveSequence personId={personId ?? journey.person_id} events={data.data?.events ?? []} />
             <section>
               <h3 className="mb-3 font-medium">{t('inbox.timeline')}</h3>
               <ol className="flex flex-col gap-4 border-l border-border pl-3">

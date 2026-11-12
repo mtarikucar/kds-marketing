@@ -111,6 +111,12 @@ pub const LINKEDIN_API_VERSION: &str = "JEETA_LINKEDIN_API_VERSION";
 /// Where the panel is reached from outside (`https://host[:port]`), for OAuth redirect URIs and
 /// webhook URLs; required whenever a provider app is configured.
 pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
+/// The platform switch for outreach email (spec 2026-10-30-leads-pool-outreach-design.md D24):
+/// `1` or `true` turns it on, anything else unset or `0`/`false` keeps it off (the default).
+/// While it is off no campaign launches or sends, and no commercial email rests on the
+/// business-recipient basis. Turned on only after the public unsubscribe links are deployed and
+/// the owner's lawyer answered.
+pub const OUTREACH_ENABLED: &str = "JEETA_OUTREACH_ENABLED";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
@@ -156,6 +162,7 @@ const VARS: &[&str] = &[
     LINKEDIN_API_VERSION,
     HEPSIBURADA_INTEGRATOR_USER,
     PUBLIC_BASE_URL,
+    OUTREACH_ENABLED,
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -247,6 +254,8 @@ pub struct EnvPlatformApps {
     linkedin: Option<LinkedinApp>,
     hepsiburada_integrator_user: Option<String>,
     public_base_url: Option<Url>,
+    /// [`OUTREACH_ENABLED`].
+    outreach_enabled: bool,
 }
 
 impl EnvPlatformApps {
@@ -282,6 +291,7 @@ impl fmt::Debug for EnvPlatformApps {
                 "public_base_url",
                 &self.public_base_url.as_ref().map(Url::as_str),
             )
+            .field("outreach_enabled", &self.outreach_enabled)
             .finish()
     }
 }
@@ -313,6 +323,10 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn public_base_url(&self) -> Option<Url> {
         self.public_base_url.clone()
+    }
+
+    fn outreach_enabled(&self) -> bool {
+        self.outreach_enabled
     }
 }
 
@@ -732,6 +746,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         linkedin,
         hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
         public_base_url,
+        outreach_enabled: parse_flag(OUTREACH_ENABLED, get(OUTREACH_ENABLED))?,
     })
 }
 
@@ -1018,6 +1033,27 @@ mod tests {
         for bad in ["yes", "2", "on"] {
             let err = error(&with(&[(ALLOW_TEST_LOOPBACK, bad)]));
             assert_eq!(err.var, ALLOW_TEST_LOOPBACK, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_outreach_switch_is_off_unless_one_or_true() {
+        let off = Config::from_map(&with(&[])).unwrap();
+        assert!(!off.apps.outreach_enabled(), "off by default");
+        for (raw, on) in [
+            ("1", true),
+            ("true", true),
+            (" TRUE ", true),
+            ("0", false),
+            ("false", false),
+            ("", false),
+        ] {
+            let config = Config::from_map(&with(&[(OUTREACH_ENABLED, raw)])).unwrap();
+            assert_eq!(config.apps.outreach_enabled(), on, "{raw:?}");
+        }
+        for bad in ["yes", "2", "on", "enabled"] {
+            let err = error(&with(&[(OUTREACH_ENABLED, bad)]));
+            assert_eq!(err.var, OUTREACH_ENABLED, "{bad}");
         }
     }
 

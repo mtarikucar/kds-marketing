@@ -129,3 +129,16 @@ async fn undo_reads_a_version_1_snapshot() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_merge_contract::undo_reads_a_version_1_snapshot(uow).await;
 }
+
+#[tokio::test]
+async fn request_keys_purge_expired() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::request_keys_purge_expired(uow).await;
+}
+
+#[tokio::test]
+async fn erasing_the_survivor_scrubs_the_merged_familys_prospects() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_merge_contract::erasing_the_survivor_scrubs_the_merged_familys_prospects(uow)
+        .await;
+}

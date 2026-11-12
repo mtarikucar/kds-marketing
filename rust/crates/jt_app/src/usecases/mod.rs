@@ -14,15 +14,20 @@ pub mod calls;
 pub mod capabilities;
 pub mod connector;
 pub mod devices;
+pub mod distribution;
 pub mod events;
 pub mod failure;
 pub mod files;
 pub mod groups;
+pub mod hours;
 pub mod inbox;
 pub mod jobs;
 pub mod ledger;
+pub mod outreach;
 pub mod platform;
 pub mod platform_payments;
+pub mod prospects;
+pub mod research;
 pub mod roles;
 pub mod strategy;
 pub mod studio;
@@ -205,6 +210,41 @@ pub(crate) fn keyset_cursor<I>(
         (Some(_), None) => Err(invalid("before_id", "before_id must come with before_at")),
         (None, Some(_)) => Err(invalid("before_at", "before_at must come with before_id")),
     }
+}
+
+/// The longest range a report covers, in days.
+pub const MAX_REPORT_DAYS: i64 = 366;
+
+/// A report's range `[from, to)` from the two RFC 3339 instants a caller sends (the panel computes
+/// local-day bounds in the workspace's time zone): `VALIDATION {field, reason}` for a time that
+/// does not parse (`not_a_time`), a `to` not after `from` (`not_after_from`) or a range over
+/// [`MAX_REPORT_DAYS`] (`range_too_long`).
+pub(crate) fn report_range(
+    from: &str,
+    to: &str,
+) -> Result<(OffsetDateTime, OffsetDateTime), AppError> {
+    let parse = |field: &str, raw: &str| {
+        OffsetDateTime::parse(raw.trim(), &Rfc3339).map_err(|_| {
+            AppError::validation(
+                format!("{field} must be an RFC 3339 time"),
+                json!({ "field": field, "reason": "not_a_time" }),
+            )
+        })
+    };
+    let (from, to) = (parse("from", from)?, parse("to", to)?);
+    if to <= from {
+        return Err(AppError::validation(
+            "to must come after from",
+            json!({ "field": "to", "reason": "not_after_from" }),
+        ));
+    }
+    if to - from > time::Duration::days(MAX_REPORT_DAYS) {
+        return Err(AppError::validation(
+            format!("a report covers at most {MAX_REPORT_DAYS} days"),
+            json!({ "field": "to", "reason": "range_too_long" }),
+        ));
+    }
+    Ok((from, to))
 }
 
 /// `raw` trimmed, or `VALIDATION` when nothing is left.

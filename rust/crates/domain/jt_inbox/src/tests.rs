@@ -322,6 +322,10 @@ fn serde_round_trips_preserve_variants_and_populated_records() {
         Source::Import,
         Source::Form,
         Source::Repeat,
+        Source::Prospect {
+            prospect_id: uuid::Uuid::now_v7(),
+            origin: "agent".into(),
+        },
     ] {
         round_trip(source);
     }
@@ -368,6 +372,7 @@ fn serde_round_trips_preserve_variants_and_populated_records() {
         workspace_id: WorkspaceId::new_v7(),
         display_name: "Alice".into(),
         company: "Example".into(),
+        recipient_kind: RecipientKind::Business,
         first_touch: FirstTouch {
             source: Source::MetaAds,
             capability_id: Some(CapabilityId::new_v7()),

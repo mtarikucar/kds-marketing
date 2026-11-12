@@ -27,10 +27,14 @@ pub mod calls;
 pub mod compliance;
 pub mod connectors;
 pub mod devices;
+pub mod distribution;
 pub mod files;
 pub mod inbox;
+pub mod mail_files;
 pub mod materials;
+pub mod outreach;
 pub mod posts;
+pub mod prospects;
 pub mod public;
 pub mod studio;
 use inbox::*;
@@ -1119,6 +1123,80 @@ impl InboxPolicy {
     }
 }
 
+/// The leads policy (spec 2026-10-30-leads-pool-outreach-design.md §6.1): the time zone the
+/// pool's daily caps count in, the pool's retention and caps, distribution, outreach and
+/// attachment retention. Stored as JSON (`workspace_policies.leads_policy`) and read key by key:
+/// a missing key, at any depth, reads as its default. The outreach part's defaults keep cold
+/// email locked (no business-recipient basis, `jt_outreach::OutreachPolicy`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct LeadsPolicy {
+    /// An IANA time zone, `Europe/Istanbul` unless set.
+    pub timezone: String,
+    pub prospects: jt_prospects::ProspectsPolicy,
+    pub distribution: DistributionPolicy,
+    pub outreach: jt_outreach::OutreachPolicy,
+    pub attachments: AttachmentsPolicy,
+}
+
+impl Default for LeadsPolicy {
+    fn default() -> Self {
+        Self {
+            timezone: crate::usecases::hours::DEFAULT_TZ.to_owned(),
+            prospects: jt_prospects::ProspectsPolicy::default(),
+            distribution: DistributionPolicy::default(),
+            outreach: jt_outreach::OutreachPolicy::default(),
+            attachments: AttachmentsPolicy::default(),
+        }
+    }
+}
+
+/// How new journeys get their owner (spec §3.9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DistributionMode {
+    /// The rules, then the implicit default rule, assign every new journey.
+    #[default]
+    Auto,
+    /// Only the listed rules assign; every other new journey waits for a manager.
+    Manual,
+}
+
+/// Distribution's part of the leads policy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct DistributionPolicy {
+    pub mode: DistributionMode,
+    /// How many times an assignment past its SLA moves to the next member, `0..=10`.
+    pub max_reassignments: u8,
+}
+
+impl Default for DistributionPolicy {
+    fn default() -> Self {
+        Self {
+            mode: DistributionMode::Auto,
+            max_reassignments: 2,
+        }
+    }
+}
+
+/// Mail attachments' part of the leads policy. 180 days is the owner's decision of 2026-10-30
+/// (spec §15 Q2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct AttachmentsPolicy {
+    /// Days an inbound attachment is kept.
+    pub retention_days: u16,
+}
+
+impl Default for AttachmentsPolicy {
+    fn default() -> Self {
+        Self {
+            retention_days: 180,
+        }
+    }
+}
+
 /// The workspace-wide policies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkspacePolicy {
@@ -1127,6 +1205,8 @@ pub struct WorkspacePolicy {
     pub agent_checkin_interval_minutes: u32,
     /// Workspace display labels for the nine fixed inbox stages; absent overrides use defaults.
     pub inbox: InboxPolicy,
+    /// The prospect pool's, distribution's and attachments' settings.
+    pub leads: LeadsPolicy,
 }
 
 impl Default for WorkspacePolicy {
@@ -1134,20 +1214,73 @@ impl Default for WorkspacePolicy {
         WorkspacePolicy {
             agent_checkin_interval_minutes: DEFAULT_AGENT_CHECKIN_INTERVAL_MINUTES,
             inbox: InboxPolicy::default(),
+            leads: LeadsPolicy::default(),
         }
     }
 }
 
 /// The workspace's policies.
+///
+/// Lock order: a policy write takes the workspace-policy lock (`get`, `patch_leads`); a reader
+/// that writes no policy uses `read`, which takes none. A use case holding the pool lock reads
+/// the policy with `read` only, and none takes the pool lock after `get` (inbox → pool; a
+/// policy read never locks).
 #[async_trait]
 pub trait WorkspacePolicyRepo: Send + Sync {
     /// The stored policies, or [`WorkspacePolicy::default`] while none are stored.
     /// Serialize policy read/modify/write transactions, including when the row is absent.
     async fn get(&mut self) -> Result<WorkspacePolicy, AppError>;
-    /// Stores the policies, updated at `at`, replacing any stored before. An interval outside
-    /// `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check
-    /// constraint and is `INTERNAL`: callers validate first.
+    /// The stored policies as [`WorkspacePolicyRepo::get`] reads them, without the
+    /// workspace-policy lock: for a reader that writes no policy (the pool's caps, time zone and
+    /// retention).
+    async fn read(&mut self) -> Result<WorkspacePolicy, AppError>;
+    /// Stores the policies, updated at `at`, replacing any stored before, except the leads
+    /// policy, which only [`WorkspacePolicyRepo::patch_leads`] writes (`policy.leads` is not
+    /// written). An interval outside `MIN_AGENT_CHECKIN_INTERVAL_MINUTES..=
+    /// MAX_AGENT_CHECKIN_INTERVAL_MINUTES` breaks a check constraint and is `INTERNAL`: callers
+    /// validate first.
     async fn set(&mut self, policy: WorkspacePolicy, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Merges `patch` into the stored leads policy under the workspace-policy lock, updated at
+    /// `at`, and answers the policy as it reads after ([`merge_object`]): the stored object holds
+    /// only the keys someone set, so every other key keeps following its default. A `patch` that
+    /// is not an object, or a result that does not read as a [`LeadsPolicy`], is `INTERNAL`:
+    /// callers validate first.
+    async fn patch_leads(
+        &mut self,
+        patch: Value,
+        at: OffsetDateTime,
+    ) -> Result<LeadsPolicy, AppError>;
+}
+
+/// Merges `patch` into `stored`, key by key: an object value merges into the stored object of
+/// the same key (made one if it is not), any other value replaces the stored one. Keys `patch`
+/// does not name stay as stored.
+pub fn merge_object(stored: &mut Value, patch: &Value) {
+    let Value::Object(patch) = patch else {
+        *stored = patch.clone();
+        return;
+    };
+    if !stored.is_object() {
+        *stored = Value::Object(serde_json::Map::new());
+    }
+    if let Value::Object(target) = stored {
+        for (key, value) in patch {
+            match value {
+                Value::Object(_) => {
+                    merge_object(target.entry(key.clone()).or_insert(Value::Null), value)
+                }
+                other => {
+                    target.insert(key.clone(), other.clone());
+                }
+            }
+        }
+    }
+}
+
+/// The leads policy a stored object reads as: every missing key, at any depth, its default.
+pub fn leads_policy_of(stored: &Value) -> Result<LeadsPolicy, AppError> {
+    serde_json::from_value(stored.clone())
+        .map_err(|_| AppError::internal("invalid stored leads policy"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1554,6 +1687,18 @@ pub trait TenantRepos: Send + Sync {
     fn studio_posts(&mut self) -> &mut dyn crate::ports::posts::PostRepo;
     fn calls(&mut self) -> &mut dyn crate::ports::calls::CallRepo;
     fn device_commands(&mut self) -> &mut dyn crate::ports::devices::DeviceCommandRepo;
+    fn prospects(&mut self) -> &mut dyn crate::ports::prospects::ProspectRepo;
+    fn research_tasks(&mut self) -> &mut dyn crate::ports::prospects::ResearchTaskRepo;
+    fn prospect_blocklist(&mut self) -> &mut dyn crate::ports::prospects::BlocklistRepo;
+    fn rep_profiles(&mut self) -> &mut dyn crate::ports::distribution::RepProfileRepo;
+    fn distribution_rules(&mut self) -> &mut dyn crate::ports::distribution::RuleRepo;
+    fn assignments(&mut self) -> &mut dyn crate::ports::distribution::AssignmentRepo;
+    fn outreach_templates(&mut self) -> &mut dyn crate::ports::outreach::TemplateRepo;
+    fn outreach_campaigns(&mut self) -> &mut dyn crate::ports::outreach::CampaignRepo;
+    fn outreach_enrollments(&mut self) -> &mut dyn crate::ports::outreach::EnrollmentRepo;
+    fn outreach_sends(&mut self) -> &mut dyn crate::ports::outreach::OutreachSendRepo;
+    /// Email attachments' records (`ports::mail_files`).
+    fn mail_files(&mut self) -> &mut dyn crate::ports::mail_files::MailFileRepo;
 
     fn consents(&mut self) -> &mut dyn ConsentRepo;
     fn suppressions(&mut self) -> &mut dyn SuppressionRepo;

@@ -301,6 +301,10 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
             "calls.bridge",
             "devices.work",
             "devices.bridge",
+            "prospects.work",
+            "prospects.manage",
+            "outreach.work",
+            "outreach.manage",
         ])
     );
 
@@ -4601,6 +4605,632 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
     }
 }
 
+#[tokio::test]
+async fn prospects_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("pool").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = json_body(resp).await;
+    let id = created["prospect"]["id"].as_str().unwrap().to_owned();
+
+    // Reads answer the same.
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/prospects/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.get",
+        json!({ "prospect_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human["prospect"]["contact"]["phone"]["value"],
+        "+905000000000"
+    );
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects?limit=10", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.list",
+        json!({ "limit": 10 }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"].as_array().unwrap().len(), 1);
+
+    let check = json!({ "phone": "+90 500 000 00 00" });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/check",
+            Some(&cookie),
+            Some(check.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.check", check).await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human,
+        json!({"ok": false, "reason": "duplicate", "prospect_id": id, "flags": []})
+    );
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects/settings", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.settings_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["rejected_retention_days"], 30);
+    assert_eq!(human["timezone"], "Europe/Istanbul");
+}
+
+/// [`approve_inbox_strategy`] with prospecting on: one ICP entry (`local`, segment `all`) and a
+/// one-criterion rubric, so the approval plans a standing research task.
+async fn approve_prospecting_strategy(app: &Router, cookie: &str) {
+    let draft = send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/consultation",
+            Some(cookie),
+            None,
+        ),
+    )
+    .await;
+    assert!(draft.status().is_success());
+    let prospecting = json!({
+        "icp": [{
+            "key": "local", "segment_key": "all", "sectors": ["kafe"],
+            "areas": [{"city": "İstanbul"}], "signals": [], "exclusions": [], "size_hint": "",
+            "daily_cap": 20, "backlog_target": 0,
+        }],
+        "rubric": {"criteria": [{"key": "fit", "description": "Serves coffee", "weight": 100}], "qualify_at": 60},
+    });
+    for (key, value) in [
+        ("identity", json!({"product":"Service"})),
+        (
+            "audience",
+            json!([{"key":"all","name":"Everyone","description":"Local"}]),
+        ),
+        (
+            "channels",
+            json!([{"channel":"any","rationale":"Available"}]),
+        ),
+        ("cadence", json!({"per_week":3})),
+        ("prospecting", prospecting),
+    ] {
+        let r = send(
+            app,
+            panel(
+                Method::PUT,
+                &format!("/api/strategy/draft/sections/{key}"),
+                Some(cookie),
+                Some(value),
+            ),
+        )
+        .await;
+        assert!(r.status().is_success(), "{key}");
+    }
+    let r = send(app,panel(Method::PUT,"/api/strategy/draft/hypotheses",Some(cookie),Some(json!([{"title":"Contact","segment_key":"all","angle":"Help","channel":"any","metric":"dm","prior_confidence":0.6}])))).await;
+    assert!(r.status().is_success());
+    let draft = json_body(
+        send(
+            app,
+            panel(
+                Method::POST,
+                "/api/strategy/draft/submit",
+                Some(cookie),
+                None,
+            ),
+        )
+        .await,
+    )
+    .await;
+    let r = send(
+        app,
+        panel(
+            Method::POST,
+            "/api/strategy/draft/approve",
+            Some(cookie),
+            Some(json!({"version_id":draft["id"],"submitted_at":draft["submitted_at"]})),
+        ),
+    )
+    .await;
+    assert!(r.status().is_success());
+}
+
+#[tokio::test]
+async fn research_tasks_and_the_playbook_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("research").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_prospecting_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    // The approval planned the ICP entry's standing task.
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/research/tasks", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.research.tasks_list", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"].as_array().unwrap().len(), 1);
+    assert_eq!(human["items"][0]["task"]["kind"]["type"], "standing");
+    let id = human["items"][0]["task"]["id"].as_str().unwrap().to_owned();
+
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/research/tasks/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.research.tasks_get",
+        json!({ "task_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["remaining_today"], 20);
+
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/prospects/playbook", Some(&cookie), None),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.playbook", json!({})).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["workspace"]["prospecting_on"], true);
+    assert_eq!(human["workspace"]["remaining_today"][0]["remaining"], 20);
+
+    // An ad-hoc task created over the panel reads the same over both.
+    let body = json!({
+        "brief": {"sectors": ["pastane"], "areas": [{"city": "Ankara"}]},
+        "target_count": 10,
+        "daily_cap": 5,
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/research/tasks",
+            Some(&cookie),
+            Some(body),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = json_body(resp).await;
+    let id = created["task"]["id"].as_str().unwrap().to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/research/tasks/{id}"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.research.tasks_get",
+        json!({ "task_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(
+        human["task"]["kind"],
+        json!({"type": "ad_hoc", "target_count": 10})
+    );
+}
+
+#[tokio::test]
+async fn promotion_distribution_and_the_recipient_kind_answer_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("distribution").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = json_body(resp).await["prospect"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // A person promotes; both surfaces then answer the link the same.
+    let promote = json!({ "prospect_ids": [id] });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(promote.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let first = json_body(resp).await;
+    assert_eq!(first["items"][0]["outcome"], "promoted");
+    assert_eq!(first["items"][0]["owner_id"], json!(user));
+    let person = first["items"][0]["person_id"].as_str().unwrap().to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(promote.clone()),
+        ),
+    )
+    .await;
+    let human = json_body(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.prospects.promote", promote).await;
+    assert_eq!(human, agent);
+    assert_eq!(human["items"][0]["outcome"], "already_promoted");
+
+    for (path, tool) in [
+        ("/api/distribution", "jeeta.distribution.get"),
+        (
+            "/api/distribution/assignments",
+            "jeeta.distribution.assignments_list",
+        ),
+    ] {
+        let resp = send(&app, panel(Method::GET, path, Some(&cookie), None)).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        let human = json_body(resp).await;
+        let agent = call_tool(&app, &key, &session, tool, json!({})).await;
+        assert_eq!(human, agent, "{path}");
+    }
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/distribution", Some(&cookie), None),
+    )
+    .await;
+    let got = json_body(resp).await;
+    assert_eq!(got["mode"], "auto");
+    assert_eq!(got["ownerless"]["count"], 0);
+
+    // The recipient kind: set over the panel, the same again over MCP (no change) answers the
+    // same person.
+    let kind = json!({ "kind": "individual" });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/inbox/people/{person}/kind"),
+            Some(&cookie),
+            Some(kind),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    assert_eq!(human["recipient_kind"], "individual");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.people_set_kind",
+        json!({ "person_id": person, "kind": "individual" }),
+    )
+    .await;
+    assert_eq!(human, agent);
+}
+
+#[tokio::test]
+async fn the_pool_report_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("pool-report").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let body = json!({
+        "business_name": "Örnek Kafe",
+        "entity_kind": "legal_entity",
+        "sector": "kafe",
+        "city": "İstanbul",
+        "phone": {
+            "value": "0500 000 00 00",
+            "sources": [{"kind": "url", "url": "https://ornek.example.invalid/iletisim"}],
+            "captured_at": "2026-10-20T10:00:00Z",
+        },
+    });
+    let resp = send(
+        &app,
+        panel(Method::POST, "/api/prospects", Some(&cookie), Some(body)),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let id = json_body(resp).await["prospect"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/prospects/promote",
+            Some(&cookie),
+            Some(json!({ "prospect_ids": [id] })),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The range is instants around now (the panel computes local-day bounds).
+    use time::format_description::well_known::Rfc3339;
+    let now = time::OffsetDateTime::now_utc();
+    let from = (now - time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let to = (now + time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            &format!("/api/prospects/report?from={from}&to={to}&group_by=sector"),
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.report",
+        json!({ "from": from, "to": to, "group_by": "sector" }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["groups"][0]["key"], "kafe");
+    assert_eq!(human["groups"][0]["created"], 1);
+    assert_eq!(human["groups"][0]["promoted"], 1);
+}
+
+#[tokio::test]
+async fn outreach_answers_the_same_over_the_panel_and_mcp() {
+    let db = TestDb::new().await;
+    let (_ws, user) = db.seed_workspace("outreach").await;
+    let deps = deps(&db);
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    approve_inbox_strategy(&app, &cookie).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+
+    // A template saved over the panel reads the same on both surfaces.
+    let template = json!({
+        "name": "Tanışma",
+        "language": "tr",
+        "subject": "Merhaba {{company|işletmeniz}}",
+        "body": "Tanışmak isteriz: https://acme.example.invalid/katalog",
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/outreach/templates",
+            Some(&cookie),
+            Some(template),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let saved = json_body(resp).await;
+    assert_eq!(saved["template"]["revision"], 1);
+    assert_eq!(
+        saved["facts"]["links"],
+        json!(["https://acme.example.invalid/katalog"])
+    );
+    let template_id = saved["template"]["id"].clone();
+    use time::format_description::well_known::Rfc3339;
+    let now = time::OffsetDateTime::now_utc();
+    let from = (now - time::Duration::days(1)).format(&Rfc3339).unwrap();
+    let to = (now + time::Duration::days(1)).format(&Rfc3339).unwrap();
+    for (path, tool, args) in [
+        (
+            "/api/outreach/templates".to_owned(),
+            "jeeta.outreach.templates_list",
+            json!({}),
+        ),
+        (
+            "/api/outreach/campaigns".to_owned(),
+            "jeeta.outreach.campaigns_list",
+            json!({}),
+        ),
+        (
+            "/api/outreach/settings".to_owned(),
+            "jeeta.outreach.settings_get",
+            json!({}),
+        ),
+        (
+            format!("/api/outreach/report?from={from}&to={to}&group_by=step"),
+            "jeeta.outreach.report",
+            json!({ "from": from, "to": to, "group_by": "step" }),
+        ),
+    ] {
+        let resp = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        let human = json_body(resp).await;
+        let agent = call_tool(&app, &key, &session, tool, args).await;
+        assert_eq!(human, agent, "{path}");
+    }
+    // The switch is off here: the settings say so on both surfaces.
+    let settings = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.settings_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(settings["platform_enabled"], false);
+    assert_eq!(settings["b2b_channels_in_force"], json!([]));
+
+    // A campaign on a mailbox the workspace does not have is refused alike.
+    let definition = json!({
+        "sender_name": "Acme Satış",
+        "steps": [{ "template_id": template_id, "delay_days": 0 }],
+        "audience": { "people": {} },
+        "schedule": { "window": { "tz": "Europe/Istanbul", "from": 9, "to": 18, "days": [1, 2, 3, 4, 5] } },
+        "throttle": { "per_hour": 20, "per_day": 100 },
+    });
+    let campaign = json!({
+        "name": "Ekim tanışma",
+        "mailbox_id": jt_capability::CapabilityId::new_v7(),
+        "definition": definition,
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/outreach/campaigns",
+            Some(&cookie),
+            Some(campaign.clone()),
+        ),
+    )
+    .await;
+    assert!(resp.status().is_client_error(), "{}", resp.status());
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.campaigns_save",
+        campaign,
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+
+    // Stopping an enrollment that is not the workspace's is refused alike.
+    // Any id the workspace has no enrollment under.
+    let enrollment = jt_inbox::PersonId::new_v7();
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            &format!("/api/outreach/enrollments/{enrollment}/stop"),
+            Some(&cookie),
+            Some(json!({})),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.outreach.enrollments_stop",
+        json!({ "enrollment_id": enrollment }),
+    )
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+}
+
 /// An owed public item `external_id` of `conversation` (`kind` a comment or a question), with
 /// its inbound message, written straight to the repos at `now`.
 async fn public_item(
@@ -4695,6 +5325,7 @@ async fn public_surface(
         workspace_id: ws,
         display_name: "Commenter".into(),
         company: String::new(),
+        recipient_kind: jt_inbox::RecipientKind::default(),
         first_touch: FirstTouch {
             source: Source::Import,
             capability_id: None,
@@ -5066,4 +5697,65 @@ async fn inbox_public_rows_have_http_mcp_parity() {
     assert_eq!(agent["isError"], json!(true));
     assert_eq!(human, agent["structuredContent"]);
     assert_eq!(human["details"]["reason"], "reply_not_held");
+}
+
+/// The mail attachments' upload and read (leads L6-T3) answer the same over the panel and MCP:
+/// an upload replayed by its request key, and the file with its download address.
+#[tokio::test]
+async fn inbox_attachments_have_http_mcp_parity() {
+    let db = TestDb::new().await;
+    let (_, user) = db.seed_workspace("attachments-parity").await;
+    let mut deps = deps(&db);
+    deps.clock = Arc::new(jt_testkit::fakes::FixedClock(deps.clock.now()));
+    deps.files = Arc::new(jt_testkit::fakes::files::MemoryFiles::default());
+    let app = app(&db, &deps);
+    let cookie = sign_in(&app, user).await;
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
+    let upload = json!({
+        "request_key": "parity-file", "filename": "katalog.pdf",
+        "mime": "application/pdf", "data_base64": "JVBERi0xLjcK",
+    });
+    let resp = send(
+        &app,
+        panel(
+            Method::POST,
+            "/api/inbox/attachments",
+            Some(&cookie),
+            Some(upload.clone()),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    assert_eq!(human["state"], "staged");
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.attachments_upload",
+        upload,
+    )
+    .await;
+    assert_eq!(human, agent);
+    let id = human["file_id"].as_str().unwrap().to_owned();
+    let path = format!("/api/inbox/attachments/{id}");
+    let resp = send(&app, panel(Method::GET, &path, Some(&cookie), None)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.inbox.attachments_get",
+        json!({ "file_id": id }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert!(
+        human["download_url"]
+            .as_str()
+            .is_some_and(|u| u.contains("purpose=attachment")),
+        "{human}"
+    );
 }

@@ -34,7 +34,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           jeeta.studio.shoot_list: tell the owner, who shoots it), \
                           studio_post_request with post_request_id (plan posts from \
                           its materials and answer it with jeeta.studio.posts_propose), \
-                          declare_first_capability), a priority \
+                          declare_first_capability, research_due \
+                          with task_id and remaining_today (research businesses for that task \
+                          with your own tools and record them; to a key with prospects.work), \
+                          prospects_to_score with count (new prospects without a score under \
+                          the approved rubric)), a priority \
                           (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",

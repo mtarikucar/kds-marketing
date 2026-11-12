@@ -151,7 +151,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 163);
+    assert_eq!(jt_mcp::registry().len(), 209);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -170,11 +170,12 @@ async fn studio_exact_catalog_and_gate_set() {
         }
     }
     // 67 through M4, the four call tables of 0015_voice_calls, the bridge's event notes of
-    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the
-    // public items, subjects and cursors of 0019_inbox_public, the materials library's seven of
-    // 0021_studio_materials, and the planned posts, package requests and posting policy of
-    // 0022_studio_posts.
-    assert_eq!(all_tables.len(), 87);
+    // 0016_voice_bridge, the device commands and device files of 0017_device_bridge, the public
+    // items, subjects and cursors of 0019_inbox_public, the five pool tables of 0020_prospects,
+    // the materials library's seven of 0021_studio_materials, the planned posts, package requests
+    // and posting policy of 0022_studio_posts, the four outreach tables of 0026_outreach, the
+    // three distribution tables of 0027_distribution and the mail files of 0028_mail_files.
+    assert_eq!(all_tables.len(), 100);
 
     // All twenty-four Studio tables are tenant-scoped: fourteen of 0009_studio, seven of
     // 0021_studio_materials, three of 0022_studio_posts.

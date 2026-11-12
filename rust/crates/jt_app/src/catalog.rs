@@ -98,14 +98,21 @@ pub const STATUS_EXEMPT_PREFIXES: &[&str] = &["auth.", "workspace.", "platform."
 /// ([`StatusExemption::PendingPayment`]), but not while it is `suspended`.
 pub const PENDING_PAYMENT_EXEMPT_PREFIXES: &[&str] = &["strategy.", "work."];
 
+/// The use cases that record a business's objection or erase its data: an objection must always
+/// be recordable, so they run whatever the workspace's status ([`StatusExemption::Always`]) and
+/// without an approved strategy ([`GateMode::Exempt`]).
+pub const OBJECTION_USE_CASES: &[&str] = &["prospects.do_not_contact", "prospects.erase"];
+
 /// The status exemption of use case `id`. The exact `billing.status` row is Always and
 /// `billing.report_payment` and `billing.activate` are PendingPayment; no other billing name is exempt.
+/// The [`OBJECTION_USE_CASES`] are Always.
 /// For other rows: [`StatusExemption::Always`] for one of
 /// [`STATUS_EXEMPT_PREFIXES`], [`StatusExemption::PendingPayment`] for one of
 /// [`PENDING_PAYMENT_EXEMPT_PREFIXES`], else [`StatusExemption::Never`].
 pub const fn status_exemption(id: &str) -> StatusExemption {
     if equals(id, "ops.health")
         || equals(id, "billing.status")
+        || equals_any(id, OBJECTION_USE_CASES)
         || starts_with_any(id, STATUS_EXEMPT_PREFIXES)
     {
         StatusExemption::Always
@@ -122,6 +129,18 @@ pub const fn status_exemption(id: &str) -> StatusExemption {
 /// Whether `id` starts with one of `prefixes`, usable in a constant.
 const fn equals(a: &str, b: &str) -> bool {
     a.len() == b.len() && starts_with(a, b)
+}
+
+/// Whether `id` is one of `ids`, usable in a constant.
+const fn equals_any(id: &str, ids: &[&str]) -> bool {
+    let mut i = 0;
+    while i < ids.len() {
+        if equals(id, ids[i]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 const fn starts_with_any(id: &str, prefixes: &[&str]) -> bool {
@@ -287,6 +306,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.people.get", Exempt, "jeeta.inbox.people_get", ("GET", "/api/inbox/people/{person_id}"), Read),
     twin("inbox.people.erase", Exempt, "jeeta.inbox.people_erase", ("POST", "/api/inbox/people/{person_id}/erase"), Destructive),
     twin("inbox.people.create", Exempt, "jeeta.inbox.people_create", ("POST", "/api/inbox/people"), Write),
+    twin("inbox.people.set_kind", Exempt, "jeeta.inbox.people_set_kind", ("POST", "/api/inbox/people/{person_id}/kind"), Write),
     twin("inbox.identities.add", Exempt, "jeeta.inbox.identities_add", ("POST", "/api/inbox/people/{person_id}/identities"), Write),
     twin("inbox.journeys.open", Exempt, "jeeta.inbox.journeys_open", ("POST", "/api/inbox/people/{person_id}/journeys"), Write),
     twin("inbox.events.report", Exempt, "jeeta.inbox.events_report", ("POST", "/api/inbox/journeys/{journey_id}/events"), Write),
@@ -326,6 +346,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.public.report", Exempt, "jeeta.inbox.public_report", ("POST", "/api/inbox/items/{item_id}/report"), Write),
     twin("inbox.public.approve", Exempt, "jeeta.inbox.public_approve", ("POST", "/api/inbox/replies/{outbox_id}/approve"), Write),
     twin("inbox.public.discard", Exempt, "jeeta.inbox.public_discard", ("POST", "/api/inbox/replies/{outbox_id}/discard"), Write),
+    // Email attachments (leads spec §3.15, §7.1): files to answer customers with, and the ones
+    // they sent; answering customers needs no strategy (as `inbox.reply`).
+    twin("inbox.attachments_upload", Exempt, "jeeta.inbox.attachments_upload", ("POST", "/api/inbox/attachments"), Write),
+    twin("inbox.attachments_get", Exempt, "jeeta.inbox.attachments_get", ("GET", "/api/inbox/attachments/{file_id}"), Read),
 
     panel_only("auth.register", Exempt, ("POST", "/api/auth/register"), Write),
     panel_only("auth.login", Exempt, ("POST", "/api/auth/login"), Write),
@@ -443,6 +467,63 @@ pub static CATALOG: &[UseCase] = &[
     twin("devices.act", Exempt, "jeeta.devices.act", ("POST", "/api/devices/{capability_id}/act"), Write),
     twin("devices.command_get", Exempt, "jeeta.devices.command_get", ("GET", "/api/devices/commands/{command_id}"), Read),
     twin("devices.commands", Exempt, "jeeta.devices.commands", ("GET", "/api/devices/{capability_id}/commands"), Read),
+    // The prospect pool (spec 2026-10-30-leads-pool-outreach-design.md §7.1), for an agent or a
+    // person holding `prospects.work` (`prospects.manage` for the settings, lifting and erasing).
+    // `check` and the do-not-contact lift are `POST`: their bodies carry contact values, which never
+    // go into a URL. Do-not-contact and erasure record an objection, which must always be
+    // recordable: they are `OBJECTION_USE_CASES`, exempt from the strategy gate and from the
+    // workspace status. `prospects.promote` came with distribution and `prospects.report` with
+    // outreach's stop hooks and reports (leads L4-T6).
+    twin("prospects.playbook", GateMode::Gated, "jeeta.prospects.playbook", ("GET", "/api/prospects/playbook"), Read),
+    twin("prospects.check", GateMode::Gated, "jeeta.prospects.check", ("POST", "/api/prospects/check"), Read),
+    twin("prospects.create", GateMode::Gated, "jeeta.prospects.create", ("POST", "/api/prospects"), Write),
+    twin("prospects.update", GateMode::Gated, "jeeta.prospects.update", ("PATCH", "/api/prospects/{prospect_id}"), Write),
+    twin("prospects.list", GateMode::Gated, "jeeta.prospects.list", ("GET", "/api/prospects"), Read),
+    twin("prospects.get", GateMode::Gated, "jeeta.prospects.get", ("GET", "/api/prospects/{prospect_id}"), Read),
+    twin("prospects.score", GateMode::Gated, "jeeta.prospects.score", ("POST", "/api/prospects/{prospect_id}/scores"), Write),
+    twin("prospects.decide", GateMode::Gated, "jeeta.prospects.decide", ("POST", "/api/prospects/{prospect_id}/decision"), Write),
+    twin("prospects.do_not_contact", Exempt, "jeeta.prospects.do_not_contact", ("POST", "/api/prospects/do-not-contact"), Destructive),
+    twin("prospects.dnc_lift", GateMode::Gated, "jeeta.prospects.dnc_lift", ("POST", "/api/prospects/do-not-contact/lift"), Write),
+    twin("prospects.erase", Exempt, "jeeta.prospects.erase", ("POST", "/api/prospects/{prospect_id}/erase"), Destructive),
+    twin("prospects.settings_get", GateMode::Gated, "jeeta.prospects.settings_get", ("GET", "/api/prospects/settings"), Read),
+    twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
+    twin("prospects.promote", GateMode::Gated, "jeeta.prospects.promote", ("POST", "/api/prospects/promote"), Write),
+    twin("prospects.report", GateMode::Gated, "jeeta.prospects.report", ("GET", "/api/prospects/report"), Read),
+    // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
+    twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
+    twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),
+    twin("research.tasks_create", GateMode::Gated, "jeeta.research.tasks_create", ("POST", "/api/research/tasks"), Write),
+    twin("research.tasks_claim", GateMode::Gated, "jeeta.research.tasks_claim", ("POST", "/api/research/tasks/{task_id}/claim"), Write),
+    twin("research.tasks_close", GateMode::Gated, "jeeta.research.tasks_close", ("POST", "/api/research/tasks/{task_id}/close"), Write),
+    // Lead distribution (leads spec §3.9): rules, rep profiles and the assignment log, for
+    // `inbox.work` (`inbox.manage` for the rules, another member's profile and the backfill).
+    twin("distribution.get", GateMode::Gated, "jeeta.distribution.get", ("GET", "/api/distribution"), Read),
+    twin("distribution.rules_set", GateMode::Gated, "jeeta.distribution.rules_set", ("PUT", "/api/distribution/rules"), Write),
+    twin("distribution.rep_set", GateMode::Gated, "jeeta.distribution.rep_set", ("PUT", "/api/distribution/reps/{user_id}"), Write),
+    twin("distribution.assignments_list", GateMode::Gated, "jeeta.distribution.assignments_list", ("GET", "/api/distribution/assignments"), Read),
+    twin("distribution.backfill", GateMode::Gated, "jeeta.distribution.backfill", ("POST", "/api/distribution/backfill"), Write),
+    // Email outreach (leads spec §3.10-§3.16): templates, campaigns, enrollments, a test email,
+    // the report and the settings, for `outreach.work` (`outreach.manage` for an approval, a
+    // cancel and the settings). All gated; nothing is sent while the platform switch
+    // `JEETA_OUTREACH_ENABLED` is off. `audience-preview` is `POST`: its body carries filters.
+    twin("outreach.templates_list", GateMode::Gated, "jeeta.outreach.templates_list", ("GET", "/api/outreach/templates"), Read),
+    twin("outreach.templates_save", GateMode::Gated, "jeeta.outreach.templates_save", ("POST", "/api/outreach/templates"), Write),
+    twin("outreach.templates_archive", GateMode::Gated, "jeeta.outreach.templates_archive", ("POST", "/api/outreach/templates/{template_id}/archive"), Write),
+    twin("outreach.campaigns_list", GateMode::Gated, "jeeta.outreach.campaigns_list", ("GET", "/api/outreach/campaigns"), Read),
+    twin("outreach.campaigns_get", GateMode::Gated, "jeeta.outreach.campaigns_get", ("GET", "/api/outreach/campaigns/{campaign_id}"), Read),
+    twin("outreach.campaigns_save", GateMode::Gated, "jeeta.outreach.campaigns_save", ("POST", "/api/outreach/campaigns"), Write),
+    twin("outreach.audience_preview", GateMode::Gated, "jeeta.outreach.audience_preview", ("POST", "/api/outreach/audience-preview"), Read),
+    twin("outreach.campaigns_launch", GateMode::Gated, "jeeta.outreach.campaigns_launch", ("POST", "/api/outreach/campaigns/{campaign_id}/launch"), Write),
+    twin("outreach.campaigns_approve", GateMode::Gated, "jeeta.outreach.campaigns_approve", ("POST", "/api/outreach/campaigns/{campaign_id}/approve"), Write),
+    twin("outreach.campaigns_control", GateMode::Gated, "jeeta.outreach.campaigns_control", ("POST", "/api/outreach/campaigns/{campaign_id}/control"), Write),
+    twin("outreach.enroll", GateMode::Gated, "jeeta.outreach.enroll", ("POST", "/api/outreach/campaigns/{campaign_id}/enrollments"), Write),
+    twin("outreach.enrollments_list", GateMode::Gated, "jeeta.outreach.enrollments_list", ("GET", "/api/outreach/campaigns/{campaign_id}/enrollments"), Read),
+    twin("outreach.enrollments_stop", GateMode::Gated, "jeeta.outreach.enrollments_stop", ("POST", "/api/outreach/enrollments/{enrollment_id}/stop"), Write),
+    twin("outreach.personalize", GateMode::Gated, "jeeta.outreach.personalize", ("POST", "/api/outreach/enrollments/personalization"), Write),
+    twin("outreach.test_send", GateMode::Gated, "jeeta.outreach.test_send", ("POST", "/api/outreach/campaigns/{campaign_id}/test"), Write),
+    twin("outreach.report", GateMode::Gated, "jeeta.outreach.report", ("GET", "/api/outreach/report"), Read),
+    twin("outreach.settings_get", GateMode::Gated, "jeeta.outreach.settings_get", ("GET", "/api/outreach/settings"), Read),
+    twin("outreach.settings_set", GateMode::Gated, "jeeta.outreach.settings_set", ("PUT", "/api/outreach/settings"), Write),
     // What the connections brought in: observation, not planned work, so exempt from the
     // strategy gate; not from the status check. Acknowledging needs `capabilities.manage`.
     twin("events.pending", Exempt, "jeeta.events.pending", ("GET", "/api/events/pending"), Read),

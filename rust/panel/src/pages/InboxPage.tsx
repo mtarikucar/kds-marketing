@@ -14,6 +14,7 @@ import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
+import { OwnerlessQueue } from './InboxLeads';
 import { Deadline, columnClass, useInboxKey } from './InboxShared';
 
 /** The surface badge of a row (spec §9): a direct message, a comment, a question, relayed mail. */
@@ -71,14 +72,14 @@ export function InboxPage() {
   const key = useInboxKey();
   const { conversationId } = useParams();
   const [params] = useSearchParams();
-  const [queue, setQueue] = useState<InboxQueue | 'approvals'>('ours');
+  const [queue, setQueue] = useState<InboxQueue | 'approvals' | 'ownerless'>('ours');
   const [search, setSearch] = useState('');
   const rows = useInfiniteQuery({
     queryKey: [...key, 'conversations', queue],
     queryFn: ({ pageParam }) => api.listConversations(queue as InboxQueue, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
-    enabled: allowed && queue !== 'approvals',
+    enabled: allowed && queue !== 'approvals' && queue !== 'ownerless',
   });
   // The held replies waiting for a human (spec §3.7), from inbox.pending.
   const pending = useQuery({
@@ -153,12 +154,23 @@ export function InboxPage() {
             >
               {t('inbox.public.approvals')}
             </Button>
+            <Button
+              size="sm"
+              className="col-span-2"
+              variant={queue === 'ownerless' ? 'primary' : 'outline'}
+              aria-pressed={queue === 'ownerless'}
+              onClick={() => setQueue('ownerless')}
+            >
+              {t('inbox.queue.ownerless')}
+            </Button>
           </div>
           <label className="text-sm">
             {t('inbox.search')}
             <Input type="search" value={search} onChange={(e) => setSearch(e.target.value)} />
           </label>
-          {queue === 'approvals' && !search.trim() ? (
+          {queue === 'ownerless' && !search.trim() ? (
+            <OwnerlessQueue />
+          ) : queue === 'approvals' && !search.trim() ? (
             <QueryState query={pending}>
               {pending.data?.approvals?.map((held) => (
                 <Link

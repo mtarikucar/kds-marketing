@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
-import type { MeOut } from '@/api/types';
+import en from '@/i18n/en.json';
+import { flatten } from '@/i18n/flatten';
+import { PERMISSIONS, type MeOut } from '@/api/types';
 import { WS_ID, me, workspace } from '@/test/fixtures';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 
@@ -55,6 +57,48 @@ describe('Shell', () => {
       expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ workspace_id: WS_ID }),
     );
     expect(await screen.findByText(tr.shell.switched)).toBeInTheDocument();
+  });
+
+  it('nav_lists_new_pages_for_permitted_users', async () => {
+    const permitted: MeOut = {
+      ...me,
+      memberships: [
+        {
+          ...me.memberships[0],
+          permissions: [...me.memberships[0].permissions, 'prospects.work', 'outreach.work'],
+        },
+      ],
+    };
+    mockFetch({ 'GET /api/auth/me': permitted, 'GET /api/workspace': workspace });
+    const first = renderAt('/');
+    const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(within(nav).getByRole('link', { name: tr.nav.prospects })).toHaveAttribute('href', '/prospects');
+    expect(within(nav).getByRole('link', { name: tr.nav.outreach })).toHaveAttribute('href', '/outreach');
+    first.unmount();
+
+    // Without the permissions the pages are not offered (the server refuses them anyway).
+    mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace': workspace });
+    renderAt('/');
+    const plain = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+    expect(within(plain).getByRole('link', { name: tr.nav.home })).toBeInTheDocument();
+    expect(within(plain).queryByRole('link', { name: tr.nav.prospects })).not.toBeInTheDocument();
+    expect(within(plain).queryByRole('link', { name: tr.nav.outreach })).not.toBeInTheDocument();
+  });
+
+  it('permissions_copy_parity', () => {
+    for (const key of ['prospects.work', 'prospects.manage', 'outreach.work', 'outreach.manage']) {
+      expect(PERMISSIONS).toContain(key);
+    }
+    const trFlat = flatten(tr);
+    const enFlat = flatten(en);
+    for (const permission of PERMISSIONS) {
+      expect(trFlat[`permissions.${permission}`], permission).toBeTruthy();
+      expect(enFlat[`permissions.${permission}`], permission).toBeTruthy();
+    }
+    expect(en.nav.prospects).toBe('Prospects');
+    expect(en.nav.outreach).toBe('Campaigns');
+    expect(tr.nav.prospects).toBe('Aday havuzu');
+    expect(tr.nav.outreach).toBe('Kampanyalar');
   });
 
   it('sends a visitor to the sign-in page', async () => {

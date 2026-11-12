@@ -40,6 +40,20 @@ describe('errorMessage', () => {
     ).toBe(tr.errors.draftChanged);
   });
 
+  it('names_the_leads_refusals', () => {
+    expect(errorMessage(t, new ApiError('CONFLICT', 'x', { reason: 'stale_revision', revision: 4 }, 409))).toBe(
+      tr.leads.errors.stale_revision,
+    );
+    expect(errorMessage(t, new ApiError('FORBIDDEN', 'x', { reason: 'human_only' }, 403))).toBe(tr.leads.errors.human_only);
+    expect(errorMessage(t, new ApiError('CONFLICT', 'x', { reason: 'erase_the_person', person_id: 'p' }, 409))).toBe(
+      tr.leads.errors.erase_the_person,
+    );
+    expect(errorMessage(t, new ApiError('FORBIDDEN', 'x', { reason: 'outreach_disabled_on_platform' }, 403))).toBe(
+      tr.leads.errors.outreach_disabled_on_platform,
+    );
+    expect(errorMessage(t, new ApiError('FORBIDDEN', 'x', { reason: 'owner_required' }, 403))).toBe(tr.leads.errors.owner_required);
+  });
+
   it('names the connection refusals', () => {
     expect(
       errorMessage(

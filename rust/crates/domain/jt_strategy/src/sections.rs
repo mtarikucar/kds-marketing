@@ -27,6 +27,9 @@ pub struct Sections {
     pub cadence: Cadence,
     /// Whether the strategy uses paid channels at all.
     pub paid_enabled: bool,
+    /// Whom agents research for the prospect pool, and how prospects are scored. Empty `icp`
+    /// means prospecting is off.
+    pub prospecting: Prospecting,
 }
 
 impl Sections {
@@ -40,6 +43,7 @@ impl Sections {
         "prohibitions",
         "cadence",
         "paid_enabled",
+        "prospecting",
     ];
 }
 
@@ -235,4 +239,107 @@ pub struct Mix {
 impl Mix {
     /// The serialised field names, for the strict write-time check.
     pub const KEYS: &'static [&'static str] = &["channel", "share_pct"];
+}
+
+/// The prospect pool's part of the strategy (spec 2026-10-30-leads-pool-outreach-design.md §3.7):
+/// the ideal customer profile's entries agents research, and the rubric scores follow.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Prospecting {
+    /// `0..=10`; none means prospecting is off.
+    pub icp: Vec<IcpEntry>,
+    pub rubric: Rubric,
+}
+
+impl Prospecting {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["icp", "rubric"];
+}
+
+/// One entry of the ideal customer profile: whom to look for, where, and how many a day. The
+/// research planning keeps one standing task open per entry of the approved version.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IcpEntry {
+    /// `[a-z0-9_]{2,32}`, unique within the profile.
+    pub key: String,
+    /// An audience segment key of the same version.
+    pub segment_key: String,
+    /// `1..=10`.
+    pub sectors: Vec<String>,
+    /// `1..=20`.
+    pub areas: Vec<Area>,
+    /// `0..=10`: what to look for.
+    pub signals: Vec<String>,
+    /// `0..=10`: what disqualifies.
+    pub exclusions: Vec<String>,
+    /// At most 200 characters.
+    pub size_hint: String,
+    pub language: Option<String>,
+    /// Prospects created per local day for this entry, `1..=200`.
+    pub daily_cap: u16,
+    /// `0..=2000`: no research is asked for while this many of the segment are unpromoted.
+    pub backlog_target: u16,
+}
+
+impl IcpEntry {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &[
+        "key",
+        "segment_key",
+        "sectors",
+        "areas",
+        "signals",
+        "exclusions",
+        "size_hint",
+        "language",
+        "daily_cap",
+        "backlog_target",
+    ];
+}
+
+/// A place prospects are researched in: a city, optionally narrowed to one district. Named by a
+/// research brief (`jt_prospects::Brief`) and by an ICP entry of the `prospecting` section.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Area {
+    pub city: String,
+    pub district: Option<String>,
+}
+
+impl Area {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["city", "district"];
+}
+
+/// How a prospect is scored: criteria whose weights sum to 100, and the score at which a
+/// prospect qualifies by itself (spec 2026-10-30-leads-pool-outreach-design.md §3.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Rubric {
+    /// `1..=12` criteria, keys unique.
+    pub criteria: Vec<Criterion>,
+    /// `1..=100`.
+    pub qualify_at: u8,
+}
+
+impl Rubric {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["criteria", "qualify_at"];
+}
+
+/// One criterion of a [`Rubric`]: a score gives it at most `weight` points.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Criterion {
+    /// `[a-z0-9_]{2,32}`, unique within the rubric.
+    pub key: String,
+    /// `1..=300` characters.
+    pub description: String,
+    pub weight: u8,
+}
+
+impl Criterion {
+    /// The serialised field names, for the strict write-time check.
+    pub const KEYS: &'static [&'static str] = &["key", "description", "weight"];
 }

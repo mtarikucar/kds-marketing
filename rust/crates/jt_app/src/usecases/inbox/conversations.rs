@@ -45,6 +45,9 @@ pub struct Page<T> {
 ///
 /// On a public conversation, `item` names the comment or question the message is (an inbound
 /// one) or answers (ours, with its visibility); absent on a direct conversation.
+///
+/// `attachments` are the email's files (spec 2026-10-30-leads-pool-outreach-design.md §3.15):
+/// each kept, skipped (with why) or deleted, oldest first; empty for any other message.
 #[derive(Debug, Serialize)]
 pub struct MessageView {
     #[serde(flatten)]
@@ -52,6 +55,7 @@ pub struct MessageView {
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<MessageItem>,
+    pub attachments: Vec<super::attachments::AttachmentView>,
 }
 
 /// The public item a message is or answers.
@@ -223,6 +227,8 @@ pub async fn messages(
         .map(|m| m.id)
         .collect();
     let reasons = r.outbox().failure_reasons(&failed).await?;
+    let ids: Vec<_> = items.iter().map(|m| m.id).collect();
+    let files = r.mail_files().for_messages(&ids).await?;
     let mut views = Vec::with_capacity(items.len());
     for message in items {
         let item = if public {
@@ -236,6 +242,11 @@ pub async fn messages(
                 .find(|(id, _)| *id == message.id)
                 .map(|(_, reason)| reason.clone()),
             item,
+            attachments: files
+                .iter()
+                .filter(|f| f.message_id == Some(message.id))
+                .map(Into::into)
+                .collect(),
             message,
         });
     }

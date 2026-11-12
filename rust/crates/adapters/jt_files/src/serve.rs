@@ -24,9 +24,16 @@
 //!   asked for more), and the client sees the body end short of its length.
 //!
 //! An address is a provider's (signed without a purpose, as studio hands its media to Meta and
-//! TikTok) or a device's (`purpose=device`, signed with it: a `push_file` download, an agent's
-//! `file_url`). A request for anything else (an address that does not verify, another purpose, a
-//! file that is not there) is `404`.
+//! TikTok), a device's (`purpose=device`, signed with it: a `push_file` download, an agent's
+//! `file_url`) or a mail attachment's (`purpose=attachment`: a person's download from the inbox,
+//! spec 2026-10-30-leads-pool-outreach-design.md §3.15). A request for anything else (an address
+//! that does not verify, another purpose, a file that is not there) is `404`.
+//!
+//! A mail attachment is served as a download only, whatever it holds: `Content-Type:
+//! application/octet-stream`, `Content-Disposition: attachment` with its stored name
+//! (`filename*=UTF-8''…`, RFC 6266 and RFC 8187), `nosniff` and a `Content-Security-Policy` of
+//! `sandbox` ([`ATTACHMENT_POLICY`]), so an HTML file a customer mailed never runs in the panel's
+//! origin.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +45,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::{Clock, files::ByteSource, files::FileStore};
+use jt_app::usecases::files::OCTET_STREAM;
 use jt_studio::FileId;
 use jt_tenancy::WorkspaceId;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
@@ -62,6 +70,12 @@ pub const READ_IDLE: StdDuration = StdDuration::from_secs(30);
 pub const READ_DEADLINE: StdDuration = StdDuration::from_secs(30 * 60);
 /// The purpose a device's address is signed with (`purpose=device`).
 pub const DEVICE_PURPOSE: &str = "device";
+/// The purpose a mail attachment's download address is signed with (`purpose=attachment`).
+pub const ATTACHMENT_PURPOSE: &str = "attachment";
+/// The `Content-Security-Policy` of a mail attachment's download: `sandbox` (spec §3.15), and
+/// `frame-ancestors 'none'`, so the server's security headers keep it rather than put their own
+/// in its place (`jt_panel_http::security_headers` keeps only a policy that forbids framing).
+pub const ATTACHMENT_POLICY: &str = "sandbox; frame-ancestors 'none'";
 
 /// The route's limits ([`router_with_limits`]); [`router`] uses the constants above.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +114,8 @@ enum Use {
     Provider,
     /// A device's download, or an agent's `file_url` (`purpose=device`).
     Device,
+    /// A person's download of a mail attachment (`purpose=attachment`).
+    Attachment,
 }
 
 /// The turns of every read: one semaphore per file, one per workspace and [`Use`], and the
@@ -221,6 +237,7 @@ async fn retrieve(
     let use_ = match purpose {
         None => Use::Provider,
         Some(DEVICE_PURPOSE) => Use::Device,
+        Some(ATTACHMENT_PURPOSE) => Use::Attachment,
         Some(_) => return StatusCode::NOT_FOUND.into_response(),
     };
     let verified = crate::verify_for(
@@ -267,16 +284,52 @@ async fn retrieve(
         activity,
         limits: s.limits,
     };
+    let body = Body::from_stream(body.into_stream());
+    let length = file.size_bytes.to_string();
+    if use_ == Use::Attachment {
+        return (
+            [
+                (header::CONTENT_TYPE, OCTET_STREAM.to_owned()),
+                (header::CONTENT_DISPOSITION, disposition(&file.filename)),
+                (header::CONTENT_LENGTH, length),
+                (header::CACHE_CONTROL, "private, no-store".into()),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+                (header::CONTENT_SECURITY_POLICY, ATTACHMENT_POLICY.into()),
+            ],
+            body,
+        )
+            .into_response();
+    }
     (
         [
             (header::CONTENT_TYPE, file.mime),
-            (header::CONTENT_LENGTH, file.size_bytes.to_string()),
+            (header::CONTENT_LENGTH, length),
             (header::CACHE_CONTROL, "private, no-store".into()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
         ],
-        Body::from_stream(body.into_stream()),
+        body,
     )
         .into_response()
+}
+
+/// `Content-Disposition` of a download named `name`: `attachment; filename*=UTF-8''` and the
+/// name's UTF-8 bytes, every byte but RFC 8187's `attr-char` percent-encoded (so no quote, space,
+/// semicolon or control character reaches the header). A blank name reads `attachment`.
+pub(crate) fn disposition(name: &str) -> String {
+    let name = if name.trim().is_empty() {
+        "attachment"
+    } else {
+        name
+    };
+    let mut out = String::from("attachment; filename*=UTF-8''");
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// What a response being served holds while its client takes it: the rest of the file, and its

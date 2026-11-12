@@ -10,6 +10,14 @@ impl JourneyRepo for PgTenantRepos {
         many!(sqlx::query_scalar(&format!("select {ROW} from journeys j where workspace_id=$1 and owner_id=$2 and closed_at is null order by id for update")).bind(self.workspace_id().as_uuid()).bind(user.as_uuid()),self,Journey)
     }
 
+    async fn list_open(
+        &mut self,
+        after: Option<JourneyId>,
+        limit: u32,
+    ) -> Result<Vec<Journey>, AppError> {
+        many!(sqlx::query_scalar(&format!("select {ROW} from journeys j where workspace_id=$1 and closed_at is null and ($2::uuid is null or id>$2) order by id limit $3")).bind(self.workspace_id().as_uuid()).bind(after.map(|a| a.as_uuid())).bind(i64::from(limit)),self,Journey)
+    }
+
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError> {
         sqlx::query_scalar("select reducer_revision from journeys where workspace_id=$1 and id=$2")
             .bind(self.workspace_id().as_uuid())

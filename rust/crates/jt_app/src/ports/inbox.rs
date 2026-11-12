@@ -73,6 +73,14 @@ pub trait PersonRepo: Send + Sync {
         at: OffsetDateTime,
     ) -> Result<(), AppError>;
     async fn set_erased(&mut self, id: PersonId, at: OffsetDateTime) -> Result<(), AppError>;
+    /// Sets whom a commercial message to the person reaches; `NOT_FOUND` for a person of
+    /// another workspace.
+    async fn set_recipient_kind(
+        &mut self,
+        id: PersonId,
+        kind: jt_inbox::RecipientKind,
+        at: OffsetDateTime,
+    ) -> Result<(), AppError>;
 }
 
 #[async_trait]
@@ -232,6 +240,12 @@ pub trait MessageRepo: Send + Sync {
 pub trait JourneyRepo: Send + Sync {
     /// All open journeys of a departing owner, without a page cap.
     async fn open_owned_by(&mut self, user: UserId) -> Result<Vec<Journey>, AppError>;
+    /// Open journeys (not closed) by id, those after `after`, at most `limit`; a read, no lock.
+    async fn list_open(
+        &mut self,
+        after: Option<JourneyId>,
+        limit: u32,
+    ) -> Result<Vec<Journey>, AppError>;
     /// Advances only when a reducer transition is persisted, never for notes/tasks/owner edits
     /// or historical receipts. Read while holding the journey lock.
     async fn reducer_revision(&mut self, id: JourneyId) -> Result<i64, AppError>;
@@ -490,7 +504,18 @@ pub trait RequestKeyRepo: Send + Sync {
         response: Value,
         now: OffsetDateTime,
     ) -> Result<bool, AppError>;
+    /// Deletes every request key, expired or not, whose key starts with `prefix` and whose
+    /// stored response holds the string `value` under its top-level `field`; how many went. An
+    /// erasure, a do-not-contact mark or a purge forgets the requests that recorded the row.
+    async fn forget(&mut self, prefix: &str, field: &str, value: &str) -> Result<u64, AppError>;
+    /// Deletes the workspace's request keys stored at `before` or earlier; how many went. With
+    /// `before = now - REQUEST_KEY_TTL` these are exactly the keys [`RequestKeyRepo::get`] no
+    /// longer answers at `now` (the `purge_request_keys` job).
+    async fn purge_expired(&mut self, before: OffsetDateTime) -> Result<u64, AppError>;
 }
+
+/// How long a request key answers a replay after it was stored ([`RequestKeyRepo::get`]).
+pub const REQUEST_KEY_TTL: time::Duration = time::Duration::hours(24);
 
 /// Durable outbound intent. Sending/recovery state transitions belong to the send use cases.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

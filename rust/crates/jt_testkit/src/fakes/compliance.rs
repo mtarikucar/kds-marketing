@@ -534,6 +534,49 @@ impl ErasureRepo for MemTenant {
         })
     }
 
+    async fn family(&mut self, person: PersonId) -> Result<Vec<PersonId>, AppError> {
+        let s = self.state();
+        let ws = self.ws;
+        if !s
+            .inbox
+            .people
+            .iter()
+            .any(|p| p.workspace_id == ws && p.id == person)
+        {
+            return Ok(vec![]);
+        }
+        let mut family = std::collections::BTreeSet::from([person]);
+        loop {
+            let added: Vec<_> = s
+                .inbox
+                .people
+                .iter()
+                .filter(|p| {
+                    p.workspace_id == ws
+                        && !family.contains(&p.id)
+                        && p.merged_into.is_some_and(|id| family.contains(&id))
+                })
+                .map(|p| p.id)
+                .collect();
+            if added.is_empty() {
+                return Ok(family.into_iter().collect());
+            }
+            family.extend(added);
+        }
+    }
+    async fn family_identities(&mut self, person: PersonId) -> Result<Vec<Identity>, AppError> {
+        let family = ErasureRepo::family(self, person).await?;
+        let mut rows: Vec<Identity> = self
+            .state()
+            .inbox
+            .identities
+            .iter()
+            .filter(|i| i.workspace_id == self.ws && family.contains(&i.person_id))
+            .cloned()
+            .collect();
+        rows.sort_by_key(|i| (i.person_id, i.first_seen_at, i.id));
+        Ok(rows)
+    }
     async fn record(&mut self, row: ErasureLog) -> Result<(), AppError> {
         self.call(|t| {
             same_workspace(t.ws, row.workspace_id)?;

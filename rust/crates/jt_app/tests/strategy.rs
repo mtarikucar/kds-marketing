@@ -147,6 +147,39 @@ impl TenantRepos for SpyTenant {
     fn device_commands(&mut self) -> &mut dyn jt_app::ports::devices::DeviceCommandRepo {
         self.inner.device_commands()
     }
+    fn prospects(&mut self) -> &mut dyn jt_app::ports::prospects::ProspectRepo {
+        self.inner.prospects()
+    }
+    fn research_tasks(&mut self) -> &mut dyn jt_app::ports::prospects::ResearchTaskRepo {
+        self.inner.research_tasks()
+    }
+    fn prospect_blocklist(&mut self) -> &mut dyn jt_app::ports::prospects::BlocklistRepo {
+        self.inner.prospect_blocklist()
+    }
+    fn rep_profiles(&mut self) -> &mut dyn jt_app::ports::distribution::RepProfileRepo {
+        self.inner.rep_profiles()
+    }
+    fn distribution_rules(&mut self) -> &mut dyn jt_app::ports::distribution::RuleRepo {
+        self.inner.distribution_rules()
+    }
+    fn assignments(&mut self) -> &mut dyn jt_app::ports::distribution::AssignmentRepo {
+        self.inner.assignments()
+    }
+    fn outreach_templates(&mut self) -> &mut dyn jt_app::ports::outreach::TemplateRepo {
+        self.inner.outreach_templates()
+    }
+    fn outreach_campaigns(&mut self) -> &mut dyn jt_app::ports::outreach::CampaignRepo {
+        self.inner.outreach_campaigns()
+    }
+    fn outreach_enrollments(&mut self) -> &mut dyn jt_app::ports::outreach::EnrollmentRepo {
+        self.inner.outreach_enrollments()
+    }
+    fn outreach_sends(&mut self) -> &mut dyn jt_app::ports::outreach::OutreachSendRepo {
+        self.inner.outreach_sends()
+    }
+    fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
+        self.inner.mail_files()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.inner.consents()
@@ -2397,4 +2430,121 @@ async fn every_mutation_writes_one_ledger_entry_about_its_version() {
     let last = w.ledger().pop().unwrap();
     assert_eq!(last.strategy_version_id, Some(v1.id.as_uuid()));
     assert_eq!(last.subject.unwrap().id, v2.id.to_string());
+}
+
+/// The rubric digest names a rubric exactly: the same rubric gives the same digest, whatever
+/// version it is in; another order of the criteria, or another weight, gives another (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.4).
+#[test]
+fn rubric_digest_is_stable_and_order_sensitive() {
+    use jt_app::usecases::prospects::rubric_digest;
+    use jt_strategy::{Criterion, Rubric};
+    let c = |key: &str, weight: u8| Criterion {
+        key: key.into(),
+        description: format!("{key} fits"),
+        weight,
+    };
+    let rubric = Rubric {
+        criteria: vec![c("fit", 60), c("size", 40)],
+        qualify_at: 70,
+    };
+    let digest = rubric_digest(&rubric);
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    assert_eq!(rubric_digest(&rubric.clone()), digest);
+    let reordered = Rubric {
+        criteria: vec![c("size", 40), c("fit", 60)],
+        ..rubric.clone()
+    };
+    assert_ne!(rubric_digest(&reordered), digest);
+    let reweighted = Rubric {
+        criteria: vec![c("fit", 59), c("size", 41)],
+        ..rubric.clone()
+    };
+    assert_ne!(rubric_digest(&reweighted), digest);
+    let threshold = Rubric {
+        qualify_at: 71,
+        ..rubric
+    };
+    assert_ne!(rubric_digest(&threshold), digest);
+}
+
+/// The prospecting section with ICP entries `keys` (segment `students`) and a one-criterion
+/// rubric.
+fn prospecting(keys: &[&str]) -> Value {
+    let icp: Vec<Value> = keys
+        .iter()
+        .map(|k| {
+            json!({
+                "key": k, "segment_key": "students", "sectors": ["kafe"],
+                "areas": [{ "city": "İstanbul" }], "signals": [], "exclusions": [],
+                "size_hint": "", "language": "tr", "daily_cap": 20, "backlog_target": 0,
+            })
+        })
+        .collect();
+    json!({
+        "icp": icp,
+        "rubric": { "criteria": [{ "key": "fit", "description": "serves coffee", "weight": 100 }], "qualify_at": 60 },
+    })
+}
+
+/// Approving a version plans its research in the same transaction: one open standing task per
+/// ICP entry at once; the next approval supersedes them (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.7).
+#[tokio::test]
+async fn approval_creates_one_standing_task_per_icp_entry() {
+    use jt_prospects::{TaskKind, TaskStatus};
+    let w = world().await;
+    complete_draft(&w, &w.owner_ctx).await;
+    strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "prospecting".to_owned(),
+        prospecting(&["kampus", "merkez"]),
+    )
+    .await
+    .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let v1 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    let tasks = w.uow.snapshot().prospects.tasks;
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks.iter().all(|t| t.strategy_version_id == v1.id
+        && t.status == TaskStatus::Open
+        && matches!(t.kind, TaskKind::Standing { .. })));
+    // The next version keeps one entry: the old tasks are superseded, one new one is open.
+    strategy::start_consultation(&w.deps, &w.owner_ctx)
+        .await
+        .unwrap();
+    strategy::write_section(
+        &w.deps,
+        &w.owner_ctx,
+        "prospecting".to_owned(),
+        prospecting(&["kampus"]),
+    )
+    .await
+    .unwrap();
+    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    let tasks = w.uow.snapshot().prospects.tasks;
+    let open: Vec<_> = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Open)
+        .collect();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].strategy_version_id, v2.id);
+    assert_eq!(
+        tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Superseded)
+            .count(),
+        2
+    );
 }

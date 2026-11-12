@@ -55,6 +55,12 @@ panel-build:
 smoke-inbox:
 	cargo test --locked -p jt_app --test smoke_inbox
 
+.PHONY: smoke-leads
+# Prospect to Contacted in process: the real mail adapter against loopback SMTP/IMAP fixtures,
+# the platform switch on inside the test only; no database or provider.
+smoke-leads:
+	cargo test --locked -p jt_app --test smoke_leads
+
 .PHONY: smoke-studio
 # In-process M3 acceptance with scripted connectors; no database or provider credentials.
 smoke-studio:

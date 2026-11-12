@@ -78,3 +78,12 @@ async fn merge_during_provider_io_reconciles_without_conversation_effects() {
         std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
     ).await;
 }
+
+#[tokio::test]
+async fn erasing_the_survivor_scrubs_the_merged_familys_prospects() {
+    let db = jt_testkit::TestDb::new().await;
+    jt_testkit::inbox_merge_contract::erasing_the_survivor_scrubs_the_merged_familys_prospects(
+        std::sync::Arc::new(jt_pg::PgUnitOfWork::new(db.pool.clone())),
+    )
+    .await;
+}

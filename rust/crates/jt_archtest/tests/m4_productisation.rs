@@ -21,9 +21,11 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the
-/// materials library's twins; olay-driven publishing's).
-const POST_M4_ADDED: [(&str, &str); 38] = [
+/// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the prospect
+/// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
+/// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
+/// pool's report, leads L4-T6; outreach, leads L4-T7; the mail attachments, leads L6-T3).
+const POST_M4_ADDED: [(&str, &str); 84] = [
     ("connector.set_pbx_policy", "jeeta.connector.set_pbx_policy"),
     ("calls.policy_get", "jeeta.calls.policy_get"),
     ("calls.policy_set", "jeeta.calls.policy_set"),
@@ -39,6 +41,34 @@ const POST_M4_ADDED: [(&str, &str); 38] = [
     ("devices.act", "jeeta.devices.act"),
     ("devices.command_get", "jeeta.devices.command_get"),
     ("devices.commands", "jeeta.devices.commands"),
+    ("prospects.playbook", "jeeta.prospects.playbook"),
+    ("prospects.check", "jeeta.prospects.check"),
+    ("prospects.create", "jeeta.prospects.create"),
+    ("prospects.update", "jeeta.prospects.update"),
+    ("prospects.list", "jeeta.prospects.list"),
+    ("prospects.get", "jeeta.prospects.get"),
+    ("prospects.score", "jeeta.prospects.score"),
+    ("prospects.decide", "jeeta.prospects.decide"),
+    ("prospects.do_not_contact", "jeeta.prospects.do_not_contact"),
+    ("prospects.dnc_lift", "jeeta.prospects.dnc_lift"),
+    ("prospects.erase", "jeeta.prospects.erase"),
+    ("prospects.settings_get", "jeeta.prospects.settings_get"),
+    ("prospects.settings_set", "jeeta.prospects.settings_set"),
+    ("research.tasks_list", "jeeta.research.tasks_list"),
+    ("research.tasks_get", "jeeta.research.tasks_get"),
+    ("research.tasks_create", "jeeta.research.tasks_create"),
+    ("research.tasks_claim", "jeeta.research.tasks_claim"),
+    ("research.tasks_close", "jeeta.research.tasks_close"),
+    ("prospects.promote", "jeeta.prospects.promote"),
+    ("distribution.get", "jeeta.distribution.get"),
+    ("distribution.rules_set", "jeeta.distribution.rules_set"),
+    ("distribution.rep_set", "jeeta.distribution.rep_set"),
+    (
+        "distribution.assignments_list",
+        "jeeta.distribution.assignments_list",
+    ),
+    ("distribution.backfill", "jeeta.distribution.backfill"),
+    ("inbox.people.set_kind", "jeeta.inbox.people_set_kind"),
     ("inbox.public.hide", "jeeta.inbox.public_hide"),
     ("inbox.public.delete", "jeeta.inbox.public_delete"),
     (
@@ -67,6 +97,50 @@ const POST_M4_ADDED: [(&str, &str); 38] = [
     ("studio.posts_propose", "jeeta.studio.posts_propose"),
     ("studio.posts_list", "jeeta.studio.posts_list"),
     ("studio.weekly_summary", "jeeta.studio.weekly_summary"),
+    // The pool's report (leads L4-T6).
+    ("prospects.report", "jeeta.prospects.report"),
+    // Email outreach (leads L4-T7).
+    ("outreach.templates_list", "jeeta.outreach.templates_list"),
+    ("outreach.templates_save", "jeeta.outreach.templates_save"),
+    (
+        "outreach.templates_archive",
+        "jeeta.outreach.templates_archive",
+    ),
+    ("outreach.campaigns_list", "jeeta.outreach.campaigns_list"),
+    ("outreach.campaigns_get", "jeeta.outreach.campaigns_get"),
+    ("outreach.campaigns_save", "jeeta.outreach.campaigns_save"),
+    (
+        "outreach.audience_preview",
+        "jeeta.outreach.audience_preview",
+    ),
+    (
+        "outreach.campaigns_launch",
+        "jeeta.outreach.campaigns_launch",
+    ),
+    (
+        "outreach.campaigns_approve",
+        "jeeta.outreach.campaigns_approve",
+    ),
+    (
+        "outreach.campaigns_control",
+        "jeeta.outreach.campaigns_control",
+    ),
+    ("outreach.enroll", "jeeta.outreach.enroll"),
+    (
+        "outreach.enrollments_list",
+        "jeeta.outreach.enrollments_list",
+    ),
+    (
+        "outreach.enrollments_stop",
+        "jeeta.outreach.enrollments_stop",
+    ),
+    ("outreach.personalize", "jeeta.outreach.personalize"),
+    ("outreach.test_send", "jeeta.outreach.test_send"),
+    ("outreach.report", "jeeta.outreach.report"),
+    ("outreach.settings_get", "jeeta.outreach.settings_get"),
+    ("outreach.settings_set", "jeeta.outreach.settings_set"),
+    ("inbox.attachments_upload", "jeeta.inbox.attachments_upload"),
+    ("inbox.attachments_get", "jeeta.inbox.attachments_get"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
@@ -437,7 +511,7 @@ fn only_named_billing_rows_bypass_pending_status() {
         } else if ["auth.", "workspace.", "platform."]
             .iter()
             .any(|p| row.id.starts_with(p))
-            || row.id == "ops.health"
+            || ["ops.health", "prospects.do_not_contact", "prospects.erase"].contains(&row.id)
         {
             Always
         } else if ["strategy.", "work."].iter().any(|p| row.id.starts_with(p)) {

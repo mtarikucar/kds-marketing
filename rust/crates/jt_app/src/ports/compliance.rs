@@ -146,6 +146,12 @@ pub trait ErasureRepo: Send + Sync {
     /// identities (including inactive keys) inside the caller transaction after recording erasure.
     /// PostgreSQL uses transaction-local, person-scoped append-only exceptions.
     async fn scrub(&mut self, person: PersonId) -> Result<(), AppError>;
+    /// The person and their transitive merged aliases, `scrub`'s family, ordered by id; empty
+    /// for a person of another workspace.
+    async fn family(&mut self, person: PersonId) -> Result<Vec<PersonId>, AppError>;
+    /// Every identity of `family`'s members, inactive ones included (the keys `scrub` hashes),
+    /// ordered by (person_id, first_seen_at, id).
+    async fn family_identities(&mut self, person: PersonId) -> Result<Vec<Identity>, AppError>;
     /// First request wins; replays preserve its timestamp and source.
     async fn record(&mut self, row: ErasureLog) -> Result<(), AppError>;
     async fn get(&mut self, person: PersonId) -> Result<Option<ErasureLog>, AppError>;

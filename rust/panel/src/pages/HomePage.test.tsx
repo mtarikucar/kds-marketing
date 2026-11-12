@@ -316,3 +316,43 @@ it('links all four inbox work kinds to actionable destinations', async () => {
   }
   expect(screen.queryByText('private hint')).not.toBeInTheDocument();
 });
+
+it('home_renders_every_new_kind', async () => {
+  const campaign = '0190a000-0000-7000-8000-000000000701';
+  const lead = (kind: string, extra: Record<string, unknown>) => ({ kind, ...extra, priority: 2, hint: 'agent hint' });
+  mockFetch({
+    'GET /api/auth/me': me,
+    'GET /api/workspace': workspace,
+    'GET /api/work/pending': {
+      ...pendingOverdue,
+      items: [
+        lead('research_due', { task_id: 'task-1', remaining_today: 8 }),
+        lead('prospects_to_score', { count: 4 }),
+        lead('prospects_to_promote', { count: 3 }),
+        lead('ownerless_journeys', { count: 2, oldest_journey_id: 'journey-9' }),
+        lead('assignment_stalled', { count: 1 }),
+        lead('promoted_not_contacted', { count: 5 }),
+        lead('campaign_approval', { campaign_id: campaign, revision: 2 }),
+        lead('campaign_blocked', { campaign_id: campaign, reason: 'bounce_rate' }),
+        lead('personalization_due', { campaign_id: campaign, count: 6 }),
+      ],
+    },
+  });
+  renderAt('/');
+  const expected: [string, string][] = [
+    [i18n.t('home.pending.research_due', { n: 8 }), '/prospects/tasks'],
+    [i18n.t('home.pending.prospects_to_score', { n: 4 }), '/prospects'],
+    [i18n.t('home.pending.prospects_to_promote', { n: 3 }), '/prospects'],
+    [i18n.t('home.pending.ownerless_journeys', { n: 2 }), '/team/distribution'],
+    [i18n.t('home.pending.assignment_stalled', { n: 1 }), '/team/distribution'],
+    [i18n.t('home.pending.promoted_not_contacted', { n: 5 }), '/outreach'],
+    [i18n.t('home.pending.campaign_approval', { revision: 2 }), `/outreach/${campaign}`],
+    [i18n.t('home.pending.campaign_blocked', { reason: tr.leads.pauseReasons.bounce_rate }), `/outreach/${campaign}`],
+    [i18n.t('home.pending.personalization_due', { n: 6 }), `/outreach/${campaign}`],
+  ];
+  for (const [copy, href] of expected) {
+    const text = await screen.findByText(copy, undefined, { timeout: 5000 });
+    expect(within(text.closest('li')!).getByRole('link')).toHaveAttribute('href', href);
+  }
+  expect(screen.getByText(/Bir araştırma görevi bugün 8 aday/)).toBeInTheDocument();
+});

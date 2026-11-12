@@ -300,8 +300,16 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         .into_iter()
         .map(|f| f.id)
         .collect();
+    // An email's file is recorded apart too (`ports::mail_files`): kept while its row holds it.
+    // A deleted row's bytes (an erasure or a purge that committed before they went) go here.
+    let mail: std::collections::HashSet<FileId> = r
+        .mail_files()
+        .kept(&candidates)
+        .await?
+        .into_iter()
+        .collect();
     for id in candidates {
-        if !device.contains(&id.0) {
+        if !device.contains(&id.0) && !mail.contains(&id) {
             d.files.delete(ws, id).await?;
         }
     }

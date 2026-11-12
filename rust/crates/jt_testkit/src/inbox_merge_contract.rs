@@ -1177,3 +1177,119 @@ pub async fn undo_reads_a_version_1_snapshot(uow: Arc<dyn UnitOfWork>) {
             .is_none()
     );
 }
+
+/// A prospect promoted into a person later merged away is erased with the survivor: the
+/// survivor's erasure scrubs every family member's prospect and blocks the keys of every family
+/// identity, the inactive ones included (spec 2026-10-30-leads-pool-outreach-design.md §3.6,
+/// D105).
+pub async fn erasing_the_survivor_scrubs_the_merged_familys_prospects(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::usecases::{inbox::erasure, prospects};
+    use jt_prospects::{FieldInput, ProspectStatus, SourceRefInput};
+    let w = MergeFixture::new(uow.clone()).await;
+    let field = |value: &str| {
+        Some(FieldInput {
+            value: value.to_owned(),
+            sources: vec![SourceRefInput::Url {
+                url: "https://ornek.example.invalid/iletisim".into(),
+                note: None,
+            }],
+            captured_at: FIXED_NOW - Duration::days(1),
+        })
+    };
+    let create = |name: &str, phone: &str, email: &str| {
+        let mut i = crate::prospects_contract::input(name, phone);
+        i.email = field(email);
+        i.address = field("Örnek Sokak 1, Kadıköy");
+        i
+    };
+    // P: promoted into the person merged away (the source).
+    let p = prospects::create(
+        &w.deps,
+        &w.ctx,
+        create("Örnek Kafe", "0500 000 00 07", "kafe@ornek.example.invalid"),
+    )
+    .await
+    .unwrap()
+    .prospect;
+    // Q: unlinked, holding only an address the source once had (an inactive identity).
+    let q = prospects::create(
+        &w.deps,
+        &w.ctx,
+        create("Eski Kafe", "0500 000 00 08", "eski@ornek.example.invalid"),
+    )
+    .await
+    .unwrap()
+    .prospect;
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    r.identities()
+        .insert(Identity {
+            id: IdentityId::new_v7(),
+            workspace_id: w.f.ws,
+            person_id: w.source.id,
+            channel: IdentityChannel::Email,
+            value_normalized: "eski@ornek.example.invalid".into(),
+            value_display: "eski@ornek.example.invalid".into(),
+            active: false,
+            first_seen_at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.prospects().lock_pool().await.unwrap();
+    assert_eq!(
+        r.prospects()
+            .set_promoted(
+                p.id,
+                &jt_prospects::Promotion {
+                    person_id: w.source.id,
+                    journey_id: w.journey.id,
+                    at: FIXED_NOW,
+                    score: None,
+                    bucket: None,
+                },
+            )
+            .await
+            .unwrap(),
+        jt_app::ports::prospects::Promoted::Ok
+    );
+    r.commit().await.unwrap();
+    w.apply().await;
+    erasure::erase(
+        &w.deps,
+        &w.ctx,
+        w.keep.id,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    let mut r = uow.tenant(w.f.ws).await.unwrap();
+    let back = r.prospects().get(p.id).await.unwrap().unwrap();
+    assert_eq!(
+        back.business_name, "—",
+        "the merged person's prospect is scrubbed"
+    );
+    assert_eq!(back.contact, jt_prospects::ContactFields::default());
+    assert!(back.notes.is_empty());
+    assert_eq!(
+        back.status,
+        ProspectStatus::Promoted,
+        "its ids and status stay"
+    );
+    assert_eq!(r.prospects().get(q.id).await.unwrap(), None, "Q is deleted");
+    drop(r);
+    // Every key P and Q held is on the list: neither business is collected again.
+    for (name, phone, email) in [
+        ("Örnek Kafe", "0500 000 00 09", "kafe@ornek.example.invalid"),
+        ("Örnek Kafe", "0500 000 00 07", "yeni@ornek.example.invalid"),
+        ("Eski Kafe", "0500 000 00 10", "eski@ornek.example.invalid"),
+    ] {
+        let e = prospects::create(&w.deps, &w.ctx, create(name, phone, email))
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        // The inactive address is an erased identity too, which the pool checks first.
+        assert!(
+            ["do_not_contact", "erased_identity"].contains(&e.details["reason"].as_str().unwrap()),
+            "{email}: {e:?}"
+        );
+    }
+}

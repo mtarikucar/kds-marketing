@@ -42,6 +42,18 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
     ("jt_devices", &[]),
     // The wire between the server and a device bridge speaks the device vocabulary.
     ("jt_device_protocol", &["jt_devices"]),
+    // The prospect pool: phones and emails normalise through `jt_inbox::normalise` and a
+    // promotion names the inbox person and journey; `url` parses websites and does IDNA; the
+    // rubric and the research areas are the strategy's types.
+    ("jt_prospects", &["jt_inbox", "jt_strategy", "url"]),
+    // Outreach: audiences name inbox people, journey stages, source and recipient kinds, and
+    // the policy's business-basis channels (`jt_inbox`); a campaign's sending window is a
+    // capability's working hours, validated by its rules (`jt_capability::Hours`); a prospect
+    // filter names research tasks (`jt_prospects`); `url` checks template and privacy links.
+    (
+        "jt_outreach",
+        &["jt_inbox", "jt_capability", "jt_prospects", "url"],
+    ),
 ];
 
 #[test]
@@ -194,8 +206,9 @@ fn voice_bridge_depends_on_no_server_crate() {
     );
 }
 
-/// Exact dependency sets: connector, inbox and studio use capability types; only connector
-/// and inbox hash bytes, while the other crypto crates remain connector-only (non-vacuous).
+/// Exact dependency sets: connector, inbox, studio, calls and outreach use capability types;
+/// only connector and inbox hash bytes, while the other crypto crates remain connector-only
+/// (non-vacuous).
 #[test]
 fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
     for krate in CONNECTOR_EXTRA_ALLOW {
@@ -205,7 +218,13 @@ fn domain_capability_and_crypto_dependencies_match_explicit_sets() {
             .filter(|c| direct_deps(c).contains(*krate))
             .collect();
         let expected = if *krate == "jt_capability" {
-            BTreeSet::from(["jt_connector", "jt_inbox", "jt_studio", "jt_calls"])
+            BTreeSet::from([
+                "jt_connector",
+                "jt_inbox",
+                "jt_studio",
+                "jt_calls",
+                "jt_outreach",
+            ])
         } else if *krate == "sha2" {
             BTreeSet::from(["jt_connector", "jt_inbox"])
         } else {
@@ -233,6 +252,8 @@ const APP_ALLOW: &[&str] = &[
     "jt_calls",
     "jt_devices",
     "jt_device_protocol",
+    "jt_prospects",
+    "jt_outreach",
     "serde",
     "serde_json",
     "uuid",
@@ -761,9 +782,16 @@ fn only_mail_names_mail_protocol_libraries() {
             }
             let manifest = std::path::PathBuf::from(package["manifest_path"].as_str().unwrap());
             let mut files = rust_files_under(manifest.parent().unwrap());
-            files.push(manifest);
+            files.push(manifest.clone());
             for file in files {
-                let source = std::fs::read_to_string(&file).unwrap();
+                let mut source = std::fs::read_to_string(&file).unwrap();
+                // `jt_app`'s smoke test (`smoke_leads.rs`, spec D100) drives the real mail adapter
+                // against `jt_mail`'s own loopback TLS fixtures, which name `tokio-rustls`: a
+                // test-only dependency, so its manifest's `[dev-dependencies]` may name that one
+                // library. Its normal dependencies are held by the `direct_deps` check above.
+                if name == "jt_app" && file == manifest && library == "tokio-rustls" {
+                    source = without_dev_dependencies(&source);
+                }
                 assert!(
                     !mentions_word(&source, library)
                         && !mentions_word(&source, &library.replace('-', "_")),
@@ -773,6 +801,18 @@ fn only_mail_names_mail_protocol_libraries() {
             }
         }
     }
+}
+
+/// `manifest` without its `[dev-dependencies]` table (from its header to the next table).
+fn without_dev_dependencies(manifest: &str) -> String {
+    let Some(start) = manifest.find("[dev-dependencies]") else {
+        return manifest.to_owned();
+    };
+    let rest = &manifest[start + 1..];
+    let end = rest
+        .find("\n[")
+        .map_or(manifest.len(), |i| start + 1 + i + 1);
+    format!("{}{}", &manifest[..start], &manifest[end..])
 }
 
 #[test]

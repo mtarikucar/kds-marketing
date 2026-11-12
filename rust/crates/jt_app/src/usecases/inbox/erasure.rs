@@ -39,6 +39,25 @@ pub async fn erase(
         return Err(AppError::conflict("erase the surviving person"));
     }
     r.conversations().lock_for_person(person).await?;
+    // The pool forgets the business too (spec 2026-10-30-leads-pool-outreach-design.md §3.6,
+    // D105): the prospects promoted into the person or any alias merged into them, and those
+    // holding a phone or email any of them ever had (inactive identities too), read before the
+    // scrub removes them.
+    let family = r.erasure().family(person).await?;
+    let contact = contact_keys(r.as_mut(), person).await?;
+    crate::usecases::prospects::blocklist::on_person_erased(
+        deps,
+        ctx,
+        r.as_mut(),
+        person,
+        &family,
+        &contact,
+    )
+    .await?;
+    // The family's outreach stops, its personalization goes (the rows and ids stay).
+    for member in &family {
+        crate::usecases::outreach::hooks::on_erased(r.as_mut(), ctx, *member).await?;
+    }
     if p.erased_at.is_some() {
         r.erasure().scrub(person).await?;
     } else {
@@ -70,12 +89,40 @@ pub async fn erase(
     // The materials that show the person, and the olays naming them (spec 2026-11-03 §9.2), in
     // the same transaction; the materials' bytes go once it is committed (best effort:
     // `StudioFilesCleanup` deletes an erased material's file too).
-    let files = crate::usecases::studio::library::erase_person(r.as_mut(), ctx, person).await?;
+    let mut files = crate::usecases::studio::library::erase_person(r.as_mut(), ctx, person).await?;
+    // The files of the person's emails (and their merged aliases'), in and out (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.15): their rows lose their names now, their
+    // bytes go once this is committed (best effort: the store's daily sweep deletes what is left).
+    files.extend(r.mail_files().erase_person(person, ctx.now).await?);
     r.commit().await?;
     for file in files {
         let _ = deps.files.delete(ctx.workspace_id, file).await;
     }
     Ok(json!({"person_id":person,"erased":true}))
+}
+
+/// The phone and email identities of the person and their merged aliases, inactive ones
+/// included, as the pool's keys.
+async fn contact_keys(
+    r: &mut dyn TenantRepos,
+    person: PersonId,
+) -> Result<Vec<jt_prospects::Key>, AppError> {
+    Ok(r.erasure()
+        .family_identities(person)
+        .await?
+        .into_iter()
+        .filter_map(|i| {
+            let kind = match i.channel {
+                IdentityChannel::Phone => jt_prospects::KeyKind::Phone,
+                IdentityChannel::Email => jt_prospects::KeyKind::Email,
+                _ => return None,
+            };
+            Some(jt_prospects::Key {
+                kind,
+                value: i.value_normalized,
+            })
+        })
+        .collect())
 }
 
 pub(crate) async fn check_identity(

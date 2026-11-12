@@ -1,7 +1,7 @@
 //! The in-memory tables, the checks shared by the bundles, and the unit of work with its
 //! transactions.
 
-use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
@@ -104,11 +104,14 @@ pub struct StoredOutboundJob {
     pub status: Option<jt_app::ports::connectors::DeliveryStatus>,
 }
 
-/// A workspace's policies together with when they were last set.
+/// A workspace's policies together with when they were last set. The leads policy is kept as
+/// the stored object (`workspace_policies.leads_policy`): only the keys someone set, read over
+/// the defaults; `policy.leads` is not read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoredWorkspacePolicy {
     pub workspace_id: WorkspaceId,
     pub policy: WorkspacePolicy,
+    pub leads: serde_json::Value,
     pub updated_at: OffsetDateTime,
 }
 
@@ -124,6 +127,10 @@ pub struct MemState {
     pub posts: super::posts::MemPosts,
     pub calls: super::calls::MemCalls,
     pub devices: super::devices::MemDevices,
+    pub prospects: super::prospects::MemProspects,
+    pub distribution: super::distribution::MemDistribution,
+    pub outreach: super::outreach::MemOutreach,
+    pub mail_files: super::mail_files::MemMailFiles,
     pub inbox: super::inbox::MemInbox,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
@@ -415,6 +422,8 @@ pub struct InMemoryUow {
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
+    bundle_seq: Arc<AtomicU64>,
+    lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
 }
 
 /// A change made to the tables inside the bundle that next stores a call session.
@@ -434,6 +443,13 @@ impl InMemoryUow {
     /// that bundle: something that changes right after the first call fence passed.
     pub fn after_call_insert(&self, hook: impl Fn(&mut MemState) + Send + Sync + 'static) {
         *lock(&self.after_call_insert) = Some(Arc::new(hook));
+    }
+
+    /// The advisory locks bundles took, in order: `(bundle, lock)` with `lock` `"inbox"`
+    /// (`PersonRepo::lock_workspace`) or `"pool"` (`ProspectRepo::lock_pool`), each bundle
+    /// numbered from 1 as it opened. Locks are not modelled; this records the order taken.
+    pub fn lock_journal(&self) -> Vec<(u64, &'static str)> {
+        lock(&self.lock_journal).clone()
     }
 
     /// A copy of the committed tables, for assertions.
@@ -510,6 +526,8 @@ pub(super) struct MemTx {
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     pub(super) after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
+    bundle: u64,
+    lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -518,6 +536,11 @@ pub(super) struct MemTx {
 }
 
 impl MemTx {
+    /// Records that this bundle took advisory lock `name` ([`InMemoryUow::lock_journal`]).
+    pub(super) fn journal_lock(&self, name: &'static str) {
+        lock(&self.lock_journal).push((self.bundle, name));
+    }
+
     // Studio writes keep their lock until commit/drop, and refresh after waiting, so a fake
     // cannot hand two workers ownership of the same Sending attempt.
     pub(super) async fn lock_studio(&mut self) {
@@ -543,6 +566,8 @@ impl MemTx {
             studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
             after_call_insert: Arc::clone(&uow.after_call_insert),
+            bundle: uow.bundle_seq.fetch_add(1, Ordering::SeqCst) + 1,
+            lock_journal: Arc::clone(&uow.lock_journal),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),

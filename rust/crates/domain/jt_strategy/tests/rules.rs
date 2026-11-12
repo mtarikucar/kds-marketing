@@ -69,6 +69,7 @@ fn complete_sections() -> Sections {
             channel_mix: vec![mix("instagram", 70), mix("mailbox", 30)],
         },
         paid_enabled: true,
+        prospecting: Prospecting::default(),
     }
 }
 
@@ -803,4 +804,207 @@ fn every_written_struct_lists_exactly_its_serialised_keys() {
         serialised_keys(HypothesisInput::default()),
         sorted(HypothesisInput::KEYS)
     );
+    assert_eq!(
+        serialised_keys(Prospecting::default()),
+        sorted(Prospecting::KEYS)
+    );
+    assert_eq!(serialised_keys(IcpEntry::default()), sorted(IcpEntry::KEYS));
+    assert_eq!(serialised_keys(Area::default()), sorted(Area::KEYS));
+    assert_eq!(serialised_keys(Rubric::default()), sorted(Rubric::KEYS));
+    assert_eq!(
+        serialised_keys(Criterion::default()),
+        sorted(Criterion::KEYS)
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The prospecting section (spec 2026-10-30-leads-pool-outreach-design.md §3.7)
+// ---------------------------------------------------------------------------------------------
+
+fn icp_entry(key: &str, segment: &str) -> IcpEntry {
+    IcpEntry {
+        key: key.to_owned(),
+        segment_key: segment.to_owned(),
+        sectors: vec!["kafe".to_owned()],
+        areas: vec![Area {
+            city: "İstanbul".to_owned(),
+            district: Some("Kadıköy".to_owned()),
+        }],
+        signals: vec!["new menu".to_owned()],
+        exclusions: vec!["chains".to_owned()],
+        size_hint: "two branches".to_owned(),
+        language: Some("tr".to_owned()),
+        daily_cap: 20,
+        backlog_target: 100,
+    }
+}
+
+fn criterion(key: &str, weight: u8) -> Criterion {
+    Criterion {
+        key: key.to_owned(),
+        description: format!("{key} fits"),
+        weight,
+    }
+}
+
+fn prospecting() -> Prospecting {
+    Prospecting {
+        icp: vec![icp_entry("kafeler_ist", "students")],
+        rubric: Rubric {
+            criteria: vec![criterion("fit", 60), criterion("size", 40)],
+            qualify_at: 70,
+        },
+    }
+}
+
+fn with_prospecting(p: Prospecting) -> Sections {
+    Sections {
+        prospecting: p,
+        ..complete_sections()
+    }
+}
+
+#[test]
+fn empty_prospecting_is_not_a_gap() {
+    assert!(validate_sections(&complete_sections()).is_empty());
+    // A rubric without ICP entries is not checked: prospecting is off.
+    let off = Prospecting {
+        icp: vec![],
+        rubric: Rubric::default(),
+    };
+    assert!(validate_sections(&with_prospecting(off)).is_empty());
+    assert!(validate_sections(&with_prospecting(prospecting())).is_empty());
+}
+
+#[test]
+fn prospecting_gaps_are_reported() {
+    let mut p = prospecting();
+    p.icp.push(icp_entry("kafeler_ist", "students"));
+    p.icp[0].sectors.clear();
+    p.icp[0].areas.clear();
+    p.icp[0].daily_cap = 0;
+    p.icp[1].daily_cap = 201;
+    p.icp[1].backlog_target = 2_001;
+    p.rubric.qualify_at = 0;
+    let gaps = validate_sections(&with_prospecting(p));
+    assert_eq!(
+        fields(&gaps),
+        [
+            "prospecting.icp[0].sectors",
+            "prospecting.icp[0].areas",
+            "prospecting.icp[0].daily_cap",
+            "prospecting.icp[1].key",
+            "prospecting.icp[1].daily_cap",
+            "prospecting.icp[1].backlog_target",
+            "prospecting.rubric.qualify_at",
+        ]
+    );
+    let mut p = prospecting();
+    p.rubric.criteria = vec![
+        criterion("fit", 50),
+        criterion("fit", 50),
+        criterion("X", 0),
+    ];
+    let gaps = validate_sections(&with_prospecting(p));
+    assert_eq!(
+        fields(&gaps),
+        [
+            "prospecting.rubric.criteria[1].key",
+            "prospecting.rubric.criteria[2].key",
+        ]
+    );
+    let mut p = prospecting();
+    p.rubric.criteria = (0..13).map(|i| criterion(&format!("c{i:02}"), 0)).collect();
+    let gaps = validate_sections(&with_prospecting(p));
+    assert!(fields(&gaps).contains(&"prospecting.rubric.criteria"));
+}
+
+#[test]
+fn icp_segment_must_exist() {
+    let mut p = prospecting();
+    p.icp[0].segment_key = "retirees".to_owned();
+    let gaps = validate_sections(&with_prospecting(p));
+    assert_eq!(fields(&gaps), ["prospecting.icp[0].segment_key"]);
+}
+
+#[test]
+fn rubric_weights_must_sum_to_100() {
+    let mut p = prospecting();
+    p.rubric.criteria[1].weight = 39;
+    let gaps = validate_sections(&with_prospecting(p));
+    assert_eq!(fields(&gaps), ["prospecting.rubric.weights_sum"]);
+    assert!(gaps[0].message.contains("99"));
+}
+
+#[test]
+fn prospecting_round_trips_and_reads_tolerantly() {
+    let sections = with_prospecting(prospecting());
+    let json = serde_json::to_value(&sections).unwrap();
+    assert_eq!(serde_json::from_value::<Sections>(json).unwrap(), sections);
+    // An older row has no prospecting key: prospecting is off.
+    let old: Sections = serde_json::from_value(json!({"paid_enabled": true})).unwrap();
+    assert_eq!(old.prospecting, Prospecting::default());
+    // A partial entry reads its missing keys as defaults, an unknown one is ignored.
+    let partial: Prospecting =
+        serde_json::from_value(json!({"icp": [{"key": "a_b", "extra": 1}]})).unwrap();
+    assert_eq!(partial.icp[0].key, "a_b");
+    assert_eq!(partial.icp[0].daily_cap, 0);
+}
+
+#[test]
+fn strict_parse_refuses_unknown_prospecting_keys() {
+    let value = json!({
+        "icp": [{"key": "a_b", "segment_key": "students", "areas": [{"city": "İzmir", "zip": "35"}], "colour": "x"}],
+        "rubric": {"criteria": [{"key": "fit", "description": "d", "weight": 100, "hint": ""}], "qualify_at": 50, "x": 1},
+        "y": true,
+    });
+    let gaps = parse_section_strict("prospecting", &value).unwrap_err();
+    assert_eq!(
+        fields(&gaps),
+        [
+            "prospecting.y",
+            "prospecting.icp[0].colour",
+            "prospecting.icp[0].areas[0].zip",
+            "prospecting.rubric.x",
+            "prospecting.rubric.criteria[0].hint",
+        ]
+    );
+    let area_without_city = json!({"icp": [{"areas": [{"district": "Konak"}]}]});
+    let gaps = parse_section_strict("prospecting", &area_without_city).unwrap_err();
+    assert_eq!(fields(&gaps), ["prospecting.icp[0].areas[0].city"]);
+    let ok =
+        parse_section_strict("prospecting", &serde_json::to_value(prospecting()).unwrap()).unwrap();
+    assert_eq!(ok.key(), "prospecting");
+    let mut sections = complete_sections();
+    ok.apply(&mut sections);
+    assert_eq!(sections.prospecting, prospecting());
+}
+
+#[test]
+fn diff_reports_prospecting() {
+    let a = complete_sections();
+    let b = with_prospecting(prospecting());
+    assert_eq!(diff(&a, &b), ["prospecting"]);
+    assert!(diff(&b, &b.clone()).is_empty());
+}
+
+#[test]
+fn next_draft_copies_prospecting() {
+    let approved = StrategyVersion {
+        id: StrategyVersionId::new_v7(),
+        workspace_id: WorkspaceId::new_v7(),
+        number: 1,
+        status: VersionStatus::Approved,
+        sections: with_prospecting(prospecting()),
+        created_at: datetime!(2026-10-30 09:00 UTC),
+        created_by: Actor::System {
+            component: "test".into(),
+        },
+        submitted_at: None,
+        approved_at: None,
+        approved_by: None,
+        archived_at: None,
+    };
+    let (sections, _) = next_draft_from(&approved, &[]);
+    assert_eq!(sections.prospecting, prospecting());
 }

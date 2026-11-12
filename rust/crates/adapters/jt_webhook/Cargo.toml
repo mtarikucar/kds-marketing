@@ -38,6 +38,13 @@ time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { workspace = true, features = ["util"] }
 tracing-subscriber.workspace = true
+# The public links' tests (`tests/links.rs`) share `jt_app`'s outreach world
+# (`jt_app/tests/support`), which names these.
+jt_inbox.workspace = true
+jt_outreach.workspace = true
+jt_strategy.workspace = true
+serde.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

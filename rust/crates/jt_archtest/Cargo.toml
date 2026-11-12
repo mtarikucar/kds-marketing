@@ -21,6 +21,7 @@ jt_connector.workspace = true
 jt_capability.workspace = true
 jt_strategy.workspace = true
 jt_studio.workspace = true
+jt_prospects.workspace = true
 time.workspace = true
 jt_app.workspace = true
 jt_panel_http.workspace = true

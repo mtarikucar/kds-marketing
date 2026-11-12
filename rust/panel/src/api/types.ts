@@ -27,7 +27,11 @@ export type Permission =
   | 'calls.manage'
   | 'calls.bridge'
   | 'devices.work'
-  | 'devices.bridge';
+  | 'devices.bridge'
+  | 'prospects.work'
+  | 'prospects.manage'
+  | 'outreach.work'
+  | 'outreach.manage';
 export const PERMISSIONS: readonly Permission[] = [
   'workspace.read',
   'team.manage',
@@ -44,6 +48,10 @@ export const PERMISSIONS: readonly Permission[] = [
   'calls.bridge',
   'devices.work',
   'devices.bridge',
+  'prospects.work',
+  'prospects.manage',
+  'outreach.work',
+  'outreach.manage',
 ];
 
 /** Keys of the seeded system roles (`jt_tenancy::SystemRole`). */
@@ -772,7 +780,27 @@ export type WorkKind =
   /** A voice bridge that has not registered within its heartbeat; `last_seen_at` is its last one. */
   | { kind: 'voice_bridge_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
   /** A phone no device bridge has listed within its heartbeat; `last_seen_at` is the last listing. */
-  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null };
+  | { kind: 'phone_offline'; capability_id: Uuid; name: string; last_seen_at: Rfc3339 | null }
+  // The nine kinds of the leads program (spec 2026-10-30-leads-pool-outreach-design.md §3.17).
+  /** An open research task may still record `remaining_today` prospects today. */
+  | { kind: 'research_due'; task_id: Uuid; remaining_today: number }
+  /** New prospects without a score under the approved rubric. */
+  | { kind: 'prospects_to_score'; count: number }
+  /** Qualified prospects waiting for promotion into the inbox. */
+  | { kind: 'prospects_to_promote'; count: number }
+  /** Open journeys without an owner; `oldest_journey_id` has waited longest. */
+  | { kind: 'ownerless_journeys'; count: number; oldest_journey_id: Uuid | null }
+  /** Assignments past their SLA after the last reassignment. */
+  | { kind: 'assignment_stalled'; count: number }
+  // The four outreach kinds (`jt_app::usecases::outreach::work`).
+  /** Promoted ≥ 2 days ago, journey open, nothing sent yet. */
+  | { kind: 'promoted_not_contacted'; count: number }
+  /** A launched campaign revision waits for a human with `outreach.manage`. */
+  | { kind: 'campaign_approval'; campaign_id: Uuid; revision: number }
+  /** A campaign stopped by a fence or an auto-pause (`reason`). */
+  | { kind: 'campaign_blocked'; campaign_id: Uuid; reason: PauseReason }
+  /** Enrollments of a campaign wait for their `custom.*` values. */
+  | { kind: 'personalization_due'; campaign_id: Uuid; count: number };
 
 /** `jt_app::usecases::work::WorkItem`: the kind flattened beside its priority and hint. */
 export type WorkItem = WorkKind & {
@@ -967,6 +995,8 @@ export interface InboxPerson {
   erased_at: Rfc3339 | null;
   created_at: Rfc3339;
   updated_at: Rfc3339;
+  /** Whom a commercial message reaches (`jt_inbox::RecipientKind`); `unknown` unless set. */
+  recipient_kind?: RecipientKind;
 }
 /** Where a conversation happens: a direct one, comments or questions in public, or mail a marketplace relays. */
 export type InboxSurface = 'private' | 'public' | 'relay';
@@ -1012,6 +1042,8 @@ export interface InboxMessage {
   failure_reason?: string | null;
   /** On a public conversation: the comment or question the message is, or our reply answers. */
   item?: { item_id: Uuid; kind: PublicKind; answer_state: PublicAnswerKey; visibility: Visibility | null };
+  /** Its email attachments (`jt_app::usecases::inbox::attachments::AttachmentView`). */
+  attachments?: InboxAttachment[];
 }
 export type PublicKind = 'comment' | 'question';
 export type Visibility = 'public' | 'private';
@@ -1154,7 +1186,9 @@ export type JourneyEventKind =
   | { won: { product: string; amount_minor: number; currency: string } }
   | { lost: { reason_key: string } }
   | { snoozed: { until: Rfc3339 } }
-  | { merged: { target: Uuid } };
+  | { merged: { target: Uuid } }
+  /** An outreach email went out (rank-neutral: it moves no stage). */
+  | { outreach_sent: { campaign_id: Uuid; step: number } };
 export interface InboxEvent {
   id: Uuid;
   workspace_id: Uuid;
@@ -1203,6 +1237,8 @@ export interface InboxContext {
   recent_conversations: { conversation: InboxConversationRow; messages: InboxMessage[] }[];
   strategy_guidance: { summary: Identity; segments: Segment[]; hypotheses: Hypothesis[] } | null;
   prohibitions: string[];
+  /** The prospect the person was promoted from. */
+  prospect?: ProspectSummary | null;
   /** For a comment or question conversation only. */
   public?: PublicContext;
 }
@@ -1220,6 +1256,8 @@ export interface InboxPersonOut {
   }[];
   open_journey: InboxJourney | null;
   conversations: InboxConversationRow[];
+  /** The prospect the person was promoted from. */
+  prospect?: ProspectSummary | null;
 }
 export type MergeConflict = 'two_open_journeys' | 'display_name' | 'email' | 'phone' | 'company';
 export interface InboxMerge {
@@ -1357,3 +1395,1190 @@ export interface OpsHealthOut {
   webhooks: { accepted: number; unrouted: number; unresolved: number };
   backup: { last_backup_at: string | null; last_wal_archive_at: string | null; backup_state: HealthState; wal_state: HealthState };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Leads: the prospect pool, research tasks, distribution and outreach (spec
+// `docs/superpowers/specs/2026-10-30-leads-pool-outreach-design.md`). Each type names its Rust
+// source; the routes are spec §7.1's.
+// ---------------------------------------------------------------------------------------------
+
+/** `jt_prospects::ProspectStatus`. */
+export type ProspectStatus = 'new' | 'qualified' | 'rejected' | 'promoted' | 'do_not_contact';
+export const PROSPECT_STATUSES: readonly ProspectStatus[] = ['new', 'qualified', 'rejected', 'promoted', 'do_not_contact'];
+
+/** `jt_prospects::EntityKind`. */
+export type EntityKind = 'legal_entity' | 'sole_trader' | 'unknown_business';
+
+/** `jt_prospects::RejectReason`; `other` needs a note. */
+export type RejectReason =
+  | 'not_icp'
+  | 'closed_business'
+  | 'no_contact_data'
+  | 'competitor'
+  | 'already_customer'
+  | 'duplicate'
+  | 'other';
+export const REJECT_REASONS: readonly RejectReason[] = [
+  'not_icp',
+  'closed_business',
+  'no_contact_data',
+  'competitor',
+  'already_customer',
+  'duplicate',
+  'other',
+];
+
+/** `jt_prospects::DncReason`. */
+export type DncReason = 'objected' | 'legal' | 'other';
+export const DNC_REASONS: readonly DncReason[] = ['objected', 'legal', 'other'];
+
+/** `jt_prospects::KeyKind`: the first four are hard keys (the blocklist holds only those). */
+export type KeyKind = 'phone' | 'email' | 'instagram' | 'tiktok' | 'domain' | 'name_city';
+
+/** `jt_prospects::Bucket`, serialised as its range. */
+export type ScoreBucket = '0-24' | '25-49' | '50-74' | '75-100';
+export const SCORE_BUCKETS: readonly ScoreBucket[] = ['0-24', '25-49', '50-74', '75-100'];
+
+/** `jt_prospects::SourceRef`, tagged by `kind`: where a value was seen. */
+export type SourceRef =
+  | { kind: 'url'; url: string; note?: string | null }
+  | { kind: 'manual'; note: string }
+  | { kind: 'import'; system: string; record: string };
+
+/** `jt_prospects::Recorder`, tagged by `kind`: who recorded a value (never input). */
+export type Recorder =
+  | { kind: 'agent'; connection_id: Uuid; user_id: Uuid }
+  | { kind: 'human'; user_id: Uuid }
+  | { kind: 'import'; system: string; record: string }
+  | { kind: 'system'; job: string };
+
+/** `jt_prospects::Evidence` (named apart from the capabilities' `Evidence`). */
+export interface FieldEvidence {
+  sources: SourceRef[];
+  captured_at: Rfc3339;
+  recorder: Recorder;
+}
+
+/** `jt_prospects::Field<T>`: a value with its evidence. */
+export interface ProspectField<T> {
+  value: T;
+  evidence: FieldEvidence;
+  /** False once a bounce (or a `tr444:` phone) made it unusable for contact. */
+  deliverable: boolean;
+}
+
+/** `jt_prospects::ContactPerson`. */
+export interface ContactPerson {
+  name: string;
+  role: string;
+}
+
+/** `jt_prospects::ContactFields`. */
+export interface ContactFields {
+  phone?: ProspectField<string> | null;
+  email?: ProspectField<string> | null;
+  website?: ProspectField<string> | null;
+  instagram?: ProspectField<string> | null;
+  tiktok?: ProspectField<string> | null;
+  address?: ProspectField<string> | null;
+  contact_person?: ProspectField<ContactPerson> | null;
+}
+
+/** `jt_prospects::EmployeeBand`. */
+export type EmployeeBand = '1-9' | '10-49' | '50-249' | '250+';
+
+/** `jt_prospects::SizeHint`. */
+export interface SizeHint {
+  branches?: number | null;
+  employees?: EmployeeBand | null;
+  note?: string | null;
+}
+
+/** `jt_prospects::Signal`. */
+export interface Signal {
+  text: string;
+  source: SourceRef;
+}
+
+/** `jt_prospects::OriginVia`. */
+export type OriginVia = 'research_task' | 'manual' | 'agent' | 'v1_import' | 'system';
+
+/** `jt_prospects::Origin`. */
+export interface Origin {
+  via: OriginVia;
+  discovered_at: SourceRef[];
+  distinct_from: Uuid[];
+  recorder: Recorder;
+  at: Rfc3339;
+}
+
+/** `jt_prospects::ScoreSummary`. */
+export interface ScoreSummary {
+  score: number;
+  digest: string;
+  at: Rfc3339;
+}
+
+/** `jt_prospects::DecisionKind` (externally tagged). */
+export type DecisionKind = { rejected: RejectReason } | { do_not_contact: DncReason };
+
+/** `jt_prospects::Decision`. */
+export interface Decision {
+  kind: DecisionKind;
+  note: string;
+  by: Recorder;
+  at: Rfc3339;
+}
+
+/** `jt_prospects::Promotion`: the score at promotion is frozen here. */
+export interface Promotion {
+  person_id: Uuid;
+  journey_id: Uuid;
+  at: Rfc3339;
+  score: number | null;
+  bucket: ScoreBucket | null;
+}
+
+/** `jt_prospects::Prospect` (spec §3.1). */
+export interface Prospect {
+  id: Uuid;
+  workspace_id: Uuid;
+  status: ProspectStatus;
+  business_name: string;
+  entity_kind: EntityKind;
+  sector: string | null;
+  city: string | null;
+  district: string | null;
+  country: string;
+  language: string | null;
+  segment_key: string | null;
+  labels: string[];
+  contact: ContactFields;
+  size: ProspectField<SizeHint> | null;
+  signals: Signal[];
+  notes: string;
+  origin: Origin;
+  research_task_id: Uuid | null;
+  latest_score: ScoreSummary | null;
+  decision: Decision | null;
+  promoted: Promotion | null;
+  purge_after: Rfc3339 | null;
+  revision: number;
+  created_at: Rfc3339;
+  updated_at: Rfc3339;
+}
+
+/** `jt_prospects::FieldName`. */
+export type ProspectFieldName =
+  | 'sector'
+  | 'city'
+  | 'district'
+  | 'language'
+  | 'segment_key'
+  | 'labels'
+  | 'phone'
+  | 'email'
+  | 'website'
+  | 'instagram'
+  | 'tiktok'
+  | 'address'
+  | 'contact_person'
+  | 'size'
+  | 'signals'
+  | 'notes';
+
+/** `jt_app::ports::prospects::ProspectRow`: a list row, without contact values or evidence. */
+export interface ProspectRow {
+  id: Uuid;
+  status: ProspectStatus;
+  business_name: string;
+  entity_kind: EntityKind;
+  sector: string | null;
+  city: string | null;
+  district: string | null;
+  country: string;
+  language: string | null;
+  segment_key: string | null;
+  labels: string[];
+  research_task_id: Uuid | null;
+  latest_score: ScoreSummary | null;
+  bucket: ScoreBucket | null;
+  /** The fields that hold a value. */
+  fields: ProspectFieldName[];
+  promoted: Promotion | null;
+  revision: number;
+  decided_at: Rfc3339 | null;
+  purge_after: Rfc3339 | null;
+  created_at: Rfc3339;
+  updated_at: Rfc3339;
+}
+
+/** `jt_app::usecases::prospects::DuplicateCandidate`. */
+export interface DuplicateCandidate {
+  prospect_id: Uuid;
+  business_name: string;
+  city: string | null;
+  status: ProspectStatus;
+  /** The soft keys it shares: `domain`, `name_city`. */
+  matched: KeyKind[];
+}
+
+/** `jt_app::usecases::prospects::Flag`, tagged by `flag`: a soft key shared, never a refusal. */
+export type ProspectFlag =
+  | { flag: 'possible_duplicate'; candidates: DuplicateCandidate[] }
+  | { flag: 'previously_rejected_soft'; candidates: DuplicateCandidate[] };
+
+/** `jt_app::usecases::prospects::ProspectOut`. */
+export interface ProspectOut {
+  prospect: Prospect;
+  flags: ProspectFlag[];
+}
+
+/** `jt_app::usecases::prospects::NextPage`: pass both back as `before_at` and `before_id`. */
+export interface NextPage {
+  before_at: string;
+  before_id: Uuid;
+}
+
+/** `jt_app::usecases::prospects::ListInput` (query string). */
+export interface ProspectListQuery {
+  status?: ProspectStatus;
+  research_task_id?: Uuid;
+  city?: string;
+  segment_key?: string;
+  bucket?: ScoreBucket;
+  /** `1..=200`, 50 unless given. */
+  limit?: number;
+  before_at?: string;
+  before_id?: Uuid;
+}
+
+/** `jt_app::usecases::prospects::ListOut`. */
+export interface ProspectListOut {
+  items: ProspectRow[];
+  next: NextPage | null;
+}
+
+/** `jt_prospects::Reason`: one criterion's points and why. */
+export interface ScoreReason {
+  criterion: string;
+  points: number;
+  evidence: string;
+  source?: SourceRef | null;
+}
+
+/** `jt_app::ports::prospects::ScoreRow`. */
+export interface ScoreRow {
+  id: Uuid;
+  prospect_id: Uuid;
+  score: number;
+  reasons: ScoreReason[];
+  rubric_digest: string;
+  strategy_version_id: Uuid | null;
+  recorder: Recorder;
+  at: Rfc3339;
+}
+
+/** `jt_app::usecases::prospects::GetOut`. */
+export interface ProspectGetOut {
+  prospect: Prospect;
+  /** The latest scores, newest first. */
+  scores: ScoreRow[];
+  /** Prospects sharing a soft key with it now. */
+  duplicate_candidates: DuplicateCandidate[];
+  /** The pool's ledger entries about it, newest first. */
+  ledger: LedgerEntryOut[];
+}
+
+/** `jt_app::usecases::prospects::CheckInput`. */
+export interface ProspectCheckInput {
+  business_name?: string;
+  city?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  instagram?: string;
+  tiktok?: string;
+  distinct_from?: Uuid[];
+}
+
+/** `jt_app::usecases::prospects::CheckOut`: `ok`, or the refusal's details beside it. */
+export type ProspectCheckOut = { ok: boolean; flags: ProspectFlag[] } & Record<string, unknown>;
+
+/** `jt_app::usecases::prospects::DecideKind`. */
+export type DecideKind = 'qualify' | 'reject' | 'reopen';
+
+/** `jt_app::usecases::prospects::DecideInput`. */
+export interface DecideInput {
+  decision: DecideKind;
+  reason?: RejectReason;
+  /** At most 500 characters; required for the reason `other`. */
+  note?: string;
+  expected_revision: number;
+}
+
+/** `jt_app::usecases::prospects::ScoreOut`. */
+export interface ScoreOut {
+  score: ScoreRow;
+  status: ProspectStatus;
+  qualified: boolean;
+}
+
+/** `jt_app::usecases::prospects::RawKey`. */
+export interface RawKey {
+  kind: KeyKind;
+  value: string;
+}
+
+/** `jt_app::usecases::prospects::DncInput`: a prospect, or raw hard keys. */
+export interface DncInput {
+  confirm: true;
+  prospect_id?: Uuid;
+  keys?: RawKey[];
+  reason: DncReason;
+  note?: string;
+}
+
+/** `jt_app::usecases::prospects::DncOut`. */
+export interface DncOut {
+  prospect_id: Uuid | null;
+  prospects: Uuid[];
+  /** Inbox people of promoted holders: record the objection on them too. */
+  people: Uuid[];
+  kinds: KeyKind[];
+}
+
+/** `jt_app::usecases::prospects::LiftOut`. */
+export interface LiftOut {
+  kind: KeyKind;
+  lifted: boolean;
+}
+
+/** `jt_app::usecases::prospects::EraseOut`. */
+export interface EraseOut {
+  prospect_id: Uuid;
+  erased: boolean;
+  kinds: KeyKind[];
+}
+
+/** `jt_app::usecases::prospects::PromoteOutcome`, tagged by `outcome`. */
+export type PromoteOutcome =
+  | {
+      outcome: 'promoted';
+      prospect_id: Uuid;
+      person_id: Uuid;
+      journey_id: Uuid;
+      created_person: boolean;
+      owner_id: Uuid | null;
+    }
+  | { outcome: 'already_promoted'; prospect_id: Uuid; person_id: Uuid; journey_id: Uuid }
+  | { outcome: 'refused'; prospect_id: Uuid; reason: string; details?: unknown };
+
+/** `jt_app::usecases::prospects::PromoteInput`: 1 to 50 prospects. */
+export interface PromoteInput {
+  prospect_ids: Uuid[];
+  request_key?: string;
+}
+
+/** `jt_app::usecases::prospects::PromoteOut`: one outcome per prospect, in order. */
+export interface PromoteOut {
+  items: PromoteOutcome[];
+}
+
+/** `jt_prospects::ProspectsPolicy`. */
+export interface ProspectsPolicy {
+  rejected_retention_days: number;
+  unpromoted_retention_days: number;
+  rejected_memory_days: number;
+  max_promotions_per_day: number;
+  agents_promote_qualified_only: boolean;
+}
+
+/** `jt_app::usecases::prospects::SettingsOut`: the policy flattened beside the time zone. */
+export type PoolSettingsOut = ProspectsPolicy & { timezone: string };
+
+/** `jt_app::usecases::prospects::SettingsInput`: the keys to change. */
+export type PoolSettingsInput = Partial<PoolSettingsOut>;
+
+/** `jt_strategy::Area`. */
+export interface Area {
+  city: string;
+  district: string | null;
+}
+
+/** `jt_strategy::IcpEntry`. */
+export interface IcpEntry {
+  key: string;
+  segment_key: string;
+  sectors: string[];
+  areas: Area[];
+  signals: string[];
+  exclusions: string[];
+  size_hint: string;
+  language: string | null;
+  daily_cap: number;
+  backlog_target: number;
+}
+
+/** `jt_strategy::Criterion`. */
+export interface Criterion {
+  key: string;
+  description: string;
+  weight: number;
+}
+
+/** `jt_strategy::Rubric`. */
+export interface Rubric {
+  criteria: Criterion[];
+  qualify_at: number;
+}
+
+/** `jt_app::usecases::prospects::PlaybookOut` (spec §3.8). */
+export interface PlaybookOut {
+  version: number;
+  text: string;
+  workspace: {
+    prospecting_on: boolean;
+    icp: IcpEntry[];
+    rubric: Rubric;
+    rubric_digest: string | null;
+    caps: {
+      timezone: string;
+      daily_prospects: number;
+      recorded_today: number;
+      max_promotions_per_day: number;
+      resets_at: string;
+    };
+    remaining_today: { task_id: Uuid; icp_key: string | null; remaining: number }[];
+    retention_days: { rejected: number; unpromoted: number; rejected_memory: number };
+    blocklist_rules: { listed: KeyKind[]; flagged: KeyKind[] };
+  };
+}
+
+/** `jt_prospects::TaskStatus`. */
+export type TaskStatus = 'open' | 'done' | 'canceled' | 'superseded';
+export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'done', 'canceled', 'superseded'];
+
+/** `jt_prospects::TaskKind`, tagged by `type`. */
+export type TaskKind = { type: 'standing'; icp_key: string } | { type: 'ad_hoc'; target_count: number };
+
+/** `jt_prospects::Brief`: what to look for, where, and what disqualifies. */
+export interface Brief {
+  segment_key: string | null;
+  sectors: string[];
+  areas: Area[];
+  signals: string[];
+  exclusions: string[];
+  size_hint: string;
+  language: string | null;
+  note: string;
+}
+
+/** `jt_prospects::Claim`: an advisory lease. */
+export interface Claim {
+  by: Recorder;
+  until: Rfc3339;
+}
+
+/** `jt_prospects::ResearchTask`. */
+export interface ResearchTask {
+  id: Uuid;
+  workspace_id: Uuid;
+  kind: TaskKind;
+  strategy_version_id: Uuid;
+  brief: Brief;
+  rubric_digest: string;
+  daily_cap: number;
+  status: TaskStatus;
+  claim: Claim | null;
+  created_by: Recorder;
+  created_at: Rfc3339;
+  closed_at: Rfc3339 | null;
+  close_note: string;
+}
+
+/** `jt_app::usecases::research::TaskOut`. */
+export interface TaskOut {
+  task: ResearchTask;
+  remaining_today: number;
+}
+
+/** `jt_app::usecases::research::ListOut`. */
+export interface TaskListOut {
+  items: TaskOut[];
+  next: NextPage | null;
+}
+
+/** `jt_app::usecases::research::GetOut`. */
+export interface TaskGetOut {
+  task: ResearchTask;
+  remaining_today: number;
+  /** Prospects recorded with this task. */
+  found: number;
+  /** Its 20 newest prospects. */
+  prospects: ProspectRow[];
+}
+
+/** `jt_app::usecases::research::CreateInput`: an ad-hoc task. */
+export interface TaskCreateInput {
+  brief: Brief;
+  /** `1..=500`. */
+  target_count: number;
+  /** `1..=500` a local day. */
+  daily_cap: number;
+  request_key?: string;
+}
+
+/** `jt_app::usecases::research::ClaimOut`. */
+export interface ClaimOut {
+  task_id: Uuid;
+  claimed: boolean;
+  claim: Claim;
+  held_by_other: boolean;
+}
+
+/** `jt_app::usecases::research::CloseInput`. */
+export interface TaskCloseInput {
+  outcome: 'done' | 'canceled';
+  note?: string;
+}
+
+/** `jt_app::ports::DistributionMode`. */
+export type DistributionMode = 'auto' | 'manual';
+
+/** `jt_inbox::SourceKind`: where a journey came from, as distribution matches it. */
+export type LeadSourceKind = 'prospect' | 'channel' | 'meta_ads' | 'form' | 'import' | 'repeat';
+export const LEAD_SOURCE_KINDS: readonly LeadSourceKind[] = ['prospect', 'channel', 'meta_ads', 'form', 'import', 'repeat'];
+
+/** `jt_inbox::Match`: an empty list matches anything. */
+export interface RuleMatch {
+  sources: LeadSourceKind[];
+  cities: string[];
+  sectors: string[];
+  languages: string[];
+  segments: string[];
+  min_score: number | null;
+}
+
+/** `jt_inbox::MemberPool`, tagged by `kind`. */
+export type MemberPool = { kind: 'members'; user_ids: Uuid[] } | { kind: 'all_eligible' };
+
+/** `jt_inbox::Method`. */
+export type DistributionMethod = 'round_robin' | 'least_loaded';
+
+/** `jt_inbox::Rule`. */
+export interface DistributionRule {
+  id: Uuid;
+  name: string;
+  enabled: boolean;
+  when: RuleMatch;
+  to: MemberPool;
+  method: DistributionMethod;
+  sla_minutes: number | null;
+  cursor: Uuid | null;
+}
+
+/** `jt_app::usecases::distribution::RuleInput`: an `id` it already has keeps its cursor. */
+export interface RuleInput {
+  id?: Uuid;
+  name: string;
+  enabled: boolean;
+  when: RuleMatch;
+  to: MemberPool;
+  method: DistributionMethod;
+  /** `5..=10080` working minutes. */
+  sla_minutes?: number | null;
+}
+
+/** `jt_app::usecases::distribution::RulesSetInput`: the whole ordered set. */
+export interface RulesSetInput {
+  rules: RuleInput[];
+  mode?: DistributionMode;
+  /** `0..=10`. */
+  max_reassignments?: number;
+}
+
+/** `jt_inbox::RepProfile`. */
+export interface RepProfile {
+  user_id: Uuid;
+  accepting: boolean;
+  max_open: number | null;
+  languages: string[];
+  cities: string[];
+  sectors: string[];
+  hours: Hours | null;
+  away_until: Rfc3339 | null;
+  updated_at: Rfc3339;
+}
+
+/** `jt_app::usecases::distribution::RepSetInput`: the profile, replaced whole. */
+export interface RepSetInput {
+  accepting: boolean;
+  /** `1..=10000`. */
+  max_open?: number | null;
+  languages: string[];
+  cities: string[];
+  sectors: string[];
+  hours?: Hours | null;
+  away_until?: Rfc3339 | null;
+}
+
+/** `jt_app::usecases::distribution::RepOut`. */
+export interface RepOut {
+  user_id: Uuid;
+  display_name: string | null;
+  role_key: string;
+  profile: RepProfile;
+  open_owned: number;
+  on_shift: boolean;
+  /** Takes a new journey now. */
+  eligible: boolean;
+}
+
+/** `jt_app::usecases::distribution::DistributionOut`. */
+export interface DistributionOut {
+  mode: DistributionMode;
+  max_reassignments: number;
+  rules: DistributionRule[];
+  /** The active members who hold `inbox.work`. */
+  reps: RepOut[];
+  ownerless: { count: number; oldest_journey_id: Uuid | null };
+  stalled: number;
+}
+
+/** `jt_inbox::Cause`. */
+export type AssignmentCause =
+  | 'rule'
+  | 'default'
+  | 'manual'
+  | 'sla_reassign'
+  | 'member_left'
+  | 'import'
+  | 'no_eligible';
+
+/** `jt_app::ports::distribution::AssignmentRow`. */
+export interface AssignmentRow {
+  id: Uuid;
+  journey_id: Uuid;
+  user_id: Uuid | null;
+  cause: AssignmentCause;
+  rule_id: Uuid | null;
+  assigned_at: Rfc3339;
+  sla_due_at: Rfc3339 | null;
+  acted_at: Rfc3339 | null;
+  superseded_at: Rfc3339 | null;
+  by: Actor;
+}
+
+/** `jt_app::ports::distribution::AssignmentCursor`. */
+export interface AssignmentCursor {
+  assigned_at: Rfc3339;
+  id: Uuid;
+}
+
+/** `jt_app::usecases::distribution::AssignmentsListInput` (query string). */
+export interface AssignmentsQuery {
+  journey_id?: Uuid;
+  user_id?: Uuid;
+  limit?: number;
+  before_at?: Rfc3339;
+  before_id?: Uuid;
+}
+
+/** `jt_app::usecases::distribution::AssignmentsOut`. */
+export interface AssignmentsOut {
+  items: AssignmentRow[];
+  next: AssignmentCursor | null;
+}
+
+/** `jt_app::usecases::distribution::Distributed`. */
+export interface Distributed {
+  assigned: number;
+  no_eligible: number;
+  imported: number;
+  reassigned: number;
+  kept: number;
+}
+
+/** `jt_inbox::RecipientKind`. */
+export type RecipientKind = 'unknown' | 'business' | 'individual';
+
+/** `jt_inbox::CommercialBasis`. */
+export type CommercialBasis = 'consent' | 'business_recipient';
+
+/** `jt_outreach::Lang`. */
+export type TemplateLang = 'tr' | 'en';
+
+/** `jt_outreach::Var` keys a template may use (and `custom.<key>`). */
+export const TEMPLATE_VARS = [
+  'first_name',
+  'contact_name',
+  'company',
+  'city',
+  'district',
+  'sector',
+  'sender_name',
+  'sender_company',
+] as const;
+
+/** `jt_outreach::Template`. */
+export interface OutreachTemplate {
+  id: Uuid;
+  name: string;
+  language: TemplateLang;
+  subject: string;
+  body: string;
+  revision: number;
+  archived: boolean;
+}
+
+/** `jt_outreach::TemplateFacts`: the variables (as keys) and the body's links. */
+export interface TemplateFacts {
+  vars: string[];
+  links: string[];
+}
+
+/** `jt_app::usecases::outreach::TemplateOut`. */
+export interface TemplateOut {
+  template: OutreachTemplate;
+  facts: TemplateFacts;
+  updated_at: Rfc3339;
+}
+
+/** `jt_app::usecases::outreach::TemplateSaveInput`: a new template, or a new revision. */
+export interface TemplateSaveInput {
+  template_id?: Uuid;
+  expected_revision?: number;
+  name: string;
+  language: TemplateLang;
+  subject: string;
+  body: string;
+  request_key?: string;
+}
+
+/** `jt_app::usecases::outreach::TemplateListOut`. */
+export interface TemplateListOut {
+  items: TemplateOut[];
+  next: { before_at: string; before_id: Uuid } | null;
+}
+
+/** `jt_outreach::StepSnapshot`: a step's content frozen at launch. */
+export interface StepSnapshot {
+  template_revision: number;
+  subject: string;
+  body: string;
+  links: string[];
+  language: TemplateLang;
+}
+
+/** `jt_outreach::Step`. */
+export interface CampaignStep {
+  template_id: Uuid;
+  /** 0 for the first step, then `1..=30`. */
+  delay_days: number;
+  same_thread: boolean;
+  snapshot?: StepSnapshot | null;
+}
+
+/** `jt_outreach::Schedule`. */
+export interface CampaignSchedule {
+  start_at?: Rfc3339 | null;
+  window: Hours;
+}
+
+/** `jt_outreach::Throttle`: per hour `1..=60`, per day `1..=500`. */
+export interface Throttle {
+  per_hour: number;
+  per_day: number;
+}
+
+/** `jt_outreach::OwnerFilter`, tagged by `kind`. */
+export type OwnerFilter = { kind: 'user'; user_id: Uuid } | { kind: 'unowned' };
+
+/** `jt_outreach::PeopleFilter`. */
+export interface PeopleFilter {
+  journey_statuses?: JourneyStatus[];
+  owner?: OwnerFilter | null;
+  source_kinds?: LeadSourceKind[];
+  recipient_kind?: RecipientKind | null;
+  segments?: string[];
+  cities?: string[];
+  sectors?: string[];
+  opened_after?: Rfc3339 | null;
+  opened_before?: Rfc3339 | null;
+}
+
+/** `jt_outreach::ProspectFilter`: over qualified prospects, promoted at enrollment. */
+export interface ProspectFilter {
+  segment_keys?: string[];
+  research_task_ids?: Uuid[];
+  cities?: string[];
+  sectors?: string[];
+  min_score?: number | null;
+}
+
+/** `jt_outreach::Audience`. */
+export interface Audience {
+  people?: PeopleFilter | null;
+  prospects?: ProspectFilter | null;
+  explicit: Uuid[];
+}
+
+/** `jt_outreach::Definition`. */
+export interface CampaignDefinition {
+  sender_name: string;
+  steps: CampaignStep[];
+  audience: Audience;
+  schedule: CampaignSchedule;
+  throttle: Throttle;
+  click_tracking: boolean;
+  evergreen: boolean;
+  segment_key?: string | null;
+}
+
+/** `jt_outreach::CampaignStatus`. */
+export type CampaignStatus =
+  | 'draft'
+  | 'awaiting_approval'
+  | 'scheduled'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'canceled';
+export const CAMPAIGN_STATUSES: readonly CampaignStatus[] = [
+  'draft',
+  'awaiting_approval',
+  'scheduled',
+  'running',
+  'paused',
+  'completed',
+  'canceled',
+];
+
+/** `jt_outreach::PauseReason`. */
+export type PauseReason = 'manual' | 'bounce_rate' | 'complaints' | 'mailbox_down' | 'strategy_changed';
+
+/** `jt_outreach::Approval`: bound to one revision. */
+export interface Approval {
+  revision: number;
+  by: Uuid;
+  at: Rfc3339;
+}
+
+/** `jt_app::ports::outreach::CampaignRow`. */
+export interface CampaignRow {
+  id: Uuid;
+  name: string;
+  mailbox_id: Uuid;
+  status: CampaignStatus;
+  definition: CampaignDefinition;
+  revision: number;
+  approval: Approval | null;
+  pause_reason: PauseReason | null;
+  strategy_version_id: Uuid;
+  created_by: Actor;
+  created_at: Rfc3339;
+  updated_at: Rfc3339;
+  launched_at: Rfc3339 | null;
+  completed_at: Rfc3339 | null;
+}
+
+/** `jt_app::usecases::outreach::EnrollOut`. */
+export interface EnrollOut {
+  campaign_id: Uuid | null;
+  enrolled: number;
+  /** By skip reason. */
+  skipped: Record<string, number>;
+  already_enrolled: number;
+  promoted: number;
+  waiting_for_promotion: number;
+  truncated: boolean;
+}
+
+/** `jt_app::usecases::outreach::CampaignOut`. */
+export interface CampaignOut {
+  campaign: CampaignRow;
+  approval_required: boolean;
+  active_enrollments: number;
+  /** What a launch (or the approval that starts it) enrolled. */
+  enrollment?: EnrollOut;
+}
+
+/** `jt_app::usecases::outreach::CampaignListOut`. */
+export interface CampaignListOut {
+  items: CampaignRow[];
+  next: { before_at: string; before_id: Uuid } | null;
+}
+
+/** `jt_app::usecases::outreach::CampaignSaveInput`: a new campaign, or a new revision. */
+export interface CampaignSaveInput {
+  campaign_id?: Uuid;
+  expected_revision?: number;
+  name: string;
+  mailbox_id: Uuid;
+  definition: CampaignDefinition;
+  request_key?: string;
+}
+
+/** `jt_app::usecases::outreach::ControlAction`. */
+export type ControlAction = 'pause' | 'resume' | 'cancel';
+
+/** `jt_outreach::SkipReason`. */
+export type SkipReason =
+  | 'no_deliverable_email'
+  | 'suppressed'
+  | 'no_basis'
+  | 'do_not_contact'
+  | 'active_elsewhere'
+  | 'person_gone'
+  | 'journey_closed'
+  | 'promotion_cap';
+
+/** `jt_app::usecases::outreach::PreviewOut`: computed as enrollment would, nothing written. */
+export interface PreviewOut {
+  eligible: number;
+  by_skip_reason: Record<string, number>;
+  basis: { consent: number; business_recipient: number };
+  promotions_needed: number;
+  business_basis_in_force: boolean;
+  truncated: boolean;
+}
+
+/** `jt_outreach::EnrollmentStatus`. */
+export type EnrollmentStatus = 'active' | 'completed' | 'stopped' | 'skipped';
+
+/** `jt_app::ports::outreach::EnrollmentRow`; `stop` is a `StopReason` key (`refused:<key>`, …). */
+export interface EnrollmentRow {
+  id: Uuid;
+  campaign_id: Uuid;
+  person_id: Uuid;
+  journey_id: Uuid | null;
+  prospect_id: Uuid | null;
+  status: EnrollmentStatus;
+  stop: string | null;
+  skip: SkipReason | null;
+  next_step: number;
+  next_send_at: Rfc3339 | null;
+  personalization: Record<string, string>;
+  basis: CommercialBasis | null;
+  enrolled_at: Rfc3339;
+  stopped_at: Rfc3339 | null;
+  last_sent_at: Rfc3339 | null;
+}
+
+/** `jt_app::usecases::outreach::EnrollmentListOut`. */
+export interface EnrollmentListOut {
+  items: EnrollmentRow[];
+  next: Uuid | null;
+}
+
+/** `jt_app::usecases::outreach::EnrollInput`: the audience, or people, or prospects. */
+export interface EnrollInput {
+  audience?: boolean;
+  person_ids?: Uuid[];
+  prospect_ids?: Uuid[];
+}
+
+/** `jt_app::usecases::outreach::PersonalizeInput`: 1 to 100 items. */
+export interface PersonalizeInput {
+  items: { enrollment_id: Uuid; values: Record<string, string> }[];
+}
+
+/** `jt_outreach::LegalAck`: the owner's record of the counsel's confirmation. */
+export interface LegalAck {
+  counsel_confirmed: boolean;
+  note: string;
+  by: Uuid;
+  at: Rfc3339;
+}
+
+/** `jt_outreach::WarmupPolicy`. */
+export interface WarmupPolicy {
+  enabled: boolean;
+  start: number;
+  step: number;
+  max: number;
+}
+
+/** `jt_outreach::Frequency`. */
+export interface Frequency {
+  min_gap_days: number;
+  max_per_30_days: number;
+}
+
+/** `jt_outreach::OutreachPolicy`. */
+export interface OutreachPolicy {
+  requires_approval: boolean;
+  /** Channels with the business-recipient basis (email only; off by default). */
+  b2b_basis: ContactChannel[];
+  require_iys_lookup: boolean;
+  legal_ack: LegalAck | null;
+  sender_company: string;
+  sender_address: string;
+  privacy_notice_url: string;
+  warmup: WarmupPolicy;
+  frequency: Frequency;
+  click_tracking_default: boolean;
+}
+
+/** `jt_app::usecases::outreach::SettingsOut`: the policy flattened beside what follows from it. */
+export type OutreachSettingsOut = OutreachPolicy & {
+  sender_identity_complete: boolean;
+  /** `JEETA_OUTREACH_ENABLED`: while off, nothing launches. */
+  platform_enabled: boolean;
+  b2b_channels_in_force: ContactChannel[];
+};
+
+/** `jt_app::usecases::outreach::SettingsInput`: the keys to change. */
+export interface OutreachSettingsInput {
+  requires_approval?: boolean;
+  b2b_basis?: ContactChannel[];
+  require_iys_lookup?: boolean;
+  legal_ack?: { counsel_confirmed: boolean; note: string };
+  sender_company?: string;
+  sender_address?: string;
+  privacy_notice_url?: string;
+  warmup?: Partial<WarmupPolicy>;
+  frequency?: Partial<Frequency>;
+  click_tracking_default?: boolean;
+}
+
+/** `jt_app::usecases::outreach::report::GroupBy`. */
+export type OutreachReportGroup = 'campaign' | 'step' | 'template';
+
+/** `jt_app::usecases::outreach::report::ReportGroup`: one group's counts. */
+export interface OutreachReportRow {
+  /** Set when grouped by campaign or step. */
+  campaign_id: Uuid | null;
+  /** Set when grouped by step. */
+  step: number | null;
+  /** Set when grouped by step or template. */
+  template_id: Uuid | null;
+  enrolled: number;
+  /** By skip reason key. */
+  skipped: Record<string, number>;
+  sent: number;
+  unknown: number;
+  failed: number;
+  refused: number;
+  bounced: number;
+  complained: number;
+  replied: number;
+  replied_threaded: number;
+  replied_unthreaded: number;
+  unsubscribed: number;
+  /** `null` while no campaign of the group tracks clicks. */
+  unique_clicks: number | null;
+  automated_clicks: number;
+  meetings_30d: number;
+  won_30d: number;
+  /** By stop reason key. */
+  stopped: Record<string, number>;
+}
+
+/** `jt_app::usecases::outreach::report::ReportOut` over `[from, to)`. */
+export interface OutreachReportOut {
+  from: Rfc3339;
+  to: Rfc3339;
+  campaign_id: Uuid | null;
+  group_by: OutreachReportGroup;
+  groups: OutreachReportRow[];
+  truncated: boolean;
+}
+
+/** `jt_app::usecases::prospects::report::GroupBy`. */
+export type ProspectsReportGroup =
+  | 'source'
+  | 'research_task'
+  | 'segment'
+  | 'sector'
+  | 'city'
+  | 'score_bucket'
+  | 'rubric_digest';
+export const PROSPECTS_REPORT_GROUPS: readonly ProspectsReportGroup[] = [
+  'source',
+  'research_task',
+  'segment',
+  'sector',
+  'city',
+  'score_bucket',
+  'rubric_digest',
+];
+
+/** `jt_app::usecases::prospects::report::ReportGroup`: one group's counts. */
+export interface ProspectsReportRow {
+  /** The group's value; `null` for the prospects without one. */
+  key: string | null;
+  created: number;
+  scored: number;
+  qualified: number;
+  /** By reject reason key. */
+  rejected: Record<string, number>;
+  promoted: number;
+  contacted: number;
+  replied: number;
+  meetings: number;
+  quoted: number;
+  won: number;
+  /** By lost-reason key. */
+  lost: Record<string, number>;
+  /** Minor units per currency code; never summed across currencies. */
+  won_revenue: Record<string, number>;
+  rates: { promoted_to_replied: number | null; replied_to_meeting: number | null; meeting_to_won: number | null };
+}
+
+/** `jt_app::usecases::prospects::report::ReportOut` over `[from, to)`. */
+export interface ProspectsReportOut {
+  from: Rfc3339;
+  to: Rfc3339;
+  group_by: ProspectsReportGroup;
+  groups: ProspectsReportRow[];
+  truncated: boolean;
+}
+
+/** `jt_app::usecases::prospects::ProspectSummary`: the prospect a person was promoted from. */
+export interface ProspectSummary {
+  prospect_id: Uuid;
+  business_name: string;
+  entity_kind: EntityKind;
+  sector: string | null;
+  city: string | null;
+  district: string | null;
+  segment_key: string | null;
+  language: string | null;
+  origin: OriginVia;
+  research_task_id: Uuid | null;
+  evidence: { field: string; sources: SourceRef[]; captured_at: Rfc3339; deliverable: boolean }[];
+  signals: Signal[];
+  latest_score: ScoreSummary | null;
+  reasons: ScoreReason[];
+  promotion: Promotion | null;
+}
+
+/** `jt_app::ports::mail_files::MailFileState`. */
+export type MailFileState = 'stored' | 'staged' | 'attached' | 'skipped' | 'deleted';
+
+/** `jt_app::usecases::inbox::attachments::AttachmentView`: a message's file. */
+export interface InboxAttachment {
+  file_id: Uuid;
+  filename: string;
+  declared_mime: string;
+  size_bytes: number;
+  state: MailFileState;
+  /** Why an inbound file was not kept. */
+  skip_reason: 'file_too_large' | 'too_many_files' | 'daily_limit' | null;
+}
+
+/** `jt_app::usecases::inbox::attachments::AttachmentOut`. */
+export type AttachmentOut = InboxAttachment & {
+  direction: 'inbound' | 'outbound';
+  message_id: Uuid | null;
+  /** When a staged upload expires unused. */
+  expires_at: Rfc3339 | null;
+};
+
+/** `jt_app::usecases::inbox::attachments::AttachmentGetOut`: the address is valid ten minutes. */
+export type AttachmentGetOut = AttachmentOut & {
+  download_url: string | null;
+  download_expires_at: Rfc3339 | null;
+};

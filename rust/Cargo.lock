@@ -1428,6 +1428,8 @@ dependencies = [
  "jt_meta",
  "jt_netgsm",
  "jt_outbound",
+ "jt_outreach",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
@@ -1439,6 +1441,7 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -1460,6 +1463,7 @@ dependencies = [
  "jt_meta",
  "jt_panel_http",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
@@ -1646,7 +1650,9 @@ dependencies = [
  "jt_connector",
  "jt_device_protocol",
  "jt_ledger",
+ "jt_outreach",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
@@ -1725,6 +1731,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "jt_outreach"
+version = "0.1.0"
+dependencies = [
+ "jt_capability",
+ "jt_inbox",
+ "jt_prospects",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "jt_panel_http"
 version = "0.1.0"
 dependencies = [
@@ -1737,7 +1759,9 @@ dependencies = [
  "jt_connector",
  "jt_ledger",
  "jt_mcp",
+ "jt_outreach",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
@@ -1763,6 +1787,8 @@ dependencies = [
  "jt_connector",
  "jt_inbox",
  "jt_ledger",
+ "jt_outreach",
+ "jt_prospects",
  "jt_seal",
  "jt_strategy",
  "jt_studio",
@@ -1777,6 +1803,21 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "jt_prospects"
+version = "0.1.0"
+dependencies = [
+ "jt_inbox",
+ "jt_strategy",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "time",
+ "url",
  "uuid",
 ]
 
@@ -1850,8 +1891,10 @@ dependencies = [
  "jt_device_protocol",
  "jt_inbox",
  "jt_ledger",
+ "jt_outreach",
  "jt_panel_http",
  "jt_pg",
+ "jt_prospects",
  "jt_strategy",
  "jt_studio",
  "jt_tenancy",
@@ -1896,13 +1939,17 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_inbox",
  "jt_ledger",
  "jt_meta",
  "jt_netgsm",
+ "jt_outreach",
  "jt_pg",
+ "jt_strategy",
  "jt_tenancy",
  "jt_testkit",
  "jt_tiktok",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "time",
@@ -1911,6 +1958,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

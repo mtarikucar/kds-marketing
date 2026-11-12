@@ -1,3 +1,6 @@
+// The synthetic leads are large `json!` literals.
+#![recursion_limit = "256"]
+
 use jt_app::usecases::v1_import::{Lead, map_status};
 use jt_inbox::JourneyStatus;
 
@@ -30,7 +33,10 @@ use jt_app::{
 };
 use jt_inbox::{Channel, ConsentKind, EventSource, Note, NoteId, PersonId};
 use jt_pg::{PgUnitOfWork, TenantTx, v1_import::PgImportStore};
-use jt_testkit::{TestDb, fakes::FIXED_NOW};
+use jt_testkit::{
+    TestDb,
+    fakes::{FIXED_NOW, PlainSecretBox},
+};
 use serde_json::{Value, json};
 
 const FIXTURE: &str = include_str!("../../../../scripts/tests/fixtures/v1-import/lead.jsonl");
@@ -188,7 +194,7 @@ async fn exported_jsonl_dry_run_import_reimport_touched_rollback_and_rls() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     drop(conn);
-    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!((dry.imported, dry.duplicates_merged, dry.tasks), (4, 1, 2));
@@ -204,7 +210,7 @@ async fn exported_jsonl_dry_run_import_reimport_touched_rollback_and_rls() {
     ] {
         assert_eq!(count(&db, ws, table).await, 0, "dry run wrote {table}");
     }
-    let report = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    let report = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -223,7 +229,7 @@ async fn exported_jsonl_dry_run_import_reimport_touched_rollback_and_rls() {
         .await
         .unwrap();
     assert_eq!(no_scope, 0);
-    let again = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    let again = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!((again.imported, again.already_present), (0, 4));
@@ -268,14 +274,28 @@ async fn exported_jsonl_dry_run_import_reimport_touched_rollback_and_rls() {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    let down = v1_import::run(&store, ws, &leads, Mode::Rollback, FIXED_NOW)
-        .await
-        .unwrap();
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!((down.rolled_back, down.kept), (2, 1));
     assert_eq!(count(&db, ws, "people").await, 1);
-    let repeat = v1_import::run(&store, ws, &leads, Mode::Rollback, FIXED_NOW)
-        .await
-        .unwrap();
+    let repeat = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!((repeat.rolled_back, repeat.kept), (0, 1));
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     let ledger: Vec<Value>=sqlx::query_scalar("select to_jsonb(l) from ledger_entries l where workspace_id=$1 and action='import.v1_leads'").bind(ws.as_uuid()).fetch_all(tx.conn()).await.unwrap();
@@ -294,7 +314,7 @@ async fn exported_jsonl_dry_run_import_reimport_touched_rollback_and_rls() {
     }
     drop(tx);
     // Up -> down -> up: untouched groups can be imported again with the same deterministic ids.
-    let up = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    let up = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!((up.imported, up.already_present), (2, 2));
@@ -315,6 +335,7 @@ async fn never_steals_non_imported_identities_and_never_rebaselines_touched_peop
             workspace_id: ws,
             display_name: "runtime person".into(),
             company: "".into(),
+            recipient_kind: jt_inbox::RecipientKind::Unknown,
             first_touch: FirstTouch {
                 source: Source::Form,
                 capability_id: None,
@@ -344,6 +365,7 @@ async fn never_steals_non_imported_identities_and_never_rebaselines_touched_peop
     let one = lead("one");
     let report = v1_import::run(
         &store,
+        &PlainSecretBox,
         ws,
         std::slice::from_ref(&one),
         Mode::Import,
@@ -371,6 +393,7 @@ async fn never_steals_non_imported_identities_and_never_rebaselines_touched_peop
     let two = lead("two");
     let report = v1_import::run(
         &store,
+        &PlainSecretBox,
         ws,
         std::slice::from_ref(&two),
         Mode::Import,
@@ -382,9 +405,16 @@ async fn never_steals_non_imported_identities_and_never_rebaselines_touched_peop
         (report.duplicates_merged, report.identities_conflicting),
         (0, 2)
     );
-    let down = v1_import::run(&store, ws, &[one, two], Mode::Rollback, FIXED_NOW)
-        .await
-        .unwrap();
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &[one, two],
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!((down.rolled_back, down.kept), (1, 1));
     let mut r = uow.tenant(ws).await.unwrap();
     assert_eq!(r.identities().list(existing).await.unwrap().len(), 1);
@@ -416,7 +446,7 @@ async fn rollback_keeps_changed_note_task_identity_consent_and_extra_journey() {
         row.email = Some(format!("guard-{i}@example.test"));
         leads.push(row);
     }
-    v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
@@ -470,9 +500,16 @@ async fn rollback_keeps_changed_note_task_identity_consent_and_extra_journey() {
     .unwrap();
     r.journeys().insert_initial(extra).await.unwrap();
     r.commit().await.unwrap();
-    let result = v1_import::run(&store, ws, &leads, Mode::Rollback, FIXED_NOW)
-        .await
-        .unwrap();
+    let result = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!((result.rolled_back, result.kept), (1, 5));
     assert_eq!(count(&db, ws, "people").await, 5);
 }
@@ -494,26 +531,33 @@ async fn chunk_boundary_duplicates_and_prevalidation_are_atomic() {
         .collect::<Vec<_>>();
     leads[100].status = "UNKNOWN".into();
     assert!(
-        v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+        v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
             .await
             .is_err()
     );
     assert_eq!(count(&db, ws, "people").await, 0);
     leads[100].status = "NEW".into();
-    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!((dry.imported, dry.duplicates_merged), (101, 100));
     assert_eq!(count(&db, ws, "people").await, 0);
-    let up = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    let up = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!((up.imported, up.duplicates_merged), (101, 100));
     assert_eq!(count(&db, ws, "journeys").await, 1);
     assert_eq!(count(&db, ws, "notes").await, 101);
-    let down = v1_import::run(&store, ws, &leads, Mode::Rollback, FIXED_NOW)
-        .await
-        .unwrap();
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     assert_eq!((down.rolled_back, down.kept), (1, 0));
     assert_eq!(count(&db, ws, "people").await, 0);
 }
@@ -534,6 +578,7 @@ async fn erased_identity_tombstone_prevents_reintroducing_the_entire_lead() {
     r.commit().await.unwrap();
     let report = v1_import::run(
         &PgImportStore(db.pool.clone()),
+        &PlainSecretBox,
         ws,
         &[lead("erased")],
         Mode::Import,
@@ -639,6 +684,7 @@ async fn assert_national_phone_erasure_blocks_import(stored_phone: &str) {
         row.email = None;
         let report = v1_import::run(
             &PgImportStore(db.pool.clone()),
+            &PlainSecretBox,
             ws,
             &[row],
             Mode::Import,
@@ -676,6 +722,7 @@ async fn assert_national_phone_owner_is_preserved(stored_phone: &str, expected: 
     row.email = None;
     let report = v1_import::run(
         &PgImportStore(db.pool.clone()),
+        &PlainSecretBox,
         ws,
         &[row],
         Mode::Import,
@@ -750,7 +797,7 @@ async fn dry_run_releases_the_inbox_lock_every_hundred_leads_and_keeps_duplicate
         .map(|i| lead(&format!("preview-{i}")))
         .collect::<Vec<_>>();
     leads.push(leads[0].clone());
-    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -772,6 +819,7 @@ async fn dry_run_releases_the_inbox_lock_every_hundred_leads_and_keeps_duplicate
     assert_eq!(count(&db, ws, "ledger_entries").await, 0);
     let real = v1_import::run(
         &PgImportStore(db.pool.clone()),
+        &PlainSecretBox,
         ws,
         &leads,
         Mode::Import,
@@ -793,7 +841,7 @@ async fn three_thousand_marker_lookups_are_bounded_and_chunked() {
         .map(|i| lead(&format!("scale-{i}")))
         .collect::<Vec<_>>();
     let rows=(0..1500).map(|i| json!({"id":entity_id(ws,&format!("scale-{}",2*i),"person"),"workspace_id":ws,
-        "display_name":"synthetic","company":"","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z",
+        "display_name":"synthetic","company":"","recipient_kind":"unknown","created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z",
         "first_touch":{"source":"import","kind":"import","system":"v1","v1_leads":[{"v1_lead_id":format!("scale-{}",2*i)},{"v1_lead_id":format!("scale-{}",2*i+1)}]}})).collect::<Vec<_>>();
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     sqlx::query("insert into people select * from jsonb_populate_recordset(null::people,$1)")
@@ -809,7 +857,7 @@ async fn three_thousand_marker_lookups_are_bounded_and_chunked() {
     let store = ObservedImportStore::new(&db);
     let report = tokio::time::timeout(
         std::time::Duration::from_secs(180),
-        v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW),
+        v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW),
     )
     .await
     .expect("3000 synthetic leads must finish within 180 seconds")
@@ -845,7 +893,7 @@ async fn three_thousand_fresh_leads_preview_in_bounded_transactions_without_writ
     let store = ObservedImportStore::new(&db);
     let report = tokio::time::timeout(
         std::time::Duration::from_secs(180),
-        v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW),
+        v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW),
     )
     .await
     .expect("3000 fresh synthetic leads must preview within 180 seconds")
@@ -879,9 +927,16 @@ async fn preview_remembers_new_keys_on_existing_imports_and_matches_mixed_outcom
     let db = TestDb::new().await;
     let (ws, _) = db.seed_workspace("mixed preview").await;
     let store = PgImportStore(db.pool.clone());
-    v1_import::run(&store, ws, &[lead("existing")], Mode::Import, FIXED_NOW)
-        .await
-        .unwrap();
+    v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &[lead("existing")],
+        Mode::Import,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
     normal_phone_person(&db, ws, "5551112233", false).await;
     normal_phone_person(&db, ws, "5554445566", true).await;
     let mut leads = (0..201)
@@ -901,7 +956,7 @@ async fn preview_remembers_new_keys_on_existing_imports_and_matches_mixed_outcom
     leads[102].phone = Some("05554445566".into()); // historical erasure alias
     leads[103].phone = Some("invalid".into());
     leads.push(leads[100].clone());
-    let dry = v1_import::run(&store, ws, &leads, Mode::DryRun, FIXED_NOW)
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -914,7 +969,7 @@ async fn preview_remembers_new_keys_on_existing_imports_and_matches_mixed_outcom
         ),
         (2, 1, 1, 1, 1)
     );
-    let real = v1_import::run(&store, ws, &leads, Mode::Import, FIXED_NOW)
+    let real = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
         .await
         .unwrap();
     assert_eq!(
@@ -964,7 +1019,15 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
     let first = {
         let store = store.clone();
         tokio::spawn(async move {
-            v1_import::run(&*store, ws, &[lead("first")], Mode::DryRun, FIXED_NOW).await
+            v1_import::run(
+                &*store,
+                &PlainSecretBox,
+                ws,
+                &[lead("first")],
+                Mode::DryRun,
+                FIXED_NOW,
+            )
+            .await
         })
     };
     store.entered.notified().await;
@@ -974,7 +1037,7 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
     let rows = [lead("second")];
     let blocked = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        v1_import::run(&inner, ws, &rows, Mode::DryRun, FIXED_NOW),
+        v1_import::run(&inner, &PlainSecretBox, ws, &rows, Mode::DryRun, FIXED_NOW),
     )
     .await
     .unwrap();
@@ -983,7 +1046,7 @@ async fn competing_operator_runs_are_refused_without_holding_the_inbox_lock() {
     assert_eq!(blocked.unwrap_err().message, "v1 import already_running");
     tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        v1_import::run(&inner, ws, &rows, Mode::DryRun, FIXED_NOW),
+        v1_import::run(&inner, &PlainSecretBox, ws, &rows, Mode::DryRun, FIXED_NOW),
     )
     .await
     .unwrap()
@@ -1016,8 +1079,8 @@ async fn six_thousand_character_email_is_invalid_in_both_dry_run_and_import() {
     row.whatsapp = None;
     let store = PgImportStore(db.pool.clone());
     let rows = [row];
-    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW).await;
-    let real = v1_import::run(&store, ws, &rows, Mode::Import, FIXED_NOW).await;
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &rows, Mode::DryRun, FIXED_NOW).await;
+    let real = v1_import::run(&store, &PlainSecretBox, ws, &rows, Mode::Import, FIXED_NOW).await;
     assert_eq!(
         dry.is_ok(),
         real.is_ok(),
@@ -1059,7 +1122,7 @@ async fn dry_run_executes_every_write_and_matches_import_across_chunks() {
         .collect::<Vec<_>>();
     rows.push(rows[0].clone());
     let store = ObservedImportStore::new(&db);
-    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW)
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &rows, Mode::DryRun, FIXED_NOW)
         .await
         .unwrap();
     for table in tables {
@@ -1078,6 +1141,7 @@ async fn dry_run_executes_every_write_and_matches_import_across_chunks() {
     assert!((3..=4).contains(&store.begins()));
     let real = v1_import::run(
         &PgImportStore(db.pool.clone()),
+        &PlainSecretBox,
         ws,
         &rows,
         Mode::Import,
@@ -1099,11 +1163,12 @@ async fn dry_run_obeys_database_write_constraints() {
         .execute(&db.pool).await.unwrap();
     let rows = [lead("database rejection")];
     let store = PgImportStore(db.pool.clone());
-    let dry = v1_import::run(&store, ws, &rows, Mode::DryRun, FIXED_NOW).await;
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &rows, Mode::DryRun, FIXED_NOW).await;
     // Drop-on-error closes the session lock connection asynchronously.
     let real = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            let result = v1_import::run(&store, ws, &rows, Mode::Import, FIXED_NOW).await;
+            let result =
+                v1_import::run(&store, &PlainSecretBox, ws, &rows, Mode::Import, FIXED_NOW).await;
             if result
                 .as_ref()
                 .err()
@@ -1120,4 +1185,408 @@ async fn dry_run_obeys_database_write_constraints() {
     assert!(real.is_err());
     assert!(dry.is_err(), "dry run skipped database constraints");
     assert_eq!(count(&db, ws, "people").await, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// L7: routing between the inbox and the pool (spec §10, D23). Synthetic values only.
+// ---------------------------------------------------------------------------------------------
+
+/// A format-2 research lead nobody contacted: the pool's case. `n` makes its keys distinct.
+fn pool_lead(id: &str, n: u32) -> Value {
+    json!({
+        "format": 2, "id": id, "businessName": format!("Sentetik İşletme {n}"),
+        "contactPerson": "Deneme Kişi", "phone": format!("+90500000{n:04}"), "whatsapp": null,
+        "email": format!("isletme{n}@example.invalid"), "address": null, "city": "İzmir",
+        "region": "Konak", "businessType": "CAFE", "tableCount": null, "branchCount": 1,
+        "currentSystem": null, "source": "AI_RESEARCH", "status": "NEW", "lostReason": null,
+        "notes": null, "nextFollowUp": null, "priority": "MEDIUM", "customFields": {},
+        "emailOptOut": false, "smsOptOut": false, "waOptOut": false, "emailBouncedAt": null,
+        "createdAt": "2025-01-01T00:00:00Z", "updatedAt": "2026-03-01T00:00:00Z",
+        "deletedAt": null, "mergedIntoId": null,
+        "contact": {"conversationsOutbound": 0, "conversationsInbound": 0, "campaignSent": 0,
+                    "mailSent": 0, "activitiesOutbound": 0, "offers": 0, "lastContactAt": null},
+        "activities": [], "offers": [], "tags": [], "attribution": null, "research": null,
+        "aiScore": 64, "aiScoreReason": null, "scoredAt": null, "ownerEmail": null,
+        "emailVerifiedStatus": "UNKNOWN"
+    })
+}
+
+fn parse(v: Value) -> Lead {
+    serde_json::from_value(v).unwrap()
+}
+
+#[tokio::test]
+async fn pool_duplicates_and_in_inbox_are_counted() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("pool counts").await;
+    let store = PgImportStore(db.pool.clone());
+    // An inbox lead (contacted) and a pool lead sharing its phone, listed pool-first: inbox
+    // leads go first, so the pool lead finds the relationship.
+    let mut contacted = pool_lead("contacted", 1);
+    contacted["contact"]["campaignSent"] = json!(2);
+    let shares_inbox = pool_lead("shares-inbox", 1);
+    let fresh = pool_lead("fresh", 2);
+    let mut same = pool_lead("same-business", 2);
+    same["businessName"] = json!("Sentetik İşletme şubesi");
+    let mut gone = pool_lead("deleted", 3);
+    gone["deletedAt"] = json!("2026-01-01T00:00:00Z");
+    let mut merged = pool_lead("merged", 4);
+    merged["mergedIntoId"] = json!("fresh");
+    let leads: Vec<Lead> = [shares_inbox, fresh, same, contacted, gone, merged]
+        .into_iter()
+        .map(parse)
+        .collect();
+    let report = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!((report.total, report.to_inbox, report.to_pool), (6, 1, 3));
+    assert_eq!((report.skipped_deleted, report.skipped_merged), (1, 1));
+    assert_eq!(
+        (
+            report.imported,
+            report.pooled,
+            report.pool_in_inbox,
+            report.pool_duplicates
+        ),
+        (1, 1, 1, 1)
+    );
+    assert_eq!(count(&db, ws, "people").await, 1);
+    assert_eq!(count(&db, ws, "prospects").await, 1);
+    assert_eq!(count(&db, ws, "prospect_scores").await, 1);
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut r = uow.tenant(ws).await.unwrap();
+    let id = jt_prospects::ProspectId::from(entity_id(ws, "fresh", "prospect"));
+    let p = r.prospects().get(id).await.unwrap().unwrap();
+    assert_eq!(p.origin.via, jt_prospects::OriginVia::V1Import);
+    assert_eq!(
+        p.latest_score.as_ref().map(|s| s.digest.as_str()),
+        Some("v1-legacy")
+    );
+    drop(r);
+    // Again: what was imported is present already; nothing new.
+    let again = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!((again.imported, again.pooled), (0, 0));
+    assert_eq!(again.already_present, 2);
+    assert_eq!(count(&db, ws, "prospects").await, 1);
+}
+
+#[tokio::test]
+async fn opt_outs_become_dnc_hashes() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("pool dnc").await;
+    let store = PgImportStore(db.pool.clone());
+    let mut objected = pool_lead("objected", 5);
+    objected["emailOptOut"] = json!(true);
+    objected["smsOptOut"] = json!(true);
+    // A later lead with the objected email is blocked by the entries the first one wrote.
+    let mut later = pool_lead("later", 6);
+    later["email"] = json!("isletme5@example.invalid");
+    let leads = vec![parse(objected), parse(later)];
+    let report = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        (report.pool_dnc, report.pool_blocked, report.pooled),
+        (1, 1, 0)
+    );
+    assert_eq!(count(&db, ws, "prospects").await, 0);
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "select kind, reason, key_hash from prospect_blocklist where workspace_id=$1 order by kind",
+    )
+    .bind(ws.as_uuid())
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.0.as_str(), r.1.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("email", "do_not_contact"), ("phone", "do_not_contact")]
+    );
+    // Hashes only: no value is stored.
+    assert!(
+        rows.iter()
+            .all(|r| !r.2.contains("example.invalid") && r.2.len() == 64)
+    );
+    drop(tx);
+    // The objection outlives a rollback.
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(down.prospects_rolled_back, 0);
+    assert_eq!(count(&db, ws, "prospect_blocklist").await, 2);
+}
+
+#[tokio::test]
+async fn dry_run_writes_nothing_and_reports_counts() {
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("pool dry run").await;
+    let store = PgImportStore(db.pool.clone());
+    // 149 pool leads, one repeating the first's keys (two chunks), and one opt-out.
+    let mut leads: Vec<Lead> = (0..149)
+        .map(|n| parse(pool_lead(&format!("dry-{n}"), n)))
+        .collect();
+    leads.push(parse(pool_lead("dry-repeat", 0)));
+    let mut objected = pool_lead("dry-objected", 900);
+    objected["waOptOut"] = json!(true);
+    leads.push(parse(objected));
+    let dry = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::DryRun, FIXED_NOW)
+        .await
+        .unwrap();
+    for table in [
+        "prospects",
+        "prospect_keys",
+        "prospect_scores",
+        "prospect_blocklist",
+        "ledger_entries",
+    ] {
+        assert_eq!(count(&db, ws, table).await, 0, "dry run wrote {table}");
+    }
+    let real = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    let (d, r) = (
+        serde_json::to_value(dry).unwrap(),
+        serde_json::to_value(real).unwrap(),
+    );
+    assert_eq!(d, r, "a dry run counts what the import does");
+    assert_eq!(
+        (
+            real.to_pool,
+            real.pooled,
+            real.pool_duplicates,
+            real.pool_dnc
+        ),
+        (151, 149, 1, 1)
+    );
+    assert!(d.as_object().unwrap().values().all(Value::is_u64));
+    assert!(!d.to_string().contains("example.invalid"));
+}
+
+#[tokio::test]
+async fn rollback_removes_unchanged_prospects_and_keeps_touched() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("pool rollback").await;
+    let store = PgImportStore(db.pool.clone());
+    let leads: Vec<Lead> = (10..13)
+        .map(|n| parse(pool_lead(&format!("rb-{n}"), n)))
+        .collect();
+    v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(count(&db, ws, "prospects").await, 3);
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut r = uow.tenant(ws).await.unwrap();
+    // One is qualified (a status change), one scored again under a Jeeta rubric.
+    let qualified = jt_prospects::ProspectId::from(entity_id(ws, "rb-10", "prospect"));
+    let p = r.prospects().get(qualified).await.unwrap().unwrap();
+    assert_eq!(
+        r.prospects()
+            .set_status(
+                qualified,
+                jt_prospects::ProspectStatus::Qualified,
+                None,
+                FIXED_NOW,
+                p.revision
+            )
+            .await
+            .unwrap(),
+        jt_app::ports::prospects::Updated::Ok
+    );
+    let rescored = jt_prospects::ProspectId::from(entity_id(ws, "rb-11", "prospect"));
+    r.prospects()
+        .record_score(&jt_app::ports::prospects::ScoreRow {
+            id: entity_id(ws, "rb-11", "rescore"),
+            prospect_id: rescored,
+            score: 90,
+            reasons: vec![],
+            rubric_digest: "jeeta-rubric".into(),
+            strategy_version_id: None,
+            recorder: jt_prospects::Recorder::Human { user_id: owner },
+            at: FIXED_NOW,
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!((down.prospects_rolled_back, down.prospects_kept), (1, 2));
+    assert_eq!(count(&db, ws, "prospects").await, 2);
+    let repeat = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (repeat.prospects_rolled_back, repeat.prospects_kept),
+        (0, 2)
+    );
+    // The rolled-back lead imports again under the same deterministic id.
+    let up = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!((up.pooled, up.already_present), (1, 2));
+}
+
+#[tokio::test]
+async fn rollback_keeps_a_person_a_prospect_was_promoted_to() {
+    // L1 review note: `prospects_person_fkey` has no on-delete rule, so an imported person a
+    // prospect names is kept (never deleted from under it, never unlinked).
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("promoted person").await;
+    let store = PgImportStore(db.pool.clone());
+    let mut inbox = pool_lead("inbox-person", 20);
+    inbox["status"] = json!("CONTACTED");
+    let leads = vec![parse(inbox)];
+    v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    let person: PersonId = entity_id(ws, "inbox-person", "person").into();
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut r = uow.tenant(ws).await.unwrap();
+    let journey = r.journeys().open_for(person).await.unwrap().unwrap();
+    let record = v1_import::pool_record(ws, &parse(pool_lead("other", 21)), FIXED_NOW).unwrap();
+    r.prospects()
+        .insert(&record.prospect, &record.keys)
+        .await
+        .unwrap();
+    r.prospects()
+        .set_promoted(
+            record.prospect.id,
+            &jt_prospects::Promotion {
+                person_id: person,
+                journey_id: journey.id,
+                at: FIXED_NOW,
+                score: None,
+                bucket: None,
+            },
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!((down.rolled_back, down.kept), (0, 1));
+    assert_eq!(count(&db, ws, "people").await, 1);
+}
+
+#[tokio::test]
+async fn inbox_route_writes_activity_and_offer_notes_and_maps_the_owner() {
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("inbox additions").await;
+    let store = PgImportStore(db.pool.clone());
+    let mut mapped = pool_lead("mapped", 30);
+    mapped["status"] = json!("OFFER_SENT");
+    mapped["ownerEmail"] = json!(format!("OWNER+{owner}@test.local"));
+    mapped["tags"] = json!(["sıcak"]);
+    mapped["activities"] = json!([
+        {"id": "a1", "type": "CALL", "title": "Arama", "description": null, "outcome": "POSITIVE",
+         "createdAt": "2026-01-02T08:00:00Z"},
+        {"id": "a2", "type": "STATUS_CHANGE", "title": "NEW to OFFER_SENT", "description": null,
+         "outcome": null, "createdAt": "2026-01-02T08:01:00Z"}
+    ]);
+    mapped["offers"] = json!([
+        {"id": "o1", "status": "SENT", "planName": "Başlangıç", "price": 1500, "currency": "TRY",
+         "validUntil": null, "createdAt": "2026-01-10T00:00:00Z"}
+    ]);
+    let mut unmapped = pool_lead("unmapped", 31);
+    unmapped["status"] = json!("CONTACTED");
+    unmapped["ownerEmail"] = json!("left@example.invalid");
+    let leads = vec![parse(mapped), parse(unmapped)];
+    let report = v1_import::run(&store, &PlainSecretBox, ws, &leads, Mode::Import, FIXED_NOW)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            report.imported,
+            report.activities_as_notes,
+            report.offers_as_notes
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!((report.owners_mapped, report.owners_unmapped), (1, 1));
+    assert_eq!(count(&db, ws, "quotes").await, 0, "v1 offers are no quotes");
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let mut r = uow.tenant(ws).await.unwrap();
+    let j = r
+        .journeys()
+        .get(entity_id(ws, "mapped", "journey").into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(j.owner, Some(owner));
+    let live = r.assignments().live(j.id).await.unwrap().unwrap();
+    assert_eq!(
+        (live.cause, live.user_id),
+        (jt_inbox::Cause::Import, Some(owner))
+    );
+    let texts: Vec<String> = r
+        .notes()
+        .list(j.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|n| n.text)
+        .collect();
+    assert_eq!(texts.len(), 3, "the lead note, one activity, the offers");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("v1 CALL · POSITIVE · Arama"))
+    );
+    assert!(texts.iter().any(|t| t.starts_with("v1 teklifleri")));
+    assert!(texts.iter().any(|t| t.contains("tags: sıcak")));
+    let other = r
+        .journeys()
+        .get(entity_id(ws, "unmapped", "journey").into())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(other.owner.is_none());
+    assert!(r.assignments().live(other.id).await.unwrap().is_none());
+    drop(r);
+    // An imported journey with its v1 owner and its import decision still rolls back.
+    let down = v1_import::run(
+        &store,
+        &PlainSecretBox,
+        ws,
+        &leads,
+        Mode::Rollback,
+        FIXED_NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!((down.rolled_back, down.kept), (2, 0));
+    assert_eq!(count(&db, ws, "journey_assignments").await, 0);
 }

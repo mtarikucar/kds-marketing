@@ -485,40 +485,20 @@ pub async fn policy_set(
 
 /// Whether `c`'s working hours allow an operation at `now` (no hours: always).
 pub(crate) fn within_hours(c: &Capability, now: OffsetDateTime) -> Result<bool, AppError> {
-    use chrono::{Datelike, Timelike};
-    let Some(h) = &c.policy.active_hours else {
-        return Ok(true);
-    };
-    let tz: chrono_tz::Tz =
-        h.tz.parse()
-            .map_err(|_| AppError::conflict("invalid work hours time zone"))?;
-    let utc = chrono::DateTime::from_timestamp(now.unix_timestamp(), now.nanosecond())
-        .ok_or_else(|| AppError::conflict("invalid work hours time"))?;
-    let local = utc.with_timezone(&tz);
-    Ok(h.days
-        .contains(&(local.weekday().number_from_monday() as u8))
-        && local.hour() >= u32::from(h.from)
-        && local.hour() < u32::from(h.to))
+    match &c.policy.active_hours {
+        None => Ok(true),
+        Some(h) => super::hours::within(h, now),
+    }
 }
 
 /// The local day holding `now` in the capability's working-hours time zone (else Istanbul).
 pub(crate) fn local_day(c: &Capability, now: OffsetDateTime) -> (OffsetDateTime, OffsetDateTime) {
-    use chrono::TimeZone;
     let name = c
         .policy
         .active_hours
         .as_ref()
         .map_or(DEFAULT_TZ, |h| h.tz.as_str());
-    let tz: chrono_tz::Tz = name.parse().unwrap_or(chrono_tz::Europe::Istanbul);
-    let utc = chrono::DateTime::from_timestamp(now.unix_timestamp(), 0).unwrap_or_default();
-    let date = utc.with_timezone(&tz).date_naive();
-    let start = date
-        .and_hms_opt(0, 0, 0)
-        .and_then(|m| tz.from_local_datetime(&m).earliest())
-        .map(|d| d.timestamp())
-        .unwrap_or(now.unix_timestamp());
-    let from = OffsetDateTime::from_unix_timestamp(start).unwrap_or(now);
-    (from, from + Duration::days(1))
+    super::hours::local_day(name, now).unwrap_or((now, now + Duration::days(1)))
 }
 
 /// What the fence needs to know about one call, read in the caller's bundle.
@@ -955,6 +935,9 @@ pub async fn place(deps: &Deps, ctx: &Ctx, input: PlaceInput) -> Result<CallOut,
         phrases: Default::default(),
     };
     r.calls().insert(session, ctx.now).await?;
+    if let Some(journey) = facts.journey_id {
+        super::distribution::touch(r.as_mut(), ctx, journey).await?;
+    }
     r.commit().await?;
 
     // 2. The fence again, every fact read afresh, right before dialing.

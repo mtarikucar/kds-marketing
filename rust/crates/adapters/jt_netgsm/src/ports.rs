@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 use jt_app::ports::connectors::{
     Connector, ConsentRow, ConsentSync, DeliveryReports, DeliveryStatus, InboundEventDraft,
-    SendReceipt, SmsSender, Telephony,
+    IysAnswer, SendReceipt, SmsSender, Telephony,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -100,5 +100,18 @@ impl ConsentSync for NetgsmConnector {
         rows: &[ConsentRow],
     ) -> Result<SendReceipt, ConnectorError> {
         iys::add(self, cred, rows).await
+    }
+
+    async fn search(
+        &self,
+        cred: &Credential,
+        recipient: &str,
+        channel: &str,
+    ) -> Result<IysAnswer, ConnectorError> {
+        Ok(match self.iys_search(cred, recipient, channel).await? {
+            iys::IysStatus::Granted => IysAnswer::Granted,
+            iys::IysStatus::Refused => IysAnswer::Refused,
+            iys::IysStatus::Absent => IysAnswer::Absent,
+        })
     }
 }

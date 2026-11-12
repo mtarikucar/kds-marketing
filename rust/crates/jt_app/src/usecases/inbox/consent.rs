@@ -67,6 +67,10 @@ pub async fn record_consent(
         attempts: 0,
     };
     r.consents().insert(row.clone()).await?;
+    if row.kind == ConsentKind::Withdrawn {
+        crate::usecases::outreach::hooks::on_withdrawn(r.as_mut(), ctx, person, row.channel)
+            .await?;
+    }
     record(
         r.as_mut(),
         ctx,
@@ -111,6 +115,7 @@ pub async fn add_suppression(
         reason: input.reason,
     };
     r.suppressions().insert(row.clone()).await?;
+    crate::usecases::outreach::hooks::on_suppressed(r.as_mut(), ctx, person, row.channel).await?;
     record(
         r.as_mut(),
         ctx,
@@ -158,7 +163,7 @@ pub async fn remove_suppression(
 
 // Keep immutable records on their original person so merge undo needs no copied history.
 // Applied aliases remain part of the survivor's compliance history until that merge is undone.
-pub(super) async fn history(
+pub(crate) async fn history(
     r: &mut dyn TenantRepos,
     person: PersonId,
 ) -> Result<ListOut, AppError> {

@@ -1,5 +1,6 @@
 //! Inbox operations shared by the panel, MCP and trusted inbound consumers.
 pub mod appointments;
+pub mod attachments;
 pub mod commissions;
 pub mod consent;
 pub mod consumer;
@@ -36,7 +37,7 @@ pub(crate) async fn record(
 pub mod schema;
 
 /// An open opportunity takes precedence over newer closed history after a merge.
-async fn active_or_latest_journey(
+pub(crate) async fn active_or_latest_journey(
     r: &mut dyn TenantRepos,
     person: PersonId,
 ) -> Result<Option<jt_inbox::Journey>, AppError> {

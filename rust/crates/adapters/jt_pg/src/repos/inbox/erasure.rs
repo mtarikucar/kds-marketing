@@ -6,6 +6,13 @@ use jt_app::{
     ports::inbox::{ErasureLog, ErasureRepo},
 };
 use jt_inbox::{IdentityChannel, PersonId};
+
+/// The person `$2` of workspace `$1` and their transitive merged aliases (after `with recursive`).
+const FAMILY: &str = "family(id) as (select id from people where workspace_id=$1 and id=$2 \
+     union select p.id from people p join family f on p.merged_into=f.id where p.workspace_id=$1)";
+/// The family's ids, ordered.
+const FAMILY_IDS: &str = "with recursive family(id) as (select id from people where workspace_id=$1 and id=$2 union select p.id from people p join family f on p.merged_into=f.id where p.workspace_id=$1) select id from family order by id";
+
 #[async_trait]
 impl ErasureRepo for PgTenantRepos {
     async fn scrub(&mut self, person: PersonId) -> Result<(), AppError> {
@@ -13,8 +20,12 @@ impl ErasureRepo for PgTenantRepos {
         let log = ErasureRepo::get(self, person)
             .await?
             .ok_or_else(|| AppError::conflict("erasure must be recorded before scrubbing"))?;
-        let family: Vec<uuid::Uuid> = sqlx::query_scalar("with recursive family(id) as (select id from people where workspace_id=$1 and id=$2 union select p.id from people p join family f on p.merged_into=f.id where p.workspace_id=$1) select id from family order by id")
-            .bind(ws.as_uuid()).bind(person.as_uuid()).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"find erasure aliases"))?;
+        let family: Vec<uuid::Uuid> = sqlx::query_scalar(FAMILY_IDS)
+            .bind(ws.as_uuid())
+            .bind(person.as_uuid())
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "find erasure aliases"))?;
         for id in &family {
             let person = PersonId::from(*id);
             ErasureRepo::record(
@@ -59,6 +70,34 @@ impl ErasureRepo for PgTenantRepos {
             .await
             .map_err(|e| map_sqlx(e, "erase identity keys"))?;
         Ok(())
+    }
+    async fn family(&mut self, person: PersonId) -> Result<Vec<PersonId>, AppError> {
+        let ids: Vec<uuid::Uuid> = sqlx::query_scalar(FAMILY_IDS)
+            .bind(self.workspace_id().as_uuid())
+            .bind(person.as_uuid())
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "find erasure aliases"))?;
+        Ok(ids.into_iter().map(PersonId::from).collect())
+    }
+    async fn family_identities(
+        &mut self,
+        person: PersonId,
+    ) -> Result<Vec<jt_inbox::Identity>, AppError> {
+        let sql = format!(
+            "with recursive {FAMILY} select to_jsonb(i) from identities i \
+             where i.workspace_id = $1 and i.person_id in (select id from family) \
+             order by i.person_id, i.first_seen_at, i.id"
+        );
+        let rows: Vec<serde_json::Value> = sqlx::query_scalar(&sql)
+            .bind(self.workspace_id().as_uuid())
+            .bind(person.as_uuid())
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "find the family's identities"))?;
+        rows.into_iter()
+            .map(|v| serde_json::from_value(v).map_err(AppError::from))
+            .collect()
     }
     async fn record(&mut self, row: ErasureLog) -> Result<(), AppError> {
         let ws = self.workspace_id();

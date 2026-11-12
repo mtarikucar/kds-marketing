@@ -59,6 +59,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::ports::connectors::{
     AppSync, Connector, DeliveryReports, DeliveryStatus, MessagingSender, OAuthFlow, Telephony,
 };
+use crate::ports::inbox::REQUEST_KEY_TTL;
 use crate::ports::{CapabilityFilter, MAX_PENDING_JOBS, PROBE_RUN_RETENTION, TenantRepos};
 
 /// A token is renewed once it expires within this time (or has expired).
@@ -141,13 +142,19 @@ pub enum Job {
     DeviceBridgeHealth,
     DeviceCommandExpiry,
     DeviceFilePurge,
+    ProspectsPurge,
+    ResearchPlan,
+    LeadDistribution,
     WhatsappAppSync,
+    OutreachDispatch,
     CommentsPoll,
+    PurgeRequestKeys,
+    MailFilesPurge,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 30] = [
+    pub const ALL: [Job; 36] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -176,8 +183,14 @@ impl Job {
         Job::DeviceBridgeHealth,
         Job::DeviceCommandExpiry,
         Job::DeviceFilePurge,
+        Job::ProspectsPurge,
+        Job::ResearchPlan,
+        Job::LeadDistribution,
         Job::WhatsappAppSync,
+        Job::OutreachDispatch,
         Job::CommentsPoll,
+        Job::PurgeRequestKeys,
+        Job::MailFilesPurge,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -212,8 +225,14 @@ impl Job {
             Job::DeviceBridgeHealth => "device_bridge_health",
             Job::DeviceCommandExpiry => "device_command_expiry",
             Job::DeviceFilePurge => "device_file_purge",
+            Job::ProspectsPurge => "prospects_purge",
+            Job::ResearchPlan => "research_plan",
+            Job::LeadDistribution => "lead_distribution",
             Job::WhatsappAppSync => "whatsapp_app_sync",
+            Job::OutreachDispatch => "outreach_dispatch",
             Job::CommentsPoll => "comments_poll",
+            Job::PurgeRequestKeys => "purge_request_keys",
+            Job::MailFilesPurge => "mail_files_purge",
         }
     }
 
@@ -253,8 +272,14 @@ impl Job {
             Job::DeviceBridgeHealth => run_device_bridge_health(deps, now).await,
             Job::DeviceCommandExpiry => run_device_command_expiry(deps, now).await,
             Job::DeviceFilePurge => run_device_file_purge(deps, now).await,
+            Job::ProspectsPurge => run_prospects_purge(deps, now).await,
+            Job::ResearchPlan => run_research_plan(deps, now).await,
+            Job::LeadDistribution => run_lead_distribution(deps, now).await,
             Job::WhatsappAppSync => run_whatsapp_app_sync(deps, now).await,
+            Job::OutreachDispatch => run_outreach_dispatch(deps, now).await,
             Job::CommentsPoll => run_comments_poll(deps, now).await,
+            Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
+            Job::MailFilesPurge => run_mail_files_purge(deps, now).await,
         }
     }
 }
@@ -1162,6 +1187,112 @@ pub async fn run_device_file_purge(deps: &Deps, now: OffsetDateTime) -> JobRepor
 // Purges
 // ---------------------------------------------------------------------------------------------
 
+/// The prospect pool's retention (spec 2026-10-30-leads-pool-outreach-design.md §3.6), in every
+/// workspace whatever its status: deletes the prospects past their retention under the current
+/// policy (a rejection's hard keys first remembered as hashes), in batches of their own
+/// transactions, and the expired rejection hashes. `touched` counts the prospects due,
+/// `changed` those deleted plus the hashes expired, `failed` the workspaces that could not be
+/// purged. No identifier is logged.
+pub async fn run_prospects_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::ProspectsPurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::prospects::purge(deps, &ctx).await {
+            Ok(purged) => {
+                report.touched += purged.due;
+                report.changed += purged.deleted + purged.expired_hashes;
+                report.skipped += purged.due - purged.deleted;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// The research tasks' planner (spec 2026-10-30-leads-pool-outreach-design.md §3.7), in every
+/// `active` workspace with an approved strategy: each ICP entry of the approved version gets an
+/// open standing task, and the open standing tasks of older versions are superseded
+/// (`research::plan`). `touched` counts the workspaces planned, `changed` the tasks created plus
+/// those superseded, `skipped` the workspaces without an approved strategy, `failed` those that
+/// could not be planned. No identifier is logged.
+pub async fn run_research_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::ResearchPlan;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::research::plan(deps, &ctx).await {
+            Ok(Some(planned)) => {
+                report.touched += 1;
+                report.changed += u64::from(planned.created + planned.superseded);
+            }
+            Ok(None) => report.skipped += 1,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// Distributes, in every active workspace, the open journeys no decision has settled and the
+/// assignments past their SLA ([`super::distribution::run`]): one transaction per journey.
+/// `touched` counts the workspaces with a decision, `changed` the decisions.
+pub async fn run_lead_distribution(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::LeadDistribution;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::distribution::run(deps, &ctx).await {
+            Ok(d) => {
+                let decisions = d.assigned + d.no_eligible + d.imported + d.reassigned + d.kept;
+                if decisions == 0 {
+                    report.skipped += 1;
+                } else {
+                    report.touched += 1;
+                    report.changed += u64::from(decisions);
+                }
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// Sends the due outreach email of every active workspace (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.11, `outreach::dispatch::run`): nothing at all
+/// while the platform switch `JEETA_OUTREACH_ENABLED` is off. `touched` counts the workspaces
+/// with a running campaign, `changed` the emails queued, stops and pauses.
+pub async fn run_outreach_dispatch(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::OutreachDispatch;
+    let mut report = JobReport::default();
+    if !deps.apps.outreach_enabled() {
+        return finish(job, report);
+    }
+    for ws in workspaces(deps, job, ACTIVE, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::outreach::dispatch::run(deps, &ctx).await {
+            Ok(d) if d.campaigns == 0 && d.started == 0 => report.skipped += 1,
+            Ok(d) => {
+                report.touched += 1;
+                report.changed += u64::from(d.queued + d.stopped + d.paused + d.completed);
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
 /// Deletes, in every workspace, the voice bridge's commands queued more than
 /// `calls::session::COMMAND_RETENTION` (7 days) before `now`, acknowledged or not; the calls and
 /// their turns stay. `touched` and `changed` count the commands deleted, `failed` the workspaces
@@ -1230,6 +1361,46 @@ pub async fn run_purge_probe_runs(deps: &Deps, now: OffsetDateTime) -> JobReport
             Ok::<u64, AppError>(n)
         };
         count_purged(job, ws, purged.await, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace whatever its status, the request keys that expired: stored
+/// [`REQUEST_KEY_TTL`] (24 hours) or longer before `now`, which no replay can read any more
+/// (`RequestKeyRepo::purge_expired`; spec 2026-10-30-leads-pool-outreach-design.md D33). Each
+/// workspace in its own transaction; no ledger entry (a key holds an id, never an answer).
+/// `touched` and `changed` count the keys deleted, `failed` the workspaces that could not be
+/// purged (the others are purged all the same).
+pub async fn run_purge_request_keys(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::PurgeRequestKeys;
+    let mut report = JobReport::default();
+    let cutoff = now - REQUEST_KEY_TTL;
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let purged = async {
+            let mut repos = deps.uow.tenant(ws).await?;
+            let n = repos.request_keys().purge_expired(cutoff).await?;
+            if n > 0 {
+                repos.commit().await?;
+            }
+            Ok::<u64, AppError>(n)
+        };
+        count_purged(job, ws, purged.await, &mut report);
+    }
+    finish(job, report)
+}
+
+/// Deletes, in every workspace whatever its status, the bytes of the mail files whose time came
+/// (spec 2026-10-30-leads-pool-outreach-design.md §3.15, §6.4): inbound files older than the
+/// leads policy's `attachments.retention_days` (180 by default) and uploads left staged past
+/// their seven days (`inbox::attachments::purge`); their rows stay, `deleted`. No ledger entry.
+/// `touched` and `changed` count the files, `failed` the workspaces that could not be purged
+/// (the others are purged all the same).
+pub async fn run_mail_files_purge(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::MailFilesPurge;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, EVERY, &mut report).await {
+        let purged = super::inbox::attachments::purge(deps, ws, now).await;
+        count_purged(job, ws, purged, &mut report);
     }
     finish(job, report)
 }
@@ -1685,6 +1856,10 @@ pub async fn run_refresh_tenant_hosts(deps: &Deps, _now: OffsetDateTime) -> JobR
 
 /// Poll each receiving workspace's verified mailboxes. Network I/O owns no transaction;
 /// cursor and drafts commit together only if the account, credential and cursor still match.
+/// An inbox email's attachments are put in the file store before that transaction, within the
+/// caps (spec 2026-10-30-leads-pool-outreach-design.md §3.15), recorded in it for the emails
+/// stored as new events, and deleted again when it does not commit or the email is a duplicate
+/// (`inbox::attachments::PolledFiles`).
 pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let job = Job::MailInboxPoll;
     let mut report = JobReport::default();
@@ -1705,6 +1880,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
             .filter(|c| c.kind_key == "mailbox" && c.status == StoredStatus::Verified)
         {
             report.touched += 1;
+            let mut files = super::inbox::attachments::PolledFiles::default();
             let outcome = async {
                 super::connector::refresh_tenant_hosts(deps, ws).await?;
                 let (sealed, cursor) = {
@@ -1718,7 +1894,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     return Ok::<_, Failure>(vec![]);
                 };
                 let credential = open_credential(deps, ws, &sealed)?;
-                let (drafts, next) = poller
+                let (polled, next) = poller
                     .poll(
                         ws,
                         &credential,
@@ -1728,6 +1904,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     .await
                     .map_err(Failure::Provider)?;
                 drop(credential);
+                let drafts = files.store(deps, ws, cap.id, polled, now).await?;
                 let mut r = deps.uow.tenant(ws).await?;
                 r.people().lock_workspace().await?;
                 let current = r.capabilities().lock(cap.id).await?;
@@ -1742,6 +1919,7 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                 {
                     return Ok(vec![]);
                 }
+                files.screen(r.as_mut(), cap.id, &drafts).await?;
                 let stored = webhook::store_polled(
                     deps,
                     r.as_mut(),
@@ -1752,11 +1930,14 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
                     now,
                 )
                 .await?;
+                files.record(r.as_mut(), &stored).await?;
                 r.mail_cursors().store(cap.id, next).await?;
+                files.commit_started();
                 r.commit().await?;
                 Ok(stored)
             }
             .await;
+            files.settle(deps, ws).await;
             match outcome {
                 Ok(stored) => {
                     for delivery in stored {
@@ -1777,6 +1958,64 @@ pub async fn run_mail_inbox_poll(deps: &Deps, now: OffsetDateTime) -> JobReport 
         report.failed += consumed.failed;
     }
     finish(job, report)
+}
+
+/// The İYS credentials of the workspace's NetGSM SMS lines: each live connector line whose sealed
+/// İYS slot names the line's own user code and a brand code. The İYS sync and the outreach
+/// dispatcher's lookup use exactly one; none or more is ambiguous.
+pub(crate) async fn iys_credentials(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+) -> Result<Vec<Credential>, AppError> {
+    let mut credentials = Vec::new();
+    for hint in r.capabilities().list(CapabilityFilter::default()).await? {
+        if hint.kind_key != "sms_line" {
+            continue;
+        }
+        let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
+            continue;
+        };
+        let cap = snapshot.capability;
+        if cap.status == StoredStatus::Retired
+            || cap.reach != jt_capability::Reach::Connector
+            || cap.kind_key != "sms_line"
+        {
+            continue;
+        }
+        let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed) else {
+            continue;
+        };
+        let Credential::NetgsmSms {
+            usercode: line_user,
+            ..
+        } = open_credential(deps, ws, &sms)?
+        else {
+            continue;
+        };
+        let credential = open_credential(deps, ws, &sealed)?;
+        if let Credential::NetgsmIys {
+            usercode,
+            brand_code,
+            ..
+        } = &credential
+            && usercode == &line_user
+            && !brand_code.trim().is_empty()
+        {
+            credentials.push(credential);
+        }
+    }
+    Ok(credentials)
+}
+
+/// The workspace's one İYS credential (`iys_credentials`), if exactly one.
+pub(crate) async fn iys_credential(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ws: WorkspaceId,
+) -> Result<Option<Credential>, AppError> {
+    let mut all = iys_credentials(deps, r, ws).await?;
+    Ok((all.len() == 1).then(|| all.remove(0)))
 }
 
 /// The most uncertain public replies of one capability a `comments_poll` run reconciles.
@@ -1968,44 +2207,7 @@ pub async fn run_iys_sync(deps: &Deps, now: OffsetDateTime) -> JobReport {
                 if rows.is_empty() {
                     return Ok::<_, AppError>(());
                 }
-                let mut credentials = Vec::new();
-                for hint in r.capabilities().list(CapabilityFilter::default()).await? {
-                    if hint.kind_key != "sms_line" {
-                        continue;
-                    }
-                    let Some(snapshot) = r.capabilities().lock_iys_snapshot(hint.id).await? else {
-                        continue;
-                    };
-                    let cap = snapshot.capability;
-                    if cap.status == StoredStatus::Retired
-                        || cap.reach != jt_capability::Reach::Connector
-                        || cap.kind_key != "sms_line"
-                    {
-                        continue;
-                    }
-                    let (Some(sealed), Some(sms)) = (snapshot.iys_sealed, snapshot.sms_sealed)
-                    else {
-                        continue;
-                    };
-                    let Credential::NetgsmSms {
-                        usercode: line_user,
-                        ..
-                    } = open_credential(deps, ws, &sms)?
-                    else {
-                        continue;
-                    };
-                    let credential = open_credential(deps, ws, &sealed)?;
-                    if let Credential::NetgsmIys {
-                        usercode,
-                        brand_code,
-                        ..
-                    } = &credential
-                        && usercode == &line_user
-                        && !brand_code.trim().is_empty()
-                    {
-                        credentials.push(credential);
-                    }
-                }
+                let mut credentials = iys_credentials(deps, r.as_mut(), ws).await?;
                 // No usable slot (or ambiguous brands) must leave consent pending and ask the owner.
                 if credentials.len() != 1 {
                     request_iys_provisioning(deps, r.as_mut(), ws, &rows, now).await?;
