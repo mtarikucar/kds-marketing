@@ -448,6 +448,43 @@ async fn an_erased_senders_email_keeps_no_files() {
     assert!(mail_rows(&w).is_empty());
 }
 
+/// An email the consumer finds it holds already (the same Message-ID polled again under another
+/// UID, as from a second folder) makes no message: its files lose their names and their bytes
+/// at once, the first email's stay (D108).
+#[tokio::test]
+async fn a_duplicate_emails_files_are_erased() {
+    let (w, _, mail, files) = setup().await;
+    let mut again = email(2, vec![attachment("kopya.pdf", "application/pdf", PDF)]);
+    again.draft.payload["message_id"] = json!("<m1@example.invalid>");
+    let report = poll(
+        &w,
+        &mail,
+        vec![
+            email(1, vec![attachment("teklif.pdf", "application/pdf", PDF)]),
+            again,
+        ],
+    )
+    .await;
+    assert_eq!(report.failed, 0);
+    let rows = mail_rows(&w);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let kept: Vec<_> = rows.iter().filter(|r| r.message_id.is_some()).collect();
+    let dropped: Vec<_> = rows.iter().filter(|r| r.message_id.is_none()).collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].filename, "teklif.pdf");
+    assert_eq!(kept[0].state, MailFileState::Stored);
+    assert_eq!(dropped.len(), 1);
+    assert_eq!(
+        (dropped[0].state, dropped[0].filename.as_str()),
+        (MailFileState::Deleted, "")
+    );
+    assert_eq!(
+        stored_ids(&files, w.ws),
+        [kept[0].id],
+        "the copy's bytes are gone"
+    );
+}
+
 /// Every file of the workspace's store is an orphan candidate (as a day-old file the store's
 /// sweep lists).
 struct EveryFile(Arc<MemoryFiles>);

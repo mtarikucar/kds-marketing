@@ -295,6 +295,7 @@ impl MailFileRepo for MemTenant {
             r.direction == MailFileDirection::Inbound
                 && r.capability_id == Some(capability)
                 && r.event_external_id.as_deref() == Some(external.as_str())
+                && r.message_id.is_none()
         };
         Ok(self.erase_mail(pick, at))
     }

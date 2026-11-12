@@ -163,18 +163,16 @@ pub async fn consume_event(
         Err(e) if e.details["reason"] == "erased_identity" => "erased_identity_drop",
         result => result?,
     };
-    // An email dropped because its sender was erased keeps no file (spec
-    // 2026-10-30-leads-pool-outreach-design.md §3.15): the rows lose their names in this
-    // transaction; the bytes go with the store's daily sweep of files no record keeps.
-    if outcome == "erased_identity_drop"
-        && event.provider == Provider::Mail
-        && event.kind == EventKind::Message
-        && let Some(capability) = event.capability_id
-    {
-        r.mail_files()
-            .erase_event(capability, &event.external_id, now)
-            .await?;
-    }
+    // An email the consumer made no message of keeps no file (spec
+    // 2026-10-30-leads-pool-outreach-design.md §3.15, D108): its sender erased, a duplicate, or
+    // any other outcome but a deferral (a later run may still make the message). The rows lose
+    // their names in this transaction; the bytes go once it commits (best effort: the store's
+    // daily sweep deletes what no record keeps).
+    let files = if outcome == "deferred" {
+        vec![]
+    } else {
+        drop_files(r.as_mut(), event, now).await?
+    };
     if claim_after_intake && !r.consumption().try_claim(CONSUMER, event.id).await? {
         return Ok("duplicate");
     }
@@ -189,7 +187,32 @@ pub async fn consume_event(
         )
         .await?;
     r.commit().await?;
+    delete_bytes(deps, event.workspace_id, files).await;
     Ok(outcome)
+}
+/// Erases the files of email event `event` that no message holds (none for another event);
+/// the ids whose bytes go once the bundle commits.
+async fn drop_files(
+    r: &mut dyn TenantRepos,
+    event: &InboundEvent,
+    now: OffsetDateTime,
+) -> Result<Vec<jt_studio::FileId>, AppError> {
+    match event.capability_id {
+        Some(capability)
+            if event.provider == Provider::Mail && event.kind == EventKind::Message =>
+        {
+            r.mail_files()
+                .erase_event(capability, &event.external_id, now)
+                .await
+        }
+        _ => Ok(vec![]),
+    }
+}
+/// Deletes the bytes of `files` from the store, best effort.
+async fn delete_bytes(deps: &Deps, ws: WorkspaceId, files: Vec<jt_studio::FileId>) {
+    for file in files {
+        let _ = deps.files.delete(ws, file).await;
+    }
 }
 async fn route(
     deps: &Deps,

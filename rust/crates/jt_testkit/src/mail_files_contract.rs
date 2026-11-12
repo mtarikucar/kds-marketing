@@ -356,6 +356,14 @@ pub async fn erasure_blanks_names_and_answers_the_files_to_delete(uow: Arc<dyn U
             .unwrap(),
         [unlinked.id]
     );
+    // A row a message holds is the message's: an event's erasure leaves it.
+    assert!(
+        t.mail_files()
+            .erase_event(other_cap, "imap:r:1", at(32))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     t.commit().await.unwrap();
     let mut t = f.uow.tenant(f.ws).await.unwrap();
     for id in [by_message.id, alias_file.id, sent.id] {

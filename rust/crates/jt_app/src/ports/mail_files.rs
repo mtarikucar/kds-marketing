@@ -254,7 +254,8 @@ pub trait MailFileRepo: Send + Sync {
         at: OffsetDateTime,
     ) -> Result<Vec<FileId>, AppError>;
     /// [`MailFileRepo::erase_person`] for the inbound rows of email event `event_external_id` on
-    /// `capability` (an email dropped because its sender was erased).
+    /// `capability` that no message holds: an email the consumer made no message of (its sender
+    /// erased, a duplicate, ...; D108). A row linked to a message is left as it is.
     async fn erase_event(
         &mut self,
         capability: CapabilityId,

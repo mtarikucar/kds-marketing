@@ -297,7 +297,8 @@ impl MailFileRepo for PgTenantRepos {
         let sql = format!(
             "with targets as ( \
                  select id, state from mail_files where workspace_id = $1 \
-                 and direction = 'inbound' and capability_id = $2 and event_external_id = $3) \
+                 and direction = 'inbound' and capability_id = $2 and event_external_id = $3 \
+                 and message_id is null) \
              update mail_files m set filename = '', \
                  state = case when t.state in {HOLDING} then 'deleted' else m.state end, \
                  deleted_at = case when t.state in {HOLDING} then $4 else m.deleted_at end \
