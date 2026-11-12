@@ -386,12 +386,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.appointments.book", Exempt, "jeeta.inbox.appointments_book", ("POST", "/api/inbox/journeys/{journey_id}/appointments"), Write),
     twin("inbox.appointments.cancel", Exempt, "jeeta.inbox.appointments_cancel", ("POST", "/api/inbox/appointments/{id}/cancel"), Write),
     twin("inbox.appointments.held", Exempt, "jeeta.inbox.appointments_held", ("POST", "/api/inbox/appointments/{id}/held"), Write),
-    // Comments and marketplace questions (spec 2026-10-30 §7.1): answering customers is not
-    // planned growth work, so no strategy is needed (owner decision 2026-11-03).
+    // Comments (spec 2026-10-30 §7.1): answering customers is not planned growth work, so no
+    // strategy is needed (owner decision 2026-11-03).
     twin("inbox.public.hide", Exempt, "jeeta.inbox.public_hide", ("POST", "/api/inbox/items/{item_id}/hide"), Write),
     twin("inbox.public.delete", Exempt, "jeeta.inbox.public_delete", ("POST", "/api/inbox/items/{item_id}/delete"), Destructive),
     twin("inbox.public.mark_handled", Exempt, "jeeta.inbox.public_mark_handled", ("POST", "/api/inbox/items/handled"), Write),
-    twin("inbox.public.report", Exempt, "jeeta.inbox.public_report", ("POST", "/api/inbox/items/{item_id}/report"), Write),
     twin("inbox.public.approve", Exempt, "jeeta.inbox.public_approve", ("POST", "/api/inbox/replies/{outbox_id}/approve"), Write),
     twin("inbox.public.discard", Exempt, "jeeta.inbox.public_discard", ("POST", "/api/inbox/replies/{outbox_id}/discard"), Write),
 

@@ -1351,8 +1351,6 @@ async fn stored_policy_without_new_keys_gets_their_defaults() {
     for (key, seconds) in [
         ("instagram", 3600),
         ("facebook_page", 3600),
-        ("trendyol", 3600),
-        ("hepsiburada", 1800),
         ("amazon", 3600),
         ("messenger", 900),
     ] {

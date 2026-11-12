@@ -51,10 +51,10 @@ define_id!(
     AssignmentId
 );
 define_id!(
-    /// One public item: a comment or a marketplace question.
+    /// One public item: a comment.
     PublicItemId
 );
 define_id!(
-    /// The post or product a public item is about.
+    /// The post a public item is about.
     PublicSubjectId
 );

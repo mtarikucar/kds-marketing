@@ -33,8 +33,7 @@
 //! person's comment `delete_others`, a private reply `private_reply`, reading a post comments on.
 //! A reply and a private reply are writes Meta takes once (`graph_post_once`): an answer that
 //! neither took nor refused one is `Unknown`, never sent again blindly. A Graph answer saying the
-//! comment does not exist is `Permanent` with [`PUBLIC_ITEM_GONE`] (`gone`). Meta has no report
-//! call: a report is refused.
+//! comment does not exist is `Permanent` with [`PUBLIC_ITEM_GONE`] (`gone`).
 //!
 //! **The backfill poll** ([`jt_app::ports::connectors::PublicPoller`]; spec D17, D28): the
 //! account's last 50 posts or media (`GET /{ig-id}/media?fields=id,timestamp,comments_count`,
@@ -212,7 +211,7 @@ pub(crate) async fn reply_private(
     })
 }
 
-/// Hides, shows again or deletes `target` (see the module docs); a report is refused.
+/// Hides, shows again or deletes `target` (see the module docs).
 pub(crate) async fn moderate(
     connector: &MetaConnector,
     cred: &Credential,
@@ -223,11 +222,6 @@ pub(crate) async fn moderate(
     let kind = surface(public)?;
     let granted = grant(kind, cred, public);
     match action {
-        ModerationAction::Report { .. } => {
-            return Err(ConnectorError::permanent(
-                "Meta takes no reports of comments",
-            ));
-        }
         ModerationAction::Delete if !granted.delete_others => {
             return Err(not_granted("deleting comments"));
         }

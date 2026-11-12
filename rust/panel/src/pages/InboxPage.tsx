@@ -17,10 +17,10 @@ import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { Deadline, conversationClass, journeyClass, useInboxKey } from './InboxShared';
 
-/** The surface badge of a row (spec §9): a direct message, a comment, a question, relayed mail. */
-function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'question' | 'relay' {
+/** The surface badge of a row (spec §9): a direct message, a comment, relayed mail. */
+function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'relay' {
   if (row.surface === 'relay') return 'relay';
-  if (row.surface === 'public') return row.channel?.endsWith('_question') ? 'question' : 'comment';
+  if (row.surface === 'public') return 'comment';
   return 'private';
 }
 

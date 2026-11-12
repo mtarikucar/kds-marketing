@@ -67,10 +67,10 @@ function entry(item, owed = false) {
 function publicFixtures(extra = {}) {
   const rows = [entry(publicItem('item-1'), true), entry(publicItem('item-2', { state: 'pending' })), entry(publicItem('item-3', { state: 'answered', by: 'us', at: '2026-10-23T11:00:00Z', message_id: null })),
     entry(publicItem('item-4', { state: 'answered', by: 'elsewhere', at: '2026-10-23T11:00:00Z', message_id: null })), entry(publicItem('item-5', { state: 'rejected', reason: 'Platform review' })),
-    entry(publicItem('item-6', { state: 'handled' })), entry(publicItem('item-7', { state: 'expired' })), ...['hidden', 'deleted', 'removed', 'reported'].map(state => entry(publicItem('item-' + state, { state: 'awaiting' }, state)))];
+    entry(publicItem('item-6', { state: 'handled' })), entry(publicItem('item-7', { state: 'expired' })), ...['hidden', 'deleted', 'removed'].map(state => entry(publicItem('item-' + state, { state: 'awaiting' }, state)))];
   return {
     'GET /api/inbox/conversations/conv-2': { ...conversation, id: 'conv-2', executor: 'agent', surface: 'public', channel: 'instagram_comment', kind_key: 'instagram', owed_items: 1 },
-    'GET /api/inbox/conversations/conv-2/context': { ...context, public: { channel: 'instagram_comment', rules: { public: { min: 1, max: 100 }, private: { window_s: 604800, max_chars: 60 }, one_answer: false, moderated: false, hide: true, delete: true, report: true, marketplace: false }, approval_required: false, items: rows } },
+    'GET /api/inbox/conversations/conv-2/context': { ...context, public: { channel: 'instagram_comment', rules: { public: { min: 1, max: 100 }, private: { window_s: 604800, max_chars: 60 }, one_answer: false, moderated: false, hide: true, delete: true }, approval_required: false, items: rows } },
     'GET /api/inbox/conversations/conv-2/messages': { items: [], next_cursor: null }, ...extra,
   };
 }
@@ -273,7 +273,7 @@ scenario('public-states-and-reply', '/inbox/conv-2', publicFixtures(), async ctx
 });
 scenario('public-moderation-and-delete', '/inbox/conv-2', publicFixtures(), async ctx => {
   const first = ctx.page.getByTestId('public-item').first(); await first.waitFor();
-  for (const [label, suffix] of [['Hide', '/items/item-1/hide'], ['Report', '/items/item-1/report'], ['No reply needed', '/items/handled']]) { ctx.data['POST /api/inbox' + suffix] = {}; await first.getByRole('button', { name: label, exact: true }).click(); await ctx.saw('POST /api/inbox' + suffix); }
+  for (const [label, suffix] of [['Hide', '/items/item-1/hide'], ['No reply needed', '/items/handled']]) { ctx.data['POST /api/inbox' + suffix] = {}; await first.getByRole('button', { name: label, exact: true }).click(); await ctx.saw('POST /api/inbox' + suffix); }
   const dialog = await dialogCheck(ctx, first.getByRole('button', { name: 'Delete', exact: true }), 'Delete for good', 'DELETE');
   ctx.data['POST /api/inbox/items/item-1/delete'] = failure(); await dialog.getByRole('button', { name: 'Delete for good' }).click(); await ctx.saw('POST /api/inbox/items/item-1/delete'); await ctx.capture('delete-error');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -336,13 +336,13 @@ scenario('task-person-and-pagination', '/inbox?task=missing', {}, async ctx => {
   await ctx.page.goto(baseURL + '/inbox'); await exactButton(ctx.page, 'Load more').click();
   assert(ctx.requests.some(row => row.key === 'GET /api/inbox/conversations' && row.query.includes('cursor=page-2'))); await ctx.capture('queue-next-page');
 });
-scenario('public-marketplace-product-and-empty', '/inbox/conv-2', publicFixtures(), async ctx => {
+scenario('public-no-private-reply-and-empty', '/inbox/conv-2', publicFixtures(), async ctx => {
   const part = ctx.data['GET /api/inbox/conversations/conv-2/context'].public;
-  part.rules.private = null; part.rules.marketplace = true; part.approval_required = true;
-  part.items = [entry(publicItem('question-1'), true)]; part.items[0].subject = { kind: 'product', title: 'Atölye seti', external_id: 'product-1', url: null };
+  part.rules.private = null; part.approval_required = true;
+  part.items = [entry(publicItem('comment-1'), true)]; part.items[0].subject = { kind: 'post', title: 'Atölye seti', external_id: 'post-2', url: null };
   await ctx.page.reload(); await ctx.page.getByTestId('public-conversation').waitFor();
-  assert.equal(await exactButton(ctx.page, 'Private (DM)').count(), 0); await ctx.capture('marketplace-product-guidance');
-  part.items = []; await ctx.page.reload(); await ctx.page.getByText('No comment or question is waiting for a reply.').waitFor(); await ctx.capture('no-owed-items');
+  assert.equal(await exactButton(ctx.page, 'Private (DM)').count(), 0); await ctx.capture('no-private-reply-guidance');
+  part.items = []; await ctx.page.reload(); await ctx.page.getByText('No comment is waiting for a reply.').waitFor(); await ctx.capture('no-owed-items');
 });
 scenario('public-held-approval-and-permission', '/inbox/conv-2', publicFixtures({
   'GET /api/auth/me': rep,
@@ -384,7 +384,7 @@ scenario('merge-person-read-error', '/inbox/merges', { 'GET /api/inbox/merges': 
   await exactButton(ctx.page, 'Try again').waitFor(); await ctx.capture('merge-person-error');
 });
 scenario('remaining-queue-and-task-branches', '/inbox', {
-  'GET /api/inbox/conversations': { items: ['private', 'public', 'public', 'relay'].map((surface, index) => ({ ...conversation, id: 'queue-' + index, surface, channel: index === 2 ? 'marketplace_question' : 'instagram_comment', owed_items: 2, held_replies: 1, next_deadline: inHours(1) })), next_cursor: null },
+  'GET /api/inbox/conversations': { items: ['private', 'public', 'public', 'relay'].map((surface, index) => ({ ...conversation, id: 'queue-' + index, surface, channel: index === 2 ? 'facebook_comment' : 'instagram_comment', owed_items: 2, held_replies: 1, next_deadline: inHours(1) })), next_cursor: null },
   'GET /api/inbox/tasks': [{ id: 'task-1', journey_id: 'journey-1', title: 'Teklifi takip et', due_at: '2099-01-02T10:00:00Z', status: 'open', assignee: USER_ID }],
 }, async ctx => {
   await ctx.capture('surface-badges-and-deadlines'); await ctx.page.goto(baseURL + '/inbox?task=task-1');

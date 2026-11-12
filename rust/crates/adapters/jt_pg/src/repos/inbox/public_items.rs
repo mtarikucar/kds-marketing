@@ -1,4 +1,4 @@
-//! Public items (0019): comments and marketplace questions. `answer` is the item's
+//! Public items (0019): comments. `answer` is the item's
 //! `AnswerState` as JSON; its generated `answer_state` column is read by the indexes and never
 //! written here. The composite foreign keys keep an item's conversation and subject on its
 //! capability; a write breaking them, or 0019's bounds, fails `INTERNAL`.

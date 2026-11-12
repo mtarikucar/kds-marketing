@@ -312,7 +312,6 @@ fn catalog_is_the_release_table() {
         ("inbox.public.hide", Some("jeeta.inbox.public_hide"), Some(("POST", "/api/inbox/items/{item_id}/hide")), false, Risk::Write),
         ("inbox.public.delete", Some("jeeta.inbox.public_delete"), Some(("POST", "/api/inbox/items/{item_id}/delete")), false, Risk::Destructive),
         ("inbox.public.mark_handled", Some("jeeta.inbox.public_mark_handled"), Some(("POST", "/api/inbox/items/handled")), false, Risk::Write),
-        ("inbox.public.report", Some("jeeta.inbox.public_report"), Some(("POST", "/api/inbox/items/{item_id}/report")), false, Risk::Write),
         ("inbox.public.approve", Some("jeeta.inbox.public_approve"), Some(("POST", "/api/inbox/replies/{outbox_id}/approve")), false, Risk::Write),
         ("inbox.public.discard", Some("jeeta.inbox.public_discard"), Some(("POST", "/api/inbox/replies/{outbox_id}/discard")), false, Risk::Write),
         ("auth.register", None, Some(("POST", "/api/auth/register")), true, Risk::Write),
@@ -468,7 +467,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 295);
+    assert_eq!(CATALOG.len(), 294);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

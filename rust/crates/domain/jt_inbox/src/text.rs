@@ -1,5 +1,5 @@
 //! What a reply's text holds, read the way a person evading a filter would write it: links (with or
-//! without a scheme, a bare `label.tld`), email addresses and handles, and Turkish phone numbers.
+//! without a scheme, a bare `label.tld`), email addresses and handles, and a person's own contacts.
 //! Every check runs on [`normalised`] text, so spelled-out symbols (`at`, `(dot)`, `nokta`), digit
 //! words (Turkish and English), keycap and full-width digits, Unicode spaces and dashes and
 //! zero-width characters do not hide what is written.
@@ -247,45 +247,6 @@ pub(crate) fn digit_runs(norm: &str) -> Vec<Vec<String>> {
         runs.push(groups);
     }
     runs
-}
-
-/// Whether `digits` is a Turkish phone number as written in full: a mobile number (`05xx…` or
-/// `905xx…`), a landline (`0` or `90`, then `2`–`4`), an `0850`/`0800` line (or `90850`/`90800`),
-/// eleven or twelve digits; or a `444` line, seven digits.
-fn turkish_phone(digits: &str) -> bool {
-    let with_zero = |rest: &str| {
-        rest.starts_with('5')
-            || rest.starts_with(['2', '3', '4'])
-            || rest.starts_with("850")
-            || rest.starts_with("800")
-    };
-    match digits.len() {
-        11 => digits.strip_prefix('0').is_some_and(with_zero),
-        12 => digits.strip_prefix("90").is_some_and(with_zero),
-        7 => digits.starts_with("444"),
-        _ => false,
-    }
-}
-
-/// Whether normalised text holds a Turkish phone number: consecutive digit groups of one run,
-/// from a group's start to a group's end, that together are [`turkish_phone`]. Sizes
-/// (`36 38 40 42 44`), a barcode or a number without its leading `0` are not phone numbers.
-pub(crate) fn has_phone_number(norm: &str) -> bool {
-    for groups in digit_runs(norm) {
-        for start in 0..groups.len() {
-            let mut digits = String::new();
-            for group in &groups[start..] {
-                digits.push_str(group);
-                if digits.len() > 12 {
-                    break;
-                }
-                if turkish_phone(&digits) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Whether normalised text repeats `contact`: an email address anywhere; a phone number as a run

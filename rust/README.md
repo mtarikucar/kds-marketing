@@ -106,7 +106,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0016_voice_bridge` | Voice V1: `call_bridge_events` (each event a voice bridge reported, by its `(bridge_call_id, bridge_seq)`; forced RLS; 72 tables), `call_commands.seq` (the queue order commands are handed out in), and `calls.bridge` for the system owner/manager, who issue the bridge's key. No event words or numbers are kept. |
 | `0017_device_bridge` | Device bridge D1: `device_commands` (the commands queued for a phone, handed out in `seq` order and answered on their own row), `device_files` (the files the bridges upload, which a result names by id, with the end of their seven-day retention; both forced RLS; 74 tables), and `devices.work` and `devices.bridge` for the system owner/manager; the last is the bridge key's permission, held by them so that they can issue it. `rep` holds none. |
 | `0018_tiktok_webhooks` | `inbound_events.provider` accepts `tiktok`, for the events TikTok's webhooks deliver to `/hooks/tiktok`. No new table. Down refuses once a TikTok event is stored (events are never deleted). |
-| `0019_inbox_public` | Comments and marketplace questions: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, the `trendyol` and `hepsiburada` providers, and erasure of a public item's author and text. Down refuses while rows need the wider checks. |
+| `0019_inbox_public` | Comments: `public_subjects`, `public_items` and `public_cursors` (FORCE RLS), the outbox's `held` state, and erasure of a public item's author and text. Its checks also took the values of the marketplace module, which `0043` takes out again. Down refuses while rows need the wider checks. |
 | `0020_prospects` | Aday havuzu (leads L1): `research_tasks`, `prospects`, `prospect_keys`, `prospect_scores`, `prospect_blocklist` (forced RLS; 82 tables), `workspace_policies.leads_policy`, and `prospects.work` and `prospects.manage` for the system owner/manager; `rep` holds neither. Down refuses while the blocklist holds a do-not-contact or erased entry, and drops `leads_policy` only while every row is `{}`. (`0018` and `0019` are the TikTok webhooks' and the inbox comments/marketplace branches'.) |
 | `0021_studio_materials` | The Growth Studio materials library (spec `2026-11-03-studio-materials-design.md`): `studio_olays`, `studio_materials` (one per Studio file; origin, file and generator fixed by a trigger; redacted, never deleted), `studio_piece_materials` (what each piece revision shows; insert only), `studio_calendar_entries`, `studio_shoot_requests` (the çekim listesi), `studio_material_policy`, `studio_material_releases`; forced RLS; 89 tables. An erased material never changes again (trigger). Down refuses while olays, materials, requests, calendar rows, a policy or a caption release are stored. |
 | `0022_studio_posts` | Olay-driven publishing (spec `2026-11-03-studio-materials-design.md` §14.2): `studio_package_requests` (the work items the olay, calendar and floor triggers write for agents; one per key; open, answered or expired), `studio_posts` (a slot's planned post: format, channel, publish time, prep start and grace, its olay and package request; nothing changes but its record and its retirement, recorded once, by a trigger; never deleted), `studio_posting_policy` (one row per workspace: the posting policy and its time zone, default `Europe/Istanbul`); forced RLS; 92 tables. `studio_slots` is unchanged: a slot keeps its state, its post the retirement reason. Down refuses while a planned post or a package request is stored. |
@@ -131,6 +131,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0040_ads_campaigns` | Reklam yönetimi (2026-11-10, §8): `ads_campaigns` (kampanya başına tek belge: hedef, bütçe, plan, sağlayıcıda kurulanlar, ajanın hamleleri, günlük sonuçlar; `start_at` açık kampanyaları, `closed_at` bitenleri sıralar; zorunlu RLS; 103 tablo). Geri alma, saklı bir kampanya varken reddeder (kampanya paranın kaydıdır ve sağlayıcıda çalışıyor olabilir); yoksa tabloyu kaldırır. |
 | `0041_google_provider` | Google Ads hesapları OAuth ile bağlanır (tasarım `2026-11-11-reklam-platformlari-design.md`): `oauth_pending`'in `provider` ve `app` denetimleri `google`'ı da kabul eder. Başka hiçbir tablo değişmez. Geri alma, bekleyen bir Google akışı varken denetimleri genişletilmiş bırakır (akışlar 30 dakikada biter; sonra yeniden çalıştırılır) ve hiçbir satıra dokunmaz |
 | `0042_tiktok_ads_app` | TikTok reklam hesapları, TikTok'un paylaşım uygulamasından ayrı bir uygulamayla (TikTok for Business) bağlanır: `oauth_pending`'in `app` denetimi `tiktok_ads`'i de kabul eder. Geri alma, bekleyen böyle bir akış varken denetimi daraltmaz (hiçbir satıra dokunmaz); bağlı `tiktok_ads` yeteneklerine dokunulmaz |
+| `0043_remove_marketplace` | Pazaryeri modülü üründen çıkarıldı (2026-11-12): `0019`'un pazaryerleri için tanıdığı değerler dört CHECK'ten çıkar (`inbound_events.provider` artık `trendyol` ve `hepsiburada` almaz; `public_items.kind` yalnız `comment`; `public_items.moderation` `reported` almaz; `public_subjects.kind` yalnız `post`) ve `inbox_event_person` iki alıcı ad alanını bırakır (`inbox_mask_personal` `0025`'teki gibi kalır). Yorumların tabloları, dizinleri, politikaları, yanıt durumları ve `held` durumu değişmez; hiçbir satır silinmez, tablo sayısı aynıdır (103). Bu değerlerden birini ya da sunucunun artık okuyamayacağı bir değeri (`trendyol`/`hepsiburada` türünde bir kabiliyet, alıcı ad alanında bir kimlik, soru kanalında bir ilk temas, izin, engel ya da teklif) taşıyan bir satır varken göç hiçbir şeyi değiştirmeden reddeder. Geri alma dört CHECK'i ve işlevi `0042`'deki haline getirir; hiçbir satıra dokunmaz |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -200,7 +201,6 @@ hiçbir günlük satırında görünmez.
 | `JEETA_INSTAGRAM_APP_SECRET` | — | Instagram uygulamasının sırrı; kimlikle birlikte verilir |
 | `JEETA_META_COMMENT_SCOPES` | kapalı | `1`/`true`: Facebook Login akışları yorum izinlerini de ister. Yalnız Meta App Review bu izinleri onayladıktan sonra açılır; kapalıyken Meta'ya giden her istek bugünkü gibidir. Meta uygulaması olmadan verilemez |
 | `JEETA_INSTAGRAM_COMMENT_SCOPES` | kapalı | `1`/`true`: Instagram Login akışları yorum izinlerini de ister (onaydan sonra). Instagram uygulaması olmadan verilemez |
-| `JEETA_HEPSIBURADA_INTEGRATOR_USER` | merchant id | Hepsiburada entegratör kullanıcı adı: satıcının servis anahtarıyla yapılan çağrıların Basic kullanıcısı (hangi değerin nereye gittiği canlıda doğrulanacak, V-H1) |
 | `JEETA_X_CLIENT_ID` | — | Platformun X uygulamasının (OAuth 2.0 gizli istemci) kimliği; sırla birlikte verilir |
 | `JEETA_X_CLIENT_SECRET` | — | X uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_X_AD_SCOPES` | kapalı | `1`/`true`: X akışları reklam kapsamlarını da ister (`ads.read`, `ads.write`) ve `x_ads` (X reklam hesabı) bağlanabilir. Yalnız X uygulamaya Ads API erişimi verdikten sonra açılır; kapalıyken `x_ads` akışı `409` `details.reason = "provider_product_not_enabled"`. Açıldığında her X akışı bu kapsamları ister. X uygulaması olmadan verilemez |
@@ -665,7 +665,7 @@ ve kaydeder. Ajan şu sırayı izler:
 ## Kabiliyetler
 
 Kabiliyet, alanın eylemde bulunabildiği her şeydir: bir hesap, bir cihaz, bir ajan bağlantısı, bilgisayar
-erişimi ya da üçüncü taraf bir araç. Türler, on grupta 49 anahtarlık kapalı bir listedir; listede olmayan
+erişimi ya da üçüncü taraf bir araç. Türler, on grupta 52 anahtarlık kapalı bir listedir; listede olmayan
 bir tür `422 VALIDATION` alır, `third_party` içindeki `other` türü ise aracın adını `key_detail` alanında
 ister (`[a-z0-9_-]`, 2–40 karakter). Aynı türden birden çok kabiliyet olabilir (iki SMS hattı, iki ajan
 bağlantısı); aynı dış hesap (tür ve `external_id`) ise emekliye ayrılmamış tek bir kabiliyette durur.
@@ -676,7 +676,7 @@ alanı durumu denetiminden muaf değildir.
 |---|---|
 | `social_account` Sosyal hesaplar (bağlayıcı) | `instagram`: Instagram, `facebook_page`: Facebook sayfası, `x`: X, `linkedin_page`: LinkedIn sayfası, `linkedin_member`: LinkedIn kişisel hesap, `tiktok`: TikTok, `pinterest`: Pinterest, `youtube`: YouTube, `google_business`: Google İşletme Profili |
 | `messaging` Mesajlaşma (bağlayıcı) | `whatsapp_cloud`: WhatsApp Business, `instagram_dm`: Instagram mesajları, `messenger`: Messenger, `sms_line`: SMS hattı, `mailbox`: E-posta kutusu, `webchat`: Web sohbeti |
-| `telephony` Telefon (bağlayıcı) | `netgsm_pbx`: NetGSM santrali |
+| `telephony` Telefon (bağlayıcı; ses köprüsü cihaz gibi) | `netgsm_pbx`: NetGSM santrali, `voice_bridge`: Ses köprüsü |
 | `community` Topluluk (bağlayıcı) | `discord`: Discord, `reddit`: Reddit, `review_google`: Google yorumları, `review_facebook`: Facebook yorumları |
 | `ads` Reklam (bağlayıcı) | `meta_ads`: Meta reklamları, `tiktok_ads`: TikTok reklamları, `linkedin_ads`: LinkedIn reklamları, `google_ads`: Google reklamları, `x_ads`: X reklamları |
 | `calendar` Takvim (bağlayıcı) | `google_calendar`: Google Takvim, `outlook_calendar`: Outlook takvimi |
@@ -2492,10 +2492,12 @@ ordered by acquisition time and journey ID. The historical Task 9 migration-test
 unrelated inbox rows.
 
 
-## Comments and marketplace questions: the six `inbox.public` rows
+## Comments: the five `inbox.public` rows
 
-Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. They bring the
-inbox to 52 tools (146 in all). None needs an approved strategy: answering customers is not
+Spec `docs/superpowers/specs/2026-10-30-inbox-comments-marketplace-design.md` §7.1. Six rows came
+with it (the inbox at 52 tools then, 146 in all); the sixth, `inbox.public.report`, left with the
+marketplace module (owner decision 2026-11-12: no comment surface takes reports), which leaves
+these five. None needs an approved strategy: answering customers is not
 planned growth work (owner decision 2026-11-03). Each still needs an `active` workspace.
 
 | Row | Panel route | MCP tool | Risk / permission |
@@ -2503,7 +2505,6 @@ planned growth work (owner decision 2026-11-03). Each still needs an `active` wo
 | `inbox.public.hide` | POST `/api/inbox/items/{item_id}/hide` `{hidden}` | `jeeta.inbox.public_hide` | WRITE / `inbox.work` |
 | `inbox.public.delete` | POST `/api/inbox/items/{item_id}/delete` `{confirm}` | `jeeta.inbox.public_delete` | DESTRUCTIVE / `inbox.manage`, humans only |
 | `inbox.public.mark_handled` | POST `/api/inbox/items/handled` `{item_ids, reason}` | `jeeta.inbox.public_mark_handled` | WRITE / `inbox.work` |
-| `inbox.public.report` | POST `/api/inbox/items/{item_id}/report` `{reason}` | `jeeta.inbox.public_report` | WRITE / `inbox.work` |
 | `inbox.public.approve` | POST `/api/inbox/replies/{outbox_id}/approve` `{text?}` | `jeeta.inbox.public_approve` | WRITE / `inbox.work`, humans only |
 | `inbox.public.discard` | POST `/api/inbox/replies/{outbox_id}/discard` | `jeeta.inbox.public_discard` | WRITE / `inbox.work`, the drafter or a human |
 

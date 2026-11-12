@@ -1136,7 +1136,6 @@
       "community": "Community",
       "ads": "Ads",
       "calendar": "Calendar",
-      "marketplace": "Marketplaces",
       "device": "Devices",
       "agent_connection": "Agent connections",
       "computer_access": "Computer access",
@@ -1171,8 +1170,6 @@
       "x_ads": "X ads",
       "google_calendar": "Google Calendar",
       "outlook_calendar": "Outlook calendar",
-      "trendyol": "Trendyol store",
-      "hepsiburada": "Hepsiburada store",
       "phone": "Phone",
       "computer": "Computer",
       "printer": "Printer",
@@ -1545,7 +1542,7 @@
         "tools": {
           "label": "Work tools",
           "title": "Organize the resources your team uses.",
-          "description": "Classify calendars, marketplaces, agents and other tools. Integration setup and permissions are completed separately for each resource."
+          "description": "Classify calendars, agents and other tools. Integration setup and permissions are completed separately for each resource."
         }
       },
       "addForPurpose": "Add a connection for this purpose",
@@ -2032,7 +2029,6 @@
       "surface": {
         "private": "DM",
         "comment": "Comment",
-        "question": "Question",
         "relay": "Amazon"
       },
       "owed": "{{count}} waiting",
@@ -2047,10 +2043,9 @@
       "approvals": "Awaiting approval",
       "approvalFor": "Reply awaiting approval",
       "noApprovals": "No reply awaits approval.",
-      "items": "Comments and questions",
+      "items": "Comments",
       "subject": {
-        "post": "Post",
-        "product": "Product"
+        "post": "Post"
       },
       "author": {
         "us": "Us",
@@ -2069,15 +2064,13 @@
       "moderation": {
         "hidden": "Hidden",
         "deleted": "Deleted",
-        "removed": "Removed",
-        "reported": "Reported"
+        "removed": "Removed"
       },
       "actions": {
         "reply": "Reply",
         "hide": "Hide",
         "unhide": "Show",
         "handled": "No reply needed",
-        "report": "Report",
         "delete": "Delete"
       },
       "delete": {
@@ -2105,9 +2098,8 @@
         "label": "Your reply",
         "count": "{{count}} / {{max}}",
         "send": "Send the reply",
-        "noOwed": "No comment or question is waiting for a reply."
+        "noOwed": "No comment is waiting for a reply."
       },
-      "marketplaceNote": "Write no contact details or links; the marketplace may review the answer before it is published.",
       "approvalNote": "On this account the agent's replies wait for your approval."
     },
     "noTasks": "No tasks yet. Add the next follow-up below.",

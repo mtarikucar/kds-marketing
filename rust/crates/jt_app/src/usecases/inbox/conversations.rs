@@ -43,7 +43,7 @@ pub struct Page<T> {
 /// whose outcome is unknown, the failure line its send recorded (`kind: provider: reason`,
 /// [`crate::usecases::failure`]), else `null`.
 ///
-/// On a public conversation, `item` names the comment or question the message is (an inbound
+/// On a public conversation, `item` names the comment the message is (an inbound
 /// one) or answers (ours, with its visibility); absent on a direct conversation.
 ///
 /// `attachments` are the email's files (spec 2026-10-30-leads-pool-outreach-design.md §3.15):
@@ -71,7 +71,7 @@ pub struct MessageItem {
 
 /// A conversation as the inbox lists it (spec §6.8): the stored conversation and what its
 /// items and replies say, computed (nothing of it is stored). `surface` is `public` for a
-/// comment or question conversation, `relay` for mail relayed by a marketplace (Amazon), else
+/// comment conversation, `relay` for buyer mail relayed by Amazon, else
 /// `private`; `owed_items` and `next_deadline` count the owed items of a public one; and
 /// `held_replies` the replies waiting for a human.
 #[derive(Debug, Serialize)]

@@ -18,8 +18,6 @@ pub fn identity_hash(channel: IdentityChannel, normalized: &str) -> String {
         IdentityChannel::Webchat => "webchat",
         IdentityChannel::InstagramCommenter => "instagram_commenter",
         IdentityChannel::FacebookCommenter => "facebook_commenter",
-        IdentityChannel::TrendyolBuyer => "trendyol_buyer",
-        IdentityChannel::HepsiburadaBuyer => "hepsiburada_buyer",
     };
     let mut hash = Sha256::new();
     hash.update(namespace.as_bytes());

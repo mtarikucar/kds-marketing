@@ -31,7 +31,7 @@
 //!   on the other, and a half cursor is refused alike.
 //! - `connector.hooks`: the webhook addresses (the Meta webhook and the workspace's NetGSM
 //!   callback URLs with their tokens) read the same on both gates.
-//! - `inbox.public.*` (comments and marketplace questions): hide, mark handled and report answer
+//! - `inbox.public.*` (comments): hide and mark handled answer
 //!   alike on like items without a strategy, an unknown item is refused alike, delete and approve
 //!   are refused to the agent and done by the human, and discarding a held draft answers alike.
 
@@ -4913,7 +4913,7 @@ async fn outreach_answers_the_same_over_the_panel_and_mcp() {
     assert_eq!(human, agent["structuredContent"]);
 }
 
-/// An owed public item `external_id` of `conversation` (`kind` a comment or a question), with
+/// An owed public item `external_id` of `conversation` (of `kind`), with
 /// its inbound message, written straight to the repos at `now`.
 async fn public_item(
     deps: &Deps,
@@ -5045,12 +5045,12 @@ async fn public_surface(
     conversation
 }
 
-/// The six `inbox.public` rows of comments and marketplace questions (F7) over the panel and
-/// MCP: hide, mark handled and report, each on a like item of its own, answer alike; an unknown
+/// The five `inbox.public` rows of comments (F7) over the panel and
+/// MCP: hide and mark handled, each on a like item of its own, answer alike; an unknown
 /// item is refused alike; deleting is refused to the agent (`agent_cannot_delete`) and done by
 /// the human with `confirm: true`; approving is refused to the agent (`human_required`) and done
 /// by the human; discarding a held draft answers alike, by the agent that drafted it and by the
-/// human. Hide, mark handled, report and delete run before any strategy is approved.
+/// human. Hide, mark handled and delete run before any strategy is approved.
 #[tokio::test]
 async fn inbox_public_rows_have_http_mcp_parity() {
     use jt_app::ports::connectors::SendReceipt;
@@ -5079,14 +5079,9 @@ async fn inbox_public_rows_have_http_mcp_parity() {
     let db = TestDb::new().await;
     let (ws, user) = db.seed_workspace("public-parity").await;
     let meta = Arc::new(ScriptedPublic::new(Provider::Meta));
-    let hepsiburada = Arc::new(ScriptedPublic::new(Provider::Hepsiburada));
     let mut deps = deps_with(
         &db,
-        Arc::new(
-            ScriptedRegistry::new()
-                .with_public(meta.clone())
-                .with_public(hepsiburada.clone()),
-        ),
+        Arc::new(ScriptedRegistry::new().with_public(meta.clone())),
     );
     let mut apps = FakeAppConfig::with_all_apps();
     apps.meta.as_mut().unwrap().comment_scopes = true;
@@ -5123,31 +5118,11 @@ async fn inbox_public_rows_have_http_mcp_parity() {
         now,
     )
     .await;
-    let hb = public_surface(
-        &deps,
-        ws,
-        "hepsiburada",
-        "hb-merchant-1",
-        json!({"provider": "hepsiburada",
-            "access": {"kind": "hepsiburada_merchant", "merchant_id": "hb-merchant-1"}}),
-        jt_connector::Credential::HepsiburadaMerchant {
-            merchant_id: "hb-merchant-1".into(),
-            service_key: "test-secret".into(),
-        },
-        jt_capability::Policy::default(),
-        now,
-    )
-    .await;
     let comment = jt_inbox::PublicKind::Comment;
-    let question = jt_inbox::PublicKind::Question;
     let mut items = Vec::new();
     for n in 0..9 {
         items.push(public_item(&deps, &ig, comment, &format!("c-{n}"), now).await);
     }
-    let q = [
-        public_item(&deps, &hb, question, "q-1", now).await,
-        public_item(&deps, &hb, question, "q-2", now).await,
-    ];
 
     // Hide.
     meta.push_moderate(Ok(()));
@@ -5230,31 +5205,6 @@ async fn inbox_public_rows_have_http_mcp_parity() {
         human["items"][0]["answer"]["state"],
         agent["items"][0]["answer"]["state"]
     );
-
-    // Report.
-    hepsiburada.push_moderate(Ok(()));
-    hepsiburada.push_moderate(Ok(()));
-    let human = ok(send(
-        &app,
-        panel(
-            Method::POST,
-            &format!("/api/inbox/items/{}/report", q[0]),
-            Some(&cookie),
-            Some(json!({"reason": "offensive"})),
-        ),
-    )
-    .await)
-    .await;
-    let agent = call_tool(
-        &app,
-        &key,
-        &session,
-        "jeeta.inbox.public_report",
-        json!({"item_id": q[1], "reason": "offensive"}),
-    )
-    .await;
-    assert_eq!(shape(&human), shape(&agent));
-    assert_eq!(human["item"]["moderation"], "reported");
 
     // Delete: never the agent; the human with confirm: true.
     let agent = tool_result(

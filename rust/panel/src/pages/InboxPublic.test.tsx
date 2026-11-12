@@ -54,8 +54,6 @@ const igRules = {
   moderated: false,
   hide: true,
   delete: true,
-  report: false,
-  marketplace: false,
 };
 
 function entry(row: ReturnType<typeof item>, text: string, owed = true) {
@@ -125,7 +123,7 @@ async function open(publicPart: Record<string, unknown> = comments, extra: Recor
 }
 
 describe('A public conversation', () => {
-  it('subject_card_shows_post_or_product', async () => {
+  it('subject_card_shows_post', async () => {
     await open();
     const [first] = screen.getAllByTestId('subject');
     expect(within(first).getByText('Gönderi')).toBeInTheDocument();
@@ -195,14 +193,12 @@ describe('A public conversation', () => {
     expect(screen.getByRole('button', { name: 'Yanıtı gönder' })).toBeDisabled();
   });
 
-  it('marketplace_note_shown', async () => {
+  it('surface_without_hide_or_private_reply_offers_neither', async () => {
     await open({
       ...comments,
-      channel: 'trendyol_question',
-      rules: { ...igRules, private: null, marketplace: true, one_answer: true, hide: false, delete: false },
-      items: [entry(item('1', { kind: 'question', deadline: inHours(20) }), 'S bedeni var mı?')],
+      rules: { ...igRules, private: null, hide: false, delete: false },
+      items: [entry(item('1', { deadline: inHours(20) }), 'S bedeni var mı?')],
     });
-    expect(screen.getByText(/İletişim bilgisi ve bağlantı yazmayın/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Gizle' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Özel (DM)' })).not.toBeInTheDocument();
   });

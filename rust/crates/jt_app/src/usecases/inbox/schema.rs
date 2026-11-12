@@ -115,10 +115,6 @@ pub fn input(action: &str) -> Value {
             json!({"item_ids":{"type":"array","minItems":1,"maxItems":100,"items":{"type":"string","format":"uuid"}},"reason":{"enum":["no_reply_needed","spam","duplicate","answered_elsewhere"]}}),
             &["item_ids", "reason"],
         ),
-        "public.report" => object(
-            json!({"reason":{"enum":["spam","offensive","personal_data","irrelevant","other"]}}),
-            &["reason"],
-        ),
         "public.approve" => object(
             json!({"text":{"type":["string","null"],"minLength":1}}),
             &[],
@@ -158,7 +154,7 @@ pub fn tool(action: &str) -> Value {
         "tasks.complete" => Some("task_id"),
         "quotes.accept" => Some("quote_id"),
         "appointments.cancel" | "appointments.held" => Some("appointment_id"),
-        "public.hide" | "public.delete" | "public.report" => Some("item_id"),
+        "public.hide" | "public.delete" => Some("item_id"),
         "public.approve" | "public.discard" => Some("outbox_id"),
         _ => None,
     };

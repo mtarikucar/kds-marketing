@@ -390,14 +390,6 @@ pub async fn public_mark_handled(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&public::mark_handled(&state.deps, &ctx, input).await?)
 }
-pub async fn public_report(
-    State(state): State<AppState>,
-    WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiPath(id): ApiPath<PublicItemId>,
-    ApiJson(input): ApiJson<public::ReportInput>,
-) -> Result<Json<Value>, ApiError> {
-    to_json(&public::report(&state.deps, &ctx, id, input).await?)
-}
 pub async fn public_approve(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

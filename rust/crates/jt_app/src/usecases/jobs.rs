@@ -1717,7 +1717,7 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                         .await?
                         .is_some()
                     {
-                        // Relayed marketplace mail answers within the marketplace's time (b).
+                        // Relayed Amazon mail answers within Amazon's time (b).
                         channel = "amazon";
                     }
                     let overdue = policy.max_response_s.get(channel).is_some_and(|seconds| {
@@ -2024,7 +2024,7 @@ pub async fn run_comments_poll(deps: &Deps, now: OffsetDateTime) -> JobReport {
             }
         };
         let mut polled = false;
-        // Meta's surfaces (spec §6.9): the marketplaces have a poll of their own.
+        // Meta's surfaces (spec §6.9).
         for cap in capabilities.into_iter().filter(|c| {
             matches!(c.kind_key.as_str(), "facebook_page" | "instagram")
                 && c.status == StoredStatus::Verified

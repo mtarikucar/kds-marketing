@@ -114,8 +114,8 @@ fn mcp_registry_matches_catalog() {
 /// the PBX call policy (`jeeta.connector.set_pbx_policy`, connector +1) gives 126; the six
 /// `calls` tools of voice V0 give 132; the agent's turns on a call of voice V1 (`listen`, `say`,
 /// `transfer`) give 135; the five `devices` tools of the device bridge (D1-T6: `list`, `observe`,
-/// `act`, `command_get`, `commands`) give 140; the six `inbox.public` tools of comments and
-/// marketplace questions (F7: `public_hide`, `public_delete`, `public_mark_handled`,
+/// `act`, `command_get`, `commands`) give 140; the six `inbox.public` tools of public items
+/// (F7: `public_hide`, `public_delete`, `public_mark_handled`,
 /// `public_report`, `public_approve`, `public_discard`, inbox +6) give 146; the thirteen twins
 /// of the Studio materials library (spec 2026-11-03 §5.2: olays, materials, a slot's
 /// materials, the calendar, the shoot list) give 159; olay-driven publishing's four twins
@@ -129,7 +129,9 @@ fn mcp_registry_matches_catalog() {
 /// four commission tools (2026-11-10, `inbox` -4) gives 231; the two `social` tools that give
 /// a finished content version its time (design 2026-11-10 §7) give 233, the two that read the
 /// social accounts 235, and dropping the lane approval's `jeeta.studio.policy_set` (`studio`
-/// -1: the approval that remains is each connection's own, design B35) gives 234.
+/// -1: the approval that remains is each connection's own, design B35) gives 234. The count
+/// stood at 244 when `jeeta.inbox.public_report` left with the marketplace module (owner
+/// decision 2026-11-12, `inbox` -1: no surface takes reports): 243.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -154,7 +156,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("distribution", 5),
     ("outreach", 18),
     ("events", 3),
-    ("inbox", 49),
+    ("inbox", 48),
     ("studio", 54),
     ("content", 4),
     ("social", 4),
@@ -164,9 +166,9 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 #[test]
 fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 244);
+    assert_eq!(specs.len(), 243);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 244);
+    assert_eq!(total, 243);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -175,7 +177,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 244);
+    assert_eq!(catalog, 243);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.
@@ -314,7 +316,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 295);
+    assert_eq!(CATALOG.len(), 294);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

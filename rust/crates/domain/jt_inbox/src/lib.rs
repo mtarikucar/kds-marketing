@@ -8,9 +8,9 @@
 //! appointments export escaped/folded UTC ICS, and scoped identity hashes prevent erased identities from reappearing. `sms_segments`
 //! counts GSM-7 septets or UTF-16 units; send boundaries must validate body size first.
 //!
-//! Public surfaces ([`public`]): comments and marketplace questions are items of a public
-//! conversation, each with its own reply rules, fence and lifecycle; [`relay`] recognises
-//! marketplace buyer messages relayed through the seller's mailbox.
+//! Public surfaces ([`public`]): comments are items of a public conversation, each with its own
+//! reply rules, fence and lifecycle; [`relay`] recognises Amazon's buyer messages relayed through
+//! a mailbox.
 
 mod appointment;
 mod consent;

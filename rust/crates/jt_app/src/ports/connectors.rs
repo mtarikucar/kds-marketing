@@ -224,14 +224,6 @@ pub trait PlatformAppConfig: Send + Sync {
     fn google_app(&self) -> Option<GoogleApp> {
         None
     }
-    /// The platform's Hepsiburada integrator user (`JEETA_HEPSIBURADA_INTEGRATOR_USER`), the
-    /// Basic auth user of the Hepsiburada calls made with a seller's service key; `None` (the
-    /// default) while it is not configured, and the merchant id stands in for it then. Which
-    /// value goes where is VERIFY V-H1 (spec 2026-10-30-inbox-comments-marketplace-design.md
-    /// §8.3, §12). Not a secret: the seller's service key is.
-    fn hepsiburada_integrator_user(&self) -> Option<String> {
-        None
-    }
     /// Where the panel is reached from outside, for OAuth redirect URIs and webhook URLs; `None`
     /// while it is not configured, and then no flow starts and no webhook URL is shown (the
     /// binary requires it whenever a provider app is configured).
@@ -330,7 +322,7 @@ impl OAuthCallback {
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
             Provider::Google => Some(OAuthCallback::Google),
-            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 }
@@ -788,12 +780,12 @@ impl From<InboundEventDraft> for PolledMail {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Public items: comments and marketplace questions
+// Public items: comments
 // ---------------------------------------------------------------------------------------------
 
-/// One comment or marketplace question as every adapter writes it into an inbound event of kind
-/// `Comment` or `Question` (spec 2026-10-30-inbox-comments-marketplace-design.md §6.3): the
-/// payload is `{"public": <envelope>, "provider_item": <the provider's item as sent>}`
+/// One comment as every adapter writes it into an inbound event of kind `Comment` (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md §6.3): the payload is
+/// `{"public": <envelope>, "provider_item": <the provider's item as sent>}`
 /// ([`PublicEnvelope::into_payload`]), and the inbox's one provider-agnostic intake reads it back
 /// ([`PublicEnvelope::from_payload`]). Provider knowledge stays in the adapters.
 ///
@@ -803,11 +795,11 @@ impl From<InboundEventDraft> for PolledMail {
 /// [`jt_inbox::public::MAX_EXTERNAL_ID_CHARS`] characters, not blank.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PublicEnvelope {
-    /// A comment or a question.
+    /// What it is.
     pub kind: PublicKind,
-    /// The capability's external id: the Instagram account, the Page, the seller, the merchant.
+    /// The capability's external id: the Instagram account, the Page.
     pub account_id: String,
-    /// The provider's comment or question id: the reply target.
+    /// The provider's comment id: the reply target.
     pub external_id: String,
     /// The comment it answers; `None` at the top level.
     #[serde(default)]
@@ -823,13 +815,13 @@ pub struct PublicEnvelope {
     /// When the provider says it was written.
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    /// The provider's answer deadline, when it gives one (Hepsiburada's `expireDate`).
+    /// The provider's answer deadline, when it gives one.
     #[serde(default, with = "time::serde::rfc3339::option")]
     pub deadline: Option<OffsetDateTime>,
     /// Whether it is a live video's comment.
     #[serde(default)]
     pub live: bool,
-    /// The post or product it is about, as much as the provider's item tells.
+    /// The post it is about, as much as the provider's item tells.
     #[serde(default)]
     pub subject: Option<EnvelopeSubject>,
     /// The answer the provider shows, when it shows one (ours or another's).
@@ -881,14 +873,12 @@ pub enum EnvelopeStatus {
     Removed,
     /// Answered: the envelope's `answer` is the text the provider shows.
     Answered,
-    /// An answer is in the platform's review (Trendyol).
+    /// An answer is in the platform's review.
     Pending,
     /// The platform refused the answer: the envelope's `rejection` says why.
     Rejected,
     /// Its answer deadline passed, as the provider says.
     Expired,
-    /// Reported to the marketplace.
-    Reported,
 }
 
 /// Who wrote a public item: the provider's id and display name of the author, when it gives
@@ -906,14 +896,14 @@ pub struct EnvelopeAuthor {
     pub is_self: bool,
 }
 
-/// The post or product a public item is about, as the provider's item tells it.
+/// The post a public item is about, as the provider's item tells it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EnvelopeSubject {
-    /// A post or a product.
+    /// What it is.
     pub kind: SubjectKind,
-    /// The provider's post (media) or product id.
+    /// The provider's post (media) id.
     pub external_id: String,
-    /// A caption excerpt or the product's name; empty when the item does not tell.
+    /// A caption excerpt; empty when the item does not tell.
     #[serde(default)]
     pub title: String,
     /// Its permalink.
@@ -922,7 +912,7 @@ pub struct EnvelopeSubject {
     /// A thumbnail on the provider's CDN.
     #[serde(default)]
     pub image_url: Option<String>,
-    /// Further provider facts (media product type, barcode, ...).
+    /// Further provider facts (media product type, ...).
     #[serde(default)]
     pub facts: Value,
 }
@@ -980,26 +970,13 @@ pub enum ModerationAction {
     Unhide,
     /// Deletes a comment.
     Delete,
-    /// Reports a marketplace question.
-    Report { reason: ReportReason },
 }
 
-/// Why a question is reported.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReportReason {
-    Spam,
-    Offensive,
-    PersonalData,
-    Irrelevant,
-    Other,
-}
-
-/// What a provider tells of a post or product when asked ([`PublicSurface::subject`]).
+/// What a provider tells of a post when asked ([`PublicSurface::subject`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SubjectFacts {
     pub kind: SubjectKind,
-    /// A caption excerpt or the product's name.
+    /// A caption excerpt.
     pub title: String,
     pub url: Option<String>,
     pub image_url: Option<String>,
@@ -1518,19 +1495,19 @@ pub trait DeliveryReports: Send + Sync {
 }
 
 /// The reason of the `ConnectorError::Permanent` a [`PublicSurface`] answers when the item a
-/// reply or moderation names is gone on the provider (a deleted comment, a removed question):
+/// reply or moderation names is gone on the provider (a deleted comment):
 /// the inbox then marks the item removed and fails the reply with `item_removed`. Which provider
 /// answer means it is each adapter's to map (Meta's is VERIFY V-M10, spec §12).
 pub const PUBLIC_ITEM_GONE: &str = "public_item_gone";
 
-/// Replies and moderation on public items: comments on posts and marketplace questions (spec
+/// Replies and moderation on public items: comments on posts (spec
 /// 2026-10-30-inbox-comments-marketplace-design.md §6.1). `public` is as [`Connector::probe`]
 /// gets it; `target` names the item. An adapter refuses, before any call, what the credential's
 /// grant does not hold (a Meta token without the comment scopes).
 #[async_trait]
 pub trait PublicSurface: Send + Sync {
-    /// Answers the item in front of everyone: a comment reply, a marketplace answer. The receipt
-    /// carries the provider's id of the reply.
+    /// Answers the item in front of everyone: a comment reply. The receipt carries the
+    /// provider's id of the reply.
     async fn reply_public(
         &self,
         cred: &Credential,
@@ -1550,7 +1527,7 @@ pub trait PublicSurface: Send + Sync {
         let _ = (cred, public, target, text);
         Err(ConnectorError::permanent("no private replies"))
     }
-    /// Hides, shows again, deletes or reports the item.
+    /// Hides, shows again or deletes the item.
     async fn moderate(
         &self,
         cred: &Credential,
@@ -1558,7 +1535,7 @@ pub trait PublicSurface: Send + Sync {
         target: &PublicTarget,
         action: ModerationAction,
     ) -> Result<(), ConnectorError>;
-    /// What the provider tells of the post or product `subject_external_id`; `None`, the
+    /// What the provider tells of the post `subject_external_id`; `None`, the
     /// default, when it tells nothing more than its items do. A read.
     async fn subject(
         &self,
@@ -2181,12 +2158,12 @@ mod tests {
 
         // The optional parts read as absent when left out.
         let bare = serde_json::json!({ "public": {
-            "kind": "question", "account_id": "123456", "external_id": "q-1",
-            "root_external_id": "q-1", "status": "answered", "author": {},
+            "kind": "comment", "account_id": "123456", "external_id": "c-1",
+            "root_external_id": "c-1", "status": "answered", "author": {},
             "text": "Bedeni var mı?", "created_at": "2026-10-30T09:15:00Z",
         }});
         let read = PublicEnvelope::from_payload(&bare).unwrap();
-        assert_eq!(read.kind, PublicKind::Question);
+        assert_eq!(read.kind, PublicKind::Comment);
         assert_eq!(read.status, EnvelopeStatus::Answered);
         assert_eq!(read.author, EnvelopeAuthor::default());
         assert_eq!(
@@ -2208,7 +2185,6 @@ mod tests {
             (EnvelopeStatus::Pending, "pending"),
             (EnvelopeStatus::Rejected, "rejected"),
             (EnvelopeStatus::Expired, "expired"),
-            (EnvelopeStatus::Reported, "reported"),
         ] {
             assert_eq!(serde_json::to_value(status).unwrap(), key);
         }

@@ -13,7 +13,6 @@
 //! | TikTok | ✓ | ✓ | — | ✓ | — | — |
 //! | LinkedIn | ✓ | ✓ | — | ✓ | — | — |
 //! | Google | ✓ | ✓ | — | — | — | ✓ |
-//! | Trendyol, Hepsiburada | — (their adapters come with the marketplace tasks T1 and H1) | — | — | — | — | — |
 //!
 //! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
 //!
@@ -101,7 +100,6 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Tiktok => self.tiktok.clone(),
             Provider::Linkedin => self.linkedin.clone(),
             Provider::Google => self.google.clone(),
-            Provider::Trendyol | Provider::Hepsiburada => return None,
         })
     }
 
@@ -112,7 +110,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
             Provider::Google => Some(self.google.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada => None,
+            Provider::Netgsm | Provider::Mail => None,
         }
     }
 
@@ -134,11 +132,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm
-            | Provider::Mail
-            | Provider::Trendyol
-            | Provider::Hepsiburada
-            | Provider::Google => None,
+            Provider::Netgsm | Provider::Mail | Provider::Google => None,
         }
     }
 
@@ -148,11 +142,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm
-            | Provider::Mail
-            | Provider::Trendyol
-            | Provider::Hepsiburada
-            | Provider::Google => None,
+            Provider::Netgsm | Provider::Mail | Provider::Google => None,
         }
     }
 
@@ -242,8 +232,8 @@ mod tests {
                 "delivery_reports",
                 registry.delivery_reports(provider).is_some(),
             ),
-            // Replies on public items (Meta's, task M2) and their polls (tasks M4, T2 and H1 of
-            // plan 2026-10-30-inbox-comments-marketplace-plan.md).
+            // Replies on public items (Meta's, task M2) and their polls (task M4 of plan
+            // 2026-10-30-inbox-comments-marketplace-plan.md).
             ("public", registry.public(provider).is_some()),
             ("public_poller", registry.public_poller(provider).is_some()),
         ]
@@ -251,10 +241,6 @@ mod tests {
         .filter_map(|(name, some)| some.then_some(name))
         .collect()
     }
-
-    /// The providers whose adapters are not in the binary yet: the marketplaces (tasks T1 and H1
-    /// of plan 2026-10-30-inbox-comments-marketplace-plan.md).
-    const NOT_YET_SERVED: [Provider; 2] = [Provider::Trendyol, Provider::Hepsiburada];
 
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
@@ -327,8 +313,6 @@ mod tests {
                     "ad_campaigns",
                 ],
             ),
-            (Provider::Trendyol, vec![]),
-            (Provider::Hepsiburada, vec![]),
             (
                 Provider::Google,
                 vec!["connector", "oauth", "ads", "ad_campaigns"],
@@ -357,11 +341,7 @@ mod tests {
     fn the_scripted_registry_offers_no_more_than_production() {
         // Register every production adapter and compare the complete operation sets.
         let mut scripted = ScriptedRegistry::new();
-        for provider in Provider::all()
-            .iter()
-            .copied()
-            .filter(|p| !NOT_YET_SERVED.contains(p))
-        {
+        for provider in Provider::all().iter().copied() {
             scripted = scripted.with_connector(Arc::new(ScriptedConnector::new(provider)));
             if matches!(
                 provider,
@@ -396,14 +376,6 @@ mod tests {
     fn each_adapter_names_its_provider_and_only_its_fixed_hosts() {
         let registry = production();
         for provider in Provider::all() {
-            if NOT_YET_SERVED.contains(provider) {
-                assert!(
-                    registry.connector(*provider).is_none(),
-                    "{}",
-                    provider.key()
-                );
-                continue;
-            }
             if *provider == Provider::Mail {
                 let connector = registry.connector(*provider).expect("mail adapter");
                 assert_eq!(connector.provider(), Provider::Mail);

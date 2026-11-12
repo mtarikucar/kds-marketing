@@ -1,21 +1,20 @@
-//! Public conversations: comments on posts and marketplace questions (spec
-//! 2026-10-30-inbox-comments-marketplace-design.md §6). A conversation stays one person on one
-//! capability; each comment or question is a [`PublicItem`] of it.
+//! Public conversations: comments on posts (spec 2026-10-30-inbox-comments-marketplace-design.md
+//! §6). A conversation stays one person on one capability; each comment is a [`PublicItem`] of
+//! it.
 //!
-//! - [`comments_enabled`]: whether a capability's comments (or questions) are taken at all. A
-//!   marketplace's always are (its credentials are the switch); a Meta surface's only while the
-//!   platform's comment flag for its login is on **and** its grant holds the comment scopes, so
-//!   that Meta comment code stays inert until Meta's App Review granted them (spec D11, §11).
-//! - `intake`: one inbound event of kind `Comment` or `Question` (its payload a
-//!   [`PublicEnvelope`]) into person, conversation, message, item and subject, or a provider's new
-//!   state of a known item into that item. No journey is opened (D4), no ledger line written for a
+//! - [`comments_enabled`]: whether a capability's comments are taken at all: a Meta surface's
+//!   only while the platform's comment flag for its login is on **and** its grant holds the
+//!   comment scopes, so that Meta comment code stays inert until Meta's App Review granted them
+//!   (spec D11, §11).
+//! - `intake`: one inbound event of kind `Comment` (its payload a [`PublicEnvelope`]) into
+//!   person, conversation, message, item and subject, or a provider's new state of a known item
+//!   into that item. No journey is opened (D4), no ledger line written for a
 //!   new item (inbound events are records of the outside world).
 //! - `settle_state`: a public conversation's state from its items (`Ours` while one is owed).
 //! - `subject_fetch`: lock-free and best-effort before the intake's transaction, what the
-//!   provider tells of a post or product the inbox does not know yet (or knew more than a day
-//!   ago).
-//! - Moderation ([`hide`], [`delete`], [`report`], [`mark_handled`]: spec §3.8, §6.7), the
-//!   provider called with no transaction open (`super::moderation`).
+//!   provider tells of a post the inbox does not know yet (or knew more than a day ago).
+//! - Moderation ([`hide`], [`delete`], [`mark_handled`]: spec §3.8, §6.7), the provider called
+//!   with no transaction open (`super::moderation`).
 //! - Replies (`inbox.reply` on a public conversation, `super::replies`): `reply_fence` (spec
 //!   §3.6 rules 2 to 6, at enqueue, claim and approval), `on_receipt` (the item answered or
 //!   privately replied, the recipient's direct-message identity linked) and `on_gone`; held
@@ -55,8 +54,8 @@ use crate::{
 };
 
 pub use super::moderation::{
-    DeleteInput, HandledOut, HideInput, MAX_HANDLED_BATCH, MarkHandledInput, ModerationOut,
-    ReportInput, delete, hide, mark_handled, report,
+    DeleteInput, HandledOut, HideInput, MAX_HANDLED_BATCH, MarkHandledInput, ModerationOut, delete,
+    hide, mark_handled,
 };
 
 /// How long a subject the inbox knows is not asked of its provider again.
@@ -66,7 +65,7 @@ pub const SUBJECT_REFRESH: Duration = Duration::days(1);
 /// human (spec §3.11 (c)).
 pub const DEADLINE_HANDOVER: Duration = Duration::hours(2);
 
-/// The marketplace relaying mail conversation `conversation` (Amazon's buyer-seller messages,
+/// The relay behind mail conversation `conversation` (Amazon's buyer-seller messages,
 /// spec §8.4): a mailbox conversation whose person holds an active relay address
 /// (`jt_inbox::relay::marketplace_relay`); `None` for any other.
 pub(crate) async fn relay_of(
@@ -96,12 +95,12 @@ pub fn surface_kind(kind_key: &str) -> &str {
     }
 }
 
-/// Whether `cap` takes public items: a marketplace (`trendyol`, `hepsiburada`) always; a Meta
-/// surface (or its direct-message sibling, read as its surface: [`surface_kind`]) while the
-/// platform's comment flag of the app it signed in with is on (`MetaApp::comment_scopes`, or
-/// `InstagramApp::comment_scopes` for an Instagram Login grant: `connector_public.access.app =
-/// "instagram"`) and its grant (`connector_public.access.scopes`) enables comments
-/// ([`jt_connector::comment_grant`]); any other kind never.
+/// Whether `cap` takes public items: a Meta surface (or its direct-message sibling, read as its
+/// surface: [`surface_kind`]) while the platform's comment flag of the app it signed in with is
+/// on (`MetaApp::comment_scopes`, or `InstagramApp::comment_scopes` for an Instagram Login
+/// grant: `connector_public.access.app = "instagram"`) and its grant
+/// (`connector_public.access.scopes`) enables comments ([`jt_connector::comment_grant`]); any
+/// other kind never.
 ///
 /// Gates the webhook's intake (a disabled comment is dropped), the consumer (ignored), the reply
 /// and moderation fences and the comment polls. The flag keeps every Meta comment path off until
@@ -109,7 +108,6 @@ pub fn surface_kind(kind_key: &str) -> &str {
 pub fn comments_enabled(apps: &dyn PlatformAppConfig, cap: &Capability) -> bool {
     let kind = surface_kind(&cap.kind_key);
     match kind {
-        "trendyol" | "hepsiburada" => true,
         "facebook_page" | "instagram" => {
             let flag = comment_flag(apps, cap);
             let scopes: Vec<&str> = cap.connector_public["access"]["scopes"]
@@ -122,7 +120,7 @@ pub fn comments_enabled(apps: &dyn PlatformAppConfig, cap: &Capability) -> bool 
     }
 }
 
-/// Whether a connector takes its comments or questions, as its health shows it (spec §9).
+/// Whether a connector takes its comments, as its health shows it (spec §9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommentStatus {
@@ -134,17 +132,15 @@ pub enum CommentStatus {
     On,
 }
 
-/// `cap`'s [`CommentStatus`]: for a kind whose comments or questions the inbox takes (a Meta
-/// surface, a marketplace); `None` for any other, a direct-message sibling included.
+/// `cap`'s [`CommentStatus`]: for a kind whose comments the inbox takes (a Meta surface);
+/// `None` for any other, a direct-message sibling included.
 pub fn comment_status(apps: &dyn PlatformAppConfig, cap: &Capability) -> Option<CommentStatus> {
-    let meta = match cap.kind_key.as_str() {
-        "facebook_page" | "instagram" => true,
-        "trendyol" | "hepsiburada" => false,
-        _ => return None,
-    };
+    if !matches!(cap.kind_key.as_str(), "facebook_page" | "instagram") {
+        return None;
+    }
     Some(if comments_enabled(apps, cap) {
         CommentStatus::On
-    } else if meta && comment_flag(apps, cap) {
+    } else if comment_flag(apps, cap) {
         CommentStatus::Reconnect
     } else {
         CommentStatus::Off
@@ -168,7 +164,7 @@ pub(crate) async fn surface_capability(
     cap: &Capability,
 ) -> Result<Option<Capability>, AppError> {
     let kind = match cap.kind_key.as_str() {
-        "facebook_page" | "instagram" | "trendyol" | "hepsiburada" => {
+        "facebook_page" | "instagram" => {
             return Ok(Some(cap.clone()));
         }
         "messenger" => "facebook_page",
@@ -264,7 +260,7 @@ pub(crate) async fn settle_states(
 }
 
 /// What the provider tells of the subject of public-item `event` (see the module docs): asked
-/// only for a comment or question whose subject the inbox does not know, or refreshed more than
+/// only for a comment whose subject the inbox does not know, or refreshed more than
 /// [`SUBJECT_REFRESH`] before `now`, of a capability that takes public items, in a workspace
 /// that receives, through the provider's [`crate::ports::connectors::PublicSurface`]. Lock-free
 /// (no transaction is held across the call) and best-effort: every failure reads as nothing, so
@@ -274,9 +270,7 @@ pub(crate) async fn subject_fetch(
     event: &InboundEvent,
     now: OffsetDateTime,
 ) -> Option<SubjectFacts> {
-    if !matches!(event.kind, EventKind::Comment | EventKind::Question)
-        || event.payload["erased_identity"] == true
-    {
+    if event.kind != EventKind::Comment || event.payload["erased_identity"] == true {
         return None;
     }
     let envelope = PublicEnvelope::from_payload(&event.payload)?;
@@ -327,7 +321,6 @@ fn malformed() -> AppError {
 fn kind_of(channel: Channel) -> Option<PublicKind> {
     match channel {
         Channel::InstagramComment | Channel::FacebookComment => Some(PublicKind::Comment),
-        Channel::TrendyolQuestion | Channel::HepsiburadaQuestion => Some(PublicKind::Question),
         _ => None,
     }
 }
@@ -347,8 +340,8 @@ fn subject_id_ok(subject: &EnvelopeSubject) -> bool {
 /// `consumer::route`) into the inbox (see the module docs), with the subject facts `fetched`
 /// before the transaction. A comment of the account itself takes the own-comment path only
 /// while it is open or edited. Outcomes: `consumed`, `duplicate` (a replay, or our own reply's
-/// echo already bound), `deferred` (a question's state before the question itself, or an own
-/// comment the inbox cannot yet tell from our replies), `comments_not_enabled`. An erased author
+/// echo already bound), `deferred` (an own comment the inbox cannot yet tell from our replies),
+/// `comments_not_enabled`. An erased author
 /// is the `erased_identity` refusal (`erased_identity_drop`); a payload without an envelope, or
 /// one that does not fit the capability, is a validation error.
 pub(crate) async fn intake(
@@ -366,7 +359,6 @@ pub(crate) async fn intake(
     let env = PublicEnvelope::from_payload(&event.payload).ok_or_else(malformed)?;
     let event_kind = match event.kind {
         EventKind::Comment => PublicKind::Comment,
-        EventKind::Question => PublicKind::Question,
         _ => return Err(malformed()),
     };
     if env.kind != event_kind || kind_of(channel) != Some(env.kind) {
@@ -399,7 +391,6 @@ pub(crate) async fn intake(
         .filter(|id| !id.trim().is_empty())
         .unwrap_or_else(|| match env.kind {
             PublicKind::Comment => format!("c:{}", env.external_id),
-            PublicKind::Question => format!("q:{}", env.external_id),
         });
     let key = scope_opaque(
         account,
@@ -613,7 +604,7 @@ async fn revision(
     Ok("consumed")
 }
 
-/// What `fetched` and the envelope's `subject` tell of a post or product of `cap`, stored (a new
+/// What `fetched` and the envelope's `subject` tell of a post of `cap`, stored (a new
 /// subject, or a refresh with `fetched`) and linked to the Studio publication that made the post
 /// when one did; its id. A known subject without new facts is left as it is.
 async fn upsert_subject(
@@ -815,9 +806,8 @@ async fn own(
 /// A provider's new state of a known item (see `intake`): `answered` confirms our answer in
 /// review when the provider shows its text, else answers the item elsewhere (the shown answer
 /// recorded as a system message); `rejected` refuses our answer in review (ledger
-/// `inbox.public.answer_rejected`); `expired`, `removed` and `reported` as named. A state the
-/// item cannot take changes nothing. An unknown question is `deferred` (its `open` state comes
-/// first); an unknown comment is consumed.
+/// `inbox.public.answer_rejected`); `expired` and `removed` as named. A state the item cannot
+/// take changes nothing. An unknown comment is consumed.
 async fn status(
     deps: &Deps,
     ctx: &Ctx,
@@ -835,10 +825,7 @@ async fn status(
         None => None,
     };
     let Some(item) = item else {
-        return Ok(match env.kind {
-            PublicKind::Question => "deferred",
-            PublicKind::Comment => "consumed",
-        });
+        return Ok("consumed");
     };
     let shown = env
         .answer
@@ -897,7 +884,6 @@ async fn status(
         }
         EnvelopeStatus::Expired => jt_inbox::public::apply(&item, ItemEvent::Expired, ctx.now),
         EnvelopeStatus::Removed => jt_inbox::public::apply(&item, ItemEvent::Removed, ctx.now),
-        EnvelopeStatus::Reported => jt_inbox::public::apply(&item, ItemEvent::Reported, ctx.now),
         // In the platform's review: our receipt already made it pending.
         EnvelopeStatus::Pending | EnvelopeStatus::Open | EnvelopeStatus::Edited => {
             return Ok("consumed");
@@ -1013,7 +999,7 @@ pub(crate) async fn reply_fence(
     count_cap: bool,
     except: Option<uuid::Uuid>,
 ) -> Result<Fenced, AppError> {
-    // 2. A Meta surface without the comment grant (a marketplace's always holds).
+    // 2. A Meta surface without the comment grant.
     if !comments_enabled(deps.apps.as_ref(), cap) {
         return Err(refusal(PublicRefusal::CommentsNotEnabled));
     }
@@ -1038,7 +1024,7 @@ pub(crate) async fn reply_fence(
     if in_flight.iter().any(|state| by_agent || state != "unknown") {
         return Err(refusal("reply_in_flight"));
     }
-    // 5. The text: bounds, the person's own contact data, a marketplace's contact data.
+    // 5. The text: bounds, the person's own contact data.
     if let Some(refused) = text_refusal(r, conversation, channel, visibility, text).await? {
         return Err(refusal(refused));
     }

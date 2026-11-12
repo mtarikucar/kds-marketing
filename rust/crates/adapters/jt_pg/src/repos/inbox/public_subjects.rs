@@ -1,4 +1,4 @@
-//! Public subjects (0019): the posts and products public items are about.
+//! Public subjects (0019): the posts public items are about.
 
 use super::{map_sqlx, reference, same_workspace};
 use crate::uow::PgTenantRepos;

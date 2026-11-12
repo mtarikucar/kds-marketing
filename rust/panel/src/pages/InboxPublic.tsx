@@ -8,7 +8,6 @@ import type {
   InboxMessage,
   PublicContext,
   PublicItem,
-  ReportReason,
   Visibility,
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
@@ -83,7 +82,6 @@ function ItemActions({
   const manage = can(session.data, 'inbox.manage');
   const hide = useInboxMutation(() => api.hideItem(item.id, item.moderation === 'visible'));
   const handled = useInboxMutation((reason: HandledReason) => api.markHandled([item.id], reason));
-  const report = useInboxMutation((reason: ReportReason) => api.reportItem(item.id, reason));
   const [deleting, setDeleting] = useState(false);
   const [phrase, setPhrase] = useState('');
   const remove = useInboxMutation(() => api.deleteItem(item.id), () => setDeleting(false));
@@ -111,11 +109,6 @@ function ItemActions({
           {t('inbox.public.actions.handled')}
         </Button>
       )}
-      {context.rules.report && item.moderation === 'visible' && (
-        <Button size="sm" variant="ghost" loading={report.isPending} onClick={() => report.mutate('spam')}>
-          {t('inbox.public.actions.report')}
-        </Button>
-      )}
       {context.rules.delete && manage && (
         <Button
           size="sm"
@@ -130,7 +123,7 @@ function ItemActions({
           {t('inbox.public.actions.delete')}
         </Button>
       )}
-      <div className="basis-full empty:hidden"><ErrorCallout error={hide.error ?? handled.error ?? report.error} /></div>
+      <div className="basis-full empty:hidden"><ErrorCallout error={hide.error ?? handled.error} /></div>
       <Dialog open={deleting} onOpenChange={(open) => !remove.isPending && setDeleting(open)}>
         <DialogContent dismissible={!remove.isPending}>
           <DialogHeader className="pr-7">
@@ -323,7 +316,6 @@ function Composer({
           </span>
         </div>
       )}
-      {context.rules.marketplace && <Callout tone="info">{t('inbox.public.marketplaceNote')}</Callout>}
       {context.approval_required && <Callout tone="info">{t('inbox.public.approvalNote')}</Callout>}
       <label className="flex flex-col gap-2 text-sm font-medium">
         {t('inbox.public.composer.label')}
@@ -344,7 +336,7 @@ function Composer({
 }
 
 /**
- * A comment or question conversation (spec §9): each item with its post or product, its thread
+ * A comment conversation (spec §9): each item with its post, its thread
  * and its state, its actions, the held drafts waiting for approval, and the composer.
  */
 export function InboxPublic({

@@ -1136,7 +1136,6 @@
       "community": "Topluluk",
       "ads": "Reklam",
       "calendar": "Takvim",
-      "marketplace": "Pazar yerleri",
       "device": "Cihazlar",
       "agent_connection": "Ajan bağlantıları",
       "computer_access": "Bilgisayar erişimi",
@@ -1171,8 +1170,6 @@
       "x_ads": "X reklamları",
       "google_calendar": "Google Takvim",
       "outlook_calendar": "Outlook takvimi",
-      "trendyol": "Trendyol mağazası",
-      "hepsiburada": "Hepsiburada mağazası",
       "phone": "Telefon",
       "computer": "Bilgisayar",
       "printer": "Yazıcı",
@@ -1545,7 +1542,7 @@
         "tools": {
           "label": "İş araçları",
           "title": "Ekibinizin kullandığı kaynakları düzenleyin.",
-          "description": "Takvim, pazar yeri, ajan ve diğer iş araçlarını sınıflandırın. Entegrasyon kurulumu ve izinler kaynağa göre ayrıca tamamlanır."
+          "description": "Takvim, ajan ve diğer iş araçlarını sınıflandırın. Entegrasyon kurulumu ve izinler kaynağa göre ayrıca tamamlanır."
         }
       },
       "addForPurpose": "Bu amaç için bağlantı ekle",
@@ -2032,7 +2029,6 @@
       "surface": {
         "private": "DM",
         "comment": "Yorum",
-        "question": "Soru",
         "relay": "Amazon"
       },
       "owed": "{{count}} bekleyen",
@@ -2047,10 +2043,9 @@
       "approvals": "Onay bekleyenler",
       "approvalFor": "Onay bekleyen yanıt",
       "noApprovals": "Onay bekleyen yanıt yok.",
-      "items": "Yorumlar ve sorular",
+      "items": "Yorumlar",
       "subject": {
-        "post": "Gönderi",
-        "product": "Ürün"
+        "post": "Gönderi"
       },
       "author": {
         "us": "Biz",
@@ -2069,15 +2064,13 @@
       "moderation": {
         "hidden": "Gizli",
         "deleted": "Silindi",
-        "removed": "Kaldırıldı",
-        "reported": "Bildirildi"
+        "removed": "Kaldırıldı"
       },
       "actions": {
         "reply": "Yanıtla",
         "hide": "Gizle",
         "unhide": "Göster",
         "handled": "Yanıt gerekmiyor",
-        "report": "Bildir",
         "delete": "Sil"
       },
       "delete": {
@@ -2105,9 +2098,8 @@
         "label": "Yanıtınız",
         "count": "{{count}} / {{max}}",
         "send": "Yanıtı gönder",
-        "noOwed": "Yanıt bekleyen yorum ya da soru yok."
+        "noOwed": "Yanıt bekleyen yorum yok."
       },
-      "marketplaceNote": "İletişim bilgisi ve bağlantı yazmayın; pazaryeri yanıtı yayından önce inceleyebilir.",
       "approvalNote": "Bu hesapta ajanın yanıtları sizin onayınızı bekler."
     },
     "noTasks": "Henüz görev yok. Sıradaki takip işini aşağıdan ekleyin.",

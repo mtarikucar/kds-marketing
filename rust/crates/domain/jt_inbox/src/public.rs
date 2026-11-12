@@ -1,7 +1,7 @@
-//! Public items: one comment on a post, or one customer question on a marketplace product, the
-//! unit of work of a public conversation (spec 2026-10-30-inbox-comments-marketplace-design.md
-//! §3.3–§3.6). A conversation stays one person on one capability; each of their comments (or
-//! questions) is an item with its own reply target, thread, window, deadline and answer state.
+//! Public items: one comment on a post, the unit of work of a public conversation (spec
+//! 2026-10-30-inbox-comments-marketplace-design.md §3.3–§3.6). A conversation stays one person on
+//! one capability; each of their comments is an item with its own reply target, thread, window,
+//! deadline and answer state.
 //!
 //! Here, pure: the rules per surface ([`rules`]), when a private reply may be sent
 //! ([`private_reply_until`]), the reply fence over an item ([`reply_allowed`]) and over a text
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
-use crate::text::{has_email, has_handle, has_link, has_phone_number, normalised, repeats_contact};
+use crate::text::{normalised, repeats_contact};
 use crate::{
     Channel, ConvState, ConversationId, EventSource, MessageId, PublicItemId, PublicSubjectId,
     epoch,
@@ -29,8 +29,6 @@ use crate::{
 pub enum PublicKind {
     /// A comment on a post (Instagram, Facebook).
     Comment,
-    /// A customer question on a product (Trendyol, Hepsiburada).
-    Question,
 }
 
 /// Where an item's answer stands. Stored as JSON tagged by `state`; migration
@@ -40,7 +38,7 @@ pub enum PublicKind {
 pub enum AnswerState {
     /// Owed an answer.
     Awaiting,
-    /// Our answer is in the platform's review before it is published (Trendyol).
+    /// Our answer is in the platform's review before it is published.
     Pending {
         /// Our outbound answer.
         message_id: MessageId,
@@ -123,8 +121,6 @@ pub enum Moderation {
     Deleted,
     /// Removed by its author or by the platform.
     Removed,
-    /// Reported by us to the marketplace.
-    Reported,
 }
 
 impl Moderation {
@@ -135,7 +131,6 @@ impl Moderation {
             Moderation::Hidden => "hidden",
             Moderation::Deleted => "deleted",
             Moderation::Removed => "removed",
-            Moderation::Reported => "reported",
         }
     }
 
@@ -146,7 +141,6 @@ impl Moderation {
             Moderation::Hidden,
             Moderation::Deleted,
             Moderation::Removed,
-            Moderation::Reported,
         ]
         .into_iter()
         .find(|m| m.key() == key)
@@ -184,8 +178,6 @@ pub enum Visibility {
 pub enum SubjectKind {
     /// A post (Instagram media, a Facebook Page post).
     Post,
-    /// A marketplace product.
-    Product,
 }
 
 /// The longest external id of an item or a subject, in characters (0019's checks).
@@ -195,7 +187,7 @@ pub const MAX_EXTERNAL_ID_CHARS: usize = 512;
 /// platform refused it (`Rejected`); after that only a human answers.
 pub const MAX_AGENT_ANSWERS: u8 = 2;
 
-/// One comment or one question (spec §3.3).
+/// One comment (spec §3.3).
 ///
 /// Stored, so reading is tolerant: an unknown field is ignored and a missing field reads as the
 /// default named on it, except the identity and relationship fields and the answer, the item's
@@ -206,18 +198,18 @@ pub struct PublicItem {
     pub id: PublicItemId,
     /// The tenant that owns the item.
     pub workspace_id: WorkspaceId,
-    /// The capability whose post or product it is on; its conversation's and its subject's.
+    /// The capability whose post it is on; its conversation's and its subject's.
     pub capability_id: CapabilityId,
     /// The author's conversation on that capability.
     pub conversation_id: ConversationId,
     /// The inbound message: the latest revision after an edit.
     pub message_id: MessageId,
-    /// The post or product, once known; missing reads as `None`.
+    /// The post, once known; missing reads as `None`.
     #[serde(default)]
     pub subject_id: Option<PublicSubjectId>,
-    /// A comment or a question.
+    /// What it is.
     pub kind: PublicKind,
-    /// The provider's comment or question id: the reply target.
+    /// The provider's comment id: the reply target.
     pub external_id: String,
     /// The comment it answers; `None` at the top level. Missing reads as `None`.
     #[serde(default)]
@@ -278,14 +270,14 @@ impl PublicItem {
     }
 }
 
-/// The longest subject title kept, in characters: a caption excerpt or a product name.
+/// The longest subject title kept, in characters: a caption excerpt.
 pub const MAX_SUBJECT_TITLE_CHARS: usize = 280;
 /// The longest subject permalink kept, in characters (0019's check).
 pub const MAX_SUBJECT_URL_CHARS: usize = 2_048;
 /// The longest subject thumbnail URL kept, in characters (0019's check).
 pub const MAX_SUBJECT_IMAGE_URL_CHARS: usize = 4_096;
 
-/// The post or product items are about, unique per capability and external id (spec §3.3).
+/// The post items are about, unique per capability and external id (spec §3.3).
 ///
 /// Stored, so reading is tolerant: an unknown field is ignored and a missing field reads as the
 /// default named on it, except the identity fields.
@@ -295,14 +287,14 @@ pub struct PublicSubject {
     pub id: PublicSubjectId,
     /// The tenant that owns it.
     pub workspace_id: WorkspaceId,
-    /// The capability whose post or product it is.
+    /// The capability whose post it is.
     pub capability_id: CapabilityId,
-    /// A post or a product.
+    /// What it is.
     pub kind: SubjectKind,
-    /// The provider's post (media) or product id, at most [`MAX_EXTERNAL_ID_CHARS`] characters.
+    /// The provider's post (media) id, at most [`MAX_EXTERNAL_ID_CHARS`] characters.
     pub external_id: String,
-    /// A caption excerpt or the product's name, at most [`MAX_SUBJECT_TITLE_CHARS`]
-    /// characters; missing reads as empty.
+    /// A caption excerpt, at most [`MAX_SUBJECT_TITLE_CHARS`] characters; missing reads as
+    /// empty.
     #[serde(default)]
     pub title: String,
     /// Its permalink, at most [`MAX_SUBJECT_URL_CHARS`] characters; missing reads as `None`.
@@ -312,7 +304,7 @@ pub struct PublicSubject {
     /// [`MAX_SUBJECT_IMAGE_URL_CHARS`] characters; missing reads as `None`.
     #[serde(default)]
     pub image_url: Option<String>,
-    /// Further provider facts (media product type, barcode, ...), an object; missing reads as `{}`.
+    /// Further provider facts (media product type, ...), an object; missing reads as `{}`.
     #[serde(default = "empty_object")]
     pub facts: Value,
     /// The Studio publication that made the post, when one did; missing reads as `None`.
@@ -363,10 +355,6 @@ pub struct PublicRules {
     pub hide: bool,
     /// Whether an item can be deleted.
     pub delete: bool,
-    /// Whether an item can be reported.
-    pub report: bool,
-    /// Whether it is a marketplace (no link or contact data in an answer).
-    pub marketplace: bool,
 }
 
 /// The longest Instagram comment reply. VERIFY V-M8 (spec §12): re-read Meta's reference before
@@ -379,20 +367,6 @@ pub const FACEBOOK_COMMENT_MAX: usize = 8_000;
 /// The longest Facebook private reply: a Messenger text, as the Meta adapter bounds it
 /// (`MAX_MESSENGER_TEXT` in `jt_meta::messaging`).
 pub const FACEBOOK_PRIVATE_MAX: usize = 2_000;
-/// A Trendyol answer's bounds, as documented for answering a question
-/// (<https://developers.trendyol.com/reference/answerquestion.md>).
-pub const TRENDYOL_ANSWER: TextBounds = TextBounds {
-    min: 10,
-    max: 2_000,
-};
-/// A Hepsiburada answer's bounds: `Answer` is required and at most 2,000 characters
-/// (`answerIssue` in the `saticiya-sor-entegrasyonu` v1.0 OpenAPI,
-/// <https://developers.hepsiburada.com/api/v1/public/docs/hepsiburada/saticiya-sor-entegrasyonu/v1.0/openapi>,
-/// read by hand for task H0 on 2026-10-30).
-pub const HEPSIBURADA_ANSWER: TextBounds = TextBounds { min: 1, max: 2_000 };
-/// Hepsiburada publishes an answer without a review: its questions have no in-review status (the
-/// same document's statuses are `WaitingForAnswer`, `Answered`, `Rejected` and `AutoClosed`).
-pub const HEPSIBURADA_MODERATED: bool = false;
 /// How long after a comment one private reply may be sent. VERIFY V-M8 (spec §12).
 pub const PRIVATE_REPLY_WINDOW: Duration = Duration::days(7);
 /// How long after a live video's comment a private reply is still tried: Meta takes one only
@@ -416,34 +390,10 @@ pub fn rules(channel: Channel) -> Option<PublicRules> {
         moderated: false,
         hide: true,
         delete: true,
-        report: false,
-        marketplace: false,
     };
     Some(match channel {
         Channel::InstagramComment => comment(INSTAGRAM_COMMENT_MAX, INSTAGRAM_PRIVATE_MAX),
         Channel::FacebookComment => comment(FACEBOOK_COMMENT_MAX, FACEBOOK_PRIVATE_MAX),
-        // Whether a Trendyol question can be reported is VERIFY V-T5 (spec §12): not until then.
-        Channel::TrendyolQuestion => PublicRules {
-            public: TRENDYOL_ANSWER,
-            private: None,
-            one_answer: true,
-            moderated: true,
-            hide: false,
-            delete: false,
-            report: false,
-            marketplace: true,
-        },
-        // A question is reported with `rejectIssue` (task H0).
-        Channel::HepsiburadaQuestion => PublicRules {
-            public: HEPSIBURADA_ANSWER,
-            private: None,
-            one_answer: true,
-            moderated: HEPSIBURADA_MODERATED,
-            hide: false,
-            delete: false,
-            report: true,
-            marketplace: true,
-        },
         Channel::WhatsApp
         | Channel::InstagramDm
         | Channel::Messenger
@@ -520,9 +470,6 @@ pub enum PublicRefusal {
     /// A public reply repeats the person's own phone number or email address.
     #[error("contact_data_in_public_reply")]
     ContactDataInPublicReply,
-    /// A marketplace answer holds a link, an email address, a handle or a phone number.
-    #[error("contact_data_in_marketplace_answer")]
-    ContactDataInMarketplaceAnswer,
     /// Commercial intent on a public surface.
     #[error("commercial_on_public_surface")]
     CommercialOnPublicSurface,
@@ -594,10 +541,9 @@ pub fn reply_allowed(
 /// Whether `text` may be sent as a reply of `visibility` under `rules` (spec §3.6 rule 5):
 /// within the surface's bounds (characters; the minimum not counting leading and trailing
 /// whitespace); a public reply never repeats one of `person_contacts` (the person's own
-/// normalised email addresses and E.164 phone numbers); a marketplace answer holds no link (with
-/// or without a scheme), email address, handle or Turkish phone number at all. The contact checks
-/// read the text normalised (spelled-out `at`/`dot`/`nokta`, digit words, keycap digits, Unicode
-/// spaces and dashes). A private reply is checked for its bounds only.
+/// normalised email addresses and E.164 phone numbers). The contact check reads the text
+/// normalised (spelled-out `at`/`dot`/`nokta`, digit words, keycap digits, Unicode spaces and
+/// dashes). A private reply is checked for its bounds only.
 pub fn check_text(
     rules: &PublicRules,
     visibility: Visibility,
@@ -631,11 +577,6 @@ pub fn check_text(
         .any(|contact| repeats_contact(&norm, contact))
     {
         return Err(PublicRefusal::ContactDataInPublicReply);
-    }
-    if rules.marketplace
-        && (has_link(&norm) || has_email(&norm) || has_handle(&norm) || has_phone_number(&norm))
-    {
-        return Err(PublicRefusal::ContactDataInMarketplaceAnswer);
     }
     Ok(())
 }
@@ -679,8 +620,6 @@ pub enum ItemEvent {
     Deleted,
     /// Removed by its author or the platform.
     Removed,
-    /// Reported by us.
-    Reported,
     /// Our private reply was received by the platform.
     PrivateReplySent {
         /// Our outbound private message.
@@ -702,7 +641,6 @@ impl ItemEvent {
             ItemEvent::Unhidden => "unhidden",
             ItemEvent::Deleted => "deleted",
             ItemEvent::Removed => "removed",
-            ItemEvent::Reported => "reported",
             ItemEvent::PrivateReplySent { .. } => "private_reply_sent",
         }
     }
@@ -833,10 +771,6 @@ pub fn apply(
         ItemEvent::Removed => {
             moderation_from(&[Moderation::Visible, Moderation::Hidden])?;
             next.moderation = Moderation::Removed;
-        }
-        ItemEvent::Reported => {
-            moderation_from(&[Moderation::Visible])?;
-            next.moderation = Moderation::Reported;
         }
         ItemEvent::PrivateReplySent { message_id } => {
             next.private_reply_message_id = item.private_reply_message_id.or(Some(*message_id));

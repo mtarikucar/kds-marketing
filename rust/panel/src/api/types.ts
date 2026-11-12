@@ -476,7 +476,6 @@ export const KIND_GROUPS = [
   'community',
   'ads',
   'calendar',
-  'marketplace',
   'device',
   'agent_connection',
   'computer_access',
@@ -514,8 +513,6 @@ export const KINDS = [
   { group: 'ads', key: 'x_ads' },
   { group: 'calendar', key: 'google_calendar' },
   { group: 'calendar', key: 'outlook_calendar' },
-  { group: 'marketplace', key: 'trendyol' },
-  { group: 'marketplace', key: 'hepsiburada' },
   { group: 'device', key: 'phone' },
   { group: 'device', key: 'computer' },
   { group: 'device', key: 'printer' },
@@ -990,7 +987,7 @@ export interface ConnectorHealth {
   token_expires_at: Rfc3339 | null;
   reconnect_required: boolean;
   /**
-   * Whether it takes its comments or questions (`jt_app::usecases::inbox::public::CommentStatus`):
+   * Whether it takes its comments (`jt_app::usecases::inbox::public::CommentStatus`):
    * `off` until Meta approved them, `reconnect` when this account's grant lacks them; `null` for a
    * kind without comments. Absent from a server older than it.
    */
@@ -1023,7 +1020,7 @@ export interface InboxPerson {
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }
-/** Where a conversation happens: a direct one, comments or questions in public, or mail a marketplace relays. */
+/** Where a conversation happens: a direct one, comments in public, or buyer mail Amazon relays. */
 export type InboxSurface = 'private' | 'public' | 'relay';
 export interface InboxConversationRow {
   id: Uuid;
@@ -1065,15 +1062,14 @@ export interface InboxMessage {
   at: Rfc3339;
   /** For a failed or uncertain outbound message, the recorded `kind: provider reason`. */
   failure_reason?: string | null;
-  /** On a public conversation: the comment or question the message is, or our reply answers. */
+  /** On a public conversation: the comment the message is, or our reply answers. */
   item?: { item_id: Uuid; kind: PublicKind; answer_state: PublicAnswerKey; visibility: Visibility | null };
 }
-export type PublicKind = 'comment' | 'question';
+export type PublicKind = 'comment';
 export type Visibility = 'public' | 'private';
 export type PublicAnswerKey = 'awaiting' | 'pending' | 'answered' | 'rejected' | 'handled' | 'expired';
-export type PublicModeration = 'visible' | 'hidden' | 'deleted' | 'removed' | 'reported';
+export type PublicModeration = 'visible' | 'hidden' | 'deleted' | 'removed';
 export type HandledReason = 'no_reply_needed' | 'spam' | 'duplicate' | 'answered_elsewhere';
-export type ReportReason = 'spam' | 'offensive' | 'personal_data' | 'irrelevant' | 'other';
 export type PublicAnswer =
   | { state: 'awaiting' }
   | { state: 'pending'; message_id: Uuid }
@@ -1081,7 +1077,7 @@ export type PublicAnswer =
   | { state: 'rejected'; reason: string; message_id: Uuid | null; at: Rfc3339 }
   | { state: 'handled'; by: unknown; reason: HandledReason; at: Rfc3339 }
   | { state: 'expired'; at: Rfc3339 };
-/** One comment or question of a public conversation: ids, states and times only (its text is its message's). */
+/** One comment of a public conversation: ids, states and times only (its text is its message's). */
 export interface PublicItem {
   id: Uuid;
   workspace_id: Uuid;
@@ -1105,10 +1101,10 @@ export interface PublicItem {
   checked_at: Rfc3339 | null;
   updated_at: Rfc3339;
 }
-/** The post or product an item is on. */
+/** The post an item is on. */
 export interface PublicSubject {
   id: Uuid;
-  kind: 'post' | 'product';
+  kind: 'post';
   external_id: string;
   title: string;
   url: string | null;
@@ -1123,8 +1119,6 @@ export interface PublicRules {
   moderated: boolean;
   hide: boolean;
   delete: boolean;
-  report: boolean;
-  marketplace: boolean;
 }
 export interface PublicThreadEntry {
   author: 'us' | 'them' | 'other';
@@ -1132,7 +1126,7 @@ export interface PublicThreadEntry {
   at: Rfc3339;
   external_id: string | null;
 }
-/** What `inbox.context` adds for a comment or question conversation. */
+/** What `inbox.context` adds for a comment conversation. */
 export interface PublicContext {
   channel: string;
   rules: PublicRules;
@@ -1258,7 +1252,7 @@ export interface InboxContext {
   recent_conversations: { conversation: InboxConversationRow; messages: InboxMessage[] }[];
   strategy_guidance: { summary: Identity; segments: Segment[]; hypotheses: Hypothesis[] } | null;
   prohibitions: string[];
-  /** For a comment or question conversation only. */
+  /** For a comment conversation only. */
   public?: PublicContext;
 }
 export interface InboxPersonOut {

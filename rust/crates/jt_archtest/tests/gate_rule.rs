@@ -80,12 +80,11 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.appointments.book",
     "inbox.appointments.cancel",
     "inbox.appointments.held",
-    // Comments and marketplace questions: moderating, marking handled, reporting, and approving
-    // or discarding a held answer are answering customers too.
+    // Comments: moderating, marking handled, and approving or discarding a held answer are
+    // answering customers too.
     "inbox.public.hide",
     "inbox.public.delete",
     "inbox.public.mark_handled",
-    "inbox.public.report",
     "inbox.public.approve",
     "inbox.public.discard",
 ];
@@ -367,7 +366,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 49);
+    assert_eq!(rows.len(), 48);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

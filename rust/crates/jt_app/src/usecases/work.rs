@@ -239,7 +239,7 @@ pub enum WorkKind {
     MergeSuggested {
         merge_id: jt_inbox::MergeId,
     },
-    /// An owed comment or question of a visible conversation is due within
+    /// An owed comment of a visible conversation is due within
     /// [`ANSWER_DEADLINE_WINDOW`] (spec §3.11): the soonest first.
     AnswerDeadline {
         conversation_id: jt_inbox::ConversationId,
