@@ -1521,7 +1521,8 @@ gerçek kampanya sahibin kendi hesabında, küçük bütçeyle ve o anki onayıy
 tamamı ve ilk gerçek çalıştırmanın göstereceği noktalar `jt_x`'in crate belgesindedir; özeti:
 
 - **Toplam bütçe kesin sınır değildir (önemli).** X, kampanyanın toplam bütçesinin hiç aşılmayacağını
-  söylemiyor (belgeleri "fazla harcama için kredi"den söz ediyor). Bu yüzden X'te kuralların
+  söylemiyor (belgeleri fazla harcamadan yalnızca bitiş saatinden sonra gösterilen reklamlar için söz
+  ediyor ve onu iade ettiğini söylüyor). Bu yüzden X'te kuralların
   `hard_budget_cap` alanı `false`'tur ve Jeeta çalışan bir X kampanyasını saatte bir değil **15
   dakikada bir** okur (`watch_minutes`); bütçe dolduğu anda kampanyayı kendisi durdurur. İki okuma
   arasında bütçeden biraz fazlası harcanabilir; X'in bildirdiği harcamanın tamamı, bütçenin üstündeki

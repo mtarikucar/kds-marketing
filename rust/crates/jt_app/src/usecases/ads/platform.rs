@@ -239,8 +239,10 @@ const LINKEDIN: PlatformRules = PlatformRules {
 /// a call to action (<https://business-api.tiktok.com/portal/docs?id=1739953377508354>,
 /// <https://business-api.tiktok.com/portal/docs?id=1766217791987713>, read 2026-11-11); no
 /// headline and no description. The audience is the plan's countries, everyone of 18 and over.
-/// A lifetime budget is never exceeded (TikTok's help: "will never exceed the budget you set"),
-/// and TikTok's least budgets are the ad account's own limits (`AdAccountLimits`).
+/// A lifetime budget is not exceeded (TikTok's help page "About Budget",
+/// <https://ads.tiktok.com/help/article/budget>, read 2026-11-12: "it won't exceed the total
+/// lifetime budget by the end of the campaign"), and TikTok's least budgets are the ad account's
+/// own limits (`AdAccountLimits`).
 const TIKTOK: PlatformRules = PlatformRules {
     platform: AdsPlatform::Tiktok,
     account_kind: "tiktok_ads",

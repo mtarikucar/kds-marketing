@@ -30,7 +30,7 @@ harcamayacağını belgesinde söyleyip söylemediğidir.
 | | Google | LinkedIn | TikTok | X |
 |---|---|---|---|---|
 | İlk sürümde kurulan | Arama kampanyası, metin reklamı (görsel yok) | Sponsorlu içerik, tek görselli | TikTok yerleşiminde tek görselli kaydırmalı reklam (müzik zorunlu) | Görselli web sitesi kartı taşıyan tanıtılan gönderi |
-| Kesin sınır | Var: "you will never be charged more than your total budget" | Var: "you spend no more than the full budget for the lifetime of the campaign" | Var (yardım sayfası; arama ile): "will never exceed the budget you set" | **Belgede yok**: analiz sayfası "credits for overspend" diyor |
+| Kesin sınır | Var: "you will never be charged more than your total budget" | Var: "you spend no more than the full budget for the lifetime of the campaign" | Var (yardım sayfası, 2026-11-12'de doğrudan okundu): "it won't exceed the total lifetime budget by the end of the campaign"; "Once your ad group reaches its allocated budget, ad delivery will pause automatically." | **Belgede yok**: toplam bütçenin aşılmayacağı yazmıyor. Analiz sayfası "credits for overspend"den yalnızca bitiş saatinden sonra gösterilen reklamlar için söz ediyor |
 | En kısa süre, en düşük bütçe | 3 gün; en çok 90 gün. Alt bütçe belgede yok | En düşük ömür boyu bütçe süreye göre değişir ve LinkedIn onu yalnızca reddederken söyler (belgedeki hata örneği: "cannot be lower than 100.00"); kitle en az 300 kişi (B86) | Kampanya en az 500 TL; reklam grubu en az 200 TL × gün | Belgede yok |
 | Reklamın sahibi görünen kimlik | Yok (reklam hesabı) | Reklam hesabının kendi şirket Sayfası (B85) | Müşterinin gerçek TikTok hesabı, reklam hesabına bağlı olmalı | X hesabı |
 | Eylem düğmesi | Yok | Var | Var | Yok (görselli web sitesi kartında) |
@@ -223,7 +223,8 @@ Hepsi 2026-11-11'de okundu.
   1739499616346114 reklam grubu, 1739953377508354 reklam, 1766217791987713 kaydırmalı reklam,
   1848048566169730 kimlik, 1739381246298114 bütçe, 1737585839634433 alt sınırlar,
   1740302848100353 rapor, 1853452461203458 elle kurulan kampanyalar). Kesin sınır cümlesi
-  ads.tiktok.com yardım sayfasından, arama ile.
+  `ads.tiktok.com/help/article/budget` yardım sayfasından ("About Budget", Temmuz 2026
+  güncellemesi), 2026-11-12'de doğrudan okundu.
 - **X:** `github.com/xdevplatform/docs` (commit `fe4cdaf4`): `x-ads-api/campaign-management.mdx`,
   `x-ads-api/campaign-management/reference.mdx`, `x-ads-api/creatives/reference.mdx`,
   `x-ads-api/analytics.mdx`, `x-ads-api/fundamentals/`,
