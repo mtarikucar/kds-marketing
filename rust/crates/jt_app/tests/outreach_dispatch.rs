@@ -507,6 +507,54 @@ async fn dispatch_respects_daily_hourly_and_pacing_budgets() {
     assert_eq!(sent_mail(&o.mail).len(), 3, "the next local day");
 }
 
+/// The mailbox's daily cap counts in the mailbox's own day (its hours' time zone, else the
+/// workspace's), whatever the campaigns' windows say (D106): two campaigns whose windows' days
+/// turn at other hours never send more than the cap in one mailbox day.
+#[tokio::test]
+async fn two_campaigns_in_other_time_zones_share_one_mailbox_day() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    {
+        let mut r = w.uow.tenant(w.ws).await.unwrap();
+        let mut cap = r.capabilities().find(o.mailbox).await.unwrap().unwrap();
+        cap.policy.daily_ops_cap = Some(2);
+        r.capabilities().update(cap).await.unwrap();
+        r.commit().await.unwrap();
+    }
+    let t = hello(w).await;
+    // FIXED_NOW is 09:00 UTC: 23:00 in Kiritimati (UTC+14), 22:00 the day before in Pago Pago
+    // (UTC-11), 12:00 in Istanbul, the workspace's zone.
+    for (tz, names) in [
+        ("Pacific/Kiritimati", ["Ada", "Bora", "Cem"]),
+        ("Pacific/Pago_Pago", ["Deniz", "Ece", "Fatma"]),
+    ] {
+        let mut people = Vec::new();
+        for name in names {
+            people.push(consented_as(w, name).await);
+        }
+        let mut d = definition(t, json!({"explicit": people}));
+        d.schedule.window.tz = tz.into();
+        running(&o, d).await;
+    }
+    for _ in 0..6 {
+        o.mail.push_mail(accepted("shared"));
+    }
+    for m in 0..3 {
+        dispatch(w, minutes(m)).await;
+    }
+    assert_eq!(sent_mail(&o.mail).len(), 2, "the cap");
+    // 10:30 UTC is a new day in Kiritimati, 11:30 UTC one in Pago Pago: not in Istanbul.
+    for m in [90, 91, 92, 150, 151, 152] {
+        dispatch(w, minutes(m)).await;
+    }
+    assert_eq!(sent_mail(&o.mail).len(), 2, "still the mailbox's day");
+    // 21:10 UTC is the next day in Istanbul.
+    for m in 0..3 {
+        dispatch(w, minutes(12 * 60 + 10 + m)).await;
+    }
+    assert_eq!(sent_mail(&o.mail).len(), 4, "the mailbox's next day");
+}
+
 #[tokio::test]
 async fn warmup_limits_a_new_mailbox() {
     let o = outreach_world().await;

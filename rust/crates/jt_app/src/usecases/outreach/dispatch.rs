@@ -281,11 +281,15 @@ async fn settle(
 }
 
 /// How many emails the campaign may send in this run: the window, then `jt_outreach::budget`.
+/// The campaign's own daily throttle counts in its window's day; the mailbox's daily cap and its
+/// warm-up in the mailbox's day (its hours' time zone, else `workspace_tz`), which every
+/// campaign sharing the mailbox counts alike (D106).
 async fn allowance(
     r: &mut dyn TenantRepos,
     c: &CampaignRow,
     cap: &Capability,
     policy: &jt_outreach::OutreachPolicy,
+    workspace_tz: &str,
     now: OffsetDateTime,
 ) -> Result<u32, AppError> {
     let window = &c.definition.schedule.window;
@@ -299,12 +303,18 @@ async fn allowance(
         return Ok(0);
     }
     let (day_start, _) = hours::local_day(&window.tz, now)?;
+    let mailbox_tz = cap
+        .policy
+        .active_hours
+        .as_ref()
+        .map_or(workspace_tz, |h| h.tz.as_str());
+    let (mailbox_day_start, _) = hours::local_day(mailbox_tz, now)?;
     let warmup = if policy.warmup.enabled {
         let days = r
             .outreach_sends()
-            .mailbox_send_days(c.mailbox_id, &window.tz, now - WARMUP_LOOKBACK)
+            .mailbox_send_days(c.mailbox_id, mailbox_tz, now - WARMUP_LOOKBACK)
             .await?;
-        let today = hours::local_date(&window.tz, now)?;
+        let today = hours::local_date(mailbox_tz, now)?;
         warmup_cap(&policy.warmup, warmup_day_index(&days, today))
     } else {
         u32::MAX
@@ -313,7 +323,9 @@ async fn allowance(
     let input = BudgetInput {
         mailbox_daily_ops_cap: cap.policy.daily_ops_cap,
         warmup_cap: warmup,
-        mailbox_sent_today: sends.count_mailbox_since(c.mailbox_id, day_start).await?,
+        mailbox_sent_today: sends
+            .count_mailbox_since(c.mailbox_id, mailbox_day_start)
+            .await?,
         per_day: c.definition.throttle.per_day,
         campaign_sent_today: sends.count_campaign_since(c.id, day_start).await?,
         per_hour: c.definition.throttle.per_hour,
@@ -333,7 +345,8 @@ async fn campaign(
     out: &mut Dispatched,
 ) -> Result<(), AppError> {
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let policy = outreach_policy(r.as_mut()).await?;
+    let leads = r.workspace_policy().read().await?.leads;
+    let policy = leads.outreach;
     let cap = r.capabilities().find(c.mailbox_id).await?;
     if !policy.sender_identity_complete() {
         return Ok(());
@@ -345,7 +358,7 @@ async fn campaign(
         }
         return Ok(());
     };
-    let n = allowance(r.as_mut(), c, &cap, &policy, ctx.now).await?;
+    let n = allowance(r.as_mut(), c, &cap, &policy, &leads.timezone, ctx.now).await?;
     if n == 0 {
         return Ok(());
     }
