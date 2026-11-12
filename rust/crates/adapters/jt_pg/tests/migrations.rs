@@ -1831,6 +1831,47 @@ async fn distribution_up_and_down_are_repeatable() {
     }
 }
 
+/// `people.recipient_kind`'s check is added `not valid`, then validated (D107): the column's
+/// add is a catalog change and the check scans `people` without blocking writes; validated
+/// once, every run after is a no-op, and the check holds.
+#[tokio::test]
+async fn distribution_validates_the_recipient_kind_check_apart() {
+    let db = TestDb::new().await;
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0027_distribution.up.sql")).unwrap();
+    let up_sql = up.to_lowercase();
+    let add = up_sql
+        .split_once("add column if not exists recipient_kind")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .map(|(statement, _)| statement)
+        .unwrap();
+    assert!(!add.contains("check"), "the column's add carries no check");
+    assert!(up_sql.contains("not valid"));
+    assert!(up_sql.contains("validate constraint people_recipient_kind_check"));
+    for _ in 0..2 {
+        try_run(&db.pool, &up).await.unwrap();
+        let validated: Vec<bool> = sqlx::query_scalar(
+            "select convalidated from pg_constraint where conname = 'people_recipient_kind_check'",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(validated, [true]);
+    }
+    let (ws, _) = db.seed_workspace("distribution-kind-checked").await;
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let refused = sqlx::query(
+        "insert into people (workspace_id, id, display_name, company, first_touch, created_at, \
+         updated_at, recipient_kind) values ($1, $2, 'Ornek', 'Ornek Kafe', \
+         '{\"source\": \"form\", \"at\": \"2026-11-03T00:00:00Z\"}', now(), now(), 'other')",
+    )
+    .bind(ws.as_uuid())
+    .bind(Uuid::now_v7())
+    .execute(tx.conn())
+    .await;
+    assert!(refused.is_err(), "the check holds");
+}
+
 #[tokio::test]
 async fn distribution_down_keeps_a_recipient_kind_a_person_holds() {
     let db = TestDb::new().await;

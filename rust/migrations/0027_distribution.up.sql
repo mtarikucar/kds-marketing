@@ -4,9 +4,19 @@
 -- the truth for ownership; the log is the decision history, written in the same transaction.
 -- Repeatable: every statement is guarded.
 
--- Unknown until promotion makes the person a business or a person sets it.
-alter table people add column if not exists recipient_kind text not null default 'unknown'
-    check (recipient_kind in ('unknown', 'business', 'individual'));
+-- Unknown until promotion makes the person a business or a person sets it. A constant default
+-- makes the add a catalog change; the check is added `not valid` (no scan under the add's
+-- ACCESS EXCLUSIVE lock), then validated, which scans `people` under a lock that lets writes
+-- through. Validating a valid check again changes nothing.
+alter table people add column if not exists recipient_kind text not null default 'unknown';
+do $$ begin
+    if not exists (select 1 from pg_constraint where conrelid = to_regclass('people')
+                   and conname = 'people_recipient_kind_check') then
+        alter table people add constraint people_recipient_kind_check
+            check (recipient_kind in ('unknown', 'business', 'individual')) not valid;
+    end if;
+end $$;
+alter table people validate constraint people_recipient_kind_check;
 
 -- A member's distribution settings; a member without a row reads as the default profile
 -- (accepting, no limit, no filters, always on shift).
