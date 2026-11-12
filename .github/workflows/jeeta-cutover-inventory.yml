@@ -1,0 +1,30 @@
+name: Jeeta cutover inventory (read-only)
+on:
+  push:
+    branches: [ops/cutover-jeetagrowth]
+    paths: [.github/workflows/jeeta-cutover-inventory.yml, ops/cutover/inventory.py, ops/cutover/inventory-recipient.crt]
+permissions:
+  contents: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-ssh
+        with:
+          ssh-private-key-base64: ${{ secrets.SSH_PRIVATE_KEY_BASE64 }}
+          ssh-known-hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          server-host: '38.242.233.166'
+      - name: Collect encrypted inventory
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes ops/cutover/inventory-recipient.crt root@38.242.233.166:/root/jeeta-inventory.crt
+          ssh -o BatchMode=yes root@38.242.233.166 'python3 -I -' < ops/cutover/inventory.py
+          scp -o BatchMode=yes root@38.242.233.166:/root/jeeta-inventory.p7m .
+          ssh -o BatchMode=yes root@38.242.233.166 'rm -f /root/jeeta-inventory.p7m'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jeeta-cutover-inventory
+          path: jeeta-inventory.p7m
+          retention-days: 1
