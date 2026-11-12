@@ -1706,6 +1706,29 @@ contract, `jobs.rs` (`Job::PurgeRequestKeys` `"purge_request_keys"`, daily, ever
 
 ---
 
+## PR #393 review fixes
+
+- As built (`fe205868`, spec D105): `ErasureRepo::{family, family_identities}` (both adapters; Postgres shares the
+  recursive family query with `scrub`); `erasure::erase` reads the family and every phone/email identity of it,
+  inactive ones included, before the scrub; `blocklist::on_person_erased(deps, ctx, r, person, family, keys)`
+  scrubs each member's promoted prospect (`PersonErased.linked: Vec<ProspectId>`); `outreach::hooks::on_erased`
+  per member. Tests: contract `inbox_merge_contract::erasing_the_survivor_scrubs_the_merged_familys_prospects`
+  (fakes and Postgres), `outreach_hooks::erasing_the_survivor_clears_a_merged_members_personalization`.
+- As built (`013c86b1`, spec D106, D70 amended): `dispatch::allowance` takes the workspace time zone
+  (`leads_policy.timezone`); the mailbox's sent-today count and warm-up days use the mailbox's zone
+  (`active_hours.tz`, else the workspace's), the campaign's `per_day` its window's. Test
+  `outreach_dispatch::two_campaigns_in_other_time_zones_share_one_mailbox_day`.
+- As built (`25e5fe1f`, spec D107): `0027` edited in place: the column without its check, then
+  `people_recipient_kind_check` added `not valid` (guarded) and validated. Test
+  `jt_pg/tests/migrations.rs::distribution_validates_the_recipient_kind_check_apart`.
+- As built (`5314c9b0`, spec D108): `MailFileRepo::erase_event` now touches only rows no message holds; the
+  consumer calls it after every outcome but `deferred` and deletes the returned bytes after commit. Tests
+  `inbox_attachments::a_duplicate_emails_files_are_erased`, the contract
+  `mail_files_contract::erasure_blanks_names_and_answers_the_files_to_delete` (a linked row is left). Not
+  covered: an event abandoned after its deferrals keeps its files until the retention purge.
+
+---
+
 ## Self-review against the spec and the requirements
 
 | Requirement (owner's brief) | Where |
