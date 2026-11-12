@@ -425,17 +425,19 @@ pub async fn erase(
 /// What a person's erasure did to the pool.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PersonErased {
-    /// The prospect promoted into the person, scrubbed (ids kept).
-    pub linked: Option<ProspectId>,
+    /// The prospects promoted into the person or an alias merged into them, scrubbed (ids
+    /// kept).
+    pub linked: Vec<ProspectId>,
     /// The unlinked prospects holding the person's phone or email, deleted.
     pub deleted: Vec<ProspectId>,
 }
 
 /// Runs in `inbox.people.erase`'s transaction, after the inbox lock (it takes the pool lock):
-/// the prospect promoted into the person is scrubbed as a do-not-contact one is (personal
+/// the prospect promoted into each member of the person's `family` (the person and every alias
+/// merged into them, D105) is scrubbed as a do-not-contact one is (personal
 /// fields, evidence, score rows and the create requests that recorded it gone; ids, status and
 /// promotion kept: its lifetime is the person's), and every unlinked live prospect holding one of
-/// the person's `keys` (phone, email) is deleted with the requests that recorded it. Every hard
+/// the family's `keys` (phone, email, inactive identities' too) is deleted with the requests that recorded it. Every hard
 /// key each held is hashed as `erased`, so the business is not collected again (L-06): its
 /// handles, and its phone and email too (a `tr444:` number or an undeliverable address is no
 /// erased identity). One `prospects.erased {via: person}` entry per prospect.
@@ -444,11 +446,15 @@ pub(crate) async fn on_person_erased(
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     person: PersonId,
+    family: &[PersonId],
     keys: &[Key],
 ) -> Result<PersonErased, AppError> {
     r.prospects().lock_pool().await?;
     let mut out = PersonErased::default();
-    if let Some(mut p) = r.prospects().by_person(person).await? {
+    for member in family {
+        let Some(mut p) = r.prospects().by_person(*member).await? else {
+            continue;
+        };
         let held = all_keys(r, &p).await?;
         let expected = p.revision;
         scrub_for_dnc(&mut p);
@@ -469,7 +475,7 @@ pub(crate) async fn on_person_erased(
             json!({ "prospect_id": p.id, "keys": kinds, "via": "person", "person_id": person }),
         )
         .await?;
-        out.linked = Some(p.id);
+        out.linked.push(p.id);
     }
     let hard: Vec<Key> = keys.iter().filter(|k| k.kind.hard()).cloned().collect();
     let holders: BTreeSet<ProspectId> = r
@@ -478,7 +484,7 @@ pub(crate) async fn on_person_erased(
         .await?
         .into_iter()
         .map(|(_, id)| id)
-        .filter(|id| Some(*id) != out.linked)
+        .filter(|id| !out.linked.contains(id))
         .collect();
     for id in holders {
         let Some(p) = r.prospects().lock(id).await? else {

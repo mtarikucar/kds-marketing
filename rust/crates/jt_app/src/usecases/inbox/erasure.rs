@@ -39,19 +39,25 @@ pub async fn erase(
         return Err(AppError::conflict("erase the surviving person"));
     }
     r.conversations().lock_for_person(person).await?;
-    // The pool forgets the business too (spec 2026-10-30-leads-pool-outreach-design.md §3.6):
-    // read the person's phone and email before the scrub removes them.
+    // The pool forgets the business too (spec 2026-10-30-leads-pool-outreach-design.md §3.6,
+    // D105): the prospects promoted into the person or any alias merged into them, and those
+    // holding a phone or email any of them ever had (inactive identities too), read before the
+    // scrub removes them.
+    let family = r.erasure().family(person).await?;
     let contact = contact_keys(r.as_mut(), person).await?;
     crate::usecases::prospects::blocklist::on_person_erased(
         deps,
         ctx,
         r.as_mut(),
         person,
+        &family,
         &contact,
     )
     .await?;
-    // The person's outreach stops, their personalization goes (the rows and ids stay).
-    crate::usecases::outreach::hooks::on_erased(r.as_mut(), ctx, person).await?;
+    // The family's outreach stops, its personalization goes (the rows and ids stay).
+    for member in &family {
+        crate::usecases::outreach::hooks::on_erased(r.as_mut(), ctx, *member).await?;
+    }
     if p.erased_at.is_some() {
         r.erasure().scrub(person).await?;
     } else {
@@ -95,13 +101,14 @@ pub async fn erase(
     Ok(json!({"person_id":person,"erased":true}))
 }
 
-/// The person's active phone and email identities as the pool's keys.
+/// The phone and email identities of the person and their merged aliases, inactive ones
+/// included, as the pool's keys.
 async fn contact_keys(
     r: &mut dyn TenantRepos,
     person: PersonId,
 ) -> Result<Vec<jt_prospects::Key>, AppError> {
-    Ok(r.identities()
-        .list(person)
+    Ok(r.erasure()
+        .family_identities(person)
         .await?
         .into_iter()
         .filter_map(|i| {

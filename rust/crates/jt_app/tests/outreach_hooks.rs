@@ -564,6 +564,83 @@ async fn erasure_stops_and_keeps_ids() {
 }
 
 #[tokio::test]
+async fn erasing_the_survivor_clears_a_merged_members_personalization() {
+    let o = outreach_world().await;
+    let w = &o.w;
+    let ada = consented(w).await;
+    let t = template(
+        w,
+        &w.owner_ctx,
+        "Merhaba",
+        "{{custom.opener|Merhaba}}, tanışalım.",
+    )
+    .await;
+    let c = running(
+        &o,
+        definition_steps(&[(t, 0), (t, 5)], json!({ "explicit": [ada] })),
+    )
+    .await
+    .campaign
+    .id;
+    let e = enrollment_of(w, c, ada);
+    outreach::personalize(
+        &w.deps,
+        &w.owner_ctx,
+        PersonalizeInput {
+            items: vec![PersonalizeItem {
+                enrollment_id: e.id,
+                values: [("opener".to_owned(), "Ada Hanım".to_owned())].into(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    // Ada is merged into a twin; the twin, the survivor, is erased (D105).
+    let twin = person(w, "Ada K.", "ada.k@example.invalid").await;
+    let j = journey_of(w, twin).await;
+    journeys::report(
+        &w.deps,
+        &w.owner_ctx,
+        j.id,
+        report_event("lost", "twin-lost", json!({"reason_key": "fiyat"})),
+    )
+    .await
+    .unwrap();
+    people::add_identity(
+        &w.deps,
+        &w.owner_ctx,
+        twin,
+        serde_json::from_value(json!({"channel": "email", "value": "ada@example.invalid"}))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    let suggestion = merge::list(&w.deps, &w.owner_ctx).await.unwrap().remove(0);
+    merge::apply(
+        &w.deps,
+        &w.owner_ctx,
+        suggestion.id,
+        merge::ApplyInput { keep: twin },
+    )
+    .await
+    .unwrap();
+    erasure::erase(
+        &w.deps,
+        &w.owner_ctx,
+        twin,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    let after = enrollment_of(w, c, ada);
+    assert_eq!(after.id, e.id, "the row and its ids stay");
+    assert!(
+        after.personalization.is_empty(),
+        "the merged member's text goes with the survivor's erasure"
+    );
+}
+
+#[tokio::test]
 async fn merge_stops_source_enrollments() {
     let o = outreach_world().await;
     let w = &o.w;
