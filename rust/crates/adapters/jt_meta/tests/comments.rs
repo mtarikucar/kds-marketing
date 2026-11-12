@@ -7,7 +7,7 @@ mod support;
 
 use jt_app::ports::connectors::{
     ModerationAction, PUBLIC_ITEM_GONE, PublicEnvelope, PublicKind, PublicPoller, PublicSurface,
-    PublicTarget, ReportReason, SubjectKind,
+    PublicTarget, SubjectKind,
 };
 use jt_connector::{ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES};
 use jt_meta::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, MAX_MESSENGER_TEXT};
@@ -299,20 +299,6 @@ async fn delete_uses_delete() {
         .await
         .unwrap();
     assert_eq!(r.mock.requests("DELETE", &path).len(), 1);
-    // Meta takes no reports.
-    let e = r
-        .meta
-        .moderate(
-            &page_cred(),
-            &fb_public(),
-            &target(FB_COMMENT),
-            ModerationAction::Report {
-                reason: ReportReason::Spam,
-            },
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(e.kind(), "permanent");
 }
 
 #[tokio::test]

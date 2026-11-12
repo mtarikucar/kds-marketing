@@ -1,7 +1,6 @@
 //! Moderation of public items (spec 2026-10-30-inbox-comments-marketplace-design.md §3.8, §6.7):
-//! hiding a comment and showing it again ([`hide`]), deleting one ([`delete`]), reporting a
-//! marketplace question ([`report`]) and marking items handled ([`mark_handled`]). Reached as
-//! `inbox.public.*` through `super::public`.
+//! hiding a comment and showing it again ([`hide`]), deleting one ([`delete`]) and marking items
+//! handled ([`mark_handled`]). Reached as `inbox.public.*` through `super::public`.
 //!
 //! A moderation asks its provider, and the provider is called **without a transaction**: the
 //! item and its capability are checked and the credential opened in a first bundle, which is
@@ -31,7 +30,7 @@ use crate::{
     error::AppError,
     ports::{
         TenantRepos,
-        connectors::{ModerationAction, PUBLIC_ITEM_GONE, PublicTarget, ReportReason},
+        connectors::{ModerationAction, PUBLIC_ITEM_GONE, PublicTarget},
     },
     usecases::{
         Deps,
@@ -58,13 +57,6 @@ pub struct DeleteInput {
     pub confirm: bool,
 }
 
-/// Why a question is reported.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReportInput {
-    pub reason: ReportReason,
-}
-
 /// The items to mark handled (1 to [`MAX_HANDLED_BATCH`], repeats counted once) and why.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,7 +81,7 @@ pub struct HandledOut {
 }
 
 /// `inbox.public.hide`: hides comment `id` or shows it again (`inbox.work`; the agent may). A
-/// hidden comment is not owed. Refusals: `hide_unsupported` (a marketplace question),
+/// hidden comment is not owed. Refusals: `hide_unsupported` (a surface that hides nothing),
 /// `comments_not_enabled`, `item_removed`, `human_holds_conversation` (an agent on a conversation
 /// a human holds), `capability_down`; `NOT_FOUND` for an unknown item. Ledger
 /// `inbox.public.moderated {item_id, action: "hide" | "unhide"}`.
@@ -130,27 +122,6 @@ pub async fn delete(
         ));
     }
     moderate(deps, ctx, id, ModerationAction::Delete).await
-}
-
-/// `inbox.public.report`: reports question `id` to its marketplace (`inbox.work`; the agent
-/// may), where the surface reports (`report_unsupported` elsewhere). A reported question is not
-/// owed. Ledger `inbox.public.moderated {item_id, action: "report", reason}`.
-pub async fn report(
-    deps: &Deps,
-    ctx: &Ctx,
-    id: PublicItemId,
-    input: ReportInput,
-) -> Result<ModerationOut, AppError> {
-    ctx.require(Permission::InboxWork)?;
-    moderate(
-        deps,
-        ctx,
-        id,
-        ModerationAction::Report {
-            reason: input.reason,
-        },
-    )
-    .await
 }
 
 /// `inbox.public.mark_handled`: marks owed items handled with `reason` (`inbox.work`; the agent
@@ -253,7 +224,6 @@ fn event_of(action: ModerationAction) -> ItemEvent {
         ModerationAction::Hide => ItemEvent::Hidden,
         ModerationAction::Unhide => ItemEvent::Unhidden,
         ModerationAction::Delete => ItemEvent::Deleted,
-        ModerationAction::Report { .. } => ItemEvent::Reported,
     }
 }
 
@@ -263,9 +233,6 @@ fn ledger_of(id: PublicItemId, action: ModerationAction) -> Value {
         ModerationAction::Hide => json!({"item_id": id, "action": "hide"}),
         ModerationAction::Unhide => json!({"item_id": id, "action": "unhide"}),
         ModerationAction::Delete => json!({"item_id": id, "action": "delete"}),
-        ModerationAction::Report { reason } => {
-            json!({"item_id": id, "action": "report", "reason": reason})
-        }
     }
 }
 
@@ -295,7 +262,6 @@ async fn moderate(
         let (supported, unsupported) = match action {
             ModerationAction::Hide | ModerationAction::Unhide => (rules.hide, "hide_unsupported"),
             ModerationAction::Delete => (rules.delete, "delete_unsupported"),
-            ModerationAction::Report { .. } => (rules.report, "report_unsupported"),
         };
         if !supported {
             return Err(refusal(unsupported));
@@ -303,7 +269,7 @@ async fn moderate(
         if !comments_enabled(deps.apps.as_ref(), &cap) {
             return Err(refusal(PublicRefusal::CommentsNotEnabled));
         }
-        if action == ModerationAction::Delete && !rules.marketplace {
+        if action == ModerationAction::Delete {
             let scopes: Vec<&str> = cap.connector_public["access"]["scopes"]
                 .as_array()
                 .map(|scopes| scopes.iter().filter_map(Value::as_str).collect())

@@ -247,12 +247,10 @@ pub struct ConfirmAssets {
 }
 
 /// Credentials entered by hand, one shape per credential (`kind`): the NetGSM SMS API sub-user
-/// of an `sms_line`, the Netsantral user of a `netgsm_pbx`, a Meta access token pasted for a
+/// of an `sms_line`, the Netsantral user of a `netgsm_pbx`, or a Meta access token pasted for a
 /// Meta kind (a Page token for `facebook_page`, a WhatsApp Cloud token for `whatsapp_cloud`, a
-/// user token otherwise), a Trendyol seller's API key and secret (`trendyol`) or a Hepsiburada
-/// merchant's service key (`hepsiburada`). Mirrors [`Credential`]'s shapes; X has none (it
-/// connects through OAuth only). İYS attaches to an existing SMS line in its separate sealed
-/// slot. A marketplace capability's external id is its seller or merchant id.
+/// user token otherwise). Mirrors [`Credential`]'s shapes; X has none (it connects through OAuth
+/// only). İYS attaches to an existing SMS line in its separate sealed slot.
 ///
 /// Read strictly: an unknown shape or field is refused, and so is a field that is not a string,
 /// without the refusal repeating any value. `Debug` masks the secrets.
@@ -290,15 +288,6 @@ pub enum CredentialInput {
     MetaToken {
         access_token: String,
     },
-    TrendyolSeller {
-        seller_id: String,
-        api_key: String,
-        api_secret: String,
-    },
-    HepsiburadaMerchant {
-        merchant_id: String,
-        service_key: String,
-    },
 }
 
 impl CredentialInput {
@@ -310,8 +299,6 @@ impl CredentialInput {
             CredentialInput::NetgsmIys { .. } => "netgsm_iys",
             CredentialInput::NetgsmPbx { .. } => "netgsm_pbx",
             CredentialInput::MetaToken { .. } => "meta_token",
-            CredentialInput::TrendyolSeller { .. } => "trendyol_seller",
-            CredentialInput::HepsiburadaMerchant { .. } => "hepsiburada_merchant",
         }
     }
 }
@@ -352,17 +339,6 @@ impl fmt::Debug for CredentialInput {
             CredentialInput::MetaToken { .. } => f
                 .debug_struct("MetaToken")
                 .field("access_token", &Masked)
-                .finish(),
-            CredentialInput::TrendyolSeller { seller_id, .. } => f
-                .debug_struct("TrendyolSeller")
-                .field("seller_id", seller_id)
-                .field("api_key", &Masked)
-                .field("api_secret", &Masked)
-                .finish(),
-            CredentialInput::HepsiburadaMerchant { merchant_id, .. } => f
-                .debug_struct("HepsiburadaMerchant")
-                .field("merchant_id", merchant_id)
-                .field("service_key", &Masked)
                 .finish(),
         }
     }
@@ -429,7 +405,7 @@ pub struct ConnectorHealth {
     #[serde(with = "time::serde::rfc3339::option")]
     pub token_expires_at: Option<OffsetDateTime>,
     pub reconnect_required: bool,
-    /// Whether it takes its comments or questions, for a kind that has them (spec §9).
+    /// Whether it takes its comments, for a kind that has them (spec §9).
     pub comments: Option<super::inbox::public::CommentStatus>,
     /// Whether Studio can read its counters with the grant it holds, for a kind Studio publishes
     /// to (spec D29): `reconnect` when the grant lacks the read scope.
@@ -1676,7 +1652,7 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
     }
     not_retired(capability)?;
     match provider_for_kind(&capability.kind_key) {
-        Some(Provider::Netgsm | Provider::Mail | Provider::Trendyol | Provider::Hepsiburada) => {
+        Some(Provider::Netgsm | Provider::Mail) => {
             return Err(AppError::validation(
                 "this capability takes new credentials by hand (connector.set_credentials)",
                 json!({ "reason": "use_set_credentials" }),
@@ -1972,7 +1948,6 @@ async fn credentials_for_new(
     let external_id = external_id
         .map(|e| checked_external_id_of(kind.key, &e))
         .transpose()?;
-    let external_id = bound_account(kind.key, &input, external_id)?;
     let credential = built_credential(kind.key, provider, input, external_id.as_deref())?;
     let connector = adapter(deps, provider)?;
     let hosts = credential_hosts(deps, connector.as_ref(), &credential)?;
@@ -2081,7 +2056,6 @@ async fn credentials_for(
             "a verified capability keeps its credentials until a probe fails",
         ));
     }
-    let external_id = bound_account(kind.key, &input, external_id)?;
     let bound = match (&capability.external_id, external_id) {
         (Some(held), Some(given)) if *held != given => {
             return Err(invalid(
@@ -2273,49 +2247,7 @@ fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
         CredentialInput::MetaToken { access_token } => CredentialInput::MetaToken {
             access_token: checked_field("access_token", &access_token, MAX_SECRET_CHARS, true)?,
         },
-        // Marketplace keys are pasted from the seller panel: trimmed like a pasted token.
-        CredentialInput::TrendyolSeller {
-            seller_id,
-            api_key,
-            api_secret,
-        } => CredentialInput::TrendyolSeller {
-            seller_id: field("seller_id", &seller_id)?,
-            api_key: checked_field("api_key", &api_key, MAX_SECRET_CHARS, true)?,
-            api_secret: checked_field("api_secret", &api_secret, MAX_SECRET_CHARS, true)?,
-        },
-        CredentialInput::HepsiburadaMerchant {
-            merchant_id,
-            service_key,
-        } => CredentialInput::HepsiburadaMerchant {
-            merchant_id: field("merchant_id", &merchant_id)?,
-            service_key: checked_field("service_key", &service_key, MAX_SECRET_CHARS, true)?,
-        },
     })
-}
-
-/// The external id a capability of `kind_key` takes from credential `input` and the `given`
-/// one: a marketplace credential's seller or merchant id is its account (`VALIDATION` naming
-/// `external_id` when another one is given, or when the id is not a valid external id); any
-/// other credential, or one that does not fit the kind ([`built_credential`] refuses it), leaves
-/// `given` as it is.
-fn bound_account(
-    kind_key: &str,
-    input: &CredentialInput,
-    given: Option<String>,
-) -> Result<Option<String>, AppError> {
-    let account = match (kind_key, input) {
-        ("trendyol", CredentialInput::TrendyolSeller { seller_id, .. }) => seller_id,
-        ("hepsiburada", CredentialInput::HepsiburadaMerchant { merchant_id, .. }) => merchant_id,
-        _ => return Ok(given),
-    };
-    let account = checked_external_id_of(kind_key, account)?;
-    match given {
-        Some(given) if given != account => Err(invalid(
-            "external_id",
-            "a marketplace capability's external_id is its seller or merchant id",
-        )),
-        _ => Ok(Some(account)),
-    }
 }
 
 /// One credential field checked (see [`normalised`]); the refusal never repeats the value.
@@ -2431,37 +2363,11 @@ fn built_credential(
             expires_at: None,
             scopes: Vec::new(),
         }),
-        (
-            Provider::Trendyol,
-            "trendyol",
-            CredentialInput::TrendyolSeller {
-                seller_id,
-                api_key,
-                api_secret,
-            },
-        ) => Ok(Credential::TrendyolSeller {
-            seller_id,
-            api_key,
-            api_secret,
-        }),
-        (
-            Provider::Hepsiburada,
-            "hepsiburada",
-            CredentialInput::HepsiburadaMerchant {
-                merchant_id,
-                service_key,
-            },
-        ) => Ok(Credential::HepsiburadaMerchant {
-            merchant_id,
-            service_key,
-        }),
         _ => {
             let expected = match (provider, kind_key) {
                 (Provider::Netgsm, "sms_line") => "netgsm_sms",
                 (Provider::Netgsm, _) => "netgsm_pbx",
                 (Provider::Mail, _) => "mailbox",
-                (Provider::Trendyol, _) => "trendyol_seller",
-                (Provider::Hepsiburada, _) => "hepsiburada_merchant",
                 _ => "meta_token",
             };
             Err(AppError::validation(
@@ -2485,8 +2391,8 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
         {
             format!("invalid credential: {message}")
         } else if message.starts_with("unknown variant") {
-            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_iys, netgsm_pbx, \
-             meta_token, trendyol_seller or hepsiburada_merchant"
+            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_iys, netgsm_pbx or \
+             meta_token"
                 .to_owned()
         } else {
             "invalid credential: it must be an object with a `kind` and string fields".to_owned()

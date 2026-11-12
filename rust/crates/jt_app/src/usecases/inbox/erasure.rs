@@ -311,7 +311,6 @@ pub fn event_identities(
             let id = payload.pointer("/public/external_id")?.as_str()?;
             match payload.pointer("/public/kind")?.as_str()? {
                 "comment" => Some(format!("c:{id}")),
-                "question" => Some(format!("q:{id}")),
                 _ => None,
             }
         });

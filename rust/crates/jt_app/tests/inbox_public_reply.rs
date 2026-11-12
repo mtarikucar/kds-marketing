@@ -23,7 +23,6 @@ use support::*;
 use time::{Duration, OffsetDateTime};
 
 const IG: &str = "17841400000000001";
-const SELLER: &str = "123456";
 const FAN: &str = "17841400000000009";
 const IG_COMMENTS: &[&str] = &[
     "instagram_basic",
@@ -34,9 +33,7 @@ const IG_COMMENTS: &[&str] = &[
 struct Rig {
     w: World,
     meta: Arc<ScriptedPublic>,
-    trendyol: Arc<ScriptedPublic>,
     ig: Capability,
-    store: Capability,
     tick: AtomicI64,
 }
 
@@ -49,33 +46,19 @@ async fn rig() -> Rig {
     apps.instagram.as_mut().unwrap().comment_scopes = true;
     w.deps.apps = Arc::new(apps);
     let meta = Arc::new(ScriptedPublic::new(Provider::Meta));
-    let trendyol = Arc::new(ScriptedPublic::new(Provider::Trendyol));
-    w.deps.connectors = Arc::new(
-        ScriptedRegistry::new()
-            .with_public(meta.clone())
-            .with_public(trendyol.clone()),
-    );
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_public(meta.clone()));
     let ig = capability(&w, "instagram", IG, IG_COMMENTS).await;
-    let store = capability(&w, "trendyol", SELLER, &[]).await;
     Rig {
         w,
         meta,
-        trendyol,
         ig,
-        store,
         tick: AtomicI64::new(0),
     }
 }
 
 async fn capability(w: &World, kind: &str, account: &str, scopes: &[&str]) -> Capability {
-    let public = match kind {
-        "trendyol" => {
-            json!({"provider": "trendyol", "access": {"kind": "trendyol_seller", "seller_id": SELLER}})
-        }
-        _ => {
-            json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}})
-        }
-    };
+    let public =
+        json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}});
     let mut cap = Capability::new(
         CapabilityId::new_v7(),
         w.ws,
@@ -91,18 +74,11 @@ async fn capability(w: &World, kind: &str, account: &str, scopes: &[&str]) -> Ca
     .unwrap();
     cap.status = StoredStatus::Verified;
     cap.last_verified_at = Some(FIXED_NOW);
-    let credential = match kind {
-        "trendyol" => Credential::TrendyolSeller {
-            seller_id: SELLER.into(),
-            api_key: "ty-key".into(),
-            api_secret: "ty-secret".into(),
-        },
-        _ => Credential::OAuth {
-            access_token: "EAAB-test-token".into(),
-            refresh_token: None,
-            expires_at: None,
-            scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
-        },
+    let credential = Credential::OAuth {
+        access_token: "EAAB-test-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
     };
     let sealed = w
         .deps
@@ -149,37 +125,12 @@ fn comment(id: &str, author: &str) -> PublicEnvelope {
     }
 }
 
-fn question(id: &str) -> PublicEnvelope {
-    PublicEnvelope {
-        kind: PublicKind::Question,
-        account_id: SELLER.into(),
-        external_id: id.into(),
-        root_external_id: id.into(),
-        author: EnvelopeAuthor {
-            id: Some("cust-1".into()),
-            name: None,
-            is_self: false,
-        },
-        text: "Bu ürünün S bedeni var mı?".into(),
-        subject: Some(EnvelopeSubject {
-            kind: SubjectKind::Product,
-            external_id: "PRD-1".into(),
-            title: "Boyama seti".into(),
-            url: None,
-            image_url: None,
-            facts: json!({}),
-        }),
-        ..comment(id, "x")
-    }
-}
-
 /// Takes `env` in on `cap` through the consumer; the item.
 async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
     let tick = r.tick.fetch_add(1, Ordering::Relaxed);
     let external_id = env.external_id.clone();
     let (provider, kind) = match env.kind {
         PublicKind::Comment => (Provider::Meta, EventKind::Comment),
-        PublicKind::Question => (Provider::Trendyol, EventKind::Question),
     };
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
@@ -396,11 +347,9 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
     let past = FIXED_NOW - Duration::hours(1);
     // One case per refusal of spec §3.6 rule 4 and 5: the item made so, the reply, who sends.
     type Setup = Box<dyn Fn(&mut PublicItem)>;
-    /// (the refusal expected, a question?, the item made so, the visibility, the text, by the
-    /// agent?)
+    /// (the refusal expected, the item made so, the visibility, the text, by the agent?)
     type Case = (
         &'static str,
-        bool,
         Setup,
         Option<&'static str>,
         &'static str,
@@ -410,7 +359,6 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
     let cases: Vec<Case> = vec![
         (
             "item_removed",
-            false,
             Box::new(|i| i.moderation = Moderation::Removed),
             None,
             "Merhaba",
@@ -418,7 +366,6 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
         ),
         (
             "live_comment_public_reply",
-            false,
             Box::new(|i| i.live = true),
             None,
             "Merhaba",
@@ -426,27 +373,13 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
         ),
         (
             "deadline_passed",
-            true,
             Box::new(move |i| i.deadline = Some(past)),
             None,
             "Evet, S beden var.",
             false,
         ),
         (
-            "already_answered",
-            true,
-            Box::new(|i| {
-                i.answer = AnswerState::Pending {
-                    message_id: i.message_id,
-                }
-            }),
-            None,
-            "Evet, S beden var.",
-            false,
-        ),
-        (
             "agent_already_replied",
-            false,
             Box::new(|i| {
                 i.agent_answers = 1;
                 i.answer = AnswerState::Answered {
@@ -461,7 +394,6 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
         ),
         (
             "item_not_owed",
-            false,
             Box::new(|i| {
                 i.answer = AnswerState::Handled {
                     by: EventSource::System,
@@ -474,16 +406,7 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
             true,
         ),
         (
-            "private_reply_unsupported",
-            true,
-            none(),
-            Some("private"),
-            "Evet, S beden var.",
-            false,
-        ),
-        (
             "private_window_closed",
-            false,
             Box::new(move |i| i.private_reply_until = Some(past)),
             Some("private"),
             "Merhaba",
@@ -491,40 +414,26 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
         ),
         (
             "private_reply_used",
-            false,
             Box::new(|i| i.private_reply_message_id = Some(i.message_id)),
             Some("private"),
             "Merhaba",
             false,
         ),
-        ("text_too_short", true, none(), None, "Evet var.", false),
-        ("text_too_long", false, none(), None, "", false),
+        ("text_too_long", none(), None, "", false),
         (
             "contact_data_in_public_reply",
-            false,
             none(),
             None,
             "Sizi 0532 000 00 01'den arıyoruz",
             false,
         ),
-        (
-            "contact_data_in_marketplace_answer",
-            true,
-            none(),
-            None,
-            "Detaylar için www.example.com adresine bakın",
-            true,
-        ),
     ];
-    for (n, (expected, is_question, change, visibility, text, by_agent)) in
-        cases.into_iter().enumerate()
-    {
-        let (cap, env) = if is_question {
-            (r.store.clone(), question(&format!("q{n}")))
-        } else {
-            (r.ig.clone(), comment(&format!("c{n}"), &format!("fan-{n}")))
-        };
-        let taken = take(&r, &cap, env).await;
+    // `already_answered`, `private_reply_unsupported` and `text_too_short` need a surface that
+    // takes one answer, has no private reply or a minimum above one character: no channel is
+    // one today (`jt_inbox`'s own tests hold those rules).
+    let cases_len = cases.len();
+    for (n, (expected, change, visibility, text, by_agent)) in cases.into_iter().enumerate() {
+        let taken = take(&r, &r.ig, comment(&format!("c{n}"), &format!("fan-{n}"))).await;
         edit_item(&r, taken.id, |i| change(i));
         if expected == "contact_data_in_public_reply" {
             // The commenter's own phone, which the reply repeats written another way.
@@ -553,7 +462,7 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
             text.to_owned()
         };
         let ctx = if by_agent { &agent } else { &human };
-        let before = sends(&r.meta).len() + sends(&r.trendyol).len();
+        let before = sends(&r.meta).len();
         let e = replies::reply(
             &r.w.deps,
             ctx,
@@ -563,11 +472,7 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
         .await
         .unwrap_err();
         assert_eq!(reason(&e), expected, "{expected}");
-        assert_eq!(
-            sends(&r.meta).len() + sends(&r.trendyol).len(),
-            before,
-            "{expected}: no provider call"
-        );
+        assert_eq!(sends(&r.meta).len(), before, "{expected}: no provider call");
     }
     // The item of another conversation.
     let a = take(&r, &r.ig, comment("x1", "fan-a")).await;
@@ -583,7 +488,8 @@ async fn every_public_refusal_is_reached_through_inbox_reply() {
     assert_eq!(reason(&e), "item_not_in_conversation");
     // Every refusal is in the ledger, with its reason.
     let refused = r.w.entries("inbox.send.refused");
-    assert_eq!(refused.len(), 14);
+    assert_eq!(refused.len(), cases_len + 1);
+    assert_eq!(cases_len, 9);
 }
 
 #[tokio::test]
@@ -682,13 +588,15 @@ async fn agent_at(r: &Rig, now: OffsetDateTime) -> jt_app::ctx::Ctx {
     at(&agent(r).await, now)
 }
 
+/// The agent may answer an item once more after the platform refused its answer (no surface
+/// reviews answers today, so the refusal is written on the item here), and no more than that.
 #[tokio::test]
-async fn agent_answers_a_rejected_question_once_more() {
+async fn agent_answers_an_item_once_more_after_its_answer_was_rejected() {
     let r = rig().await;
     let agent = agent(&r).await;
-    let q = take(&r, &r.store, question("501")).await;
+    let q = take(&r, &r.ig, comment("501", FAN)).await;
     for round in 0..2 {
-        r.trendyol.push_reply_public(accepted(&format!("a{round}")));
+        r.meta.push_reply_public(accepted(&format!("a{round}")));
         let out = replies::reply(
             &r.w.deps,
             &agent,
@@ -698,17 +606,15 @@ async fn agent_answers_a_rejected_question_once_more() {
         .await
         .unwrap();
         assert_eq!(out.state, "sent", "{round}");
-        let pending = item(&r, "501");
+        let answered = item(&r, "501");
         assert!(
-            matches!(pending.answer, AnswerState::Pending { .. }),
+            matches!(answered.answer, AnswerState::Answered { .. }),
             "{round}"
         );
-        assert_eq!(pending.agent_answers, round + 1);
-        // Trendyol refuses the answer in review.
-        edit_item(&r, q.id, |i| {
-            let AnswerState::Pending { message_id } = i.answer else {
-                unreachable!()
-            };
+        assert_eq!(answered.agent_answers, round + 1);
+        // The platform refuses the answer.
+        let message_id = out.message_id;
+        edit_item(&r, q.id, move |i| {
             i.answer = AnswerState::Rejected {
                 reason: "uygun değil".into(),
                 message_id: Some(message_id),
@@ -726,7 +632,7 @@ async fn agent_answers_a_rejected_question_once_more() {
     .await
     .unwrap_err();
     assert_eq!(reason(&e), "agent_already_replied");
-    r.trendyol.push_reply_public(accepted("a3"));
+    r.meta.push_reply_public(accepted("a3"));
     let out = replies::reply(
         &r.w.deps,
         &r.w.owner_ctx,
@@ -1170,28 +1076,6 @@ async fn late_receipt_answers_a_handled_or_expired_item() {
             ..
         }
     ));
-}
-
-#[tokio::test]
-async fn trendyol_answer_receipt_is_pending() {
-    let r = rig().await;
-    let q = take(&r, &r.store, question("501")).await;
-    r.trendyol.push_reply_public(accepted("ans-1"));
-    let out = replies::reply(
-        &r.w.deps,
-        &r.w.owner_ctx,
-        q.conversation_id,
-        public_reply(&q, "Evet, S beden stokta var."),
-    )
-    .await
-    .unwrap();
-    assert_eq!(out.state, "sent");
-    assert!(matches!(
-        item(&r, "501").answer,
-        AnswerState::Pending { message_id } if message_id == out.message_id
-    ));
-    // In review, not owed.
-    assert_eq!(conversation_state(&r, q.conversation_id), ConvState::Theirs);
 }
 
 #[tokio::test]

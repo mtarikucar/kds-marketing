@@ -199,9 +199,9 @@ pub(crate) struct NewPerson {
 }
 
 /// [`match_or_create`], a new person starting with `new`'s company and kind, and with a journey
-/// only when `open_journey`: a commenter or a marketplace asker is a person without one until
-/// buying intent shows (spec 2026-10-30-inbox-comments-marketplace-design.md D4). A matched person
-/// is left as it is: the caller decides what changes.
+/// only when `open_journey`: a commenter is a person without one until buying intent shows (spec
+/// 2026-10-30-inbox-comments-marketplace-design.md D4). A matched person is left as it is: the
+/// caller decides what changes.
 pub(crate) async fn match_or_create_with(
     deps: &Deps,
     ctx: &Ctx,

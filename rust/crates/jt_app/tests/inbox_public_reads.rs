@@ -24,18 +24,25 @@ use support::*;
 use time::{Duration, OffsetDateTime};
 
 const IG: &str = "17841400000000001";
-const SELLER: &str = "123456";
+/// The Facebook Page.
+const PAGE: &str = "100000000000001";
 const IG_COMMENTS: &[&str] = &[
     "instagram_basic",
     "instagram_manage_comments",
     "instagram_manage_messages",
+];
+/// A Page token's grant with the comment scopes.
+const PAGE_COMMENTS: &[&str] = &[
+    "pages_read_engagement",
+    "pages_manage_engagement",
+    "pages_messaging",
 ];
 
 struct Rig {
     w: World,
     meta: Arc<ScriptedPublic>,
     ig: Capability,
-    store: Capability,
+    page: Capability,
     tick: AtomicI64,
 }
 
@@ -52,42 +59,26 @@ async fn rig_with(comment_flag: bool) -> Rig {
     apps.instagram.as_mut().unwrap().comment_scopes = comment_flag;
     w.deps.apps = Arc::new(apps);
     let meta = Arc::new(ScriptedPublic::new(Provider::Meta));
-    let trendyol = Arc::new(ScriptedPublic::new(Provider::Trendyol));
-    w.deps.connectors = Arc::new(
-        ScriptedRegistry::new()
-            .with_public(meta.clone())
-            .with_public(trendyol),
-    );
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_public(meta.clone()));
     let ig = capability(&w, "instagram", IG, IG_COMMENTS).await;
-    let store = capability(&w, "trendyol", SELLER, &[]).await;
+    let page = capability(&w, "facebook_page", PAGE, PAGE_COMMENTS).await;
     Rig {
         w,
         meta,
         ig,
-        store,
+        page,
         tick: AtomicI64::new(0),
     }
 }
 
 async fn capability(w: &World, kind: &str, account: &str, scopes: &[&str]) -> Capability {
-    let (public, credential) = match kind {
-        "trendyol" => (
-            json!({"provider": "trendyol", "access": {"kind": "trendyol_seller", "seller_id": SELLER}}),
-            Credential::TrendyolSeller {
-                seller_id: SELLER.into(),
-                api_key: "ty-key".into(),
-                api_secret: "ty-secret".into(),
-            },
-        ),
-        _ => (
-            json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}}),
-            Credential::OAuth {
-                access_token: "EAAB-test-token".into(),
-                refresh_token: None,
-                expires_at: None,
-                scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
-            },
-        ),
+    let public =
+        json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}});
+    let credential = Credential::OAuth {
+        access_token: "EAAB-test-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
     };
     let mut cap = Capability::new(
         CapabilityId::new_v7(),
@@ -149,28 +140,13 @@ fn comment(id: &str, author: &str, created_at: OffsetDateTime) -> PublicEnvelope
     }
 }
 
-fn question(id: &str, customer: &str, deadline: Option<OffsetDateTime>) -> PublicEnvelope {
+/// A comment `id` on the Page by `author` whose provider gives the answer `deadline`. No adapter
+/// gives one today; the item, the reads and the response SLA hold it all the same.
+fn page_comment(id: &str, author: &str, deadline: Option<OffsetDateTime>) -> PublicEnvelope {
     PublicEnvelope {
-        kind: PublicKind::Question,
-        account_id: SELLER.into(),
-        external_id: id.into(),
-        root_external_id: id.into(),
-        author: EnvelopeAuthor {
-            id: Some(customer.into()),
-            name: None,
-            is_self: false,
-        },
-        text: "Bu ürünün S bedeni var mı?".into(),
+        account_id: PAGE.into(),
         deadline,
-        subject: Some(EnvelopeSubject {
-            kind: SubjectKind::Product,
-            external_id: "PRD-1".into(),
-            title: "Boyama seti".into(),
-            url: None,
-            image_url: None,
-            facts: json!({}),
-        }),
-        ..comment(id, "x", FIXED_NOW - Duration::minutes(10))
+        ..comment(id, author, FIXED_NOW - Duration::minutes(10))
     }
 }
 
@@ -197,7 +173,6 @@ async fn take_at(
     let provider = jt_connector::provider_for_kind(&cap.kind_key).unwrap();
     let kind = match env.kind {
         PublicKind::Comment => EventKind::Comment,
-        PublicKind::Question => EventKind::Question,
     };
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
@@ -295,7 +270,7 @@ async fn context_of_a_comment_conversation_has_items_subjects_threads_rules_and_
         public["rules"]["public"]["max"],
         jt_inbox::public::INSTAGRAM_COMMENT_MAX
     );
-    assert_eq!(public["rules"]["marketplace"], false);
+    assert_eq!(public["rules"]["one_answer"], false);
     assert_eq!(public["rules"]["hide"], true);
     assert!(public["rules"]["private"]["window_s"].as_i64().unwrap() > 0);
     assert_eq!(public["approval_required"], false);
@@ -341,17 +316,18 @@ async fn context_of_a_comment_conversation_has_items_subjects_threads_rules_and_
 }
 
 #[tokio::test]
-async fn context_of_a_question_has_the_deadline_and_the_marketplace_rules() {
+async fn context_of_an_item_with_a_deadline_shows_it_and_the_approval_rule() {
     let r = rig().await;
-    require_approval(&r, r.store.id);
+    require_approval(&r, r.page.id);
     let deadline = FIXED_NOW + Duration::hours(20);
-    let q = take(&r, &r.store, question("q-1", "cust-1", Some(deadline))).await;
+    let q = take(&r, &r.page, page_comment("q-1", "cust-1", Some(deadline))).await;
     let out = context_json(&r, &r.w.owner_ctx, q.conversation_id).await;
     let public = &out["public"];
-    assert_eq!(public["channel"], "trendyol_question");
-    assert_eq!(public["rules"]["marketplace"], true);
-    assert_eq!(public["rules"]["one_answer"], true);
-    assert!(public["rules"]["private"].is_null());
+    assert_eq!(public["channel"], "facebook_comment");
+    assert_eq!(
+        public["rules"]["public"]["max"],
+        jt_inbox::public::FACEBOOK_COMMENT_MAX
+    );
     assert_eq!(public["approval_required"], true);
     let first = &public["items"][0];
     assert_eq!(
@@ -362,8 +338,7 @@ async fn context_of_a_question_has_the_deadline_and_the_marketplace_rules() {
                 .unwrap()
         )
     );
-    assert!(first["private_reply_until"].is_null());
-    assert_eq!(first["subject"]["kind"], "product");
+    assert_eq!(first["subject"]["kind"], "post");
 }
 
 #[tokio::test]
@@ -419,13 +394,13 @@ async fn context_of_a_dm_has_no_public_part() {
 #[tokio::test]
 async fn conversation_view_has_surface_owed_items_next_deadline_and_held_replies() {
     let r = rig().await;
-    require_approval(&r, r.store.id);
+    require_approval(&r, r.page.id);
     let (soon, later) = (
         FIXED_NOW + Duration::hours(3),
         FIXED_NOW + Duration::hours(30),
     );
-    let q1 = take(&r, &r.store, question("q-1", "cust-1", Some(later))).await;
-    take(&r, &r.store, question("q-2", "cust-1", Some(soon))).await;
+    let q1 = take(&r, &r.page, page_comment("q-1", "cust-1", Some(later))).await;
+    take(&r, &r.page, page_comment("q-2", "cust-1", Some(soon))).await;
     let agent = r.w.agent(&["inbox.work"]).await;
     let out = replies::reply(
         &r.w.deps,
@@ -444,7 +419,7 @@ async fn conversation_view_has_surface_owed_items_next_deadline_and_held_replies
     .unwrap();
     assert_eq!(view["id"], json!(q1.conversation_id));
     assert_eq!(view["surface"], "public");
-    assert_eq!(view["channel"], "trendyol_question");
+    assert_eq!(view["channel"], "facebook_comment");
     assert_eq!(view["owed_items"], 2);
     assert_eq!(view["held_replies"], 1);
     assert_eq!(
@@ -523,10 +498,10 @@ async fn messages_list_marks_item_messages() {
 #[tokio::test]
 async fn pending_lists_public_due_and_approvals() {
     let r = rig().await;
-    require_approval(&r, r.store.id);
+    require_approval(&r, r.page.id);
     let deadline = FIXED_NOW + Duration::hours(5);
-    let q1 = take(&r, &r.store, question("q-1", "cust-1", Some(deadline))).await;
-    let q2 = take(&r, &r.store, question("q-2", "cust-2", None)).await;
+    let q1 = take(&r, &r.page, page_comment("q-1", "cust-1", Some(deadline))).await;
+    let q2 = take(&r, &r.page, page_comment("q-2", "cust-2", None)).await;
     let agent = r.w.agent(&["inbox.work"]).await;
     let held = replies::reply(
         &r.w.deps,
@@ -543,7 +518,7 @@ async fn pending_lists_public_due_and_approvals() {
     assert_eq!(due.len(), 2);
     let first = due.iter().find(|d| d["item_id"] == json!(q1.id)).unwrap();
     assert_eq!(first["conversation_id"], json!(q1.conversation_id));
-    assert_eq!(first["channel"], "trendyol_question");
+    assert_eq!(first["channel"], "facebook_comment");
     assert!(first["awaiting_since"].is_string());
     assert!(first["deadline"].is_string());
     assert!(mine["approvals"].as_array().unwrap().is_empty());
@@ -562,12 +537,12 @@ async fn work_answer_deadline_within_24h_sorted_by_urgency() {
     let r = rig().await;
     let in_5h = FIXED_NOW + Duration::hours(5);
     let in_2h = FIXED_NOW + Duration::hours(2);
-    let q5 = take(&r, &r.store, question("q-5", "cust-5", Some(in_5h))).await;
-    let q2 = take(&r, &r.store, question("q-2", "cust-2", Some(in_2h))).await;
+    let q5 = take(&r, &r.page, page_comment("q-5", "cust-5", Some(in_5h))).await;
+    let q2 = take(&r, &r.page, page_comment("q-2", "cust-2", Some(in_2h))).await;
     take(
         &r,
-        &r.store,
-        question("q-48", "cust-48", Some(FIXED_NOW + Duration::hours(48))),
+        &r.page,
+        page_comment("q-48", "cust-48", Some(FIXED_NOW + Duration::hours(48))),
     )
     .await;
     let agent = r.w.agent(&["inbox.work", "workspace.read"]).await;
@@ -595,8 +570,8 @@ async fn work_answer_deadline_within_24h_sorted_by_urgency() {
 #[tokio::test]
 async fn work_approve_reply_for_humans_only() {
     let r = rig().await;
-    require_approval(&r, r.store.id);
-    let q = take(&r, &r.store, question("q-1", "cust-1", None)).await;
+    require_approval(&r, r.page.id);
+    let q = take(&r, &r.page, page_comment("q-1", "cust-1", None)).await;
     let agent = r.w.agent(&["inbox.work", "workspace.read"]).await;
     replies::reply(
         &r.w.deps,
@@ -667,8 +642,7 @@ async fn health_shows_each_surface_its_comment_status() {
         };
         assert_eq!(comments(r.ig.id), json!(granted), "flag {flag}");
         assert_eq!(comments(bare.id), json!(lacking), "flag {flag}");
-        // A marketplace's questions are always taken; a kind without comments has no status.
-        assert_eq!(comments(r.store.id), json!("on"));
+        // A kind without comments has no status.
         assert_eq!(comments(mailbox.id), Value::Null);
     }
 }
@@ -699,7 +673,6 @@ async fn health_shows_whether_studio_can_measure() {
     // The rig's account holds the comment scopes, not the insights: reconnect to measure.
     assert_eq!(measure(r.ig.id), json!("reconnect"));
     // Kinds Studio does not publish to have no such status.
-    assert_eq!(measure(r.store.id), Value::Null);
     assert_eq!(measure(mailbox.id), Value::Null);
 }
 
@@ -776,12 +749,12 @@ async fn sla_uses_the_oldest_owed_item() {
 #[tokio::test]
 async fn sla_hands_over_two_hours_before_a_deadline() {
     let r = rig().await;
-    let mut fresh = question("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(90)));
+    let mut fresh = page_comment("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(90)));
     fresh.created_at = FIXED_NOW - Duration::minutes(1);
-    let q = take(&r, &r.store, fresh).await;
-    let mut calm = question("q-2", "cust-2", Some(FIXED_NOW + Duration::hours(5)));
+    let q = take(&r, &r.page, fresh).await;
+    let mut calm = page_comment("q-2", "cust-2", Some(FIXED_NOW + Duration::hours(5)));
     calm.created_at = FIXED_NOW - Duration::minutes(1);
-    let other = take(&r, &r.store, calm).await;
+    let other = take(&r, &r.page, calm).await;
     assert_eq!(
         jobs::run_response_sla(&r.w.deps, FIXED_NOW).await.changed,
         1
@@ -806,8 +779,8 @@ async fn sla_expires_items_past_their_deadline() {
     let r = rig().await;
     let q = take(
         &r,
-        &r.store,
-        question("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(30))),
+        &r.page,
+        page_comment("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(30))),
     )
     .await;
     let later = FIXED_NOW + Duration::hours(1);
@@ -893,9 +866,9 @@ async fn sla_defaults_apply_to_stored_policies() {
     policy.inbox.max_response_s = [("sms".to_owned(), 60)].into_iter().collect();
     t.workspace_policy().set(policy, FIXED_NOW).await.unwrap();
     t.commit().await.unwrap();
-    let mut old = question("q-1", "cust-1", None);
+    let mut old = page_comment("q-1", "cust-1", None);
     old.created_at = FIXED_NOW - Duration::hours(2);
-    let q = take_at(&r, &r.store, old, FIXED_NOW - Duration::hours(2)).await;
+    let q = take_at(&r, &r.page, old, FIXED_NOW - Duration::hours(2)).await;
     assert_eq!(
         jobs::run_response_sla(&r.w.deps, FIXED_NOW).await.changed,
         1
@@ -936,12 +909,12 @@ async fn sla_clock_starts_when_the_item_is_taken_in() {
 #[tokio::test]
 async fn sla_leaves_an_item_whose_answer_waits_for_approval() {
     let r = rig().await;
-    require_approval(&r, r.store.id);
+    require_approval(&r, r.page.id);
     // Overdue and due within two hours, but the agent's answer only waits for a human now.
     let two_hours_ago = FIXED_NOW - Duration::hours(2);
-    let mut old = question("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(90)));
+    let mut old = page_comment("q-1", "cust-1", Some(FIXED_NOW + Duration::minutes(90)));
     old.created_at = two_hours_ago;
-    let q = take_at(&r, &r.store, old, two_hours_ago).await;
+    let q = take_at(&r, &r.page, old, two_hours_ago).await;
     let agent = r.w.agent(&["inbox.work"]).await;
     let held = replies::reply(
         &r.w.deps,

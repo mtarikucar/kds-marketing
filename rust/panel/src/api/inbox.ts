@@ -34,7 +34,7 @@ export const conversationAction = (
 ) => request<InboxConversationRow>('POST', `${conv(id)}/${action}`);
 export const snooze = (id: string, until: string) =>
   request<InboxConversationRow>('POST', `${conv(id)}/snooze`, { body: { until } });
-/** Answers comment or question `item_id` of public conversation `id`, in public or privately (a DM). */
+/** Answers comment `item_id` of public conversation `id`, in public or privately (a DM). */
 export const replyToItem = (
   id: string,
   input: { item_id: string; visibility: import('./types').Visibility; text: string; request_key: string },
@@ -44,8 +44,6 @@ export const hideItem = (id: string, hidden: boolean) =>
   request<import('./types').ModerationOut>('POST', `${item(id)}/hide`, { body: { hidden } });
 export const deleteItem = (id: string) =>
   request<import('./types').ModerationOut>('POST', `${item(id)}/delete`, { body: { confirm: true } });
-export const reportItem = (id: string, reason: import('./types').ReportReason) =>
-  request<import('./types').ModerationOut>('POST', `${item(id)}/report`, { body: { reason } });
 export const markHandled = (item_ids: string[], reason: import('./types').HandledReason) =>
   request<{ items: import('./types').PublicItem[] }>('POST', `${root}/items/handled`, { body: { item_ids, reason } });
 const held = (id: string) => `${root}/replies/${seg(id)}`;

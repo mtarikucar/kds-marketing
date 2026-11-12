@@ -43,7 +43,7 @@ pub struct ReplyInput {
     pub in_reply_to: Option<String>,
     #[serde(default)]
     pub references: Vec<String>,
-    /// The comment or question replied to: required on a public conversation, refused on a
+    /// The comment replied to: required on a public conversation, refused on a
     /// private one (`item_requires_public_conversation`).
     #[serde(default)]
     pub item_id: Option<PublicItemId>,
@@ -433,7 +433,7 @@ pub(crate) async fn enqueue_in(
     };
     let id = c.id;
     let opens_conversation = r.conversations().get(id).await?.is_none();
-    // A comment or question is answered by naming it; a direct message never names one.
+    // A comment is answered by naming it; a direct message never names one.
     let public = public_channel_for_kind(&c.kind_key).is_some();
     if !public && (input.item_id.is_some() || input.visibility.is_some()) {
         return Err(AppError::validation(

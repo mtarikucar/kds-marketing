@@ -5,7 +5,6 @@ import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { USER_ID, WS_ID } from '@/test/fixtures';
 import { inboxAnswers, inboxMe, conversation, context, journey, merge, person } from '@/test/inbox';
 import i18n from '@/i18n/config';
-import { kindLabel, kindsInGroup } from '@/lib/capabilities';
 
 /** What the server sends as `status_labels`: the fixed Turkish defaults, all nine stages. */
 const turkishDefaults = {
@@ -523,7 +522,7 @@ it('Inbox names an unnamed contact by its channel and the end of its id, never b
   expect(document.body.textContent).not.toContain(person.id);
 });
 
-describe('The inbox list, with comments and questions', () => {
+describe('The inbox list, with comments', () => {
   const HOUR = 3_600_000;
   const inHours = (hours: number) => new Date(Date.now() + hours * HOUR).toISOString();
   const publicConversation = {
@@ -540,7 +539,7 @@ describe('The inbox list, with comments and questions', () => {
   };
   const rows = [
     { ...conversation, id: 'conv-dm', surface: 'private', channel: 'whats_app', owed_items: 0, next_deadline: null, held_replies: 0 },
-    { ...publicConversation, id: 'conv-q', kind_key: 'trendyol', channel: 'trendyol_question', next_deadline: inHours(1), owed_items: 1 },
+    { ...publicConversation, id: 'conv-fb', kind_key: 'facebook_page', channel: 'facebook_comment', next_deadline: inHours(1), owed_items: 1 },
     { ...publicConversation, id: 'conv-c', next_deadline: inHours(30), held_replies: 1 },
   ];
 
@@ -549,8 +548,7 @@ describe('The inbox list, with comments and questions', () => {
     renderAt('/inbox');
     await screen.findAllByText('Deniz Örnek');
     expect(screen.getByText('DM')).toBeInTheDocument();
-    expect(screen.getByText('Soru')).toBeInTheDocument();
-    expect(screen.getByText('Yorum')).toBeInTheDocument();
+    expect(screen.getAllByText('Yorum')).toHaveLength(2);
     expect(screen.getByText('1 bekleyen')).toBeInTheDocument();
     expect(screen.getByText('1 onay bekliyor')).toBeInTheDocument();
   });
@@ -583,15 +581,5 @@ describe('The inbox list, with comments and questions', () => {
     const approval = await screen.findByTestId('approval');
     expect(approval).toHaveAttribute('href', '/inbox/conv-2');
     expect(within(approval).getByTestId('deadline')).toHaveTextContent(/kaldı$/);
-  });
-
-  it('marketplace_kinds_have_labels', () => {
-    const kinds = kindsInGroup('marketplace').map((k) => k.key);
-    expect(kinds).toEqual(['trendyol', 'hepsiburada']);
-    for (const lang of ['tr', 'en']) {
-      const t = i18n.getFixedT(lang);
-      for (const key of kinds) expect(kindLabel(t, key)).not.toBe(`capabilities.kinds.${key}`);
-      expect(t('capabilities.groups.marketplace')).not.toBe('capabilities.groups.marketplace');
-    }
   });
 });

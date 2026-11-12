@@ -267,7 +267,7 @@ async fn route(
             None => return Ok("no_surface"),
         };
     }
-    if matches!(event.kind, EventKind::Comment | EventKind::Question) {
+    if event.kind == EventKind::Comment {
         return super::public::intake(deps, ctx, r, event, &cap, subject).await;
     }
     if event.kind == EventKind::LeadGen {

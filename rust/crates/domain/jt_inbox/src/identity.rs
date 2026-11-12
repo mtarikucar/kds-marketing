@@ -28,10 +28,6 @@ pub enum Channel {
     InstagramComment,
     /// Public comments on the Facebook Page's posts, matched within the provider account.
     FacebookComment,
-    /// Customer questions on the seller's Trendyol products, matched within the seller.
-    TrendyolQuestion,
-    /// Customer questions on the merchant's Hepsiburada products, matched within the merchant.
-    HepsiburadaQuestion,
 }
 
 impl Channel {
@@ -45,21 +41,13 @@ impl Channel {
             Self::Webchat => IdentityChannel::Webchat,
             Self::InstagramComment => IdentityChannel::InstagramCommenter,
             Self::FacebookComment => IdentityChannel::FacebookCommenter,
-            Self::TrendyolQuestion => IdentityChannel::TrendyolBuyer,
-            Self::HepsiburadaQuestion => IdentityChannel::HepsiburadaBuyer,
         }
     }
 
-    /// Whether the channel is a public surface: a comment or a marketplace question, answered
-    /// in front of everyone, item by item (`crate::public`). The other channels are private.
+    /// Whether the channel is a public surface: comments, answered in front of everyone, item
+    /// by item (`crate::public`). The other channels are private.
     pub const fn is_public(self) -> bool {
-        matches!(
-            self,
-            Self::InstagramComment
-                | Self::FacebookComment
-                | Self::TrendyolQuestion
-                | Self::HepsiburadaQuestion
-        )
+        matches!(self, Self::InstagramComment | Self::FacebookComment)
     }
 }
 
@@ -81,10 +69,6 @@ pub enum IdentityChannel {
     InstagramCommenter,
     /// An account-scoped Facebook commenter id; not a Messenger id.
     FacebookCommenter,
-    /// A seller-scoped Trendyol customer id.
-    TrendyolBuyer,
-    /// A merchant-scoped Hepsiburada customer id.
-    HepsiburadaBuyer,
 }
 
 /// The contact channel of a messaging or telephone capability; `None` for other kinds.
@@ -101,15 +85,13 @@ pub fn channel_for_kind(kind_key: &str) -> Option<Channel> {
     }
 }
 
-/// The public channel of a kind whose account owns posts or products that people comment on or
-/// ask about: `instagram`, `facebook_page`, `trendyol`, `hepsiburada`; `None` for other kinds.
-/// [`channel_for_kind`] keeps the private contact channel; neither kind has one.
+/// The public channel of a kind whose account owns posts that people comment on: `instagram`,
+/// `facebook_page`; `None` for other kinds. [`channel_for_kind`] keeps the private contact
+/// channel; neither kind has one.
 pub fn public_channel_for_kind(kind_key: &str) -> Option<Channel> {
     match kind_key {
         "instagram" => Some(Channel::InstagramComment),
         "facebook_page" => Some(Channel::FacebookComment),
-        "trendyol" => Some(Channel::TrendyolQuestion),
-        "hepsiburada" => Some(Channel::HepsiburadaQuestion),
         _ => None,
     }
 }
@@ -171,9 +153,7 @@ pub fn normalise(channel: IdentityChannel, raw: &str) -> Result<String, Identity
         | IdentityChannel::Messenger
         | IdentityChannel::Webchat
         | IdentityChannel::InstagramCommenter
-        | IdentityChannel::FacebookCommenter
-        | IdentityChannel::TrendyolBuyer
-        | IdentityChannel::HepsiburadaBuyer => {
+        | IdentityChannel::FacebookCommenter => {
             if raw.is_empty() {
                 Err(IdentityError::Invalid)
             } else {
@@ -185,8 +165,8 @@ pub fn normalise(channel: IdentityChannel, raw: &str) -> Result<String, Identity
 
 /// Scope a normalised opaque id to a capability's canonical provider account external id.
 ///
-/// Call after [`normalise`] for every opaque namespace (Instagram, Messenger, web chat, the
-/// commenters and the marketplace buyers), before storing or matching.
+/// Call after [`normalise`] for every opaque namespace (Instagram, Messenger, web chat and the
+/// commenters), before storing or matching.
 /// Both arguments must already be validated; this preserves their case and content exactly.
 /// Phone numbers and email addresses are shared identities and must not be scoped this way.
 pub fn scope_opaque(external_id: &str, raw: &str) -> String {

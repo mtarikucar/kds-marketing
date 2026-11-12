@@ -20,7 +20,7 @@ export const GOAL_GROUPS: Record<CapabilityGoal, readonly KindGroup[]> = {
   calls: ['telephony'],
   devices: ['device', 'computer_access'],
   growth: ['ads', 'community'],
-  tools: ['calendar', 'marketplace', 'agent_connection', 'third_party'],
+  tools: ['calendar', 'agent_connection', 'third_party'],
   custom: ['third_party'],
 };
 export const GOAL_CONNECTIONS: Record<CapabilityGoal, readonly string[]> = {

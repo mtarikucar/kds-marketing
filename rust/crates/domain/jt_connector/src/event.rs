@@ -35,9 +35,6 @@ pub enum EventKind {
     Consent,
     /// A public comment on one of the account's posts, as a public-item envelope.
     Comment,
-    /// A customer question on one of the seller's marketplace products, as a public-item
-    /// envelope.
-    Question,
     /// A message, or a refusal, of the chat history a WhatsApp Business app shares once its
     /// number is onboarded to the Cloud API beside the app (Meta's `history` webhook): the past,
     /// never something to answer.
@@ -63,7 +60,6 @@ impl EventKind {
             EventKind::CallEvent => "call_event",
             EventKind::Consent => "consent",
             EventKind::Comment => "comment",
-            EventKind::Question => "question",
             EventKind::History => "history",
             EventKind::ContactSync => "contact_sync",
             EventKind::AccountUpdate => "account_update",
@@ -82,7 +78,6 @@ impl EventKind {
             "call_event" => EventKind::CallEvent,
             "consent" => EventKind::Consent,
             "comment" => EventKind::Comment,
-            "question" => EventKind::Question,
             "history" => EventKind::History,
             "contact_sync" => EventKind::ContactSync,
             "account_update" => EventKind::AccountUpdate,

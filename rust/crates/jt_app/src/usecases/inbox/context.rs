@@ -21,7 +21,7 @@ pub struct PendingOut {
     pub reopen_questions: Vec<Conversation>,
     pub merges: Vec<MergeRow>,
     pub tasks_due: Vec<Task>,
-    /// The owed comments and questions of the caller's conversations in `ours` and
+    /// The owed comments of the caller's conversations in `ours` and
     /// `reopen_questions`, soonest deadline first (those without one last), then oldest.
     pub public_due: Vec<PublicDue>,
     /// The held replies waiting for a human (spec §3.7), oldest first: listed to human callers
@@ -74,7 +74,7 @@ pub struct ContextOut {
     pub prohibitions: Vec<String>,
     /// The prospect this person was promoted from: why this business was chosen.
     pub prospect: Option<crate::usecases::prospects::ProspectSummary>,
-    /// For a comment or question conversation (spec §6.8); absent for a direct one.
+    /// For a comment conversation (spec §6.8); absent for a direct one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public: Option<PublicContext>,
 }
@@ -89,7 +89,7 @@ pub const THREAD_ITEMS: u32 = 50;
 pub struct PublicContext {
     pub channel: Channel,
     /// What the surface allows (`jt_inbox::public::rules`): text bounds, the private reply and
-    /// its window in seconds, one answer, the platform's review, moderation, marketplace.
+    /// its window in seconds, one answer, the platform's review, moderation.
     pub rules: Value,
     /// Whether the agent's replies on the capability wait for a human (spec §3.7).
     pub approval_required: bool,
@@ -134,22 +134,13 @@ pub(crate) fn rules_view(rules: &jt_inbox::public::PublicRules) -> Value {
         "moderated": rules.moderated,
         "hide": rules.hide,
         "delete": rules.delete,
-        "report": rules.report,
-        "marketplace": rules.marketplace,
     })
 }
 
-/// The agent's hint on a surface with `rules` (spec §3.10).
-fn public_hint(rules: &jt_inbox::public::PublicRules) -> &'static str {
-    if rules.marketplace {
-        "Answer each owed question before its deadline, from the product's facts: no links, email \
-         addresses or phone numbers. Mark a question that needs no answer handled."
-    } else {
-        "Answer owed comments in public, briefly. When an item shows buying intent, open a \
-         journey for the person, then answer privately. Hide abuse; mark what needs no answer \
-         handled."
-    }
-}
+/// The agent's hint on a public surface (spec §3.10).
+const PUBLIC_HINT: &str = "Answer owed comments in public, briefly. When an item shows buying \
+     intent, open a journey for the person, then answer privately. Hide abuse; mark what needs \
+     no answer handled.";
 
 /// The public part of `conversation`'s context; `None` for a direct conversation.
 async fn public_context(
@@ -225,7 +216,7 @@ async fn public_context(
         channel,
         rules: rules_view(&rules),
         approval_required: cap.policy.requires_human_approval,
-        hint: public_hint(&rules),
+        hint: PUBLIC_HINT,
         items: out,
     }))
 }

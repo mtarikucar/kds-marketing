@@ -2429,8 +2429,8 @@ pub async fn public_subjects_contract(uow: Arc<dyn UnitOfWork>) {
 /// One cursor per capability, replaced on each store; an object only.
 pub async fn public_cursors_contract(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow.clone()).await;
-    let cap = f.account("trendyol", "seller-1").await;
-    let other_cap = f.account("hepsiburada", "merchant-1").await;
+    let cap = f.account("instagram", "ig-1").await;
+    let other_cap = f.account("facebook_page", "page-1").await;
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert_eq!(t.public_cursors().get(cap).await.unwrap(), None);
     t.public_cursors()

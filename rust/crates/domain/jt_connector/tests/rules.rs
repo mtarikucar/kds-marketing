@@ -57,8 +57,6 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("linkedin_member", Provider::Linkedin),
     ("linkedin_page", Provider::Linkedin),
     ("linkedin_ads", Provider::Linkedin),
-    ("trendyol", Provider::Trendyol),
-    ("hepsiburada", Provider::Hepsiburada),
     ("google_ads", Provider::Google),
 ];
 
@@ -106,15 +104,7 @@ fn provider_for_every_connector_kind() {
     assert_eq!(
         keys,
         [
-            "meta",
-            "netgsm",
-            "x",
-            "mail",
-            "tiktok",
-            "linkedin",
-            "trendyol",
-            "hepsiburada",
-            "google"
+            "meta", "netgsm", "x", "mail", "tiktok", "linkedin", "google"
         ]
     );
     for p in Provider::all() {
@@ -840,23 +830,6 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
             vec!["iys-pass-SECRET"],
             vec!["8503001144", "654321"],
         ),
-        (
-            Credential::TrendyolSeller {
-                seller_id: "123456".to_owned(),
-                api_key: "ty-key-SECRET".to_owned(),
-                api_secret: "ty-secret-SECRET".to_owned(),
-            },
-            vec!["ty-key-SECRET", "ty-secret-SECRET"],
-            vec!["123456"],
-        ),
-        (
-            Credential::HepsiburadaMerchant {
-                merchant_id: "a1b2c3d4-0000-4000-8000-000000000001".to_owned(),
-                service_key: "hb-service-key-SECRET".to_owned(),
-            },
-            vec!["hb-service-key-SECRET"],
-            vec!["a1b2c3d4-0000-4000-8000-000000000001"],
-        ),
     ]
 }
 
@@ -872,9 +845,7 @@ fn credential_debug_is_masked() {
             "whatsapp_cloud",
             "netgsm_sms",
             "netgsm_pbx",
-            "netgsm_iys",
-            "trendyol_seller",
-            "hepsiburada_merchant"
+            "netgsm_iys"
         ]),
         "one credential of each variant"
     );
@@ -968,75 +939,6 @@ fn credential_public_facts_never_contain_secrets() {
     assert_eq!(
         no_expiry.redact_for_public(),
         json!({ "kind": "oauth", "expires_at": null, "scopes": [] })
-    );
-}
-
-/// A marketplace seller's own API credentials (spec 2026-10-30-inbox-comments-marketplace-design.md
-/// §5.3): sealed whole, shown by the seller or merchant id only.
-#[test]
-fn marketplace_credentials_mask_and_redact() {
-    let trendyol = Credential::TrendyolSeller {
-        seller_id: "123456".to_owned(),
-        api_key: "ty-key-SECRET".to_owned(),
-        api_secret: "ty-secret-SECRET".to_owned(),
-    };
-    // The seller's service key for Jeeta as its integrator (task H0).
-    let hepsiburada = Credential::HepsiburadaMerchant {
-        merchant_id: "m-42".to_owned(),
-        service_key: "hb-service-key-SECRET".to_owned(),
-    };
-    assert_eq!(trendyol.kind(), "trendyol_seller");
-    assert_eq!(hepsiburada.kind(), "hepsiburada_merchant");
-    assert_eq!(
-        format!("{trendyol:?}"),
-        "TrendyolSeller { seller_id: \"123456\", api_key: ***, api_secret: *** }"
-    );
-    assert_eq!(
-        format!("{hepsiburada:?}"),
-        "HepsiburadaMerchant { merchant_id: \"m-42\", service_key: *** }"
-    );
-    assert_eq!(
-        trendyol.redact_for_public(),
-        json!({ "kind": "trendyol_seller", "seller_id": "123456" })
-    );
-    assert_eq!(
-        hepsiburada.redact_for_public(),
-        json!({ "kind": "hepsiburada_merchant", "merchant_id": "m-42" })
-    );
-    // Sealed, tagged by kind, and read back; a blob missing a secret does not read.
-    assert_eq!(
-        serde_json::to_value(&trendyol).unwrap(),
-        json!({
-            "kind": "trendyol_seller", "seller_id": "123456",
-            "api_key": "ty-key-SECRET", "api_secret": "ty-secret-SECRET"
-        })
-    );
-    assert_eq!(
-        serde_json::to_value(&hepsiburada).unwrap(),
-        json!({
-            "kind": "hepsiburada_merchant", "merchant_id": "m-42",
-            "service_key": "hb-service-key-SECRET"
-        })
-    );
-    for cred in [&trendyol, &hepsiburada] {
-        let sealed = serde_json::to_value(cred).unwrap();
-        assert_eq!(&serde_json::from_value::<Credential>(sealed).unwrap(), cred);
-        assert!(!cred.expires_soon(NOW, Duration::days(10_000)));
-    }
-    let read = |v: Value| serde_json::from_value::<Credential>(v);
-    assert!(read(json!({ "kind": "trendyol_seller", "seller_id": "1", "api_key": "k" })).is_err());
-    assert!(read(json!({ "kind": "hepsiburada_merchant", "merchant_id": "1" })).is_err());
-    assert_eq!(
-        read(json!({
-            "kind": "trendyol_seller", "seller_id": "1", "api_key": "k", "api_secret": "s",
-            "later_field": true
-        }))
-        .unwrap(),
-        Credential::TrendyolSeller {
-            seller_id: "1".to_owned(),
-            api_key: "k".to_owned(),
-            api_secret: "s".to_owned(),
-        }
     );
 }
 
@@ -1388,7 +1290,6 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
         (EventKind::CallEvent, "call_event"),
         (EventKind::Consent, "consent"),
         (EventKind::Comment, "comment"),
-        (EventKind::Question, "question"),
         (EventKind::History, "history"),
         (EventKind::ContactSync, "contact_sync"),
         (EventKind::AccountUpdate, "account_update"),
@@ -1419,29 +1320,27 @@ fn event_kinds_round_trip_and_unknown_is_kept() {
     }
 }
 
-/// A comment and a marketplace question are events of their own (spec §6.3), not messages.
+/// A comment is an event of its own (spec §6.3), not a message.
 #[test]
-fn comment_and_question_event_kinds_round_trip() {
-    for (kind, key) in [
-        (EventKind::Comment, "comment"),
-        (EventKind::Question, "question"),
-    ] {
-        assert_eq!(kind.key(), key);
-        assert_eq!(EventKind::parse(key), kind);
-        assert_ne!(kind, EventKind::Message);
-        let event: InboundEvent = serde_json::from_value(json!({
-            "id": InboundEventId::new_v7(), "workspace_id": ws(), "provider": "trendyol",
-            "external_id": "q:1:open:", "kind": key
-        }))
-        .unwrap();
-        assert_eq!(event.kind, kind);
-        assert_eq!(event.provider, Provider::Trendyol);
-        assert_eq!(serde_json::to_value(&event).unwrap()["kind"], json!(key));
+fn comment_event_kind_round_trips() {
+    let (kind, key) = (EventKind::Comment, "comment");
+    assert_eq!(kind.key(), key);
+    assert_eq!(EventKind::parse(key), kind);
+    assert_ne!(kind, EventKind::Message);
+    let event: InboundEvent = serde_json::from_value(json!({
+        "id": InboundEventId::new_v7(), "workspace_id": ws(), "provider": "meta",
+        "external_id": "c:1:open:", "kind": key
+    }))
+    .unwrap();
+    assert_eq!(event.kind, kind);
+    assert_eq!(event.provider, Provider::Meta);
+    assert_eq!(serde_json::to_value(&event).unwrap()["kind"], json!(key));
+    for other in ["comments", "question"] {
+        assert_eq!(
+            EventKind::parse(other),
+            EventKind::Unknown(other.to_owned())
+        );
     }
-    assert_eq!(
-        EventKind::parse("comments"),
-        EventKind::Unknown("comments".to_owned())
-    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1526,7 +1425,7 @@ fn comment_grant_matrix() {
         "instagram",
         "messenger",
         "instagram_dm",
-        "trendyol",
+        "mailbox",
         "x",
     ] {
         assert_eq!(comment_grant(kind, FACEBOOK_SCOPES_TODAY), none, "{kind}");
@@ -1639,8 +1538,8 @@ fn comment_grant_matrix() {
         none
     );
 
-    // Marketplaces and every other kind: not a comment kind at all.
-    for kind in ["trendyol", "hepsiburada", "mailbox", "x", ""] {
+    // Every other kind: not a comment kind at all.
+    for kind in ["mailbox", "x", ""] {
         assert_eq!(comment_grant(kind, &facebook_login), none, "{kind}");
         assert_eq!(comment_grant(kind, &instagram_login), none, "{kind}");
     }

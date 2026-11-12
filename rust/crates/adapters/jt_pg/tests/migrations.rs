@@ -48,8 +48,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0042_tiktok_ads_app`.
-const MIGRATIONS: i64 = 42;
+/// Migrations `0001_foundation` through `0043_remove_marketplace`.
+const MIGRATIONS: i64 = 43;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -261,6 +261,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0043_remove_marketplace",
         "0042_tiktok_ads_app",
         "0041_google_provider",
         "0040_ads_campaigns",
@@ -2298,7 +2299,7 @@ async fn answer_state_is_generated() {
     sqlx::query(
         "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,kind,\
          external_id,root_external_id,created_at,answer,updated_at) \
-         values ($1,$2,$3,$4,$5,'question','q1','q1',now(),$6,now())",
+         values ($1,$2,$3,$4,$5,'comment','c1','c1',now(),$6,now())",
     )
     .bind(ws.as_uuid())
     .bind(id)
@@ -2375,7 +2376,8 @@ async fn outbox_accepts_held() {
 
 /// `0019_inbox_public` repeats, and its down refuses, changing nothing, while a row needs the wider
 /// checks: a marketplace inbound event (events are never deleted) or a reply held for approval.
-/// Without such rows it narrows both checks back and drops the three tables.
+/// Without such rows it narrows both checks back and drops the three tables. Run here over a
+/// database `0043_remove_marketplace` has narrowed already: 0019's up widens its checks again.
 #[tokio::test]
 async fn inbox_public_down_refuses_while_rows_need_the_wider_checks() {
     let db = TestDb::new().await; // already migrated up, 0019 included
@@ -4009,4 +4011,168 @@ async fn ads_campaigns_migration_is_repeatable_and_its_down_refuses_a_stored_cam
     }
     try_run(&db.pool, UP).await.unwrap();
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+}
+
+/// The four checks `0043_remove_marketplace` narrows, each with a value only the marketplaces
+/// needed and one it keeps.
+const MARKETPLACE_CHECKS: [(&str, &str, &str); 4] = [
+    ("inbound_events_provider_check", "'trendyol'", "'tiktok'"),
+    ("public_items_kind_check", "'question'", "'comment'"),
+    ("public_items_moderation_check", "'reported'", "'removed'"),
+    ("public_subjects_kind_check", "'product'", "'post'"),
+];
+
+/// Whether the four checks and `inbox_event_person` are as 0042 had them (`true`: the marketplace
+/// values are allowed and the buyers matched) or as 0043 leaves them (`false`); a mix of the two
+/// fails.
+async fn marketplace_schema(pool: &PgPool) -> bool {
+    let function: String = sqlx::query_scalar(
+        "select pg_get_functiondef(oid) from pg_proc where proname = 'inbox_event_person'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let wide = function.contains("'trendyol_buyer'");
+    assert_eq!(function.contains("'hepsiburada_buyer'"), wide);
+    assert_eq!(function.contains("'q:'"), wide);
+    // The comment namespaces stay either way.
+    assert!(function.contains("'instagram_commenter'") && function.contains("'c:'"));
+    for (check, gone, kept) in MARKETPLACE_CHECKS {
+        let definition = check_definition(pool, check).await;
+        assert_eq!(definition.contains(gone), wide, "{check}: {definition}");
+        assert!(definition.contains(kept), "{check}: {definition}");
+    }
+    let providers = check_definition(pool, "inbound_events_provider_check").await;
+    assert_eq!(providers.contains("'hepsiburada'"), wide, "{providers}");
+    wide
+}
+
+/// `0043_remove_marketplace` takes the marketplace values out of the four checks
+/// `0019_inbox_public` gave them to, and the buyer namespaces out of the erasure matching: its up
+/// repeats; its down puts 0042's schema back, and repeats; and its up is refused, changing
+/// nothing, while a row still holds a marketplace value. No table comes or goes.
+#[tokio::test]
+async fn remove_marketplace_migration_is_repeatable_and_refuses_while_a_marketplace_row_exists() {
+    const UP: &str = include_str!("../../../../migrations/0043_remove_marketplace.up.sql");
+    const DOWN: &str = include_str!("../../../../migrations/0043_remove_marketplace.down.sql");
+    const CHECK_VIOLATION: &str = "23514";
+    let db = TestDb::new().await; // already migrated up, 0043 included
+    assert!(!marketplace_schema(&db.pool).await);
+    let (ws, _, _, _) = inbox_rows(&db).await;
+    // An inbound event of `provider`: `None` when it is stored, else the database's refusal.
+    let event = |provider: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            let mut tx = TenantTx::begin(&pool, ws).await.unwrap();
+            let result = sqlx::query(
+                "insert into inbound_events (id,workspace_id,provider,external_id,kind,payload,\
+                 received_at) values ($1,$2,$3,$4,'comment','{}',now())",
+            )
+            .bind(Uuid::now_v7())
+            .bind(ws.as_uuid())
+            .bind(provider)
+            .bind(Uuid::now_v7().to_string())
+            .execute(tx.conn())
+            .await;
+            match result {
+                Ok(_) => {
+                    tx.commit().await.unwrap();
+                    None
+                }
+                Err(e) => {
+                    tx.rollback().await.unwrap();
+                    e.as_database_error()
+                        .and_then(|d| d.code())
+                        .map(|c| c.into_owned())
+                }
+            }
+        }
+    };
+
+    // Up, twice more: nothing changes, and comments are stored as before.
+    for _ in 0..2 {
+        try_sql(&db.pool, UP).await.unwrap();
+        assert!(!marketplace_schema(&db.pool).await);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+    assert_eq!(event("trendyol").await.as_deref(), Some(CHECK_VIOLATION));
+    assert_eq!(event("meta").await, None);
+    // Down, twice: 0042's schema, with the comment already stored kept.
+    for _ in 0..2 {
+        try_sql(&db.pool, DOWN).await.unwrap();
+        assert!(marketplace_schema(&db.pool).await);
+        assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
+    }
+    // Up again, with no marketplace row: narrowed again.
+    try_sql(&db.pool, UP).await.unwrap();
+    assert!(!marketplace_schema(&db.pool).await);
+
+    // One marketplace row of each kind the up looks for, each on a database of its own (an
+    // inbound event is never deleted): the up is refused and 0042's schema stays whole.
+    let cases: [(&str, &str); 7] = [
+        (
+            "insert into inbound_events (id,workspace_id,provider,external_id,kind,payload,\
+             received_at) values (gen_random_uuid(),$1,'trendyol','q:1:open:','question','{}',now())",
+            "inbound_events holds marketplace events",
+        ),
+        (
+            "update capabilities set kind_key = 'hepsiburada' where workspace_id = $1",
+            "capabilities holds a trendyol or hepsiburada capability",
+        ),
+        (
+            "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,\
+             kind,external_id,root_external_id,created_at,answer,updated_at) \
+             select c.workspace_id,gen_random_uuid(),c.capability_id,c.id,m.id,'question','q1','q1',\
+             now(),'{\"state\":\"awaiting\"}',now() from conversations c \
+             join messages m on m.workspace_id = c.workspace_id and m.conversation_id = c.id \
+             where c.workspace_id = $1",
+            "public_items holds a question or a reported item",
+        ),
+        (
+            "insert into public_items (workspace_id,id,capability_id,conversation_id,message_id,\
+             kind,external_id,root_external_id,created_at,answer,moderation,updated_at) \
+             select c.workspace_id,gen_random_uuid(),c.capability_id,c.id,m.id,'comment','c9','c9',\
+             now(),'{\"state\":\"awaiting\"}','reported',now() from conversations c \
+             join messages m on m.workspace_id = c.workspace_id and m.conversation_id = c.id \
+             where c.workspace_id = $1",
+            "public_items holds a question or a reported item",
+        ),
+        (
+            "insert into public_subjects (workspace_id,id,capability_id,kind,external_id,\
+             first_seen_at,updated_at) select workspace_id,gen_random_uuid(),id,'product','PRD-1',\
+             now(),now() from capabilities where workspace_id = $1",
+            "public_subjects holds a product",
+        ),
+        (
+            "insert into identities (workspace_id,id,person_id,channel,value_normalized,\
+             first_seen_at) select workspace_id,gen_random_uuid(),id,'trendyol_buyer',\
+             'seller-1:777',now() from people where workspace_id = $1",
+            "identities holds a marketplace buyer",
+        ),
+        (
+            "insert into suppressions (workspace_id,person_id,channel,reason) \
+             select workspace_id,id,'hepsiburada_question','manual' from people \
+             where workspace_id = $1",
+            "on a marketplace question channel",
+        ),
+    ];
+    for (row, refusal) in cases {
+        let db = TestDb::new().await;
+        try_sql(&db.pool, DOWN).await.unwrap();
+        let (ws, _, _, _) = inbox_rows(&db).await;
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        let written = sqlx::query(row)
+            .bind(ws.as_uuid())
+            .execute(tx.conn())
+            .await
+            .unwrap_or_else(|e| panic!("{refusal}: {e}"));
+        assert_eq!(written.rows_affected(), 1, "{refusal}");
+        tx.commit().await.unwrap();
+        for _ in 0..2 {
+            let e = try_sql(&db.pool, UP).await.unwrap_err();
+            assert!(e.contains("marketplace removal refused"), "{refusal}: {e}");
+            assert!(e.contains(refusal), "{refusal}: {e}");
+            assert!(marketplace_schema(&db.pool).await, "{refusal}");
+        }
+    }
 }

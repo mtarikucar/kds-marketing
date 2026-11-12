@@ -21,11 +21,11 @@ const ADDED: [&str; 11] = [
 ];
 
 /// Rows added after the M4 amendment, each with its MCP tool (cleanup-and-voice plan; the
-/// device bridge's agent tools, D1-T6; the comment and marketplace question rows, F7; the prospect
+/// device bridge's agent tools, D1-T6; the comment rows, F7; the prospect
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 124] = [
+const POST_M4_ADDED: [(&str, &str); 123] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -94,7 +94,6 @@ const POST_M4_ADDED: [(&str, &str); 124] = [
         "inbox.public.mark_handled",
         "jeeta.inbox.public_mark_handled",
     ),
-    ("inbox.public.report", "jeeta.inbox.public_report"),
     ("inbox.public.approve", "jeeta.inbox.public_approve"),
     ("inbox.public.discard", "jeeta.inbox.public_discard"),
     // The Growth Studio materials library (spec 2026-11-03 §5.2).

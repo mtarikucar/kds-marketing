@@ -327,7 +327,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.public.hide",
-            description: "Hide a comment on its platform (hidden: true) or show it again (false); a hidden comment is not owed. The agent may. Refused on marketplace questions (hide_unsupported) and while comments are not enabled. [risk: WRITE]",
+            description: "Hide a comment on its platform (hidden: true) or show it again (false); a hidden comment is not owed. The agent may. Refused while comments are not enabled. [risk: WRITE]",
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.hide")).expect("inbox schema"),
             run: public_hide,
@@ -341,17 +341,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.public.mark_handled",
-            description: "Mark 1 to 100 owed comments or questions handled (no_reply_needed, spam, duplicate, answered_elsewhere), all or none; tells no provider. [risk: WRITE]",
+            description: "Mark 1 to 100 owed comments handled (no_reply_needed, spam, duplicate, answered_elsewhere), all or none; tells no provider. [risk: WRITE]",
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("public.mark_handled")).expect("inbox schema"),
             run: public_mark_handled,
-        },
-        ToolDef {
-            use_case: "inbox.public.report",
-            description: "Report a marketplace question to its marketplace where it takes reports (report_unsupported elsewhere); a reported question is not owed. [risk: WRITE]",
-            permissions: &[Permission::InboxWork],
-            schema: || Schema::try_from(schema::tool("public.report")).expect("inbox schema"),
-            run: public_report,
         },
         ToolDef {
             use_case: "inbox.public.approve",
@@ -666,12 +659,6 @@ fn public_delete<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture
 }
 fn public_mark_handled<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move { to_json(&public::mark_handled(deps, ctx, args(raw)?).await?) })
-}
-fn public_report<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
-    Box::pin(async move {
-        let id: PublicItemId = take_id(&mut raw, "item_id")?;
-        to_json(&public::report(deps, ctx, id, args(raw)?).await?)
-    })
 }
 fn public_approve<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {

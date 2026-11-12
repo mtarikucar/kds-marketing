@@ -195,7 +195,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 244);
+    assert_eq!(jt_mcp::registry().len(), 243);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -960,7 +960,7 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "AdCampaignWriter",
             "LeadGenFetcher",
             "OAuthProvider",
-            // Replies, moderation and polls on public items (comments, marketplace questions):
+            // Replies, moderation and polls on public items (comments):
             // plan 2026-10-30-inbox-comments-marketplace-plan.md, task F4.
             "PublicSurface",
             "PublicPoller",

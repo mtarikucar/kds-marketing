@@ -43,11 +43,6 @@ fn phone_channels_share_one_identity() {
             IdentityChannel::InstagramCommenter,
         ),
         (Channel::FacebookComment, IdentityChannel::FacebookCommenter),
-        (Channel::TrendyolQuestion, IdentityChannel::TrendyolBuyer),
-        (
-            Channel::HepsiburadaQuestion,
-            IdentityChannel::HepsiburadaBuyer,
-        ),
     ] {
         assert_eq!(channel.identity_channel(), identity);
     }
@@ -128,8 +123,6 @@ fn opaque_ids_are_account_scoped() {
         IdentityChannel::Webchat,
         IdentityChannel::InstagramCommenter,
         IdentityChannel::FacebookCommenter,
-        IdentityChannel::TrendyolBuyer,
-        IdentityChannel::HepsiburadaBuyer,
     ] {
         let raw = normalise(channel, "  AbC:123  ").unwrap();
         assert_eq!(raw, "AbC:123");
@@ -306,8 +299,6 @@ fn serde_round_trips_preserve_variants_and_populated_records() {
         Channel::Phone,
         Channel::InstagramComment,
         Channel::FacebookComment,
-        Channel::TrendyolQuestion,
-        Channel::HepsiburadaQuestion,
     ] {
         round_trip(channel);
         round_trip(channel.identity_channel());

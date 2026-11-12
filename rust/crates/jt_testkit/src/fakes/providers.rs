@@ -60,8 +60,6 @@ pub struct FakeAppConfig {
     pub tiktok_ads: Option<TiktokAdsApp>,
     pub linkedin: Option<LinkedinApp>,
     pub google: Option<GoogleApp>,
-    /// The Hepsiburada integrator user; `None` by default (the merchant id stands in for it).
-    pub hepsiburada_integrator_user: Option<String>,
     pub public_base_url: Option<Url>,
     /// The platform switch `JEETA_OUTREACH_ENABLED`; off by default, as on a real platform.
     pub outreach_enabled: bool,
@@ -77,7 +75,6 @@ impl Default for FakeAppConfig {
             tiktok_ads: None,
             linkedin: None,
             google: None,
-            hepsiburada_integrator_user: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
             outreach_enabled: false,
         }
@@ -163,10 +160,6 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn google_app(&self) -> Option<GoogleApp> {
         self.google.clone()
-    }
-
-    fn hepsiburada_integrator_user(&self) -> Option<String> {
-        self.hepsiburada_integrator_user.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {

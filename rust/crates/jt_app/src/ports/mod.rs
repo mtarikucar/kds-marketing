@@ -1103,8 +1103,8 @@ pub const MAX_AGENT_CHECKIN_INTERVAL_MINUTES: u32 = 10_080;
 /// Inbox response deadlines, reachability and fixed-stage display labels.
 ///
 /// `max_response_s` is keyed by channel or surface: `whatsapp`, `instagram_dm`, `messenger`,
-/// `sms`, and the public surfaces' kinds `instagram`, `facebook_page`, `trendyol`, `hepsiburada`,
-/// with `amazon` for Amazon relay mail. A stored policy reads with every default it lacks
+/// `sms`, and the public surfaces' kinds `instagram`, `facebook_page`, with `amazon` for Amazon
+/// relay mail. A stored policy reads with every default it lacks
 /// ([`InboxPolicy::with_default_response_times`]): a map stored before a default was added
 /// would otherwise hide it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -1124,8 +1124,6 @@ impl Default for InboxPolicy {
                 ("sms", 3600),
                 ("instagram", 3600),
                 ("facebook_page", 3600),
-                ("trendyol", 3600),
-                ("hepsiburada", 1800),
                 ("amazon", 3600),
             ]
             .into_iter()

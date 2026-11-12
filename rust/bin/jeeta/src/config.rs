@@ -86,9 +86,6 @@ pub const INSTAGRAM_APP_SECRET: &str = "JEETA_INSTAGRAM_APP_SECRET";
 /// Whether Instagram Login flows ask for the comment scopes (`1`/`true`; default off): set once
 /// Meta's App Review granted them. Requires the Instagram app.
 pub const INSTAGRAM_COMMENT_SCOPES: &str = "JEETA_INSTAGRAM_COMMENT_SCOPES";
-/// The platform's Hepsiburada integrator user, the Basic auth user of the calls made with a
-/// seller's service key (optional; the merchant id stands in while unset; VERIFY V-H1).
-pub const HEPSIBURADA_INTEGRATOR_USER: &str = "JEETA_HEPSIBURADA_INTEGRATOR_USER";
 /// The platform's X app (OAuth 2.0 confidential client) id.
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
@@ -185,7 +182,6 @@ const VARS: &[&str] = &[
     LINKEDIN_API_VERSION,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    HEPSIBURADA_INTEGRATOR_USER,
     PUBLIC_BASE_URL,
     OUTREACH_ENABLED,
 ];
@@ -279,7 +275,6 @@ pub struct EnvPlatformApps {
     tiktok_ads: Option<TiktokAdsApp>,
     linkedin: Option<LinkedinApp>,
     google: Option<GoogleApp>,
-    hepsiburada_integrator_user: Option<String>,
     public_base_url: Option<Url>,
     /// [`OUTREACH_ENABLED`].
     outreach_enabled: bool,
@@ -314,10 +309,6 @@ impl fmt::Debug for EnvPlatformApps {
             .field("tiktok_ads", &self.tiktok_ads)
             .field("linkedin", &self.linkedin)
             .field("google", &self.google)
-            .field(
-                "hepsiburada_integrator_user",
-                &self.hepsiburada_integrator_user,
-            )
             .field(
                 "public_base_url",
                 &self.public_base_url.as_ref().map(Url::as_str),
@@ -354,10 +345,6 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn google_app(&self) -> Option<GoogleApp> {
         self.google.clone()
-    }
-
-    fn hepsiburada_integrator_user(&self) -> Option<String> {
-        self.hepsiburada_integrator_user.clone()
     }
 
     fn public_base_url(&self) -> Option<Url> {
@@ -817,7 +804,6 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         tiktok_ads,
         linkedin,
         google,
-        hepsiburada_integrator_user: value(HEPSIBURADA_INTEGRATOR_USER),
         public_base_url,
         outreach_enabled: parse_flag(OUTREACH_ENABLED, get(OUTREACH_ENABLED))?,
     })
@@ -1569,9 +1555,6 @@ mod tests {
             assert_eq!(err.var, app, "{flag}");
             assert!(err.to_string().contains(flag), "{err}");
         }
-        // The Hepsiburada integrator user is unset until the operator names it: the merchant id
-        // stands in for it then.
-        assert_eq!(all.apps.hepsiburada_integrator_user(), None);
     }
 
     #[test]
@@ -1588,16 +1571,6 @@ mod tests {
             assert!(!apps.meta_app().unwrap().comment_scopes, "{on:?}");
             assert!(apps.instagram_app().unwrap().comment_scopes, "{on:?}");
         }
-        // The integrator user is read trimmed, on its own (it needs no provider app).
-        let apps = Config::from_map(&with(&[(HEPSIBURADA_INTEGRATOR_USER, " jeeta-int ")]))
-            .unwrap()
-            .apps;
-        assert_eq!(
-            apps.hepsiburada_integrator_user().as_deref(),
-            Some("jeeta-int")
-        );
-        assert!(apps.configured().is_empty());
-        assert!(format!("{apps:?}").contains("jeeta-int"));
     }
 
     #[test]
@@ -1734,7 +1707,6 @@ mod tests {
             LINKEDIN_API_VERSION,
             GOOGLE_CLIENT_ID,
             GOOGLE_CLIENT_SECRET,
-            HEPSIBURADA_INTEGRATOR_USER,
             PUBLIC_BASE_URL,
         ] {
             assert_eq!(listed[var], "", "{var} is a placeholder in .env.example");

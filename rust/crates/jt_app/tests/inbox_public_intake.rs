@@ -1,7 +1,7 @@
 //! Intake of public items (plan 2026-10-30-inbox-comments-marketplace-plan.md, task F5): the
-//! webhook gate and the consumer turn a comment or question envelope into person, conversation,
+//! webhook gate and the consumer turn a comment envelope into person, conversation,
 //! message, item and subject, and a provider's new state of a known item into that item.
-//! Envelopes are built here; the adapters' parsing is tasks M1, T2 and H1.
+//! Envelopes are built here; the adapter's parsing is task M1.
 
 mod support;
 
@@ -28,8 +28,6 @@ use time::{Duration, OffsetDateTime};
 const IG: &str = "17841400000000001";
 /// The Facebook Page.
 const PAGE: &str = "100000000000001";
-/// The Trendyol seller.
-const SELLER: &str = "123456";
 /// A commenter's Instagram-scoped id.
 const FAN: &str = "17841400000000009";
 /// The post the comments are on.
@@ -77,14 +75,9 @@ async fn rig_with(meta_flag: bool, instagram_flag: bool) -> Rig {
     }
 }
 
-/// `connector_public` of a `kind` capability whose grant is `scopes` through `app`.
-fn public_facts(kind: &str, app: &str, scopes: &[&str]) -> Value {
-    match kind {
-        "trendyol" => {
-            json!({"provider": "trendyol", "access": {"kind": "trendyol_seller", "seller_id": SELLER}})
-        }
-        _ => json!({"provider": "meta", "access": {"kind": "oauth", "app": app, "scopes": scopes}}),
-    }
+/// `connector_public` of a capability whose grant is `scopes` through `app`.
+fn public_facts(app: &str, scopes: &[&str]) -> Value {
+    json!({"provider": "meta", "access": {"kind": "oauth", "app": app, "scopes": scopes}})
 }
 
 /// A connected (sealed, verified) capability of `kind` holding `account`.
@@ -106,7 +99,7 @@ async fn capability_via(
             kind_key: kind.into(),
             name: format!("{kind} {account}"),
             external_id: Some(account.into()),
-            connector_public: public_facts(kind, app, scopes),
+            connector_public: public_facts(app, scopes),
             ..Default::default()
         },
         FIXED_NOW,
@@ -114,18 +107,11 @@ async fn capability_via(
     .unwrap();
     cap.status = StoredStatus::Verified;
     cap.last_verified_at = Some(FIXED_NOW);
-    let credential = match kind {
-        "trendyol" => Credential::TrendyolSeller {
-            seller_id: SELLER.into(),
-            api_key: "ty-key".into(),
-            api_secret: "ty-secret".into(),
-        },
-        _ => Credential::OAuth {
-            access_token: "EAAB-test-token".into(),
-            refresh_token: None,
-            expires_at: None,
-            scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
-        },
+    let credential = Credential::OAuth {
+        access_token: "EAAB-test-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
     };
     let sealed = w
         .deps
@@ -196,54 +182,14 @@ fn own_reply(id: &str, parent: &str, text: &str) -> PublicEnvelope {
     }
 }
 
-/// Customer question `id` to [`SELLER`] by `customer`.
-fn question(id: &str, customer: Option<&str>) -> PublicEnvelope {
-    PublicEnvelope {
-        kind: PublicKind::Question,
-        account_id: SELLER.into(),
-        external_id: id.into(),
-        parent_external_id: None,
-        root_external_id: id.into(),
-        status: EnvelopeStatus::Open,
-        author: EnvelopeAuthor {
-            id: customer.map(Into::into),
-            name: None,
-            is_self: false,
-        },
-        text: "Bu ürünün S bedeni var mı?".into(),
-        created_at: FIXED_NOW - Duration::minutes(30),
-        deadline: None,
-        live: false,
-        subject: Some(EnvelopeSubject {
-            kind: SubjectKind::Product,
-            external_id: "PRD-1".into(),
-            title: "Boyama seti".into(),
-            url: None,
-            image_url: None,
-            facts: json!({"barcode": "8690000000001"}),
-        }),
-        answer: None,
-        rejection: None,
-    }
-}
-
 fn with_status(mut env: PublicEnvelope, status: EnvelopeStatus) -> PublicEnvelope {
     env.status = status;
     env
 }
 
-fn provider_of(cap: &Capability) -> Provider {
-    match cap.kind_key.as_str() {
-        "trendyol" => Provider::Trendyol,
-        "hepsiburada" => Provider::Hepsiburada,
-        _ => Provider::Meta,
-    }
-}
-
 fn kind_of(env: &PublicEnvelope) -> EventKind {
     match env.kind {
         PublicKind::Comment => EventKind::Comment,
-        PublicKind::Question => EventKind::Question,
     }
 }
 
@@ -265,7 +211,7 @@ async fn deliver_raw(
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
         workspace_id: r.w.ws,
-        provider: provider_of(cap),
+        provider: Provider::Meta,
         capability_id: Some(cap.id),
         external_id: external_id.into(),
         kind,
@@ -914,43 +860,37 @@ async fn removed_comment_is_removed_and_not_owed() {
     assert_eq!(r.w.uow.snapshot().inbox.public_items.len(), 1);
 }
 
+/// A provider's `answered` state of an owed item, with a text Jeeta never sent: answered
+/// elsewhere, the shown answer kept as a system message.
 #[tokio::test]
-async fn question_open_then_answered_elsewhere() {
+async fn open_comment_then_answered_elsewhere_by_its_provider_state() {
     let r = rig().await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
     assert_eq!(
-        deliver(&r, &store, "q:501:open:", question("501", Some("cust-77"))).await,
+        deliver(&r, &ig, "comment:501", comment("501", Some(FAN))).await,
         "consumed"
     );
     let s = r.w.uow.snapshot();
     let asked = item(&s, "501");
-    assert_eq!(asked.kind, PublicKind::Question);
-    assert_eq!(asked.private_reply_until, None);
-    assert_eq!(
-        s.inbox.identities[0].channel,
-        IdentityChannel::TrendyolBuyer
-    );
-    assert_eq!(
-        s.inbox.identities[0].value_normalized,
-        format!("{SELLER}:cust-77")
-    );
-    let subject = &s.inbox.public_subjects[0];
-    assert_eq!(
-        (subject.kind, subject.title.as_str()),
-        (SubjectKind::Product, "Boyama seti")
-    );
+    assert_eq!(asked.kind, PublicKind::Comment);
     assert_eq!(
         conversation(&s, asked.conversation_id).state,
         ConvState::Ours
     );
-    // Answered in the seller panel, with a text Jeeta never sent.
-    let mut answered = with_status(question("501", Some("cust-77")), EnvelopeStatus::Answered);
+    // Answered on the platform, with a text Jeeta never sent.
+    let mut answered = with_status(comment("501", Some(FAN)), EnvelopeStatus::Answered);
     answered.answer = Some(EnvelopeAnswer {
         text: "Evet, S beden stokta.".into(),
         at: Some(FIXED_NOW),
     });
     assert_eq!(
-        deliver(&r, &store, "q:501:answered:2026-10-30T09:00:00Z", answered).await,
+        deliver(
+            &r,
+            &ig,
+            "comment:501:answered:2026-10-30T09:00:00Z",
+            answered
+        )
+        .await,
         "consumed"
     );
     let s = r.w.uow.snapshot();
@@ -978,20 +918,16 @@ async fn question_open_then_answered_elsewhere() {
     );
 }
 
+/// An answer in a platform's review (no surface reviews answers today; the lifecycle holds the
+/// state) is confirmed or refused by the provider's next state of its item.
 #[tokio::test]
-async fn our_pending_answer_is_confirmed_or_rejected_by_the_marketplace() {
+async fn our_pending_answer_is_confirmed_or_rejected_by_the_platform() {
     let r = rig().await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
     for id in ["601", "602"] {
-        deliver(
-            &r,
-            &store,
-            &format!("q:{id}:open:"),
-            question(id, Some("cust-1")),
-        )
-        .await;
+        deliver(&r, &ig, &format!("comment:{id}"), comment(id, Some(FAN))).await;
     }
-    // Our answers are in the marketplace's review.
+    // Our answers are in the platform's review.
     let s = r.w.uow.snapshot();
     let conversation_id = item(&s, "601").conversation_id;
     let ws = r.w.ws;
@@ -1021,22 +957,22 @@ async fn our_pending_answer_is_confirmed_or_rejected_by_the_marketplace() {
             };
         }
     });
-    let mut published = with_status(question("601", Some("cust-1")), EnvelopeStatus::Answered);
+    let mut published = with_status(comment("601", Some(FAN)), EnvelopeStatus::Answered);
     published.answer = Some(EnvelopeAnswer {
         text: " Evet, S beden mevcut. ".into(),
         at: None,
     });
     assert_eq!(
-        deliver(&r, &store, "q:601:answered:t1", published).await,
+        deliver(&r, &ig, "comment:601:answered:t1", published).await,
         "consumed"
     );
-    let mut refused = with_status(question("602", Some("cust-1")), EnvelopeStatus::Rejected);
+    let mut refused = with_status(comment("602", Some(FAN)), EnvelopeStatus::Rejected);
     refused.rejection = Some(EnvelopeRejection {
         reason: "Cevabınız içerik kurallarına uymuyor".into(),
         at: None,
     });
     assert_eq!(
-        deliver(&r, &store, "q:602:rejected:t2", refused).await,
+        deliver(&r, &ig, "comment:602:rejected:t2", refused).await,
         "consumed"
     );
     let s = r.w.uow.snapshot();
@@ -1060,56 +996,38 @@ async fn our_pending_answer_is_confirmed_or_rejected_by_the_marketplace() {
 }
 
 #[tokio::test]
-async fn question_status_for_an_unknown_item_is_deferred() {
+async fn status_for_an_unknown_comment_is_consumed_with_nothing_written() {
     let r = rig().await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
-    let mut answered = with_status(question("700", Some("cust-1")), EnvelopeStatus::Answered);
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    let mut answered = with_status(comment("700", Some(FAN)), EnvelopeStatus::Answered);
     answered.answer = Some(EnvelopeAnswer {
         text: "Evet".into(),
         at: None,
     });
     assert_eq!(
-        deliver(&r, &store, "q:700:answered:t", answered).await,
-        "deferred"
+        deliver(&r, &ig, "comment:700:answered:t", answered).await,
+        "consumed"
     );
     let s = r.w.uow.snapshot().inbox;
     assert!(s.people.is_empty() && s.messages.is_empty() && s.public_items.is_empty());
 }
 
 #[tokio::test]
-async fn trendyol_buyer_without_customer_id_is_a_one_off_person() {
+async fn author_name_is_the_envelopes_never_the_provider_items() {
     let r = rig().await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
-    deliver(&r, &store, "q:801:open:", question("801", None)).await;
-    deliver(&r, &store, "q:802:open:", question("802", None)).await;
-    let s = r.w.uow.snapshot().inbox;
-    assert_eq!(s.people.len(), 2);
-    let mut values: Vec<_> = s
-        .identities
-        .iter()
-        .map(|i| i.value_normalized.clone())
-        .collect();
-    values.sort();
-    assert_eq!(
-        values,
-        [format!("{SELLER}:q:801"), format!("{SELLER}:q:802")]
-    );
-}
-
-#[tokio::test]
-async fn trendyol_name_hidden_when_show_user_name_false() {
-    let r = rig().await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
-    // The adapter leaves the name out of the envelope when the buyer hides it; the name in the
+    let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
+    // An adapter leaves the name out of the envelope when it may not be shown; the name in the
     // provider's own item (here `userName`) is never read.
-    deliver(&r, &store, "q:901:open:", question("901", Some("cust-9"))).await;
+    let mut unnamed = comment("901", Some(FAN));
+    unnamed.author.name = None;
+    deliver(&r, &ig, "comment:901", unnamed).await;
     let s = r.w.uow.snapshot();
     assert_eq!(s.inbox.people[0].display_name, "");
     assert!(!wire(&s.inbox.people).contains("Ayşe"));
     // A name the envelope gives is kept.
-    let mut named = question("902", Some("cust-8"));
+    let mut named = comment("902", Some("17841400000000088"));
     named.author.name = Some("  Ayşe K.\u{7} ".into());
-    deliver(&r, &store, "q:902:open:", named).await;
+    deliver(&r, &ig, "comment:902", named).await;
     let s = r.w.uow.snapshot();
     assert!(s.inbox.people.iter().any(|p| p.display_name == "Ayşe K."));
 }
@@ -1465,11 +1383,7 @@ async fn our_removed_comment_never_answers_the_parent() {
     let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
     deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await;
     let before = r.w.uow.snapshot().inbox;
-    for status in [
-        EnvelopeStatus::Removed,
-        EnvelopeStatus::Answered,
-        EnvelopeStatus::Reported,
-    ] {
+    for status in [EnvelopeStatus::Removed, EnvelopeStatus::Answered] {
         assert_eq!(
             deliver(
                 &r,
@@ -1556,13 +1470,19 @@ async fn erase(r: &Rig, person: PersonId) {
 async fn erase_commenter_scrubs_messages_and_payloads() {
     let r = rig().await;
     let ig = capability(&r.w, "instagram", IG, IG_COMMENTS).await;
-    let store = capability(&r.w, "trendyol", SELLER, &[]).await;
+    let page = capability(&r.w, "facebook_page", PAGE, PAGE_COMMENTS).await;
     assert_eq!(
         deliver(&r, &ig, "comment:1", comment("1", Some(FAN))).await,
         "consumed"
     );
     assert_eq!(
-        deliver(&r, &store, "q:1", question("q-1", Some("777"))).await,
+        deliver(
+            &r,
+            &page,
+            "comment:fb-1",
+            comment_on(PAGE, "fb-1", Some("777"))
+        )
+        .await,
         "consumed"
     );
     // Someone else's comment.
@@ -1577,11 +1497,11 @@ async fn erase_commenter_scrubs_messages_and_payloads() {
         "consumed"
     );
     let s = r.w.uow.snapshot();
-    let (commenter, buyer) = (person_of(&s, "1"), person_of(&s, "q-1"));
+    let (commenter, page_commenter) = (person_of(&s, "1"), person_of(&s, "fb-1"));
     erase(&r, commenter).await;
-    erase(&r, buyer).await;
+    erase(&r, page_commenter).await;
     let s = r.w.uow.snapshot();
-    for (event, external_id) in [("comment:1", "1"), ("q:1", "q-1")] {
+    for (event, external_id) in [("comment:1", "1"), ("comment:fb-1", "fb-1")] {
         let payload = payload_of(&s, event);
         let public = &payload["public"];
         assert_eq!(public["author"], json!(""), "{event}");
@@ -1596,7 +1516,7 @@ async fn erase_commenter_scrubs_messages_and_payloads() {
             .iter()
             .find(|m| m.id == item(&s, external_id).message_id)
             .unwrap();
-        assert!(!message.body.contains("Fiyat") && !message.body.contains("bedeni"));
+        assert!(!message.body.contains("Fiyat"));
     }
     assert!(
         s.inbox

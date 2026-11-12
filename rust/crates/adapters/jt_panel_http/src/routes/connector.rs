@@ -64,9 +64,7 @@ pub async fn confirm_assets(
 
 /// `200` with the capability the credentials were entered for, after their probe. The body is
 /// [`SetCredentials`]: `{capability_id}` or `{kind_key, name}`, an optional `external_id`, and the
-/// `credential` (`mailbox`, `netgsm_sms`, `netgsm_iys`, `netgsm_pbx`, `meta_token`,
-/// `trendyol_seller` or `hepsiburada_merchant`; a marketplace's external id is its seller or
-/// merchant id).
+/// `credential` (`mailbox`, `netgsm_sms`, `netgsm_iys`, `netgsm_pbx` or `meta_token`).
 /// IYS requires capability_id of an existing live SMS line and matching usercode; its separate
 /// sealed slot leaves the SMS credential untouched, with brand_code in connector_public.iys.
 pub async fn set_credentials(

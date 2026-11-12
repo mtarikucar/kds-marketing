@@ -118,7 +118,7 @@ async fn mask_personal_blanks_the_envelope() {
     assert_eq!(public["text"], json!(""));
     assert_eq!(masked["provider_item"], json!(""));
     assert_eq!(public["answer"]["text"], json!(""));
-    // `subject` was a masked key already (a mail's subject): the post or product goes whole.
+    // `subject` was a masked key already (a mail's subject): the post goes whole.
     assert_eq!(public["subject"], json!(""));
     // Ids, states and times stay.
     for key in [
@@ -239,11 +239,9 @@ async fn event_person_finds_a_commenter() {
     let instagram = account(&f, "instagram", "ig-acct").await;
     let instagram_dm = account(&f, "instagram_dm", "ig-acct").await;
     let page = account(&f, "facebook_page", "page-acct").await;
-    let trendyol = account(&f, "trendyol", "seller-1").await;
     let commenter = f.insert_person("Commenter").await;
     let other = f.insert_person("Other").await;
     let anonymous = f.insert_person("Anonymous").await;
-    let buyer = f.insert_person("Buyer").await;
     identity(
         &f,
         commenter.id,
@@ -259,7 +257,6 @@ async fn event_person_finds_a_commenter() {
         "page-acct:c:9001",
     )
     .await;
-    identity(&f, buyer.id, IdentityChannel::TrendyolBuyer, "seller-1:777").await;
 
     let comment = envelope("comment", Some("5150"), "1789");
     // The commenter, scoped by the capability's account, on the surface or its DM sibling.
@@ -288,10 +285,9 @@ async fn event_person_finds_a_commenter() {
         )
         .await
     );
-    // A marketplace buyer in the seller's namespace.
-    let question = envelope("question", Some("777"), "q-1");
-    assert!(event_person(&db, &f, trendyol, &question, buyer.id).await);
-    assert!(!event_person(&db, &f, instagram, &question, buyer.id).await);
+    // An envelope of a kind no surface has names nobody.
+    let question = envelope("question", Some("5150"), "q-1");
+    assert!(!event_person(&db, &f, instagram, &question, commenter.id).await);
     // A payload without an envelope matches as before.
     assert!(!event_person(&db, &f, instagram, &json!({"text": "5150"}), commenter.id).await);
 }
@@ -608,15 +604,15 @@ async fn moderation_holds_no_postgres_lock_during_the_provider_call() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Erasure of comments and questions (task F9)
+// Erasure of comments (task F9)
 // ---------------------------------------------------------------------------------------------
 
-/// A comment of an Instagram commenter and a question of a Trendyol buyer, both taken in through
-/// the consumer, then the person of each erased: their events keep ids, states and times, and
-/// lose the author, the text, the provider's item and its names; the items stay with no personal
-/// text; a later comment of the erased commenter is masked before it is stored.
+/// The comments of two Instagram commenters, both taken in through the consumer, then the
+/// person of each erased: their events keep ids, states and times, and lose the author, the
+/// text, the provider's item and its names; the items stay with no personal text; a later
+/// comment of an erased commenter is masked before it is stored.
 #[tokio::test]
-async fn erasure_masks_comment_and_question_events() {
+async fn erasure_masks_comment_events() {
     use jt_app::usecases::inbox::{consumer, erasure};
     use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
     let db = TestDb::new().await;
@@ -634,11 +630,10 @@ async fn erasure_masks_comment_and_question_events() {
         .unwrap()
         .unwrap();
     drop(t);
-    let trendyol = account(&r.f, "trendyol", "seller-1").await;
-    let envelope = |kind: &str, account: &str, author: &str, id: &str| {
+    let envelope = |author: &str, id: &str| {
         json!({
             "public": {
-                "kind": kind, "account_id": account, "external_id": id,
+                "kind": "comment", "account_id": "ig-acct", "external_id": id,
                 "root_external_id": id, "status": "open",
                 "author": {"id": author, "name": "ayse.example", "is_self": false},
                 "text": "Fiyatı nedir? 0532 000 00 00", "created_at": "2026-10-30T10:00:00Z"
@@ -647,27 +642,14 @@ async fn erasure_masks_comment_and_question_events() {
         })
     };
     let mut events = Vec::new();
-    for (cap, provider, kind, payload) in [
-        (
-            ig.id,
-            Provider::Meta,
-            EventKind::Comment,
-            envelope("comment", "ig-acct", "5150", "c-1"),
-        ),
-        (
-            trendyol,
-            Provider::Trendyol,
-            EventKind::Question,
-            envelope("question", "seller-1", "777", "q-1"),
-        ),
-    ] {
+    for payload in [envelope("5150", "c-1"), envelope("777", "c-7")] {
         let event = InboundEvent {
             id: InboundEventId::new_v7(),
             workspace_id: ws,
-            provider,
-            capability_id: Some(cap),
+            provider: Provider::Meta,
+            capability_id: Some(ig.id),
             external_id: format!("event:{}", payload["public"]["external_id"]),
-            kind,
+            kind: EventKind::Comment,
             payload,
             received_at: FIXED_NOW,
             processed_at: None,
@@ -691,10 +673,10 @@ async fn erasure_masks_comment_and_question_events() {
     let mut t = r.f.uow.tenant(ws).await.unwrap();
     let items: Vec<PublicItem> = {
         let mut items = Vec::new();
-        for (cap, id) in [(ig.id, "c-1"), (trendyol, "q-1")] {
+        for id in ["c-1", "c-7"] {
             items.push(
                 t.public_items()
-                    .find_by_external(cap, id)
+                    .find_by_external(ig.id, id)
                     .await
                     .unwrap()
                     .expect("the item was taken in"),
@@ -756,7 +738,7 @@ async fn erasure_masks_comment_and_question_events() {
         assert!(!message.body.contains("Fiyat"));
     }
     // A later comment of the erased commenter is masked before it is stored.
-    let mut later = envelope("comment", "ig-acct", "5150", "c-2");
+    let mut later = envelope("5150", "c-2");
     let erased = erasure::scrub_inbound(t.as_mut(), Some(ig.id), &mut later)
         .await
         .unwrap();

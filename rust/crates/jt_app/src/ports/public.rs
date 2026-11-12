@@ -1,6 +1,6 @@
 //! Public items' persistence (spec 2026-10-30-inbox-comments-marketplace-design.md §6.1): the
-//! comments and marketplace questions the inbox answers, the posts and products they are about,
-//! and where each polled surface's next poll starts. Re-exported from [`super::inbox`]; scoped and
+//! comments the inbox answers, the posts they are about, and where each polled surface's next
+//! poll starts. Re-exported from [`super::inbox`]; scoped and
 //! answered like every inbox repo (see its module docs). An item holds ids, states and times
 //! only: its text is its inbound message's.
 //!

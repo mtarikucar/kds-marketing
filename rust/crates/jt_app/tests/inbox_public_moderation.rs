@@ -1,5 +1,5 @@
 //! Moderation of public items (plan 2026-10-30-inbox-comments-marketplace-plan.md, task F7; spec
-//! §3.8, §6.7): hide and unhide, delete, mark handled and report, each with its refusals, the
+//! §3.8, §6.7): hide and unhide, delete and mark handled, each with its refusals, the
 //! provider called outside any transaction and a lost race skipped. Items are taken in through
 //! the consumer; the providers are scripted public surfaces.
 
@@ -12,7 +12,7 @@ use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::{
     EnvelopeAuthor, EnvelopeStatus, EnvelopeSubject, ModerationAction, PUBLIC_ITEM_GONE,
-    PublicEnvelope, ReportReason,
+    PublicEnvelope,
 };
 use jt_app::usecases::inbox::{consumer, public};
 use jt_capability::{Capability, CapabilityId, NewCapability, StoredStatus};
@@ -24,8 +24,6 @@ use support::*;
 use time::Duration;
 
 const IG: &str = "17841400000000001";
-const SELLER: &str = "123456";
-const MERCHANT: &str = "hb-merchant-1";
 const IG_COMMENTS: &[&str] = &[
     "instagram_basic",
     "instagram_manage_comments",
@@ -35,11 +33,7 @@ const IG_COMMENTS: &[&str] = &[
 struct Rig {
     w: World,
     meta: Arc<ScriptedPublic>,
-    trendyol: Arc<ScriptedPublic>,
-    hepsiburada: Arc<ScriptedPublic>,
     ig: Capability,
-    store: Capability,
-    hb: Capability,
     tick: AtomicI64,
 }
 
@@ -52,55 +46,24 @@ async fn rig() -> Rig {
     apps.instagram.as_mut().unwrap().comment_scopes = true;
     w.deps.apps = Arc::new(apps);
     let meta = Arc::new(ScriptedPublic::new(Provider::Meta));
-    let trendyol = Arc::new(ScriptedPublic::new(Provider::Trendyol));
-    let hepsiburada = Arc::new(ScriptedPublic::new(Provider::Hepsiburada));
-    w.deps.connectors = Arc::new(
-        ScriptedRegistry::new()
-            .with_public(meta.clone())
-            .with_public(trendyol.clone())
-            .with_public(hepsiburada.clone()),
-    );
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_public(meta.clone()));
     let ig = capability(&w, "instagram", IG, IG_COMMENTS).await;
-    let store = capability(&w, "trendyol", SELLER, &[]).await;
-    let hb = capability(&w, "hepsiburada", MERCHANT, &[]).await;
     Rig {
         w,
         meta,
-        trendyol,
-        hepsiburada,
         ig,
-        store,
-        hb,
         tick: AtomicI64::new(0),
     }
 }
 
 async fn capability(w: &World, kind: &str, account: &str, scopes: &[&str]) -> Capability {
-    let (public, credential) = match kind {
-        "trendyol" => (
-            json!({"provider": "trendyol", "access": {"kind": "trendyol_seller", "seller_id": SELLER}}),
-            Credential::TrendyolSeller {
-                seller_id: SELLER.into(),
-                api_key: "ty-key".into(),
-                api_secret: "ty-secret".into(),
-            },
-        ),
-        "hepsiburada" => (
-            json!({"provider": "hepsiburada", "access": {"kind": "hepsiburada_merchant", "merchant_id": MERCHANT}}),
-            Credential::HepsiburadaMerchant {
-                merchant_id: MERCHANT.into(),
-                service_key: "hb-key".into(),
-            },
-        ),
-        _ => (
-            json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}}),
-            Credential::OAuth {
-                access_token: "EAAB-test-token".into(),
-                refresh_token: None,
-                expires_at: None,
-                scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
-            },
-        ),
+    let public =
+        json!({"provider": "meta", "access": {"kind": "oauth", "app": "meta", "scopes": scopes}});
+    let credential = Credential::OAuth {
+        access_token: "EAAB-test-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
     };
     let mut cap = Capability::new(
         CapabilityId::new_v7(),
@@ -162,30 +125,6 @@ fn comment(id: &str, author: &str) -> PublicEnvelope {
     }
 }
 
-fn question(account: &str, id: &str) -> PublicEnvelope {
-    PublicEnvelope {
-        kind: PublicKind::Question,
-        account_id: account.into(),
-        external_id: id.into(),
-        root_external_id: id.into(),
-        author: EnvelopeAuthor {
-            id: Some("cust-1".into()),
-            name: None,
-            is_self: false,
-        },
-        text: "Bu ürünün S bedeni var mı?".into(),
-        subject: Some(EnvelopeSubject {
-            kind: SubjectKind::Product,
-            external_id: "PRD-1".into(),
-            title: "Boyama seti".into(),
-            url: None,
-            image_url: None,
-            facts: json!({}),
-        }),
-        ..comment(id, "x")
-    }
-}
-
 /// Takes `env` in on `cap` through the consumer; the item.
 async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
     let tick = r.tick.fetch_add(1, Ordering::Relaxed);
@@ -193,7 +132,6 @@ async fn take(r: &Rig, cap: &Capability, env: PublicEnvelope) -> PublicItem {
     let provider = jt_connector::provider_for_kind(&cap.kind_key).unwrap();
     let kind = match env.kind {
         PublicKind::Comment => EventKind::Comment,
-        PublicKind::Question => EventKind::Question,
     };
     let event = InboundEvent {
         id: InboundEventId::new_v7(),
@@ -312,18 +250,6 @@ async fn agent_hides_and_unhides() {
         [ModerationAction::Hide, ModerationAction::Unhide]
     );
     assert_eq!(r.w.entries("inbox.public.moderated").len(), 2);
-}
-
-#[tokio::test]
-async fn hide_refused_on_marketplace_items() {
-    let r = rig().await;
-    let q = take(&r, &r.store, question(SELLER, "q-1")).await;
-    let e = public::hide(&r.w.deps, &r.w.owner_ctx, q.id, hidden(true))
-        .await
-        .unwrap_err();
-    assert_eq!(reason(&e), "hide_unsupported");
-    assert!(moderations(&r.trendyol).is_empty());
-    assert_eq!(item(&r, "q-1").moderation, Moderation::Visible);
 }
 
 #[tokio::test]
@@ -512,17 +438,6 @@ async fn delete_marks_deleted_and_not_owed() {
         .unwrap_err();
     assert_eq!(reason(&e), "item_removed");
     assert_eq!(moderations(&r.meta).len(), 1);
-    // A marketplace question is never deleted.
-    let q = take(&r, &r.store, question(SELLER, "q-1")).await;
-    let e = public::delete(
-        &r.w.deps,
-        &r.w.owner_ctx,
-        q.id,
-        public::DeleteInput { confirm: true },
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(reason(&e), "delete_unsupported");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -539,16 +454,16 @@ async fn mark_handled_batch_up_to_100_and_one_ledger_line() {
     let agent = agent(&r, &["inbox.work"]).await;
     let c1 = take(&r, &r.ig, comment("1", "fan-1")).await;
     let c2 = take(&r, &r.ig, comment("2", "fan-2")).await;
-    let q = take(&r, &r.store, question(SELLER, "q-1")).await;
+    let c3 = take(&r, &r.ig, comment("3", "fan-3")).await;
     let out = public::mark_handled(
         &r.w.deps,
         &agent,
-        handled(vec![c1.id, c2.id, q.id, c1.id], "no_reply_needed"),
+        handled(vec![c1.id, c2.id, c3.id, c1.id], "no_reply_needed"),
     )
     .await
     .unwrap();
     assert_eq!(out.items.len(), 3);
-    for id in ["1", "2", "q-1"] {
+    for id in ["1", "2", "3"] {
         assert!(
             matches!(
                 item(&r, id).answer,
@@ -565,7 +480,10 @@ async fn mark_handled_batch_up_to_100_and_one_ledger_line() {
         conversation_state(&r, c1.conversation_id),
         ConvState::Theirs
     );
-    assert_eq!(conversation_state(&r, q.conversation_id), ConvState::Theirs);
+    assert_eq!(
+        conversation_state(&r, c3.conversation_id),
+        ConvState::Theirs
+    );
     let lines = r.w.entries("inbox.public.handled");
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].payload["reason"], "no_reply_needed");
@@ -618,48 +536,6 @@ async fn mark_handled_refuses_a_foreign_or_closed_item() {
     assert_eq!(reason(&e), "item_not_owed");
     assert_eq!(item(&r, "1").answer, AnswerState::Awaiting);
     assert_eq!(r.w.entries("inbox.public.handled").len(), 1);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Report
-// ---------------------------------------------------------------------------------------------
-
-#[tokio::test]
-async fn report_only_where_the_surface_reports() {
-    let r = rig().await;
-    let c1 = take(&r, &r.ig, comment("1", "fan-1")).await;
-    let ty = take(&r, &r.store, question(SELLER, "q-1")).await;
-    let hb = take(&r, &r.hb, question(MERCHANT, "hb-1")).await;
-    let report = || public::ReportInput {
-        reason: ReportReason::Spam,
-    };
-    for id in [c1.id, ty.id] {
-        let e = public::report(&r.w.deps, &r.w.owner_ctx, id, report())
-            .await
-            .unwrap_err();
-        assert_eq!(reason(&e), "report_unsupported");
-    }
-    let agent = agent(&r, &["inbox.work"]).await;
-    r.hepsiburada.push_moderate(Ok(()));
-    let out = public::report(&r.w.deps, &agent, hb.id, report())
-        .await
-        .unwrap();
-    assert_eq!(out.outcome, "applied");
-    assert_eq!(item(&r, "hb-1").moderation, Moderation::Reported);
-    assert_eq!(
-        conversation_state(&r, hb.conversation_id),
-        ConvState::Theirs
-    );
-    assert_eq!(
-        moderations(&r.hepsiburada),
-        [ModerationAction::Report {
-            reason: ReportReason::Spam
-        }]
-    );
-    assert!(moderations(&r.meta).is_empty() && moderations(&r.trendyol).is_empty());
-    let line = &r.w.entries("inbox.public.moderated")[0];
-    assert_eq!(line.payload["action"], "report");
-    assert_eq!(line.payload["reason"], "spam");
 }
 
 #[tokio::test]
