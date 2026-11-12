@@ -9,9 +9,12 @@ fail() { printf 'release: %s\n' "$1" >&2; exit 1; }
 [[ $# == 3 ]] || fail 'usage: staging FULL_REVISION ARCHIVE_SHA256'
 ENVIRONMENT=$1 REV=$2 ARCHIVE_SHA256=$3
 [[ "$ENVIRONMENT" == staging ]] || fail 'this reviewed operation is authorized for staging only'
-PINNED_REV=d66152a4f7834c73e524cf492fac2cfb7fa8ac56
-# This candidate carries no migration: the database is at schema 40 before and after. The checks
-# below refuse a candidate that would apply one.
+PINNED_REV=7438a6b8f6de6ce952836adcf95dfa0572511dcc
+# This candidate applies migrations 41 and 42: the database goes from schema 40 to schema 42. Both
+# only replace CHECK constraints of oauth_pending (which providers and which platform apps a
+# pending sign-in may name: Google, and TikTok's ads app). The checks below compare, on the
+# restored copy and through the candidate's start, every table's row count, every column's name,
+# type and nullability, and the names the two constraints list.
 [[ "$REV" == "$PINNED_REV" && "$REV" =~ ^[0-9a-f]{40}$ ]] || fail 'unreviewed candidate revision'
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid archive digest'
 [[ "$EUID" == 0 ]] || fail 'run as root on the audited installation'
@@ -24,7 +27,7 @@ case "$ENVIRONMENT" in
     UNIT=jeeta-staging.service LINK=/opt/jeeta/staging-current OTHER_LINK=/opt/jeeta/current
     ENVFILE=/etc/jeeta-staging/jeeta.env PORT=5437 HTTP_PORT=8091 REHEARSAL_PORT=18091
     SERVICE_USER=jeeta-staging FILES=/var/lib/jeeta-staging/files HOST=staging.jeetagrowth.com
-    PREDECESSOR=f7be8eb1beefc92c713c6f807c89ff1192945fad
+    PREDECESSOR=d66152a4f7834c73e524cf492fac2cfb7fa8ac56
     UPGRADE=/root/staging-upgrade.sh
     UPGRADE_SHA256=120ff74c1b8ae34cc6f9a23328b5425f2c67818a4b9a3b32fd56a9c3b5935929
     BACKUP_ROOT=/var/backups/jeeta-staging/release-operations
@@ -161,7 +164,7 @@ for path in [r,*r.rglob('*')]:
 m=json.loads((r/'manifest.json').read_text())
 assert m['source_revision']==rev and m['source_clean'] is True
 assert (r/'REVISION').read_text().strip()==rev and m['format']==1
-assert m['schema_version']==40 and m['migration_versions']==list(range(1,41))
+assert m['schema_version']==42 and m['migration_versions']==list(range(1,43))
 assert m['binary_checksum']['algorithm']=='sha256' and m['panel_checksum']['algorithm']=='sha256'
 assert m['panel_checksum']['manifest']=='panel.sha256'
 assert hashlib.sha256((r/'jeeta').read_bytes()).hexdigest()==m['binary_checksum']['value']
@@ -182,7 +185,7 @@ for entry in m['migrations']:
         assert pathlib.PurePosixPath(name).name==name and name.endswith('.'+direction+'.sql')
         assert hashlib.sha384((r/'migrations'/name).read_bytes()).hexdigest()==entry[direction+'_sha384']
     expected[version]=entry
-assert list(expected)==list(range(1,41))
+assert list(expected)==list(range(1,43))
 assert {p.name for p in (r/'migrations').iterdir()}=={e[k] for e in expected.values() for k in ['up','down']}
 values={}
 for line in pathlib.Path(envfile).read_text().splitlines():
@@ -205,6 +208,10 @@ assert values.get('JEETA_PANEL_DIR')==('/opt/jeeta/staging-current/panel' if env
 assert values.get('JEETA_JOBS_ENABLED')=='true' and values.get('JEETA_ALLOW_SUPERUSER','') not in ['true','1']
 assert not values.get('JEETA_PLATFORM_BOOTSTRAP_RESET') or values['JEETA_PLATFORM_BOOTSTRAP_RESET']=='0'
 assert re.fullmatch('[0-9a-fA-F]{64}',values['JEETA_SECRET_KEY'])
+# The candidate reads six names its predecessor ignores, and refuses to start on a half-configured
+# app. Its first read of this file is after the swap (the rehearsal runs on a reduced environment),
+# so a file that already sets one of them is refused here, before anything is stopped.
+assert not any(values.get(k,'').strip() for k in ['JEETA_GOOGLE_CLIENT_ID','JEETA_GOOGLE_CLIENT_SECRET','JEETA_TIKTOK_ADS_APP_ID','JEETA_TIKTOK_ADS_SECRET','JEETA_X_AD_SCOPES','JEETA_LINKEDIN_AD_SCOPES']), 'Environment already sets a name this candidate starts to read; review it before publishing'
 f=pathlib.Path(files);assert f.is_dir()
 for p in [f,*f.parents]:assert not p.is_symlink(), 'Symlink in files path'
 for p in f.rglob('*'):assert p.is_file() or p.is_dir();assert not p.is_symlink(), 'Unsafe files tree'
@@ -218,11 +225,15 @@ actual=[line.split('|') for line in rows.splitlines()]
 versions=list(range(1,41)) if environment=='staging' else list(range(1,20))+list(range(21,26))
 assert [int(row[0]) for row in actual]==versions, 'Unexpected applied migration set'
 assert all(row==[str(int(row[0])),expected[int(row[0])]['up_sha384'],'t'] for row in actual), 'Changed or failed migration'
-assert set(expected)-set(versions)==(set() if environment=='staging' else {20,*range(26,41)})
+assert set(expected)-set(versions)==({41,42} if environment=='staging' else {20,*range(26,43)})
 if environment=='staging':
     # The predecessor's schema 40, as its release left it.
     assert sql("SELECT to_regclass('public.social_account_days') IS NOT NULL AND to_regclass('public.ads_campaigns') IS NOT NULL AND to_regclass('public.workspace_modules') IS NOT NULL").strip()=='t', 'A table of the predecessor is missing'
     assert sql("SELECT to_regclass('public.commissions') IS NULL AND to_regclass('public.commission_default') IS NULL AND to_regclass('public.commission_user_rates') IS NULL").strip()=='t', 'Unexpected commission table'
+    # What migrations 41 and 42 replace: the two CHECK constraints of oauth_pending, listing the
+    # names schema 40 left them with (compared as sorted sets).
+    listed="(SELECT ARRAY(SELECT m[1] FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m ORDER BY 1) FROM pg_constraint c WHERE c.conrelid='public.oauth_pending'::regclass AND c.contype='c' AND c.conname='%s')"
+    assert sql("SELECT "+listed%'oauth_pending_provider_check'+"=ARRAY['linkedin','meta','netgsm','tiktok','x'] AND "+listed%'oauth_pending_app_check'+"=ARRAY['instagram','linkedin','meta','tiktok','x']").strip()=='t', 'oauth_pending constraints differ from schema 40'
 old=json.loads((pathlib.Path(previous)/'manifest.json').read_text())
 assert old['source_revision']==pathlib.Path(previous).name
 assert [x['version'] for x in old['migrations']]==versions
@@ -231,7 +242,7 @@ assert all(entry==expected[entry['version']] for entry in old['migrations']), 'P
 (root/'database-migrations').write_text(rows)
 (root/'database-role').write_text(role)
 (root/'environment.sha256').write_text(hashlib.sha256(pathlib.Path(envfile).read_bytes()).hexdigest())
-print('Complete candidate verified; exact predecessor matches and the candidate carries no migration')
+print('Complete candidate verified; exact predecessor and reviewed migration delta match')
 PY
 # A complete content comparison prevents the upgraders' existing-directory shortcut from
 # accepting stale scripts/docs/extra assets. Installed paths must be root-owned and immutable.
@@ -259,7 +270,7 @@ if [[ "$ENVIRONMENT" == production ]]; then
   private_file "$PROMOTIONS/$REV.staging.json"
   python3 -I - "$PROMOTIONS/$REV.staging.json" "$REV" "$ARCHIVE_SHA256" <<'PY'
 import json,sys
-record=json.load(open(sys.argv[1]));assert record['environment']=='staging' and record['revision']==sys.argv[2] and record['archive_sha256']==sys.argv[3] and record['schema_version']==40
+record=json.load(open(sys.argv[1]));assert record['environment']=='staging' and record['revision']==sys.argv[2] and record['archive_sha256']==sys.argv[3] and record['schema_version']==42
 PY
   systemctl is-active --quiet jeeta-staging.service
   curl --fail --silent --max-time 10 --noproxy '*' -H 'Host: staging.jeetagrowth.com' http://127.0.0.1:8091/readyz >/dev/null
@@ -340,11 +351,15 @@ PY
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
   "SELECT format('SELECT %L, count(*) FROM %I.%I;', tablename, schemaname, tablename) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('_sqlx_migrations') ORDER BY tablename" > "$BACKUP/count-original-tables.sql"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 < "$BACKUP/count-original-tables.sql" > "$BACKUP/rows-before"
-# The checks below are written for staging's predecessor (schema 40) and a candidate without a
-# migration: every table keeps its row count through the candidate's start, the module registry
-# included. The retained production branch must be reworked before it is enabled.
+# The checks below are written for staging's predecessor (schema 40) and a candidate whose two
+# migrations replace CHECK constraints only: through the candidate's start every table keeps its
+# row count, and the set of tables and of their columns stays what it was. The retained production
+# branch must be reworked before it is enabled.
+sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
+  "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, column_name" > "$BACKUP/columns-before"
+[[ -s "$BACKUP/columns-before" ]] || fail 'empty column inventory'
 VERIFY_UNIT=jeeta-${ENVIRONMENT}-rehearsal-${REV:0:8}-$(date +%s)
-UNSET_ENV='JEETA_PLATFORM_BOOTSTRAP_EMAIL JEETA_PLATFORM_BOOTSTRAP_PASSWORD JEETA_PLATFORM_BOOTSTRAP_RESET JEETA_META_APP_ID JEETA_META_APP_SECRET JEETA_META_VERIFY_TOKEN JEETA_META_LOGIN_CONFIG_ID JEETA_META_WHATSAPP_CONFIG_ID JEETA_META_GRAPH_VERSION JEETA_META_COMMENT_SCOPES JEETA_INSTAGRAM_APP_ID JEETA_INSTAGRAM_APP_SECRET JEETA_INSTAGRAM_COMMENT_SCOPES JEETA_X_CLIENT_ID JEETA_X_CLIENT_SECRET JEETA_TIKTOK_CLIENT_KEY JEETA_TIKTOK_CLIENT_SECRET JEETA_LINKEDIN_CLIENT_ID JEETA_LINKEDIN_CLIENT_SECRET JEETA_LINKEDIN_API_VERSION JEETA_LINKEDIN_ORG_SCOPES JEETA_HEPSIBURADA_INTEGRATOR_USER JEETA_RECOVERY_STATUS_DIR JEETA_WAL_ARCHIVE_DIR JEETA_ALLOW_SUPERUSER JEETA_ALLOW_TEST_LOOPBACK JEETA_STDIO_API_KEY JEETA_TEST_DATABASE_URL'
+UNSET_ENV='JEETA_PLATFORM_BOOTSTRAP_EMAIL JEETA_PLATFORM_BOOTSTRAP_PASSWORD JEETA_PLATFORM_BOOTSTRAP_RESET JEETA_META_APP_ID JEETA_META_APP_SECRET JEETA_META_VERIFY_TOKEN JEETA_META_LOGIN_CONFIG_ID JEETA_META_WHATSAPP_CONFIG_ID JEETA_META_GRAPH_VERSION JEETA_META_COMMENT_SCOPES JEETA_INSTAGRAM_APP_ID JEETA_INSTAGRAM_APP_SECRET JEETA_INSTAGRAM_COMMENT_SCOPES JEETA_X_CLIENT_ID JEETA_X_CLIENT_SECRET JEETA_X_AD_SCOPES JEETA_TIKTOK_CLIENT_KEY JEETA_TIKTOK_CLIENT_SECRET JEETA_TIKTOK_ADS_APP_ID JEETA_TIKTOK_ADS_SECRET JEETA_LINKEDIN_CLIENT_ID JEETA_LINKEDIN_CLIENT_SECRET JEETA_LINKEDIN_API_VERSION JEETA_LINKEDIN_ORG_SCOPES JEETA_LINKEDIN_AD_SCOPES JEETA_GOOGLE_CLIENT_ID JEETA_GOOGLE_CLIENT_SECRET JEETA_HEPSIBURADA_INTEGRATOR_USER JEETA_RECOVERY_STATUS_DIR JEETA_WAL_ARCHIVE_DIR JEETA_ALLOW_SUPERUSER JEETA_ALLOW_TEST_LOOPBACK JEETA_STDIO_API_KEY JEETA_TEST_DATABASE_URL'
 systemd-run --quiet --unit="$VERIFY_UNIT" --property=Type=simple --property=User="$SERVICE_USER" --property=Group="$SERVICE_USER" \
   --property=WorkingDirectory="$CANDIDATE" --property=EnvironmentFile="$CANDIDATE/rehearsal.env" --property="UnsetEnvironment=$UNSET_ENV" \
   --property=IPAddressDeny=any --property=IPAddressAllow=localhost --property=NoNewPrivileges=yes \
@@ -367,6 +382,16 @@ cmp "$BACKUP/rows-before" "$BACKUP/rows-after"
 sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
   "SELECT count(*) FROM pg_class WHERE relname IN ('social_account_days','ads_campaigns') AND relnamespace='public'::regnamespace AND relrowsecurity AND relforcerowsecurity" > "$BACKUP/analysis-rls"
 [[ $(cat "$BACKUP/analysis-rls") == 2 ]] || fail 'social account and ad campaign tables must force RLS'
+# Migrations 41 and 42 change no table and no column.
+sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c \
+  "SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, column_name" > "$BACKUP/columns-after"
+cmp "$BACKUP/columns-before" "$BACKUP/columns-after"
+# What they do change: a pending sign-in may name Google as its provider and as its app
+# (migration 41), and TikTok's ads app (migration 42); what it could name before, it still can.
+# The names each constraint lists are compared as a sorted set, whatever the spacing of its text.
+OAUTH_PENDING_CHECKS="SELECT (SELECT ARRAY(SELECT m[1] FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m ORDER BY 1) FROM pg_constraint c WHERE c.conrelid='public.oauth_pending'::regclass AND c.contype='c' AND c.conname='oauth_pending_provider_check')=ARRAY['google','linkedin','meta','netgsm','tiktok','x'] AND (SELECT ARRAY(SELECT m[1] FROM regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''', 'g') AS m ORDER BY 1) FROM pg_constraint c WHERE c.conrelid='public.oauth_pending'::regclass AND c.contype='c' AND c.conname='oauth_pending_app_check')=ARRAY['google','instagram','linkedin','meta','tiktok','tiktok_ads','x']"
+sudo -u postgres psql -XAt -p "$PORT" -d "$VERIFY_DB" -v ON_ERROR_STOP=1 -c "$OAUTH_PENDING_CHECKS" > "$BACKUP/oauth-pending-checks"
+[[ $(cat "$BACKUP/oauth-pending-checks") == t ]] || fail 'oauth_pending constraints differ from what migrations 41 and 42 define'
 sudo -u postgres dropdb -p "$PORT" "$VERIFY_DB"
 VERIFY_DB=''
 (cd "$BACKUP" && sha256sum database.dump files.tar jeeta.env manifest.json REVISION database-migrations > SHA256SUMS && sha256sum --check --status SHA256SUMS)
@@ -389,17 +414,20 @@ check_digest "$(cat "$CANDIDATE/environment.sha256")" "$ENVFILE" || fail 'enviro
 systemctl is-active --quiet "$UNIT"
 curl --fail --silent --show-error --max-time 10 --noproxy '*' -H "Host: $HOST" "http://127.0.0.1:$HTTP_PORT/readyz" > "$BACKUP/local-readyz"
 curl --fail --silent --show-error --max-time 20 --noproxy '*' "https://$HOST/readyz" > "$BACKUP/public-readyz"
-# A candidate without a migration leaves no trace in the database: say which binary serves.
-# Printed, not enforced: the unit's start command is not this script's to assume.
+# Say which binary serves. Printed, not enforced: the unit's start command is not this script's
+# to assume.
 SERVING=$(readlink -f "/proc/$(systemctl show "$UNIT" -p MainPID --value)/exe" 2>/dev/null || true)
 printf 'Serving binary: %s (candidate: %s/jeeta)\n' "${SERVING:-unknown}" "$DEST"
 migration_snapshot jeeta > "$BACKUP/published-migrations"
 cmp "$CANDIDATE/expected-migrations" "$BACKUP/published-migrations"
+# The published database carries what the rehearsal proved on the restored copy.
+sudo -u postgres psql -XAt -p "$PORT" -d jeeta -v ON_ERROR_STOP=1 -c "$OAUTH_PENDING_CHECKS" > "$BACKUP/published-oauth-pending-checks"
+[[ $(cat "$BACKUP/published-oauth-pending-checks") == t ]] || fail 'published oauth_pending constraints differ from what migrations 41 and 42 define'
 install -d -m 0700 "$PROMOTIONS"
 python3 -I - "$PROMOTIONS" "$ENVIRONMENT" "$REV" "$ARCHIVE_SHA256" "$BACKUP" <<'PY'
 import datetime,json,os,pathlib,sys,tempfile
 root,environment,revision,digest,backup=sys.argv[1:]
-record={'environment':environment,'revision':revision,'archive_sha256':digest,'schema_version':40,'backup':backup,'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+record={'environment':environment,'revision':revision,'archive_sha256':digest,'schema_version':42,'backup':backup,'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat()}
 fd,temp=tempfile.mkstemp(prefix='.promotion-',dir=root)
 with os.fdopen(fd,'w') as f:json.dump(record,f);f.write('\n')
 os.replace(temp,str(pathlib.Path(root)/(revision+'.'+environment+'.json')))
