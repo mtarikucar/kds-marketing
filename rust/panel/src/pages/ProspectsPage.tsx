@@ -1,21 +1,19 @@
 import { useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from 'lucide-react';
 import { getPlaybook, listProspects, poolReport } from '@/api/prospects';
 import { listTasks } from '@/api/research';
-import { getStrategy } from '@/api/strategy';
 import {
   SCORE_BUCKETS,
-  type IcpEntry,
   type NextPage,
   type ProspectListQuery,
   type ProspectRow,
   type ProspectStatus,
   type ScoreBucket,
-  type Segment,
 } from '@/api/types';
+import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
 import {
   Button,
@@ -31,6 +29,7 @@ import {
   toast,
 } from '@/components/ui';
 import { formatRelative } from '@/lib/format';
+import { can } from '@/lib/roles';
 import { selectClass } from './InboxShared';
 import {
   BulkOutcomes,
@@ -43,9 +42,12 @@ import {
 } from './LeadsShared';
 import { ProspectPane } from './ProspectDetail';
 import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
+import { ProspectFormDialog } from './prospects/ProspectFormDialog';
+import { usePoolSegments } from './prospects/segments';
 import { taskLabel } from './prospects/words';
 
 export { promoteOutcomeText, taskLabel } from './prospects/words';
+export { segmentOptions, type SegmentOption } from './prospects/segments';
 
 /** Prospects per page; the server pages by `(created_at, id)`, newest first. */
 export const PROSPECTS_PAGE = 50;
@@ -56,33 +58,6 @@ interface Filters {
   city: string;
   segment: string;
   task: string;
-}
-
-/** One choice of the audience filter. */
-export interface SegmentOption {
-  key: string;
-  name: string;
-}
-
-/**
- * The audience filter's choices, read from this workspace's own strategy and never from a fixed
- * list: one per audience segment that an ICP entry names, in the entries' order, then any segment
- * a listed prospect carries, then the filter's current value (a link, or a segment the strategy
- * no longer prospects for). Each is shown under the audience's name, or its key when the strategy
- * cannot be read.
- */
-export function segmentOptions(
-  icp: readonly Pick<IcpEntry, 'segment_key'>[],
-  audience: readonly Pick<Segment, 'key' | 'name'>[],
-  carried: readonly (string | null)[] = [],
-  current = '',
-): SegmentOption[] {
-  const names = new Map(audience.map((s) => [s.key, s.name]));
-  const keys: string[] = [];
-  for (const key of [...icp.map((e) => e.segment_key), ...carried, current]) {
-    if (key && !keys.includes(key)) keys.push(key);
-  }
-  return keys.map((key) => ({ key, name: names.get(key) || key }));
 }
 
 /** The status tabs, in the order a prospect moves through them. */
@@ -259,6 +234,10 @@ export function ProspectsPage() {
   const [blocking, setBlocking] = useState<DecisionTarget[] | null>(null);
   const [outcomes, setOutcomes] = useState<BulkOutcome[] | null>(null);
   const [playbook, setPlaybook] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const session = useSession();
+  const navigate = useNavigate();
+  const canAdd = can(session.data, 'prospects.work');
 
   const page = cursors.at(-1);
   const query: ProspectListQuery = {
@@ -278,20 +257,10 @@ export function ProspectsPage() {
   });
   const tasks = useQuery({ queryKey: [...key, 'research', 'list', 'open'], queryFn: () => listTasks({ status: 'open' }) });
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
-  // The audience filter lists this workspace's own segments: the ICP entries say which ones
-  // prospecting works for, the strategy's audience names them (a member who cannot read the
-  // strategy sees their keys).
-  const book = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook, retry: false });
-  const strategy = useQuery({ queryKey: [...key, 'prospects', 'audience'], queryFn: getStrategy, retry: false });
-  const segments = useMemo(
-    () =>
-      segmentOptions(
-        book.data?.workspace.icp ?? [],
-        strategy.data?.approved?.sections.audience ?? [],
-        rows.map((r) => r.segment_key),
-        filters.segment,
-      ),
-    [book.data, strategy.data, rows, filters.segment],
+  // The audience filter lists this workspace's own segments, never a fixed list.
+  const segments = usePoolSegments(
+    rows.map((r) => r.segment_key),
+    filters.segment,
   );
   const segmentName = (segmentKey: string | null) => segments.find((s) => s.key === segmentKey)?.name;
 
@@ -341,6 +310,12 @@ export function ProspectsPage() {
           <Button asChild size="sm" variant="outline">
             <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
           </Button>
+          {canAdd && (
+            <Button size="sm" onClick={() => setAdding(true)}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              {copy('addProspect')}
+            </Button>
+          )}
         </div>
       </header>
 
@@ -468,9 +443,12 @@ export function ProspectsPage() {
                     title={t('leads.prospects.empty')}
                     description={t('leads.prospects.emptyBody')}
                     action={
-                      <Button asChild variant="outline">
-                        <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
-                      </Button>
+                      <div className="flex flex-wrap justify-center gap-2">
+                        <Button asChild variant="outline">
+                          <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
+                        </Button>
+                        {canAdd && <Button onClick={() => setAdding(true)}>{copy('addProspect')}</Button>}
+                      </div>
                     }
                   />
                 )}
@@ -538,6 +516,13 @@ export function ProspectsPage() {
       </div>
 
       {playbook && <PlaybookDialog onClose={() => setPlaybook(false)} />}
+      {adding && (
+        <ProspectFormDialog
+          segments={segments}
+          onClose={() => setAdding(false)}
+          onSaved={(saved) => navigate(`/prospects/${encodeURIComponent(saved.id)}`)}
+        />
+      )}
       {rejecting && rejecting.length > 0 && (
         <RejectDialog key={rejecting.map((x) => x.id).join()} targets={rejecting} onClose={() => setRejecting(null)} onDone={finished} />
       )}

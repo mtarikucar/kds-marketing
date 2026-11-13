@@ -294,4 +294,44 @@ describe('ProspectDetail', () => {
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ expected_revision: 3, clear: ['notes'] }),
     );
   });
+
+  it('edits the details in a form and sends only what changed', async () => {
+    const user = userEvent.setup();
+    const { calls } = await open({ [`PATCH /api/prospects/${ID}`]: { prospect: prospectOut(1).prospect, flags: [] } });
+    await user.click(screen.getByRole('button', { name: 'Bilgileri düzenle' }));
+    const form = within(screen.getByRole('form', { name: 'Bilgileri düzenle' }));
+    // The name and kind are fixed once recorded; with nothing changed there is nothing to save.
+    expect(form.queryByRole('textbox', { name: /İşletme adı/ })).not.toBeInTheDocument();
+    const save = form.getByRole('button', { name: 'Kaydet' });
+    expect(save).toBeDisabled();
+    expect(form.getByRole('textbox', { name: tr.leads.fields.phone })).toHaveValue('+905000000000');
+
+    const city = form.getByRole('textbox', { name: 'Şehir' });
+    await user.clear(city);
+    await user.type(city, 'Ankara');
+    await user.clear(form.getByRole('textbox', { name: tr.leads.fields.email }));
+    await user.type(form.getByRole('textbox', { name: tr.leads.fields.instagram }), 'ornekkafe');
+    const source = form.getByRole('textbox', { name: /nereden biliyorsun/ });
+    await user.clear(source);
+    await user.type(source, 'Telefonda sordum');
+    await user.click(save);
+    await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true));
+    const body = calls.find((c) => c.method === 'PATCH' && c.path === `/api/prospects/${ID}`)!.body as {
+      set: Record<string, unknown>;
+    };
+    expect(body).toMatchObject({
+      expected_revision: 3,
+      set: { city: 'Ankara', instagram: { value: 'ornekkafe', sources: [{ kind: 'manual', note: 'Telefonda sordum' }] } },
+      clear: ['email'],
+    });
+    // The phone was not touched: it is not sent, so it keeps the agent's evidence.
+    expect(body.set).not.toHaveProperty('phone');
+  });
+
+  it('a blocked prospect is not edited in the pool', async () => {
+    await open({
+      [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'do_not_contact' }),
+    });
+    expect(screen.queryByRole('button', { name: 'Bilgileri düzenle' })).not.toBeInTheDocument();
+  });
 });
