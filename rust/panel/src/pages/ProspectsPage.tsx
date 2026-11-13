@@ -5,13 +5,16 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { getPlaybook, listProspects, poolReport } from '@/api/prospects';
 import { listTasks } from '@/api/research';
+import { getStrategy } from '@/api/strategy';
 import {
   SCORE_BUCKETS,
+  type IcpEntry,
   type NextPage,
   type ProspectListQuery,
   type ProspectRow,
   type ProspectStatus,
   type ScoreBucket,
+  type Segment,
 } from '@/api/types';
 import { QueryState } from '@/components/QueryState';
 import {
@@ -53,6 +56,33 @@ interface Filters {
   city: string;
   segment: string;
   task: string;
+}
+
+/** One choice of the audience filter. */
+export interface SegmentOption {
+  key: string;
+  name: string;
+}
+
+/**
+ * The audience filter's choices, read from this workspace's own strategy and never from a fixed
+ * list: one per audience segment that an ICP entry names, in the entries' order, then any segment
+ * a listed prospect carries, then the filter's current value (a link, or a segment the strategy
+ * no longer prospects for). Each is shown under the audience's name, or its key when the strategy
+ * cannot be read.
+ */
+export function segmentOptions(
+  icp: readonly Pick<IcpEntry, 'segment_key'>[],
+  audience: readonly Pick<Segment, 'key' | 'name'>[],
+  carried: readonly (string | null)[] = [],
+  current = '',
+): SegmentOption[] {
+  const names = new Map(audience.map((s) => [s.key, s.name]));
+  const keys: string[] = [];
+  for (const key of [...icp.map((e) => e.segment_key), ...carried, current]) {
+    if (key && !keys.includes(key)) keys.push(key);
+  }
+  return keys.map((key) => ({ key, name: names.get(key) || key }));
 }
 
 /** The status tabs, in the order a prospect moves through them. */
@@ -143,12 +173,15 @@ function PlaybookDialog({ onClose }: { onClose: () => void }) {
 /** One prospect as a compact row: the name opens it (the link covers the row), the box selects it. */
 function Row({
   row,
+  segment,
   current,
   showStatus,
   checked,
   onToggle,
 }: {
   row: ProspectRow;
+  /** The name of the row's audience segment, when it has one. */
+  segment?: string;
   current: boolean;
   showStatus: boolean;
   checked: boolean;
@@ -180,7 +213,7 @@ function Row({
         >
           {row.business_name}
         </Link>
-        <span className="truncate text-xs text-muted-foreground">{[row.sector, place].filter(Boolean).join(' · ') || '—'}</span>
+        <span className="truncate text-xs text-muted-foreground">{[segment, row.sector, place].filter(Boolean).join(' · ') || '—'}</span>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         <span
@@ -245,6 +278,22 @@ export function ProspectsPage() {
   });
   const tasks = useQuery({ queryKey: [...key, 'research', 'list', 'open'], queryFn: () => listTasks({ status: 'open' }) });
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
+  // The audience filter lists this workspace's own segments: the ICP entries say which ones
+  // prospecting works for, the strategy's audience names them (a member who cannot read the
+  // strategy sees their keys).
+  const book = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook, retry: false });
+  const strategy = useQuery({ queryKey: [...key, 'prospects', 'audience'], queryFn: getStrategy, retry: false });
+  const segments = useMemo(
+    () =>
+      segmentOptions(
+        book.data?.workspace.icp ?? [],
+        strategy.data?.approved?.sections.audience ?? [],
+        rows.map((r) => r.segment_key),
+        filters.segment,
+      ),
+    [book.data, strategy.data, rows, filters.segment],
+  );
+  const segmentName = (segmentKey: string | null) => segments.find((s) => s.key === segmentKey)?.name;
 
   const setFilter = <K extends keyof Filters>(name: K, value: Filters[K]) => {
     setFilters((f) => ({ ...f, [name]: value }));
@@ -269,7 +318,7 @@ export function ProspectsPage() {
     else if (out[0]) toast.success(out[0].text);
   };
 
-  const extraFilters = [filters.bucket, filters.task, filters.city, filters.segment].filter(Boolean).length;
+  const extraFilters = [filters.bucket, filters.task, filters.city].filter(Boolean).length;
   const hasFilters = Object.values(filters).some(Boolean);
   const clearFilters = () => {
     setFilters({ status: '', bucket: '', city: '', segment: '', task: '' });
@@ -312,6 +361,21 @@ export function ProspectsPage() {
             </button>
           ))}
         </div>
+        <label className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+          {t('leads.prospects.filters.segment')}
+          <select
+            className={cn(selectClass, 'w-auto max-w-[16rem] py-1 text-foreground')}
+            value={filters.segment}
+            onChange={(e) => setFilter('segment', e.target.value)}
+          >
+            <option value="">{t('leads.prospects.filters.all')}</option>
+            {segments.map((s) => (
+              <option key={s.key} value={s.key}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           aria-expanded={moreFilters}
@@ -328,7 +392,7 @@ export function ProspectsPage() {
       <div
         id="prospect-more-filters"
         hidden={!moreFilters}
-        className={moreFilters ? cn('grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-2 xl:grid-cols-4', prospectId && 'hidden lg:grid') : 'hidden'}
+        className={moreFilters ? cn('grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-3', prospectId && 'hidden lg:grid') : 'hidden'}
       >
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.prospects.filters.bucket')}
@@ -358,10 +422,6 @@ export function ProspectsPage() {
         <label className="flex flex-col gap-1 text-sm">
           {t('leads.prospects.filters.city')}
           <Input value={filters.city} autoComplete="off" onChange={(e) => setFilter('city', e.target.value)} />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          {t('leads.prospects.filters.segment')}
-          <Input value={filters.segment} autoComplete="off" onChange={(e) => setFilter('segment', e.target.value)} />
         </label>
       </div>
 
@@ -421,6 +481,7 @@ export function ProspectsPage() {
                   <Row
                     key={row.id}
                     row={row}
+                    segment={segmentName(row.segment_key) ?? row.segment_key ?? undefined}
                     current={row.id === prospectId}
                     showStatus={filters.status === ''}
                     checked={selected.has(row.id)}

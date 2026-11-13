@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { LOADED, agentsList, leadsMe, prospectId, prospectOut, row, task, team } from '@/test/leads';
+import { segmentOptions } from './ProspectsPage';
 
 const NEXT = { before_at: '2026-11-01T09:02:00Z', before_id: prospectId(2) };
 
@@ -23,6 +24,28 @@ const listCalls = (calls: { path: string; method: string; search: string }[]) =>
 
 const tabs = () => within(screen.getByRole('group', { name: 'Durum' }));
 
+describe('segmentOptions', () => {
+  it('lists_the_workspaces_own_segments_by_name', () => {
+    const icp = [{ segment_key: 'toplu' }, { segment_key: 'atolye' }, { segment_key: 'toplu' }];
+    const audience = [
+      { key: 'atolye', name: 'Atölye ortakları' },
+      { key: 'toplu', name: 'Toplu sipariş' },
+      { key: 'kisiye_ozel', name: 'Kişiye özel' },
+    ];
+    // ICP order, each segment once; a segment without an ICP entry is not offered.
+    expect(segmentOptions(icp, audience)).toEqual([
+      { key: 'toplu', name: 'Toplu sipariş' },
+      { key: 'atolye', name: 'Atölye ortakları' },
+    ]);
+    // A segment a listed prospect carries, and the filter's own value, stay selectable; without
+    // the strategy the key stands in for the name.
+    expect(segmentOptions([], [], ['bayi', null, 'bayi'], 'eski')).toEqual([
+      { key: 'bayi', name: 'bayi' },
+      { key: 'eski', name: 'eski' },
+    ]);
+  });
+});
+
 describe('ProspectsPage', () => {
   it('filters_and_paging', async () => {
     const user = userEvent.setup();
@@ -40,8 +63,8 @@ describe('ProspectsPage', () => {
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.task }), task(1).id);
     await user.click(screen.getByRole('textbox', { name: tr.leads.prospects.filters.city }));
     await user.paste('İzmir');
-    await user.click(screen.getByRole('textbox', { name: tr.leads.prospects.filters.segment }));
-    await user.paste('kafeler');
+    // The audience is chosen from the workspace's own segments, beside the status tabs.
+    await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.segment }), 'kafeler');
     await waitFor(() => {
       const q = listCalls(calls).at(-1)!;
       expect(q.get('status')).toBe('qualified');
