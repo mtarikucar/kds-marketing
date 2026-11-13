@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
-import { LOADED, agentsList, leadsMe, prospectId, prospectOut, row, task, team } from '@/test/leads';
+import { LOADED, agentsList, leadsMe, playbook, prospect, prospectId, prospectOut, row, task, team } from '@/test/leads';
 import { segmentOptions } from './ProspectsPage';
 
 const NEXT = { before_at: '2026-11-01T09:02:00Z', before_id: prospectId(2) };
@@ -217,5 +217,63 @@ describe('ProspectsPage', () => {
     expect(items[0]).toHaveAttribute('data-ok', 'true');
     expect(items[1]).toHaveTextContent('Örnek Kafe 2');
     expect(items[1]).toHaveAttribute('data-ok', 'false');
+  });
+
+  it('a person adds a prospect by hand, under their own source note', async () => {
+    const user = userEvent.setup();
+    const added = { business_name: 'Örnek Atölye', status: 'new' as const };
+    const calls = mockFetch(
+      answers({
+        'GET /api/prospects/playbook': { ...playbook, workspace: { ...playbook.workspace, icp: [{ segment_key: 'atolye' }] } },
+        'POST /api/prospects': { prospect: prospect(9, added), flags: [] },
+        [`GET /api/prospects/${prospectId(9)}`]: prospectOut(9, added),
+      }),
+    );
+    const { router } = renderAt('/prospects');
+    await user.click(await screen.findByRole('button', { name: 'Aday ekle' }, LOADED));
+    const form = within(screen.getByRole('form', { name: 'Yeni aday' }));
+    // Nothing is sent while the name is missing.
+    await user.click(form.getByRole('button', { name: 'Aday ekle' }));
+    expect(form.getByText('Bu alan zorunlu.')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+
+    await user.type(form.getByRole('textbox', { name: /İşletme adı/ }), 'Örnek Atölye');
+    // The purposes offered are the workspace's own.
+    await user.selectOptions(form.getByRole('combobox', { name: 'Amaç (kitle)' }), 'atolye');
+    await user.type(form.getByRole('textbox', { name: tr.leads.fields.phone }), '0532 000 00 00');
+    await user.click(form.getByRole('button', { name: 'Aday ekle' }));
+    // The new prospect opens beside the list.
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/prospects/${prospectId(9)}`));
+    const body = calls.find((c) => c.method === 'POST' && c.path === '/api/prospects')!.body as Record<string, unknown>;
+    const manual = { kind: 'manual', note: 'Elle girildi' };
+    expect(body).toMatchObject({
+      business_name: 'Örnek Atölye',
+      entity_kind: 'unknown_business',
+      segment_key: 'atolye',
+      discovered_at: [manual],
+      phone: { value: '0532 000 00 00', sources: [manual] },
+    });
+    expect(body).not.toHaveProperty('email');
+    expect(typeof body.request_key).toBe('string');
+  });
+
+  it('a duplicate is refused with the way to the record that holds the contact', async () => {
+    const user = userEvent.setup();
+    mockFetch(
+      answers({
+        'POST /api/prospects': withStatus(409, {
+          code: 'CONFLICT',
+          message: 'another prospect holds this contact',
+          details: { reason: 'duplicate', prospect_id: prospectId(2) },
+        }),
+      }),
+    );
+    renderAt('/prospects');
+    await user.click(await screen.findByRole('button', { name: 'Aday ekle' }, LOADED));
+    const form = within(screen.getByRole('form', { name: 'Yeni aday' }));
+    await user.type(form.getByRole('textbox', { name: /İşletme adı/ }), 'Örnek Kafe 2');
+    await user.click(form.getByRole('button', { name: 'Aday ekle' }));
+    expect(await form.findByText(tr.leads.errors.duplicate)).toBeInTheDocument();
+    expect(form.getByRole('link', { name: 'Var olan kaydı aç' })).toHaveAttribute('href', `/prospects/${prospectId(2)}`);
   });
 });

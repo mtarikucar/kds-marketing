@@ -52,6 +52,23 @@ const tr = {
   popupBlocked: 'Tarayıcı yeni sekmeyi engelledi. Aday iletişime alındı; sohbeti buradan aç:', openLink: '{way} sohbetini aç',
   noPermission: 'Bu alıcıya bu kanaldan ticari mesaj izni yok. Kampanya ayarlarından “işletme alıcısı dayanağını” bu kanal için açabilirsin.',
   noWay: 'Bu adaya ulaşılabilecek bir kanal yok.',
+  // The person's own form: adding a prospect, editing one's details.
+  addProspect: 'Aday ekle', addTitle: 'Yeni aday',
+  addBody: 'Kendi bildiğin bir işletmeyi havuza ekle. Yalnızca işletme adı zorunlu; gerisini sonra da doldurabilirsin.',
+  editDetails: 'Bilgileri düzenle', editTitle: '{name}: bilgiler',
+  editBody: 'Değiştirdiğin alan kaydedilir, boşalttığın alan silinir. İşletme adı ve türü sonradan değiştirilemez.',
+  fName: 'İşletme adı', fKind: 'İşletme türü', fSegment: 'Amaç (kitle)', fNoSegment: 'Seçilmedi',
+  fSector: 'Sektör', fCity: 'Şehir', fDistrict: 'İlçe', fLabelsHint: 'Virgülle ayır.',
+  fContactName: 'İlgili kişi', fContactRole: 'Görevi',
+  fWebsiteHint: 'İşletmenin kendi sitesi; sosyal medya profili değil.', fHandleHint: 'Kullanıcı adı ya da profil bağlantısı.',
+  fSource: 'Bu bilgiyi nereden biliyorsun?', fSourceHint: 'Yazdığın iletişim bilgilerinin yanında kaynak olarak görünür.',
+  sourceDefault: 'Elle girildi',
+  pRequired: 'Bu alan zorunlu.', pTooLong: 'Bu alan için çok uzun.', pEmail: 'Geçerli bir e-posta adresi yaz.',
+  pTooManyLabels: 'En çok 20 etiket girilebilir.', pLabelTooLong: 'Bir etiket en çok 40 karakter olabilir.',
+  pNameFirst: 'Görev yazmak için önce kişinin adını gir.', pServer: 'Bu değer kabul edilmedi. Yazımını kontrol et.',
+  added: 'Aday eklendi.', detailsSaved: 'Bilgiler kaydedildi.',
+  similar: 'Havuzda benzer bir kayıt olabilir. Aday sayfasındaki olası mükerrerlere bak.',
+  openExisting: 'Var olan kaydı aç',
 };
 
 const en: typeof tr = {
@@ -101,6 +118,22 @@ const en: typeof tr = {
   popupBlocked: 'The browser blocked the new tab. The prospect is in contact; open the chat here:', openLink: 'Open the {way} chat',
   noPermission: 'There is no permission for a commercial message to this recipient on this channel. Open the “business-recipient basis” for it in the campaign settings.',
   noWay: 'There is no channel to reach this prospect on.',
+  addProspect: 'Add prospect', addTitle: 'New prospect',
+  addBody: 'Add a business you know of to the pool. Only its name is required; the rest can follow later.',
+  editDetails: 'Edit details', editTitle: '{name}: details',
+  editBody: 'A field you change is saved, a field you empty is removed. The business name and kind cannot be changed afterwards.',
+  fName: 'Business name', fKind: 'Business kind', fSegment: 'Purpose (audience)', fNoSegment: 'None chosen',
+  fSector: 'Sector', fCity: 'City', fDistrict: 'District', fLabelsHint: 'Separate with commas.',
+  fContactName: 'Contact person', fContactRole: 'Role',
+  fWebsiteHint: 'The business’s own site, not a social media profile.', fHandleHint: 'A username or a profile link.',
+  fSource: 'Where do you know this from?', fSourceHint: 'Shown as the source beside the contact details you type.',
+  sourceDefault: 'Entered by hand',
+  pRequired: 'This field is required.', pTooLong: 'Too long for this field.', pEmail: 'Enter a valid email address.',
+  pTooManyLabels: 'At most 20 labels.', pLabelTooLong: 'A label can be at most 40 characters.',
+  pNameFirst: 'Enter the person’s name before a role.', pServer: 'This value was not accepted. Check how it is written.',
+  added: 'Prospect added.', detailsSaved: 'Details saved.',
+  similar: 'The pool may hold a similar record. See the possible duplicates on the prospect’s page.',
+  openExisting: 'Open the existing record',
 };
 
 export type PoolCopyKey = keyof typeof tr;

@@ -62,6 +62,8 @@ import {
 } from './LeadsShared';
 import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
 import { MessageDialog } from './prospects/MessageDialog';
+import { ProspectFormDialog } from './prospects/ProspectFormDialog';
+import { usePoolSegments } from './prospects/segments';
 import { buildTimeline, stageOf, type StepKey, type TimelineEntry, type TimelineTone } from './prospects/timeline';
 
 type ContactKey = 'phone' | 'email' | 'website' | 'instagram' | 'tiktok' | 'address';
@@ -201,7 +203,10 @@ function Actions({ data, conversationHref }: { data: ProspectGetOut; conversatio
     (p.status === 'qualified' || p.status === 'promoted' || p.status === 'new') &&
     can(session.data, 'inbox.work') &&
     (p.status !== 'new' || can(session.data, 'prospects.work'));
-  const [dialog, setDialog] = useState<'reject' | 'dnc' | 'erase' | 'message' | null>(null);
+  const [dialog, setDialog] = useState<'reject' | 'dnc' | 'erase' | 'message' | 'edit' | null>(null);
+  const segments = usePoolSegments([p.segment_key]);
+  // The pool edits what is still in it; once in contact the person is edited in the inbox.
+  const canEdit = (p.status === 'new' || p.status === 'qualified' || p.status === 'rejected') && can(session.data, 'prospects.work');
   const decide = useMutation({
     mutationFn: (decision: 'qualify' | 'reopen') => decideProspect(p.id, { decision, expected_revision: p.revision }),
     onSuccess: async () => {
@@ -230,6 +235,12 @@ function Actions({ data, conversationHref }: { data: ProspectGetOut; conversatio
       {conversationHref && (
         <Button asChild size="sm" variant="outline">
           <Link to={conversationHref}>{copy('openConversation')}</Link>
+        </Button>
+      )}
+      {canEdit && (
+        <Button size="sm" variant="outline" onClick={() => setDialog('edit')}>
+          <Pencil className="h-4 w-4" aria-hidden="true" />
+          {copy('editDetails')}
         </Button>
       )}
       {p.status === 'new' && (
@@ -272,6 +283,7 @@ function Actions({ data, conversationHref }: { data: ProspectGetOut; conversatio
       {dialog === 'dnc' && <DncDialog targets={target} onClose={() => setDialog(null)} onDone={done} />}
       {dialog === 'erase' && <EraseDialog prospect={p} onClose={() => setDialog(null)} />}
       {dialog === 'message' && <MessageDialog data={data} onClose={() => setDialog(null)} />}
+      {dialog === 'edit' && <ProspectFormDialog prospect={p} segments={segments} onClose={() => setDialog(null)} />}
     </div>
   );
 }
@@ -649,6 +661,8 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
   const contactPerson: ProspectField<ContactPerson> | null | undefined = p.contact.contact_person;
   const hasContact = CONTACT_KEYS.some((k) => p.contact[k]) || !!contactPerson || !!p.size;
   const place = [p.district, p.city].filter(Boolean).join(', ');
+  const segments = usePoolSegments([p.segment_key]);
+  const segmentName = segments.find((s) => s.key === p.segment_key)?.name ?? p.segment_key;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2.5">
@@ -696,7 +710,7 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
                 [t('leads.prospect.entity'), t(`leads.entityKinds.${p.entity_kind}`)],
                 [t('leads.prospect.sector'), p.sector],
                 [t('leads.prospect.place'), place || null],
-                [t('leads.prospect.segment'), p.segment_key],
+                [t('leads.prospect.segment'), segmentName],
                 [t('leads.prospect.language'), p.language],
                 [t('leads.prospect.labels'), p.labels.length ? p.labels.join(', ') : null],
               ]}
