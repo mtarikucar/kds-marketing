@@ -38,7 +38,8 @@ protect the recovery storage and hooks against writes by tenants and app process
 
 Install the packaged `/opt/jeeta/current/deploy/jeeta-backup.service` and timer in
 systemd's unit directory. Create the directories in `ReadWritePaths` before enabling
-the timer. `/etc/jeeta/recovery.env` is root-owned 0600; its values are systemd
+the timer. The lock directory `/run/jeeta-recovery` is recreated by the unit itself
+(`RuntimeDirectory=`, preserved between runs), because `/run` is empty after a boot. `/etc/jeeta/recovery.env` is root-owned 0600; its values are systemd
 EnvironmentFile entries (no shell expansion):
 
 ```ini
@@ -48,6 +49,8 @@ JEETA_SOURCE_ID=primary-installation
 JEETA_MASTER_KEY_ID=owner-key-v1
 JEETA_RECOVERY_STATUS_DIR=/var/lib/jeeta/recovery-status
 JEETA_BASE_ROOT=/var/backups/jeeta/base
+JEETA_WAL_ARCHIVE_DIR=/var/backups/jeeta/wal
+JEETA_BASE_RETENTION=2
 JEETA_STATUS_GROUP=jeeta
 JEETA_LOCK_DIR=/run/jeeta-recovery
 JEETA_CONTROL_HOOK=/etc/jeeta/recovery-control
@@ -111,17 +114,30 @@ of the nightly timer. `pg_basebackup`'s streamed starting WAL makes a complete b
 but future PITR requires the continuous archive. Test archive-command failure and
 disk-full alerts when commissioning the deployment.
 
-Keep at least 30 daily logical sets and a verified 30-day base/WAL/key chain. The
-script retains complete logical sets for the newest 30 distinct backup days, pruning older complete sets
-only after a newer full backup verifies. Corrupt, foreign-installation, incomplete
-and failed sets are retained for inspection and never consume the valid-set quota. **Base and WAL deletion is deliberately not automated.** Age alone,
-a fresh base, or a checksum is insufficient evidence of a recoverable chain.
-Keep the base at or before the 30-day boundary and every WAL segment/history file
-needed through the newest verified target. First restore a newer complete chain,
-record its base ID, timeline, target and retained range, then have the owner remove
-only superseded material outside that range. Never remove the only recoverable
-chain or its key. Until that evidence exists, retain extra data and alert on disk
-usage; this conservative policy trades storage for recovery safety.
+The script retains complete logical sets for the newest 30 distinct backup days, pruning
+older complete sets only after a newer full backup verifies. Corrupt, foreign-installation,
+incomplete and failed sets are retained for inspection and never consume the valid-set quota.
+
+Bases and WAL are bounded by count: after a physical set has been written and verified,
+the run keeps the WAL archive needed by the newest `JEETA_BASE_RETENTION` (default 2)
+complete, verified physical sets of this installation in `JEETA_BASE_ROOT`. It finds
+the N-th newest such set, matches the first line of its `base/backup_label` with the
+archived `<segment>.<offset>.backup` history file in `JEETA_WAL_ARCHIVE_DIR`, and runs
+`pg_archivecleanup <archive> <history file>`: only segments (and `.partial` files) before
+that base's starting segment are removed. History, timeline and temporary files stay.
+Verified physical sets of this installation older than the N-th are then removed;
+corrupt, foreign, incomplete and failed sets are kept for inspection, as for logical sets.
+With weekly bases and N=2 the point-in-time window is one to two weeks; logical sets still
+cover 30 days. Retention refuses and removes nothing when the newest base does not verify,
+fewer than N bases verify, the N-th base's history file is missing or does not match, or
+`pg_archivecleanup` is unavailable (it is looked up on `PATH`, then in
+`/usr/lib/postgresql/16/bin`). A refusal or error is logged to the journal as
+`recovery: WAL retention skipped: ...`; it never fails the backup or blocks ingress.
+Without `JEETA_WAL_ARCHIVE_DIR` the archive is not touched. Preview or rerun by hand with
+`JEETA_RECOVERY_CONFIG=/etc/jeeta/recovery.env /opt/jeeta/current/scripts/wal-retention.sh --dry-run`
+(drop `--dry-run` to apply; exit status 3 means refused). It takes the same installation
+lock as the backup. The off-site copy must still hold every segment it needs before the
+local archive is pruned; alert on disk usage and archiver failures as before.
 
 Keep FileStore files append-only throughout the retained PITR window. A base's
 file snapshot can only support targets whose references exist in that snapshot.

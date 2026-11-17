@@ -334,6 +334,41 @@ ci_runs_real_restore_scripts() {
   cp -a "$logical" "$work/no-database"; rm "$work/no-database/database.dump"
   config no-database; refused "$work/no-database"
 }
+wal_retention_prunes_real_archive() {
+  # Real bases and real archived history files: the nightly run prunes WAL only once
+  # N=2 verified bases exist, and never removes the oldest kept base's segments.
+  local run=0 first label_line cut name older=0 i
+  backup_with_wal() {
+    run=$((run + 1))
+    JEETA_PHYSICAL_SCHEDULE=always JEETA_BASE_ROOT="$work/wal-base" JEETA_WAL_ARCHIVE_DIR="$work/wal" \
+      "$scripts/backup.sh" "$work/wal-logical" > "$work/wal-retention-$run.log" 2>&1 || { cat "$work/wal-retention-$run.log"; fail 'backup with WAL retention'; }
+    for ((i=0;i<100;i++)); do
+      [[ -z $(find "$work/source/pg_wal/archive_status" -name '*.ready' -print -quit) ]] && break
+      sleep .1
+    done
+  }
+  backup_with_wal
+  grep -q 'only 1 complete base backup' "$work/wal-retention-1.log" || fail 'single base must refuse WAL retention'
+  first=$(find "$work/wal-base" -mindepth 1 -maxdepth 1 -type d -name '*-physical-*' | LC_ALL=C sort | head -1)
+  IFS= read -r label_line < "$first/base/backup_label"
+  cut=${label_line##*file }; cut=${cut%)}
+  [[ "$cut" =~ ^[0-9A-F]{24}$ ]] || fail 'unexpected backup_label'
+  for name in "$work/wal"/*; do
+    name=${name##*/}
+    if [[ $name =~ ^[0-9A-F]{24}$ && "${name:8}" < "${cut:8}" ]]; then older=$((older + 1)); fi
+  done
+  ((older > 0)) || fail 'fixture has no WAL older than the first base'
+  backup_with_wal
+  grep -q "removed $older archived segment(s) before $cut\." "$work/wal-retention-2.log" || { cat "$work/wal-retention-2.log"; fail 'WAL retention did not prune to the oldest kept base'; }
+  for name in "$work/wal"/*; do
+    name=${name##*/}
+    if [[ $name =~ ^[0-9A-F]{24}$ && "${name:8}" < "${cut:8}" ]]; then fail 'segment before the cut kept'; fi
+  done
+  [[ -f "$work/wal/$cut" && -d "$first" ]] || fail 'oldest kept base or its first segment removed'
+  backup_with_wal
+  [[ ! -e "$first" ]] || fail 'superseded base kept after two newer verified bases'
+  [[ $(find "$work/wal-base" -mindepth 1 -maxdepth 1 -type d -name '*-physical-*' | wc -l) == 2 ]] || fail 'base retention count'
+}
 if [[ ${JEETA_TEST_FILTER:-} == review ]]; then
   review_regressions
   printf 'PASS post_commit_security_regressions\n'
@@ -344,7 +379,7 @@ if [[ ${JEETA_TEST_FILTER:-} == retention ]]; then
   printf 'PASS retention_preserves_valid_daily_history\n'
   exit 0
 fi
-for case_name in restore_requires_matching_key_and_files restore_checks_schema_before_serve restore_drill_has_zero_provider_traffic logical_restore_preserves_rls_payment_and_ledger pitr_stops_at_selected_target backup_failure_does_not_advance_success_marker restore_refuses_production_or_nonempty_target restored_unknown_send_is_not_retried ci_runs_real_restore_scripts; do
+for case_name in restore_requires_matching_key_and_files restore_checks_schema_before_serve restore_drill_has_zero_provider_traffic logical_restore_preserves_rls_payment_and_ledger pitr_stops_at_selected_target backup_failure_does_not_advance_success_marker restore_refuses_production_or_nonempty_target restored_unknown_send_is_not_retried ci_runs_real_restore_scripts wal_retention_prunes_real_archive; do
   "$case_name"
   printf 'PASS %s\n' "$case_name"
 done

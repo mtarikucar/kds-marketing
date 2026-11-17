@@ -66,6 +66,86 @@ read_manifest() {
   done
   [[ ${manifest[schema_version]} == "$(tail -1 "$1/schema.versions")" ]] || fail 'manifest schema version mismatch'
 }
+# WAL/base retention. Keeps the archive needed by the newest N verified physical
+# sets of this installation (N=JEETA_BASE_RETENTION, default 2). It refuses, and
+# removes nothing, unless the newest base verifies, N verified bases exist and the
+# N-th newest base's backup history file is in the archive. Returns 3 on refusal.
+# Written for callers without errexit (backup.sh runs it in a `( ) ||` subshell).
+wal_skip() { printf 'recovery: WAL retention skipped: %s; archive left untouched\n' "$1" >&2; }
+base_valid() {
+  [[ -f "$1/COMPLETE" && ! -e "$1/FAILED" ]] || return 1
+  # Same evidence as logical retention: checksums, manifest, source and kind.
+  (verify_set "$1"; read_manifest "$1"; [[ ${manifest[source_id]} == "$JEETA_SOURCE_ID" && ${manifest[kind]} == physical ]]) 2>/dev/null
+}
+# First backup_label line, e.g. "START WAL LOCATION: 0/2000028 (file 000000010000000000000002)".
+base_start() {
+  local line re='^START WAL LOCATION: [0-9A-F]+/[0-9A-F]+ \(file ([0-9A-F]{24})\)$'
+  [[ -f "$1/base/backup_label" && ! -L "$1/base/backup_label" ]] || return 1
+  IFS= read -r line < "$1/base/backup_label" || return 1
+  [[ "$line" =~ $re ]] || return 1
+  printf '%s\n' "$line"
+}
+# The archived <segment>.<offset>.backup whose START line matches the base's label.
+base_history() {
+  local line segment candidate first found=
+  line=$(base_start "$1") || return 1
+  segment=${line##*file }; segment=${segment%)}
+  for candidate in "$2/$segment".????????.backup; do
+    [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+    IFS= read -r first < "$candidate" || continue
+    [[ "$first" == "$line" ]] || continue
+    [[ -z "$found" ]] || return 1
+    found=${candidate##*/}
+  done
+  [[ -n "$found" ]] || return 1
+  printf '%s\n' "$found"
+}
+wal_retention() {
+  local base_root=$1 wal_dir=$2 keep=$3 dry_run=${4:-0}
+  local cleanup cut history line newest_line newest_segment listing removed i cut_index=-1
+  local -a sets=() valid=()
+  [[ "$keep" =~ ^[1-9][0-9]*$ ]] || { wal_skip 'JEETA_BASE_RETENTION must be a positive integer'; return 3; }
+  [[ -d "$wal_dir" && ! -L "$wal_dir" ]] || { wal_skip 'WAL archive directory missing'; return 3; }
+  [[ -d "$base_root" && ! -L "$base_root" ]] || { wal_skip 'base backup root missing'; return 3; }
+  cleanup=$(command -v pg_archivecleanup) || cleanup=/usr/lib/postgresql/16/bin/pg_archivecleanup
+  [[ -x "$cleanup" ]] || { wal_skip 'pg_archivecleanup not found'; return 3; }
+  mapfile -t sets < <(find "$base_root" -mindepth 1 -maxdepth 1 -type d -name '*-physical-*' | LC_ALL=C sort -r)
+  (( ${#sets[@]} > 0 )) || { wal_skip 'no base backups'; return 3; }
+  base_valid "${sets[0]}" || { wal_skip "newest base backup ${sets[0]##*/} is not complete and verified"; return 3; }
+  for ((i = 0; i < ${#sets[@]}; i++)); do
+    base_valid "${sets[i]}" || continue
+    valid+=("${sets[i]}")
+    if (( ${#valid[@]} == keep )); then cut_index=$i; break; fi
+  done
+  (( cut_index >= 0 )) || { wal_skip "only ${#valid[@]} complete base backup(s), $keep required"; return 3; }
+  cut=${sets[cut_index]}
+  history=$(base_history "$cut" "$wal_dir") || { wal_skip "backup history file of ${cut##*/} not found in the WAL archive"; return 3; }
+  newest_line=$(base_start "${sets[0]}") || { wal_skip "newest base backup ${sets[0]##*/} has no backup_label"; return 3; }
+  newest_segment=${newest_line##*file }; newest_segment=${newest_segment%)}
+  # pg_archivecleanup compares names without the timeline; so does this guard.
+  [[ ! "${history:8:16}" > "${newest_segment:8}" ]] || { wal_skip 'base backup names and WAL positions disagree'; return 3; }
+  listing=$("$cleanup" -n "$wal_dir" "$history") || { wal_skip 'pg_archivecleanup dry run failed'; return 3; }
+  removed=0; [[ -z "$listing" ]] || removed=$(printf '%s\n' "$listing" | wc -l)
+  if (( dry_run )); then
+    printf 'recovery: dry run: would keep WAL from %s (base %s; newest %s verified bases kept)\n' "$history" "${cut##*/}" "$keep"
+    [[ -z "$listing" ]] || while IFS= read -r line; do printf 'would remove %s\n' "$line"; done <<< "$listing"
+  else
+    "$cleanup" "$wal_dir" "$history" || { printf 'recovery: pg_archivecleanup failed; inspect the WAL archive\n' >&2; return 1; }
+    printf 'recovery: WAL retention removed %s archived segment(s) before %s (base %s)\n' "$removed" "$history" "${cut##*/}" >&2
+  fi
+  # Older verified sets of this installation are superseded by N newer verified ones.
+  # Corrupt, foreign, incomplete and failed sets stay for inspection.
+  for ((i = cut_index + 1; i < ${#sets[@]}; i++)); do
+    base_valid "${sets[i]}" || continue
+    if (( dry_run )); then
+      printf 'would remove base %s\n' "${sets[i]##*/}"
+    else
+      rm -rf -- "${sets[i]}" || { printf 'recovery: could not remove superseded base %s\n' "${sets[i]##*/}" >&2; return 1; }
+      printf 'recovery: removed superseded base backup %s\n' "${sets[i]##*/}" >&2
+    fi
+  done
+  return 0
+}
 [[ "${1:-}" == --library ]] && return 0
 [[ $# == 1 ]] || fail 'usage: backup.sh <backup-root>'
 [[ -z "${PGPASSWORD:-}" ]] || fail 'use a protected libpq passfile'
@@ -86,6 +166,7 @@ mkdir -p "$lock_dir"
 exec 9>"$lock_dir/$JEETA_SOURCE_ID.lock"; flock -n 9 || fail 'backup already running for this installation'
 set_verified=0
 set_dir=
+physical_created=0
 on_exit() {
   local rc=$?
   if (( rc != 0 )); then
@@ -140,9 +221,10 @@ create_set logical "$root"
 if [[ "${JEETA_PHYSICAL_SCHEDULE:-sunday}" == always || ( "${JEETA_PHYSICAL_SCHEDULE:-sunday}" == sunday && $(date -u +%u) == 7 ) ]]; then
   required JEETA_BASE_ROOT
   create_set physical "$JEETA_BASE_ROOT"
+  physical_created=1
 fi
 # Retention is deliberately conservative: only complete logical sets, after a newer
-# verified full set, and never bases/WAL without an independently verified chain.
+# verified full set. Bases/WAL follow wal_retention after a verified physical set.
 mapfile -t old_sets < <(find "$root" -mindepth 1 -maxdepth 1 -type d -name '*-logical-*' | LC_ALL=C sort -r)
 kept=0
 declare -A retained_days=()
@@ -166,3 +248,13 @@ chmod 640 "$status_tmp"
 hook "$JEETA_CONTROL_HOOK" start
 hook "$JEETA_CONTROL_HOOK" unblock
 mv -f "$status_tmp" "$JEETA_RECOVERY_STATUS_DIR/backup-status.json"
+# After the verified run is published and ingress is open: a retention refusal or
+# error is logged and leaves the archive as it is, never failing the backup.
+if (( physical_created )); then
+  if [[ -n ${JEETA_WAL_ARCHIVE_DIR:-} ]]; then
+    (wal_retention "$JEETA_BASE_ROOT" "$JEETA_WAL_ARCHIVE_DIR" "${JEETA_BASE_RETENTION:-2}") ||
+      printf 'recovery: WAL retention did not complete; backup itself succeeded\n' >&2
+  else
+    printf 'recovery: JEETA_WAL_ARCHIVE_DIR unset; WAL retention skipped\n' >&2
+  fi
+fi
