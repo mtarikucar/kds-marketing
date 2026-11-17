@@ -154,7 +154,19 @@ corrupt_base_is_skipped_not_counted() {
   cut_respected "$(seg 6)"
   [[ -d "$base/20261108T020000Z-physical-cccccc" && ! -e "$base/20261025T020000Z-physical-aaaaaa" ]] || fail 'corrupt base handling'
 }
-for case_name in prunes_to_nth_newest_complete_base retention_count_is_configurable dry_run_removes_nothing fewer_than_n_complete_bases_refuse newest_base_must_verify history_file_must_match corrupt_base_is_skipped_not_counted; do
+same_second_bases_follow_wal_order() {
+  # Set names carry whole seconds and a random suffix; within one second the WAL
+  # position decides which base is newer, never the suffix.
+  setup same-second
+  rm -rf "$base"/*-cccccc "$base"/*-dddddd
+  mkset 20261115T020000Z-physical-zzzzzz 9
+  mkset 20261115T020000Z-physical-aaaaaa 11
+  retention > "$work/out" 2>&1 || { cat "$work/out" >&2; fail 'same-second run failed'; }
+  cut_respected "$(seg 9)"
+  [[ -d "$base/20261115T020000Z-physical-zzzzzz" && -d "$base/20261115T020000Z-physical-aaaaaa" ]] || fail 'same-second bases removed'
+  [[ ! -e "$base/20261101T020000Z-physical-bbbbbb" ]] || fail 'superseded base kept'
+}
+for case_name in prunes_to_nth_newest_complete_base same_second_bases_follow_wal_order retention_count_is_configurable dry_run_removes_nothing fewer_than_n_complete_bases_refuse newest_base_must_verify history_file_must_match corrupt_base_is_skipped_not_counted; do
   keep=2
   "$case_name"
   printf 'PASS %s\n' "$case_name"

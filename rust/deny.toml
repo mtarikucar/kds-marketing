@@ -7,6 +7,15 @@ exclude-dev = true
 [advisories]
 yanked = "deny"
 unmaintained = "workspace"
+# Informational "unmaintained" notices only (no vulnerability, no patched version), dated
+# 2026-09-14 and first reported by our CI on 2026-11-17. chrono is a workspace dependency and
+# comes through async-imap; chrono-tz is used by jt_app and jt_google. The advisories suggest
+# jiff or time, a migration rather than a drop-in fix. Revisit by 2027-02-17: migrate, or
+# re-check the advisories.
+ignore = [
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational); migration to jiff/time pending" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained (informational); migration to jiff/time pending" },
+]
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "CDLA-Permissive-2.0"]
