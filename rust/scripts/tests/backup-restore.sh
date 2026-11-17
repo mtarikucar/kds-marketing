@@ -346,6 +346,8 @@ wal_retention_prunes_real_archive() {
       [[ -z $(find "$work/source/pg_wal/archive_status" -name '*.ready' -print -quit) ]] && break
       sleep .1
     done
+    # The next run's cut needs this run's backup history file in the archive.
+    [[ -z $(find "$work/source/pg_wal/archive_status" -name '*.ready' -print -quit) ]] || fail 'archiver did not catch up'
   }
   backup_with_wal
   grep -q 'only 1 complete base backup' "$work/wal-retention-1.log" || fail 'single base must refuse WAL retention'

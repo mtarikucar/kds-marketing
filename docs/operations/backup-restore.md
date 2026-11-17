@@ -120,7 +120,8 @@ incomplete and failed sets are retained for inspection and never consume the val
 
 Bases and WAL are bounded by count: after a physical set has been written and verified,
 the run keeps the WAL archive needed by the newest `JEETA_BASE_RETENTION` (default 2)
-complete, verified physical sets of this installation in `JEETA_BASE_ROOT`. It finds
+complete, verified physical sets of this installation in `JEETA_BASE_ROOT`, ordered by
+the timestamp in the set name and, within one second, by the label's WAL start. It finds
 the N-th newest such set, matches the first line of its `base/backup_label` with the
 archived `<segment>.<offset>.backup` history file in `JEETA_WAL_ARCHIVE_DIR`, and runs
 `pg_archivecleanup <archive> <history file>`: only segments (and `.partial` files) before

@@ -85,6 +85,22 @@ base_start() {
   [[ "$line" =~ $re ]] || return 1
   printf '%s\n' "$line"
 }
+# Sort key per set: "<name timestamp> <start LSN> <path>". Names carry only whole seconds
+# plus a random suffix, so sets from the same second are ordered by WAL position; a set
+# without a readable label sorts as the newest of its second (it then blocks retention).
+base_order() {
+  local dir name line lsn hi lo
+  while IFS= read -r dir; do
+    name=${dir##*/}
+    lsn=FFFFFFFFFFFFFFFF
+    if line=$(base_start "$dir"); then
+      lsn=${line#START WAL LOCATION: }; lsn=${lsn%% *}
+      hi=${lsn%/*}; lo=${lsn#*/}
+      printf -v lsn '%08X%08X' "0x$hi" "0x$lo"
+    fi
+    printf '%s %s %s\n' "${name%%-*}" "$lsn" "$dir"
+  done
+}
 # The archived <segment>.<offset>.backup whose START line matches the base's label.
 base_history() {
   local line segment candidate first found=
@@ -109,7 +125,7 @@ wal_retention() {
   [[ -d "$base_root" && ! -L "$base_root" ]] || { wal_skip 'base backup root missing'; return 3; }
   cleanup=$(command -v pg_archivecleanup) || cleanup=/usr/lib/postgresql/16/bin/pg_archivecleanup
   [[ -x "$cleanup" ]] || { wal_skip 'pg_archivecleanup not found'; return 3; }
-  mapfile -t sets < <(find "$base_root" -mindepth 1 -maxdepth 1 -type d -name '*-physical-*' | LC_ALL=C sort -r)
+  mapfile -t sets < <(find "$base_root" -mindepth 1 -maxdepth 1 -type d -name '*-physical-*' | base_order | LC_ALL=C sort -r | cut -d' ' -f3-)
   (( ${#sets[@]} > 0 )) || { wal_skip 'no base backups'; return 3; }
   base_valid "${sets[0]}" || { wal_skip "newest base backup ${sets[0]##*/} is not complete and verified"; return 3; }
   for ((i = 0; i < ${#sets[@]}; i++)); do
