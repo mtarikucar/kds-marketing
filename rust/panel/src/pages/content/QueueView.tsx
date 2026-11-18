@@ -7,9 +7,9 @@ import { analysisQueue, GENEL, type QueueItem, type QueueStage, type TreeOut } f
 import * as m from '@/api/materials';
 import { getPending } from '@/api/work';
 import { useSession } from '@/auth/useSession';
-import { Badge, Button, Callout, EmptyState } from '@/components/ui';
+import { Badge, Button, EmptyState } from '@/components/ui';
+import { agentNotice } from '@/components/ModuleStatusLine';
 import { QueryState } from '@/components/QueryState';
-import { formatDateTime } from '@/lib/format';
 import { fieldClass, MaterialPreview, materialLabel, MaterialsError, useDecider, useMaterialsMutation } from '../materials/MaterialsShared';
 import { placeHref, useContentKey, useContentPlace } from './location';
 
@@ -73,8 +73,10 @@ export function QueueView({ tree }: { tree: TreeOut }) {
   const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000, retry: false });
   const items = queue.data?.items ?? [];
   const agent = work.data?.agent;
-  const noAgent = !!agent && (agent.last_seen_at === null || agent.overdue);
-  const waiting = items.some((i) => i.stage === 'waiting');
+  // Files the agent has yet to analyse; the notice speaks only when they wait and no agent is on time.
+  const waiting = items.filter((i) => i.stage === 'waiting').length;
+  const notice = agent ? agentNotice(t, i18n.language, waiting, [agent]) : null;
+  const noAgent = !!notice;
   const line = (item: QueueItem) => {
     if (item.stage === 'waiting' && noAgent) return t('content.queue.line.noAgent');
     if (item.stage === 'needs_filing') return item.intelligence.description || t('content.queue.line.needs_filing');
@@ -90,15 +92,11 @@ export function QueueView({ tree }: { tree: TreeOut }) {
           <p className="mt-0.5 text-sm text-muted-foreground">{t('content.queue.help')}</p>
         </div>
       </header>
-      {noAgent && waiting && (
-        <Callout tone="warning" icon={<Bot className="h-4 w-4" />} title={t('content.queue.noAgent')}>
-          <p className="text-sm">
-            {agent?.last_seen_at
-              ? t('content.queue.agentSeen', { at: formatDateTime(agent.last_seen_at, i18n.language) })
-              : t('content.queue.agentNever')}{' '}
-            <Link className="underline" to="/agents">{t('content.queue.agents')}</Link>
-          </p>
-        </Callout>
+      {notice && (
+        <p role="status" className="flex items-center gap-2 border-s-2 border-warning bg-warning-subtle px-4 py-2 text-sm">
+          <Bot aria-hidden="true" className="h-4 w-4 shrink-0 text-warning" />
+          <Link className="min-w-0 underline underline-offset-4" to="/agents">{notice}</Link>
+        </p>
       )}
       <QueryState query={queue} keepOnError>
         {queue.data && !items.length && <EmptyState title={t('content.queue.empty')} description={t('content.queue.emptyHelp')} />}

@@ -168,6 +168,15 @@ describe('uploads and the analysis queue', () => {
     expect(calls.some((c) => c.path === '/api/studio/files')).toBe(false);
   });
 
+  it('says nothing of a stale agent when no file waits for analysis', async () => {
+    contentPageFetch({
+      'GET /api/content/analysis-queue': { items: [queueItem('q2', 'needs_filing')] },
+    });
+    renderAt('/content?view=queue');
+    expect(await screen.findByText('Dosyalanmalı')).toBeVisible();
+    expect(screen.queryByText(/ajanı bekliyor/)).not.toBeInTheDocument();
+  });
+
   it('shows each stage, says when no agent is connected and lets a manager file an analysed upload', async () => {
     const calls = contentPageFetch({
       'GET /api/content/tree': tree({ olays: [{ ...folder(), olay: o1 }] as never, analysis_queue: 3 }),
@@ -175,9 +184,11 @@ describe('uploads and the analysis queue', () => {
       'POST /api/studio/materials/q2/bind': material('q2'),
     });
     renderAt('/content?view=queue');
-    expect(await screen.findByText('Şu an bağlı bir ajan yok')).toBeVisible();
+    expect(await screen.findByRole('link', { name: '1 iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.' }, { timeout: 5000 })).toHaveAttribute('href', '/agents');
     expect(screen.getByText('Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek')).toBeVisible();
     expect(screen.getByText('Dosyalanmalı')).toBeVisible();
+    // The page's own line stays away from the queue, which says it once.
+    expect(screen.getAllByText(/ajanı bekliyor/)).toHaveLength(1);
     expect(screen.getByText('Analiz olmadı')).toBeVisible();
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /Olayı seçin · Dosya q2/ }), 'o1');
     await userEvent.click(screen.getByRole('button', { name: 'Dosyala' }));

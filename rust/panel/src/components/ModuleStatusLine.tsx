@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { listKeys } from '@/api/apiKeys';
@@ -14,6 +15,19 @@ import { formatDateTime } from '@/lib/format';
 
 /** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`); `null`: the platform's authorization names none (TikTok). */
 const AD_WRITE_SCOPES: Record<string, string | null> = { meta_ads: 'ads_management', google_ads: 'https://www.googleapis.com/auth/adwords', linkedin_ads: 'rw_ads', tiktok_ads: null, x_ads: 'ads.write' };
+/**
+ * The agent check-in, as one sentence, only when it matters to a person: work waits for an agent
+ * and none that may do it checked in on time. Nothing when nothing waits or an agent is on time.
+ * The sentence names how much waits and the most recent check-in among the agents, never one
+ * line per agent.
+ */
+export function agentNotice(t: TFunction, language: string, waiting: number, agents: { last_seen_at: string | null; overdue: boolean }[]): string | null {
+  if (waiting <= 0 || agents.some(a => !a.overdue && a.last_seen_at)) return null;
+  const last = agents.map(a => a.last_seen_at).filter((at): at is string => !!at).sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
+  return last
+    ? t('moduleStatus.overdue', { n: waiting, time: formatDateTime(last, language) })
+    : t('moduleStatus.noAgent', { n: waiting });
+}
 export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
   const { t, i18n } = useTranslation();
   const session = useSession();
@@ -30,11 +44,10 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
   const assigned = config?.agent_ids ?? [];
   const candidates = agents.data?.filter(a => (!assigned.length || assigned.includes(a.id)) && (!keys.data || keys.data.some(k => k.id === a.api_key_id && k.status === 'active' && k.scopes.includes(`${module}.work`))));
   const rows: { key: string; text: string; href: string }[] = [];
-  if (config && candidates && !candidates.length) rows.push({ key: 'no-agent', text: t('moduleStatus.noAgent'), href: assigned.length ? `/modules/${module}` : '/agents' });
-  const waiting = work.data?.items.filter(item => module === 'content' ? item.kind.startsWith('content_') : module === 'social' ? ['studio_slot', 'studio_post_request'].includes(item.kind) || (item.kind === 'studio_approval' && 'slot' in item.target) : item.kind.startsWith('ads_campaign_') || item.kind === 'studio_budget_move' || (item.kind === 'studio_approval' && 'budget_move' in item.target)).length;
-  for (const agent of candidates ?? []) {
-    if (agent.overdue && waiting !== undefined) rows.push({ key: agent.id, text: t('moduleStatus.overdue', { time: formatDateTime(agent.last_seen_at, i18n.language), n: waiting }), href: '/agents' });
-  }
+  // The agents' work of this module that waits; the content page's also counts the files in the analysis queue.
+  const waiting = work.data?.items.filter(item => module === 'content' ? item.kind.startsWith('content_') || item.kind === 'studio_material_analysis' : module === 'social' ? ['studio_slot', 'studio_post_request'].includes(item.kind) || (item.kind === 'studio_approval' && 'slot' in item.target) : item.kind.startsWith('ads_campaign_') || item.kind === 'studio_budget_move' || (item.kind === 'studio_approval' && 'budget_move' in item.target)).length;
+  const notice = config && candidates ? agentNotice(t, i18n.language, waiting ?? 0, candidates) : null;
+  if (notice) rows.push({ key: 'agent', text: notice, href: !candidates?.length && assigned.length ? `/modules/${module}` : '/agents' });
   if (strategy.data && !strategy.data.approved) rows.push({ key: 'strategy', text: t('moduleStatus.strategy'), href: '/strategy' });
   // The posting engine takes a post only for a live hypothesis with an organic cadence above zero
   // posts a week (`studio::posts::content_types`); a strategy without one posts nothing.
@@ -59,5 +72,5 @@ export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'a
     if (connected?.length && !connected.some(creates)) rows.push({ key: 'ad-scope', text: t('moduleStatus.adScope'), href: '/capabilities' });
   }
   if (!rows.length) return null;
-  return <section aria-label={t('moduleStatus.label')} className="space-y-2 border-s-2 border-warning bg-warning-subtle px-4 py-3 text-sm">{rows.map(row => <p key={row.key}><Link className="break-words underline underline-offset-4" to={row.href}>{row.text}</Link></p>)}</section>;
+  return <section aria-label={t('moduleStatus.label')} className="space-y-1 border-s-2 border-warning bg-warning-subtle px-4 py-2 text-sm">{rows.map(row => <p key={row.key}><Link className="break-words underline underline-offset-4" to={row.href}>{row.text}</Link></p>)}</section>;
 }
