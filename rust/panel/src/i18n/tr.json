@@ -318,8 +318,8 @@
   },
   "moduleStatus": {
     "label": "Modül durumu",
-    "noAgent": "Bu modülde çalışabilecek bağlı bir ajan yok; işler bekliyor.",
-    "overdue": "Ajan en son {{time}} yoklama yaptı; {{n}} iş bekliyor.",
+    "noAgent": "{{n}} iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.",
+    "overdue": "{{n}} iş ajanı bekliyor; ajan en son {{time}} yoklama yaptı.",
     "strategy": "Onaylı strateji yok; hazırlık yapılır, paylaşım ve harcama bekler.",
     "paid": "Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.",
     "noPosting": "Onaylı stratejide hiçbir hipotez paylaşım yapmıyor; paylaşımlar bekler. Paylaşım sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar.",
@@ -4376,10 +4376,6 @@
         "failed": "Analiz tamamlanamadı; yeniden deneyebilirsiniz.",
         "noAgent": "Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek"
       },
-      "noAgent": "Şu an bağlı bir ajan yok",
-      "agentNever": "Hiçbir ajan henüz bağlanmadı. Dosyalar kaybolmaz; ajan bağlanınca sırayla analiz edilir.",
-      "agentSeen": "Ajan en son {{at}} görüldü. Dosyalar kaybolmaz; ajan bağlanınca sırayla analiz edilir.",
-      "agents": "Ajanlar",
       "fileInto": "Olayı seçin",
       "choose": "Bir olay seçin",
       "file": "Dosyala",

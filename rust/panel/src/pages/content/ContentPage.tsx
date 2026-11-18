@@ -115,7 +115,8 @@ export function ContentPage() {
             </div>
           }
         />
-        {contents && <ModuleStatusLine module="content" />}
+        {/* The queue says the same of its own files. */}
+        {contents && place.view !== 'queue' && <ModuleStatusLine module="content" />}
         <QueryState query={tree} keepOnError>
           {tree.data && (
             <div className="grid min-w-0 gap-5 md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[16.5rem_minmax(0,1fr)]">

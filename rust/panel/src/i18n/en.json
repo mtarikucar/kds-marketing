@@ -318,8 +318,8 @@
   },
   "moduleStatus": {
     "label": "Module status",
-    "noAgent": "No connected agent can work in this module; work is waiting.",
-    "overdue": "The agent last checked in at {{time}}; {{n}} items are waiting.",
+    "noAgent": "{{n}} items wait for an agent; no connected agent can work in this module.",
+    "overdue": "{{n}} items wait for an agent; an agent last checked in at {{time}}.",
     "strategy": "No approved strategy; preparation can continue, but publishing and spending wait.",
     "paid": "The strategy does not allow ad spending; campaigns are waiting.",
     "noPosting": "No hypothesis of the approved strategy posts; posts are waiting. If no posting cadence was ever written, submitting the strategy again completes it.",
@@ -4376,10 +4376,6 @@
         "failed": "The analysis did not complete; you can retry.",
         "noAgent": "No agent connected · analysed in turn once one connects"
       },
-      "noAgent": "No agent is connected now",
-      "agentNever": "No agent has connected yet. Files are not lost; they are analysed in turn once an agent connects.",
-      "agentSeen": "The agent was last seen {{at}}. Files are not lost; they are analysed in turn once an agent connects.",
-      "agents": "Agents",
       "fileInto": "Choose the event",
       "choose": "Choose an event",
       "file": "File it",
