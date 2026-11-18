@@ -77,6 +77,10 @@ pub struct SocialAccount {
     pub kind: String,
     pub status: StoredStatus,
     pub paused: bool,
+    /// The account's policy (`jeeta.capability.get`'s `policy.requires_human_approval`): every
+    /// post planned on it waits for a person's approval before it goes out. Scheduling is not
+    /// refused for it; the planned post waits in the owner's approvals.
+    pub requires_human_approval: bool,
     pub latest: Option<DayOut>,
     pub next: Option<NextPost>,
 }
@@ -272,6 +276,7 @@ fn account_of(
         kind: c.kind_key.clone(),
         status: c.status,
         paused: settings.paused_capability_ids.contains(&c.id),
+        requires_human_approval: c.policy.requires_human_approval,
         latest: latest
             .iter()
             .find(|d| d.capability_id == c.id)

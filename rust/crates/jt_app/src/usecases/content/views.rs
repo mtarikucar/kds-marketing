@@ -2,7 +2,7 @@
 //! tree of olays with what waits for a person, the analysis queue, the production line with each
 //! area's pipeline, and one olay's view (its flow, contents, files and "Eksikler"), each in one
 //! call. Nothing here writes.
-use super::pipeline::{self, Pipeline, PostReads};
+use super::pipeline::{self, Pipeline, PostReads, TimeWait};
 use crate::{
     ctx::Ctx,
     error::AppError,
@@ -13,6 +13,7 @@ use crate::{
     },
     usecases::{
         Deps,
+        social::schedule::VersionAccounts,
         studio::{
             library,
             projects::{self, OlayFilter, ProjectQuery},
@@ -120,6 +121,9 @@ pub enum WaitReason {
     MaterialRequest,
     /// One of its contents waits for a person's approval.
     ContentApproval,
+    /// One of its contents is finished and waits for an account and a time: the agent gives
+    /// them on its next run, or a person does.
+    ContentTime,
     /// One of its contents is stuck (refused three times, or a post that cannot go out).
     ContentProblem,
 }
@@ -142,7 +146,23 @@ pub struct TreeOlay {
     pub folder: Folder,
 }
 
-/// A special day of the calendar coming up with no olay yet (design 2026-11-18 §5).
+/// Where a special day with no olay stands today.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DayPhase {
+    /// Its preparation day has not come.
+    Ahead,
+    /// Its preparation day has come; its window has not started.
+    Preparing,
+    /// Its window has started and not ended: it is now, not coming.
+    Open,
+}
+
+/// A special day of the calendar, coming up or under way, with no olay yet (design 2026-11-18
+/// §5). The system opens no olay for it (spec 2026-11-03 D3, D25): from `prepares_from` the
+/// calendar trigger makes content for the confirmed olay of its occasion and season year once that
+/// olay has a usable file, and while there is none it asks for a capture on the çekim listesi
+/// (`shoot_request_id`). A person opens the olay, or confirms one an agent proposed.
 #[derive(Clone, Debug, Serialize)]
 pub struct UpcomingDay {
     pub key: String,
@@ -156,6 +176,10 @@ pub struct UpcomingDay {
     /// When the system starts preparing for it: the window's start less its lead.
     #[serde(with = "jt_studio::time_compat::date")]
     pub prepares_from: Date,
+    pub phase: DayPhase,
+    /// The çekim listesi's open request for it (`season:{key}:{year}`), once the calendar trigger
+    /// asked for a capture because it has no olay with a usable file.
+    pub shoot_request_id: Option<Uuid>,
 }
 
 /// "Sizi bekleyenler": what waits for a person across the workspace.
@@ -167,6 +191,9 @@ pub struct WaitingCounts {
     pub shoot_requests: u32,
     /// Planned posts of the contents waiting for a person's approval.
     pub content_approvals: u32,
+    /// Finished contents waiting for an account and a time some account can take (the agent's
+    /// next run gives them, or a person does). One no account can take is a problem instead.
+    pub content_times: u32,
     /// Contents that are stuck.
     pub problem_contents: u32,
 }
@@ -266,6 +293,8 @@ pub struct Flow {
     pub contents: u32,
     /// Contents not finished yet: queued, worked, waiting for a capture, held.
     pub in_production: u32,
+    /// Finished contents waiting for an account and a time ([`Pipeline::awaits_time`]).
+    pub awaiting_time: u32,
     pub awaiting_approval: u32,
     pub published: u32,
     pub problems: u32,
@@ -375,8 +404,45 @@ async fn olay_areas(
     }
 }
 
+/// The versions of each of `areas`' finished packages that wait for a time, by area, with the
+/// accounts that could take each and why none can (as `social.versions_waiting` says it); the
+/// strategy and the channels are read once, and only when some version waits.
+async fn time_waits<'p>(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    areas: impl IntoIterator<Item = &'p ProductionProject>,
+    now: OffsetDateTime,
+) -> Result<BTreeMap<Uuid, Vec<TimeWait>>, AppError> {
+    let mut out = BTreeMap::new();
+    let mut reader: Option<VersionAccounts> = None;
+    for p in areas {
+        let mut waits = Vec::new();
+        for v in p.waiting_versions() {
+            if reader.is_none() {
+                reader = Some(VersionAccounts::load(d, r, now).await?);
+            }
+            let Some(accounts_of) = reader.as_ref() else {
+                continue;
+            };
+            let (accounts, blocked) = accounts_of.of(d, r, v, now).await?;
+            waits.push(TimeWait {
+                version_id: v.id,
+                format: v.format,
+                capability_id: v.capability_id,
+                accounts,
+                blocked,
+            });
+        }
+        if !waits.is_empty() {
+            out.insert(p.id, waits);
+        }
+    }
+    Ok(out)
+}
+
 /// The areas with their pipelines at `now`; their planned posts are read once for all of them.
 async fn rows(
+    d: &Deps,
     r: &mut dyn TenantRepos,
     areas: Vec<ProductionProject>,
     now: OffsetDateTime,
@@ -384,12 +450,14 @@ async fn rows(
     let posts: Vec<Vec<AreaPost>> = areas.iter().map(ProductionProject::posts).collect();
     let slots: Vec<SlotId> = posts.iter().flatten().map(|p| p.slot_id).collect();
     let reads = PostReads::load(r, &slots).await?;
+    let mut waits = time_waits(d, r, &areas, now).await?;
     Ok(areas
         .into_iter()
         .zip(posts)
         .map(|(p, posts)| {
             let facts = reads.facts(&posts);
-            let pipeline = pipeline::project(&p, now, &facts);
+            let unscheduled = waits.remove(&p.id).unwrap_or_default();
+            let pipeline = pipeline::project(&p, now, &facts, unscheduled);
             row(p, now, pipeline)
         })
         .collect())
@@ -535,23 +603,40 @@ struct AreaTally {
 }
 
 impl AreaTally {
-    async fn read(r: &mut dyn TenantRepos) -> Result<Self, AppError> {
+    async fn read(
+        d: &Deps,
+        r: &mut dyn TenantRepos,
+        now: OffsetDateTime,
+    ) -> Result<Self, AppError> {
         let counts = r.studio_projects().area_counts().await?;
         let noted = r.studio_projects().area_posts().await?;
+        // The finished areas whose versions wait for a time, planned posts or none.
+        let waiting = r.studio_projects().list_areas_waiting().await?;
+        let waits = time_waits(d, r, &waiting, now).await?;
         let slots: Vec<SlotId> = noted
             .iter()
             .flat_map(|a| a.posts.iter().map(|p| p.slot_id))
             .collect();
         let reads = PostReads::load(r, &slots).await?;
-        let marks = noted
+        let none = Vec::new();
+        let mut marks: Vec<(Option<OlayId>, pipeline::Marks)> = noted
             .iter()
             .map(|a| {
+                let unscheduled = waits.get(&a.id).unwrap_or(&none);
                 (
                     a.olay_id,
-                    pipeline::marks(a.held, a.done, &reads.facts(&a.posts)),
+                    pipeline::marks(a.held, a.done, &reads.facts(&a.posts), unscheduled),
                 )
             })
             .collect();
+        for p in waiting
+            .iter()
+            .filter(|p| !noted.iter().any(|a| a.id == p.id))
+        {
+            if let Some(unscheduled) = waits.get(&p.id) {
+                marks.push((p.olay_id, pipeline::marks(p.held(), true, &[], unscheduled)));
+            }
+        }
         Ok(AreaTally { counts, marks })
     }
 
@@ -580,7 +665,7 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
             .filter(|(m, i, leased)| queue_stage(m, i, *leased).is_some())
             .count(),
     );
-    let tally = AreaTally::read(r.as_mut()).await?;
+    let tally = AreaTally::read(d, r.as_mut(), now).await?;
     let full = ctx.permissions.contains(&Permission::MaterialsWork);
     let shoots: Vec<_> = r
         .studio_materials()
@@ -618,6 +703,9 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
             if m.awaits_approval {
                 waits.insert(WaitReason::ContentApproval);
             }
+            if m.awaits_time {
+                waits.insert(WaitReason::ContentTime);
+            }
             if m.problem {
                 waits.insert(WaitReason::ContentProblem);
             }
@@ -646,6 +734,15 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
     let genel = folder(None);
     let policy = r.studio_materials().material_policy().await?;
     let today = istanbul_day(now);
+    let season_request = |key: &str, year: i32| {
+        shoots
+            .iter()
+            .find(|q| {
+                matches!(&q.reason, ShootReason::SeasonAhead { occasion, year: y }
+                    if occasion == key && *y == year)
+            })
+            .map(|q| ShootRequestId::as_uuid(&q.id))
+    };
     let mut upcoming: Vec<UpcomingDay> = lib
         .calendar
         .entries
@@ -655,6 +752,8 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
             let covered = lib.olays.iter().any(|o| {
                 o.occasion.as_deref() == Some(e.key.as_str()) && season_year(o) == Some(e.year)
             });
+            let prepares_from =
+                start - Duration::days(i64::from(e.lead_days.unwrap_or(policy.lead_days)));
             (end >= today && start <= today + Duration::days(UPCOMING_DAYS) && !covered).then(
                 || UpcomingDay {
                     key: e.key.clone(),
@@ -663,8 +762,15 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
                     kind: e.kind,
                     window_start: start,
                     window_end: end,
-                    prepares_from: start
-                        - Duration::days(i64::from(e.lead_days.unwrap_or(policy.lead_days))),
+                    prepares_from,
+                    phase: if start <= today {
+                        DayPhase::Open
+                    } else if prepares_from <= today {
+                        DayPhase::Preparing
+                    } else {
+                        DayPhase::Ahead
+                    },
+                    shoot_request_id: season_request(&e.key, e.year),
                 },
             )
         })
@@ -680,6 +786,7 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
         ),
         shoot_requests: count64(shoots.len() as u64 + open_area_requests),
         content_approvals: count(tally.marks.iter().map(|(_, m)| m.approvals_waiting).sum()),
+        content_times: count(tally.marks.iter().filter(|(_, m)| m.awaits_time).count()),
         problem_contents: count(tally.marks.iter().filter(|(_, m)| m.problem).count()),
     };
     Ok(TreeOut {
@@ -699,7 +806,7 @@ pub async fn areas(d: &Deps, ctx: &Ctx, q: ProjectQuery) -> Result<AreasOut, App
     let mut r = open(d, ctx, AREA_PERMISSIONS).await?;
     let page = projects::list_in(r.as_mut(), q, ctx.now).await?;
     Ok(AreasOut {
-        areas: rows(r.as_mut(), page.projects, ctx.now).await?,
+        areas: rows(d, r.as_mut(), page.projects, ctx.now).await?,
         next_cursor: page.next_cursor,
         next_done_before: page.next_done_before,
     })
@@ -813,7 +920,7 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
         .into_iter()
         .filter(|(m, _, _)| folder_of(m) == Some(target))
         .collect();
-    let contents = rows(r.as_mut(), mine.clone(), now).await?;
+    let contents = rows(d, r.as_mut(), mine.clone(), now).await?;
     let analysed = materials
         .iter()
         .filter(|(_, i, _)| i.status == AnalysisStatus::Completed)
@@ -837,6 +944,7 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
                 })
                 .count(),
         ),
+        awaiting_time: count(contents.iter().filter(|a| a.pipeline.awaits_time()).count()),
         awaiting_approval: count(
             contents
                 .iter()

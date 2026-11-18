@@ -12,6 +12,8 @@ import { placeHref, type ContentPlace } from './location';
 /** The groups of the tree (design 2026-11-18): Şimdi, Sürekli, Yaklaşan, Geçmiş. */
 export interface TreeGroups {
   now: TreeOut['olays'];
+  /** Special days with no olay whose window has started: they are now, not coming. */
+  nowDays: UpcomingDay[];
   soon: ({ kind: 'olay'; item: TreeOut['olays'][number] } | { kind: 'day'; day: UpcomingDay })[];
   past: TreeOut['olays'];
 }
@@ -19,10 +21,11 @@ export interface TreeGroups {
 /**
  * An olay is "now" while its days run, "soon" before they start and "past" after they end; one
  * that ended but still waits for a person stays "now" so its dot is not folded away. The special
- * days with no olay yet join "soon" by their window's start.
+ * days with no olay yet join "soon" by their window's start, or "now" once their window started.
  */
 export function groupTree(tree: TreeOut, today = istanbulDay(new Date())): TreeGroups {
   const now: TreeOut['olays'] = [];
+  const nowDays: UpcomingDay[] = [];
   const past: TreeOut['olays'] = [];
   const soon: TreeGroups['soon'] = [];
   for (const item of tree.olays) {
@@ -31,10 +34,13 @@ export function groupTree(tree: TreeOut, today = istanbulDay(new Date())): TreeG
     else if (ends_on >= today || item.waits.length) now.push(item);
     else past.push(item);
   }
-  for (const day of tree.upcoming) soon.push({ kind: 'day', day });
+  for (const day of tree.upcoming) {
+    if (day.phase === 'open' || day.window_start <= today) nowDays.push(day);
+    else soon.push({ kind: 'day', day });
+  }
   const start = (s: TreeGroups['soon'][number]) => (s.kind === 'olay' ? s.item.olay.starts_on : s.day.window_start);
   soon.sort((a, b) => start(a).localeCompare(start(b)));
-  return { now, soon, past };
+  return { now, nowDays, soon, past };
 }
 
 export const dayId = (day: UpcomingDay) => `${day.key}:${day.year}`;
@@ -104,6 +110,20 @@ function FolderRow({ id, name, folder, place, muted }: { id: string; name: strin
   );
 }
 
+/** A special day with no olay yet, as a dashed folder: under Şimdi once its window started. */
+function DayRow({ day, place, trailing }: { day: UpcomingDay; place: ContentPlace; trailing: ReactNode }) {
+  return (
+    <Row
+      to={placeHref({ day: dayId(day) })}
+      current={place.day === dayId(day)}
+      muted
+      icon={<Folder aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground [stroke-dasharray:2_2]" />}
+      name={day.name}
+      trailing={trailing}
+    />
+  );
+}
+
 function OlayRow({ item, place, muted }: { item: TreeOut['olays'][number]; place: ContentPlace; muted?: boolean }) {
   return <FolderRow id={item.olay.id} name={item.olay.title} folder={item} place={place} muted={muted} />;
 }
@@ -163,7 +183,10 @@ export function ContentTree({
       </div>
       <ul className="space-y-px">
         {groups.now.map((item) => <OlayRow key={item.olay.id} item={item} place={place} />)}
-        {!groups.now.length && <li className="px-2 py-1 text-xs text-muted-foreground">{t('content.tree.noneNow')}</li>}
+        {groups.nowDays.map((day) => (
+          <DayRow key={dayId(day)} day={day} place={place} trailing={<span className="text-xs text-warning">{t('content.tree.noOlay')}</span>} />
+        ))}
+        {!groups.now.length && !groups.nowDays.length && <li className="px-2 py-1 text-xs text-muted-foreground">{t('content.tree.noneNow')}</li>}
       </ul>
       <Heading>{t('content.tree.always')}</Heading>
       <ul className="space-y-px">
@@ -177,15 +200,7 @@ export function ContentTree({
               s.kind === 'olay' ? (
                 <OlayRow key={s.item.olay.id} item={s.item} place={place} />
               ) : (
-                <Row
-                  key={dayId(s.day)}
-                  to={placeHref({ day: dayId(s.day) })}
-                  current={place.day === dayId(s.day)}
-                  muted
-                  icon={<Folder aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground [stroke-dasharray:2_2]" />}
-                  name={s.day.name}
-                  trailing={<span className="text-xs text-muted-foreground">{formatDay(s.day.window_start, i18n.language, false)}</span>}
-                />
+                <DayRow key={dayId(s.day)} day={s.day} place={place} trailing={<span className="text-xs text-muted-foreground">{formatDay(s.day.window_start, i18n.language, false)}</span>} />
               ),
             )}
           </ul>

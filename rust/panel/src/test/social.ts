@@ -2,7 +2,7 @@ import { studioAnswers, slot } from './studio';
 import { defaultSettings } from './posts';
 
 export const socialAccount = {
-  capability_id: 'ig1', name: '@atolye', kind: 'instagram', status: 'verified', paused: false,
+  capability_id: 'ig1', name: '@atolye', kind: 'instagram', status: 'verified', paused: false, requires_human_approval: false,
   latest: { day: '2026-11-10', followers: 1250, reach: 4800, views: null, engagement: 320, profile_visits: 80 },
   next: { publish_at: '2026-11-11T09:00:00Z', format: 'reel' },
 };

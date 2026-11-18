@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router-dom';
-import { ArrowRight, Check, Folder, LayoutGrid, List, Plus, Sparkles, Upload } from 'lucide-react';
+import { ArrowRight, Check, Folder, LayoutGrid, List, Lock, Plus, Sparkles, Upload } from 'lucide-react';
 import { GENEL, olayView, type FileRow, type Need, type OlayViewOut } from '@/api/content';
 import * as m from '@/api/materials';
 import { projectGet, projectRequestUpdate } from '@/api/projects';
@@ -37,6 +37,7 @@ function FlowStrip({ flow }: { flow: OlayViewOut['flow'] }) {
     { n: flow.files, label: t('content.flow.files') },
     { n: flow.analysed, label: flow.in_queue ? t('content.flow.analysedQueue', { n: flow.in_queue }) : t('content.flow.analysed') },
     { n: flow.in_production, label: t('content.flow.inProduction') },
+    { n: flow.awaiting_time ?? 0, label: t('content.flow.awaitingTime') },
     { n: flow.awaiting_approval, label: t('content.flow.awaitingApproval'), tone: flow.awaiting_approval ? 'warning' : undefined },
     { n: flow.published, label: t('content.flow.published'), tone: flow.published ? 'success' : undefined },
   ];
@@ -279,6 +280,8 @@ export function OlayView({
   const data = view.data;
   const olay = data?.olay ?? null;
   const contents = contentOn ? data?.contents ?? null : null;
+  // A file nobody gave a share permission is used by no content: the system waits for a person.
+  const unshared = data?.files?.filter((f) => !f.material.share && !f.material.erased_at).length ?? 0;
   // A link to the folder's "Eksikler" lands on them once they are drawn.
   useEffect(() => {
     if (data && location.hash === '#eksikler') document.getElementById('eksikler')?.scrollIntoView?.({ block: 'start' });
@@ -318,6 +321,11 @@ export function OlayView({
               </Callout>
             )}
             <FlowStrip flow={data.flow} />
+            {unshared > 0 && (
+              <Callout tone="warning" icon={<Lock className="h-4 w-4" />} title={t('content.files.noShareTitle', { count: unshared })}>
+                <p className="text-sm">{t('content.files.noShareHelp')}</p>
+              </Callout>
+            )}
             {contents && (
               <section aria-labelledby="olay-contents" className="space-y-3">
                 <SectionHead title={t('content.contents.title')} count={contents.length}>

@@ -400,10 +400,27 @@ async fn an_accounts_page_shows_what_is_coming_why_it_waits_and_what_went_out() 
         .clone()
         .expect("the account's next post");
     assert!(next.publish_at <= WHEN);
+    assert!(!detail.account.requires_human_approval);
 
-    // The connection asks for a person's approval: the post waits for it, and says so.
+    // The connection asks for a person's approval: the post waits for it, and says so. An agent
+    // reads that policy where it reads the account (it is `jeeta.capability.get`'s too).
     w.approval(true).await;
+    let listed = social::accounts_list(&w.d, &a, input(json!({})))
+        .await
+        .unwrap();
+    assert!(
+        listed
+            .iter()
+            .find(|l| l.capability_id == account)
+            .unwrap()
+            .requires_human_approval
+    );
     let detail = get(&w, &a, json!({"capability_id":account})).await;
+    assert!(detail.account.requires_human_approval);
+    assert_eq!(
+        serde_json::to_value(&detail.account).unwrap()["requires_human_approval"],
+        json!(true)
+    );
     let u = detail
         .upcoming
         .iter()

@@ -11,6 +11,8 @@ export interface SocialAccount {
   kind: AccountKind;
   status: 'verified' | 'unreachable' | 'declared' | 'retired';
   paused: boolean;
+  /** The connection's policy: every post planned on it waits for a person's approval. */
+  requires_human_approval: boolean;
   latest: AccountDay | null;
   next: { publish_at: string; format: string } | null;
 }
@@ -38,6 +40,9 @@ export const accountsList = () => request<SocialAccount[]>('GET', `${root}/accou
 export const accountGet = (id: string, from: string, until: string) =>
   request<AccountDetail>('GET', `${root}/accounts/${encodeURIComponent(id)}`, { query: { from, until } });
 export const packagesWaiting = () => request<WaitingPackage[]>('GET', `${root}/packages`);
+/** Gives a waiting version its account and time (`social.version_schedule`); replayed by `request_key`. */
+export const versionSchedule = (body: { project_id: string; version_id: string; capability_id: string; publish_at: string; request_key: string }) =>
+  request<unknown>('POST', `${root}/versions/schedule`, { body });
 export const accountPause = (id: string, paused: boolean, expected_revision: number) =>
   request<SocialPostingSettings>('POST', `${root}/accounts/${encodeURIComponent(id)}/pause`, { body: { paused, expected_revision } });
 export const postingSettings = () => request<{ settings: SocialPostingSettings }>('GET', '/api/studio/posts');

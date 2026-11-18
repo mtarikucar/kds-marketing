@@ -193,7 +193,11 @@
   "socialAccounts": {
     "accounts": "Accounts",
     "packages": "Ready packages",
-    "packageHelp": "The agent will choose a time for these versions.",
+    "packageHelp": "On its next run the agent gives these versions an account and a time. If you do not want to wait, give the time yourself; the posting rules (quiet hours, daily cap, spacing) still apply.",
+    "scheduleAccount": "Account",
+    "scheduleAt": "Posting time",
+    "schedule": "Give the time",
+    "scheduleRefused": "This time could not be given: {{reason}}",
     "connect": "Connect an account",
     "empty": "No social accounts connected yet.",
     "back": "Back to accounts",
@@ -4192,6 +4196,7 @@
       "soon": "Coming up",
       "past": "Past",
       "noneNow": "No event is running now.",
+      "noOlay": "no event",
       "newOlay": "Event",
       "waiting": "Something waits for you",
       "files_one": "{{count}} file",
@@ -4207,6 +4212,8 @@
       "shoot_requests_other": "shoot requests",
       "content_approvals_one": "content to approve",
       "content_approvals_other": "contents to approve",
+      "content_times_one": "content waits for a time",
+      "content_times_other": "contents wait for a time",
       "problem_contents_one": "content with a problem",
       "problem_contents_other": "contents with a problem"
     },
@@ -4252,6 +4259,22 @@
       "publishedAt": "published {{at}}",
       "plannedAt": "planned for {{at}}",
       "failedShort": "could not go out",
+      "due": "{{account}} · its time came, sending",
+      "dueShort": "its time came, sending",
+      "awaitsTime_one": "Package ready · waits for a posting time",
+      "awaitsTime_other": "Package ready · {{count}} versions wait for a posting time",
+      "awaitsTimeOne": "waits for an account and a time",
+      "blocked": "{{format}} cannot go to any account",
+      "retirement": {
+        "cancelled": "taken back",
+        "missed_grace": "not sent in time",
+        "replanned": "replanned",
+        "hypothesis_retired": "taken back, its hypothesis closed",
+        "strategy_archived": "taken back, the strategy changed",
+        "week_ended": "taken back, its week ended",
+        "measurements_complete": "measurements complete",
+        "other": "taken back"
+      },
       "window": "{{hours}}-hour measurement",
       "link": "Open the post"
     },
@@ -4263,7 +4286,14 @@
       "approve": "Go to approval",
       "approveAt": "Approve · {{account}}, {{at}}",
       "toNeeds": "Go to missing items",
-      "startsAt": "Waiting for its time · {{at}}"
+      "startsAt": "Waiting for its time · {{at}}",
+      "blocked_one": "A ready version cannot go to any account",
+      "blocked_other": "{{count}} ready versions cannot go to any account",
+      "toPackages": "Go to ready packages",
+      "awaitsTime_one": "Package ready · waits for a posting time",
+      "awaitsTime_other": "Package ready · {{count}} versions wait for a posting time",
+      "awaitsTimeHelp": "On its next run the agent gives each version an account and a time. If you do not want to wait, give the time yourself.",
+      "giveTime": "Give the time yourself"
     },
     "row": {
       "preview": "Preview",
@@ -4302,6 +4332,7 @@
       "analysed": "Analysed",
       "analysedQueue": "Analysed · {{n}} queued",
       "inProduction": "In production",
+      "awaitingTime": "Waiting for a time",
       "awaitingApproval": "Awaiting approval",
       "published": "Published",
       "problems": "With a problem"
@@ -4316,6 +4347,9 @@
       "empty": "This folder has no files.",
       "review": "To review",
       "noReview": "No file in this folder waits for you.",
+      "noShareTitle_one": "{{count}} file has no share permission",
+      "noShareTitle_other": "{{count}} files have no share permission",
+      "noShareHelp": "No content is made from a file without a permission; the system waits. Open the file and give its share permission, or mark it not to be shared. “To review” shows these files.",
       "layout": "Layout",
       "grid": "Grid",
       "list": "List"
@@ -4350,8 +4384,23 @@
       }
     },
     "day": {
-      "notStarted": "This special day has not started yet",
-      "help": "The system starts preparing on {{day}} and opens its event itself.",
+      "phase": {
+        "ahead": "Coming up",
+        "preparing": "Preparation time",
+        "open": "Under way"
+      },
+      "title": {
+        "ahead": "This special day has no event yet",
+        "preparing": "Its preparation time has come, and it has no event",
+        "open": "It is under way, and it has no event"
+      },
+      "help": {
+        "ahead": "The system prepares for it from {{day}}.",
+        "preparing": "Preparation started on {{day}}; its window starts on {{start}}.",
+        "open": "Its window started on {{start}}; content needs an event."
+      },
+      "how": "The system does not open the event itself: you open it, or confirm the one an agent proposed. Once the event is confirmed and holds a usable file, content is made by itself; until then the system adds a request to the shoot list.",
+      "shootAsked": "The system added a request for this day to the shoot list · Go to the gaps",
       "create": "Open the event now",
       "gone": "This special day is no longer coming up",
       "goneHelp": "Its event may be open already, or its date has passed; see the folders on the left."
@@ -4372,14 +4421,21 @@
         "waitingFiled": "Queued · in its folder, the agent will look",
         "analysing": "The agent is looking: describing, labelling, finding its event",
         "analysingFiled": "The agent is looking: describing, labelling",
-        "needs_filing": "Analysed; a person chooses its event",
+        "needs_filing": "The agent could not place this file in an event. Choose a folder or delete the file.",
         "failed": "The analysis did not complete; you can retry.",
         "noAgent": "No agent connected · analysed in turn once one connects"
       },
       "fileInto": "Choose the event",
       "choose": "Choose an event",
       "file": "File it",
-      "managerFiles": "An owner or manager chooses its event."
+      "managerFiles": "An owner or manager chooses its event or deletes the file.",
+      "erase": "Delete the file",
+      "agent": {
+        "none": "No connected agent can analyse files; they wait in the queue until one connects.",
+        "seen": "An agent that can analyse files was last here at {{last}}.",
+        "next": "An agent that can analyse files was last here at {{last}}; it is next expected around {{next}}.",
+        "overdue": "An agent that can analyse files was last here at {{last}}; it was expected around {{next}} and is late."
+      }
     },
     "file": {
       "title": "File",
@@ -4411,7 +4467,7 @@
     },
     "settings": {
       "title": "Special days and rules",
-      "help": "For the special days that are on, the system opens the event itself and starts production in time."
+      "help": "For the special days that are on, preparation starts in time: if the day's confirmed event holds a usable file, content is made; if not, the system adds a request to the shoot list. The system does not open the event; you do."
     }
   }
 }

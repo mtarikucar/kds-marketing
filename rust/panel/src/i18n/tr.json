@@ -193,7 +193,11 @@
   "socialAccounts": {
     "accounts": "Hesaplar",
     "packages": "Hazır paketler",
-    "packageHelp": "Ajan bu sürümler için zaman seçecek.",
+    "packageHelp": "Ajan bir sonraki çalışmasında bu sürümlere hesap ve saat verir. Beklemek istemezseniz zamanı siz verin; paylaşım kuralları (sessiz saatler, günlük sınır, aralık) aynen uygulanır.",
+    "scheduleAccount": "Hesap",
+    "scheduleAt": "Paylaşım zamanı",
+    "schedule": "Zamanı ver",
+    "scheduleRefused": "Bu zaman verilemedi: {{reason}}",
     "connect": "Hesap bağla",
     "empty": "Henüz bağlı sosyal hesabın yok.",
     "back": "Hesaplara dön",
@@ -4192,6 +4196,7 @@
       "soon": "Yaklaşan",
       "past": "Geçmiş",
       "noneNow": "Şu an süren olay yok.",
+      "noOlay": "olayı yok",
       "newOlay": "Olay",
       "waiting": "Sizi bekleyen bir şey var",
       "files_one": "{{count}} dosya",
@@ -4207,6 +4212,8 @@
       "shoot_requests_other": "çekim talebi",
       "content_approvals_one": "içerik onayı",
       "content_approvals_other": "içerik onayı",
+      "content_times_one": "içerik zaman bekliyor",
+      "content_times_other": "içerik zaman bekliyor",
       "problem_contents_one": "sorunlu içerik",
       "problem_contents_other": "sorunlu içerik"
     },
@@ -4252,6 +4259,22 @@
       "publishedAt": "yayında {{at}}",
       "plannedAt": "{{at}} planlandı",
       "failedShort": "gönderilemedi",
+      "due": "{{account}} · zamanı geldi, gönderiliyor",
+      "dueShort": "zamanı geldi, gönderiliyor",
+      "awaitsTime_one": "Paket hazır · paylaşım zamanı bekliyor",
+      "awaitsTime_other": "Paket hazır · {{count}} sürüm paylaşım zamanı bekliyor",
+      "awaitsTimeOne": "hesap ve saat bekliyor",
+      "blocked": "{{format}} hiçbir hesaba gidemiyor",
+      "retirement": {
+        "cancelled": "geri alındı",
+        "missed_grace": "zamanında gönderilemedi",
+        "replanned": "yeniden planlandı",
+        "hypothesis_retired": "hipotezi kapandığı için geri alındı",
+        "strategy_archived": "strateji değiştiği için geri alındı",
+        "week_ended": "haftası bittiği için geri alındı",
+        "measurements_complete": "ölçümleri tamamlandı",
+        "other": "geri alındı"
+      },
       "window": "{{hours}} saatlik ölçüm",
       "link": "Gönderiyi aç"
     },
@@ -4263,7 +4286,14 @@
       "approve": "Onaya git",
       "approveAt": "Onayla · {{account}}, {{at}}",
       "toNeeds": "Eksiklere git",
-      "startsAt": "Saatini bekliyor · {{at}}"
+      "startsAt": "Saatini bekliyor · {{at}}",
+      "blocked_one": "Hazır sürüm hiçbir hesaba gidemiyor",
+      "blocked_other": "{{count}} hazır sürüm hiçbir hesaba gidemiyor",
+      "toPackages": "Hazır paketlere git",
+      "awaitsTime_one": "Paket hazır · paylaşım zamanı bekliyor",
+      "awaitsTime_other": "Paket hazır · {{count}} sürüm paylaşım zamanı bekliyor",
+      "awaitsTimeHelp": "Ajan bir sonraki çalışmasında her sürüme hesap ve saat verecek. Beklemek istemezseniz zamanı siz verin.",
+      "giveTime": "Zamanı siz verin"
     },
     "row": {
       "preview": "Önizle",
@@ -4302,6 +4332,7 @@
       "analysed": "Analiz",
       "analysedQueue": "Analiz · {{n}} sırada",
       "inProduction": "Üretimde",
+      "awaitingTime": "Zaman bekleyen",
       "awaitingApproval": "Onay bekleyen",
       "published": "Yayında",
       "problems": "Sorunlu"
@@ -4316,6 +4347,9 @@
       "empty": "Bu klasörde dosya yok.",
       "review": "Bakılacaklar",
       "noReview": "Bu klasörde size bakan dosya yok.",
+      "noShareTitle_one": "{{count}} dosyanın paylaşım izni yok",
+      "noShareTitle_other": "{{count}} dosyanın paylaşım izni yok",
+      "noShareHelp": "İzni verilmeyen dosyadan içerik üretilmez; sistem bekler. Dosyayı açıp paylaşım iznini verin ya da paylaşılmayacak diye işaretleyin. “Bakılacaklar” bu dosyaları gösterir.",
       "layout": "Görünüm",
       "grid": "Izgara",
       "list": "Liste"
@@ -4350,8 +4384,23 @@
       }
     },
     "day": {
-      "notStarted": "Bu özel gün henüz başlamadı",
-      "help": "Sistem {{day}} tarihinde hazırlığa başlar ve olayını kendisi açar.",
+      "phase": {
+        "ahead": "Yaklaşan",
+        "preparing": "Hazırlık zamanı",
+        "open": "Dönemi başladı"
+      },
+      "title": {
+        "ahead": "Bu özel günün henüz olayı yok",
+        "preparing": "Hazırlık zamanı geldi, olayı yok",
+        "open": "Dönemi başladı, olayı yok"
+      },
+      "help": {
+        "ahead": "Sistem {{day}} tarihinden itibaren hazırlık yapar.",
+        "preparing": "Hazırlık {{day}} tarihinde başladı; dönemi {{start}} tarihinde başlıyor.",
+        "open": "Dönemi {{start}} tarihinde başladı; içerik üretimi için olay gerekiyor."
+      },
+      "how": "Sistem olayı kendisi açmaz: olayı siz açarsınız ya da ajanın önerdiğini onaylarsınız. Olay onaylı ve içinde kullanılabilir bir dosya olunca içerik üretimi kendiliğinden başlar; o zamana kadar sistem çekim listesine bir istek ekler.",
+      "shootAsked": "Sistem çekim listesine bu gün için bir istek ekledi · Eksiklere git",
       "create": "Olayı şimdi aç",
       "gone": "Bu özel gün artık yaklaşanlarda değil",
       "goneHelp": "Olayı açılmış ya da tarihi geçmiş olabilir; soldaki klasörlere bakın."
@@ -4372,14 +4421,21 @@
         "waitingFiled": "Sırada · klasörüne kondu, ajan bakacak",
         "analysing": "Ajan bakıyor: tanımlıyor, etiketliyor, olayını buluyor",
         "analysingFiled": "Ajan bakıyor: tanımlıyor, etiketliyor",
-        "needs_filing": "Analiz bitti; olayını bir kişi seçecek",
+        "needs_filing": "Ajan bu dosyayı bir olaya yerleştiremedi. Bir klasör seçin ya da dosyayı silin.",
         "failed": "Analiz tamamlanamadı; yeniden deneyebilirsiniz.",
         "noAgent": "Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek"
       },
       "fileInto": "Olayı seçin",
       "choose": "Bir olay seçin",
       "file": "Dosyala",
-      "managerFiles": "Bir sahip ya da yönetici olayını seçecek."
+      "managerFiles": "Bir sahip ya da yönetici olayını seçecek ya da dosyayı silecek.",
+      "erase": "Dosyayı sil",
+      "agent": {
+        "none": "Analizi yapabilecek bağlı ajan yok; dosyalar bir ajan bağlanana kadar sırada bekler.",
+        "seen": "Analizi yapabilecek ajan en son {{last}} geldi.",
+        "next": "Analizi yapabilecek ajan en son {{last}} geldi; bir sonraki gelişi {{next}} civarında bekleniyor.",
+        "overdue": "Analizi yapabilecek ajan en son {{last}} geldi; {{next}} civarında gelmesi gerekiyordu, gecikti."
+      }
     },
     "file": {
       "title": "Dosya",
@@ -4411,7 +4467,7 @@
     },
     "settings": {
       "title": "Özel günler ve kurallar",
-      "help": "Açık olan özel günler için sistem olayı kendisi açar ve zamanı gelince üretime başlar."
+      "help": "Açık olan özel günlerin hazırlığı zamanı gelince başlar: o günün onaylı olayında kullanılabilir dosya varsa içerik üretilir, yoksa sistem çekim listesine istek ekler. Olayı sistem açmaz; siz açarsınız."
     }
   }
 }

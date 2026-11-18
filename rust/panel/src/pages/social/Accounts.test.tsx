@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { accountDetail, socialAccount, socialAnswers, socialSettings } from '@/test/social';
@@ -53,14 +53,31 @@ it('pauses and resumes with the latest revision and updates both account marks',
   await userEvent.click(await screen.findByRole('switch', { name: '@atolye · Paylaşımı sürdür' }));
   await waitFor(() => expect(calls.filter(c => c.method === 'POST').at(-1)?.body).toEqual({ paused: false, expected_revision: 8 }));
 });
-it('lists waiting package versions read-only', async () => {
-  const calls = mockFetch(socialAnswers);
-  renderAt('/social?tab=packages');
+it('lists waiting package versions and lets a person give one its account and time', async () => {
+  const calls = mockFetch({ ...socialAnswers, 'POST /api/social/versions/schedule': {}, 'GET /api/social/packages': socialAnswers['GET /api/social/packages'] });
+  renderAt('/social?tab=packages#version-v1');
   expect(await screen.findByText('Birlikte üretelim.')).toBeVisible();
-  expect(screen.getByText('Ajan bu sürümler için zaman seçecek.')).toBeVisible();
+  expect(screen.getByText(/Ajan bir sonraki çalışmasında bu sürümlere hesap ve saat verir/)).toBeVisible();
   expect(screen.getByText('Atölyeyi tanıt')).toBeVisible();
-  expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  // The content page links straight to the version.
+  expect(document.getElementById('version-v1')).toHaveTextContent('Birlikte üretelim.');
   expect(calls.some(c => c.method !== 'GET')).toBe(false);
+  expect(screen.getByRole('button', { name: 'Zamanı ver' })).toBeDisabled();
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Hesap' }), 'ig1');
+  fireEvent.change(screen.getByLabelText('Paylaşım zamanı'), { target: { value: '2026-11-21T10:30' } });
+  await userEvent.click(screen.getByRole('button', { name: 'Zamanı ver' }));
+  await waitFor(() => expect(calls.find(c => c.method === 'POST' && c.path === '/api/social/versions/schedule')?.body).toEqual({
+    project_id: 'p1', version_id: 'v1', capability_id: 'ig1', publish_at: new Date('2026-11-21T10:30').toISOString(), request_key: expect.any(String),
+  }));
+});
+
+it('says why the engine refused a time a person gave', async () => {
+  mockFetch({ ...socialAnswers, 'POST /api/social/versions/schedule': withStatus(409, { code: 'CONFLICT', message: 'refused', details: { reason: 'quiet_hours' } }) });
+  renderAt('/social?tab=packages');
+  await screen.findByText('Birlikte üretelim.');
+  fireEvent.change(screen.getByLabelText('Paylaşım zamanı'), { target: { value: '2026-11-21T03:00' } });
+  await userEvent.click(screen.getByRole('button', { name: 'Zamanı ver' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Bu zaman verilemedi: quiet_hours');
 });
 it.each(['?tab=posts', '?tab=plan', '?slot=ordinary'])('opens accounts for the old link %s', async query => {
   mockFetch({ ...socialAnswers, 'GET /api/studio/pending': { slots: [], approvals: [], blockers: [], budget_moves: [], paid_alerts: [] } });

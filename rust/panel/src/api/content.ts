@@ -58,13 +58,20 @@ export interface RefusedDelivery {
 // The content page's read model (`jt_app::usecases::content::{views, pipeline}`, design
 // 2026-11-18): the tree, the analysis queue, the production line and one olay's view.
 
-export type WaitReason = 'olay_proposed' | 'shoot_request' | 'material_request' | 'content_approval' | 'content_problem';
+export type WaitReason = 'olay_proposed' | 'shoot_request' | 'material_request' | 'content_approval' | 'content_time' | 'content_problem';
 export interface Folder {
   files: number;
   areas: number;
   published: number;
   waits: WaitReason[];
 }
+/** `ahead`: its preparation day has not come; `preparing`: it has, the window has not started; `open`: the window runs now. */
+export type DayPhase = 'ahead' | 'preparing' | 'open';
+/**
+ * A special day of the calendar with no olay yet. The system opens no olay for it: from
+ * `prepares_from` it makes content for the confirmed olay of the day once that olay has a usable
+ * file, and while there is none it asks for a capture on the çekim listesi (`shoot_request_id`).
+ */
 export interface UpcomingDay {
   key: string;
   year: number;
@@ -73,6 +80,8 @@ export interface UpcomingDay {
   window_start: string;
   window_end: string;
   prepares_from: string;
+  phase: DayPhase;
+  shoot_request_id: string | null;
 }
 export interface TreeOut {
   /** Every olay, newest start first. */
@@ -83,7 +92,8 @@ export interface TreeOut {
   analysis_queue: number;
   /** Every area not archived ("Tüm üretim"). */
   areas: number;
-  waiting: { olay_confirmations: number; shoot_requests: number; content_approvals: number; problem_contents: number };
+  /** `content_times`: finished contents waiting for an account and a time some account can take. */
+  waiting: { olay_confirmations: number; shoot_requests: number; content_approvals: number; content_times: number; problem_contents: number };
 }
 export type QueueStage = 'waiting' | 'analysing' | 'needs_filing' | 'failed';
 export interface QueueItem {
@@ -119,6 +129,8 @@ export interface PublicationFact {
   published_at: string | null;
   url: string | null;
   failed: boolean;
+  /** Why it was retired unsent, when it was (`cancelled`, `missed_grace`, `replanned`, ...). */
+  retirement?: string;
 }
 export interface ResultFact {
   version_id: string;
@@ -138,10 +150,32 @@ export interface Stage {
   publications?: PublicationFact[];
   results?: ResultFact[];
 }
+/** Why no account can take a waiting version, as `social.versions_waiting` says it. */
+export const BLOCKED_REASONS = [
+  'no_approved_strategy',
+  'no_connected_account',
+  'account_paused',
+  'its_account_unavailable',
+  'format_not_supported',
+  'channel_not_in_strategy',
+  'hypothesis_does_not_post',
+] as const;
+/** A version of the finished package with no planned post yet: it waits for an account and a time. */
+export interface TimeWait {
+  version_id: string;
+  format: PostFormat;
+  capability_id: string | null;
+  /** The accounts it could go out on now. */
+  accounts: string[];
+  /** Why none can take it now; absent while some account can. */
+  blocked?: string;
+}
 export interface Pipeline {
   current_step: number | null;
   /** Always eight, in order. */
   stages: Stage[];
+  /** The versions of the finished package that wait for a time (empty when none). */
+  unscheduled: TimeWait[];
 }
 export type OpenedBy = { kind: 'human' } | { kind: 'system'; trigger: 'olay' | 'calendar' | 'floor'; key: string };
 export interface AreaSummary {
@@ -173,6 +207,8 @@ export interface Flow {
   in_queue: number;
   contents: number;
   in_production: number;
+  /** Finished contents waiting for an account and a time. */
+  awaiting_time: number;
   awaiting_approval: number;
   published: number;
   problems: number;
