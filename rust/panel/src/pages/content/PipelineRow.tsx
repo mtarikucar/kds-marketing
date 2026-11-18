@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, Clock, ExternalLink, Layers, RotateCcw, UserRound } from 'lucide-react';
-import type { AreaRow, Stage, StageState } from '@/api/content';
+import { BLOCKED_REASONS, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait } from '@/api/content';
 import { Button, cn } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { areaTime, MiniThumb, openedBy, StateBadge, stepName } from './AreaShared';
@@ -23,6 +24,31 @@ const LABEL: Record<StageState, string> = {
   problem: 'text-danger',
   todo: 'font-normal text-muted-foreground',
 };
+
+/** Why no account can take a waiting version, in the words of the social page's packages. */
+export function blockedText(t: TFunction, wait: TimeWait): string {
+  const reason = BLOCKED_REASONS.find((r) => r === wait.blocked);
+  return reason ? t(`socialAccounts.blocked.${reason}`) : t('socialAccounts.noSuitableAccount');
+}
+
+/** Where a person gives a waiting version its account and time: the social page's packages. */
+export const scheduleHref = (versionId?: string) => `/social?tab=packages${versionId ? `#version-${encodeURIComponent(versionId)}` : ''}`;
+
+const RETIREMENTS = ['cancelled', 'missed_grace', 'replanned', 'hypothesis_retired', 'strategy_archived', 'week_ended', 'measurements_complete'] as const;
+
+/** A planned post's line: out, failed, taken back, due and being sent, or planned. */
+export function publicationText(t: TFunction, p: PublicationFact, lang: string, short = false): string {
+  const who = p.account_name ?? t('contentAreas.account');
+  if (p.failed) return short ? t('content.out.failedShort') : t('content.out.failed', { account: who });
+  if (p.published_at) return short ? t('content.out.publishedAt', { at: areaTime(p.published_at, lang) }) : t('content.out.published', { account: who, at: areaTime(p.published_at, lang) });
+  if (p.state === 'retired') {
+    const known = RETIREMENTS.find((r) => r === p.retirement) ?? 'other';
+    const reason = t(`content.out.retirement.${known}`);
+    return short ? reason : `${who} · ${reason}`;
+  }
+  if (Date.parse(p.scheduled_at) <= Date.now()) return short ? t('content.out.dueShort') : t('content.out.due', { account: who });
+  return short ? t('content.out.plannedAt', { at: areaTime(p.scheduled_at, lang) }) : t('content.out.planned', { account: who, at: areaTime(p.scheduled_at, lang) });
+}
 
 export function StageNode({ state, small = false }: { state: StageState; small?: boolean }) {
   const icon = small ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5';
@@ -89,17 +115,19 @@ export function StageOutput({ stage, row, files }: { stage: Stage; row: AreaRow;
     else if (!a.required) lines.push(<span key={`a-${a.slot_id}`}>{t('content.out.noApproval')}</span>);
   }
   for (const p of stage.publications ?? []) {
-    const who = p.account_name ?? t('contentAreas.account');
     lines.push(
       <span key={`p-${p.slot_id}`} className={cn('block', p.failed && 'font-medium text-danger')}>
-        {p.failed
-          ? t('content.out.failed', { account: who })
-          : p.published_at
-            ? t('content.out.published', { account: who, at: areaTime(p.published_at, lang) })
-            : t('content.out.planned', { account: who, at: areaTime(p.scheduled_at, lang) })}
+        {publicationText(t, p, lang)}
       </span>,
     );
   }
+  // The finished package's versions with no time yet: waiting for one, or blocked.
+  const unscheduled = row.pipeline.unscheduled ?? [];
+  if (stage.key === 'onay' && stage.state === 'current' && unscheduled.length)
+    lines.push(<span key="time" className="block text-info">{t('content.out.awaitsTime', { count: unscheduled.length })}</span>);
+  if (stage.key === 'yayin')
+    for (const w of unscheduled.filter((x) => x.blocked))
+      lines.push(<span key={`b-${w.version_id}`} className="block font-medium text-danger">{t('content.out.blocked', { format: t(`posts.format.${w.format}`) })}</span>);
   for (const r of stage.results ?? []) {
     const numbers = Object.entries(r.metrics).filter(([, v]) => v !== null) as [string, number][];
     if (numbers.length)
@@ -122,7 +150,7 @@ export function StageOutput({ stage, row, files }: { stage: Stage; row: AreaRow;
         {stage.key === 'onay' ? t('content.out.awaitsApproval') : row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson')}
       </span>,
     );
-  if (stage.state === 'problem' && !(stage.publications ?? []).some((p) => p.failed))
+  if (stage.state === 'problem' && !(stage.publications ?? []).some((p) => p.failed) && !(stage.key === 'yayin' && unscheduled.some((x) => x.blocked)))
     lines.push(<span key="problem" className="block font-medium text-danger">{t('content.out.stuck')}</span>);
   if (!lines.length) return null;
   return <div className="min-w-0 space-y-1 pe-3 text-xs leading-snug text-muted-foreground">{lines}</div>;
@@ -142,13 +170,21 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
   let title: ReactNode = null;
   let body: ReactNode = null;
   let actions: ReactNode = null;
+  const unscheduled = row.pipeline.unscheduled ?? [];
+  const blocked = unscheduled.filter((w) => w.blocked);
   if (stage?.state === 'problem') {
     tone = 'danger';
     const failed = (stage.publications ?? []).filter((p) => p.failed);
-    title = t(stage.key === 'yayin' ? 'content.bar.publishFailed' : 'content.bar.problem', { stage: t(`content.stage.${stage.key}`) });
-    body = stage.key === 'paket' ? t('contentAreas.held') : null;
+    const cannotTime = stage.key === 'yayin' && blocked.length > 0;
+    title = cannotTime && !failed.length
+      ? t('content.bar.blocked', { count: blocked.length })
+      : t(stage.key === 'yayin' ? 'content.bar.publishFailed' : 'content.bar.problem', { stage: t(`content.stage.${stage.key}`) });
+    body = stage.key === 'paket'
+      ? t('contentAreas.held')
+      : cannotTime ? [...new Set(blocked.map((w) => blockedText(t, w)))].join(' ') : null;
     actions = <>
       {failed.map((p) => <Button key={p.slot_id} size="sm" variant="outline" asChild><Link to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{t('content.bar.openPost', { account: p.account_name ?? t('contentAreas.account') })}</Link></Button>)}
+      {cannotTime && <Button size="sm" variant="outline" asChild><Link to={scheduleHref(blocked[0].version_id)}>{t('content.bar.toPackages')}</Link></Button>}
       {!expanded && <Button size="sm" variant="outline" onClick={onExpand}>{t('content.bar.inspect')}</Button>}
     </>;
   } else if (stage?.state === 'waiting_person' && stage.key === 'onay') {
@@ -167,6 +203,16 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
     title = row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson');
     actions = <>
       <Button size="sm" variant="outline" asChild><Link to={`${folder}#eksikler`}>{t('content.bar.toNeeds')}</Link></Button>
+      {preview}
+    </>;
+  } else if (unscheduled.some((w) => !w.blocked)) {
+    // Finished, with versions that have no time: the agent gives them on its next run; a person
+    // who does not want to wait gives them on the social page.
+    const first = unscheduled.find((w) => !w.blocked)!;
+    title = t('content.bar.awaitsTime', { count: unscheduled.filter((w) => !w.blocked).length });
+    body = t('content.bar.awaitsTimeHelp');
+    actions = <>
+      <Button size="sm" variant="outline" asChild><Link to={scheduleHref(first.version_id)}>{t('content.bar.giveTime')}</Link></Button>
       {preview}
     </>;
   } else if (row.area.redo) {

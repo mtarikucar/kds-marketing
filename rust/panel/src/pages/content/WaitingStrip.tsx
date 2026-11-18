@@ -10,6 +10,7 @@ const KINDS: { kind: Kind; reasons: WaitReason[]; tone: 'primary' | 'warning' | 
   { kind: 'olay_confirmations', reasons: ['olay_proposed'], tone: 'primary' },
   { kind: 'shoot_requests', reasons: ['shoot_request', 'material_request'], tone: 'warning', hash: 'eksikler' },
   { kind: 'content_approvals', reasons: ['content_approval'], tone: 'warning' },
+  { kind: 'content_times', reasons: ['content_time'], tone: 'primary' },
   { kind: 'problem_contents', reasons: ['content_problem'], tone: 'danger' },
 ];
 const TONES = {
@@ -27,11 +28,12 @@ function folderFor(tree: TreeOut, reasons: WaitReason[]): string | null {
 
 /**
  * "Sizi bekleyenler": only the exceptions, each leading to the first folder where it waits (an
- * olay to confirm, a capture asked for, an approval, a stuck content). Nothing when nothing waits.
+ * olay to confirm, a capture asked for, an approval, a finished content with no time yet, a stuck
+ * content). Nothing when nothing waits.
  */
 export function WaitingStrip({ tree, className }: { tree: TreeOut; className?: string }) {
   const { t } = useTranslation();
-  const chips = KINDS.filter(({ kind }) => tree.waiting[kind] > 0);
+  const chips = KINDS.filter(({ kind }) => (tree.waiting[kind] ?? 0) > 0);
   return (
     <section aria-label={t('content.waiting.title')} className={cn('flex flex-wrap items-center gap-2', className)}>
       <h2 className="me-1 flex items-center gap-1.5 text-sm font-medium">

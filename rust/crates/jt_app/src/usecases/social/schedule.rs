@@ -536,17 +536,65 @@ pub async fn versions_waiting(
     waiting(d, r.as_mut(), ctx.now).await
 }
 
+/// What decides which accounts can take a waiting version now: the approved strategy and the
+/// channels a post may go out on, read once for any number of versions.
+pub(crate) struct VersionAccounts {
+    frame: Option<jt_strategy::StrategyVersion>,
+    live: Vec<crate::usecases::studio::posts::Channel>,
+}
+
+impl VersionAccounts {
+    pub(crate) async fn load(
+        d: &Deps,
+        r: &mut dyn TenantRepos,
+        now: OffsetDateTime,
+    ) -> Result<Self, AppError> {
+        let frame = r.strategy().current_approved().await?;
+        let live = match &frame {
+            Some(frame) => channels(d, r, frame, now).await?,
+            None => Vec::new(),
+        };
+        Ok(Self { frame, live })
+    }
+
+    /// The accounts version `v` could go out on now, and, when none can, why
+    /// ([`WaitingVersion::blocked`]).
+    pub(crate) async fn of(
+        &self,
+        d: &Deps,
+        r: &mut dyn TenantRepos,
+        v: &PackageVersion,
+        now: OffsetDateTime,
+    ) -> Result<(Vec<CapabilityId>, Option<&'static str>), AppError> {
+        let accounts: Vec<CapabilityId> = self
+            .live
+            .iter()
+            .filter(|ch| {
+                v.capability_id.is_none_or(|c| c == ch.capability.id)
+                    && jt_studio::supported_formats(&ch.capability.kind_key).contains(&v.format)
+                    && ch
+                        .options
+                        .iter()
+                        .any(|o| o.hypothesis_id == v.hypothesis_id)
+            })
+            .map(|ch| ch.capability.id)
+            .collect();
+        let blocked = if accounts.is_empty() {
+            Some(why_blocked(d, r, self.frame.as_ref(), v, now).await?)
+        } else {
+            None
+        };
+        Ok((accounts, blocked))
+    }
+}
+
 /// See [`versions_waiting`]; `work.pending` lists the same versions.
 pub(crate) async fn waiting(
     d: &Deps,
     r: &mut dyn TenantRepos,
     now: OffsetDateTime,
 ) -> Result<Vec<WaitingPackage>, AppError> {
-    let frame = r.strategy().current_approved().await?;
-    let live = match &frame {
-        Some(frame) => channels(d, r, frame, now).await?,
-        None => Vec::new(),
-    };
+    let reader = VersionAccounts::load(d, r, now).await?;
     let mut out = Vec::new();
     for area in r.studio_projects().list_areas_waiting().await? {
         let Some(package) = area.packages.last() else {
@@ -554,23 +602,7 @@ pub(crate) async fn waiting(
         };
         let mut versions = Vec::new();
         for v in area.waiting_versions() {
-            let accounts: Vec<CapabilityId> = live
-                .iter()
-                .filter(|ch| {
-                    v.capability_id.is_none_or(|c| c == ch.capability.id)
-                        && jt_studio::supported_formats(&ch.capability.kind_key).contains(&v.format)
-                        && ch
-                            .options
-                            .iter()
-                            .any(|o| o.hypothesis_id == v.hypothesis_id)
-                })
-                .map(|ch| ch.capability.id)
-                .collect();
-            let blocked = if accounts.is_empty() {
-                Some(why_blocked(d, r, frame.as_ref(), v, now).await?)
-            } else {
-                None
-            };
+            let (accounts, blocked) = reader.of(d, r, v, now).await?;
             versions.push(WaitingVersion {
                 version_id: v.id,
                 format: v.format,

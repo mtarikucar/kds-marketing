@@ -14,11 +14,18 @@ import { ProjectError } from '../projects/ProjectShared';
 import { areaTime, currentPackage, MiniThumb, StateBadge, stepName } from './AreaShared';
 import { PlatformFrame } from './PlatformFrame';
 import { AreaHistory } from './AreaHistory';
-import { PostLink, StageNode } from './PipelineRow';
+import { blockedText, PostLink, publicationText, scheduleHref, StageNode } from './PipelineRow';
 import { placeHref, useContentPlace } from './location';
 import { useUploads } from './uploads';
 
 const WINDOWS = { hours24: '24', hours72: '72', days7: '168' } as const;
+
+/** A step's note, when it says more than its output: the same sentence is shown once. */
+export function noteBeyondOutput(report: { note: string; output?: string }): string | null {
+  const note = report.note.trim();
+  if (!note || note === (report.output ?? '').trim()) return null;
+  return note;
+}
 
 /** The step stages' fourteen steps and what follows them, each with what the agent reported. */
 function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
@@ -52,8 +59,8 @@ function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
                       </span>
                       {report && <time dateTime={report.at} className="font-mono text-xs text-muted-foreground">{areaTime(report.at, lang)}</time>}
                     </p>
-                    {report?.output && <p className="break-words text-foreground">{report.output}</p>}
-                    {report?.note && <p className="break-words text-xs text-muted-foreground">{report.note}</p>}
+                    {report?.output && <p className="break-words font-medium text-foreground">{report.output}</p>}
+                    {report && noteBeyondOutput(report) && <p className="break-words text-xs text-muted-foreground">{noteBeyondOutput(report)}</p>}
                     {!!report?.material_ids?.length && (
                       <span className="flex flex-wrap gap-1 pt-1">
                         {report.material_ids.map((id) => <MiniThumb key={id} id={id} files={files} />)}
@@ -77,13 +84,26 @@ function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
               ))}
             </ul>
           )}
+          {stage.key === 'onay' && !!row.pipeline.unscheduled?.length && (
+            <ul className="space-y-1 border-s-2 border-border ps-4 text-sm">
+              {row.pipeline.unscheduled.map((w) => (
+                <li key={w.version_id} className="break-words">
+                  <span className="font-medium">{t(`posts.format.${w.format}`)}</span>{' · '}
+                  {w.blocked
+                    ? <span className="text-danger">{blockedText(t, w)}</span>
+                    : <span className="text-muted-foreground">{t('content.out.awaitsTimeOne')}</span>}{' '}
+                  <Link className="text-primary underline" to={scheduleHref(w.version_id)}>{t(w.blocked ? 'content.bar.toPackages' : 'content.bar.giveTime')}</Link>
+                </li>
+              ))}
+            </ul>
+          )}
           {stage.key === 'yayin' && !!stage.publications?.length && (
             <ul className="space-y-1 border-s-2 border-border ps-4 text-sm">
               {stage.publications.map((p) => (
                 <li key={p.slot_id} className="flex flex-wrap items-baseline gap-x-2 break-words">
                   <Link className="font-medium underline decoration-border underline-offset-4" to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{p.account_name ?? t('contentAreas.account')}</Link>
                   <span className={p.failed ? 'text-danger' : 'text-muted-foreground'}>
-                    {p.failed ? t('content.out.failedShort') : p.published_at ? t('content.out.publishedAt', { at: areaTime(p.published_at, lang) }) : t('content.out.plannedAt', { at: areaTime(p.scheduled_at, lang) })}
+                    {publicationText(t, p, lang, true)}
                   </span>
                   <PostLink url={p.url} />
                 </li>

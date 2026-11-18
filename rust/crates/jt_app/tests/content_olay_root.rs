@@ -561,6 +561,9 @@ async fn an_area_keeps_one_report_per_step_for_its_attempt_and_a_redo_starts_ano
     assert_eq!(state(StageKey::Onay), StageState::Current);
     assert_eq!(state(StageKey::Yayin), StageState::Todo);
     assert_eq!(state(StageKey::Sonuc), StageState::Todo);
+    // What it waits for is said, not left to a state: its version has no time yet.
+    assert_eq!(row.pipeline.unscheduled.len(), 1);
+    assert!(row.pipeline.awaits_time());
     let hazirlik = row.pipeline.stage(StageKey::Hazirlik).unwrap();
     assert_eq!(hazirlik.steps.len(), 2);
     assert_eq!(
@@ -969,4 +972,65 @@ async fn a_caller_without_the_library_permission_reads_an_olays_identity_only() 
         .find(|n| n.kind == NeedKind::MaterialRequest)
         .unwrap();
     assert_eq!(need.project_title.as_deref(), Some(p.title.as_str()));
+}
+
+/// A special day of the calendar with no olay (spec 2026-11-03 D25): the tree says whether its
+/// preparation day came or its window already started (then it is now, not coming), and names the
+/// capture the calendar trigger asked for. The system opens no olay for it.
+#[tokio::test]
+async fn a_special_day_with_no_olay_says_where_it_stands_and_what_the_system_asked_for() {
+    use content::views::DayPhase;
+    use time::macros::date;
+    let (w, _) = publishing_world().await;
+    // What the calendar trigger adds from the preparation day while the day has no olay.
+    let ask = ShootRequest {
+        id: ShootRequestId(Uuid::now_v7()),
+        workspace_id: w.f.ws,
+        key: "season:ogretmenler_gunu:2026".into(),
+        reason: ShootReason::SeasonAhead {
+            occasion: "ogretmenler_gunu".into(),
+            year: 2026,
+        },
+        text: "Öğretmenler Günü için çekim".into(),
+        week_start: date!(2026 - 10 - 19),
+        status: ShootStatus::Open,
+        created_by: Actor::System {
+            component: "scheduler:studio_plan".into(),
+        },
+        created_at: FIXED_NOW,
+        resolved_by: None,
+        resolved_at: None,
+    };
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    assert!(
+        r.studio_materials()
+            .insert_shoot_request(ask.clone())
+            .await
+            .unwrap()
+    );
+    r.commit().await.unwrap();
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    let day = |key: &str| {
+        tree.upcoming
+            .iter()
+            .find(|u| u.key == key && u.year == 2026)
+            .unwrap_or_else(|| panic!("{key} is listed"))
+    };
+    // 17–31 October has begun on 22 October: it is under way.
+    assert_eq!(day("cadilar_bayrami").phase, DayPhase::Open);
+    // 10–24 November is prepared from 20 October (the default 21 days' lead), and asked for.
+    let teachers = day("ogretmenler_gunu");
+    assert_eq!(teachers.prepares_from, date!(2026 - 10 - 20));
+    assert_eq!(teachers.phase, DayPhase::Preparing);
+    assert_eq!(
+        teachers.shoot_request_id,
+        Some(ShootRequestId::as_uuid(&ask.id))
+    );
+    // 1–31 December is prepared from 10 November: ahead, nothing asked yet.
+    let new_year = day("yilbasi");
+    assert_eq!(new_year.phase, DayPhase::Ahead);
+    assert_eq!(new_year.shoot_request_id, None);
+    let json = serde_json::to_value(teachers).unwrap();
+    assert_eq!(json["phase"], "preparing");
+    assert_eq!(json["shoot_request_id"], json!(ask.id));
 }

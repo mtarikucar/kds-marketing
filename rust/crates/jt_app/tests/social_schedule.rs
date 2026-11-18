@@ -756,7 +756,7 @@ async fn a_published_post_stays_on_the_line_through_a_redo_and_the_next_package(
     .await
     .unwrap();
     // The redo stands: the area is not finished, but what went out is still there.
-    let check = |row: &content::views::AreaRow| {
+    let check = |row: &content::views::AreaRow, onay: StageState| {
         assert!(row.pipeline.published());
         let yayin = stage(row, StageKey::Yayin);
         let out: Vec<_> = yayin
@@ -768,11 +768,12 @@ async fn a_published_post_stays_on_the_line_through_a_redo_and_the_next_package(
         assert_eq!(out[0].slot_id, first.publication.slot.id);
         assert_ne!(yayin.state, StageState::Todo);
         assert_ne!(yayin.state, StageState::Problem);
-        assert_eq!(stage(row, StageKey::Onay).state, StageState::Done);
+        assert_eq!(stage(row, StageKey::Onay).state, onay);
         assert_eq!(stage(row, StageKey::Sonuc).state, StageState::Current);
     };
     let row = line_row(&w, &p).await;
-    check(&row);
+    check(&row, StageState::Done);
+    assert!(row.pipeline.unscheduled.is_empty());
     assert!(!row.pipeline.has_problem());
     let tree = content::tree(&w.d, &w.ctx).await.unwrap();
     assert_eq!(tree.genel.published, 1);
@@ -805,7 +806,10 @@ async fn a_published_post_stays_on_the_line_through_a_redo_and_the_next_package(
             .revision,
         2
     );
-    check(&row);
+    // The new package's version has no time yet: Onay says so, the published post stays.
+    check(&row, StageState::Current);
+    assert_eq!(row.pipeline.unscheduled.len(), 1);
+    assert!(row.pipeline.awaits_time());
     assert_eq!(
         content::tree(&w.d, &w.ctx).await.unwrap().genel.published,
         1
@@ -1046,6 +1050,10 @@ async fn the_trees_numbers_agree_with_the_lists_of_the_same_folder() {
             WaitReason::ContentProblem,
             rows.iter().any(|r| r.pipeline.has_problem()),
         );
+        area_waits(
+            WaitReason::ContentTime,
+            rows.iter().any(|r| r.pipeline.awaits_time()),
+        );
         all.extend(rows);
     }
     assert_eq!(tree.areas as usize, all.len());
@@ -1061,6 +1069,23 @@ async fn the_trees_numbers_agree_with_the_lists_of_the_same_folder() {
             .filter(|f| f.waiting)
             .count()
     );
+    assert_eq!(
+        tree.waiting.content_times as usize,
+        all.iter().filter(|r| r.pipeline.awaits_time()).count()
+    );
+    // The olay's flow counts the same contents its list shows.
+    let view = content::olay_view(&w.d, &w.ctx, input(json!({ "olay_id": olay })))
+        .await
+        .unwrap();
+    let contents = view.contents.unwrap();
+    assert_eq!(
+        view.flow.awaiting_time as usize,
+        contents.iter().filter(|r| r.pipeline.awaits_time()).count()
+    );
+    assert_eq!(
+        view.flow.problems as usize,
+        contents.iter().filter(|r| r.pipeline.has_problem()).count()
+    );
     // What this world holds, so the agreement is not vacuous.
     let node = &tree
         .olays
@@ -1072,4 +1097,132 @@ async fn the_trees_numbers_agree_with_the_lists_of_the_same_folder() {
     assert_eq!(node.published, 1);
     assert!(node.waits.contains(&WaitReason::MaterialRequest));
     assert!(node.waits.contains(&WaitReason::ContentProblem));
+    assert!(node.waits.contains(&WaitReason::ContentTime));
+    assert_eq!(tree.waiting.content_times, 1);
+    assert_eq!(view.flow.awaiting_time, 1);
+}
+
+/// A finished package whose versions have no time yet says so: Onay is current with the
+/// versions that wait, the content is counted as waiting for a time (the agent gives it on its
+/// next run, or a person does), and a version no account can take is a problem with its reason.
+#[tokio::test]
+async fn a_finished_package_with_no_time_says_so_and_a_blocked_version_is_a_problem() {
+    use content::pipeline::{StageKey, StageState};
+    use content::views::WaitReason;
+    let (w, _) = social_world().await;
+    let account = w.f.slot.capability_id;
+    let m = material(&w, true).await;
+    let olay = m.olay_id().unwrap();
+    let p = projects::project_create(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"untimed","brief":"Atölyeden bir gün",
+            "material_ids":[m.id],"olay_id":olay})),
+    )
+    .await
+    .unwrap();
+    let a = agent(&w);
+    let c = content::area_claim(
+        &w.d,
+        &a,
+        input(json!({"project_id":p.id,"expected_revision":p.revision})),
+    )
+    .await
+    .unwrap();
+    let p = content::area_deliver(
+        &w.d,
+        &a,
+        input(
+            json!({"project_id":p.id,"claim_token":c.claim_token,"request_key":"untimed-d",
+            "summary":"Hazır","versions":[version(&w, &m, json!({}))]}),
+        ),
+    )
+    .await
+    .unwrap()
+    .project;
+    let version_id = p.packages[0].versions[0].id;
+
+    let row = line_row(&w, &p).await;
+    assert_eq!(row.pipeline.unscheduled.len(), 1);
+    let wait = &row.pipeline.unscheduled[0];
+    assert_eq!(wait.version_id, version_id);
+    assert_eq!(wait.accounts, vec![account]);
+    assert_eq!(wait.blocked, None);
+    assert!(row.pipeline.awaits_time());
+    assert!(!row.pipeline.has_problem());
+    assert_eq!(stage(&row, StageKey::Onay).state, StageState::Current);
+    assert_eq!(stage(&row, StageKey::Yayin).state, StageState::Todo);
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    let node = &tree
+        .olays
+        .iter()
+        .find(|o| o.olay.id() == olay)
+        .unwrap()
+        .folder;
+    assert!(node.waits.contains(&WaitReason::ContentTime));
+    assert_eq!(tree.waiting.content_times, 1);
+    assert_eq!(tree.waiting.problem_contents, 0);
+    let view = content::olay_view(&w.d, &w.ctx, input(json!({ "olay_id": olay })))
+        .await
+        .unwrap();
+    assert_eq!(view.flow.awaiting_time, 1);
+    assert_eq!(view.flow.in_production, 0);
+    assert_eq!(view.flow.problems, 0);
+    let json = serde_json::to_value(&row.pipeline).unwrap();
+    assert_eq!(json["unscheduled"][0]["version_id"], json!(version_id));
+    assert!(json["unscheduled"][0].get("blocked").is_none());
+
+    // A person paused the only account: nothing can take the version. That is a problem a
+    // person fixes, with its reason, and no longer a content the agent will time.
+    let pause = |paused: bool, revision: u64| json!({"capability_id":account,"paused":paused,"expected_revision":revision});
+    let settings = social::account_pause(&w.d, &w.ctx, input(pause(true, 0)))
+        .await
+        .unwrap();
+    let row = line_row(&w, &p).await;
+    assert_eq!(row.pipeline.unscheduled[0].blocked, Some("account_paused"));
+    assert!(row.pipeline.unscheduled[0].accounts.is_empty());
+    assert!(!row.pipeline.awaits_time());
+    assert!(row.pipeline.has_problem());
+    assert_eq!(stage(&row, StageKey::Yayin).state, StageState::Problem);
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    let node = &tree
+        .olays
+        .iter()
+        .find(|o| o.olay.id() == olay)
+        .unwrap()
+        .folder;
+    assert!(node.waits.contains(&WaitReason::ContentProblem));
+    assert!(!node.waits.contains(&WaitReason::ContentTime));
+    assert_eq!(tree.waiting.content_times, 0);
+    assert_eq!(tree.waiting.problem_contents, 1);
+    let view = content::olay_view(&w.d, &w.ctx, input(json!({ "olay_id": olay })))
+        .await
+        .unwrap();
+    assert_eq!(view.flow.problems, 1);
+    assert_eq!(view.flow.awaiting_time, 0);
+
+    // Resumed and given its time: nothing waits for a time any more.
+    social::account_pause(&w.d, &w.ctx, input(pause(false, settings.revision)))
+        .await
+        .unwrap();
+    social::version_schedule(
+        &w.d,
+        &a,
+        input(schedule_input(&p, 0, &w, WHEN, "untimed-t")),
+    )
+    .await
+    .unwrap();
+    let row = line_row(&w, &p).await;
+    assert!(row.pipeline.unscheduled.is_empty());
+    assert!(!row.pipeline.has_problem());
+    assert_eq!(stage(&row, StageKey::Onay).state, StageState::Done);
+    assert_eq!(stage(&row, StageKey::Yayin).state, StageState::Current);
+    assert_eq!(
+        content::tree(&w.d, &w.ctx)
+            .await
+            .unwrap()
+            .waiting
+            .content_times,
+        0
+    );
 }

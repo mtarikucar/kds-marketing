@@ -179,16 +179,17 @@ describe('uploads and the analysis queue', () => {
 
   it('shows each stage, says when no agent is connected and lets a manager file an analysed upload', async () => {
     const calls = contentPageFetch({
+      'GET /api/agents': [],
       'GET /api/content/tree': tree({ olays: [{ ...folder(), olay: o1 }] as never, analysis_queue: 3 }),
       'GET /api/content/analysis-queue': { items: [queueItem('q1', 'waiting'), queueItem('q2', 'needs_filing'), queueItem('q3', 'failed')] },
       'POST /api/studio/materials/q2/bind': material('q2'),
     });
     renderAt('/content?view=queue');
-    expect(await screen.findByRole('link', { name: '1 iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.' }, { timeout: 5000 })).toHaveAttribute('href', '/agents');
+    expect(await screen.findByRole('link', { name: 'Analizi yapabilecek bağlı ajan yok; dosyalar bir ajan bağlanana kadar sırada bekler.' }, { timeout: 5000 })).toHaveAttribute('href', '/agents');
     expect(screen.getByText('Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek')).toBeVisible();
     expect(screen.getByText('Dosyalanmalı')).toBeVisible();
     // The page's own line stays away from the queue, which says it once.
-    expect(screen.getAllByText(/ajanı bekliyor/)).toHaveLength(1);
+    expect(screen.queryByText(/ajanı bekliyor/)).not.toBeInTheDocument();
     expect(screen.getByText('Analiz olmadı')).toBeVisible();
     await userEvent.selectOptions(screen.getByRole('combobox', { name: /Olayı seçin · Dosya q2/ }), 'o1');
     await userEvent.click(screen.getByRole('button', { name: 'Dosyala' }));
@@ -203,7 +204,7 @@ describe('an olay', () => {
       'GET /api/content/tree': tree({ olays: [{ ...folder({ waits: ['olay_proposed'] }), olay: proposed }] as never }),
       'GET /api/content/olays/o1': view({
         olay: proposed as never,
-        flow: { files: 2, analysed: 1, in_queue: 1, contents: 0, in_production: 0, awaiting_approval: 0, published: 0, problems: 0 },
+        flow: { files: 2, analysed: 1, in_queue: 1, contents: 0, in_production: 0, awaiting_time: 0, awaiting_approval: 0, published: 0, problems: 0 },
         files: [{ material: material('m1', { title: 'Kupa ön' }), intelligence: { status: 'completed' }, used_in: [] }] as never,
         needs: [{ kind: 'shoot_request', id: 'r1', text: 'Kutudan çıkış anı', status: 'open', created_at: '2026-10-02T09:00:00Z', resolved_at: null, project_id: null, project_title: null, material_ids: [], asked_by: null }],
       }),

@@ -159,11 +159,32 @@ pub struct Stage {
     pub results: Vec<ResultFact>,
 }
 
+/// A version of a finished current package that no planned post was made of yet: it waits for
+/// an account and a time (`jeeta.social.version_schedule`), given by the agent on its next run or
+/// by a person, unless nothing can take it now (`blocked`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TimeWait {
+    pub version_id: Uuid,
+    pub format: PostFormat,
+    /// The account the version was made for, if its maker chose one.
+    pub capability_id: Option<CapabilityId>,
+    /// The accounts it could go out on now.
+    pub accounts: Vec<CapabilityId>,
+    /// Why no account can take it now, as `jeeta.social.versions_waiting` says it
+    /// (`no_approved_strategy`, `no_connected_account`, `account_paused`,
+    /// `its_account_unavailable`, `format_not_supported`, `channel_not_in_strategy`,
+    /// `hypothesis_does_not_post`): a problem a person fixes. Absent while some account can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked: Option<&'static str>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Pipeline {
     /// The step the agent reported last in the current attempt, 1 to 14.
     pub current_step: Option<u8>,
     pub stages: Vec<Stage>,
+    /// The versions of the finished current package that wait for an account and a time.
+    pub unscheduled: Vec<TimeWait>,
 }
 
 impl Pipeline {
@@ -180,6 +201,12 @@ impl Pipeline {
     /// Some stage is stuck.
     pub fn has_problem(&self) -> bool {
         self.stages.iter().any(|s| s.state == StageState::Problem)
+    }
+
+    /// A version of its finished package waits for a time that some account can take: the
+    /// agent gives it on its next run, or a person does.
+    pub fn awaits_time(&self) -> bool {
+        self.unscheduled.iter().any(|v| v.blocked.is_none())
     }
 
     /// Some planned post of the area went out (of its current package or an earlier one).
@@ -221,19 +248,24 @@ fn current_step(p: &ProductionProject) -> Option<u8> {
 }
 
 /// Onay, Yayın and Sonuç of an area whose current package is finished or not (`done`), from
-/// `facts`, its planned posts (see [`PostReads::facts`]).
+/// `facts`, its planned posts (see [`PostReads::facts`]), and `unscheduled`, the versions of its
+/// finished package no planned post was made of.
 ///
-/// Onay waits for a person while a planned post waits for an approval; it is done once a planned
-/// post exists and none waits, current while a finished package has none yet, todo otherwise.
-/// Yayın is a problem while a planned post failed; todo while nothing went out and the posts are
-/// not approved; current while a post is still to go out; done once every post went out or was
-/// taken back. Sonuç is current once something went out, done once every published post is
-/// measured.
-fn post_states(done: bool, facts: &[VersionFact]) -> [StageState; 3] {
+/// Onay waits for a person while a planned post waits for an approval; it is current while a
+/// version of the finished package waits for a time (or the package has no post yet), done once
+/// planned posts exist and nothing waits, todo otherwise. Yayın is a problem while a planned post
+/// failed or a version waits for a time no account can take (`blocked`); todo while nothing went
+/// out and the posts are not approved, or nothing is planned; current while a post is still to go
+/// out or a version still waits for its time; done once every post went out or was taken back.
+/// Sonuç is current once something went out, done once every published post is measured.
+fn post_states(done: bool, facts: &[VersionFact], unscheduled: &[TimeWait]) -> [StageState; 3] {
     let waiting = facts.iter().any(|f| f.approval.waiting);
     let out = facts.iter().any(VersionFact::out);
+    let blocked = unscheduled.iter().any(|v| v.blocked.is_some());
     let onay = if waiting {
         StageState::WaitingPerson
+    } else if !unscheduled.is_empty() {
+        StageState::Current
     } else if !facts.is_empty() {
         StageState::Done
     } else if done {
@@ -241,11 +273,11 @@ fn post_states(done: bool, facts: &[VersionFact]) -> [StageState; 3] {
     } else {
         StageState::Todo
     };
-    let yayin = if facts.iter().any(|f| f.publication.failed) {
+    let yayin = if blocked || facts.iter().any(|f| f.publication.failed) {
         StageState::Problem
     } else if facts.is_empty() || (waiting && !out) {
         StageState::Todo
-    } else if facts.iter().any(VersionFact::pending) {
+    } else if !unscheduled.is_empty() || facts.iter().any(VersionFact::pending) {
         StageState::Current
     } else {
         StageState::Done
@@ -268,30 +300,34 @@ fn post_states(done: bool, facts: &[VersionFact]) -> [StageState; 3] {
 
 /// What the content tree counts of an area, from the same rules as its [`Pipeline`]: whether a
 /// post of it went out ([`Pipeline::published`]), whether it waits for an approval
-/// ([`Pipeline::awaits_approval`]) and how many of its posts do, and whether it is stuck
-/// ([`Pipeline::has_problem`]: held, or a post failed).
+/// ([`Pipeline::awaits_approval`]) and how many of its posts do, whether a version waits for a
+/// time some account can take ([`Pipeline::awaits_time`]), and whether it is stuck
+/// ([`Pipeline::has_problem`]: held, a post failed, or a version no account can take).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Marks {
     pub published: bool,
     pub awaits_approval: bool,
     pub approvals_waiting: usize,
+    pub awaits_time: bool,
     pub problem: bool,
 }
 
 /// [`Marks`] of an area that is `held` or not, whose current package is finished or not
-/// (`done`), with `facts`, without building its pipeline.
-pub fn marks(held: bool, done: bool, facts: &[VersionFact]) -> Marks {
-    let [onay, yayin, _] = post_states(done, facts);
+/// (`done`), with `facts` and `unscheduled`, without building its pipeline.
+pub fn marks(held: bool, done: bool, facts: &[VersionFact], unscheduled: &[TimeWait]) -> Marks {
+    let [onay, yayin, _] = post_states(done, facts, unscheduled);
     Marks {
         published: facts.iter().any(VersionFact::out),
         awaits_approval: onay == StageState::WaitingPerson,
         approvals_waiting: facts.iter().filter(|f| f.approval.waiting).count(),
+        awaits_time: unscheduled.iter().any(|v| v.blocked.is_none()),
         problem: held || yayin == StageState::Problem,
     }
 }
 
-/// The pipeline of area `p` at `now`, from its step history, its current package and `facts`,
-/// its planned posts ([`PostReads::facts`]).
+/// The pipeline of area `p` at `now`, from its step history, its current package, `facts`, its
+/// planned posts ([`PostReads::facts`]), and `unscheduled`, the versions of its finished package
+/// that wait for a time.
 ///
 /// The step stages: Paket is a problem and the others done while the area is held (its
 /// deliveries were refused); all done once the area holds its finished current package (no redo
@@ -301,12 +337,17 @@ pub fn marks(held: bool, done: bool, facts: &[VersionFact]) -> Marks {
 /// at Görsel. Onay, Yayın and Sonuç follow the planned posts (see `post_states`): a post that went
 /// out stays there, with its results, whatever the current attempt does (a redo, a capture
 /// asked for).
-pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]) -> Pipeline {
+pub fn project(
+    p: &ProductionProject,
+    now: OffsetDateTime,
+    facts: &[VersionFact],
+    unscheduled: Vec<TimeWait>,
+) -> Pipeline {
     let state = p.state(now);
     let current = current_step(p);
     let done = p.done_at().is_some();
     let package = p.packages.last().filter(|_| done);
-    let [onay, yayin, sonuc] = post_states(done, facts);
+    let [onay, yayin, sonuc] = post_states(done, facts, &unscheduled);
     let at_stage = |range: (u8, u8), step: u8| (range.0..=range.1).contains(&step);
     let mut stages = Vec::with_capacity(STAGES.len());
     for (key, span) in STAGES {
@@ -398,6 +439,7 @@ pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]
     Pipeline {
         current_step: current,
         stages,
+        unscheduled,
     }
 }
 

@@ -75,3 +75,11 @@ Additive: widens `studio_materials_binding_check` to `unfiled`, adds the generat
 index, backfills O3. Its down refuses while a material is unfiled, an area a person opened names an
 olay, or an area or package holds reported steps; otherwise it drops the column and index and
 narrows the check again.
+
+## 5. End-to-end review on production (2026-11-19)
+
+| # | Decision |
+|---|---|
+| O15 | **A special day's olay is a person's.** The calendar trigger opens no olay (spec 2026-11-03 D3, D25, D49): from `window_start − lead` it makes content for the confirmed olay of the occasion and season year once that olay has a usable file, and while there is none it adds the çekim listesi item `season:{key}:{year}`. The tree's `upcoming[]` says where each day stands, `phase`: `ahead` (before its preparation day), `preparing` (from it), `open` (its window runs: the panel lists it under "Şimdi", not "Yaklaşan"), and `shoot_request_id`, the open `season:` request when there is one. The page says a person opens the olay (or confirms an agent's proposal); it no longer says the system opens it. |
+| O16 | **A finished package with no time says so.** `Pipeline.unscheduled[]`: the versions of the finished current package with no planned post, each with `accounts` (who could take it now) and `blocked` (why none can, the codes of `social.versions_waiting`). Onay is `current` while one waits; Yayın is `problem` while one is blocked (a person fixes it: counted in `problems`, `problem_contents`, `content_problem`). One that some account can take is counted apart: `Flow.awaiting_time`, `WaitingCounts.content_times`, `WaitReason::ContentTime`; the agent gives it a time on its next run, or a person does on the social page's "Hazır paketler" (which now takes a person's time through `social.version_schedule`, under the engine's rules). |
+| O17 | **The account answers carry the approval policy.** `social.accounts_list` and `social.account_get` give each account's `requires_human_approval` (as `capability.get` does): a post planned on it waits for the owner's approval; scheduling it is not refused. |

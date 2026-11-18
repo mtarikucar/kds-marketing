@@ -20,7 +20,7 @@ export function stages(patch: Partial<Record<StageKey, Partial<Stage> | StageSta
   });
 }
 
-export function row(id: string, patch: { area?: Partial<AreaRow['area']>; stages?: Stage[]; current_step?: number | null } = {}): AreaRow {
+export function row(id: string, patch: { area?: Partial<AreaRow['area']>; stages?: Stage[]; current_step?: number | null; unscheduled?: AreaRow['pipeline']['unscheduled'] } = {}): AreaRow {
   return {
     area: {
       id, title: `İçerik ${id}`, brief: 'Yeni kupaları tanıt', olay_id: null, opened_by: { kind: 'human' },
@@ -29,7 +29,7 @@ export function row(id: string, patch: { area?: Partial<AreaRow['area']>; stages
       revision: 3, redo: null, open_requests: 0, created_at: '2026-10-01T09:00:00Z', updated_at: '2026-10-01T09:00:00Z',
       ...patch.area,
     },
-    pipeline: { current_step: patch.current_step ?? null, stages: patch.stages ?? stages() },
+    pipeline: { current_step: patch.current_step ?? null, stages: patch.stages ?? stages(), unscheduled: patch.unscheduled ?? [] },
   };
 }
 
@@ -38,7 +38,7 @@ export const folder = (patch: Partial<TreeOut['genel']> = {}) => ({ files: 0, ar
 export function tree(patch: Partial<TreeOut> = {}): TreeOut {
   return {
     olays: [], genel: folder(), upcoming: [], analysis_queue: 0, areas: 0,
-    waiting: { olay_confirmations: 0, shoot_requests: 0, content_approvals: 0, problem_contents: 0 },
+    waiting: { olay_confirmations: 0, shoot_requests: 0, content_approvals: 0, content_times: 0, problem_contents: 0 },
     ...patch,
   } as TreeOut;
 }
@@ -46,7 +46,7 @@ export function tree(patch: Partial<TreeOut> = {}): TreeOut {
 export function view(patch: Partial<OlayViewOut> = {}): OlayViewOut {
   return {
     olay: null,
-    flow: { files: 0, analysed: 0, in_queue: 0, contents: 0, in_production: 0, awaiting_approval: 0, published: 0, problems: 0 },
+    flow: { files: 0, analysed: 0, in_queue: 0, contents: 0, in_production: 0, awaiting_time: 0, awaiting_approval: 0, published: 0, problems: 0 },
     contents: [], files: [], needs: [],
     ...patch,
   } as OlayViewOut;
