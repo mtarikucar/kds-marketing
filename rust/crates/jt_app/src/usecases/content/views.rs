@@ -2,13 +2,13 @@
 //! tree of olays with what waits for a person, the analysis queue, the production line with each
 //! area's pipeline, and one olay's view (its flow, contents, files and "Eksikler"), each in one
 //! call. Nothing here writes.
-use super::pipeline::{self, Accounts, Pipeline, VersionFact};
+use super::pipeline::{self, Pipeline, PostReads};
 use crate::{
     ctx::Ctx,
     error::AppError,
     ports::{
         TenantRepos,
-        materials::{AnalysisStatus, Material, MaterialIntelligence, Olay, OlayStatus},
+        materials::{AnalysisStatus, Material, MaterialIntelligence, Olay, OlayKind, OlayStatus},
         production_projects::*,
     },
     usecases::{
@@ -21,10 +21,10 @@ use crate::{
 };
 use jt_ledger::Actor;
 use jt_studio::{
-    Binding, CalendarEntry, MaterialId, OccasionKind, OlayId, Publication, ShootReason,
-    ShootRequestId, ShootStatus, istanbul_day,
+    Binding, CalendarEntry, MaterialId, OccasionKind, OlayId, ShootReason, ShootRequestId,
+    ShootStatus, SlotId, istanbul_day,
 };
-use jt_tenancy::Permission;
+use jt_tenancy::{Permission, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use time::{Date, Duration, OffsetDateTime};
@@ -42,8 +42,71 @@ pub const AREA_PERMISSIONS: &[Permission] = &[Permission::ContentWork, Permissio
 pub const UPCOMING_DAYS: i64 = 120;
 /// How long an answered or dismissed request stays in an olay's "Eksikler".
 pub const RESOLVED_NEEDS_DAYS: i64 = 30;
-/// The most areas the page reads at once.
-const MAX_AREAS: usize = 2000;
+
+/// An olay as the page's reads show it: the whole record to a caller with `materials.work`, who
+/// works the library (the shape of `studio.olay_get`), and its identity alone to anyone else: what
+/// the page needs to draw its folder, without its place, client, notes or who confirmed it
+/// (design 2026-11-18 §5). The same keys either way, the identity's a subset.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum OlayOut {
+    Full(Olay),
+    Identity(OlayIdentity),
+}
+
+/// An olay's identity: what draws its folder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OlayIdentity {
+    pub id: OlayId,
+    pub workspace_id: WorkspaceId,
+    pub kind: OlayKind,
+    pub title: String,
+    #[serde(with = "jt_studio::time_compat::date")]
+    pub starts_on: Date,
+    #[serde(with = "jt_studio::time_compat::date")]
+    pub ends_on: Date,
+    /// The calendar key of a season or special day.
+    pub occasion: Option<String>,
+    pub status: OlayStatus,
+    pub revision: u64,
+    #[serde(with = "jt_studio::time_compat")]
+    pub created_at: OffsetDateTime,
+}
+
+impl OlayOut {
+    /// `o` as a caller sees it: whole with `materials.work` (`full`), its identity otherwise.
+    pub fn of(o: Olay, full: bool) -> Self {
+        if full {
+            return Self::Full(o);
+        }
+        Self::Identity(OlayIdentity {
+            id: o.id,
+            workspace_id: o.workspace_id,
+            kind: o.kind,
+            title: o.title,
+            starts_on: o.starts_on,
+            ends_on: o.ends_on,
+            occasion: o.occasion,
+            status: o.status,
+            revision: o.revision,
+            created_at: o.created_at,
+        })
+    }
+
+    pub fn id(&self) -> OlayId {
+        match self {
+            Self::Full(o) => o.id,
+            Self::Identity(o) => o.id,
+        }
+    }
+
+    pub fn status(&self) -> OlayStatus {
+        match self {
+            Self::Full(o) => o.status,
+            Self::Identity(o) => o.status,
+        }
+    }
+}
 
 /// Why a folder waits for a person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -73,7 +136,8 @@ pub struct Folder {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TreeOlay {
-    pub olay: Olay,
+    /// Whole with `materials.work`, its identity otherwise ([`OlayOut`]).
+    pub olay: OlayOut,
     #[serde(flatten)]
     pub folder: Folder,
 }
@@ -255,11 +319,14 @@ pub struct Need {
 }
 
 /// `content.olay_view`'s answer. `contents` needs `content.work` or `content.manage`, `files`
-/// needs `materials.work`: each is `null` for a caller without its permission.
+/// needs `materials.work`: each is `null` for a caller without its permission. Without
+/// `materials.work` the olay is its identity alone ([`OlayOut`]) and `needs` holds no çekim
+/// listesi request (a material request, with its content's title, stays: whoever supplies the
+/// capture is told what it is for).
 #[derive(Clone, Debug, Serialize)]
 pub struct OlayViewOut {
     /// The olay; `null` for "Genel".
-    pub olay: Option<Olay>,
+    pub olay: Option<OlayOut>,
     pub flow: Flow,
     pub contents: Option<Vec<AreaRow>>,
     pub files: Option<Vec<FileRow>>,
@@ -286,44 +353,46 @@ fn count(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// Every area not archived, newest first, up to [`MAX_AREAS`].
-async fn live_areas(r: &mut dyn TenantRepos) -> Result<Vec<ProductionProject>, AppError> {
+/// Every area of `olay` not archived, newest first: the store's olay filter (its index), page
+/// by page, with no cap.
+async fn olay_areas(
+    r: &mut dyn TenantRepos,
+    olay: AreaOlay,
+) -> Result<Vec<ProductionProject>, AppError> {
     let mut out: Vec<ProductionProject> = Vec::new();
     let mut before = None;
     loop {
         let page = r
             .studio_projects()
-            .list_projects(false, before, None)
+            .list_projects(false, before, Some(olay))
             .await?;
         let more = page.len() > 100;
         out.extend(page.into_iter().take(100));
-        if !more || out.len() >= MAX_AREAS {
+        if !more {
             return Ok(out);
         }
         before = out.last().map(|p| p.id);
     }
 }
 
-/// The areas with their pipelines at `now`.
+/// The areas with their pipelines at `now`; their planned posts are read once for all of them.
 async fn rows(
     r: &mut dyn TenantRepos,
     areas: Vec<ProductionProject>,
     now: OffsetDateTime,
 ) -> Result<Vec<AreaRow>, AppError> {
-    let publications: Vec<Publication> = if areas.iter().any(|p| p.done_at().is_some()) {
-        r.studio().list_publications().await?
-    } else {
-        Vec::new()
-    };
-    let mut accounts = Accounts::new();
-    let mut out = Vec::with_capacity(areas.len());
-    for p in areas {
-        let facts: Vec<VersionFact> =
-            pipeline::version_facts(r, &p, &publications, &mut accounts).await?;
-        let pipeline = pipeline::project(&p, now, &facts);
-        out.push(row(p, now, pipeline));
-    }
-    Ok(out)
+    let posts: Vec<Vec<AreaPost>> = areas.iter().map(ProductionProject::posts).collect();
+    let slots: Vec<SlotId> = posts.iter().flatten().map(|p| p.slot_id).collect();
+    let reads = PostReads::load(r, &slots).await?;
+    Ok(areas
+        .into_iter()
+        .zip(posts)
+        .map(|(p, posts)| {
+            let facts = reads.facts(&posts);
+            let pipeline = pipeline::project(&p, now, &facts);
+            row(p, now, pipeline)
+        })
+        .collect())
 }
 
 fn row(p: ProductionProject, now: OffsetDateTime, pipeline: Pipeline) -> AreaRow {
@@ -453,18 +522,48 @@ pub async fn analysis_queue(d: &Deps, ctx: &Ctx) -> Result<QueueOut, AppError> {
     Ok(QueueOut { items })
 }
 
-/// Why the areas of a folder wait for a person, from their rows.
-fn area_waits(rows: &[&AreaRow], waits: &mut BTreeSet<WaitReason>) {
-    for row in rows {
-        if row.area.open_requests > 0 {
-            waits.insert(WaitReason::MaterialRequest);
-        }
-        if row.pipeline.awaits_approval() {
-            waits.insert(WaitReason::ContentApproval);
-        }
-        if row.pipeline.has_problem() {
-            waits.insert(WaitReason::ContentProblem);
-        }
+fn count64(n: u64) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// What the tree counts of the areas, without reading their documents whole: how many each olay
+/// holds and their open captures, counted in the store; and, for the areas that are held or have
+/// planned posts, their [`pipeline::Marks`], from the same rules as their pipelines.
+struct AreaTally {
+    counts: Vec<AreaCount>,
+    marks: Vec<(Option<OlayId>, pipeline::Marks)>,
+}
+
+impl AreaTally {
+    async fn read(r: &mut dyn TenantRepos) -> Result<Self, AppError> {
+        let counts = r.studio_projects().area_counts().await?;
+        let noted = r.studio_projects().area_posts().await?;
+        let slots: Vec<SlotId> = noted
+            .iter()
+            .flat_map(|a| a.posts.iter().map(|p| p.slot_id))
+            .collect();
+        let reads = PostReads::load(r, &slots).await?;
+        let marks = noted
+            .iter()
+            .map(|a| {
+                (
+                    a.olay_id,
+                    pipeline::marks(a.held, a.done, &reads.facts(&a.posts)),
+                )
+            })
+            .collect();
+        Ok(AreaTally { counts, marks })
+    }
+
+    fn of(&self, olay: Option<OlayId>) -> Option<&AreaCount> {
+        self.counts.iter().find(|c| c.olay_id == olay)
+    }
+
+    fn marks_of(&self, olay: Option<OlayId>) -> impl Iterator<Item = &pipeline::Marks> {
+        self.marks
+            .iter()
+            .filter(move |(o, _)| *o == olay)
+            .map(|(_, m)| m)
     }
 }
 
@@ -481,8 +580,8 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
             .filter(|(m, i, leased)| queue_stage(m, i, *leased).is_some())
             .count(),
     );
-    let live = live_areas(r.as_mut()).await?;
-    let areas = rows(r.as_mut(), live, now).await?;
+    let tally = AreaTally::read(r.as_mut()).await?;
+    let full = ctx.permissions.contains(&Permission::MaterialsWork);
     let shoots: Vec<_> = r
         .studio_materials()
         .list_shoot_requests()
@@ -496,7 +595,7 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
             .and_then(|k| lib.calendar.season_year(k, o.starts_on))
     };
     let folder = |olay: Option<OlayId>| {
-        let mine: Vec<&AreaRow> = areas.iter().filter(|a| a.area.olay_id == olay).collect();
+        let counted = tally.of(olay);
         let mut waits = BTreeSet::new();
         if olay.is_some_and(|id| {
             lib.olays
@@ -511,7 +610,19 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
         {
             waits.insert(WaitReason::ShootRequest);
         }
-        area_waits(&mine, &mut waits);
+        if counted.is_some_and(|c| c.open_requests > 0) {
+            waits.insert(WaitReason::MaterialRequest);
+        }
+        let mut published = 0;
+        for m in tally.marks_of(olay) {
+            if m.awaits_approval {
+                waits.insert(WaitReason::ContentApproval);
+            }
+            if m.problem {
+                waits.insert(WaitReason::ContentProblem);
+            }
+            published += usize::from(m.published);
+        }
         Folder {
             files: count(
                 materials
@@ -519,8 +630,8 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
                     .filter(|(m, _, _)| folder_of(m) == Some(olay))
                     .count(),
             ),
-            areas: count(mine.len()),
-            published: count(mine.iter().filter(|a| a.pipeline.published()).count()),
+            areas: count64(counted.map_or(0, |c| c.areas)),
+            published: count(published),
             waits: waits.into_iter().collect(),
         }
     };
@@ -528,7 +639,7 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
         .olays
         .iter()
         .map(|o| TreeOlay {
-            olay: o.clone(),
+            olay: OlayOut::of(o.clone(), full),
             folder: folder(Some(o.id)),
         })
         .collect();
@@ -559,7 +670,7 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
         })
         .collect();
     upcoming.sort_by_key(|u| (u.window_start, u.key.clone()));
-    let open_area_requests: usize = areas.iter().map(|a| a.area.open_requests as usize).sum();
+    let open_area_requests: u64 = tally.counts.iter().map(|c| c.open_requests).sum();
     let waiting = WaitingCounts {
         olay_confirmations: count(
             lib.olays
@@ -567,23 +678,16 @@ pub async fn tree(d: &Deps, ctx: &Ctx) -> Result<TreeOut, AppError> {
                 .filter(|o| o.status == OlayStatus::Proposed)
                 .count(),
         ),
-        shoot_requests: count(shoots.len() + open_area_requests),
-        content_approvals: count(
-            areas
-                .iter()
-                .flat_map(|a| a.pipeline.stage(pipeline::StageKey::Onay))
-                .flat_map(|s| s.approvals.iter())
-                .filter(|a| a.waiting)
-                .count(),
-        ),
-        problem_contents: count(areas.iter().filter(|a| a.pipeline.has_problem()).count()),
+        shoot_requests: count64(shoots.len() as u64 + open_area_requests),
+        content_approvals: count(tally.marks.iter().map(|(_, m)| m.approvals_waiting).sum()),
+        problem_contents: count(tally.marks.iter().filter(|(_, m)| m.problem).count()),
     };
     Ok(TreeOut {
         olays,
         genel,
         upcoming,
         analysis_queue,
-        areas: count(areas.len()),
+        areas: count64(tally.counts.iter().map(|c| c.areas).sum()),
         waiting,
     })
 }
@@ -625,6 +729,8 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
         AreaOlay::Olay(id) => Some(id),
         AreaOlay::Genel => None,
     };
+    // The library's reader sees the olay whole and the çekim listesi; anyone else its identity.
+    let library_reader = ctx.permissions.contains(&Permission::MaterialsWork);
     let lib = crate::usecases::studio::materials::library(r.as_mut(), now).await?;
     let olay = match target {
         Some(id) => Some(
@@ -636,11 +742,7 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
         ),
         None => None,
     };
-    let mine: Vec<ProductionProject> = live_areas(r.as_mut())
-        .await?
-        .into_iter()
-        .filter(|p| p.olay_id == target)
-        .collect();
+    let mine: Vec<ProductionProject> = olay_areas(r.as_mut(), i.olay_id.0).await?;
     let recent = |at: Option<OffsetDateTime>| {
         at.is_none_or(|at| at >= now - Duration::days(RESOLVED_NEEDS_DAYS))
     };
@@ -649,10 +751,12 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
             .as_deref()
             .and_then(|k| lib.calendar.season_year(k, o.starts_on))
     };
-    let mut needs: Vec<Need> = r
-        .studio_materials()
-        .list_shoot_requests()
-        .await?
+    let shoots = if library_reader {
+        r.studio_materials().list_shoot_requests().await?
+    } else {
+        Vec::new()
+    };
+    let mut needs: Vec<Need> = shoots
         .into_iter()
         .filter(|q| {
             shoot_olay(&q.reason, &lib.olays, &season_year) == target
@@ -742,25 +846,22 @@ pub async fn olay_view(d: &Deps, ctx: &Ctx, i: OlayViewInput) -> Result<OlayView
         published: count(contents.iter().filter(|a| a.pipeline.published()).count()),
         problems: count(contents.iter().filter(|a| a.pipeline.has_problem()).count()),
     };
-    let files = ctx
-        .permissions
-        .contains(&Permission::MaterialsWork)
-        .then(|| {
-            materials
-                .into_iter()
-                .map(|(material, intelligence, _)| FileRow {
-                    used_in: mine
-                        .iter()
-                        .filter(|p| uses(p, material.id))
-                        .map(|p| p.id)
-                        .collect(),
-                    material,
-                    intelligence,
-                })
-                .collect()
-        });
+    let files = library_reader.then(|| {
+        materials
+            .into_iter()
+            .map(|(material, intelligence, _)| FileRow {
+                used_in: mine
+                    .iter()
+                    .filter(|p| uses(p, material.id))
+                    .map(|p| p.id)
+                    .collect(),
+                material,
+                intelligence,
+            })
+            .collect()
+    });
     Ok(OlayViewOut {
-        olay,
+        olay: olay.map(|o| OlayOut::of(o, library_reader)),
         flow,
         contents: has_any(ctx, AREA_PERMISSIONS).then_some(contents),
         files,

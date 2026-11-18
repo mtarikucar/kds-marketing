@@ -195,6 +195,64 @@ pub trait StudioRepo: Send + Sync {
     ) -> Result<BudgetMove, AppError>;
     async fn insert_arm(&mut self, arm: Arm) -> Result<Arm, AppError>;
     async fn get_slot(&mut self, id: SlotId) -> Result<Option<Slot>, AppError>;
+    /// The stored slots among `ids`, by id; one read in the database.
+    async fn get_slots(&mut self, ids: &[SlotId]) -> Result<Vec<Slot>, AppError> {
+        let mut out = Vec::new();
+        for id in ids {
+            if let Some(s) = self.get_slot(*id).await? {
+                out.push(s);
+            }
+        }
+        out.sort_by_key(|s| s.id);
+        out.dedup_by_key(|s| s.id);
+        Ok(out)
+    }
+    /// [`Self::get_approval`] of each slot of `slots` at its revision, those that have one, by
+    /// slot id; one read in the database.
+    async fn slot_approvals(
+        &mut self,
+        slots: &[(SlotId, u64)],
+    ) -> Result<Vec<(SlotId, ApprovalReceipt)>, AppError> {
+        let mut out = Vec::new();
+        for (id, rev) in slots {
+            if let Some(a) = self.get_approval(ApprovalTarget::Slot(*id), *rev).await? {
+                out.push((*id, a));
+            }
+        }
+        out.sort_by_key(|(id, _)| *id);
+        out.dedup_by_key(|(id, _)| *id);
+        Ok(out)
+    }
+    /// [`Self::slot_evidence`] of every slot of `ids` at once: the attempts, then the
+    /// measurements of their publications, each by id; one read per kind in the database.
+    async fn slots_evidence(
+        &mut self,
+        ids: &[SlotId],
+    ) -> Result<(Vec<PublishAttempt>, Vec<Measurement>), AppError> {
+        let mut unique = ids.to_vec();
+        unique.sort();
+        unique.dedup();
+        let (mut attempts, mut measurements) = (Vec::new(), Vec::new());
+        for id in unique {
+            let (a, m) = self.slot_evidence(id).await?;
+            attempts.extend(a);
+            measurements.extend(m);
+        }
+        attempts.sort_by_key(|a| a.id());
+        measurements.sort_by_key(|m| m.id);
+        Ok((attempts, measurements))
+    }
+    /// The publications of the slots of `ids`, by id; one read in the database.
+    async fn publications_of(&mut self, ids: &[SlotId]) -> Result<Vec<Publication>, AppError> {
+        let mut out: Vec<Publication> = self
+            .list_publications()
+            .await?
+            .into_iter()
+            .filter(|p| ids.contains(&p.slot_id))
+            .collect();
+        out.sort_by_key(|p| p.id);
+        Ok(out)
+    }
     async fn insert_slots(
         &mut self,
         run_key: &str,

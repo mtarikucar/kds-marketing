@@ -393,6 +393,98 @@ impl StudioRepo for PgTenantRepos {
     async fn get_slot(&mut self, id: SlotId) -> Result<Option<Slot>, AppError> {
         self.studio_record("studio_slots", id.0).await
     }
+    async fn get_slots(&mut self, ids: &[SlotId]) -> Result<Vec<Slot>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_slots where workspace_id=$1 and id = any($2) order by id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(ids.iter().map(|s| s.0).collect::<Vec<Uuid>>())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read Studio slots"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn slot_approvals(
+        &mut self,
+        slots: &[(SlotId, u64)],
+    ) -> Result<Vec<(SlotId, ApprovalReceipt)>, AppError> {
+        if slots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid, i64, Option<Value>)> = sqlx::query_as(
+            "select slot_id, revision, data->'approval' from studio_pieces \
+             where workspace_id=$1 and slot_id = any($2) order by slot_id, revision",
+        )
+        .bind(self.workspace_id().0)
+        .bind(slots.iter().map(|(s, _)| s.0).collect::<Vec<Uuid>>())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read approvals"))?;
+        let mut out = Vec::new();
+        for (slot, rev, approval) in rows {
+            let wanted = slots
+                .iter()
+                .any(|(s, r)| s.0 == slot && revision(*r).is_ok_and(|r| r == rev));
+            if let Some(a) = approval.filter(|v| wanted && !v.is_null()) {
+                out.push((SlotId(slot), decode(a)?));
+            }
+        }
+        out.dedup_by_key(|(id, _)| *id);
+        Ok(out)
+    }
+    async fn slots_evidence(
+        &mut self,
+        ids: &[SlotId],
+    ) -> Result<(Vec<PublishAttempt>, Vec<Measurement>), AppError> {
+        if ids.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let ids: Vec<Uuid> = ids.iter().map(|s| s.0).collect();
+        let attempts: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_publish_attempts \
+             where workspace_id=$1 and slot_id = any($2) order by id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(&ids[..])
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "slots attempts"))?;
+        let measurements: Vec<Value> = sqlx::query_scalar(
+            "select m.data from studio_measurements m join studio_publications p \
+             on p.workspace_id=m.workspace_id and p.id=m.publication_id \
+             where m.workspace_id=$1 and p.slot_id = any($2) order by m.id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(&ids[..])
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "slots measurements"))?;
+        Ok((
+            attempts.into_iter().map(decode).collect::<Result<_, _>>()?,
+            measurements
+                .into_iter()
+                .map(decode)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
+    async fn publications_of(&mut self, ids: &[SlotId]) -> Result<Vec<Publication>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_publications \
+             where workspace_id=$1 and slot_id = any($2) order by id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(ids.iter().map(|s| s.0).collect::<Vec<Uuid>>())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "Studio evidence"))?;
+        rows.into_iter().map(decode).collect()
+    }
     async fn list_slots(&mut self, q: SlotQuery) -> Result<Vec<Slot>, AppError> {
         let rows:Vec<Value>=sqlx::query_scalar("select s.data from studio_slots s join studio_arms a on a.workspace_id=s.workspace_id and a.id=s.arm_id where s.workspace_id=$1 and ($2::timestamptz is null or s.scheduled_at >= $2) and s.scheduled_at < $3 and ($4::uuid is null or s.hypothesis_id=$4) and ($5::text is null or a.lane=$5) order by s.scheduled_at,s.id")
             .bind(self.workspace_id().0).bind((q.from != time::Date::MIN.midnight().assume_utc()).then_some(q.from)).bind(q.until).bind(q.hypothesis_id.map(|h|h.0)).bind(q.lane.map(|l|encode(&l)).transpose()?.and_then(|v|v.as_str().map(str::to_owned))).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"list Studio slots"))?;

@@ -192,4 +192,110 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
             .code,
         ErrorCode::Conflict
     );
+    drop(r);
+
+    // The tree's reads (design 2026-11-18): the areas counted by olay, with their open captures,
+    // and, without their documents, those held or with planned posts, each post with whether it
+    // is of the current package. An olay's held area, an olay's area asking for two captures,
+    // and an area with posts in both of its packages join the areas above.
+    let olay = jt_studio::OlayId::new_v7();
+    let mut held = area(ws, 400);
+    held.olay_id = Some(olay);
+    held.refused = MAX_REFUSALS;
+    let mut asking = area(ws, 401);
+    asking.olay_id = Some(olay);
+    for status in [
+        RequestStatus::Open,
+        RequestStatus::Open,
+        RequestStatus::Done,
+    ] {
+        asking.requests.push(ProjectMaterialRequest {
+            id: Uuid::now_v7(),
+            text: "A photo".into(),
+            status,
+            material_ids: vec![],
+            created_at: FIXED_NOW,
+            resolved_at: None,
+        });
+    }
+    let mut both = delivered(area(ws, 402), 402);
+    both.packages[0].versions = vec![version(Some(jt_studio::SlotId::new_v7()))];
+    both = delivered(both, 403);
+    both.packages[1].versions = vec![version(None), version(Some(jt_studio::SlotId::new_v7()))];
+    let mut r = uow.tenant(ws).await.unwrap();
+    for p in [&held, &asking, &both] {
+        r.studio_projects()
+            .save_project(p.clone(), None)
+            .await
+            .unwrap();
+    }
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    let mut live: Vec<ProductionProject> = Vec::new();
+    let mut before = None;
+    loop {
+        let page = r
+            .studio_projects()
+            .list_projects(false, before, None)
+            .await
+            .unwrap();
+        let more = page.len() > 100;
+        live.extend(page.into_iter().take(100));
+        if !more {
+            break;
+        }
+        before = live.last().map(|p| p.id);
+    }
+    let mut counts: Vec<AreaCount> = Vec::new();
+    for p in &live {
+        let open = p
+            .requests
+            .iter()
+            .filter(|q| q.status == RequestStatus::Open)
+            .count() as u64;
+        match counts.iter_mut().find(|c| c.olay_id == p.olay_id) {
+            Some(c) => {
+                c.areas += 1;
+                c.open_requests += open;
+            }
+            None => counts.push(AreaCount {
+                olay_id: p.olay_id,
+                areas: 1,
+                open_requests: open,
+            }),
+        }
+    }
+    counts.sort_by_key(|c| c.olay_id);
+    let got = r.studio_projects().area_counts().await.unwrap();
+    assert_eq!(got, counts);
+    assert_eq!(
+        got.iter().find(|c| c.olay_id == Some(olay)),
+        Some(&AreaCount {
+            olay_id: Some(olay),
+            areas: 2,
+            open_requests: 2
+        })
+    );
+    let mut posts: Vec<AreaPosts> = live.iter().filter_map(AreaPosts::of).collect();
+    posts.sort_by_key(|a| a.id);
+    let got = r.studio_projects().area_posts().await.unwrap();
+    assert_eq!(got, posts);
+    let of = |id: Uuid| got.iter().find(|a| a.id == id).cloned();
+    let held_posts = of(held.id).expect("a held area is listed");
+    assert!(held_posts.held && !held_posts.done && held_posts.posts.is_empty());
+    assert!(of(asking.id).is_none(), "neither held nor with posts");
+    let both_posts = of(both.id).unwrap();
+    assert!(both_posts.done);
+    assert_eq!(
+        both_posts
+            .posts
+            .iter()
+            .map(|p| (p.version_id, p.current))
+            .collect::<Vec<_>>(),
+        vec![
+            (both.packages[0].versions[0].id, false),
+            (both.packages[1].versions[1].id, true)
+        ]
+    );
+    assert!(of(unfinished.id).is_none(), "its one version has no post");
 }

@@ -109,6 +109,9 @@ async fn load(
     }
     Ok(row)
 }
+/// The production's sources as stored, each live, at the revision it names, and filed: a
+/// material nobody filed yet is no content's and no derivative's (design 2026-11-18 §3),
+/// `CONFLICT material_unfiled`.
 async fn sources(
     r: &mut dyn TenantRepos,
     p: &MaterialProduction,
@@ -118,6 +121,9 @@ async fn sources(
         let m = live(r, s.material_id).await?;
         if m.revision != s.expected_revision {
             return Err(conflict("source_revision_changed"));
+        }
+        if m.is_unfiled() {
+            return Err(conflict("material_unfiled"));
         }
         out.push(m);
     }
@@ -546,7 +552,8 @@ pub async fn invalidate_material_productions(
 }
 
 /// Publication-time provenance fence: even a reapproved derivative cannot bypass a source's
-/// current share restriction or erasure. Returns material IDs whose derived lineage is blocked.
+/// current share restriction, erasure, or its being unfiled (no content's, design 2026-11-18
+/// §3). Returns material IDs whose derived lineage is blocked.
 pub async fn blocked_derivatives(
     r: &mut dyn TenantRepos,
 ) -> Result<BTreeSet<MaterialId>, AppError> {
@@ -564,6 +571,7 @@ pub async fn blocked_derivatives(
                             .find(|m| m.id == s.material_id)
                             .is_none_or(|m| {
                                 m.erased_at.is_some()
+                                    || m.is_unfiled()
                                     || m.share
                                         .as_ref()
                                         .is_none_or(|p| p.permission != SharePermission::Shareable)

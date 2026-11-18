@@ -3,7 +3,9 @@ use super::tenant::MemTenant;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::production_projects::{AreaOlay, DoneCursor, ProductionProject, ProjectRepo},
+    ports::production_projects::{
+        AreaCount, AreaOlay, AreaPosts, DoneCursor, ProductionProject, ProjectRepo,
+    },
 };
 use uuid::Uuid;
 #[async_trait]
@@ -61,6 +63,45 @@ impl ProjectRepo for MemTenant {
             rows.truncate(200);
         }
         Ok(rows)
+    }
+    async fn area_counts(&mut self) -> Result<Vec<AreaCount>, AppError> {
+        let mut out: Vec<AreaCount> = Vec::new();
+        for p in self
+            .state()
+            .production_projects
+            .iter()
+            .filter(|p| p.workspace_id == self.ws && !p.archived)
+        {
+            let open = p
+                .requests
+                .iter()
+                .filter(|q| q.status == jt_app::ports::production_projects::RequestStatus::Open)
+                .count() as u64;
+            match out.iter_mut().find(|c| c.olay_id == p.olay_id) {
+                Some(c) => {
+                    c.areas += 1;
+                    c.open_requests += open;
+                }
+                None => out.push(AreaCount {
+                    olay_id: p.olay_id,
+                    areas: 1,
+                    open_requests: open,
+                }),
+            }
+        }
+        out.sort_by_key(|c| c.olay_id);
+        Ok(out)
+    }
+    async fn area_posts(&mut self) -> Result<Vec<AreaPosts>, AppError> {
+        let mut out: Vec<AreaPosts> = self
+            .state()
+            .production_projects
+            .iter()
+            .filter(|p| p.workspace_id == self.ws)
+            .filter_map(AreaPosts::of)
+            .collect();
+        out.sort_by_key(|a| a.id);
+        Ok(out)
     }
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError> {
         let mut rows: Vec<_> = self
