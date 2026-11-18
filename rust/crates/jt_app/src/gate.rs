@@ -122,16 +122,31 @@ pub fn studio_module(id: &str) -> Option<&'static str> {
     })
 }
 
+/// The content page's reads that a library worker needs as much as a content worker (design
+/// 2026-11-18 §5: any of `materials.work`, `content.work`, `content.manage`). The library
+/// comes with the content, social and ads modules, so these are gated by it: a workspace with
+/// the library but not the content module still has its olays, files, "Eksikler" and analysis
+/// queue on the one page. The production line (`content.areas`) stays the content module's.
+pub const LIBRARY_PAGE_READS: &[&str] = &[
+    "content.tree",
+    "content.olay_view",
+    "content.analysis_queue",
+];
+
 /// The module that gates use case `id`, if any: `inbox.*` (people records excepted: the People
 /// module works without the inbox), each `studio.*` use case's own module ([`studio_module`]),
 /// `outreach.*` and `calls.*` (the device bridge's `calls.bridge.*` plumbing excepted), less
-/// [`CAPABILITY_EXEMPT`].
+/// [`CAPABILITY_EXEMPT`]; the content page's library reads ([`LIBRARY_PAGE_READS`]) are the
+/// library's.
 pub fn gating_module(id: &str) -> Option<&'static str> {
     if CAPABILITY_EXEMPT.contains(&id)
         || id.starts_with("calls.bridge.")
         || id.starts_with("inbox.people.")
     {
         return None;
+    }
+    if LIBRARY_PAGE_READS.contains(&id) {
+        return Some(MATERIALS);
     }
     match id.split('.').next()? {
         "inbox" => Some("inbox"),

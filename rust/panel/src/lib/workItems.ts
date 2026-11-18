@@ -50,17 +50,17 @@ export function workItemLink(item: WorkItem, tiktokWaiting = false): string | nu
     case 'studio_budget_move':
       return '/ads?tab=external';
     case 'studio_shoot_request':
-      return '/materials?view=shoots';
+      return '/content';
     case 'studio_post_request':
       return '/social?tab=posts';
     case 'content_area':
     case 'content_material_request':
     case 'content_area_held':
-      return `/content?area=${encodeURIComponent(item.project_id)}`;
+      return `/content?content=${encodeURIComponent(item.project_id)}`;
     case 'studio_material_analysis':
-      return `/materials?view=olays&material=${encodeURIComponent(item.material_id)}`;
+      return `/content?view=queue&file=${encodeURIComponent(item.material_id)}`;
     case 'studio_material_production':
-      return '/materials?view=library';
+      return '/content';
     case 'reply_due':
     case 'reopen_question':
       return `/inbox/${encodeURIComponent(item.conversation_id)}`;

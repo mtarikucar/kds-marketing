@@ -15,7 +15,6 @@ import {
   useDecider,
   useMaterialsMutation,
 } from './MaterialsShared';
-import { materialsHref } from './StudioMaterials';
 
 function findingsOf(details: unknown): m.HoldFinding[] {
   if (!Array.isArray(details)) return [];
@@ -103,7 +102,7 @@ export function MaterialHold({
               {f.material_id && (
                 <>
                   {' '}
-                  <Link className="underline" to={materialsHref('olays', { material: f.material_id })}>
+                  <Link className="underline" to={`/content?file=${encodeURIComponent(f.material_id)}`}>
                     {t('materials.hold.openMaterial')}
                   </Link>
                 </>
@@ -120,7 +119,7 @@ export function MaterialHold({
       {shootCount > 0 && (
         <p>
           {t('materials.hold.shoots', { count: shootCount })}{' '}
-          <Link className="underline" to={materialsHref('shoots')}>
+          <Link className="underline" to="/content">
             {t('materials.hold.openShoots')}
           </Link>
         </p>

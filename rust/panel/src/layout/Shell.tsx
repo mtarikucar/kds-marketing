@@ -43,7 +43,7 @@ import {
 import { errorMessage } from '@/lib/errors';
 import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
-import { useModules, modulePath, moduleReady, moduleVisibleTo } from '@/lib/modules';
+import { CONTENT_PAGE_MODULES, useModules, modulePath, moduleReady, moduleVisibleTo } from '@/lib/modules';
 
 type NavItem = { to: string; label: string; Icon: LucideIcon; locked?: boolean };
 
@@ -85,8 +85,17 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
       {modules.isPending && <p className="px-3 py-2 text-xs text-muted-foreground" role="status">{t('common.loading')}</p>}
       {modules.isError && <button className="px-3 py-2 text-left text-xs text-destructive underline" onClick={() => void modules.refetch()}>{tr ? 'Modüller yüklenemedi. Yeniden dene' : 'Modules unavailable. Retry'}</button>}
       {modules.data?.modules.filter(m => m.installed && !m.required && moduleVisibleTo(m, me)).map(m => ({
-        to: modulePath(m), label: m.blueprint.name, Icon: Layers, locked: !moduleReady(modules.data, m.blueprint.id),
-      })).map(link)}
+        to: modulePath(m),
+        label: CONTENT_PAGE_MODULES.includes(m.blueprint.id) ? t('content.title') : m.blueprint.name,
+        Icon: Layers,
+        locked: !moduleReady(modules.data, m.blueprint.id),
+      // The library and the content are one entry: listed once, locked only when neither opens.
+      })).reduce<NavItem[]>((items, item) => {
+        const same = items.find(i => i.to === item.to);
+        if (same) same.locked = same.locked && item.locked;
+        else items.push(item);
+        return items;
+      }, []).map(link)}
       {link({ to: '/modules', label: tr ? 'Modül ekle' : 'Add module', Icon: Plus })}
     </div>
     <details className="group border-t border-border pt-3" open={management.some(item => location.pathname === item.to)}>

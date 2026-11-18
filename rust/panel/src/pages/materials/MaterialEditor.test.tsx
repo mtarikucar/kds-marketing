@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 import { material, materialsAnswers, olay, repMe } from '@/test/materials';
+import { tree } from '@/test/contentPage';
 
 // Materyal (spec §10): tags (an agent's suggestion shown as such), permission, freeing, another
 // olay and deletion, the consent decisions an owner or manager takes in person (D4).
@@ -27,10 +28,12 @@ const answers = {
     { olay: olay('o2', { title: 'Moda atölyesi' }), materials: 0 },
   ],
   'GET /api/studio/materials/m1': { material: suggested, used_in: [] },
+  'GET /api/content/tree': tree(),
   'GET /api/studio/materials/m1/intelligence': { material: suggested, intelligence: null },
   'GET /api/studio/materials/m1/preview': { url: '/material-test.jpg', expires_at: '2030-01-01T00:00:00Z' },
 };
-const open = () => renderAt('/materials?view=olays&material=m1');
+// A file opens in the content page's drawer.
+const open = () => renderAt('/content?file=m1');
 
 describe('Materyaller · Materyal', () => {
   it('preserves a hidden draft after another section saves and submits it at the refreshed revision', async () => {
@@ -258,7 +261,7 @@ it('keeps the material location available during loading and retries a failed re
   });
   const first = open();
   const editor = await screen.findByTestId('material-editor');
-  expect(within(editor).getByRole('button', { name: 'Geri' })).toBeInTheDocument();
+  expect(screen.getByRole('dialog', { name: 'Dosya' })).toBeInTheDocument();
   expect(within(editor).getByRole('status')).toHaveTextContent('Yükleniyor');
   await user.click(await within(editor).findByRole('button', { name: 'Etiketler ve kişiler' }));
   await within(editor).findByRole('button', { name: 'Etiketleri onayla' });

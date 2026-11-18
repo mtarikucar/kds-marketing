@@ -9,9 +9,11 @@ export function useModules() {
   return useQuery({ queryKey: modulesKey(workspaceId), queryFn: getModules, enabled: !!workspaceId });
 }
 const BUILTIN_PATHS: Record<string, string> = {
-  inbox: '/inbox', strategy: '/strategy', content: '/content', social: '/social', ads: '/ads', materials: '/materials', people: '/people',
+  inbox: '/inbox', strategy: '/strategy', content: '/content', social: '/social', ads: '/ads', materials: '/content', people: '/people',
   prospects: '/prospects', outreach: '/outreach', calls: '/calls',
 };
+/** The library and the content share one page and one menu entry (design 2026-11-18). */
+export const CONTENT_PAGE_MODULES = ['content', 'materials'];
 export function modulePath(module: WorkspaceModule | Blueprint): string {
   const blueprint = 'blueprint' in module ? module.blueprint : module;
   return blueprint.builtin && BUILTIN_PATHS[blueprint.id]

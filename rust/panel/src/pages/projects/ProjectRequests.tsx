@@ -22,7 +22,7 @@ function RequestRow({
   project: api.ProductionProject;
   materials: Material[];
   writable: boolean;
-  onUpload: () => void;
+  onUpload?: () => void;
 }) {
   const { t } = useTranslation();
   const [resolving, setResolving] = useState(false);
@@ -49,9 +49,11 @@ function RequestRow({
           <button className={tapClass} onClick={() => setResolving(!resolving)}>
             {t('projects.resolveRequest')}
           </button>
-          <button className={tapClass} onClick={onUpload}>
-            {t('projects.upload')}
-          </button>
+          {onUpload && (
+            <button className={tapClass} onClick={onUpload}>
+              {t('projects.upload')}
+            </button>
+          )}
           <button
             className={tapClass}
             disabled={mutation.isPending}
@@ -113,7 +115,8 @@ export function ProjectRequests({
   project: api.ProductionProject;
   materials: Material[];
   writable: boolean;
-  onUpload: () => void;
+  /** Opens the page's upload; without it there is no upload here. */
+  onUpload?: () => void;
 }) {
   const { t } = useTranslation();
   const [creating, setCreating] = useState(false);

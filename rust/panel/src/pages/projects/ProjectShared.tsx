@@ -94,7 +94,7 @@ export function OpenMaterial({ material }: { material: Material }) {
   return (
     <Link
       className={tapClass}
-      to={`/materials?view=library&material=${encodeURIComponent(material.id)}`}
+      to={`/content?file=${encodeURIComponent(material.id)}`}
     >
       {t('projects.openMaterial')}
     </Link>
