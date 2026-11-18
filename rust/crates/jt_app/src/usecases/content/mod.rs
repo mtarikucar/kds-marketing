@@ -3,12 +3,16 @@
 //! hands the area out, keeps the agent's place, and checks what is delivered.
 pub mod areas;
 pub mod delivery;
+pub mod pipeline;
+pub mod views;
 pub use areas::{area_claim, area_progress, area_redo, area_release, open_by_system};
 pub use delivery::{area_deliver, delivery_accept};
+pub use views::{analysis_queue, areas, olay_view, tree};
 
 use crate::ports::production_projects::{
-    MAX_CONTENT_TYPE_CHARS, MAX_GOAL_CHARS, MAX_LINK_CHARS, MAX_TAG_CHARS, MAX_TAGS,
-    MAX_VERSION_TEXT_CHARS, MAX_VERSION_TITLE_CHARS, MAX_VERSIONS,
+    MAX_CONTENT_TYPE_CHARS, MAX_GOAL_CHARS, MAX_LINK_CHARS, MAX_STEP_MATERIALS,
+    MAX_STEP_OUTPUT_CHARS, MAX_TAG_CHARS, MAX_TAGS, MAX_VERSION_TEXT_CHARS,
+    MAX_VERSION_TITLE_CHARS, MAX_VERSIONS,
 };
 use serde_json::{Value, json};
 
@@ -32,7 +36,12 @@ pub fn schema(name: &str) -> Value {
             vec!["note"],
         ),
         "area_progress" => (
-            json!({"claim_token":token,"step":{"type":"integer","minimum":1,"maximum":14},"note":note}),
+            json!({"claim_token":token,"step":{"type":"integer","minimum":1,"maximum":14},"note":note,
+                "output":{"type":["string","null"],"minLength":1,"maxLength":MAX_STEP_OUTPUT_CHARS,
+                    "description":"The step's result in one line, shown under its stage: step 3 the platform and format (e.g. Instagram, Reels), 6 the main message, 7 the headline. Leave out when the step has no one-line result."},
+                "material_ids":{"type":"array","maxItems":MAX_STEP_MATERIALS,"uniqueItems":true,
+                    "items":{"type":"string","format":"uuid"},
+                    "description":"Steps 9 and 10: the materials you chose (material ids), in display order."}}),
             vec!["claim_token", "step", "note"],
         ),
         "area_release" => (

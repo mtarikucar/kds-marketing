@@ -157,12 +157,18 @@ pub enum Origin {
     AiGenerated { generator: String },
 }
 
-/// The material's real context: one olay, or explicitly genel (evergreen).
+/// The material's real context: one olay, or explicitly genel (evergreen), or not known yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Binding {
-    Olay { olay_id: OlayId },
+    Olay {
+        olay_id: OlayId,
+    },
     Genel,
+    /// Not filed yet (design 2026-11-18 §3): a person dropped the file with no olay, and it waits
+    /// in the analysis queue until an agent's analysis or a person files it. Never usable in any
+    /// content, in any role ([`crate::Refusal::Unfiled`]).
+    Unfiled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -281,7 +287,29 @@ impl Material {
     pub fn olay_id(&self) -> Option<OlayId> {
         match self.binding {
             Binding::Olay { olay_id } => Some(olay_id),
-            Binding::Genel => None,
+            Binding::Genel | Binding::Unfiled => None,
+        }
+    }
+
+    /// Whether it waits to be filed into an olay or genel ([`Binding::Unfiled`]).
+    pub fn is_unfiled(&self) -> bool {
+        self.binding == Binding::Unfiled
+    }
+
+    /// The person whose upload confirms the olay an agent opens while filing this material
+    /// (design 2026-11-18 §3, the owner's rule): a live, unfiled, real material that a person
+    /// added in person. The person supplied the files, so the event they show is theirs; the
+    /// olay is confirmed by that rule, not by a click. `None` for anything else (an AI image, a
+    /// material an agent added, one already filed): an olay opened for it stays proposed until a
+    /// person confirms it (spec 2026-11-03 D3).
+    pub fn upload_confirms_olay(&self) -> Option<UserId> {
+        match (&self.created_by, &self.origin, self.binding) {
+            (Actor::Human { user_id }, Origin::Real, Binding::Unfiled)
+                if self.erased_at.is_none() =>
+            {
+                Some(*user_id)
+            }
+            _ => None,
         }
     }
 

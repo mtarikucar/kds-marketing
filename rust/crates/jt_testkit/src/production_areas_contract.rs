@@ -22,6 +22,8 @@ fn area(ws: WorkspaceId, start_minutes: i64) -> ProductionProject {
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        olay_id: None,
+        steps: vec![],
         created_at: FIXED_NOW,
         updated_at: FIXED_NOW,
         start_at: Some(FIXED_NOW + Duration::minutes(start_minutes)),
@@ -45,6 +47,7 @@ fn delivered(mut p: ProductionProject, minutes: i64) -> ProductionProject {
         summary: "Ready".into(),
         versions: vec![],
         released: None,
+        steps: vec![],
     });
     p
 }
@@ -92,10 +95,17 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
     open.sort_by_key(|p| (p.starts_at(), p.id));
     done.sort_by_key(|p| std::cmp::Reverse((p.done_at(), p.id)));
     assert_eq!(
-        r.studio_projects().list_areas(false, None).await.unwrap(),
+        r.studio_projects()
+            .list_areas(false, None, None)
+            .await
+            .unwrap(),
         open[..200]
     );
-    let page = r.studio_projects().list_areas(true, None).await.unwrap();
+    let page = r
+        .studio_projects()
+        .list_areas(true, None, None)
+        .await
+        .unwrap();
     assert_eq!(page, done[..51]);
     let last = &page[49];
     let cursor = DoneCursor {
@@ -104,7 +114,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
     };
     assert_eq!(
         r.studio_projects()
-            .list_areas(true, Some(cursor))
+            .list_areas(true, Some(cursor), None)
             .await
             .unwrap(),
         done[50..]
@@ -167,7 +177,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
     for finished in [false, true] {
         assert!(
             !r.studio_projects()
-                .list_areas(finished, None)
+                .list_areas(finished, None, None)
                 .await
                 .unwrap()
                 .iter()

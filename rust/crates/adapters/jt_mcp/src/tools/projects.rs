@@ -13,14 +13,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
             use_case: "studio.project_list",
-            description: "List a cursor page of tenant production projects; target dates are draft intentions. [risk: READ]",
+            description: "List a cursor page of tenant production projects; target dates are draft intentions. olay_id filters: an olay's id for its areas, or genel for the areas of no olay. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.project_list"),
             schema: || Schema::try_from(projects::schema("list")).expect("project schema"),
             run: project_list,
         },
         ToolDef {
             use_case: "studio.project_create",
-            description: "Create a production workspace within the tenant; does not publish or start a model. [risk: WRITE]",
+            description: "Create a production workspace within the tenant; does not publish or start a model. olay_id (optional) names the olay its content is about (jeeta.studio.olays_list); without it the area is about no olay and the owner sees it under Genel. Its materials must be filed (an unfiled upload is refused, CONFLICT material_unfiled). [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case(
                 "studio.project_create",
             ),

@@ -408,6 +408,7 @@ async fn legacy_document_lists_opens_and_claims_and_state_precedence_is_exact() 
         summary: "test".into(),
         versions: vec![],
         released: None,
+        steps: vec![],
     });
     assert_eq!(p.state(w.ctx.now), AreaState::Working);
     assert_eq!(p.state(w.ctx.now + AREA_LEASE), AreaState::Done);
@@ -470,6 +471,7 @@ async fn opening_validation_and_system_key_idempotence() {
         &[],
         w.ctx.now,
         hints.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -493,6 +495,7 @@ async fn opening_validation_and_system_key_idempotence() {
         &[],
         w.ctx.now,
         AreaHints::default(),
+        None,
     )
     .await
     .unwrap();

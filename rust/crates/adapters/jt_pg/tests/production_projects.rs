@@ -19,6 +19,8 @@ fn project(ws: jt_tenancy::WorkspaceId) -> ProductionProject {
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        olay_id: None,
+        steps: vec![],
         start_at: None,
         opened_by: Default::default(),
         hints: Default::default(),
@@ -56,7 +58,7 @@ async fn project_repository_is_tenant_scoped_revision_guarded_and_forces_rls() {
     );
     assert!(
         r.studio_projects()
-            .list_projects(false, None)
+            .list_projects(false, None, None)
             .await
             .unwrap()
             .is_empty()
@@ -127,7 +129,7 @@ async fn migration_guard_sees_populated_projects_without_tenant_or_platform_cont
     let mut r = uow.tenant(ws).await.unwrap();
     assert_eq!(
         r.studio_projects()
-            .list_projects(false, None)
+            .list_projects(false, None, None)
             .await
             .unwrap()
             .len(),
@@ -232,7 +234,10 @@ async fn area_migration_backfills_legacy_json_roundtrips_and_refuses_runtime_dat
         .unwrap();
     assert_eq!((stored.start_at, stored.starts_at()), (None, FIXED_NOW));
     assert_eq!(
-        r.studio_projects().list_areas(false, None).await.unwrap(),
+        r.studio_projects()
+            .list_areas(false, None, None)
+            .await
+            .unwrap(),
         [stored.clone()]
     );
     stored.revision = 2;
@@ -317,6 +322,7 @@ async fn mirrored_area_columns_follow_the_stored_document() {
         summary: "Ready".into(),
         versions: vec![],
         released: None,
+        steps: vec![],
     });
     let mut r = uow.tenant(ws).await.unwrap();
     r.studio_projects()
@@ -352,7 +358,7 @@ async fn mirrored_area_columns_follow_the_stored_document() {
         async move {
             let mut r = uow.tenant(ws).await.unwrap();
             r.studio_projects()
-                .list_areas(true, None)
+                .list_areas(true, None, None)
                 .await
                 .unwrap()
                 .len()
@@ -449,4 +455,157 @@ async fn ad_campaign_repository_contract() {
         .await
         .unwrap();
     assert_eq!(unscoped, 0);
+}
+
+/// `0044_content_olay_root` (design 2026-11-18): an area the system opened for an olay before it
+/// gets the olay its stored request names, the generated column follows the document and filters
+/// the lists, an unfiled material is stored, and the down refuses what only this release reads.
+#[tokio::test]
+async fn content_olay_root_migration_backfills_filters_and_refuses_a_lossy_down() {
+    use jt_app::ports::production_projects::{AreaOlay, AreaTrigger, OpenedBy};
+    let db = TestDb::new().await;
+    let (ws, _) = db.seed_workspace("olay-root").await;
+    let up = include_str!("../../../../migrations/0044_content_olay_root.up.sql");
+    let down = include_str!("../../../../migrations/0044_content_olay_root.down.sql");
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let m = jt_testkit::studio_contract::seed_material(&uow, ws).await;
+    let olay = m.olay_id().unwrap();
+    // Before: a system area of an olay trigger with no olay written, its request naming one, and
+    // a floor area that keeps none.
+    let mut olay_area = project(ws);
+    olay_area.opened_by = OpenedBy::System {
+        trigger: AreaTrigger::Olay,
+        key: format!("olay:{}:0:abc", olay.0),
+    };
+    let mut floor = project(ws);
+    floor.opened_by = OpenedBy::System {
+        trigger: AreaTrigger::Floor,
+        key: "floor:x:2026-11-18".into(),
+    };
+    let mut r = uow.tenant(ws).await.unwrap();
+    for p in [&olay_area, &floor] {
+        r.studio_projects()
+            .save_project(p.clone(), None)
+            .await
+            .unwrap();
+    }
+    r.commit().await.unwrap();
+    let mut tx = as_tenant(&db, ws).await;
+    for (key, trigger) in [
+        (format!("olay:{}:0:abc", olay.0), "olay"),
+        ("floor:x:2026-11-18".to_owned(), "floor"),
+    ] {
+        sqlx::query(
+            "insert into studio_package_requests(workspace_id,id,key,trigger,status,data,created_at,answered_at) \
+             values($1,$2,$3,$4,'answered',$5,now(),now())",
+        )
+        .bind(ws.0)
+        .bind(Uuid::now_v7())
+        .bind(key)
+        .bind(trigger)
+        .bind(serde_json::json!({"olay_id": if trigger == "olay" { Some(olay.0) } else { None }}))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    sqlx::query("update studio_production_projects set data = data - 'olay_id'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    for _ in 0..2 {
+        sqlx::raw_sql(up).execute(&db.pool).await.unwrap();
+    }
+    let mut r = uow.tenant(ws).await.unwrap();
+    let stored = r
+        .studio_projects()
+        .get_project(olay_area.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.olay_id, Some(olay));
+    assert_eq!(stored.revision, olay_area.revision);
+    let floor_stored = r
+        .studio_projects()
+        .get_project(floor.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(floor_stored.olay_id, None);
+    let ids = |rows: Vec<ProductionProject>| rows.into_iter().map(|p| p.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(r
+            .studio_projects()
+            .list_areas(false, None, Some(AreaOlay::Olay(olay)))
+            .await
+            .unwrap()),
+        vec![olay_area.id]
+    );
+    assert_eq!(
+        ids(r
+            .studio_projects()
+            .list_projects(false, None, Some(AreaOlay::Genel))
+            .await
+            .unwrap()),
+        vec![floor.id]
+    );
+    // The column follows the document as the repository saves it.
+    let mut moved = floor_stored.clone();
+    moved.revision = 2;
+    moved.olay_id = Some(olay);
+    r.studio_projects()
+        .save_project(moved, Some(1))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut tx = as_tenant(&db, ws).await;
+    let column: Option<Uuid> =
+        sqlx::query_scalar("select olay_id from studio_production_projects where id=$1")
+            .bind(floor.id)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(column, Some(olay.0));
+    tx.rollback().await.unwrap();
+    // The down refuses an area a person (here: not the system) put under an olay, reported
+    // steps, and an unfiled material; with none of them it reverts, twice.
+    for change in [
+        "update studio_production_projects set data = jsonb_set(data, '{opened_by}', '{\"kind\":\"human\"}') where olay_id is not null",
+        "update studio_production_projects set data = jsonb_set(data - 'olay_id', '{steps}', '[{\"step\":1,\"note\":\"n\",\"at\":\"2026-11-18T00:00:00Z\"}]')",
+        "update studio_materials set binding = 'unfiled', olay_id = null, data = jsonb_set(data, '{binding}', '{\"kind\":\"unfiled\"}')",
+    ] {
+        let mut tx = as_tenant(&db, ws).await;
+        sqlx::query(change).execute(&mut *tx).await.unwrap();
+        let err = sqlx::raw_sql(down).execute(&mut *tx).await.unwrap_err();
+        assert!(err.to_string().contains("down refused"), "{err}");
+        tx.rollback().await.unwrap();
+    }
+    let mut tx = as_tenant(&db, ws).await;
+    sqlx::query("update studio_production_projects set data = data - 'olay_id'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let binding_check = || async {
+        sqlx::query_scalar::<_, String>(
+            "select pg_get_constraintdef(oid) from pg_constraint              where conname = 'studio_materials_binding_check'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap()
+    };
+    assert!(binding_check().await.contains("unfiled"));
+    for _ in 0..2 {
+        sqlx::raw_sql(down).execute(&db.pool).await.unwrap();
+    }
+    assert!(!binding_check().await.contains("unfiled"));
+    let generated: bool = sqlx::query_scalar(
+        "select exists(select 1 from information_schema.columns          where table_name = 'studio_production_projects' and column_name = 'olay_id')",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(!generated);
+    sqlx::raw_sql(up).execute(&db.pool).await.unwrap();
+    assert!(binding_check().await.contains("unfiled"));
 }

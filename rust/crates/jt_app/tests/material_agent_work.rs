@@ -24,7 +24,7 @@ async fn analysis_work_is_module_scoped_recovers_expired_leases_and_covers_legac
     };
     agent.agent_connection_id = Some(connection_id);
     let has = |p: &work::PendingOut| {
-        p.items.iter().any(|i| matches!(i.kind, WorkKind::StudioMaterialAnalysis {material_id, expected_revision:1} if material_id==material.id))
+        p.items.iter().any(|i| matches!(i.kind, WorkKind::StudioMaterialAnalysis {material_id, expected_revision:1, ..} if material_id==material.id))
     };
     // No stored metadata (pre-migration material) still has truthful, claimable pending work.
     let pending = work::pending(&w.deps, &agent).await.unwrap();

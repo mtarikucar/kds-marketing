@@ -3,7 +3,7 @@ use crate::error::AppError;
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
 use jt_strategy::HypothesisId;
-use jt_studio::{MaterialId, PostFormat, SlotId};
+use jt_studio::{MaterialId, OlayId, PostFormat, SlotId};
 use jt_tenancy::{AgentConnectionId, UserId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -64,6 +64,10 @@ pub const AREA_LEASE: time::Duration = time::Duration::minutes(30);
 pub const AREA_STEPS: u8 = 14;
 /// Deliveries refused in a row before the area is held for a person (design B9).
 pub const MAX_REFUSALS: u8 = 3;
+/// The longest one-line result of a step (design 2026-11-18 §4).
+pub const MAX_STEP_OUTPUT_CHARS: usize = 240;
+/// The most materials one step names (the files chosen at steps 9 and 10).
+pub const MAX_STEP_MATERIALS: usize = 20;
 
 /// Who opened an area: a person, or the system by one of its triggers (design §6.3).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +121,24 @@ pub struct AreaProgress {
     pub at: OffsetDateTime,
 }
 
+/// One step of the workflow as the agent reported it (design 2026-11-18 §4): its note, when, and
+/// what it produced, in one line, and the materials it chose. An area keeps one per step for the
+/// attempt that leads to its current or next package ([`ProductionProject::steps`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AreaStep {
+    pub step: u8,
+    pub note: String,
+    #[serde(with = "jt_studio::time_compat")]
+    pub at: OffsetDateTime,
+    /// The step's result in one line: the platform and format at step 3, the main message at 6,
+    /// the headline at 7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// The materials the step chose, in order (steps 9 and 10: the files the content shows).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_ids: Vec<MaterialId>,
+}
+
 /// What an area produces: the platform versions of one delivery. Every version passed the
 /// checks, unless a person released what the text check alone held (`released`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +152,9 @@ pub struct ContentPackage {
     /// The person who released it from a hold, and the text findings released (design B9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub released: Option<PackageRelease>,
+    /// The steps of the attempt that made it, as the area held them when it was accepted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<AreaStep>,
 }
 
 /// A person's release of a held delivery: who, when, and the findings they accepted, as the
@@ -222,6 +247,17 @@ pub struct ProductionProject {
     pub claim: Option<AreaClaim>,
     #[serde(default)]
     pub progress: Option<AreaProgress>,
+    /// The olay the area's content is about (design 2026-11-18 §2): the trigger's olay for an
+    /// area the system opened for an olay or a calendar occasion, the one a person named. `None`:
+    /// no olay, and the panel shows the area under "Genel".
+    #[serde(default)]
+    pub olay_id: Option<OlayId>,
+    /// The steps of the current attempt, ascending, one per step: the attempt that leads to the
+    /// next package, or that led to the current one. A report of step `n` replaces `n` and drops
+    /// every later step (they are redone after it); a redo clears them, since the package they
+    /// led to is abandoned; a delivery copies them into its package ([`ContentPackage::steps`]).
+    #[serde(default)]
+    pub steps: Vec<AreaStep>,
     /// Oldest first; the last one is the current package.
     #[serde(default)]
     pub packages: Vec<ContentPackage>,
@@ -310,6 +346,23 @@ impl ProductionProject {
             .filter(|v| v.slot_id.is_none())
     }
 
+    /// Records step `s` of the current attempt (see [`ProductionProject::steps`]): it replaces
+    /// what was reported for its step and drops every later one; the area's `progress` follows.
+    pub fn record_step(&mut self, s: AreaStep) {
+        self.steps.retain(|x| x.step < s.step);
+        self.progress = Some(AreaProgress {
+            step: s.step,
+            note: s.note.clone(),
+            at: s.at,
+        });
+        self.steps.push(s);
+    }
+
+    /// A new attempt: the steps of the abandoned one are dropped (their package keeps its own).
+    pub fn restart_steps(&mut self) {
+        self.steps.clear();
+    }
+
     /// The area with its state as of `now`, for an answer.
     pub fn present(mut self, now: OffsetDateTime) -> Self {
         self.state = Some(AreaStatus {
@@ -319,6 +372,23 @@ impl ProductionProject {
             starts_at: self.starts_at(),
         });
         self
+    }
+}
+
+/// Which olay's areas a list holds (design 2026-11-18 §2): those of one olay, or those of none
+/// ("Genel").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AreaOlay {
+    Olay(OlayId),
+    Genel,
+}
+
+impl AreaOlay {
+    pub fn matches(self, p: &ProductionProject) -> bool {
+        match self {
+            Self::Olay(id) => p.olay_id == Some(id),
+            Self::Genel => p.olay_id.is_none(),
+        }
     }
 }
 
@@ -333,20 +403,23 @@ pub struct DoneCursor {
 #[async_trait]
 pub trait ProjectRepo: Send + Sync {
     async fn get_project(&mut self, id: Uuid) -> Result<Option<ProductionProject>, AppError>;
-    /// At most 101 rows for a 100-row page, newest first, before an exclusive ID cursor.
+    /// At most 101 rows for a 100-row page, newest first, before an exclusive ID cursor; only
+    /// `olay`'s areas when given.
     async fn list_projects(
         &mut self,
         archived: bool,
         before: Option<Uuid>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError>;
     /// Areas not archived. `done == false`: those without a finished package, earliest start
     /// first, then id, at most 200 (`before` is not used). `done == true`: those with one, newest
     /// delivery first, then id descending, at most 51 rows for a 50-row page, after the exclusive
-    /// cursor `before`.
+    /// cursor `before`. Only `olay`'s areas when given.
     async fn list_areas(
         &mut self,
         done: bool,
         before: Option<DoneCursor>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError>;
     /// Finished areas whose current package holds a version no planned post was made of, oldest
     /// delivery first, then id, at most 200: what waits for a time (design §7.2).

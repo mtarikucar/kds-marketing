@@ -44,6 +44,7 @@ fn material_columns(m: &Material) -> Result<MaterialColumns, AppError> {
         binding: match m.binding {
             Binding::Olay { .. } => "olay",
             Binding::Genel => "genel",
+            Binding::Unfiled => "unfiled",
         },
         olay_id: m.olay_id().map(|o| o.0),
         origin,

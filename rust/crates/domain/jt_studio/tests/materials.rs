@@ -852,3 +852,102 @@ fn shoot_request_keys_and_texts() {
     );
     assert!(season_request_text("Yılbaşı", date!(2026 - 12 - 01)).contains("1 Aralık"));
 }
+
+/// An unfiled material (design 2026-11-18 §3) is refused before anything else, whatever its
+/// permission, quality, origin, role or subject, and no selection ever picks or ranks it.
+#[test]
+fn an_unfiled_material_is_never_a_candidate() {
+    let a = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 12 - 20),
+        date!(2026 - 12 - 20),
+    );
+    let olays = [a.clone()];
+    let day = date!(2026 - 12 - 10);
+    let mut unfiled = material(1, Binding::Unfiled);
+    unfiled.freed = freed();
+    unfiled.validate().unwrap();
+    let mut ai = material(2, Binding::Unfiled);
+    ai.origin = Origin::AiGenerated {
+        generator: "codex".into(),
+    };
+    ai.validate().unwrap();
+    for m in [&unfiled, &ai] {
+        assert_eq!(m.olay_id(), None);
+        assert!(m.is_unfiled());
+        for role in [UseRole::Anchor, UseRole::Support] {
+            for s in [
+                Subject::Generic,
+                Subject::Olay { olay_id: a.id },
+                Subject::Archive { olay_id: a.id },
+            ] {
+                assert_eq!(check(m, role, s, &olays, day), Err(Refusal::Unfiled));
+            }
+        }
+    }
+    assert_eq!(Refusal::Unfiled.code(), "unfiled");
+    let cal = calendar();
+    let cx = UseContext {
+        at: at(day),
+        olays: &olays,
+        calendar: &cal,
+        ai_standalone: true,
+    };
+    let policy = MaterialPolicy::default();
+    let need = SlotNeed::default();
+    let all = [unfiled.clone(), ai.clone()];
+    assert_eq!(select_anchor(&need, &all, &[], &policy, &cx), None);
+    let (ranked, refused) = rank_materials(&need, &all, &[], &policy, &cx);
+    assert!(ranked.is_empty());
+    assert_eq!(
+        refused,
+        vec![(unfiled.id, Refusal::Unfiled), (ai.id, Refusal::Unfiled)]
+    );
+    // A filed twin of the same material is a candidate: only the binding refuses it.
+    let filed = material(3, bound(&a));
+    assert!(select_anchor(&need, &[filed], &[], &policy, &cx).is_some());
+}
+
+/// The owner's rule (design 2026-11-18 §3): an olay opened while filing a real material a person
+/// uploaded is confirmed by that person's upload; anything else leaves it proposed.
+#[test]
+fn only_a_persons_real_upload_confirms_the_olay_it_is_filed_into() {
+    let uploaded = material(1, Binding::Unfiled);
+    assert_eq!(uploaded.upload_confirms_olay(), Some(owner()));
+
+    let mut ai = uploaded.clone();
+    ai.origin = Origin::AiGenerated {
+        generator: "codex".into(),
+    };
+    assert_eq!(ai.upload_confirms_olay(), None);
+
+    let mut by_agent = uploaded.clone();
+    by_agent.created_by = Actor::Agent {
+        connection_id: jt_tenancy::AgentConnectionId(Uuid::from_u128(9)),
+        user_id: owner(),
+    };
+    assert_eq!(by_agent.upload_confirms_olay(), None);
+
+    let mut by_system = uploaded.clone();
+    by_system.created_by = Actor::System {
+        component: "import".into(),
+    };
+    assert_eq!(by_system.upload_confirms_olay(), None);
+
+    let a = olay(
+        1,
+        OlayKind::Workshop,
+        date!(2026 - 12 - 20),
+        date!(2026 - 12 - 20),
+    );
+    let mut filed = uploaded.clone();
+    filed.binding = bound(&a);
+    assert_eq!(filed.upload_confirms_olay(), None);
+    filed.binding = Binding::Genel;
+    filed.freed = freed();
+    assert_eq!(filed.upload_confirms_olay(), None);
+
+    let erased = uploaded.redacted(at(date!(2026 - 12 - 1)));
+    assert_eq!(erased.upload_confirms_olay(), None);
+}

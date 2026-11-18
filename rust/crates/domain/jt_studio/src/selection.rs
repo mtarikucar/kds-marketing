@@ -159,6 +159,7 @@ type Rank = (
 /// The subjects material `m` can take as an anchor: its olay's own, its archive, and generic.
 fn subjects(m: &Material) -> Vec<Subject> {
     match m.binding {
+        Binding::Unfiled => Vec::new(),
         Binding::Genel => vec![Subject::Generic],
         Binding::Olay { olay_id } => vec![
             Subject::Olay { olay_id },
@@ -255,7 +256,7 @@ pub fn rank_materials(
         if !any {
             let own = match m.binding {
                 Binding::Olay { olay_id } => Subject::Olay { olay_id },
-                Binding::Genel => Subject::Generic,
+                Binding::Genel | Binding::Unfiled => Subject::Generic,
             };
             if let Err(r) = crate::classify(m, &own, cx) {
                 refused.push((m.id, r));

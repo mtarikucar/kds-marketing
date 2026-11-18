@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 123] = [
+const POST_M4_ADDED: [(&str, &str); 124] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -204,6 +204,8 @@ const POST_M4_ADDED: [(&str, &str); 123] = [
     ("content.area_progress", "jeeta.content.area_progress"),
     ("content.area_release", "jeeta.content.area_release"),
     ("content.area_deliver", "jeeta.content.area_deliver"),
+    // One module with the olay at its root (design 2026-11-18 §5): an olay as the page reads it.
+    ("content.olay_view", "jeeta.content.olay_view"),
     // Social media management (design 2026-11-10 §7): a finished version gets its time.
     ("social.version_schedule", "jeeta.social.version_schedule"),
     ("social.versions_waiting", "jeeta.social.versions_waiting"),
@@ -247,7 +249,7 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 32] = [
+const POST_M4_PANEL_ONLY: [&str; 35] = [
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
@@ -272,6 +274,10 @@ const POST_M4_PANEL_ONLY: [&str; 32] = [
     "studio.material_production_request",
     "content.area_redo",
     "content.delivery_accept",
+    // The content page's tree, analysis queue and production line (design 2026-11-18 §5).
+    "content.tree",
+    "content.analysis_queue",
+    "content.areas",
     "social.account_pause",
     "budget.stop",
     "ads.campaign_open",

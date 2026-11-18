@@ -300,7 +300,7 @@ fn keys<T: TagKey>(set: &BTreeSet<T>) -> Vec<&'static str> {
 fn summary(m: &Material) -> Value {
     json!({
         "file_id": m.file_id,
-        "binding": match m.binding { Binding::Olay { .. } => "olay", Binding::Genel => "genel" },
+        "binding": match m.binding { Binding::Olay { .. } => "olay", Binding::Genel => "genel", Binding::Unfiled => "unfiled" },
         "olay_id": m.olay_id(),
         "origin": match &m.origin { Origin::Real => "real", Origin::AiGenerated { .. } => "ai_generated" },
         "generator": match &m.origin { Origin::Real => None, Origin::AiGenerated { generator } => Some(generator) },
@@ -514,6 +514,9 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
     let binding = match (i.olay_id, i.genel) {
         (Some(olay_id), false) => Binding::Olay { olay_id },
         (None, true) => Binding::Genel,
+        // A person dropping a file with no form (design 2026-11-18 §3): it waits, unfiled, in the
+        // analysis queue. An agent names the olay (or genel) of what it adds, as before.
+        (None, false) if person(ctx).is_some() => Binding::Unfiled,
         _ => {
             return Err(refused(
                 "olay_id",
@@ -545,6 +548,9 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
             by: Some(by),
             at: ctx.now,
         }),
+        // An unfiled upload carries no form: its permission is given later, by a person, and
+        // until then nothing may use it anyway.
+        (None, Some(_)) if binding == Binding::Unfiled => None,
         (None, Some(_)) => {
             return Err(refused(
                 "share",
@@ -951,7 +957,8 @@ pub async fn material_free(
 }
 
 /// An owner or manager binds a material to another olay, or makes it genel (D4); a real material
-/// made genel is freed by that decision (D8).
+/// made genel is freed by that decision (D8). An unfiled material is filed the same way (design
+/// 2026-11-18 §3); nothing is bound back to unfiled.
 pub async fn material_bind(
     d: &Deps,
     ctx: &Ctx,
@@ -963,12 +970,20 @@ pub async fn material_bind(
     let by = super::super::control::human_approver(ctx)?;
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
+    if i.binding == Binding::Unfiled {
+        return Err(refused(
+            "binding",
+            "unfiled_is_not_a_binding",
+            "a material is filed into an olay or genel",
+        ));
+    }
     let mut m = next(live(r.as_mut(), i.material_id, i.expected_revision).await?)?;
     if let Binding::Olay { olay_id } = i.binding
         && r.studio_materials().get_olay(olay_id).await?.is_none()
     {
         return Err(AppError::not_found("olay"));
     }
+    let filed = m.is_unfiled();
     m.binding = i.binding;
     if m.binding == Binding::Genel && !m.is_ai() && m.freed.is_none() {
         m.freed = Some(HumanMark { by, at: ctx.now });
@@ -977,7 +992,14 @@ pub async fn material_bind(
     r.studio_materials()
         .update_material(m.clone(), i.expected_revision)
         .await?;
-    append(r.as_mut(), ctx, "studio.material.bound", &m, json!({})).await?;
+    append(
+        r.as_mut(),
+        ctx,
+        "studio.material.bound",
+        &m,
+        json!({"was_unfiled": filed}),
+    )
+    .await?;
     r.commit().await?;
     Ok(m)
 }

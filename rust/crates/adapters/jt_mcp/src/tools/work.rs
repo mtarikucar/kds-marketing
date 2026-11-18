@@ -32,9 +32,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           them, with capabilities.manage), studio_shoot_request with \
                           shoot_request_id (a material Studio needs, listed with \
                           jeeta.studio.shoot_list: tell the owner, who shoots it), \
-                          studio_material_analysis with material_id and expected_revision (to an \
-                          agent with materials.work: claim, inspect the preview with your own tools, \
-                          and complete or fail; live leases and terminal results are omitted), \
+                          studio_material_analysis with material_id, expected_revision and \
+                          unfiled (to an agent with materials.work: claim, inspect the preview with \
+                          your own tools, and complete or fail; unfiled true: a person uploaded it \
+                          with no olay, so file it with the completion, reading \
+                          jeeta.studio.olays_list; live leases and terminal results are omitted), \
                           studio_material_production with production_id and expected_revision \
                           (human-requested edit/crop/poster: claim and produce with your own tools, \
                           then upload a distinct AI result; no server generation), \

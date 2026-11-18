@@ -255,6 +255,11 @@ pub static CATALOG: &[UseCase] = &[
     // The materials library (spec 2026-11-03 §5.2): exempt from the strategy gate (D35), never
     // from the workspace-status check.
     // Production projects prepare media before strategy approval; only scheduling is gated.
+    // The content page's read model (design 2026-11-18 §5): one module, the olay at its root.
+    panel_only("content.tree", Exempt, ("GET", "/api/content/tree"), Read),
+    panel_only("content.analysis_queue", Exempt, ("GET", "/api/content/analysis-queue"), Read),
+    panel_only("content.areas", Exempt, ("GET", "/api/content/areas"), Read),
+    twin("content.olay_view", Exempt, "jeeta.content.olay_view", ("GET", "/api/content/olays/{olay_id}"), Read),
     twin("content.area_claim", Exempt, "jeeta.content.area_claim", ("POST", "/api/content/areas/{project_id}/claim"), Write),
     twin("content.area_progress", Exempt, "jeeta.content.area_progress", ("POST", "/api/content/areas/{project_id}/progress"), Write),
     twin("content.area_release", Exempt, "jeeta.content.area_release", ("POST", "/api/content/areas/{project_id}/release"), Write),

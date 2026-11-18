@@ -315,7 +315,7 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
         // The channels a floor area is being made for: none asks for a second one.
         let mut floor_areas = BTreeSet::new();
         if areas {
-            let mut live = r.studio_projects().list_areas(false, None).await?;
+            let mut live = r.studio_projects().list_areas(false, None, None).await?;
             live.extend(r.studio_projects().list_areas_waiting().await?);
             for p in live {
                 if matches!(
@@ -626,7 +626,10 @@ impl Triggers<'_> {
                 formats: q.best_formats.iter().map(|f| f.format).take(3).collect(),
                 capability_ids: q.capability_id.into_iter().collect(),
             };
-            self.area(r, trigger, &q.key, &goal, &q.material_ids, hints)
+            // The area is about the request's olay: the olay trigger's, the calendar's (design
+            // 2026-11-18 §2); a floor area is about none.
+            let olay = q.olay_id.filter(|_| trigger != AreaTrigger::Floor);
+            self.area(r, trigger, &q.key, &goal, &q.material_ids, hints, olay)
                 .await?;
         }
         self.requests.push(q);
@@ -635,6 +638,7 @@ impl Triggers<'_> {
     }
 
     /// Opens the production area of trigger key `key`, once.
+    #[allow(clippy::too_many_arguments)]
     async fn area(
         &mut self,
         r: &mut dyn TenantRepos,
@@ -643,6 +647,7 @@ impl Triggers<'_> {
         goal: &str,
         sources: &[MaterialId],
         hints: AreaHints,
+        olay: Option<OlayId>,
     ) -> Result<(), AppError> {
         let floor = trigger == AreaTrigger::Floor;
         let channels = hints.capability_ids.clone();
@@ -655,6 +660,7 @@ impl Triggers<'_> {
             sources,
             self.ctx.now,
             hints,
+            olay,
         )
         .await?;
         if floor {
@@ -1004,7 +1010,7 @@ impl Triggers<'_> {
                         capability_ids: vec![ch.capability.id],
                     };
                     let goal = quiet_goal(&ch.capability.name, last, now);
-                    self.area(r, AreaTrigger::Floor, &key, &goal, &[], hints)
+                    self.area(r, AreaTrigger::Floor, &key, &goal, &[], hints, None)
                         .await?;
                 }
                 None => {

@@ -248,8 +248,10 @@ fn library_definitions() -> Vec<ToolDef> {
              a season collection, a special day, a product shoot), newest start first, each with \
              its count of live materials; status filters proposed or confirmed. Only a confirmed \
              olay makes its materials usable, and only an owner or manager confirms one, in the \
-             panel. Returns {olays: [{olay, materials}]}. Needs no approved strategy. \
-             [risk: READ]",
+             panel. Read it before filing a material a person uploaded with no olay \
+             (jeeta.studio.material_analysis_complete's filing): its kinds and dates tell you \
+             which olay the files come from. Returns {olays: [{olay, materials}]}. Needs no \
+             approved strategy. [risk: READ]",
             || library_schema("olays_list"),
             olays_list,
         ),
@@ -349,7 +351,7 @@ fn library_definitions() -> Vec<ToolDef> {
         ),
         def(
             "studio.material_analysis_complete",
-            "Agent only: complete your unexpired analysis lease using claim_token and expected_revision. Read jeeta.strategy.get and material_intelligence_list to reuse existing groups and labels. Record a factual description, labels, optional title and grouping, and date_source; never infer capture/event dates from upload time and leave uncertain facts unknown; do not invent dates or infer share permission. Revision conflicts preserve manual edits: reread the material instead of overwriting them. [risk: WRITE]",
+            "Agent only: complete your unexpired analysis lease using claim_token and expected_revision. Read jeeta.strategy.get and material_intelligence_list to reuse existing groups and labels. Record a factual description, labels, optional title and grouping, and date_source; never infer capture/event dates from upload time and leave uncertain facts unknown; do not invent dates or infer share permission. Revision conflicts preserve manual edits: reread the material instead of overwriting them. filing (optional, only for a material a person uploaded with no olay: the work item's unfiled is true and the material's binding is {kind: unfiled}) files it with exactly one of: olay_id, an existing olay it comes from (jeeta.studio.olays_list); new_olay {kind, title, starts_on, ends_on, place, occasion, notes} when no olay fits (it is created; occasion is required for a season or special_day and absent otherwise); or genel true, only for an AI image (a real photo goes genel only by a person, FORBIDDEN human_required). An olay you open this way for a real material a person uploaded is confirmed by the owner's rule (the person supplied the files; the ledger records it as confirmed by that rule from their upload); one opened for an AI image stays proposed until a person confirms it. Filing into an existing proposed olay does not confirm it. Leave filing out when unsure: the material stays unfiled and a person files it. A filing on a material already filed is refused (CONFLICT material_already_filed). Returns {material, intelligence, olay}: olay is the one the filing named. [risk: WRITE]",
             || library_schema("material_analysis_complete"),
             material_analysis_complete,
         ),
@@ -368,7 +370,9 @@ fn library_definitions() -> Vec<ToolDef> {
         def(
             "studio.material_add",
             "Add a file stored by jeeta.studio.file_upload (file_id) to the library as a \
-             material, with request_key (replayed). Name its olay (olay_id) or set genel true; \
+             material, with request_key (replayed). Name its olay (olay_id) or set genel true \
+             (only a person in the panel may add a file with neither: it waits unfiled for \
+             analysis); \
              an agent adds no real genel material (a human frees one). origin is {kind: real} or \
              {kind: ai_generated, generator: e.g. codex}, fixed for ever. An AI image requires \
              depicts: which of face, name, child, client_logo, corporate_ref it shows, [] when \

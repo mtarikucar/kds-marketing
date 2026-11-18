@@ -9,6 +9,7 @@ use crate::{
         studio::{files, library, planner, projects},
     },
 };
+use jt_studio::{MaterialId, OlayId};
 use jt_tenancy::{AgentConnectionId, Permission};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -30,6 +31,12 @@ pub struct ProgressInput {
     /// The step of the module's workflow the agent is at, 1 to 14.
     pub step: u8,
     pub note: String,
+    /// What the step produced, in one line (design 2026-11-18 §4).
+    #[serde(default)]
+    pub output: Option<String>,
+    /// The materials the step chose (steps 9 and 10: the files the content shows).
+    #[serde(default)]
+    pub material_ids: Vec<MaterialId>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -116,7 +123,25 @@ pub async fn area_claim(d: &Deps, ctx: &Ctx, i: ClaimInput) -> Result<ClaimOut, 
     })
 }
 
-/// `content.area_progress`: the claim's agent says which step it is at; the lease starts again.
+/// A step's one-line result: whitespace collapsed to single spaces, 1 to
+/// [`MAX_STEP_OUTPUT_CHARS`] characters, no control characters.
+fn step_output(output: &str) -> Result<String, AppError> {
+    let line = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.is_empty()
+        || line.chars().count() > MAX_STEP_OUTPUT_CHARS
+        || line.chars().any(char::is_control)
+    {
+        return Err(AppError::validation(
+            "output is one line of 1 to 240 characters",
+            json!({"field":"output"}),
+        ));
+    }
+    Ok(line)
+}
+
+/// `content.area_progress`: the claim's agent says which step it is at, and optionally what the
+/// step produced; the lease starts again. The report is the area's history for that step (design
+/// 2026-11-18 §4): it replaces an earlier report of the same step and drops the later steps'.
 pub async fn area_progress(d: &Deps, ctx: &Ctx, i: ProgressInput) -> Result<AreaOut, AppError> {
     ctx.require(Permission::ContentWork)?;
     agent(ctx)?;
@@ -127,17 +152,36 @@ pub async fn area_progress(d: &Deps, ctx: &Ctx, i: ProgressInput) -> Result<Area
             json!({"field":"step"}),
         ));
     }
+    let output = i.output.as_deref().map(step_output).transpose()?;
+    if i.material_ids.len() > MAX_STEP_MATERIALS
+        || i.material_ids
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != i.material_ids.len()
+    {
+        return Err(AppError::validation(
+            "a step names at most 20 distinct materials",
+            json!({"field":"material_ids"}),
+        ));
+    }
     let mut r = library::open(d, ctx, Permission::ContentWork).await?;
     r.studio_control().lock_control().await?;
     let mut p = projects::load(r.as_mut(), i.project_id, None, true).await?;
     claim(&p, ctx, &i.claim_token)?;
+    // A step names live, filed materials of the workspace.
+    for id in &i.material_ids {
+        projects::material(r.as_mut(), *id).await?;
+    }
     if let Some(c) = &mut p.claim {
         c.lease_until = ctx.now + AREA_LEASE;
     }
-    p.progress = Some(AreaProgress {
+    p.record_step(AreaStep {
         step: i.step,
         note,
         at: ctx.now,
+        output,
+        material_ids: i.material_ids,
     });
     let project = projects::save(r.as_mut(), ctx, p, "content.area.progress").await?;
     r.commit().await?;
@@ -217,6 +261,9 @@ pub async fn area_redo(
         by,
         at: ctx.now,
     });
+    // The package the steps led to is abandoned: the next attempt reports its own (design
+    // 2026-11-18 §4). The delivered package keeps the steps that made it.
+    p.restart_steps();
     // A held area's claim is dead (its agent was told so): the area is free for the next
     // check-in, with the note. Otherwise an agent at work keeps its claim.
     if p.state(ctx.now) == AreaState::Held {
@@ -233,7 +280,8 @@ pub async fn area_redo(
 
 /// Opens an area for the system (design §6.3) inside the caller's transaction, once per `key`:
 /// its id is the workspace's stable id of the key, and a second call answers the area as it is.
-/// Answers the area and whether this call opened it.
+/// `olay_id` is the olay its content is about: the olay trigger's olay, the calendar's (design
+/// 2026-11-18 §2). Answers the area and whether this call opened it.
 #[allow(clippy::too_many_arguments)]
 pub async fn open_by_system(
     r: &mut dyn TenantRepos,
@@ -244,6 +292,7 @@ pub async fn open_by_system(
     sources: &[jt_studio::MaterialId],
     start_at: OffsetDateTime,
     hints: AreaHints,
+    olay_id: Option<OlayId>,
 ) -> Result<(ProductionProject, bool), AppError> {
     let goal = projects::text(goal, "brief", MAX_GOAL_CHARS, true)?;
     files::key(key)?;
@@ -281,6 +330,8 @@ pub async fn open_by_system(
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        olay_id,
+        steps: vec![],
         created_at: ctx.now,
         updated_at: ctx.now,
         start_at: Some(projects::whole_micros(start_at)),
@@ -304,7 +355,7 @@ pub async fn open_by_system(
             "content.area.opened",
             "production_project",
             id,
-            json!({"trigger":trigger}),
+            json!({"trigger":trigger,"olay_id":olay_id}),
         )?)
         .await?;
     Ok((p.present(ctx.now), true))

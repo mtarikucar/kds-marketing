@@ -787,7 +787,7 @@ export type WorkKind =
   | { kind: 'content_area'; project_id: Uuid; expected_revision: number; redo_note: string | null }
   | { kind: 'content_material_request'; project_id: Uuid; request_id: Uuid }
   | { kind: 'content_area_held'; project_id: Uuid }
-  | { kind: 'studio_material_analysis'; material_id: Uuid; expected_revision: number }
+  | { kind: 'studio_material_analysis'; material_id: Uuid; expected_revision: number; unfiled?: boolean }
   | { kind: 'studio_material_production'; production_id: Uuid; expected_revision: number }
   | { kind: 'consult_strategy' }
   | { kind: 'approve_strategy' }
