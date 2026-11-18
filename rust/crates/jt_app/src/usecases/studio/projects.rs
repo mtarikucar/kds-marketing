@@ -15,7 +15,7 @@ use crate::{
     },
 };
 use jt_capability::CapabilityId;
-use jt_studio::{MaterialId, PlannedPost, PostFormat, Slot, SlotId};
+use jt_studio::{MaterialId, OlayId, PlannedPost, PostFormat, Slot, SlotId};
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,6 +35,25 @@ pub struct ProjectQuery {
     pub before: Option<Uuid>,
     pub scope: Option<AreaScope>,
     pub done_before: Option<String>,
+    /// Only the areas of this olay, or (`genel`) those of none (design 2026-11-18 §2).
+    #[serde(default)]
+    pub olay_id: Option<OlayFilter>,
+}
+
+/// An area list's olay filter as a query or tool argument takes it: an olay's id, or `genel`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OlayFilter(pub AreaOlay);
+
+impl<'de> Deserialize<'de> for OlayFilter {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = String::deserialize(d)?;
+        if v == "genel" {
+            return Ok(Self(AreaOlay::Genel));
+        }
+        Uuid::parse_str(&v)
+            .map(|id| Self(AreaOlay::Olay(OlayId(id))))
+            .map_err(|_| serde::de::Error::custom("olay_id is an olay's id or genel"))
+    }
 }
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -67,6 +86,9 @@ pub struct ProjectCreateInput {
     pub capability_ids: Vec<CapabilityId>,
     #[serde(default)]
     pub material_ids: Vec<MaterialId>,
+    /// The olay the area's content is about; none: the area is shown under "Genel".
+    #[serde(default)]
+    pub olay_id: Option<OlayId>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -223,6 +245,10 @@ pub(crate) async fn material(
         .ok_or_else(|| AppError::not_found("material"))?;
     if m.erased_at.is_some() {
         return Err(AppError::conflict("material erased"));
+    }
+    // A material nobody filed yet is no content's (design 2026-11-18 §3): it is filed first.
+    if m.is_unfiled() {
+        return Err(library::conflict("material_unfiled"));
     }
     Ok(m)
 }
@@ -402,6 +428,14 @@ pub async fn project_list(
         "studio.project_list",
     ))?;
     let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentWork).await?;
+    list_in(r.as_mut(), q, ctx.now).await
+}
+/// A page of areas as `q` asks, in the caller's tenant bundle; the caller checked permissions.
+pub(crate) async fn list_in(
+    r: &mut dyn TenantRepos,
+    q: ProjectQuery,
+    now: OffsetDateTime,
+) -> Result<ProjectListOut, AppError> {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     let cursor = q
         .done_before
@@ -420,12 +454,16 @@ pub async fn project_list(
     let mut rows = match q.scope {
         None => {
             r.studio_projects()
-                .list_projects(q.archived, q.before)
+                .list_projects(q.archived, q.before, q.olay_id.map(|f| f.0))
                 .await?
         }
         Some(scope) => {
             r.studio_projects()
-                .list_areas(matches!(scope, AreaScope::Done), cursor)
+                .list_areas(
+                    matches!(scope, AreaScope::Done),
+                    cursor,
+                    q.olay_id.map(|f| f.0),
+                )
                 .await?
         }
     };
@@ -451,7 +489,7 @@ pub async fn project_list(
         None
     };
     Ok(ProjectListOut {
-        projects: rows.into_iter().map(|p| p.present(ctx.now)).collect(),
+        projects: rows.into_iter().map(|p| p.present(now)).collect(),
         next_cursor,
         next_done_before,
     })
@@ -535,6 +573,11 @@ pub async fn project_create(
     for cap in &i.capability_ids {
         validate_account(d, r.as_mut(), ctx, *cap, None).await?;
     }
+    if let Some(o) = i.olay_id
+        && r.studio_materials().get_olay(o).await?.is_none()
+    {
+        return Err(AppError::not_found("olay"));
+    }
     let mut sources = Vec::new();
     for id in i.material_ids {
         let m = material(r.as_mut(), id).await?;
@@ -555,6 +598,8 @@ pub async fn project_create(
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        olay_id: i.olay_id,
+        steps: vec![],
         start_at: Some(start_at),
         opened_by: Default::default(),
         hints: AreaHints {
@@ -587,7 +632,7 @@ pub async fn project_create(
             "studio.project.created",
             "production_project",
             p.id,
-            json!({"source_count":p.sources.len()}),
+            json!({"source_count":p.sources.len(),"olay_id":p.olay_id}),
         )?)
         .await?;
     r.commit().await?;
@@ -1005,12 +1050,16 @@ pub fn schema(name: &str) -> Value {
     let output = json!({"type":"object","additionalProperties":false,"properties":{"id":uuid,"title":{"type":"string","minLength":1,"maxLength":160},"format":{"type":"string","enum":["story","feed_post","carousel","reel","tiktok_video"]},"target_at":{"type":["string","null"],"format":"date-time"},"capability_id":{"type":["string","null"],"format":"uuid"}},"required":["title","format"]});
     let (properties, required) = match name {
         "list" => (
-            json!({"archived":{"type":"boolean"},"before":uuid,"scope":{"enum":["open","done"]},"done_before":string}),
+            json!({"archived":{"type":"boolean"},"before":uuid,"scope":{"enum":["open","done"]},"done_before":string,
+                   "olay_id":{"anyOf":[uuid,{"const":"genel"}],
+                       "description":"Only the areas of this olay, or genel for the areas of no olay."}}),
             vec![],
         ),
         "get" => (json!({"project_id":uuid}), vec!["project_id"]),
         "create" => (
-            json!({"request_key":string,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","minLength":1,"maxLength":2000},"material_ids":ids,"start_at":{"type":["string","null"],"format":"date-time"},"formats":{"type":"array","items":{"enum":["story","feed_post","carousel","reel","tiktok_video"]},"maxItems":5,"uniqueItems":true},"capability_ids":ids}),
+            json!({"request_key":string,"title":{"type":"string","minLength":1,"maxLength":160},"brief":{"type":"string","minLength":1,"maxLength":2000},"material_ids":ids,"start_at":{"type":["string","null"],"format":"date-time"},"formats":{"type":"array","items":{"enum":["story","feed_post","carousel","reel","tiktok_video"]},"maxItems":5,"uniqueItems":true},"capability_ids":ids,
+                   "olay_id":{"type":["string","null"],"format":"uuid",
+                       "description":"The olay the content is about (jeeta.studio.olays_list); leave out for content about no olay."}}),
             vec!["request_key", "brief"],
         ),
         "update" => (

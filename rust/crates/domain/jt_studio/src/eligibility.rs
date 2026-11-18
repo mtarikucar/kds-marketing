@@ -33,6 +33,8 @@ impl Subject {
 #[serde(rename_all = "snake_case")]
 pub enum Refusal {
     Erased,
+    /// Not filed into an olay or genel yet (design 2026-11-18 §3): never a candidate.
+    Unfiled,
     ShareUnset,
     NotShareable,
     SensitiveNeedsHuman,
@@ -56,6 +58,7 @@ impl Refusal {
     pub fn code(self) -> &'static str {
         match self {
             Self::Erased => "erased",
+            Self::Unfiled => "unfiled",
             Self::ShareUnset => "share_unset",
             Self::NotShareable => "not_shareable",
             Self::SensitiveNeedsHuman => "sensitive_needs_human",
@@ -116,6 +119,10 @@ pub fn check_use(
     if m.erased_at.is_some() {
         return Err(Refusal::Erased);
     }
+    // An unfiled material belongs to no context yet: nothing may speak about it.
+    if m.is_unfiled() {
+        return Err(Refusal::Unfiled);
+    }
     match m.share.as_ref().map(|s| s.permission) {
         None => return Err(Refusal::ShareUnset),
         Some(SharePermission::NotShareable) => return Err(Refusal::NotShareable),
@@ -142,6 +149,7 @@ pub fn check_use(
             // agent's visual do so and the piece speaks about nothing specific (design
             // 2026-11-10 B39): about an olay it never anchors, and the truth check refuses the
             // name, place or client of a confirmed olay in a generic text.
+            Binding::Unfiled => Err(Refusal::Unfiled),
             Binding::Genel => match role {
                 UseRole::Support => Ok(()),
                 UseRole::Anchor if cx.ai_standalone && *subject == Subject::Generic => Ok(()),
@@ -168,6 +176,7 @@ pub fn check_use(
         };
     }
     let olay_id = match m.binding {
+        Binding::Unfiled => return Err(Refusal::Unfiled),
         Binding::Genel => {
             return if *subject == Subject::Generic {
                 Ok(())

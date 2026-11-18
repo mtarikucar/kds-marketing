@@ -176,6 +176,8 @@ pub enum WorkKind {
     StudioMaterialAnalysis {
         material_id: jt_studio::MaterialId,
         expected_revision: u64,
+        /// A person dropped it with no olay (design 2026-11-18 §3): file it with the analysis.
+        unfiled: bool,
     },
     /// A human-requested derivative for an external agent to produce with its own tools.
     /// A production project needs missing materials or canonical output planning.
@@ -552,10 +554,11 @@ async fn pending_as_seen(
                     .get(&material.id)
                     .is_none_or(|row| row.claimable(ctx.now))
             {
+                let unfiled = material.is_unfiled();
                 analyses.push(WorkItem {
-                    kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision },
+                    kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision, unfiled },
                     priority: 2,
-                    hint: "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. Nothing wakes you: poll jeeta.work.checkin on your own schedule.".into(),
+                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. Nothing wakes you: poll jeeta.work.checkin on your own schedule.".into() },
                 });
             }
         }
@@ -585,7 +588,11 @@ async fn pending_as_seen(
         let person = super::studio::library::person(ctx).is_some();
         let work = ctx.permissions.contains(&Permission::ContentWork);
         let manage = ctx.permissions.contains(&Permission::ContentManage);
-        for p in repos.studio_projects().list_areas(false, None).await? {
+        for p in repos
+            .studio_projects()
+            .list_areas(false, None, None)
+            .await?
+        {
             if agent && work && p.needs_agent(ctx.now) {
                 projects.push(WorkItem {
                     kind: WorkKind::ContentArea {
@@ -1389,6 +1396,9 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
     with no connected account leave capability_id out. A refusal lists, by version index, what \
     to fix: fix it and deliver again with a new request_key. Three refusals in a row hand the \
     area to a person. An accepted delivery finishes the area.";
+
+/// What the agent analysing a material a person dropped with no olay does (design 2026-11-18 §3).
+const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no olay: analyse it and     file it. Claim it with jeeta.studio.material_analysis_claim at expected_revision and inspect     the short-lived preview with your own tools; read jeeta.studio.olays_list for the olays it may     belong to (their kinds and dates) and jeeta.studio.material_intelligence_list to reuse groups     and labels. Complete with jeeta.studio.material_analysis_complete and a filing: olay_id of the     existing olay it comes from, or new_olay (kind, title, starts_on, ends_on, and place, occasion     or notes when known) when none fits, or genel only for an AI image. Never infer event dates     from upload time; when you cannot tell where it belongs, complete without a filing and a     person files it. Never set its share permission. Nothing wakes you: poll jeeta.work.checkin.";
 
 /// What an agent that has never seen the system needs to plan an ad campaign.
 const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \

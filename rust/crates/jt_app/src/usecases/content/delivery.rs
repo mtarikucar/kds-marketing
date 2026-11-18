@@ -132,7 +132,7 @@ pub(crate) fn subject_of(materials: &[jt_studio::Material]) -> Subject {
         .iter()
         .filter_map(|m| match m.binding {
             Binding::Olay { olay_id } => Some(olay_id),
-            Binding::Genel => None,
+            Binding::Genel | Binding::Unfiled => None,
         })
         .collect();
     match olays.first() {
@@ -218,7 +218,9 @@ async fn held_versions(
 
 /// The next package of `p`, appended; the document keeps the newest [`MAX_PACKAGES`] (the ledger
 /// keeps every delivery). The area is finished with it: no claim, no refusal, nothing counted.
-fn accept(p: &mut ProductionProject, package: ContentPackage) {
+fn accept(p: &mut ProductionProject, mut package: ContentPackage) {
+    // The package keeps the steps of the attempt that made it (design 2026-11-18 §4).
+    package.steps = p.steps.clone();
     p.packages.push(package);
     if p.packages.len() > MAX_PACKAGES {
         let extra = p.packages.len() - MAX_PACKAGES;
@@ -328,6 +330,7 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
         summary,
         versions,
         released: None,
+        steps: vec![],
     };
     accept(&mut p, package);
     if p.redo == seen {
@@ -405,6 +408,7 @@ pub async fn delivery_accept(
             at: ctx.now,
             findings: json!(held),
         }),
+        steps: vec![],
     };
     accept(&mut p, package);
     // The person decided the content stands as it is: a note asking for a change is answered.

@@ -48,8 +48,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0043_remove_marketplace`.
-const MIGRATIONS: i64 = 43;
+/// Migrations `0001_foundation` through `0044_content_olay_root`.
+const MIGRATIONS: i64 = 44;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -261,6 +261,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0044_content_olay_root",
         "0043_remove_marketplace",
         "0042_tiktok_ads_app",
         "0041_google_provider",
@@ -1392,6 +1393,7 @@ async fn project_tables_down(pool: &PgPool) {
     // Newest first: the lane approval record on `studio_control`, then the account snapshots
     // (they reference `capabilities`) and the pause columns on the posting policy.
     for down in [
+        include_str!("../../../../migrations/0044_content_olay_root.down.sql"),
         include_str!("../../../../migrations/0040_ads_campaigns.down.sql"),
         include_str!("../../../../migrations/0039_general_ad_budget.down.sql"),
         include_str!("../../../../migrations/0038_lane_approval_to_connections.down.sql"),

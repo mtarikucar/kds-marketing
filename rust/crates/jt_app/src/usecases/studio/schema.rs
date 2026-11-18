@@ -247,7 +247,14 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
                 "group_name":{"type":["string","null"],"minLength":1,"maxLength":120},
                 "captured_at":{"type":["string","null"],"format":"date-time"},
                 "date_source":{"type":"string","enum":["unknown","exif","file_modified","agent_inferred"]},
-                "quality":quality(),"depicts":{"type":["array","null"],"uniqueItems":true,"items":{"type":"string","enum":keys::<jt_studio::Depicts>()}}}),
+                "quality":quality(),"depicts":{"type":["array","null"],"uniqueItems":true,"items":{"type":"string","enum":keys::<jt_studio::Depicts>()}},
+                "filing":{"type":["object","null"],"additionalProperties":false,"properties":{
+                    "olay_id":{"type":["string","null"],"format":"uuid"},
+                    "new_olay":{"type":["object","null"],"additionalProperties":false,"properties":{
+                        "kind":kind,"title":label(1),"starts_on":date(),"ends_on":date(),
+                        "place":nullable_label(),"occasion":occasion,"notes":notes},
+                        "required":["kind","title","starts_on","ends_on"]},
+                    "genel":{"type":"boolean"}}}}),
             &[
                 "material_id",
                 "claim_token",

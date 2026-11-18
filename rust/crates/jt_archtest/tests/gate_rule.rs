@@ -91,6 +91,10 @@ const EXEMPT_INBOX: &[&str] = &[
 
 /// Single use cases that may be exempt outside those prefixes. Of the ledger, only reading it is.
 const EXEMPT_IDS: &[&str] = &[
+    "content.tree",
+    "content.analysis_queue",
+    "content.areas",
+    "content.olay_view",
     "content.area_claim",
     "content.area_progress",
     "content.area_release",

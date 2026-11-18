@@ -3,7 +3,7 @@ use super::tenant::MemTenant;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::production_projects::{DoneCursor, ProductionProject, ProjectRepo},
+    ports::production_projects::{AreaOlay, DoneCursor, ProductionProject, ProjectRepo},
 };
 use uuid::Uuid;
 #[async_trait]
@@ -20,6 +20,7 @@ impl ProjectRepo for MemTenant {
         &mut self,
         archived: bool,
         before: Option<Uuid>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError> {
         let mut rows: Vec<_> = self
             .state()
@@ -29,6 +30,7 @@ impl ProjectRepo for MemTenant {
                 r.workspace_id == self.ws
                     && r.archived == archived
                     && before.is_none_or(|v| r.id < v)
+                    && olay.is_none_or(|o| o.matches(r))
             })
             .cloned()
             .collect();
@@ -40,6 +42,7 @@ impl ProjectRepo for MemTenant {
         &mut self,
         done: bool,
         before: Option<DoneCursor>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError> {
         let mut rows: Vec<_> = self
             .state()
@@ -47,6 +50,7 @@ impl ProjectRepo for MemTenant {
             .iter()
             .filter(|p| p.workspace_id == self.ws && !p.archived && p.done_at().is_some() == done)
             .filter(|p| !done || before.is_none_or(|c| (p.done_at(), p.id) < (Some(c.at), c.id)))
+            .filter(|p| olay.is_none_or(|o| o.matches(p)))
             .cloned()
             .collect();
         if done {

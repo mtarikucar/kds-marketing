@@ -2,10 +2,20 @@ use super::{PgTenantRepos, decode, encode, map_sqlx, revision};
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::production_projects::{DoneCursor, ProductionProject, ProjectRepo},
+    ports::production_projects::{AreaOlay, DoneCursor, ProductionProject, ProjectRepo},
 };
 use serde_json::Value;
 use uuid::Uuid;
+
+/// The binds of an olay filter: whether one is given, and its olay (`None` with a filter: the
+/// areas of no olay). `olay_id` is a column generated from the document (migration 0044).
+fn olay_binds(olay: Option<AreaOlay>) -> (bool, Option<Uuid>) {
+    match olay {
+        None => (false, None),
+        Some(AreaOlay::Genel) => (true, None),
+        Some(AreaOlay::Olay(id)) => (true, Some(id.0)),
+    }
+}
 
 // The mirrored columns `start_at` and `done_at` are computed in SQL from the document being
 // stored, by the expressions of the table's checks (migration 0036): the start time (the creation
@@ -37,35 +47,38 @@ impl ProjectRepo for PgTenantRepos {
         &mut self,
         archived: bool,
         before: Option<Uuid>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError> {
-        let rows: Vec<Value> = sqlx::query_scalar("select data from studio_production_projects where workspace_id=$1 and archived=$2 and ($3::uuid is null or id<$3) order by id desc limit 101")
-            .bind(self.workspace_id().0).bind(archived).bind(before).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"list production projects"))?;
+        let (filtered, olay) = olay_binds(olay);
+        let rows: Vec<Value> = sqlx::query_scalar("select data from studio_production_projects where workspace_id=$1 and archived=$2 and ($3::uuid is null or id<$3) and (not $4 or olay_id is not distinct from $5) order by id desc limit 101")
+            .bind(self.workspace_id().0).bind(archived).bind(before).bind(filtered).bind(olay).fetch_all(self.tx.conn()).await.map_err(|e|map_sqlx(e,"list production projects"))?;
         rows.into_iter().map(decode).collect()
     }
     async fn list_areas(
         &mut self,
         done: bool,
         before: Option<DoneCursor>,
+        olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError> {
+        let (filtered, olay) = olay_binds(olay);
         let rows: Vec<Value> = if done {
             sqlx::query_scalar(
-                "select data from studio_production_projects \
-                 where workspace_id=$1 and not archived and done_at is not null \
-                   and ($2::timestamptz is null or (done_at,id)<($2,$3)) \
-                 order by done_at desc,id desc limit 51",
+                "select data from studio_production_projects                  where workspace_id=$1 and not archived and done_at is not null                    and ($2::timestamptz is null or (done_at,id)<($2,$3))                    and (not $4 or olay_id is not distinct from $5)                  order by done_at desc,id desc limit 51",
             )
             .bind(self.workspace_id().0)
             .bind(before.map(|c| c.at))
             .bind(before.map(|c| c.id))
+            .bind(filtered)
+            .bind(olay)
             .fetch_all(self.tx.conn())
             .await
         } else {
             sqlx::query_scalar(
-                "select data from studio_production_projects \
-                 where workspace_id=$1 and not archived and done_at is null \
-                 order by start_at,id limit 200",
+                "select data from studio_production_projects                  where workspace_id=$1 and not archived and done_at is null                    and (not $2 or olay_id is not distinct from $3)                  order by start_at,id limit 200",
             )
             .bind(self.workspace_id().0)
+            .bind(filtered)
+            .bind(olay)
             .fetch_all(self.tx.conn())
             .await
         }

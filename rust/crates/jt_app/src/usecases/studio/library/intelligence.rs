@@ -1,6 +1,8 @@
 //! Durable analysis claimed by an external agent. No model invocation, inferred event creation,
 //! permission grant, or agent wake-up happens in these use cases.
-use super::{MaterialIdInput, conflict, invalid, is_agent, nullable, open, person};
+use super::{
+    MaterialIdInput, conflict, invalid, is_agent, nullable, open, person, person_required,
+};
 use crate::{
     ctx::Ctx,
     error::AppError,
@@ -62,6 +64,52 @@ pub struct MaterialAnalysisCompleteInput {
     pub quality: Option<Quality>,
     #[serde(default)]
     pub depicts: Option<BTreeSet<Depicts>>,
+    /// Where an unfiled material goes (design 2026-11-18 §3); absent: it stays unfiled and a
+    /// person files it.
+    #[serde(default)]
+    pub filing: Option<MaterialFiling>,
+}
+
+/// The agent's filing decision for an unfiled material: exactly one of an existing olay, a new
+/// olay, or genel.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterialFiling {
+    #[serde(default)]
+    pub olay_id: Option<OlayId>,
+    #[serde(default)]
+    pub new_olay: Option<NewOlay>,
+    #[serde(default)]
+    pub genel: bool,
+}
+
+/// The olay a filing opens: what the agent can tell from the files. It names no client: linking
+/// a person is a person's decision.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewOlay {
+    pub kind: OlayKind,
+    pub title: String,
+    #[serde(with = "jt_studio::time_compat::date")]
+    pub starts_on: time::Date,
+    #[serde(with = "jt_studio::time_compat::date")]
+    pub ends_on: time::Date,
+    #[serde(default)]
+    pub place: Option<String>,
+    #[serde(default)]
+    pub occasion: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+/// `studio.material_analysis_complete`'s answer: the material, its analysis, and the olay the
+/// filing named (the new one, or the existing one), if any.
+#[derive(Clone, Debug, Serialize)]
+pub struct MaterialAnalysisCompleteOut {
+    pub material: Material,
+    pub intelligence: MaterialIntelligence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub olay: Option<Olay>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +184,17 @@ fn legacy_record(material: &Material, now: OffsetDateTime) -> MaterialAnalysisRe
         }
     }
     row
+}
+
+/// The public analysis of `material`: its record's, or what a material from before the analysis
+/// records reads as (pending, its filled fields kept as a person's).
+pub(crate) fn intelligence_of(
+    material: &Material,
+    row: Option<&MaterialAnalysisRecord>,
+    now: OffsetDateTime,
+) -> MaterialIntelligence {
+    row.map(|r| r.intelligence.clone())
+        .unwrap_or_else(|| legacy_record(material, now).intelligence)
 }
 
 pub(super) async fn record(
@@ -302,11 +361,105 @@ fn owns(
     Ok(())
 }
 
+/// Where a filing puts the material, before anything is read: one of the three, or `VALIDATION`.
+enum Filing {
+    Olay(OlayId),
+    New(NewOlay),
+    Genel,
+}
+
+fn filing(f: MaterialFiling) -> Result<Filing, AppError> {
+    match (f.olay_id, f.new_olay, f.genel) {
+        (Some(id), None, false) => Ok(Filing::Olay(id)),
+        (None, Some(o), false) => Ok(Filing::New(o)),
+        (None, None, true) => Ok(Filing::Genel),
+        _ => Err(AppError::validation(
+            "a filing names exactly one of olay_id, new_olay or genel",
+            json!({"field":"filing","reason":"one_filing"}),
+        )),
+    }
+}
+
+/// Files the unfiled `material` as `f` says, in the caller's transaction (design 2026-11-18 §3).
+/// A new olay is confirmed by the owner's rule when the material is a real one a person uploaded
+/// ([`Material::upload_confirms_olay`]): its confirmation names that person, and the ledger says
+/// it was the rule, from that upload, not a click. Otherwise it is proposed, as an agent's olay
+/// always is. Filing into an existing olay never confirms it; a real material goes genel only by
+/// a person, who frees it (spec 2026-11-03 D8).
+async fn file(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    material: &mut Material,
+    f: Filing,
+) -> Result<Option<Olay>, AppError> {
+    if !material.is_unfiled() {
+        return Err(conflict("material_already_filed"));
+    }
+    let (binding, olay) = match f {
+        Filing::Olay(id) => {
+            let o = r
+                .studio_materials()
+                .get_olay(id)
+                .await?
+                .ok_or_else(|| AppError::not_found("olay"))?;
+            (Binding::Olay { olay_id: id }, Some(o))
+        }
+        Filing::Genel if material.is_ai() => (Binding::Genel, None),
+        Filing::Genel => return Err(person_required("filing")),
+        Filing::New(n) => {
+            let by = material.upload_confirms_olay();
+            let o = Olay {
+                id: OlayId(d.ids.uuid()),
+                workspace_id: ctx.workspace_id,
+                kind: n.kind,
+                title: n.title,
+                starts_on: n.starts_on,
+                ends_on: n.ends_on,
+                place: n.place,
+                client: None,
+                notes: n.notes,
+                occasion: n.occasion,
+                status: if by.is_some() {
+                    OlayStatus::Confirmed
+                } else {
+                    OlayStatus::Proposed
+                },
+                confirmed: by.map(|by| HumanMark { by, at: ctx.now }),
+                revision: 1,
+                created_at: ctx.now,
+            };
+            o.validate().map_err(invalid)?;
+            r.studio_materials().insert_olay(o.clone()).await?;
+            let mut payload = super::olays::summary(&o);
+            payload["opened_by"] = json!("material_filing");
+            payload["material_id"] = json!(material.id);
+            // Truthfully: confirmed by the rule, because this person uploaded the files.
+            payload["confirmed_by_rule"] = match by {
+                Some(user) => json!({"rule":"person_upload","uploaded_by":user}),
+                None => serde_json::Value::Null,
+            };
+            r.ledger()
+                .append(ledger_entry(
+                    ctx,
+                    "studio.olay.created",
+                    "studio_olay",
+                    o.id,
+                    payload,
+                )?)
+                .await?;
+            (Binding::Olay { olay_id: o.id }, Some(o))
+        }
+    };
+    material.binding = binding;
+    Ok(olay)
+}
+
 pub async fn material_analysis_complete(
     d: &Deps,
     ctx: &Ctx,
     i: MaterialAnalysisCompleteInput,
-) -> Result<MaterialIntelligenceOut, AppError> {
+) -> Result<MaterialAnalysisCompleteOut, AppError> {
     ctx.require_any(crate::usecases::studio::permissions::for_use_case(
         "studio.material_analysis_complete",
     ))?;
@@ -323,6 +476,7 @@ pub async fn material_analysis_complete(
         .map(|v| bounded(v, 120, false, "group_name"))
         .transpose()?;
     let labels = jt_studio::normalize_material_labels(&i.labels).map_err(invalid)?;
+    let filing_decision = i.filing.clone().map(filing).transpose()?;
     if i.date_source == DateSource::Manual
         || (i.captured_at.is_some() && i.date_source == DateSource::Unknown)
         || i.captured_at
@@ -379,6 +533,10 @@ pub async fn material_analysis_complete(
         }
     }
     material.tags_reviewed_by = None;
+    let filed = match filing_decision {
+        Some(f) => Some(file(d, r.as_mut(), ctx, &mut material, f).await?),
+        None => None,
+    };
     material.revision = material
         .revision
         .checked_add(1)
@@ -412,10 +570,25 @@ pub async fn material_analysis_complete(
             json!({"revision":material.revision,"labels_count":material.tags.labels.len()}),
         )?)
         .await?;
+    if filed.is_some() {
+        r.ledger()
+            .append(ledger_entry(
+                ctx,
+                "studio.material.filed",
+                "studio_material",
+                material.id,
+                json!({"revision":material.revision,
+                       "binding": if material.olay_id().is_some() { "olay" } else { "genel" },
+                       "olay_id": material.olay_id(),
+                       "by":"analysis"}),
+            )?)
+            .await?;
+    }
     r.commit().await?;
-    Ok(MaterialIntelligenceOut {
+    Ok(MaterialAnalysisCompleteOut {
         material,
         intelligence: row.intelligence,
+        olay: filed.flatten(),
     })
 }
 

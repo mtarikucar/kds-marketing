@@ -184,7 +184,7 @@ pub async fn olay_get(d: &Deps, ctx: &Ctx, i: OlayIdInput) -> Result<OlayDetail,
 }
 
 /// The ledger payload of an olay: its id, kind, status, occasion key and revision.
-fn summary(o: &Olay) -> Value {
+pub(super) fn summary(o: &Olay) -> Value {
     json!({"olay_id":o.id,"kind":o.kind,"status":o.status,"occasion":o.occasion,"revision":o.revision})
 }
 

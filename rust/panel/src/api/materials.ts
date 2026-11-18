@@ -102,7 +102,8 @@ export interface ShareDecision {
   at: string;
 }
 export type Origin = { kind: 'real' } | { kind: 'ai_generated'; generator: string };
-export type Binding = { kind: 'olay'; olay_id: string } | { kind: 'genel' };
+// `unfiled`: a person's upload waiting in the analysis queue to be filed (design 2026-11-18).
+export type Binding = { kind: 'olay'; olay_id: string } | { kind: 'genel' } | { kind: 'unfiled' };
 /** `jt_ledger::Actor`. */
 export type Actor =
   | { kind: 'human'; user_id: string }

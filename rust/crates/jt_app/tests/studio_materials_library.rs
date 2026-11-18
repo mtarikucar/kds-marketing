@@ -605,9 +605,9 @@ async fn who_decides_what_when_a_material_is_added() {
             json!({"genel":true,"origin":ai,"depicts":["face"],"share":"shareable"}),
             (ErrorCode::Forbidden, "owner_or_manager_human"),
         ),
-        // An olay, or genel.
+        // An olay, or genel: an agent names one (only a person's drop may be unfiled).
         (
-            w.ctx.clone(),
+            a.clone(),
             json!({"share":"shareable"}),
             (ErrorCode::Validation, "olay_or_genel"),
         ),

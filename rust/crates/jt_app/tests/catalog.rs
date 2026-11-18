@@ -191,6 +191,10 @@ fn catalog_is_the_release_table() {
         ("studio.tiktok_posting", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Read),
         ("studio.tiktok_post", None, Some(("POST", "/api/studio/slots/{slot_id}/tiktok")), true, Risk::Write),
         ("studio.tiktok_metrics", None, Some(("GET", "/api/studio/slots/{slot_id}/tiktok/metrics")), true, Risk::Read),
+        ("content.tree", None, Some(("GET", "/api/content/tree")), true, Risk::Read),
+        ("content.analysis_queue", None, Some(("GET", "/api/content/analysis-queue")), true, Risk::Read),
+        ("content.areas", None, Some(("GET", "/api/content/areas")), true, Risk::Read),
+        ("content.olay_view", Some("jeeta.content.olay_view"), Some(("GET", "/api/content/olays/{olay_id}")), false, Risk::Read),
         ("content.area_claim", Some("jeeta.content.area_claim"), Some(("POST", "/api/content/areas/{project_id}/claim")), false, Risk::Write),
         ("content.area_progress", Some("jeeta.content.area_progress"), Some(("POST", "/api/content/areas/{project_id}/progress")), false, Risk::Write),
         ("content.area_release", Some("jeeta.content.area_release"), Some(("POST", "/api/content/areas/{project_id}/release")), false, Risk::Write),
@@ -467,7 +471,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 294);
+    assert_eq!(CATALOG.len(), 298);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
