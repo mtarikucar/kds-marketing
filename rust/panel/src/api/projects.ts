@@ -35,6 +35,10 @@ export interface ProductionProject {
   /** The delivery the checks last refused, while it is the area's open matter. */
   refusal?: import('./content').RefusedDelivery | null;
   state?: { state: import('./content').AreaState; step: number | null; note: string | null; starts_at: string };
+  /** Its olay; `null`: Genel (design 2026-11-18 O1). Absent on records from older servers. */
+  olay_id?: string | null;
+  /** The steps of its current attempt. */
+  steps?: import('./content').AreaStep[];
   id: string;
   workspace_id: string;
   title: string;
@@ -71,6 +75,7 @@ export const projectCreate = (body: {
   formats?: PostFormat[];
   capability_ids?: string[];
   material_ids?: string[];
+  olay_id?: string;
 }) => request<ProductionProject>('POST', root, { body });
 export const projectUpdate = (
   id: string,

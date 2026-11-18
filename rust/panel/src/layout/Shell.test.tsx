@@ -161,19 +161,21 @@ it('orders core, installed modules including inbox, then management without remo
   mockFetch({ 'GET /api/auth/me': { ...me, memberships: [{ ...me.memberships[0], permissions: [...PERMISSIONS] }] } });
   renderAt('/');
   const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-  await within(nav).findByRole('link', { name: 'Materyal kütüphanesi' });
+  await within(nav).findByRole('link', { name: 'İçerik' });
+  // The library and the content are one entry.
+  expect(within(nav).getAllByRole('link', { name: 'İçerik' })).toHaveLength(1);
   await userEvent.click(within(nav).getByText('Yönetim'));
   expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
-    '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/materials', '/people', '/prospects', '/outreach', '/calls', '/modules',
+    '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/people', '/prospects', '/outreach', '/calls', '/modules',
     '/budget', '/users', '/capabilities', '/agents',
   ]);
   expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();
   expect(within(nav).queryByText('Günlük')).not.toBeInTheDocument();
 });
 
-it.each(['materials', 'content', 'social', 'ads'])('gates the %s module before any business query', async module => {
+it.each([['materials', 'content'], ['content', 'content'], ['social', 'social'], ['ads', 'ads']])('gates /%s before any business query', async (path, module) => {
   const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
-  renderAt(`/${module}`);
+  renderAt(`/${path}`);
   expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', `/modules/${module}`);
   expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);

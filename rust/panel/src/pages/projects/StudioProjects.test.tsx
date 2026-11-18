@@ -288,42 +288,6 @@ it('opens a scheduled piece on the social accounts screen without a human editor
   expect(router.state.location.search).toBe('?slot=s1');
 });
 
-it('retries project attachment after upload without duplicating the library material request', async () => {
-  const added = material('m2', { file_id: 'file-new', title: 'Yeni çekim' });
-  const routes = answers({
-    'POST /api/studio/files': { id: 'file-new', mime: 'image/jpeg', filename: 'urun.jpg' },
-    'POST /api/studio/materials': { material: added, olay_suggestions: [] },
-    'POST /api/studio/projects/p1/materials': withStatus(409, {
-      code: 'CONFLICT',
-      message: 'project revision changed',
-      details: {},
-    }),
-  });
-  const calls = mockFetch(routes);
-  renderAt(path('materials'));
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole('button', { name: p.upload }));
-  await user.upload(
-    await screen.findByLabelText('Galeriden seç', { selector: 'input' }),
-    new File(['x'], 'urun.jpg', { type: 'image/jpeg' }),
-  );
-  await screen.findByText('Yüklendi');
-  await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
-  await screen.findByText('Eklenemedi');
-  expect(screen.queryByText('1 materyal eklendi.')).not.toBeInTheDocument();
-  routes['GET /api/studio/projects/p1'] = { ...detail, project: { ...project, revision: 7 } };
-  routes['POST /api/studio/projects/p1/materials'] = { ...project, revision: 8 };
-  await user.click(screen.getByRole('button', { name: '1 materyali ekle' }));
-  await screen.findByText('1 materyal eklendi.');
-  const additions = calls.filter((c) => c.method === 'POST' && c.path === '/api/studio/materials');
-  expect(additions).toHaveLength(2);
-  expect(additions[0].body).toEqual(additions[1].body);
-  expect(calls.filter((c) => c.method === 'POST' && c.path === '/api/studio/files')).toHaveLength(1);
-  expect(
-    calls.filter((c) => c.method === 'POST' && c.path === '/api/studio/projects/p1/materials').at(-1)?.body,
-  ).toEqual({ expected_revision: 7, add: ['m2'], remove: [] });
-});
-
 it('allows current derivative outputs as new editing sources but excludes invalidated outputs', async () => {
   const current = material('m2', { title: 'Dikey kapak' });
   const old = material('m3', { title: 'Eski afiş' });

@@ -8,7 +8,8 @@ import { Button, Dialog, DialogContent, DialogTitle, DialogDescription } from '@
 import { fieldClass, MaterialsReadStatus, useMaterialsKey, useMaterialsMutation } from '../materials/MaterialsShared';
 import { ProjectError, useRequestKey } from '../projects/ProjectShared';
 
-export function OpenArea({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+/** Opens a content; from inside an olay it belongs to that olay (`olayId`), else to Genel. */
+export function OpenArea({ olayId, olayTitle, onClose, onCreated }: { olayId?: string; olayTitle?: string; onClose: () => void; onCreated: (id: string) => void }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
   const [goal, setGoal] = useState('');
@@ -21,12 +22,12 @@ export function OpenArea({ onClose, onCreated }: { onClose: () => void; onCreate
   const keyFor = useRequestKey();
   const accounts = useQuery({ queryKey: [...key, 'social-accounts'], queryFn: () => listCapabilities({ group: 'social_account', status: 'verified' }) });
   const create = useMaterialsMutation(() => {
-    const input = { brief: goal.trim(), start_at: new Date(start).toISOString(), ...(account ? { capability_ids: [account] } : {}), ...(format ? { formats: [format] } : {}) };
+    const input = { brief: goal.trim(), start_at: new Date(start).toISOString(), ...(olayId ? { olay_id: olayId } : {}), ...(account ? { capability_ids: [account] } : {}), ...(format ? { formats: [format] } : {}) };
     return projectCreate({ ...input, request_key: keyFor(input) });
   }, result => onCreated(result.id));
   return <Dialog open onOpenChange={open => { if (!open && !create.isPending) onClose(); }}>
     <DialogContent dismissible={!create.isPending}>
-      <DialogTitle>{t('contentAreas.open')}</DialogTitle>
+      <DialogTitle>{olayTitle ? t('content.newIn', { olay: olayTitle }) : t('contentAreas.open')}</DialogTitle>
       <DialogDescription>{t('contentAreas.openHelp')}</DialogDescription>
       <form className="min-w-0 space-y-4" onSubmit={e => { e.preventDefault(); if (goal.trim() && start && !create.isPending) create.mutate(undefined); }}>
         <label className="block space-y-2 text-sm"><span>{t('contentAreas.goal')}</span><textarea className={fieldClass} required maxLength={2000} value={goal} onChange={e => setGoal(e.target.value)} /></label>

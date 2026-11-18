@@ -17,7 +17,7 @@ export function AreaHistory({ detail }: { detail: ProjectDetail }) {
           {productions.map(production => <li key={production.id} className="space-y-1 break-words text-sm">
             <p>{production.instructions}</p>
             <p className="text-muted-foreground">{t(`materials.production.status.${production.status}`)}</p>
-            {production.output_material_id && <Link className="underline" to={`/materials?view=library&material=${encodeURIComponent(production.output_material_id)}`}>{t('projects.openMaterial')}</Link>}
+            {production.output_material_id && <Link className="underline" to={`/content?file=${encodeURIComponent(production.output_material_id)}`}>{t('projects.openMaterial')}</Link>}
           </li>)}
         </ul>}
         {project.outputs.length > 0 && <ul className="space-y-3">

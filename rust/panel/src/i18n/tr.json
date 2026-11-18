@@ -249,8 +249,7 @@
   },
   "contentAreas": {
     "existing": "Önceki çalışmalar ve kaynaklar",
-    "line": "Üretim hattı",
-    "open": "Üretim alanı aç",
+    "open": "Yeni içerik",
     "openHelp": "Bir hedef cümlesi ve başlama saati yeter. Ajan içerik paketini hazırlasın.",
     "goal": "Hedef",
     "start": "Başlama saati",
@@ -258,21 +257,14 @@
     "platform": "Platform",
     "format": "Biçim",
     "agentChooses": "Ajan seçsin",
-    "archive": "Arşivdekileri göster",
     "archiveEmpty": "Arşivde üretim alanı yok",
     "archiveHelp": "Arşivlenmiş alanlar burada görünür.",
-    "empty": "İlk üretim alanınızı açın",
     "more": "Daha fazla",
-    "future": "Saatini bekliyor",
-    "queued": "Sırada; ajan henüz almadı",
     "waiting": "Ajan {{n}} çekim istedi",
-    "done": "{{n}} platform sürümü hazır",
     "held": "Ajan çözemedi; bakmanız gerekiyor",
     "redoStatus": "Yeniden yapılıyor: “{{note}}”",
-    "back": "Üretim hattına dön",
     "versions": "Platform sürümleri",
     "account": "Hesap seçilmedi",
-    "versionSummary": "Bu sürüm",
     "usedMaterials": "Kullanılan materyaller",
     "missingMaterial": "Materyal kullanılamıyor",
     "checksPassed": "Materyal izni ve doğruluk kontrolleri geçti",
@@ -288,7 +280,6 @@
     "acceptHelp": "Bulgular yalnızca metinle ilgili. Metnin doğru olduğundan eminseniz içeriği olduğu gibi kabul edebilirsiniz; kabul eden kişi kayda geçer.",
     "notAcceptable": "Bu içerik kabul edilemez: sorun metinde değil, materyalde ya da hedefte. Not yazıp ajana geri gönderin.",
     "released": "Metin denetimindeki bulguyu bir kişi kabul etti",
-    "progress": "Adımlar ve ara çıktılar",
     "stepsLabel": "Üretim adımları",
     "requests": "Çekim talepleri",
     "previousMedia": "Önceki görsel",
@@ -336,8 +327,6 @@
     "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin."
   },
   "modulePages": {
-      "materials": "Materyal kütüphanesi",
-      "content": "İçerik oluşturma",
       "social": "Sosyal medya yönetimi",
       "ads": "Reklam yönetimi",
       "specialDays": "Özel günler",
@@ -2784,19 +2773,10 @@
     }
   },
   "materials": {
-    "tab": "Materyaller",
     "studioTab": "Stüdyo",
     "views": {
-      "upload": "Yükle",
-      "olays": "Olaylar",
-      "calendar": "Takvim",
-      "shoots": "Çekim listesi"
+      "calendar": "Takvim"
     },
-    "back": "Geri",
-    "genel": "Genel (belirli bir olaya bağlı değil)",
-    "genelShelf": "Genel materyaller",
-    "genelHelp": "Hiçbir olaya bağlı olmayan materyaller. Yalnızca belirli bir tarihten, yerden veya olaydan söz etmeyen içerikte kullanılır.",
-    "noMaterials": "Burada henüz materyal yok.",
     "noPermission": "Paylaşım izni yok",
     "erased": "Silindi",
     "ai": "Yapay zekâ görseli",
@@ -2963,53 +2943,7 @@
       "request_key": "İstek anahtarı geçersiz; sayfayı yenileyip tekrar deneyin."
     },
     "upload": {
-      "intro": "Fotoğraf ve videolarınızı ekleyin. Bağlı ajan, içeriklerine göre etiket ve grup önerir; siz dilediğiniz zaman düzenleyebilirsiniz.",
-      "camera": "Kamerayla çek",
-      "gallery": "Galeriden seç",
-      "files": "Seçilen dosyalar",
-      "status": {
-        "refused": "Kabul edilmedi",
-        "uploading": "Yükleniyor…",
-        "uploaded": "Yüklendi",
-        "failed": "Yüklenemedi",
-        "added": "Eklendi",
-        "add_failed": "Eklenemedi"
-      },
-      "refusedHelp": "JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) yükleyin.",
-      "retry": "Tekrar dene",
-      "olay": "Hangi olaydan?",
-      "suggested": "Çekim tarihine göre önerilen",
-      "otherOlays": "Diğer olaylar",
-      "newOlay": "Yeni olay oluştur",
-      "createdOlay": "Yeni olay oluşturuldu: {{title}}",
-      "genel": "Genel (belirli bir olaya bağlı değil)",
-      "genelHelp": "Yalnızca sahip veya yönetici seçebilir. Materyal genel kullanılabilir olur ve yalnızca belirli bir olaydan söz etmeyen içerikte kullanılır.",
-      "permission": "İçerik üretiminde kullanım",
-      "permissionByManager": "Paylaşım iznini sahip veya yönetici verir; materyaller onların kararını bekleyecek.",
-      "tags": "Etiketler (isteğe bağlı)",
-      "waitUploads": "Yüklemeler bitince ekleyebilirsiniz.",
-      "submit_one": "{{count}} materyali ekle",
-      "submit_other": "{{count}} materyali ekle",
-      "problem": {
-        "olay": "Bir olay seçin, yeni bir olay oluşturun ya da genel seçin.",
-        "permission": "Paylaşım iznini seçin.",
-        "title": "Olayın başlığını yazın.",
-        "dates": "Olayın tarihini girin; bitiş başlangıçtan önce olamaz.",
-        "occasion": "Sezon veya özel gün için takvimden günü seçin."
-      },
-      "done_one": "{{count}} materyal eklendi.",
-      "done_other": "{{count}} materyal eklendi.",
-      "doneNoPermission": "Paylaşım iznini sahip veya yönetici verdiğinde kullanılabilir olacaklar.",
-      "openOlay": "Olayı aç",
-      "again": "Yeni yükleme",
-      "serverSuggests": "Çekim tarihine göre bu materyal “{{title}}” olayına ait olabilir.",
-      "moveThere": "Bu olaya taşı",
-      "moved": "“{{title}}” olayına taşındı.",
-      "workbench": {
-        "searchEvents": "Olay adı veya yer ara",
-        "selectedEvent": "Seçili olay: {{title}}",
-        "noEvents": "Eşleşen olay yok. Aramayı değiştirin veya aşağıdan yeni olay oluşturun."
-      }
+      "tags": "Etiketler (isteğe bağlı)"
     },
     "olay": {
       "kind": "Tür",
@@ -3024,25 +2958,10 @@
       "oneDayHint": "Tek günlük bir olay için bitiş tarihini boş bırakın.",
       "awaiting": "Onay bekliyor",
       "confirm": "Onayla",
-      "proposedHelp": "Bu olayı bir ajan önerdi. Sahip veya yönetici onaylayana kadar materyalleri kullanılmaz.",
       "new": "Yeni olay",
       "edit": "Düzenle",
       "create": "Olayı oluştur",
-      "save": "Kaydet",
-      "empty": "Henüz olay yok. Materyal yüklerken yeni bir olay oluşturabilirsiniz.",
-      "count_one": "{{count}} materyal",
-      "count_other": "{{count}} materyal",
-      "materials_one": "Materyaller ({{count}})",
-      "materials_other": "Materyaller ({{count}})",
-      "shoots": "Bu olay için çekim listesi",
-      "upload": "Bu olaya materyal yükle",
-      "since": "Eklendi: {{at}}"
-    },
-    "review": {
-      "open_one": "İncelenmeyi bekleyen {{count}} materyal",
-      "open_other": "İncelenmeyi bekleyen {{count}} materyal",
-      "title": "İncelenmeyi bekleyenler",
-      "help": "Paylaşım izni, kalitesi veya etiketleri bir kişinin kararını bekleyen materyaller."
+      "save": "Kaydet"
     },
     "editor": {
       "origin": "Kaynak",
@@ -3152,27 +3071,8 @@
     "shoot": {
       "add": "Çekim listesine ekle",
       "addSubmit": "Listeye ekle",
-      "thisWeek": "Bu hafta",
-      "older": "Önceki haftalar",
-      "nothingThisWeek": "Bu hafta açık istek yok.",
-      "showClosed": "Kapananları da göster",
-      "week": "Hafta: {{day}}",
       "done": "Yapıldı",
-      "dismiss": "Gerek yok",
-      "openOlay": "Olayı aç",
-      "openCalendar": "Takvime git",
-      "reason": {
-        "slot_unfilled": "Bir içerik için uygun materyal yok",
-        "season_ahead": "Sezon yaklaşıyor",
-        "season_dates_missing": "Takvimde tarih eksik",
-        "olay_upcoming": "Yaklaşan olay",
-        "requested": "Eklenen istek"
-      },
-      "status": {
-        "open": "Açık",
-        "done": "Yapıldı",
-        "dismissed": "Gerek yok"
-      }
+      "dismiss": "Gerek yok"
     },
     "hold": {
       "title": "Materyal kontrolü bu içeriği durduruyor",
@@ -4165,8 +4065,6 @@
     "sourcesHelp": "Kütüphaneden seçin veya yeni çekim yükleyin. Aynı materyal başka üretim alanlarında da kullanılabilir.",
     "fromLibrary": "Kütüphaneden seç",
     "upload": "Materyal yükle",
-    "uploadHelp": "Eklediğiniz materyaller kütüphaneye kaydedilir ve bu üretim alanına bağlanır.",
-    "backToSources": "Alan materyallerine dön",
     "searchMaterials": "Başlık, etiket veya grupta ara",
     "allGroups": "Tüm gruplar",
     "noMaterialsMatch": "Seçime uygun materyal yok. Aramayı değiştirin veya yeni materyal yükleyin.",
@@ -4277,5 +4175,247 @@
     },
     "productionToolsHelp": "Tek görsel kırpma, uygun medya işçisi çalışırken otomatik işlenebilir. Birden fazla kaynaktan düzenleme ve afiş için bu işi yapabilen bağlı ajan gerekir.",
     "briefChangesHelp": "Hedefi değiştirmek önceki üretim işlerini geçersiz kılar. Bekleyen işler durdurulur; tamamlanan sonuçlar geçmişte kalır. Zamanlanmış yayınlar ayrıca yönetilir."
+  },
+  "content": {
+    "title": "İçerik",
+    "help": "Dosyaları bırakın; ajan olayına koyar, içeriği üretir. Siz yalnızca sizi bekleyenlere bakarsınız.",
+    "genel": "Genel",
+    "genelHelp": "Belirli bir olaya ait olmayan dosyalar ve içerikler",
+    "unknownOlay": "Bilinmeyen olay",
+    "folderSummary": "{{files}} dosya · {{areas}} içerik · {{published}} yayında",
+    "newIn": "Yeni içerik · {{olay}}",
+    "tree": {
+      "label": "Olaylar",
+      "all": "Tüm üretim",
+      "now": "Şimdi",
+      "always": "Sürekli",
+      "soon": "Yaklaşan",
+      "past": "Geçmiş",
+      "noneNow": "Şu an süren olay yok.",
+      "newOlay": "Olay",
+      "waiting": "Sizi bekleyen bir şey var",
+      "files_one": "{{count}} dosya",
+      "files_other": "{{count}} dosya",
+      "back": "Klasörler"
+    },
+    "waiting": {
+      "title": "Sizi bekleyenler",
+      "none": "Şu an sizi bekleyen bir şey yok.",
+      "olay_confirmations_one": "olay onayı",
+      "olay_confirmations_other": "olay onayı",
+      "shoot_requests_one": "çekim talebi",
+      "shoot_requests_other": "çekim talebi",
+      "content_approvals_one": "içerik onayı",
+      "content_approvals_other": "içerik onayı",
+      "problem_contents_one": "sorunlu içerik",
+      "problem_contents_other": "sorunlu içerik"
+    },
+    "stage": {
+      "hazirlik": "Hazırlık",
+      "fikir": "Fikir",
+      "metin": "Metin",
+      "gorsel": "Görsel",
+      "paket": "Paket",
+      "onay": "Onay",
+      "yayin": "Yayın",
+      "sonuc": "Sonuç"
+    },
+    "stageState": {
+      "done": "tamamlandı",
+      "current": "sürüyor",
+      "waiting_person": "sizi bekliyor",
+      "problem": "sorun var",
+      "todo": "sırada"
+    },
+    "metric": {
+      "reach": "erişim",
+      "impressions": "gösterim",
+      "views": "izlenme",
+      "plays": "oynatma",
+      "likes": "beğeni",
+      "comments": "yorum",
+      "saves": "kayıt",
+      "saved": "kayıt",
+      "shares": "paylaşım",
+      "clicks": "tıklama"
+    },
+    "out": {
+      "approved": "Onaylandı · {{at}}",
+      "noApproval": "Onay gerekmedi",
+      "approvalRequired": "Onay gerekiyor",
+      "awaitsApproval": "Onayınızı bekliyor",
+      "awaitsPerson": "Sizi bekliyor",
+      "stuck": "Takıldı",
+      "published": "{{account}} · yayında {{at}}",
+      "planned": "{{account}} · {{at}} planlandı",
+      "failed": "{{account}} · gönderilemedi",
+      "publishedAt": "yayında {{at}}",
+      "plannedAt": "{{at}} planlandı",
+      "failedShort": "gönderilemedi",
+      "window": "{{hours}} saatlik ölçüm",
+      "link": "Gönderiyi aç"
+    },
+    "bar": {
+      "problem": "Sorun var · {{stage}}",
+      "publishFailed": "Bir gönderi çıkamadı",
+      "openPost": "{{account}} gönderisine git",
+      "inspect": "İncele",
+      "approve": "Onaya git",
+      "approveAt": "Onayla · {{account}}, {{at}}",
+      "toNeeds": "Eksiklere git",
+      "startsAt": "Saatini bekliyor · {{at}}"
+    },
+    "row": {
+      "preview": "Önizle",
+      "stages": "Üretim aşamaları",
+      "step": "Adım {{n}} / 14",
+      "stepsDone": "14 / 14 adım"
+    },
+    "detail": {
+      "label": "İçerik",
+      "steps": "Ajanın 14 adımı ve sonrası",
+      "noPackage": "Henüz bir paket yok; ajan Paket adımında teslim edecek.",
+      "attachHelp": "Yüklediğiniz dosya önce analiz sırasına girer. Olayına yerleşince buradan bu içeriğe ekleyebilirsiniz."
+    },
+    "root": {
+      "filters": "Süzgeç",
+      "hint": "Bir satırı açın: 14 adımın tamamı ve önizleme görünür.",
+      "filter": {
+        "all": "Hepsi",
+        "working": "Çalışıyor",
+        "waiting": "Sizi bekliyor",
+        "done": "Tamamlandı",
+        "archived": "Arşiv"
+      },
+      "empty": "Henüz içerik yok",
+      "emptyHelp": "Dosya yükleyin ya da bir olayın içinden yeni içerik açın.",
+      "noMatch": "Bu süzgeçte içerik yok",
+      "moduleOff": "İçerik üretimi bu çalışma alanında açık değil",
+      "moduleOffHelp": "Dosyalar ve olaylar burada; içerikleri görmek için içerik modülü gerekir.",
+      "moduleLink": "Modülü incele",
+      "filesOnly": "İçerikleri görme izniniz yok",
+      "filesOnlyHelp": "Soldaki klasörlerden dosyalara ve eksiklere ulaşabilirsiniz."
+    },
+    "flow": {
+      "label": "Olayın akışı",
+      "files": "Dosya",
+      "analysed": "Analiz",
+      "analysedQueue": "Analiz · {{n}} sırada",
+      "inProduction": "Üretimde",
+      "awaitingApproval": "Onay bekleyen",
+      "published": "Yayında",
+      "problems": "Sorunlu"
+    },
+    "contents": {
+      "title": "İçerikler",
+      "empty": "Henüz içerik yok",
+      "emptyHelp": "Ajan dosyalara baktıktan sonra önerir; isterseniz yeni içeriği siz açın."
+    },
+    "files": {
+      "title": "Dosyalar",
+      "empty": "Bu klasörde dosya yok.",
+      "review": "Bakılacaklar",
+      "noReview": "Bu klasörde size bakan dosya yok.",
+      "layout": "Görünüm",
+      "grid": "Izgara",
+      "list": "Liste"
+    },
+    "needs": {
+      "title": "Eksikler",
+      "open_one": "{{count}} açık",
+      "open_other": "{{count}} açık",
+      "empty": "Eksik yok.",
+      "shoot": "Çekim listesi",
+      "material": "Ajanın çekim isteği",
+      "askedBy": "İsteyen:",
+      "status": {
+        "done": "Yapıldı",
+        "dismissed": "Gerek yok dendi"
+      }
+    },
+    "olay": {
+      "proposed": "Önerildi",
+      "active": "Aktif",
+      "ended": "Bitti",
+      "always": "Sürekli",
+      "proposedTitle": "Ajan bu olayı önerdi",
+      "proposedHelp": "Onaylayana kadar dosyaları içerikte kullanılmaz. Doğruysa onaylayın; değilse düzenleyin.",
+      "proposedHelpOther": "Onaylayana kadar dosyaları içerikte kullanılmaz. Bir sahip ya da yönetici onaylayacak.",
+      "newHelp": "Sahip ya da yöneticinin açtığı olay onaylı başlar; başkasının açtığı olay onay bekler.",
+      "editHelp": "Değişiklik olayın bütün dosyalarına ve içeriklerine yansır.",
+      "problem": {
+        "title": "Olaya bir başlık verin.",
+        "dates": "Başlangıç tarihi girin; bitiş başlangıçtan önce olamaz.",
+        "occasion": "Takvimdeki günü seçin."
+      }
+    },
+    "day": {
+      "notStarted": "Bu özel gün henüz başlamadı",
+      "help": "Sistem {{day}} tarihinde hazırlığa başlar ve olayını kendisi açar.",
+      "create": "Olayı şimdi aç",
+      "gone": "Bu özel gün artık yaklaşanlarda değil",
+      "goneHelp": "Olayı açılmış ya da tarihi geçmiş olabilir; soldaki klasörlere bakın."
+    },
+    "queue": {
+      "title": "Analiz sırası",
+      "help": "Yüklenmiş ama henüz bir olaya yerleşmemiş ya da analizi süren dosyalar. Her dosya analizden sonra bir olaya yerleşir.",
+      "empty": "Sıra boş",
+      "emptyHelp": "Bütün dosyalar bir klasöre yerleşti.",
+      "stage": {
+        "waiting": "Sırada",
+        "analysing": "Analiz ediliyor",
+        "needs_filing": "Dosyalanmalı",
+        "failed": "Analiz olmadı"
+      },
+      "line": {
+        "waiting": "Sırada · ajan bakınca olayı bulunacak",
+        "waitingFiled": "Sırada · klasörüne kondu, ajan bakacak",
+        "analysing": "Ajan bakıyor: tanımlıyor, etiketliyor, olayını buluyor",
+        "analysingFiled": "Ajan bakıyor: tanımlıyor, etiketliyor",
+        "needs_filing": "Analiz bitti; olayını bir kişi seçecek",
+        "failed": "Analiz tamamlanamadı; yeniden deneyebilirsiniz.",
+        "noAgent": "Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek"
+      },
+      "noAgent": "Şu an bağlı bir ajan yok",
+      "agentNever": "Hiçbir ajan henüz bağlanmadı. Dosyalar kaybolmaz; ajan bağlanınca sırayla analiz edilir.",
+      "agentSeen": "Ajan en son {{at}} görüldü. Dosyalar kaybolmaz; ajan bağlanınca sırayla analiz edilir.",
+      "agents": "Ajanlar",
+      "fileInto": "Olayı seçin",
+      "choose": "Bir olay seçin",
+      "file": "Dosyala",
+      "managerFiles": "Bir sahip ya da yönetici olayını seçecek."
+    },
+    "file": {
+      "title": "Dosya",
+      "help": "Dosyanın açıklaması, etiketleri, paylaşım izni ve kullanıldığı yerler.",
+      "open": "Dosyayı aç",
+      "unfiled": "Henüz bir olayda değil · analiz sırasında",
+      "usedIn_one": "{{count}} içerikte",
+      "usedIn_other": "{{count}} içerikte",
+      "usedInTitle": "Kullanıldığı içerikler",
+      "unused": "Henüz bir içerikte kullanılmadı."
+    },
+    "upload": {
+      "button": "Dosya yükle",
+      "drop": "Bırakın, gerisini ajan halleder",
+      "dropHelp": "Dosyalar analiz sırasına girer; ajan her birini olayına koyar.",
+      "tray": "Yüklemeler",
+      "sending_one": "{{count}} dosya yükleniyor",
+      "sending_other": "{{count}} dosya yükleniyor",
+      "sent_one": "{{count}} dosya analiz sırasına girdi",
+      "sent_other": "{{count}} dosya analiz sırasına girdi",
+      "openQueue": "Analiz sırasını aç",
+      "unnamed": "Adsız dosya",
+      "status": {
+        "refused": "Bu dosya türü ya da boyutu alınmıyor (JPEG, PNG, WebP, GIF en çok 25 MB; MP4 en çok 200 MB).",
+        "waiting": "Sırada",
+        "uploading": "Yükleniyor",
+        "added": "Analiz sırasında"
+      }
+    },
+    "settings": {
+      "title": "Özel günler ve kurallar",
+      "help": "Açık olan özel günler için sistem olayı kendisi açar ve zamanı gelince üretime başlar."
+    }
   }
 }

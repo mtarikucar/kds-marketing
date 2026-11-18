@@ -565,3 +565,39 @@ fn people_records_never_wait_for_the_inbox() {
     }
     assert_eq!(gating_module("inbox.reply"), Some("inbox"));
 }
+
+/// The content page's library reads answer a workspace that has the library but not the
+/// content module (design 2026-11-18 §5); the production line stays the content module's.
+#[test]
+fn the_content_pages_library_reads_are_gated_by_the_library() {
+    use jt_app::catalog::find;
+    use jt_app::gate::{LIBRARY_PAGE_READS, gating_module};
+    let ws = WorkspaceId::new_v7();
+    assert_eq!(
+        LIBRARY_PAGE_READS,
+        [
+            "content.tree",
+            "content.olay_view",
+            "content.analysis_queue"
+        ]
+    );
+    for id in LIBRARY_PAGE_READS {
+        assert!(find(id).is_some(), "{id} is a catalog row");
+        assert_eq!(gating_module(id), Some("materials"), "{id}");
+        let err = ready(check_gate(
+            find(id).unwrap(),
+            WorkspaceStatus::Active,
+            &NothingConnected,
+            ws,
+        ))
+        .expect_err("a locked library refuses");
+        assert_eq!(err.details["module"], "materials", "{id}");
+    }
+    for id in [
+        "content.areas",
+        "content.area_redo",
+        "content.delivery_accept",
+    ] {
+        assert_eq!(gating_module(id), Some("content"), "{id}");
+    }
+}

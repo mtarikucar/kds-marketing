@@ -2,10 +2,9 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { Plus, Upload } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import * as api from '@/api/projects';
 import * as m from '@/api/materials';
-import { MaterialsUpload } from '../materials/MaterialsUpload';
 import {
   MaterialsReadStatus,
   MaterialPreview,
@@ -29,7 +28,7 @@ export function ProjectMaterials({
 }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
-  const [mode, setMode] = useState<'sources' | 'library' | 'upload'>('sources');
+  const [mode, setMode] = useState<'sources' | 'library'>('sources');
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
@@ -41,8 +40,12 @@ export function ProjectMaterials({
     queryFn: m.materialIntelligenceList,
     enabled: writable && mode === 'library',
   });
+  // An unfiled upload is never a source (design 2026-11-18 O5): it waits in the analysis queue.
   const candidates = (library.data ?? []).filter(
-    (row) => !row.material.erased_at && !sourceIds.includes(row.material.id),
+    (row) =>
+      !row.material.erased_at &&
+      row.material.binding.kind !== 'unfiled' &&
+      !sourceIds.includes(row.material.id),
   );
   const groups = [
     ...new Set(
@@ -79,18 +82,6 @@ export function ProjectMaterials({
   );
   const toggle = (id: string) =>
     setSelected((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]));
-  const uploaded = async (material: m.Material) => {
-    // Fetch a fresh revision per file in a batch. A library-success/project-failure retry reuses
-    // the existing material instead of uploading it twice; already-attached rows are a no-op.
-    const latest = await api.projectGet(project.id);
-    if (!latest.project.sources.some((s) => s.material_id === material.id)) {
-      await api.projectMaterials(project.id, {
-        expected_revision: latest.project.revision,
-        add: [material.id],
-        remove: [],
-      });
-    }
-  };
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -108,26 +99,9 @@ export function ProjectMaterials({
               <Plus className="h-4 w-4" aria-hidden="true" />
               {t('projects.fromLibrary')}
             </button>
-            <button
-              className={primaryClass}
-              aria-pressed={mode === 'upload'}
-              onClick={() => setMode(mode === 'upload' ? 'sources' : 'upload')}
-            >
-              <Upload className="h-4 w-4" aria-hidden="true" />
-              {t('projects.upload')}
-            </button>
           </div>
         )}
       </div>
-      {writable && mode === 'upload' && (
-        <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">{t('projects.uploadHelp')}</p>
-          <MaterialsUpload onOpenOlay={() => setMode('sources')} onAdded={uploaded} />
-          <button className={tapClass} onClick={() => setMode('sources')}>
-            {t('projects.backToSources')}
-          </button>
-        </div>
-      )}
       {writable && mode === 'library' && (
         <section className="space-y-4 border-y border-border py-5" aria-label={t('projects.fromLibrary')}>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -215,7 +189,7 @@ export function ProjectMaterials({
           {t('projects.unavailableSources', { count: sourceIds.length - sources.length })}
         </EmptyNote>
       )}
-      {mode !== 'upload' && (
+      {(
         <>
           {!sources.length && <EmptyNote>{t('projects.sourcesEmpty')}</EmptyNote>}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -225,7 +199,7 @@ export function ProjectMaterials({
                 className="min-w-0 space-y-3 rounded-md border border-border bg-surface p-3"
               >
                 <Link
-                  to={`/materials?view=library&material=${encodeURIComponent(material.id)}`}
+                  to={`/content?file=${encodeURIComponent(material.id)}`}
                   className="block space-y-3 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <MaterialPreview material={material} />

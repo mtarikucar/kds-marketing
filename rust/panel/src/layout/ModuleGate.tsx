@@ -11,20 +11,24 @@ import { requirementLabel } from '@/lib/requirements';
  * Navigation availability: the module must be installed and its capability requirements met
  * (spec 2026-11-10 module gating). The server refuses the module's use cases on its own too.
  */
-export function ModuleGate({ moduleId, children }: { moduleId: string; children: ReactNode }) {
+export function ModuleGate({ moduleId, children }: { moduleId: string | string[]; children: ReactNode }) {
   const query = useModules();
   const { t, i18n } = useTranslation();
   const tr = i18n.language.startsWith('tr');
   if (!query.data) return <QueryState query={query} />;
-  const module = query.data.modules.find(m => m.blueprint.id === moduleId);
+  // Several ids: the first one installed opens the page; with none, the first is offered.
+  const ids = Array.isArray(moduleId) ? moduleId : [moduleId];
+  const installed = ids.map(id => query.data.modules.find(m => m.blueprint.id === id)).find(m => m?.installed);
+  const module = installed ?? query.data.modules.find(m => m.blueprint.id === ids[0]);
+  const gateId = module?.blueprint.id ?? ids[0];
   if (!module?.installed) return <EmptyState
     headingLevel="h1"
     icon={<Layers className="h-8 w-8" />}
     title={tr ? 'Bu modül çalışma alanına eklenmemiş' : 'This module is not installed'}
     description={tr ? 'Blueprint kataloğundan ekleyerek bu bölümü açabilirsiniz. Daha önce oluşturulan kayıtlar korunur.' : 'Install it from the blueprint catalog to open this section. Existing records are retained.'}
-    action={<Button asChild><Link to={`/modules/${encodeURIComponent(moduleId)}`}>{tr ? 'Modülü incele' : 'View module'}</Link></Button>}
+    action={<Button asChild><Link to={`/modules/${encodeURIComponent(gateId)}`}>{tr ? 'Modülü incele' : 'View module'}</Link></Button>}
   />;
-  const missing = moduleMissing(query.data, moduleId);
+  const missing = moduleMissing(query.data, gateId);
   if (missing.length) {
     const or = tr ? 'veya' : 'or';
     return <EmptyState

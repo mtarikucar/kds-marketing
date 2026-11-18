@@ -27,9 +27,11 @@ export interface Olay {
   title: string;
   starts_on: string;
   ends_on: string;
-  place: string | null;
-  client: OlayClient | null;
-  notes: string;
+  // Absent for a caller without `materials.work` (the content page's tree and olay view give
+  // such a caller only the olay's identity).
+  place?: string | null;
+  client?: OlayClient | null;
+  notes?: string;
   occasion: string | null;
   status: OlayStatus;
   confirmed: HumanMark | null;
@@ -40,12 +42,6 @@ export interface OlayListItem {
   olay: Olay;
   /** Its live materials. */
   materials: number;
-}
-export interface OlayDetail {
-  olay: Olay;
-  materials: MaterialDetail[];
-  /** Its open çekim listesi requests. */
-  shoot_requests: ShootRequest[];
 }
 export interface OlayInput {
   kind: OlayKind;
@@ -303,7 +299,6 @@ const material = (id: string) => `${root}/materials/${seg(id)}`;
 
 export const olaysList = (status?: OlayStatus) =>
   request<OlayListItem[]>('GET', `${root}/olays`, { query: { status } });
-export const olayGet = (id: string) => request<OlayDetail>('GET', olay(id));
 /** A person who is an owner or manager creates it confirmed; anyone else proposes it. */
 export const olayCreate = (body: OlayInput & { request_key: string }) =>
   request<Olay>('POST', `${root}/olays`, { body });
@@ -410,8 +405,6 @@ export const materialCheckRelease = (slotId: string, expected_revision: number, 
     body: { expected_revision, digest },
   });
 
-export const shootList = (status?: ShootStatus | 'all') =>
-  request<ShootRequest[]>('GET', `${root}/shoot-requests`, { query: { status } });
 export const shootRequest = (body: { request_key: string; text: string; week_start?: string }) =>
   request<ShootRequest>('POST', `${root}/shoot-requests`, { body });
 export const shootResolve = (id: string, status: 'done' | 'dismissed') =>
@@ -420,27 +413,4 @@ export const shootResolve = (id: string, status: 'done' | 'dismissed') =>
 /** The Istanbul calendar day of `at` (`YYYY-MM-DD`; Istanbul is UTC+03 all year). */
 export function istanbulDay(at: Date): string {
   return new Date(at.getTime() + 3 * 3600_000).toISOString().slice(0, 10);
-}
-/** The Monday of `day`'s week (`YYYY-MM-DD` in, `YYYY-MM-DD` out). */
-export function mondayOf(day: string): string {
-  const d = new Date(`${day}T00:00:00Z`);
-  const back = (d.getUTCDay() + 6) % 7;
-  return new Date(d.getTime() - back * 86400_000).toISOString().slice(0, 10);
-}
-/**
- * The olays a material taken on Istanbul day `day` may belong to, as the server answers them
- * (`jt_studio::olay_suggestions`): those whose dates contain it, the one starting nearest to it
- * first, then the shorter, then by id.
- */
-export function olaySuggestions(olays: Olay[], day: string): Olay[] {
-  const days = (a: string, b: string) =>
-    (Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400_000;
-  return olays
-    .filter((o) => o.starts_on <= day && day <= o.ends_on)
-    .sort(
-      (a, b) =>
-        days(a.starts_on, day) - days(b.starts_on, day) ||
-        days(a.starts_on, a.ends_on) - days(b.starts_on, b.ends_on) ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    );
 }

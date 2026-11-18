@@ -53,6 +53,11 @@ no olay. It is a presentation of "no olay": no binding or area is migrated into 
 | `content.areas` | `GET /api/content/areas` (`scope`, cursors, `archived`, `olay_id`) | — | `content.work` or `content.manage` |
 | `content.olay_view` | `GET /api/content/olays/{olay_id or genel}` | `jeeta.content.olay_view` | any of the three; `contents` needs a content permission and `files` `materials.work` (each `null` otherwise) |
 
+Module gate (part 2): `content.tree`, `content.olay_view` and `content.analysis_queue` are gated by
+the `materials` module (`jt_app::gate::LIBRARY_PAGE_READS`), which comes with content, social and
+ads, so a workspace with the library but not the content module keeps its olays, files, "Eksikler"
+and queue on the one page; `content.areas` and the area writes stay the `content` module's.
+
 The tree lists every olay with its live file count, area count, published count and why it waits
 for a person (`olay_proposed`, `shoot_request`, `material_request`, `content_approval`,
 `content_problem`); the Genel folder; the calendar's special days whose window ends today or later

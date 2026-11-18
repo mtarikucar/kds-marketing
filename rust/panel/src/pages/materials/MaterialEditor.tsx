@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as m from '@/api/materials';
@@ -30,16 +30,17 @@ import { UsedInList } from './MaterialsUsedIn';
  */
 export function MaterialEditor({
   id,
-  onBack,
   onOpenOlay,
   onOpenSlot,
   onOpenMaterial,
+  usedIn,
 }: {
   id: string;
-  onBack: () => void;
   onOpenOlay: (id: string) => void;
   onOpenSlot: (id: string) => void;
   onOpenMaterial: (id: string) => void;
+  /** The contents that use it, where the page knows them. */
+  usedIn?: ReactNode;
 }) {
   const { t, i18n } = useTranslation();
   const key = useMaterialsKey();
@@ -54,14 +55,11 @@ export function MaterialEditor({
       : undefined;
   return (
     <div className="space-y-4" data-testid="material-editor">
-      <button type="button" className={tapClass} onClick={onBack}>
-        {t('materials.back')}
-      </button>
       <MaterialsReadStatus query={detail} />
       {material && (
         <>
           <div
-            className={`${cardClass} grid grid-cols-1 gap-6 border-t-2 border-foreground bg-surface px-4 sm:grid-cols-[10rem_minmax(0,1fr)] sm:px-6`}
+            className={`${cardClass} grid grid-cols-1 gap-4 border-t-0 bg-surface pt-0`}
           >
             <MaterialPreview material={material} controls />
             <div className="min-w-0 space-y-2">
@@ -77,7 +75,9 @@ export function MaterialEditor({
                 <dt className="text-muted-foreground">{t('materials.editor.binding')}</dt>
                 <dd className="break-words">
                   {material.binding.kind === 'genel' ? (
-                    t('materials.genel')
+                    t('content.genel')
+                  ) : material.binding.kind === 'unfiled' ? (
+                    t('content.file.unfiled')
                   ) : olay ? (
                     <button type="button" className="underline" onClick={() => onOpenOlay(olay.id)}>
                       {olay.title}
@@ -168,6 +168,7 @@ export function MaterialEditor({
             </>
           )}
           <div hidden={!material.erased_at && group !== 'history'} className="space-y-4">
+            {usedIn}
             <section className={cardClass} aria-labelledby={`used-${id}`}>
               <h4 id={`used-${id}`} className="font-semibold">
                 {t('materials.usedIn.title')}
@@ -646,7 +647,8 @@ function FreeSection({ material }: { material: m.Material }) {
 
 function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[] }) {
   const { t } = useTranslation();
-  const current = material.binding.kind === 'olay' ? material.binding.olay_id : 'genel';
+  // An unfiled upload has no folder yet: the person picks its first.
+  const current = material.binding.kind === 'olay' ? material.binding.olay_id : material.binding.kind === 'genel' ? 'genel' : '';
   const [target, setTarget] = useMaterialDraft(current);
   const bind = useMaterialsMutation(() =>
     m.materialBind(
@@ -661,7 +663,7 @@ function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[
       className={cardClass}
       onSubmit={(e) => {
         e.preventDefault();
-        if (target !== current && !bind.isPending) bind.mutate(undefined);
+        if (target && target !== current && !bind.isPending) bind.mutate(undefined);
       }}
     >
       <h4 className="font-semibold">{t('materials.editor.bind')}</h4>
@@ -669,15 +671,16 @@ function BindSection({ material, olays }: { material: m.Material; olays: m.Olay[
       <label className="flex flex-col gap-1 text-sm">
         <span>{t('materials.editor.bindTo')}</span>
         <select className={fieldClass} value={target} onChange={(e) => setTarget(e.target.value)}>
+          {!current && <option value="">{t('content.queue.choose')}</option>}
           {olays.map((o) => (
             <option key={o.id} value={o.id}>
               {o.title}
             </option>
           ))}
-          <option value="genel">{t('materials.genel')}</option>
+          <option value="genel">{t('content.genel')}</option>
         </select>
       </label>
-      <button className={primaryClass} disabled={target === current || bind.isPending}>
+      <button className={primaryClass} disabled={!target || target === current || bind.isPending}>
         {t('materials.editor.move')}
       </button>
       <MaterialsError error={bind.error} />

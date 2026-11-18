@@ -70,7 +70,7 @@ describe('Material check hold component', () => {
     expect(within(hold).getByText(sentence, { exact: false })).toBeInTheDocument();
     expect(within(hold).getByRole('link', { name: 'Materyali aç' })).toHaveAttribute(
       'href',
-      '/materials?view=olays&material=m1',
+      '/content?file=m1',
     );
   });
 
@@ -95,8 +95,7 @@ describe('Material check hold component', () => {
     // A hard finding is never released.
     expect(within(hold).queryByRole('button', { name: 'Metni bu hâliyle yayınla' })).not.toBeInTheDocument();
     await userEvent.click(within(hold).getByRole('link', { name: 'Çekim listesini aç' }));
-    await screen.findByTestId('materials-shoots');
-    expect(router.state.location.search).toBe('?view=shoots');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/content'));
   });
 
   it('lets an owner release caption findings with the digest the check shows', async () => {

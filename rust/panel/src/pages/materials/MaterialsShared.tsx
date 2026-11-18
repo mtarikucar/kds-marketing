@@ -653,7 +653,7 @@ export const draftOf = (o: m.Olay): OlayDraft => ({
   ends_on: o.ends_on === o.starts_on ? '' : o.ends_on,
   place: o.place ?? '',
   organization: o.client?.organization ?? '',
-  notes: o.notes,
+  notes: o.notes ?? '',
   occasion: o.occasion ?? '',
 });
 

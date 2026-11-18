@@ -1,9 +1,8 @@
-import { LegacyRedirect } from '@/layout/LegacyRedirect';
+import { LegacyRedirect, MaterialsRedirect } from '@/layout/LegacyRedirect';
 import { UsersPage } from '@/pages/UsersPage';
 import { ContentPage } from '@/pages/content/ContentPage';
 import { SocialPage } from '@/pages/social/SocialPage';
 import { AdsPage } from '@/pages/ads/AdsPage';
-import { MaterialsPage } from '@/pages/materials/MaterialsPage';
 import { BillingPage } from '@/pages/BillingPage';
 import { OnboardingPage } from '@/pages/OnboardingPage';
 import { Navigate, type RouteObject } from 'react-router-dom';
@@ -115,10 +114,12 @@ export const routes: RouteObject[] = [
           { path: 'agents', element: <AgentsPage /> },
           { path: 'ledger', element: <LegacyRedirect to="/" /> },
           { path: 'users', element: <UsersPage /> },
-          { path: 'content', element: <ModuleGate moduleId="content"><ContentPage /></ModuleGate> },
+          // One page for the library and the contents (design 2026-11-18). It opens with either
+          // module: the library comes with content, social and ads; contents need content.
+          { path: 'content', element: <ModuleGate moduleId={['content', 'materials']}><ContentPage /></ModuleGate> },
           { path: 'social', element: <ModuleGate moduleId="social"><SocialPage /></ModuleGate> },
           { path: 'ads', element: <ModuleGate moduleId="ads"><AdsPage /></ModuleGate> },
-          { path: 'materials', element: <ModuleGate moduleId="materials"><MaterialsPage /></ModuleGate> },
+          { path: 'materials', element: <MaterialsRedirect /> },
           { path: 'studio', element: <LegacyRedirect /> },
         ],
       },

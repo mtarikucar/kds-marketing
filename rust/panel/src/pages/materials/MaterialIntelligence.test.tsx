@@ -3,6 +3,7 @@ import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt } from '@/test/render';
 import { material, materialsAnswers } from '@/test/materials';
+import { tree } from '@/test/contentPage';
 
 const source = material('source', {
   title: 'Kahve servisi',
@@ -29,6 +30,7 @@ const intelligence = {
 };
 const detailAnswers = {
   ...materialsAnswers,
+  'GET /api/content/tree': tree(),
   'GET /api/studio/materials/source': { material: source, used_in: [] },
   'GET /api/studio/materials/source/intelligence': { material: source, intelligence },
   'GET /api/studio/materials/source/preview': {
@@ -36,7 +38,8 @@ const detailAnswers = {
     expires_at: '2030-01-01T00:00:00Z',
   },
 };
-const open = () => renderAt('/materials?view=olays&material=source');
+// A file opens in the content page's drawer.
+const open = () => renderAt('/content?file=source');
 
 describe('Material intelligence workflow', () => {
   it('explains agent waiting and saves only the metadata fields manually changed', async () => {
@@ -75,44 +78,6 @@ describe('Material intelligence workflow', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ expected_revision: 2 }),
     );
-  });
-
-  it('finds materials by dynamically assigned group and free label', async () => {
-    const other = material('other', {
-      title: 'Ekip fotoğrafı',
-      tags: {
-        labels: ['ekip'],
-        product_groups: [],
-        doors: [],
-        content_types: [],
-        quality: null,
-        depicts: [],
-      },
-    });
-    mockFetch({
-      ...detailAnswers,
-      'GET /api/studio/material-intelligence': [
-        { material: source, intelligence: { ...intelligence, group_name: 'Yeni menü' } },
-        { material: other, intelligence: { ...intelligence, group_name: 'Ekip' } },
-      ],
-      'GET /api/studio/materials/source/preview': { url: '/coffee.webp', expires_at: '2030-01-01T00:00:00Z' },
-      'GET /api/studio/materials/other/preview': { url: '/team.webp', expires_at: '2030-01-01T00:00:00Z' },
-    });
-    const user = userEvent.setup();
-    const page = renderAt('/materials?view=library');
-    await screen.findByText('Kahve servisi');
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Grup' }), 'Ekip');
-    expect(screen.getByText('Ekip fotoğrafı')).toBeVisible();
-    expect(screen.queryByText('Kahve servisi')).not.toBeInTheDocument();
-    await user.selectOptions(screen.getByRole('combobox', { name: 'Grup' }), '');
-    await user.type(screen.getByRole('searchbox'), 'servis');
-    expect(screen.getByText('Kahve servisi')).toBeVisible();
-    expect(screen.queryByText('Ekip fotoğrafı')).not.toBeInTheDocument();
-    await user.click(screen.getByText('Kahve servisi'));
-    expect(page.router.state.location.search).toContain('view=library');
-    expect(await screen.findByRole('heading', { name: 'Kahve servisi' })).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Geri' }));
-    expect(screen.getByRole('searchbox')).toBeVisible();
   });
 
   it('queues an actual poster job with the original revision instead of claiming generation completed', async () => {

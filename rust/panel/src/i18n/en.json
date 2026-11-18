@@ -249,8 +249,7 @@
   },
   "contentAreas": {
     "existing": "Earlier work and sources",
-    "line": "Production line",
-    "open": "Open production area",
+    "open": "New content",
     "openHelp": "A goal sentence and a start time are enough. Let the agent prepare the content package.",
     "goal": "Goal",
     "start": "Start time",
@@ -258,21 +257,14 @@
     "platform": "Platform",
     "format": "Format",
     "agentChooses": "Let the agent choose",
-    "archive": "Show archived areas",
     "archiveEmpty": "No archived production areas",
     "archiveHelp": "Archived areas appear here.",
-    "empty": "Open your first production area",
     "more": "Show more",
-    "future": "Waiting for its start time",
-    "queued": "Queued; no agent has picked it up yet",
     "waiting": "The agent requested {{n}} captures",
-    "done": "{{n}} platform versions ready",
     "held": "The agent could not resolve this; your attention is needed",
     "redoStatus": "Being redone: “{{note}}”",
-    "back": "Back to production line",
     "versions": "Platform versions",
     "account": "No account selected",
-    "versionSummary": "This version",
     "usedMaterials": "Materials used",
     "missingMaterial": "Material unavailable",
     "checksPassed": "Material permission and truth checks passed",
@@ -288,7 +280,6 @@
     "acceptHelp": "The findings are about the text only. If you are sure the text is right, you can accept the content as it is; who accepted it is recorded.",
     "notAcceptable": "This content cannot be accepted: the problem is in the material or the target, not the text. Write a note and send it back to the agent.",
     "released": "A person accepted the finding of the text check",
-    "progress": "Steps and intermediate outputs",
     "stepsLabel": "Production steps",
     "requests": "Capture requests",
     "previousMedia": "Previous image",
@@ -336,8 +327,6 @@
     "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen."
   },
   "modulePages": {
-      "materials": "Materials library",
-      "content": "Content creation",
       "social": "Social media",
       "ads": "Advertising",
       "specialDays": "Special days",
@@ -2784,19 +2773,10 @@
     }
   },
   "materials": {
-    "tab": "Materials",
     "studioTab": "Studio",
     "views": {
-      "upload": "Upload",
-      "olays": "Events",
-      "calendar": "Calendar",
-      "shoots": "Shot list"
+      "calendar": "Calendar"
     },
-    "back": "Back",
-    "genel": "General (tied to no event)",
-    "genelShelf": "General materials",
-    "genelHelp": "Materials tied to no event. Used only in content that names no specific date, place or event.",
-    "noMaterials": "No materials here yet.",
     "noPermission": "No share permission",
     "erased": "Deleted",
     "ai": "AI image",
@@ -2963,53 +2943,7 @@
       "request_key": "The request key is invalid; refresh the page and try again."
     },
     "upload": {
-      "intro": "Add photos and videos. Your connected agent suggests labels and groups from their content; you can edit them at any time.",
-      "camera": "Take with camera",
-      "gallery": "Choose from gallery",
-      "files": "Chosen files",
-      "status": {
-        "refused": "Refused",
-        "uploading": "Uploading…",
-        "uploaded": "Uploaded",
-        "failed": "Upload failed",
-        "added": "Added",
-        "add_failed": "Not added"
-      },
-      "refusedHelp": "Upload JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
-      "retry": "Try again",
-      "olay": "Which event is it from?",
-      "suggested": "Suggested by the capture date",
-      "otherOlays": "Other events",
-      "newOlay": "Create a new event",
-      "createdOlay": "New event created: {{title}}",
-      "genel": "General (tied to no event)",
-      "genelHelp": "Only an owner or manager can choose this. The material becomes usable as general and is used only in content about no specific event.",
-      "permission": "Use in content creation",
-      "permissionByManager": "An owner or manager gives the share permission; the materials will wait for their decision.",
-      "tags": "Tags (optional)",
-      "waitUploads": "You can add them once the uploads finish.",
-      "submit_one": "Add {{count}} material",
-      "submit_other": "Add {{count}} materials",
-      "problem": {
-        "olay": "Choose an event, create a new one, or choose general.",
-        "permission": "Choose the share permission.",
-        "title": "Write the event's title.",
-        "dates": "Enter the event's date; the end cannot be before the start.",
-        "occasion": "For a season or special day, choose its calendar day."
-      },
-      "done_one": "{{count}} material added.",
-      "done_other": "{{count}} materials added.",
-      "doneNoPermission": "They become usable once an owner or manager gives the share permission.",
-      "openOlay": "Open the event",
-      "again": "New upload",
-      "serverSuggests": "By its capture date, this material may belong to “{{title}}”.",
-      "moveThere": "Move it to that event",
-      "moved": "Moved to “{{title}}”.",
-      "workbench": {
-        "searchEvents": "Search event name or place",
-        "selectedEvent": "Selected event: {{title}}",
-        "noEvents": "No matching events. Change your search or create an event below."
-      }
+      "tags": "Tags (optional)"
     },
     "olay": {
       "kind": "Type",
@@ -3024,25 +2958,10 @@
       "oneDayHint": "Leave the end empty for a one-day event.",
       "awaiting": "Awaiting confirmation",
       "confirm": "Confirm",
-      "proposedHelp": "An agent proposed this event. Its materials are not used until an owner or manager confirms it.",
       "new": "New event",
       "edit": "Edit",
       "create": "Create the event",
-      "save": "Save",
-      "empty": "No events yet. You can create one while uploading materials.",
-      "count_one": "{{count}} material",
-      "count_other": "{{count}} materials",
-      "materials_one": "Materials ({{count}})",
-      "materials_other": "Materials ({{count}})",
-      "shoots": "Shot list for this event",
-      "upload": "Upload materials to this event",
-      "since": "Added: {{at}}"
-    },
-    "review": {
-      "open_one": "{{count}} material awaiting review",
-      "open_other": "{{count}} materials awaiting review",
-      "title": "Awaiting review",
-      "help": "Materials whose share permission, quality or tags await a person's decision."
+      "save": "Save"
     },
     "editor": {
       "origin": "Origin",
@@ -3152,27 +3071,8 @@
     "shoot": {
       "add": "Add to the shot list",
       "addSubmit": "Add to the list",
-      "thisWeek": "This week",
-      "older": "Earlier weeks",
-      "nothingThisWeek": "No open requests this week.",
-      "showClosed": "Show closed ones too",
-      "week": "Week of {{day}}",
       "done": "Done",
-      "dismiss": "Not needed",
-      "openOlay": "Open the event",
-      "openCalendar": "Go to the calendar",
-      "reason": {
-        "slot_unfilled": "No eligible material for a piece",
-        "season_ahead": "A season is coming",
-        "season_dates_missing": "Calendar dates missing",
-        "olay_upcoming": "Upcoming event",
-        "requested": "Added request"
-      },
-      "status": {
-        "open": "Open",
-        "done": "Done",
-        "dismissed": "Not needed"
-      }
+      "dismiss": "Not needed"
     },
     "hold": {
       "title": "The material check is holding this content",
@@ -4165,8 +4065,6 @@
     "sourcesHelp": "Choose from the library or upload a new shot. Materials can also be used in other production spaces.",
     "fromLibrary": "Choose from library",
     "upload": "Upload materials",
-    "uploadHelp": "Uploaded materials are saved to the library and attached to this production space.",
-    "backToSources": "Back to space materials",
     "searchMaterials": "Search title, label or group",
     "allGroups": "All groups",
     "noMaterialsMatch": "No materials match. Change your search or upload new materials.",
@@ -4277,5 +4175,247 @@
     },
     "productionToolsHelp": "Single-image cropping can run automatically when a compatible media worker is active. Multi-source edits and posters need a connected agent with the required tools.",
     "briefChangesHelp": "Changing the brief invalidates earlier production jobs. Pending work stops and completed outputs remain in history. Scheduled publications are managed separately."
+  },
+  "content": {
+    "title": "Content",
+    "help": "Drop your files; the agent files them under their event and makes the content. You only look at what waits for you.",
+    "genel": "General",
+    "genelHelp": "Files and contents that belong to no particular event",
+    "unknownOlay": "Unknown event",
+    "folderSummary": "{{files}} files · {{areas}} contents · {{published}} published",
+    "newIn": "New content · {{olay}}",
+    "tree": {
+      "label": "Events",
+      "all": "All production",
+      "now": "Now",
+      "always": "Ongoing",
+      "soon": "Coming up",
+      "past": "Past",
+      "noneNow": "No event is running now.",
+      "newOlay": "Event",
+      "waiting": "Something waits for you",
+      "files_one": "{{count}} file",
+      "files_other": "{{count}} files",
+      "back": "Folders"
+    },
+    "waiting": {
+      "title": "Waiting for you",
+      "none": "Nothing waits for you right now.",
+      "olay_confirmations_one": "event to confirm",
+      "olay_confirmations_other": "events to confirm",
+      "shoot_requests_one": "shoot request",
+      "shoot_requests_other": "shoot requests",
+      "content_approvals_one": "content to approve",
+      "content_approvals_other": "contents to approve",
+      "problem_contents_one": "content with a problem",
+      "problem_contents_other": "contents with a problem"
+    },
+    "stage": {
+      "hazirlik": "Preparation",
+      "fikir": "Idea",
+      "metin": "Copy",
+      "gorsel": "Visual",
+      "paket": "Package",
+      "onay": "Approval",
+      "yayin": "Publishing",
+      "sonuc": "Results"
+    },
+    "stageState": {
+      "done": "done",
+      "current": "in progress",
+      "waiting_person": "waiting for you",
+      "problem": "has a problem",
+      "todo": "to do"
+    },
+    "metric": {
+      "reach": "reach",
+      "impressions": "impressions",
+      "views": "views",
+      "plays": "plays",
+      "likes": "likes",
+      "comments": "comments",
+      "saves": "saves",
+      "saved": "saves",
+      "shares": "shares",
+      "clicks": "clicks"
+    },
+    "out": {
+      "approved": "Approved · {{at}}",
+      "noApproval": "No approval needed",
+      "approvalRequired": "Needs approval",
+      "awaitsApproval": "Waiting for your approval",
+      "awaitsPerson": "Waiting for you",
+      "stuck": "Stuck",
+      "published": "{{account}} · published {{at}}",
+      "planned": "{{account}} · planned for {{at}}",
+      "failed": "{{account}} · could not go out",
+      "publishedAt": "published {{at}}",
+      "plannedAt": "planned for {{at}}",
+      "failedShort": "could not go out",
+      "window": "{{hours}}-hour measurement",
+      "link": "Open the post"
+    },
+    "bar": {
+      "problem": "Problem · {{stage}}",
+      "publishFailed": "A post could not go out",
+      "openPost": "Go to the {{account}} post",
+      "inspect": "Inspect",
+      "approve": "Go to approval",
+      "approveAt": "Approve · {{account}}, {{at}}",
+      "toNeeds": "Go to missing items",
+      "startsAt": "Waiting for its time · {{at}}"
+    },
+    "row": {
+      "preview": "Preview",
+      "stages": "Production stages",
+      "step": "Step {{n}} / 14",
+      "stepsDone": "14 / 14 steps"
+    },
+    "detail": {
+      "label": "Content",
+      "steps": "The agent's 14 steps and after",
+      "noPackage": "No package yet; the agent delivers it at the Package step.",
+      "attachHelp": "An uploaded file goes to the analysis queue first. Once it is filed under its event you can add it to this content here."
+    },
+    "root": {
+      "filters": "Filter",
+      "hint": "Open a row to see all 14 steps and the preview.",
+      "filter": {
+        "all": "All",
+        "working": "Working",
+        "waiting": "Waiting for you",
+        "done": "Done",
+        "archived": "Archive"
+      },
+      "empty": "No content yet",
+      "emptyHelp": "Upload files, or open a new content from inside an event.",
+      "noMatch": "No content in this filter",
+      "moduleOff": "Content production is not on in this workspace",
+      "moduleOffHelp": "Files and events are here; contents need the content module.",
+      "moduleLink": "View module",
+      "filesOnly": "You may not see contents",
+      "filesOnlyHelp": "The folders on the left lead to the files and missing items."
+    },
+    "flow": {
+      "label": "The event's flow",
+      "files": "Files",
+      "analysed": "Analysed",
+      "analysedQueue": "Analysed · {{n}} queued",
+      "inProduction": "In production",
+      "awaitingApproval": "Awaiting approval",
+      "published": "Published",
+      "problems": "With a problem"
+    },
+    "contents": {
+      "title": "Contents",
+      "empty": "No content yet",
+      "emptyHelp": "The agent proposes some once it has looked at the files; you may open one yourself."
+    },
+    "files": {
+      "title": "Files",
+      "empty": "This folder has no files.",
+      "review": "To review",
+      "noReview": "No file in this folder waits for you.",
+      "layout": "Layout",
+      "grid": "Grid",
+      "list": "List"
+    },
+    "needs": {
+      "title": "Missing items",
+      "open_one": "{{count}} open",
+      "open_other": "{{count}} open",
+      "empty": "Nothing is missing.",
+      "shoot": "Shot list",
+      "material": "The agent's capture request",
+      "askedBy": "Asked by:",
+      "status": {
+        "done": "Done",
+        "dismissed": "Not needed"
+      }
+    },
+    "olay": {
+      "proposed": "Proposed",
+      "active": "Active",
+      "ended": "Ended",
+      "always": "Ongoing",
+      "proposedTitle": "The agent proposed this event",
+      "proposedHelp": "Its files are not used in contents until you confirm it. Confirm it if it is right; otherwise edit it.",
+      "proposedHelpOther": "Its files are not used in contents until it is confirmed. An owner or manager will confirm it.",
+      "newHelp": "An event an owner or manager opens starts confirmed; anyone else's waits for confirmation.",
+      "editHelp": "A change applies to all of the event's files and contents.",
+      "problem": {
+        "title": "Give the event a title.",
+        "dates": "Enter a start date; the end cannot be before it.",
+        "occasion": "Choose the calendar day."
+      }
+    },
+    "day": {
+      "notStarted": "This special day has not started yet",
+      "help": "The system starts preparing on {{day}} and opens its event itself.",
+      "create": "Open the event now",
+      "gone": "This special day is no longer coming up",
+      "goneHelp": "Its event may be open already, or its date has passed; see the folders on the left."
+    },
+    "queue": {
+      "title": "Analysis queue",
+      "help": "Files that were uploaded and are not in an event yet, or whose analysis runs. After its analysis each file goes into an event.",
+      "empty": "The queue is empty",
+      "emptyHelp": "Every file is in a folder.",
+      "stage": {
+        "waiting": "Queued",
+        "analysing": "Analysing",
+        "needs_filing": "Needs filing",
+        "failed": "Analysis failed"
+      },
+      "line": {
+        "waiting": "Queued · its event is found when the agent looks",
+        "waitingFiled": "Queued · in its folder, the agent will look",
+        "analysing": "The agent is looking: describing, labelling, finding its event",
+        "analysingFiled": "The agent is looking: describing, labelling",
+        "needs_filing": "Analysed; a person chooses its event",
+        "failed": "The analysis did not complete; you can retry.",
+        "noAgent": "No agent connected · analysed in turn once one connects"
+      },
+      "noAgent": "No agent is connected now",
+      "agentNever": "No agent has connected yet. Files are not lost; they are analysed in turn once an agent connects.",
+      "agentSeen": "The agent was last seen {{at}}. Files are not lost; they are analysed in turn once an agent connects.",
+      "agents": "Agents",
+      "fileInto": "Choose the event",
+      "choose": "Choose an event",
+      "file": "File it",
+      "managerFiles": "An owner or manager chooses its event."
+    },
+    "file": {
+      "title": "File",
+      "help": "The file's description, labels, share permission and where it was used.",
+      "open": "Open the file",
+      "unfiled": "Not in an event yet · in the analysis queue",
+      "usedIn_one": "in {{count}} content",
+      "usedIn_other": "in {{count}} contents",
+      "usedInTitle": "Contents that use it",
+      "unused": "Not used in a content yet."
+    },
+    "upload": {
+      "button": "Upload files",
+      "drop": "Drop them, the agent does the rest",
+      "dropHelp": "Files go to the analysis queue; the agent files each under its event.",
+      "tray": "Uploads",
+      "sending_one": "Uploading {{count}} file",
+      "sending_other": "Uploading {{count}} files",
+      "sent_one": "{{count}} file is in the analysis queue",
+      "sent_other": "{{count}} files are in the analysis queue",
+      "openQueue": "Open the analysis queue",
+      "unnamed": "Unnamed file",
+      "status": {
+        "refused": "This file type or size is not taken (JPEG, PNG, WebP, GIF up to 25 MB; MP4 up to 200 MB).",
+        "waiting": "Queued",
+        "uploading": "Uploading",
+        "added": "In the analysis queue"
+      }
+    },
+    "settings": {
+      "title": "Special days and rules",
+      "help": "For the special days that are on, the system opens the event itself and starts production in time."
+    }
   }
 }
