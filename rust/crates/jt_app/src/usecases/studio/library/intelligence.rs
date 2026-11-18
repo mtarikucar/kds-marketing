@@ -102,14 +102,32 @@ pub struct NewOlay {
     pub notes: String,
 }
 
-/// `studio.material_analysis_complete`'s answer: the material, its analysis, and the olay the
-/// filing named (the new one, or the existing one), if any.
+/// `studio.material_analysis_complete`'s answer: the material, its analysis, the olay the
+/// filing named (the new one, the one it reused, or the existing one), if any, and how the
+/// filing placed it.
 #[derive(Clone, Debug, Serialize)]
 pub struct MaterialAnalysisCompleteOut {
     pub material: Material,
     pub intelligence: MaterialIntelligence,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub olay: Option<Olay>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filed: Option<Filed>,
+}
+
+/// How a filing placed the material.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Filed {
+    /// Into the existing olay the filing named (`olay_id`).
+    Existing,
+    /// Into the olay the filing's `new_olay` opened.
+    Opened,
+    /// Into an olay of the workspace that is plainly the one `new_olay` described (the same
+    /// kind, days, and occasion or title): no olay was opened, its confirmation is as it was.
+    Reused,
+    /// Genel.
+    Genel,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -380,35 +398,107 @@ fn filing(f: MaterialFiling) -> Result<Filing, AppError> {
     }
 }
 
-/// Files the unfiled `material` as `f` says, in the caller's transaction (design 2026-11-18 §3).
-/// A new olay is confirmed by the owner's rule when the material is a real one a person uploaded
-/// ([`Material::upload_confirms_olay`]): its confirmation names that person, and the ledger says
-/// it was the rule, from that upload, not a click. Otherwise it is proposed, as an agent's olay
-/// always is. Filing into an existing olay never confirms it; a real material goes genel only by
-/// a person, who frees it (spec 2026-11-03 D8).
+/// `title` compared as a person reads it: its words, lower case, one space between them. The
+/// Turkish i's are one letter here (`I`, `İ`, `ı` and `i` alike), so "KASIM" is "Kasım".
+fn plain_title(title: &str) -> String {
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+        .chars()
+        .filter(|c| *c != '\u{307}')
+        .map(|c| if c == 'ı' { 'i' } else { c })
+        .collect()
+}
+
+/// Whether olay `o` is plainly the one `n` describes: the same kind, the same first and last
+/// day, and the same occasion or the same title (case and spacing aside).
+fn same_olay(o: &Olay, n: &NewOlay) -> bool {
+    o.kind == n.kind
+        && o.starts_on == n.starts_on
+        && o.ends_on == n.ends_on
+        && ((o.occasion.is_some() && o.occasion == n.occasion)
+            || plain_title(&o.title) == plain_title(&n.title))
+}
+
+/// Whether `user` could confirm an olay in person now (`studio.olay_confirm`, D3): an active
+/// member of the workspace whose role is the owner's or a manager's and holds `materials.work`.
+async fn may_confirm_olays(
+    r: &mut dyn TenantRepos,
+    user: jt_tenancy::UserId,
+) -> Result<bool, AppError> {
+    let Some(m) = r
+        .memberships()
+        .find_by_user(user)
+        .await?
+        .filter(|m| m.status == jt_tenancy::MembershipStatus::Active)
+    else {
+        return Ok(false);
+    };
+    let Some(role) = r.roles().find(m.role_id).await? else {
+        return Ok(false);
+    };
+    Ok((role.key == jt_tenancy::SystemRole::Owner.key()
+        || role.key == jt_tenancy::SystemRole::Manager.key())
+        && role
+            .permissions
+            .contains(&jt_tenancy::Permission::MaterialsWork))
+}
+
+/// Files the unfiled `material` as `f` says, in the caller's transaction, under the Studio
+/// control lock the caller holds, which serialises every completion (design 2026-11-18 §3).
+///
+/// A `new_olay` that is plainly an olay the workspace has ([`same_olay`]; the oldest, if several
+/// are) files the material into that olay and opens none: its confirmation is left exactly as it
+/// is, never upgraded. Ten photos of one workshop analysed one by one make one olay.
+///
+/// Otherwise the olay is opened, confirmed by the owner's rule when the material is a real one a
+/// person uploaded ([`Material::upload_confirms_olay`]) and that person could confirm an olay
+/// themselves at the time of filing (an owner or manager, [`may_confirm_olays`]): its
+/// confirmation names that person, and the ledger says it was the rule, from that upload, not a
+/// click. Any other olay is proposed, as an agent's olay always is, and the ledger says why the
+/// rule did not apply when a person uploaded the files. Filing into an existing olay never
+/// confirms it; a real material goes genel only by a person, who frees it (spec 2026-11-03 D8).
 async fn file(
     d: &Deps,
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     material: &mut Material,
     f: Filing,
-) -> Result<Option<Olay>, AppError> {
+) -> Result<(Option<Olay>, Filed), AppError> {
     if !material.is_unfiled() {
         return Err(conflict("material_already_filed"));
     }
-    let (binding, olay) = match f {
+    let (binding, olay, filed) = match f {
         Filing::Olay(id) => {
             let o = r
                 .studio_materials()
                 .get_olay(id)
                 .await?
                 .ok_or_else(|| AppError::not_found("olay"))?;
-            (Binding::Olay { olay_id: id }, Some(o))
+            (Binding::Olay { olay_id: id }, Some(o), Filed::Existing)
         }
-        Filing::Genel if material.is_ai() => (Binding::Genel, None),
+        Filing::Genel if material.is_ai() => (Binding::Genel, None, Filed::Genel),
         Filing::Genel => return Err(person_required("filing")),
         Filing::New(n) => {
-            let by = material.upload_confirms_olay();
+            let mut same: Vec<Olay> = r
+                .studio_materials()
+                .list_olays()
+                .await?
+                .into_iter()
+                .filter(|o| o.workspace_id == ctx.workspace_id && same_olay(o, &n))
+                .collect();
+            same.sort_by_key(|o| (o.created_at, o.id));
+            if let Some(o) = same.into_iter().next() {
+                material.binding = Binding::Olay { olay_id: o.id };
+                return Ok((Some(o), Filed::Reused));
+            }
+            let uploader = material.upload_confirms_olay();
+            let by = match uploader {
+                Some(user) if may_confirm_olays(r, user).await? => Some(user),
+                _ => None,
+            };
             let o = Olay {
                 id: OlayId(d.ids.uuid()),
                 workspace_id: ctx.workspace_id,
@@ -434,11 +524,16 @@ async fn file(
             let mut payload = super::olays::summary(&o);
             payload["opened_by"] = json!("material_filing");
             payload["material_id"] = json!(material.id);
-            // Truthfully: confirmed by the rule, because this person uploaded the files.
+            // Truthfully: confirmed by the rule, because this person uploaded the files and may
+            // confirm an olay; or proposed, and, for a person's upload, why the rule did not apply.
             payload["confirmed_by_rule"] = match by {
                 Some(user) => json!({"rule":"person_upload","uploaded_by":user}),
                 None => serde_json::Value::Null,
             };
+            if let (None, Some(user)) = (by, uploader) {
+                payload["rule_not_applied"] = json!({"rule":"person_upload","uploaded_by":user,
+                    "reason":"uploader_may_not_confirm"});
+            }
             r.ledger()
                 .append(ledger_entry(
                     ctx,
@@ -448,11 +543,11 @@ async fn file(
                     payload,
                 )?)
                 .await?;
-            (Binding::Olay { olay_id: o.id }, Some(o))
+            (Binding::Olay { olay_id: o.id }, Some(o), Filed::Opened)
         }
     };
     material.binding = binding;
-    Ok(olay)
+    Ok((olay, filed))
 }
 
 pub async fn material_analysis_complete(
@@ -570,7 +665,7 @@ pub async fn material_analysis_complete(
             json!({"revision":material.revision,"labels_count":material.tags.labels.len()}),
         )?)
         .await?;
-    if filed.is_some() {
+    if let Some((_, how)) = &filed {
         r.ledger()
             .append(ledger_entry(
                 ctx,
@@ -580,6 +675,7 @@ pub async fn material_analysis_complete(
                 json!({"revision":material.revision,
                        "binding": if material.olay_id().is_some() { "olay" } else { "genel" },
                        "olay_id": material.olay_id(),
+                       "filed": how,
                        "by":"analysis"}),
             )?)
             .await?;
@@ -588,7 +684,8 @@ pub async fn material_analysis_complete(
     Ok(MaterialAnalysisCompleteOut {
         material,
         intelligence: row.intelligence,
-        olay: filed.flatten(),
+        filed: filed.as_ref().map(|(_, how)| *how),
+        olay: filed.and_then(|(o, _)| o),
     })
 }
 

@@ -363,6 +363,30 @@ impl ProductionProject {
         self.steps.clear();
     }
 
+    /// Whether its deliveries were refused [`MAX_REFUSALS`] times in a row: held for a person.
+    pub fn held(&self) -> bool {
+        !self.archived && self.refused >= MAX_REFUSALS
+    }
+
+    /// The planned posts made of its packages' versions, oldest package first, each with whether
+    /// it is of the current (last) package.
+    pub fn posts(&self) -> Vec<AreaPost> {
+        let last = self.packages.len();
+        self.packages
+            .iter()
+            .enumerate()
+            .flat_map(|(n, k)| {
+                k.versions.iter().filter_map(move |v| {
+                    v.slot_id.map(|slot_id| AreaPost {
+                        version_id: v.id,
+                        slot_id,
+                        current: n + 1 == last,
+                    })
+                })
+            })
+            .collect()
+    }
+
     /// The area with its state as of `now`, for an answer.
     pub fn present(mut self, now: OffsetDateTime) -> Self {
         self.state = Some(AreaStatus {
@@ -390,6 +414,50 @@ impl AreaOlay {
             Self::Genel => p.olay_id.is_none(),
         }
     }
+}
+
+/// A planned post made of a version of an area's package (design 2026-11-18 §4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AreaPost {
+    pub version_id: Uuid,
+    pub slot_id: SlotId,
+    /// Its version is of the current (last) package.
+    pub current: bool,
+}
+
+/// What the content tree needs of an area that is held or has planned posts, without its
+/// document: its olay, whether it is held, whether its current package is finished
+/// ([`ProductionProject::done_at`]), and its planned posts ([`ProductionProject::posts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AreaPosts {
+    pub id: Uuid,
+    pub olay_id: Option<OlayId>,
+    pub held: bool,
+    pub done: bool,
+    pub posts: Vec<AreaPost>,
+}
+
+impl AreaPosts {
+    /// The area's, when it is not archived and is held or has a planned post; `None` otherwise.
+    pub fn of(p: &ProductionProject) -> Option<Self> {
+        let posts = p.posts();
+        (!p.archived && (p.held() || !posts.is_empty())).then(|| AreaPosts {
+            id: p.id,
+            olay_id: p.olay_id,
+            held: p.held(),
+            done: p.done_at().is_some(),
+            posts,
+        })
+    }
+}
+
+/// How many areas not archived one olay holds (`None`: no olay, "Genel"), and how many captures
+/// their agents asked for that nobody supplied yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AreaCount {
+    pub olay_id: Option<OlayId>,
+    pub areas: u64,
+    pub open_requests: u64,
 }
 
 /// Where a page of finished areas ends: the last row's delivery time and id.
@@ -421,6 +489,12 @@ pub trait ProjectRepo: Send + Sync {
         before: Option<DoneCursor>,
         olay: Option<AreaOlay>,
     ) -> Result<Vec<ProductionProject>, AppError>;
+    /// The areas not archived, counted in the store by olay: one row per olay that has one
+    /// (`None`: the areas of no olay), by olay id, no olay first.
+    async fn area_counts(&mut self) -> Result<Vec<AreaCount>, AppError>;
+    /// [`AreaPosts::of`] every area not archived that is held or has a planned post, by id,
+    /// without reading the documents whole.
+    async fn area_posts(&mut self) -> Result<Vec<AreaPosts>, AppError>;
     /// Finished areas whose current package holds a version no planned post was made of, oldest
     /// delivery first, then id, at most 200: what waits for a time (design §7.2).
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError>;

@@ -1,15 +1,16 @@
 //! An area's production line as the content page shows it (design 2026-11-18 §4): the 14 steps
 //! of the workflow and what follows them, as eight stages, each with its state and, once
-//! finished, what it produced. [`project`] is pure; `version_facts` reads what the page needs
-//! of the planned posts made of the current package.
+//! finished, what it produced. [`project`] and [`marks`] are pure; [`PostReads`] reads what the
+//! page needs of the planned posts of a set of areas, one read per kind.
 use crate::{
     error::AppError,
-    ports::{TenantRepos, production_projects::*, studio::ApprovalTarget},
+    ports::{TenantRepos, production_projects::*},
 };
 use jt_capability::{Capability, CapabilityId};
 use jt_studio::{
-    MaterialId, MeasurementStatus, MeasurementWindow, PostFormat, Publication, PublicationId,
-    PublishOutcome, SlotId, SlotState,
+    ApprovalReceipt, MaterialId, Measurement, MeasurementStatus, MeasurementWindow, PostFormat,
+    Publication, PublicationId, PublishAttempt, PublishOutcome, RetirementReason, Slot, SlotId,
+    SlotState,
 };
 use jt_tenancy::UserId;
 use serde::Serialize;
@@ -115,8 +116,16 @@ pub struct PublicationFact {
     #[serde(with = "jt_studio::time_compat::option")]
     pub published_at: Option<OffsetDateTime>,
     pub url: Option<String>,
-    /// It will not go out: every attempt failed or was refused, or the post was retired unsent.
+    /// It did not go out and will not: its one attempt failed or was refused (a planned post is
+    /// attempted once, never retried), or it passed its grace unsent (`missed_grace`). A post
+    /// that was taken back on purpose (a person's cancellation, a redo, a strategy change, a
+    /// replanning) is not failed, whatever its attempt did.
     pub failed: bool,
+    /// Why it was retired unsent, when it was and its post recorded why: `cancelled`,
+    /// `missed_grace`, `replanned`, `hypothesis_retired`, `strategy_archived`, `week_ended`
+    /// (`measurements_complete` after it went out). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retirement: Option<RetirementReason>,
 }
 
 /// What a published post measured last (stage Sonuç): the provider's own counters, as stored.
@@ -173,20 +182,31 @@ impl Pipeline {
         self.stages.iter().any(|s| s.state == StageState::Problem)
     }
 
-    /// Some planned post of the current package went out.
+    /// Some planned post of the area went out (of its current package or an earlier one).
     pub fn published(&self) -> bool {
         self.stage(StageKey::Yayin)
             .is_some_and(|s| s.publications.iter().any(|p| p.published_at.is_some()))
     }
 }
 
-/// What the page needs of one planned post made of a version of the current package.
+/// What the page needs of one planned post made of a version of an area's package.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VersionFact {
     pub version_id: Uuid,
     pub approval: ApprovalFact,
     pub publication: PublicationFact,
     pub result: Option<ResultFact>,
+}
+
+impl VersionFact {
+    fn out(&self) -> bool {
+        self.publication.published_at.is_some()
+    }
+
+    /// Still to go out: not out, not failed, not retired.
+    fn pending(&self) -> bool {
+        !self.out() && !self.publication.failed && self.publication.state != SlotState::Retired
+    }
 }
 
 /// The step the attempt is at: the last reported step, or, for an area from before the step
@@ -200,21 +220,93 @@ fn current_step(p: &ProductionProject) -> Option<u8> {
     })
 }
 
-/// The pipeline of area `p` at `now`, from its step history, its current package and `facts`,
-/// the planned posts made of that package.
+/// Onay, Yayın and Sonuç of an area whose current package is finished or not (`done`), from
+/// `facts`, its planned posts (see [`PostReads::facts`]).
 ///
-/// The step stages: all done once the area holds its current package (no redo standing, no
-/// capture awaited); otherwise done before the stage of the current step, todo after it, and
-/// the stage of the current step current, waiting for a person while a capture is awaited, or
-/// (Paket) a problem while the area is held. With no step reported, a working area is at
-/// Hazırlık, an area waiting for a capture at Görsel. After them: Onay waits for a person while
-/// a planned post waits for an approval, and is current while no version has a time yet; Yayın
-/// is current until every planned post went out, a problem when one cannot; Sonuç is current
-/// once something went out, done once every published post is measured.
+/// Onay waits for a person while a planned post waits for an approval; it is done once a planned
+/// post exists and none waits, current while a finished package has none yet, todo otherwise.
+/// Yayın is a problem while a planned post failed; todo while nothing went out and the posts are
+/// not approved; current while a post is still to go out; done once every post went out or was
+/// taken back. Sonuç is current once something went out, done once every published post is
+/// measured.
+fn post_states(done: bool, facts: &[VersionFact]) -> [StageState; 3] {
+    let waiting = facts.iter().any(|f| f.approval.waiting);
+    let out = facts.iter().any(VersionFact::out);
+    let onay = if waiting {
+        StageState::WaitingPerson
+    } else if !facts.is_empty() {
+        StageState::Done
+    } else if done {
+        StageState::Current
+    } else {
+        StageState::Todo
+    };
+    let yayin = if facts.iter().any(|f| f.publication.failed) {
+        StageState::Problem
+    } else if facts.is_empty() || (waiting && !out) {
+        StageState::Todo
+    } else if facts.iter().any(VersionFact::pending) {
+        StageState::Current
+    } else {
+        StageState::Done
+    };
+    let sonuc = if !out {
+        StageState::Todo
+    } else if facts.iter().filter(|f| f.out()).all(|f| {
+        // Retired after it went out: only once its measurements were complete.
+        matches!(
+            f.publication.state,
+            SlotState::Measured | SlotState::Retired
+        )
+    }) {
+        StageState::Done
+    } else {
+        StageState::Current
+    };
+    [onay, yayin, sonuc]
+}
+
+/// What the content tree counts of an area, from the same rules as its [`Pipeline`]: whether a
+/// post of it went out ([`Pipeline::published`]), whether it waits for an approval
+/// ([`Pipeline::awaits_approval`]) and how many of its posts do, and whether it is stuck
+/// ([`Pipeline::has_problem`]: held, or a post failed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    pub published: bool,
+    pub awaits_approval: bool,
+    pub approvals_waiting: usize,
+    pub problem: bool,
+}
+
+/// [`Marks`] of an area that is `held` or not, whose current package is finished or not
+/// (`done`), with `facts`, without building its pipeline.
+pub fn marks(held: bool, done: bool, facts: &[VersionFact]) -> Marks {
+    let [onay, yayin, _] = post_states(done, facts);
+    Marks {
+        published: facts.iter().any(VersionFact::out),
+        awaits_approval: onay == StageState::WaitingPerson,
+        approvals_waiting: facts.iter().filter(|f| f.approval.waiting).count(),
+        problem: held || yayin == StageState::Problem,
+    }
+}
+
+/// The pipeline of area `p` at `now`, from its step history, its current package and `facts`,
+/// its planned posts ([`PostReads::facts`]).
+///
+/// The step stages: Paket is a problem and the others done while the area is held (its
+/// deliveries were refused); all done once the area holds its finished current package (no redo
+/// standing, no capture awaited); otherwise done before the stage of the current step, todo after
+/// it, and the stage of the current step current, or waiting for a person while a capture is
+/// awaited. With no step reported, a working area is at Hazırlık, an area waiting for a capture
+/// at Görsel. Onay, Yayın and Sonuç follow the planned posts (see `post_states`): a post that went
+/// out stays there, with its results, whatever the current attempt does (a redo, a capture
+/// asked for).
 pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]) -> Pipeline {
     let state = p.state(now);
     let current = current_step(p);
-    let package = p.packages.last().filter(|_| p.done_at().is_some());
+    let done = p.done_at().is_some();
+    let package = p.packages.last().filter(|_| done);
+    let [onay, yayin, sonuc] = post_states(done, facts);
     let at_stage = |range: (u8, u8), step: u8| (range.0..=range.1).contains(&step);
     let mut stages = Vec::with_capacity(STAGES.len());
     for (key, span) in STAGES {
@@ -235,15 +327,15 @@ pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]
                 .filter(|s| at_stage(range, s.step))
                 .cloned()
                 .collect();
-            stage.state = if package.is_some() {
-                StageState::Done
-            } else if state == AreaState::Held {
+            stage.state = if state == AreaState::Held {
                 // Its deliveries were refused: the package is what is stuck.
                 if key == StageKey::Paket {
                     StageState::Problem
                 } else {
                     StageState::Done
                 }
+            } else if package.is_some() {
+                StageState::Done
             } else {
                 let at = current.or(match state {
                     AreaState::Working => Some(1),
@@ -286,52 +378,18 @@ pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]
             stages.push(stage);
             continue;
         }
-        if package.is_none() {
-            stages.push(stage);
-            continue;
-        }
-        let approval_done = !facts.is_empty() && !facts.iter().any(|f| f.approval.waiting);
         match key {
             StageKey::Onay => {
                 stage.approvals = facts.iter().map(|f| f.approval.clone()).collect();
-                stage.state = if facts.iter().any(|f| f.approval.waiting) {
-                    StageState::WaitingPerson
-                } else if facts.is_empty() {
-                    StageState::Current
-                } else {
-                    StageState::Done
-                };
+                stage.state = onay;
             }
             StageKey::Yayin => {
                 stage.publications = facts.iter().map(|f| f.publication.clone()).collect();
-                let live: Vec<_> = facts.iter().filter(|f| !f.publication.failed).collect();
-                let out = |f: &&VersionFact| f.publication.published_at.is_some();
-                stage.state = if !approval_done {
-                    StageState::Todo
-                } else if facts.iter().any(|f| f.publication.failed && !out(&f)) {
-                    StageState::Problem
-                } else if !live.is_empty() && live.iter().all(out) {
-                    StageState::Done
-                } else {
-                    StageState::Current
-                };
+                stage.state = yayin;
             }
             StageKey::Sonuc => {
                 stage.results = facts.iter().filter_map(|f| f.result.clone()).collect();
-                let published: Vec<_> = facts
-                    .iter()
-                    .filter(|f| f.publication.published_at.is_some())
-                    .collect();
-                stage.state = if published.is_empty() {
-                    StageState::Todo
-                } else if published
-                    .iter()
-                    .all(|f| f.publication.state == SlotState::Measured)
-                {
-                    StageState::Done
-                } else {
-                    StageState::Current
-                };
+                stage.state = sonuc;
             }
             _ => {}
         }
@@ -343,101 +401,174 @@ pub fn project(p: &ProductionProject, now: OffsetDateTime, facts: &[VersionFact]
     }
 }
 
-/// The capabilities read so far, by id (`None`: not found).
-pub(crate) type Accounts = BTreeMap<CapabilityId, Option<Capability>>;
+/// What the page reads of a set of planned posts, one read per kind (slots, approvals, attempts
+/// and measurements, publications, posts) and one per account: [`PostReads::facts`] answers
+/// each area's planned posts from it.
+#[derive(Default)]
+pub struct PostReads {
+    slots: BTreeMap<SlotId, Slot>,
+    approvals: BTreeMap<SlotId, ApprovalReceipt>,
+    attempts: BTreeMap<SlotId, Vec<PublishAttempt>>,
+    measurements: Vec<Measurement>,
+    publications: BTreeMap<SlotId, Publication>,
+    retired: BTreeMap<SlotId, RetirementReason>,
+    accounts: BTreeMap<CapabilityId, Option<Capability>>,
+}
 
-/// What the planned posts of `p`'s current package are now: each version's slot, whether its
-/// account asks for an approval and who gave it, its publication among `publications`, and the
-/// last complete measurement of that publication. Nothing while the area holds no current
-/// package; a version with no planned post yet is not listed.
-pub(crate) async fn version_facts(
-    r: &mut dyn TenantRepos,
-    p: &ProductionProject,
-    publications: &[Publication],
-    accounts: &mut Accounts,
-) -> Result<Vec<VersionFact>, AppError> {
-    let Some(package) = p.packages.last().filter(|_| p.done_at().is_some()) else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for v in &package.versions {
-        let Some(slot_id) = v.slot_id else { continue };
-        let Some(slot) = r.studio().get_slot(slot_id).await? else {
-            continue;
-        };
-        if let std::collections::btree_map::Entry::Vacant(e) = accounts.entry(slot.capability_id) {
-            e.insert(r.capabilities().find(slot.capability_id).await?);
+impl PostReads {
+    /// Reads what [`PostReads::facts`] needs of the planned posts `slots`.
+    pub async fn load(r: &mut dyn TenantRepos, slots: &[SlotId]) -> Result<Self, AppError> {
+        let mut ids = slots.to_vec();
+        ids.sort();
+        ids.dedup();
+        if ids.is_empty() {
+            return Ok(Self::default());
         }
-        let account = accounts.get(&slot.capability_id).cloned().flatten();
-        let screen = account
-            .as_ref()
-            .is_some_and(|c| jt_studio::requires_posting_screen(&c.kind_key));
-        let required = screen
-            || account
-                .as_ref()
-                .is_some_and(|c| c.policy.requires_human_approval);
-        let receipt = r
+        let slots: BTreeMap<SlotId, Slot> = r
             .studio()
-            .get_approval(ApprovalTarget::Slot(slot_id), slot.revision)
-            .await?;
-        let (attempts, measurements) = r.studio().slot_evidence(slot_id).await?;
-        // As `studio.pending` asks for it: a ready post, never attempted, whose account asks.
-        let waiting = slot.state == SlotState::Ready
-            && attempts.is_empty()
-            && required
-            && receipt
-                .as_ref()
-                .is_none_or(|a| screen && a.tiktok.is_none());
-        let publication = publications
-            .iter()
-            .filter(|x| x.slot_id == slot_id)
-            .max_by_key(|x| x.published_at);
-        let unsent = !attempts.is_empty()
-            && attempts.iter().all(|a| {
-                matches!(
-                    a.outcome(),
-                    Some(PublishOutcome::Failed(_) | PublishOutcome::Refused(_))
-                )
-            });
-        let failed = publication.is_none() && (unsent || slot.state == SlotState::Retired);
-        let result = publication.and_then(|x| {
-            measurements
-                .iter()
-                .filter(|m| {
-                    m.publication_id == Some(x.id) && m.status == MeasurementStatus::Complete
-                })
-                .max_by_key(|m| (m.window, m.measured_at))
-                .map(|m| ResultFact {
-                    version_id: v.id,
-                    publication_id: x.id,
-                    window: m.window,
-                    measured_at: m.measured_at,
-                    metrics: m.raw_metrics.clone(),
-                })
-        });
-        out.push(VersionFact {
-            version_id: v.id,
-            approval: ApprovalFact {
-                version_id: v.id,
-                slot_id,
-                required,
-                waiting,
-                approved_by: receipt.as_ref().map(|a| a.by),
-                approved_at: receipt.as_ref().map(|a| a.at),
-            },
-            publication: PublicationFact {
-                version_id: v.id,
-                slot_id,
-                capability_id: slot.capability_id,
-                account_name: account.as_ref().map(|c| c.name.clone()),
-                state: slot.state,
-                scheduled_at: slot.scheduled_at,
-                published_at: publication.map(|x| x.published_at),
-                url: publication.and_then(|x| x.url.as_ref().map(|u| u.to_string())),
-                failed,
-            },
-            result,
-        });
+            .get_slots(&ids)
+            .await?
+            .into_iter()
+            .map(|s| (s.id, s))
+            .collect();
+        let revisions: Vec<(SlotId, u64)> = slots.values().map(|s| (s.id, s.revision)).collect();
+        let approvals = r
+            .studio()
+            .slot_approvals(&revisions)
+            .await?
+            .into_iter()
+            .collect();
+        let (all_attempts, measurements) = r.studio().slots_evidence(&ids).await?;
+        let mut attempts: BTreeMap<SlotId, Vec<PublishAttempt>> = BTreeMap::new();
+        for a in all_attempts {
+            attempts.entry(a.slot_id()).or_default().push(a);
+        }
+        let mut publications: BTreeMap<SlotId, Publication> = BTreeMap::new();
+        for x in r.studio().publications_of(&ids).await? {
+            let newer = publications
+                .get(&x.slot_id)
+                .is_none_or(|y| x.published_at >= y.published_at);
+            if newer {
+                publications.insert(x.slot_id, x);
+            }
+        }
+        let retired = r
+            .studio_posts()
+            .get_posts(&ids)
+            .await?
+            .into_iter()
+            .filter_map(|p| p.retired.map(|x| (p.slot_id, x.reason)))
+            .collect();
+        let mut accounts = BTreeMap::new();
+        for s in slots.values() {
+            if let std::collections::btree_map::Entry::Vacant(e) = accounts.entry(s.capability_id) {
+                e.insert(r.capabilities().find(s.capability_id).await?);
+            }
+        }
+        Ok(PostReads {
+            slots,
+            approvals,
+            attempts,
+            measurements,
+            publications,
+            retired,
+            accounts,
+        })
     }
-    Ok(out)
+
+    /// What the planned posts `posts` of one area are now, in their order: each version's slot,
+    /// whether its account asks for an approval and who gave it, its publication, and the last
+    /// complete measurement of that publication. The posts of the current package are all
+    /// listed; those of an earlier package only once they went out (what went out stays, with
+    /// its results). A post whose slot is not stored is not listed.
+    pub fn facts(&self, posts: &[AreaPost]) -> Vec<VersionFact> {
+        let mut out = Vec::new();
+        for post in posts {
+            let Some(slot) = self.slots.get(&post.slot_id) else {
+                continue;
+            };
+            let publication = self.publications.get(&slot.id);
+            if !post.current && publication.is_none() {
+                continue;
+            }
+            let account = self
+                .accounts
+                .get(&slot.capability_id)
+                .and_then(Option::as_ref);
+            let screen = account.is_some_and(|c| jt_studio::requires_posting_screen(&c.kind_key));
+            let required = screen || account.is_some_and(|c| c.policy.requires_human_approval);
+            let receipt = self.approvals.get(&slot.id);
+            let attempts: &[PublishAttempt] = self
+                .attempts
+                .get(&slot.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            // As `studio.pending` asks for it: a ready post, never attempted, whose account asks.
+            let waiting = slot.state == SlotState::Ready
+                && attempts.is_empty()
+                && required
+                && receipt.is_none_or(|a| screen && a.tiktok.is_none());
+            let retirement = self
+                .retired
+                .get(&slot.id)
+                .copied()
+                .filter(|_| slot.state == SlotState::Retired);
+            // A planned post has one attempt (`studio_publish_attempts` is unique by slot) and
+            // is never sent again once it failed or was refused: such a post failed for good.
+            let unsent = !attempts.is_empty()
+                && attempts.iter().all(|a| {
+                    matches!(
+                        a.outcome(),
+                        Some(PublishOutcome::Failed(_) | PublishOutcome::Refused(_))
+                    )
+                });
+            let failed = publication.is_none()
+                && match retirement {
+                    Some(RetirementReason::MissedGrace) => true,
+                    // Taken back on purpose: a person's cancellation, a redo, a strategy change.
+                    Some(_) => false,
+                    None => unsent,
+                };
+            let result = publication.and_then(|x| {
+                self.measurements
+                    .iter()
+                    .filter(|m| {
+                        m.publication_id == Some(x.id) && m.status == MeasurementStatus::Complete
+                    })
+                    .max_by_key(|m| (m.window, m.measured_at))
+                    .map(|m| ResultFact {
+                        version_id: post.version_id,
+                        publication_id: x.id,
+                        window: m.window,
+                        measured_at: m.measured_at,
+                        metrics: m.raw_metrics.clone(),
+                    })
+            });
+            out.push(VersionFact {
+                version_id: post.version_id,
+                approval: ApprovalFact {
+                    version_id: post.version_id,
+                    slot_id: slot.id,
+                    required,
+                    waiting,
+                    approved_by: receipt.map(|a| a.by),
+                    approved_at: receipt.map(|a| a.at),
+                },
+                publication: PublicationFact {
+                    version_id: post.version_id,
+                    slot_id: slot.id,
+                    capability_id: slot.capability_id,
+                    account_name: account.map(|c| c.name.clone()),
+                    state: slot.state,
+                    scheduled_at: slot.scheduled_at,
+                    published_at: publication.map(|x| x.published_at),
+                    url: publication.and_then(|x| x.url.as_ref().map(|u| u.to_string())),
+                    failed,
+                    retirement,
+                },
+                result,
+            });
+        }
+        out
+    }
 }

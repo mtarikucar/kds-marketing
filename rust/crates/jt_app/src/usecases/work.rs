@@ -1398,7 +1398,15 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
     area to a person. An accepted delivery finishes the area.";
 
 /// What the agent analysing a material a person dropped with no olay does (design 2026-11-18 §3).
-const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no olay: analyse it and     file it. Claim it with jeeta.studio.material_analysis_claim at expected_revision and inspect     the short-lived preview with your own tools; read jeeta.studio.olays_list for the olays it may     belong to (their kinds and dates) and jeeta.studio.material_intelligence_list to reuse groups     and labels. Complete with jeeta.studio.material_analysis_complete and a filing: olay_id of the     existing olay it comes from, or new_olay (kind, title, starts_on, ends_on, and place, occasion     or notes when known) when none fits, or genel only for an AI image. Never infer event dates     from upload time; when you cannot tell where it belongs, complete without a filing and a     person files it. Never set its share permission. Nothing wakes you: poll jeeta.work.checkin.";
+const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no olay: analyse it and \
+    file it. Claim it with jeeta.studio.material_analysis_claim at expected_revision and inspect \
+    the short-lived preview with your own tools; read jeeta.studio.olays_list for the olays it may \
+    belong to (their kinds and dates) and jeeta.studio.material_intelligence_list to reuse groups \
+    and labels. Complete with jeeta.studio.material_analysis_complete and a filing: olay_id of the \
+    existing olay it comes from, or new_olay (kind, title, starts_on, ends_on, and place, occasion \
+    or notes when known) when none fits, or genel only for an AI image. Never infer event dates \
+    from upload time; when you cannot tell where it belongs, complete without a filing and a \
+    person files it. Never set its share permission. Nothing wakes you: poll jeeta.work.checkin.";
 
 /// What an agent that has never seen the system needs to plan an ad campaign.
 const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \

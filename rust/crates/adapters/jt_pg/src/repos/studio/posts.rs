@@ -119,6 +119,22 @@ impl PostRepo for PgTenantRepos {
         row.map(decode).transpose()
     }
 
+    async fn get_posts(&mut self, slots: &[SlotId]) -> Result<Vec<PlannedPost>, AppError> {
+        if slots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_posts where workspace_id=$1 and slot_id = any($2) \
+             order by slot_id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(slots.iter().map(|s| s.0).collect::<Vec<Uuid>>())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read posts"))?;
+        rows.into_iter().map(decode).collect()
+    }
+
     async fn list_posts(&mut self) -> Result<Vec<PlannedPost>, AppError> {
         let rows: Vec<Value> = sqlx::query_scalar(
             "select data from studio_posts where workspace_id=$1 order by publish_at, slot_id",

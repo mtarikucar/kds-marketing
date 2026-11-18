@@ -341,3 +341,94 @@ async fn linking_derivative_resets_old_analysis_and_cancels_downstream_requests(
     assert_eq!(analyzed.intelligence.date_source, DateSource::Unknown);
     assert_eq!(analyzed.intelligence.description, "Owner correction");
 }
+
+/// Review fix 7: a material nobody filed is no derivative's source: a request naming it is
+/// refused, and a derivative of a source that is unfiled is blocked.
+#[tokio::test]
+async fn an_unfiled_material_is_no_derivatives_source() {
+    let (w, _) = publishing_world().await;
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(b"unfiled");
+    let file = files::file_upload(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"file-unfiled","filename":"u.png","mime":"image/png",
+            "content":{"kind":"bytes_base64","data":STANDARD.encode(bytes)}}),
+        ),
+    )
+    .await
+    .unwrap();
+    let dropped = library::material_add(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"unfiled","file_id":file.id,"origin":{"kind":"real"}})),
+    )
+    .await
+    .unwrap()
+    .material;
+    assert!(dropped.is_unfiled());
+    // Even with a share permission a person gave it, it is filed first.
+    let shared = library::material_permission(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"material_id":dropped.id,"expected_revision":dropped.revision,
+            "permission":"shareable"}),
+        ),
+    )
+    .await
+    .unwrap();
+    let e = library::material_production_request(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"from-unfiled","kind":"poster",
+            "instructions":"Make a poster","sources":[{"material_id":shared.id,
+            "expected_revision":shared.revision}]})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.details["reason"], "material_unfiled");
+    // A derivative whose source is unfiled (stored so before this rule) is blocked.
+    let source = material(&w, "source", false).await;
+    let p = request(&w, &source).await;
+    let a = agent(&w);
+    let claim = library::material_production_claim(
+        &w.d,
+        &a,
+        input(json!({"production_id":p.id,"expected_revision":p.revision})),
+    )
+    .await
+    .unwrap();
+    let output = material(&w, "output", true).await;
+    library::material_production_complete(&w.d,&a,input(json!({"production_id":p.id,"expected_revision":claim.production.revision,"claim_token":claim.claim_token,"output_material_id":output.id}))).await.unwrap();
+    let mut r = w.d.uow.tenant(w.ctx.workspace_id).await.unwrap();
+    r.studio_control().lock_control().await.unwrap();
+    assert!(
+        !library::blocked_derivatives(r.as_mut())
+            .await
+            .unwrap()
+            .contains(&output.id)
+    );
+    let mut unfiled = r
+        .studio_materials()
+        .get_material(source.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = unfiled.revision;
+    unfiled.binding = jt_studio::Binding::Unfiled;
+    unfiled.freed = None;
+    unfiled.revision += 1;
+    r.studio_materials()
+        .update_material(unfiled, revision)
+        .await
+        .unwrap();
+    assert!(
+        library::blocked_derivatives(r.as_mut())
+            .await
+            .unwrap()
+            .contains(&output.id)
+    );
+}

@@ -1697,6 +1697,67 @@ pub async fn receipt_upgrade_and_lookup(uow: &dyn UnitOfWork) {
             .await
             .is_err()
     );
+    drop(tx);
+    batch_reads_agree(uow, f.ws, &[f.slot.id, jt_studio::SlotId::new_v7()]).await;
+}
+
+/// The content page's reads of a set of planned posts, one read per kind, answer what the
+/// one-slot reads answer: the slots, their approvals at their revisions, their attempts and
+/// measurements, their publications and their posts (a slot not stored is in none).
+pub async fn batch_reads_agree(uow: &dyn UnitOfWork, ws: WorkspaceId, slots: &[SlotId]) {
+    let mut tx = uow.tenant(ws).await.unwrap();
+    let (mut stored, mut approvals, mut attempts, mut measurements, mut posts) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for id in slots {
+        if let Some(s) = tx.studio().get_slot(*id).await.unwrap() {
+            if let Some(a) = tx
+                .studio()
+                .get_approval(ApprovalTarget::Slot(s.id), s.revision)
+                .await
+                .unwrap()
+            {
+                approvals.push((s.id, a));
+            }
+            stored.push(s);
+        }
+        let (a, m) = tx.studio().slot_evidence(*id).await.unwrap();
+        attempts.extend(a);
+        measurements.extend(m);
+        if let Some(p) = tx.studio_posts().get_post(*id).await.unwrap() {
+            posts.push(p);
+        }
+    }
+    stored.sort_by_key(|s| s.id);
+    approvals.sort_by_key(|(id, _)| *id);
+    attempts.sort_by_key(|a| a.id());
+    measurements.sort_by_key(|m| m.id);
+    posts.sort_by_key(|p| p.slot_id);
+    assert!(!stored.is_empty(), "the check reads a stored slot");
+    assert_eq!(tx.studio().get_slots(slots).await.unwrap(), stored);
+    let revisions: Vec<(SlotId, u64)> = stored.iter().map(|s| (s.id, s.revision)).collect();
+    assert_eq!(
+        tx.studio().slot_approvals(&revisions).await.unwrap(),
+        approvals
+    );
+    assert_eq!(
+        tx.studio().slots_evidence(slots).await.unwrap(),
+        (attempts, measurements)
+    );
+    let mut publications: Vec<Publication> = tx
+        .studio()
+        .list_publications()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|p| slots.contains(&p.slot_id))
+        .collect();
+    publications.sort_by_key(|p| p.id);
+    assert_eq!(
+        tx.studio().publications_of(slots).await.unwrap(),
+        publications
+    );
+    assert_eq!(tx.studio_posts().get_posts(slots).await.unwrap(), posts);
+    assert!(tx.studio().get_slots(&[]).await.unwrap().is_empty());
 }
 
 /// [`seed_material`] with its bytes stored in `files` (a small PNG), so that a piece may show it

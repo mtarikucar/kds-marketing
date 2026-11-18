@@ -296,12 +296,13 @@ impl Material {
         self.binding == Binding::Unfiled
     }
 
-    /// The person whose upload confirms the olay an agent opens while filing this material
+    /// The person whose upload may confirm the olay an agent opens while filing this material
     /// (design 2026-11-18 §3, the owner's rule): a live, unfiled, real material that a person
     /// added in person. The person supplied the files, so the event they show is theirs; the
-    /// olay is confirmed by that rule, not by a click. `None` for anything else (an AI image, a
-    /// material an agent added, one already filed): an olay opened for it stays proposed until a
-    /// person confirms it (spec 2026-11-03 D3).
+    /// olay is confirmed by that rule, not by a click, but only when that person could confirm
+    /// an olay themselves at the time of filing (an owner or manager): the use case checks that.
+    /// `None` for anything else (an AI image, a material an agent added, one already filed): an
+    /// olay opened for it stays proposed until a person confirms it (spec 2026-11-03 D3).
     pub fn upload_confirms_olay(&self) -> Option<UserId> {
         match (&self.created_by, &self.origin, self.binding) {
             (Actor::Human { user_id }, Origin::Real, Binding::Unfiled)

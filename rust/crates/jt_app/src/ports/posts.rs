@@ -110,6 +110,19 @@ pub trait PostRepo: Send + Sync {
     /// retirement.
     async fn insert_post(&mut self, post: PlannedPost) -> Result<(), AppError>;
     async fn get_post(&mut self, slot: SlotId) -> Result<Option<PlannedPost>, AppError>;
+    /// The posts of the slots of `slots` that have one, by slot id; one read in the database.
+    async fn get_posts(&mut self, slots: &[SlotId]) -> Result<Vec<PlannedPost>, AppError> {
+        let mut unique = slots.to_vec();
+        unique.sort();
+        unique.dedup();
+        let mut out = Vec::new();
+        for slot in unique {
+            if let Some(p) = self.get_post(slot).await? {
+                out.push(p);
+            }
+        }
+        Ok(out)
+    }
     /// Every post of the workspace, by `publish_at`, then slot id.
     async fn list_posts(&mut self) -> Result<Vec<PlannedPost>, AppError>;
     /// Records why and when the post of `slot` was retired, once: `false` (nothing written) when

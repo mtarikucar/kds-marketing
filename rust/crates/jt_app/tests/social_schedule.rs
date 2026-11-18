@@ -687,3 +687,389 @@ async fn an_agent_that_cancels_a_planned_version_gives_it_another_time_and_a_per
     .unwrap_err();
     assert_eq!(e.details["reason"], "version_already_scheduled");
 }
+
+/// The production line's row of area `p` (`content.areas`).
+async fn line_row(w: &World, p: &ProductionProject) -> content::views::AreaRow {
+    content::areas(&w.d, &w.ctx, projects::ProjectQuery::default())
+        .await
+        .unwrap()
+        .areas
+        .into_iter()
+        .find(|r| r.area.id == p.id)
+        .expect("the area is on the production line")
+}
+
+fn stage(
+    row: &content::views::AreaRow,
+    key: content::pipeline::StageKey,
+) -> content::pipeline::Stage {
+    row.pipeline.stage(key).unwrap().clone()
+}
+
+/// The slot `id` as stored now.
+fn slot_now(w: &World, id: SlotId) -> Slot {
+    w.uow
+        .snapshot()
+        .studio
+        .slots
+        .into_iter()
+        .find(|s| s.id == id)
+        .unwrap()
+}
+
+/// Review fix 5: a post that went out stays in the pipeline, with its results and counted as
+/// published, while a redo stands and after the next package.
+#[tokio::test]
+async fn a_published_post_stays_on_the_line_through_a_redo_and_the_next_package() {
+    use content::pipeline::{StageKey, StageState};
+    let (mut w, x) = social_world().await;
+    let m = material(&w, true).await;
+    let other = material(&w, true).await;
+    let p = finished(
+        &w,
+        "kept",
+        &[&m, &other],
+        vec![
+            version(&w, &m, json!({})),
+            version(&w, &other, json!({"text":"İkinci gönderi"})),
+        ],
+    )
+    .await;
+    let a = agent(&w);
+    let first = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, WHEN, "k1")))
+        .await
+        .unwrap();
+    let later = datetime!(2026-10-26 10:00 UTC);
+    social::version_schedule(&w.d, &a, input(schedule_input(&p, 1, &w, later, "k2")))
+        .await
+        .unwrap();
+    w.d.clock = Arc::new(FixedClock(WHEN));
+    x.push_publish(Ok(sent()));
+    assert_eq!(publish::publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let mut person = w.ctx.clone();
+    person.now = WHEN;
+    content::area_redo(
+        &w.d,
+        &person,
+        input(json!({"project_id":p.id,"package_revision":1,"note":"Daha sade"})),
+    )
+    .await
+    .unwrap();
+    // The redo stands: the area is not finished, but what went out is still there.
+    let check = |row: &content::views::AreaRow| {
+        assert!(row.pipeline.published());
+        let yayin = stage(row, StageKey::Yayin);
+        let out: Vec<_> = yayin
+            .publications
+            .iter()
+            .filter(|f| f.published_at.is_some())
+            .collect();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].slot_id, first.publication.slot.id);
+        assert_ne!(yayin.state, StageState::Todo);
+        assert_ne!(yayin.state, StageState::Problem);
+        assert_eq!(stage(row, StageKey::Onay).state, StageState::Done);
+        assert_eq!(stage(row, StageKey::Sonuc).state, StageState::Current);
+    };
+    let row = line_row(&w, &p).await;
+    check(&row);
+    assert!(!row.pipeline.has_problem());
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    assert_eq!(tree.genel.published, 1);
+    // The agent delivers the next package: the published post of the first one stays.
+    let c = content::area_claim(
+        &w.d,
+        &a,
+        input(json!({"project_id":p.id,"expected_revision":line_row(&w, &p).await.area.revision})),
+    )
+    .await
+    .unwrap();
+    content::area_deliver(
+        &w.d,
+        &a,
+        input(
+            json!({"project_id":p.id,"claim_token":c.claim_token,"request_key":"kept-2",
+            "summary":"Yeniden","versions":[version(&w, &m, json!({"text":"Daha sade"}))]}),
+        ),
+    )
+    .await
+    .unwrap();
+    let row = line_row(&w, &p).await;
+    assert_eq!(
+        row.pipeline
+            .stage(StageKey::Paket)
+            .unwrap()
+            .package
+            .as_ref()
+            .unwrap()
+            .revision,
+        2
+    );
+    check(&row);
+    assert_eq!(
+        content::tree(&w.d, &w.ctx).await.unwrap().genel.published,
+        1
+    );
+}
+
+/// Review fix 5: a person's cancellation is not a problem; a post whose one attempt failed is;
+/// one whose outcome is still unknown is not (it is being asked about).
+#[tokio::test]
+async fn a_cancelled_post_is_no_problem_and_a_failed_one_is() {
+    use content::pipeline::{StageKey, StageState};
+    use jt_app::usecases::studio::work::{CancelSlotInput, slot_cancel};
+    use jt_connector::ConnectorError;
+    let (mut w, x) = social_world().await;
+    let a = agent(&w);
+    let m = material(&w, true).await;
+    let cancelled = finished(&w, "cancelled", &[&m], vec![version(&w, &m, json!({}))]).await;
+    let slot = social::version_schedule(
+        &w.d,
+        &a,
+        input(schedule_input(&cancelled, 0, &w, WHEN, "c1")),
+    )
+    .await
+    .unwrap()
+    .publication
+    .slot;
+    slot_cancel(
+        &w.d,
+        &w.ctx,
+        CancelSlotInput {
+            slot_id: slot.id,
+            expected_revision: slot.revision,
+            reason: "not this one".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let row = line_row(&w, &cancelled).await;
+    let yayin = stage(&row, StageKey::Yayin);
+    assert_eq!(
+        yayin.publications[0].retirement,
+        Some(RetirementReason::Cancelled)
+    );
+    assert!(!yayin.publications[0].failed);
+    assert_ne!(yayin.state, StageState::Problem);
+    assert!(!row.pipeline.has_problem());
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    assert_eq!(tree.waiting.problem_contents, 0);
+
+    // Its one attempt failed: a problem, for good (a planned post is never sent twice).
+    let failing = finished(&w, "failing", &[&m], vec![version(&w, &m, json!({}))]).await;
+    let day = WHEN + time::Duration::days(1);
+    let failed =
+        social::version_schedule(&w.d, &a, input(schedule_input(&failing, 0, &w, day, "f1")))
+            .await
+            .unwrap()
+            .publication
+            .slot;
+    w.d.clock = Arc::new(FixedClock(day));
+    x.push_publish(Err(ConnectorError::permanent("refused by the platform")));
+    publish::publish_due(&w.d, w.f.ws).await.unwrap();
+    let row = line_row(&w, &failing).await;
+    let yayin = stage(&row, StageKey::Yayin);
+    assert!(yayin.publications[0].failed);
+    assert_eq!(yayin.state, StageState::Problem);
+    assert!(row.pipeline.has_problem());
+    assert_eq!(
+        content::tree(&w.d, &w.ctx)
+            .await
+            .unwrap()
+            .waiting
+            .problem_contents,
+        1
+    );
+
+    // The outcome is unknown: still asked about, not a problem.
+    let unsure = finished(&w, "unsure", &[&m], vec![version(&w, &m, json!({}))]).await;
+    let next = WHEN + time::Duration::days(2);
+    social::version_schedule(&w.d, &a, input(schedule_input(&unsure, 0, &w, next, "u1")))
+        .await
+        .unwrap();
+    w.d.clock = Arc::new(FixedClock(next));
+    x.push_publish(Err(ConnectorError::unknown("response lost")));
+    publish::publish_due(&w.d, w.f.ws).await.unwrap();
+    let row = line_row(&w, &unsure).await;
+    let yayin = stage(&row, StageKey::Yayin);
+    assert!(!yayin.publications[0].failed);
+    assert_eq!(yayin.state, StageState::Current);
+
+    // A person cancels the failed post: a decision, not a problem any more.
+    let failed = slot_now(&w, failed.id);
+    slot_cancel(
+        &w.d,
+        &w.ctx,
+        CancelSlotInput {
+            slot_id: failed.id,
+            expected_revision: failed.revision,
+            reason: "leave it".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let row = line_row(&w, &failing).await;
+    assert!(!row.pipeline.has_problem());
+    assert_eq!(
+        content::tree(&w.d, &w.ctx)
+            .await
+            .unwrap()
+            .waiting
+            .problem_contents,
+        0
+    );
+}
+
+/// Review fix 4: the tree counts a folder the way its list shows it.
+#[tokio::test]
+async fn the_trees_numbers_agree_with_the_lists_of_the_same_folder() {
+    use content::views::WaitReason;
+    use jt_connector::ConnectorError;
+    let (mut w, x) = social_world().await;
+    let a = agent(&w);
+    let m = material(&w, true).await;
+    let olay = m.olay_id().unwrap();
+    let in_olay = |key: &'static str| {
+        let (w, a, m) = (&w, &a, &m);
+        async move {
+            let p = projects::project_create(
+                &w.d,
+                &w.ctx,
+                input(json!({"request_key":key,"brief":"Atölyeden bir gün",
+                    "material_ids":[m.id],"olay_id":olay})),
+            )
+            .await
+            .unwrap();
+            let c = content::area_claim(
+                &w.d,
+                a,
+                input(json!({"project_id":p.id,"expected_revision":p.revision})),
+            )
+            .await
+            .unwrap();
+            (p, c.claim_token)
+        }
+    };
+    let deliver = |p: ProductionProject, token: String, key: &'static str| {
+        let (w, a, m) = (&w, &a, &m);
+        async move {
+            content::area_deliver(
+                &w.d,
+                a,
+                input(
+                    json!({"project_id":p.id,"claim_token":token,"request_key":key,
+                    "summary":"Hazır","versions":[version(w, m, json!({}))]}),
+                ),
+            )
+            .await
+            .unwrap()
+            .project
+        }
+    };
+    // One published, one failed, one finished with no time yet, one waiting for a capture.
+    let (p, t) = in_olay("published").await;
+    let published = deliver(p, t, "published-d").await;
+    let (p, t) = in_olay("failed").await;
+    let failed = deliver(p, t, "failed-d").await;
+    let (p, t) = in_olay("waiting").await;
+    deliver(p, t, "waiting-d").await;
+    let (p, t) = in_olay("asking").await;
+    let p = content::area_progress(
+        &w.d,
+        &a,
+        input(json!({"project_id":p.id,"claim_token":t,"step":9,"note":"Yakın plan lazım"})),
+    )
+    .await
+    .unwrap()
+    .project;
+    projects::project_request(
+        &w.d,
+        &a,
+        input(
+            json!({"project_id":p.id,"expected_revision":p.revision,"request_key":"shot",
+            "text":"Yakın plan"}),
+        ),
+    )
+    .await
+    .unwrap();
+    social::version_schedule(
+        &w.d,
+        &a,
+        input(schedule_input(&published, 0, &w, WHEN, "t1")),
+    )
+    .await
+    .unwrap();
+    let day = WHEN + time::Duration::days(1);
+    social::version_schedule(&w.d, &a, input(schedule_input(&failed, 0, &w, day, "t2")))
+        .await
+        .unwrap();
+    w.d.clock = Arc::new(FixedClock(WHEN));
+    x.push_publish(Ok(sent()));
+    publish::publish_due(&w.d, w.f.ws).await.unwrap();
+    w.d.clock = Arc::new(FixedClock(day));
+    x.push_publish(Err(ConnectorError::permanent("refused")));
+    publish::publish_due(&w.d, w.f.ws).await.unwrap();
+
+    let tree = content::tree(&w.d, &w.ctx).await.unwrap();
+    let mut all = Vec::new();
+    for (folder, filter) in [
+        (
+            tree.olays
+                .iter()
+                .find(|o| o.olay.id() == olay)
+                .unwrap()
+                .folder
+                .clone(),
+            json!(olay),
+        ),
+        (tree.genel.clone(), json!("genel")),
+    ] {
+        let q: projects::ProjectQuery = input(json!({ "olay_id": filter }));
+        let rows = content::areas(&w.d, &w.ctx, q).await.unwrap().areas;
+        assert_eq!(folder.areas as usize, rows.len());
+        assert_eq!(
+            folder.published as usize,
+            rows.iter().filter(|r| r.pipeline.published()).count()
+        );
+        let area_waits = |reason: WaitReason, holds: bool| {
+            assert_eq!(folder.waits.contains(&reason), holds, "{reason:?}");
+        };
+        area_waits(
+            WaitReason::MaterialRequest,
+            rows.iter().any(|r| r.area.open_requests > 0),
+        );
+        area_waits(
+            WaitReason::ContentApproval,
+            rows.iter().any(|r| r.pipeline.awaits_approval()),
+        );
+        area_waits(
+            WaitReason::ContentProblem,
+            rows.iter().any(|r| r.pipeline.has_problem()),
+        );
+        all.extend(rows);
+    }
+    assert_eq!(tree.areas as usize, all.len());
+    assert_eq!(
+        tree.waiting.problem_contents as usize,
+        all.iter().filter(|r| r.pipeline.has_problem()).count()
+    );
+    assert_eq!(
+        tree.waiting.content_approvals as usize,
+        all.iter()
+            .flat_map(|r| r.pipeline.stage(content::pipeline::StageKey::Onay))
+            .flat_map(|s| s.approvals.iter())
+            .filter(|f| f.waiting)
+            .count()
+    );
+    // What this world holds, so the agreement is not vacuous.
+    let node = &tree
+        .olays
+        .iter()
+        .find(|o| o.olay.id() == olay)
+        .unwrap()
+        .folder;
+    assert_eq!(node.areas, 4);
+    assert_eq!(node.published, 1);
+    assert!(node.waits.contains(&WaitReason::MaterialRequest));
+    assert!(node.waits.contains(&WaitReason::ContentProblem));
+}
