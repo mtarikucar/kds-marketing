@@ -7,9 +7,10 @@ use jt_app::{
         ProjectRepo,
     },
 };
-use jt_studio::{OlayId, SlotId};
+use jt_studio::{MaterialId, OlayId, SlotId};
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 /// One planned post of an area as `area_posts` reads it out of the document.
@@ -40,6 +41,19 @@ const AREA_POSTS: &str = r#"select p.id, p.olay_id,
       and (coalesce((p.data->>'refused')::int, 0) >= $2
            or jsonb_path_exists(p.data, '$.packages[*].versions[*] ? (@.slot_id != null)'))
     order by p.id"#;
+
+// The materials among `$2` that some area of the workspace holds, archived or not: its sources'
+// materials and those its packages' versions show, read out of its document.
+const MATERIALS_IN_AREAS: &str = r#"select distinct u.id
+    from studio_production_projects p
+    cross join lateral (
+        select (x #>> '{}')::uuid as id
+          from jsonb_path_query(p.data, '$.sources[*].material_id') as x
+        union
+        select (x #>> '{}')::uuid
+          from jsonb_path_query(p.data, '$.packages[*].versions[*].material_ids[*]') as x
+    ) as u
+    where p.workspace_id = $1 and u.id = any($2)"#;
 
 /// The binds of an olay filter: whether one is given, and its olay (`None` with a filter: the
 /// areas of no olay). `olay_id` is a column generated from the document (migration 0044).
@@ -175,6 +189,22 @@ impl ProjectRepo for PgTenantRepos {
                 })
             })
             .collect()
+    }
+    async fn materials_in_areas(
+        &mut self,
+        ids: &[MaterialId],
+    ) -> Result<BTreeSet<MaterialId>, AppError> {
+        if ids.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let ids: Vec<Uuid> = ids.iter().map(|m| m.0).collect();
+        let rows: Vec<Uuid> = sqlx::query_scalar(MATERIALS_IN_AREAS)
+            .bind(self.workspace_id().0)
+            .bind(&ids)
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "list materials held by production areas"))?;
+        Ok(rows.into_iter().map(MaterialId).collect())
     }
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError> {
         let rows: Vec<Value> = sqlx::query_scalar(

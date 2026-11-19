@@ -1059,6 +1059,18 @@ pub struct PostsQuery {
 pub struct PostsOut {
     pub posts: Vec<PostOut>,
     pub settings: PostingSettings,
+    /// The content each listed post made of a content version was made of, for a reader of the
+    /// production line (`content.work` or `content.manage`); empty for anyone else, as
+    /// `studio.slot_get` shows a post's content to such a reader only.
+    #[serde(default)]
+    pub contents: Vec<PostContent>,
+}
+
+/// A planned post and the content (production area) whose version it was made of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostContent {
+    pub slot_id: SlotId,
+    pub project_id: Uuid,
 }
 
 /// The planned posts, by `publish_at`, each with its slot and whether it is pending: a post
@@ -1074,7 +1086,24 @@ pub async fn posts_list(d: &Deps, ctx: &Ctx, q: PostsQuery) -> Result<PostsOut, 
         crate::usecases::studio::permissions::for_use_case("studio.posts_list"),
     )
     .await?;
+    let reads_content = [
+        jt_tenancy::Permission::ContentWork,
+        jt_tenancy::Permission::ContentManage,
+    ]
+    .iter()
+    .any(|p| ctx.permissions.contains(p));
+    let keys: BTreeMap<PackageRequestId, String> = if reads_content {
+        r.studio_posts()
+            .list_package_requests()
+            .await?
+            .into_iter()
+            .map(|q| (q.id, q.key))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     let mut posts = Vec::new();
+    let mut contents = Vec::new();
     for p in r.studio_posts().list_posts().await? {
         if q.from.is_some_and(|f| p.publish_at < f) || q.until.is_some_and(|u| p.publish_at >= u) {
             continue;
@@ -1084,11 +1113,21 @@ pub async fn posts_list(d: &Deps, ctx: &Ctx, q: PostsQuery) -> Result<PostsOut, 
             .get_slot(p.slot_id)
             .await?
             .ok_or_else(|| AppError::internal("a post's slot is missing"))?;
+        if let Some(project_id) = keys
+            .get(&p.package_request_id)
+            .and_then(|k| crate::usecases::social::schedule::area_key(k.as_str()))
+        {
+            contents.push(PostContent {
+                slot_id: p.slot_id,
+                project_id,
+            });
+        }
         posts.push(post_out(p, slot, ctx.now));
     }
     Ok(PostsOut {
         posts,
         settings: r.studio_posts().posting_settings().await?,
+        contents,
     })
 }
 

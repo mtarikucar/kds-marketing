@@ -11,7 +11,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
             use_case: "social.version_schedule",
-            description: "Give one platform version of a finished content package its account and time: the post is planned under the posting limits and is ready to go out at once. A refusal names the limit; choose another time or account. [risk: WRITE]",
+            description: "Give one platform version of a finished content package its account and time: the post is planned under the posting limits and is ready to go out at once. A refusal names the limit; choose another time or account. A version the owner cancelled is refused (version_cancelled): leave it. [risk: WRITE]",
             permissions: &[Permission::SocialWork],
             schema: || Schema::try_from(social::schema("version_schedule")).expect("social schema"),
             run: version_schedule,

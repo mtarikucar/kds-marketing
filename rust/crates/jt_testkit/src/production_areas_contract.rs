@@ -136,6 +136,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
         hypothesis_id: jt_strategy::HypothesisId::new_v7(),
         content_type: None,
         slot_id,
+        cancelled: None,
     };
     let mut waiting = delivered(area(ws, 300), 300);
     waiting.packages[0].versions = vec![version(Some(jt_studio::SlotId::new_v7())), version(None)];
@@ -300,4 +301,58 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
         ]
     );
     assert!(of(unfinished.id).is_none(), "its one version has no post");
+    drop(r);
+
+    // The materials some area holds, archived or not: its sources, and those a version of any of
+    // its packages shows (an earlier package's too); a material no area holds is not listed.
+    let id = jt_studio::MaterialId::new_v7;
+    let (source, shown, earlier, archived_source, free) = (id(), id(), id(), id(), id());
+    let source_of = |material_id| ProjectSource {
+        material_id,
+        revision: 1,
+    };
+    let mut holder = delivered(area(ws, 500), 500);
+    holder.sources.push(source_of(source));
+    let mut old = version(None);
+    old.material_ids = vec![earlier];
+    holder.packages[0].versions = vec![old];
+    holder = delivered(holder, 501);
+    let mut current = version(None);
+    current.material_ids = vec![shown, source];
+    holder.packages[1].versions = vec![current];
+    let mut gone = area(ws, 502);
+    gone.archived = true;
+    gone.sources.push(source_of(archived_source));
+    let mut r = uow.tenant(ws).await.unwrap();
+    for p in [&holder, &gone] {
+        r.studio_projects()
+            .save_project(p.clone(), None)
+            .await
+            .unwrap();
+    }
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        r.studio_projects()
+            .materials_in_areas(&[source, shown, earlier, archived_source, free])
+            .await
+            .unwrap(),
+        [source, shown, earlier, archived_source]
+            .into_iter()
+            .collect()
+    );
+    assert!(
+        r.studio_projects()
+            .materials_in_areas(&[free])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        r.studio_projects()
+            .materials_in_areas(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

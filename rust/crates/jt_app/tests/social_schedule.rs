@@ -1369,3 +1369,238 @@ async fn a_finished_package_with_no_time_says_so_and_a_blocked_version_is_a_prob
         0
     );
 }
+
+/// "İptal et" on a post of a content: a person's cancel ends that version for good, with the
+/// reason on the content; the content's other planned post stays; the post is not planned again
+/// by the agent, nor do its images open a new content; once the last version is cancelled and
+/// nothing went out, the content is archived with it.
+#[tokio::test]
+async fn a_persons_cancel_ends_one_version_keeps_the_others_and_archives_the_content_with_the_last()
+{
+    use content::pipeline::StageKey;
+    use jt_app::usecases::studio::{
+        planner,
+        posts::posts_list,
+        work::{CancelSlotInput, slot_cancel, slot_get},
+    };
+    let (w, _) = social_world().await;
+    let m = material(&w, true).await;
+    let other = material(&w, true).await;
+    let p = finished(
+        &w,
+        "two-posts",
+        &[&m, &other],
+        vec![
+            version(&w, &m, json!({})),
+            version(&w, &other, json!({"text":"İkinci gönderi"})),
+        ],
+    )
+    .await;
+    let a = agent(&w);
+    let first = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, WHEN, "x1")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+    let later = datetime!(2026-10-26 10:00 UTC);
+    let second = social::version_schedule(&w.d, &a, input(schedule_input(&p, 1, &w, later, "x2")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+
+    // Before: neither post is the content's last, and the posts list names their content.
+    let c = slot_get(&w.d, &w.ctx, first.id)
+        .await
+        .unwrap()
+        .content
+        .unwrap();
+    assert!(!c.cancel_archives);
+    let listed = posts_list(&w.d, &w.ctx, input(json!({}))).await.unwrap();
+    for s in [first.id, second.id] {
+        assert!(
+            listed
+                .contents
+                .iter()
+                .any(|x| x.slot_id == s && x.project_id == p.id)
+        );
+    }
+    let mut social_only = w.ctx.clone();
+    social_only.permissions.remove(&Permission::ContentWork);
+    social_only.permissions.remove(&Permission::ContentManage);
+    assert!(
+        posts_list(&w.d, &social_only, input(json!({})))
+            .await
+            .unwrap()
+            .contents
+            .is_empty()
+    );
+
+    // The person cancels the first post with a reason.
+    slot_cancel(
+        &w.d,
+        &w.ctx,
+        CancelSlotInput {
+            slot_id: first.id,
+            expected_revision: slot_now(&w, first.id).revision,
+            reason: " Yinelenen paylaşım ".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let area = |w: &World| {
+        w.uow
+            .snapshot()
+            .production_projects
+            .into_iter()
+            .find(|x| x.id == p.id)
+            .unwrap()
+    };
+    let now = area(&w);
+    assert!(!now.archived, "the other version still goes out");
+    let versions = &now.packages[0].versions;
+    let cancelled = versions[0]
+        .cancelled
+        .as_ref()
+        .expect("the version is cancelled");
+    assert_eq!(cancelled.reason, "Yinelenen paylaşım");
+    assert_eq!(cancelled.slot_id, first.id);
+    assert_eq!(
+        versions[0].slot_id,
+        Some(first.id),
+        "it keeps its retired post"
+    );
+    assert_eq!(versions[1].cancelled, None);
+    assert_eq!(versions[1].slot_id, Some(second.id));
+    assert_eq!(slot_now(&w, first.id).state, SlotState::Retired);
+    assert_eq!(slot_now(&w, second.id).state, SlotState::Ready);
+
+    // Nobody plans it again: it does not wait for a time, and scheduling it is refused.
+    assert!(
+        social::versions_waiting(&w.d, &a, input(json!({})))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let e = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, later, "x3")))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "version_cancelled");
+    // The planner opens no content for its images: they are this content's.
+    planner::plan(&w.d, w.f.ws, FIXED_NOW + time::Duration::hours(2))
+        .await
+        .unwrap();
+    assert!(
+        !w.uow
+            .snapshot()
+            .production_projects
+            .iter()
+            .any(|x| matches!(
+                &x.opened_by,
+                OpenedBy::System {
+                    trigger: AreaTrigger::Olay,
+                    ..
+                }
+            ))
+    );
+    // The content says where the cancelled version stopped, and why.
+    let row = line_row(&w, &p).await;
+    let package = stage(&row, StageKey::Paket).package.unwrap();
+    assert_eq!(
+        package.versions[0]
+            .cancelled
+            .as_ref()
+            .map(|x| x.reason.as_str()),
+        Some("Yinelenen paylaşım")
+    );
+    assert_eq!(
+        stage(&row, StageKey::Yayin).publications[0].retirement,
+        Some(RetirementReason::Cancelled)
+    );
+    assert!(!row.pipeline.has_problem());
+
+    // The second is now the last one: cancelling it archives the content.
+    let c = slot_get(&w.d, &w.ctx, second.id)
+        .await
+        .unwrap()
+        .content
+        .unwrap();
+    assert!(c.cancel_archives);
+    slot_cancel(
+        &w.d,
+        &w.ctx,
+        CancelSlotInput {
+            slot_id: second.id,
+            expected_revision: slot_now(&w, second.id).revision,
+            reason: "Bu da olmasın".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let now = area(&w);
+    assert!(now.archived);
+    assert!(
+        now.packages[0]
+            .versions
+            .iter()
+            .all(|v| v.cancelled.is_some())
+    );
+    assert!(
+        w.uow
+            .snapshot()
+            .ledger
+            .iter()
+            .any(|e| e.entry.action.as_str() == "content.area.archived")
+    );
+}
+
+/// A content with a published post is not archived when its other posts are cancelled: what
+/// went out stays on the content page.
+#[tokio::test]
+async fn a_content_that_went_out_is_kept_when_its_last_planned_post_is_cancelled() {
+    use jt_app::usecases::studio::work::{CancelSlotInput, slot_cancel};
+    let (mut w, x) = social_world().await;
+    let m = material(&w, true).await;
+    let other = material(&w, true).await;
+    let p = finished(
+        &w,
+        "went-out",
+        &[&m, &other],
+        vec![
+            version(&w, &m, json!({})),
+            version(&w, &other, json!({"text":"İkinci gönderi"})),
+        ],
+    )
+    .await;
+    let a = agent(&w);
+    social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, WHEN, "o1")))
+        .await
+        .unwrap();
+    let later = datetime!(2026-10-26 10:00 UTC);
+    let second = social::version_schedule(&w.d, &a, input(schedule_input(&p, 1, &w, later, "o2")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+    w.d.clock = Arc::new(FixedClock(WHEN));
+    x.push_publish(Ok(sent()));
+    assert_eq!(publish::publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let mut person = w.ctx.clone();
+    person.now = WHEN;
+    slot_cancel(
+        &w.d,
+        &person,
+        CancelSlotInput {
+            slot_id: second.id,
+            expected_revision: slot_now(&w, second.id).revision,
+            reason: "Yeter".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let s = w.uow.snapshot();
+    let now = s.production_projects.iter().find(|x| x.id == p.id).unwrap();
+    assert!(!now.archived);
+    assert!(now.packages[0].versions[1].cancelled.is_some());
+    assert!(now.packages[0].versions[0].cancelled.is_none());
+}

@@ -85,6 +85,10 @@ pub struct VersionSummary {
     pub title: Option<String>,
     pub material_ids: Vec<MaterialId>,
     pub slot_id: Option<SlotId>,
+    /// A person cancelled its planned post: who, when and why. It stops at Yayın, unsent, and is
+    /// never planned again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<VersionCancel>,
 }
 
 /// A planned post made of a version (stage Onay): whether its account asks for a person's
@@ -412,6 +416,7 @@ pub fn project(
                             title: v.title.clone(),
                             material_ids: v.material_ids.clone(),
                             slot_id: v.slot_id,
+                            cancelled: v.cancelled.clone(),
                         })
                         .collect(),
                 });

@@ -198,6 +198,29 @@ pub struct PackageVersion {
     pub content_type: Option<String>,
     /// The planned post made of it, once it is scheduled.
     pub slot_id: Option<SlotId>,
+    /// A person cancelled the planned post made of it ([`VersionCancel`]): the version keeps that
+    /// retired post and is never planned again. Absent on every other version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<VersionCancel>,
+}
+
+/// A person's cancellation of the planned post made of a version ("İptal et": `studio.slot_cancel`
+/// in person). The post does not go out and the version is never planned again: it keeps its
+/// retired post as its `slot_id`, so neither `social.versions_waiting` nor the agent's next run
+/// offers it, and `social.version_schedule` refuses it (`version_cancelled`). The content's other
+/// versions are left as they are; once every version of the current package is cancelled and
+/// nothing of the content went out, the content is archived with the last one. A redo of the
+/// content makes a new package, whose versions are new. An agent's cancel is not one: it moves the
+/// post, and the version waits for a time again.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionCancel {
+    pub by: UserId,
+    #[serde(with = "jt_studio::time_compat")]
+    pub at: OffsetDateTime,
+    /// What the person wrote when cancelling.
+    pub reason: String,
+    /// The planned post that was cancelled.
+    pub slot_id: SlotId,
 }
 
 /// A person's "Düzenleme iste": what should change. It stands until a delivery answers it.
@@ -500,6 +523,12 @@ pub trait ProjectRepo: Send + Sync {
     /// [`AreaPosts::of`] every area not archived that is held or has a planned post, by id,
     /// without reading the documents whole.
     async fn area_posts(&mut self) -> Result<Vec<AreaPosts>, AppError>;
+    /// Of `ids`, the materials some area holds, archived or not: a source of it, or shown by a
+    /// version of any of its packages. One read, whatever the number of areas.
+    async fn materials_in_areas(
+        &mut self,
+        ids: &[MaterialId],
+    ) -> Result<std::collections::BTreeSet<MaterialId>, AppError>;
     /// Finished areas whose current package holds a version no planned post was made of, oldest
     /// delivery first, then id, at most 200: what waits for a time (design §7.2).
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError>;

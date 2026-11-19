@@ -269,3 +269,142 @@ async fn without_the_social_module_materials_still_open_areas_and_no_channel_is_
     assert!(opened(&w, AreaTrigger::Olay).is_empty());
     assert!(opened(&w, AreaTrigger::Floor).is_empty());
 }
+
+/// A content a person opened, with `materials` as its sources.
+async fn content_of(w: &World, key: &str, materials: &[&Material]) -> ProductionProject {
+    jt_app::usecases::studio::projects::project_create(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(json!({"request_key":key,"brief":"Haftanın paylaşımı",
+            "material_ids":materials.iter().map(|m| m.id).collect::<Vec<_>>()}))
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+/// Adds `materials` to area `p`'s sources, as an agent does with `studio.project_materials`.
+async fn attach(w: &World, p: &ProductionProject, materials: &[&Material]) -> ProductionProject {
+    let a = agent_at(w, w.ctx.now);
+    jt_app::usecases::studio::projects::project_materials(
+        &w.d,
+        &a,
+        serde_json::from_value(json!({"project_id":p.id,"expected_revision":p.revision,
+            "add":materials.iter().map(|m| m.id).collect::<Vec<_>>()}))
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+/// An agent takes area `p` at `at` and delivers one version showing `shown`.
+async fn deliver(w: &World, p: &ProductionProject, shown: &Material, at: OffsetDateTime) {
+    let a = agent_at(w, at);
+    let c = jt_app::usecases::content::area_claim(
+        &w.d,
+        &a,
+        serde_json::from_value(json!({"project_id":p.id,"expected_revision":p.revision})).unwrap(),
+    )
+    .await
+    .unwrap();
+    jt_app::usecases::content::area_deliver(
+        &w.d,
+        &a,
+        serde_json::from_value(json!({"project_id":p.id,"claim_token":c.claim_token,
+            "request_key":format!("{}-delivery", p.id),"summary":"Hazır",
+            "versions":[{"format":"feed_post","text":"Yeni hali","tags":[],
+                "material_ids":[shown.id],"hypothesis_id":w.f.slot.chain.hypothesis_id}]}))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+}
+
+fn sources(p: &ProductionProject) -> Vec<MaterialId> {
+    p.sources.iter().map(|s| s.material_id).collect()
+}
+
+/// The production sequence of 19 November 2026: two images of a confirmed olay are attached by
+/// an agent to two contents that already existed, and the agent delivers their new versions
+/// with those images. Half an hour after the images arrived the olay trigger finds nothing new:
+/// it used to open a third content for the same two images. A new image later still
+/// opens a content of its own, of that image alone.
+#[tokio::test]
+async fn images_an_agent_attached_to_existing_contents_open_no_content_of_their_own() {
+    let w = content_world().await;
+    let o = workshop(&w).await;
+    let first = content_of(&w, "first", &[]).await;
+    let second = content_of(&w, "second", &[]).await;
+    let a = material(&w, &o, minutes(0)).await;
+    let b = material(&w, &o, minutes(0)).await;
+    let first = attach(&w, &first, &[&a]).await;
+    let second = attach(&w, &second, &[&b]).await;
+    deliver(&w, &first, &a, minutes(33)).await;
+    deliver(&w, &second, &b, minutes(33)).await;
+    plan(&w, minutes(33)).await;
+    plan(&w, minutes(120)).await;
+    assert!(
+        opened(&w, AreaTrigger::Olay).is_empty(),
+        "the images are already the two contents'"
+    );
+    assert!(
+        !w.uow
+            .snapshot()
+            .posts
+            .requests
+            .iter()
+            .any(|q| q.trigger == PackageTrigger::Olay),
+        "nothing is asked for them"
+    );
+
+    // The olay keeps receiving its daily images: the next batch is new, and makes one content.
+    let next = material(&w, &o, minutes(400)).await;
+    plan(&w, minutes(431)).await;
+    let areas = opened(&w, AreaTrigger::Olay);
+    assert_eq!(areas.len(), 1);
+    assert_eq!(sources(&areas[0]), [next.id]);
+}
+
+/// Of a batch where some images are already a content's and some are new, the new ones make the
+/// request; an image held only by an archived content stays taken (giving it back would open the
+/// content the person closed again); an image taken out of a content's sources is new again.
+#[tokio::test]
+async fn a_mixed_batch_asks_for_its_new_images_and_an_archived_content_keeps_its_own() {
+    let w = content_world().await;
+    let o = workshop(&w).await;
+    let used = material(&w, &o, minutes(0)).await;
+    let archived = material(&w, &o, minutes(0)).await;
+    let removed = material(&w, &o, minutes(0)).await;
+    let fresh = material(&w, &o, minutes(1)).await;
+    content_of(&w, "holder", &[&used]).await;
+    let closed = content_of(&w, "closed", &[&archived]).await;
+    jt_app::usecases::studio::projects::project_update(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(
+            json!({"project_id":closed.id,"expected_revision":closed.revision,"archived":true}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    let left = content_of(&w, "left", &[&removed]).await;
+    jt_app::usecases::studio::projects::project_materials(
+        &w.d,
+        &w.ctx,
+        serde_json::from_value(
+            json!({"project_id":left.id,"expected_revision":left.revision,
+            "remove":[removed.id]}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    plan(&w, minutes(32)).await;
+    let areas = opened(&w, AreaTrigger::Olay);
+    assert_eq!(areas.len(), 1);
+    assert_eq!(sources(&areas[0]), [removed.id, fresh.id]);
+    // The request lists what it asked for: nothing more is asked later.
+    plan(&w, minutes(300)).await;
+    assert_eq!(opened(&w, AreaTrigger::Olay).len(), 1);
+}

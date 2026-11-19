@@ -8,7 +8,7 @@ use crate::{
     ports::{
         TenantRepos,
         materials::MaterialRelease,
-        production_projects::{PackageVersion, ProductionProject},
+        production_projects::{PackageVersion, ProductionProject, VersionCancel},
     },
     usecases::{
         Deps, content, hash_token, ledger_entry,
@@ -32,7 +32,7 @@ use jt_studio::{
     ChannelContent, MaterialId, MediaAsset, PackageHints, PackageRequest, PackageRequestId,
     PackageStatus, PackageTrigger, PostFormat, RetirementReason, SlotId, SlotState,
 };
-use jt_tenancy::Permission;
+use jt_tenancy::{Permission, UserId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -111,7 +111,8 @@ async fn answer(
 /// gate), and in the same transaction the version's text and materials become the slot's piece,
 /// so the slot is ready at once. A refusal of the engine answers as `studio.posts_propose`
 /// answers it, and stores nothing. One planned post per version: a second call for the same
-/// version is refused (`version_already_scheduled`), the same call replays by `request_key`.
+/// version is refused (`version_already_scheduled`), the same call replays by `request_key`; a
+/// version whose post a person cancelled is never planned again (`version_cancelled`).
 pub async fn version_schedule(
     d: &Deps,
     ctx: &Ctx,
@@ -147,6 +148,9 @@ pub async fn version_schedule(
         .position(|v| v.id == i.version_id)
         .ok_or_else(|| AppError::not_found("package version"))?;
     let version = package.versions[index].clone();
+    if version.cancelled.is_some() {
+        return Err(chain::refuse("version_cancelled"));
+    }
     if version.slot_id.is_some() {
         return Err(chain::refuse("version_already_scheduled"));
     }
@@ -398,11 +402,18 @@ pub(crate) async fn area_of(
     else {
         return Ok(None);
     };
-    let mut parts = request.key.split(':');
+    Ok(area_key(&request.key))
+}
+
+/// The area a package request key names, when it is a content version's
+/// (`project:<area>:version:<version>`, with `:<round>` after it from its second planning on);
+/// `None` for any other key.
+pub(crate) fn area_key(key: &str) -> Option<Uuid> {
+    let mut parts = key.split(':');
     let (Some("project"), Some(project), Some("version"), Some(_)) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return Ok(None);
+        return None;
     };
     // Nothing after the version, or its planning round and nothing after that.
     if parts
@@ -410,9 +421,9 @@ pub(crate) async fn area_of(
         .is_some_and(|round| round.parse::<u32>().is_err())
         || parts.next().is_some()
     {
-        return Ok(None);
+        return None;
     }
-    Ok(Uuid::parse_str(project).ok())
+    Uuid::parse_str(project).ok()
 }
 
 /// How many times one version can be planned (each planning after a post was taken back or
@@ -421,7 +432,8 @@ const MAX_ROUNDS: u32 = 50;
 
 /// Frees the content version whose planned post was `slot`, when the post was a version's
 /// (its package request is keyed `project:<area>:version:<version>`, with `:<round>` after it
-/// from its second planning on): the version waits for a time again. Nothing for any other post.
+/// from its second planning on): the version waits for a time again. Nothing for any other post,
+/// nor for a version a person cancelled ([`VersionCancel`]): it keeps its post and stays ended.
 pub(crate) async fn free_version_of(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
@@ -436,7 +448,7 @@ pub(crate) async fn free_version_of(
     let mut freed = false;
     if let Some(package) = p.packages.last_mut() {
         for version in &mut package.versions {
-            if version.slot_id == Some(slot) {
+            if version.slot_id == Some(slot) && version.cancelled.is_none() {
                 version.slot_id = None;
                 freed = true;
             }
@@ -446,6 +458,85 @@ pub(crate) async fn free_version_of(
         crate::usecases::studio::projects::save(r, ctx, p, "social.version.released").await?;
     }
     Ok(())
+}
+
+/// Whether a person's cancel of the planned post `slot` leaves nothing of area `p` to go out, so
+/// that the area is archived with it: `slot` is the post of a version of the current package of
+/// an area not archived, every other version of that package was cancelled by a person, and no
+/// post of the area (of any package) went out.
+pub(crate) async fn cancel_archives(
+    r: &mut dyn TenantRepos,
+    p: &ProductionProject,
+    slot: SlotId,
+) -> Result<bool, AppError> {
+    let Some(package) = p.packages.last().filter(|_| !p.archived) else {
+        return Ok(false);
+    };
+    if !package.versions.iter().any(|v| v.slot_id == Some(slot))
+        || package
+            .versions
+            .iter()
+            .any(|v| v.slot_id != Some(slot) && v.cancelled.is_none())
+    {
+        return Ok(false);
+    }
+    let slots: Vec<SlotId> = p.posts().iter().map(|x| x.slot_id).collect();
+    Ok(r.studio().publications_of(&slots).await?.is_empty())
+}
+
+/// A person's cancel of the planned post `slot` ("İptal et", `studio.slot_cancel` in person) when
+/// it was made of a version of an area's current package: the version is marked cancelled with
+/// the person's `reason` ([`VersionCancel`]) and keeps its retired post, so it is never planned
+/// again; the content's other versions stay as they are. Once every version of the package is
+/// cancelled and nothing of the area went out ([`cancel_archives`]), the area is archived with it.
+/// Answers whether it archived the area. Nothing for any other post.
+pub(crate) async fn cancel_version_of(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    slot: SlotId,
+    by: UserId,
+    reason: &str,
+) -> Result<bool, AppError> {
+    let Some(id) = area_of(r, slot).await? else {
+        return Ok(false);
+    };
+    let Some(mut p) = r.studio_projects().get_project(id).await? else {
+        return Ok(false);
+    };
+    if p.archived {
+        return Ok(false);
+    }
+    let archive = cancel_archives(r, &p, slot).await?;
+    let Some(version) = p
+        .packages
+        .last_mut()
+        .and_then(|k| k.versions.iter_mut().find(|v| v.slot_id == Some(slot)))
+    else {
+        return Ok(false);
+    };
+    version.cancelled = Some(VersionCancel {
+        by,
+        at: ctx.now,
+        reason: reason.to_owned(),
+        slot_id: slot,
+    });
+    if archive {
+        projects::invalidate(r, ctx, &mut p, None, "project_archived", false).await?;
+        p.archived = true;
+    }
+    let p = projects::save(r, ctx, p, "content.version.cancelled").await?;
+    if archive {
+        r.ledger()
+            .append(ledger_entry(
+                ctx,
+                "content.area.archived",
+                "production_project",
+                p.id,
+                json!({"reason":"every_version_cancelled","slot_id":slot,"revision":p.revision}),
+            )?)
+            .await?;
+    }
+    Ok(archive)
 }
 
 /// A finished package with versions that wait for a time.
