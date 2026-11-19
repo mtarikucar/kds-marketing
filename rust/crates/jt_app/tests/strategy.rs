@@ -2682,6 +2682,8 @@ async fn a_persons_approval_wakes_the_agent_that_schedules_waiting_versions() {
         [WakeReason::StrategyApproved]
     );
     assert!(pending(materials).is_none());
+}
+
 // ---------------------------------------------------------------------------------------------
 // add_channel and the owner's request (design 2026-11-19 F2, F3)
 // ---------------------------------------------------------------------------------------------

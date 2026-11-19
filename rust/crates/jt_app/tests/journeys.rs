@@ -215,14 +215,21 @@ async fn world_for(p: Platform) -> Journey {
             group_id: None,
         },
     ];
+    // An approved version is not edited: the one with these sections replaces it, as approving
+    // a new version does (the version before archived).
+    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    let user = v.approved_by.unwrap();
     r.strategy()
-        .update_sections(v.id, v.sections.clone(), FIXED_NOW)
+        .set_status(v.id, VersionStatus::Archived, FIXED_NOW, Some(user))
         .await
         .unwrap();
-    let mut h = r.hypotheses().list(v.id).await.unwrap().remove(0);
+    v.id = StrategyVersionId::new_v7();
+    v.number += 1;
+    r.strategy().insert(v.clone()).await.unwrap();
     h.channel = elsewhere(p).into();
     let other = h.id;
     r.hypotheses().upsert(v.id, h).await.unwrap();
+    w.current = v.id;
 
     let account = if p.kind == "x" {
         w.f.slot.capability_id
