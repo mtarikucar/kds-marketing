@@ -370,17 +370,17 @@
     "more": "Daha fazla",
     "waiting": "Ajan {{n}} çekim istedi",
     "held": "Ajan çözemedi; bakmanız gerekiyor",
-    "redoStatus": "Yeniden yapılıyor: “{{note}}”",
+    "redoStatus": "Düzenleme istendi: “{{note}}”",
     "versions": "Platform sürümleri",
     "account": "Hesap seçilmedi",
     "usedMaterials": "Kullanılan materyaller",
     "missingMaterial": "Materyal kullanılamıyor",
     "checksPassed": "Materyal izni ve doğruluk kontrolleri geçti",
     "agentNote": "Ajanın notları",
-    "redo": "Olmamış",
-    "redoHelp": "Neyin değişmesini istediğinizi yazın. Ajan yeni bir paket hazırlasın.",
+    "redo": "Düzenleme iste",
+    "redoHelp": "Neyin değişmesini istediğinizi yazın. Ajan içeriği notunuza göre yeniden hazırlar; planlı paylaşımları takvimden çıkar, yayınlanmış olanlar kalır.",
     "redoNote": "Ne değişsin?",
-    "redoSubmit": "Yeniden yap",
+    "redoSubmit": "Gönder",
     "heldHelp": "Ajan bu içeriği üç denemede de materyal izni ve doğruluk kontrollerinden geçiremedi. Neyin değişeceğini yazıp ajana geri gönderin ya da alanı arşivleyin.",
     "heldAction": "Not yazıp geri gönder",
     "heldReasons": "Son teslimde tutulan sürümler",
@@ -1715,6 +1715,8 @@
       "submit": "{{provider}} ile oturum aç",
       "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
       "reconnectSubmit": "Yeniden bağla",
+      "reconnectOptionalBody": "Bağlantı çalışıyor; yeniden oturum açmanız gerekmez. Yalnızca izinleri yeniden vermek isterseniz (örneğin sağlayıcıda Jeeta’nın izinlerini değiştirdiyseniz ya da şifrenizi yenilediyseniz) aynı hesapla yeniden oturum açın.",
+      "reconnectOptionalSubmit": "Yine de yeniden oturum aç",
       "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
     },
     "whatsapp": {
@@ -4015,7 +4017,7 @@
       "saved": "Kaydedildi.",
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
       "providerScheduling": "Platformun kendi zamanlayıcısını kullan",
-      "providerSchedulingHelp": "Açıkken, zamanlayıcısı olan platformlarda (şimdilik Facebook Sayfası: metin, bağlantı ve tek görselli paylaşımlar) paylaşım saatinden önce platforma bırakılır ve orada zamanlanmış görünür. Fren, duraklatma ya da “Olmamış” platformdaki paylaşımı geri çeker. Kapalıyken her paylaşımı saatinde Jeeta yayınlar.",
+      "providerSchedulingHelp": "Açıkken, zamanlayıcısı olan platformlarda (şimdilik Facebook Sayfası: metin, bağlantı ve tek görselli paylaşımlar) paylaşım saatinden önce platforma bırakılır ve orada zamanlanmış görünür. Fren, duraklatma ya da “Düzenleme iste” platformdaki paylaşımı geri çeker. Kapalıyken her paylaşımı saatinde Jeeta yayınlar.",
       "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
       "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
     }
@@ -4513,5 +4515,29 @@
       "title": "Özel günler ve kurallar",
       "help": "Açık olan özel günlerin hazırlığı zamanı gelince başlar: o günün onaylı olayında kullanılabilir dosya varsa içerik üretilir, yoksa sistem çekim listesine istek ekler. Olayı sistem açmaz; siz açarsınız."
     }
+  },
+  "socialRevision": {
+    "request": "Düzenleme iste",
+    "note": "Ne değişsin?",
+    "send": "Gönder",
+    "dismiss": "Vazgeç",
+    "postName": "{{account}} · {{format}} · {{at}}",
+    "leaves": "Bu paylaşım takvimden çıkar.",
+    "othersLeave_one": "Aynı içeriğin şu paylaşımı da çıkar: {{list}}.",
+    "othersLeave_other": "Aynı içeriğin şu paylaşımları da çıkar: {{list}}.",
+    "publishedStays_one": "Yayınlanmış olan kalır: {{list}}.",
+    "publishedStays_other": "Yayınlanmış olanlar kalır: {{list}}.",
+    "remakeApproval": "Ajan içeriği notunuza göre yeniden hazırlar, yeni hali onayınıza gelir.",
+    "remakeQueue": "Ajan içeriği notunuza göre yeniden hazırlar, yeni hali yeniden sıraya girer.",
+    "sent": "Düzenleme istendi. Yeni hali gelene kadar “Düzenleniyor” altında görünür.",
+    "stale": "İçerik bu arada değişti; güncel hali yüklendi. Notunuza bakıp yeniden gönderin.",
+    "unconfirmed": "Platform zamanlanmış paylaşımı geri aldığını doğrulamadı; hiçbir şey değişmedi. Biraz sonra yeniden deneyin.",
+    "noContent": "Bu paylaşım bir içerikten gelmedi; düzenlenecek içerik yok. İsterseniz iptal edin, gönderilmez.",
+    "cancel": "Paylaşımı iptal et",
+    "group": "Düzenleniyor",
+    "groupHelp": "Düzenleme istediğiniz içerikler. Ajanın yeni hali gelince buradan kalkar.",
+    "asked": "Notunuz: “{{note}}”",
+    "askedAt": "{{at}} istendi",
+    "open": "İçeriği aç"
   }
 }

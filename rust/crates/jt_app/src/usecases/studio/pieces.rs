@@ -382,6 +382,7 @@ fn submission_receipt(out: &SlotOut) -> SlotOut {
     SlotOut {
         piece: None,
         material_check: None,
+        content: None,
         ..out.clone()
     }
 }

@@ -327,17 +327,17 @@ pub async fn version_schedule(
 /// person asked for the content to change (design B7): each such post is cancelled with the
 /// reason `content_redo` and its version is free again. A version that was published keeps its
 /// post, and so does one a provider may be taking at this moment: neither can be taken back.
-/// Answers how many posts were cancelled.
+/// Answers the posts it cancelled.
 pub(crate) async fn withdraw_planned(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     project: &mut ProductionProject,
-) -> Result<usize, AppError> {
+) -> Result<Vec<SlotId>, AppError> {
     let Some(package) = project.packages.last_mut() else {
-        return Ok(0);
+        return Ok(Vec::new());
     };
     let frame = r.strategy().current_approved().await?.map(|v| v.id);
-    let mut cancelled = 0;
+    let mut cancelled = Vec::new();
     for version in &mut package.versions {
         let Some(slot_id) = version.slot_id else {
             continue;
@@ -345,14 +345,7 @@ pub(crate) async fn withdraw_planned(
         let Some(slot) = r.studio().get_slot(slot_id).await? else {
             continue;
         };
-        let queued = matches!(slot.state, SlotState::Planned | SlotState::Ready);
-        let in_flight = r.studio().slot_evidence(slot.id).await?.0.iter().any(|a| {
-            matches!(
-                a.state(),
-                jt_studio::PublishState::Sending | jt_studio::PublishState::Unknown
-            )
-        });
-        if !queued || in_flight {
+        if !withdrawable(&slot, &r.studio().slot_evidence(slot.id).await?.0) {
             continue;
         }
         let retired = r
@@ -371,9 +364,55 @@ pub(crate) async fn withdraw_planned(
         entry.strategy_version_id = frame.map(|id| id.0);
         r.ledger().append(entry).await?;
         version.slot_id = None;
-        cancelled += 1;
+        cancelled.push(retired.id);
     }
     Ok(cancelled)
+}
+
+/// Whether a redo takes back the planned post `slot` with its `attempts` ([`withdraw_planned`]):
+/// still planned or ready, and no provider may be taking it at this moment.
+pub(crate) fn withdrawable(slot: &jt_studio::Slot, attempts: &[jt_studio::PublishAttempt]) -> bool {
+    matches!(slot.state, SlotState::Planned | SlotState::Ready)
+        && !attempts.iter().any(|a| {
+            matches!(
+                a.state(),
+                jt_studio::PublishState::Sending | jt_studio::PublishState::Unknown
+            )
+        })
+}
+
+/// The area whose content version the planned post `slot` was made of: its package request is
+/// keyed `project:<area>:version:<version>`, with `:<round>` after it from its second planning
+/// on. `None` for any other post (one an agent proposed directly, a weekly quota's).
+pub(crate) async fn area_of(
+    r: &mut dyn TenantRepos,
+    slot: jt_studio::SlotId,
+) -> Result<Option<Uuid>, AppError> {
+    let Some(post) = r.studio_posts().get_post(slot).await? else {
+        return Ok(None);
+    };
+    let Some(request) = r
+        .studio_posts()
+        .get_package_request(post.package_request_id)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let mut parts = request.key.split(':');
+    let (Some("project"), Some(project), Some("version"), Some(_)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Ok(None);
+    };
+    // Nothing after the version, or its planning round and nothing after that.
+    if parts
+        .next()
+        .is_some_and(|round| round.parse::<u32>().is_err())
+        || parts.next().is_some()
+    {
+        return Ok(None);
+    }
+    Ok(Uuid::parse_str(project).ok())
 }
 
 /// How many times one version can be planned (each planning after a post was taken back or
@@ -388,31 +427,7 @@ pub(crate) async fn free_version_of(
     ctx: &Ctx,
     slot: jt_studio::SlotId,
 ) -> Result<(), AppError> {
-    let Some(post) = r.studio_posts().get_post(slot).await? else {
-        return Ok(());
-    };
-    let Some(request) = r
-        .studio_posts()
-        .get_package_request(post.package_request_id)
-        .await?
-    else {
-        return Ok(());
-    };
-    let mut parts = request.key.split(':');
-    let (Some("project"), Some(project), Some("version"), Some(_)) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Ok(());
-    };
-    // Nothing after the version, or its planning round and nothing after that.
-    if parts
-        .next()
-        .is_some_and(|round| round.parse::<u32>().is_err())
-        || parts.next().is_some()
-    {
-        return Ok(());
-    }
-    let Ok(project) = Uuid::parse_str(project) else {
+    let Some(project) = area_of(r, slot).await? else {
         return Ok(());
     };
     let Some(mut p) = r.studio_projects().get_project(project).await? else {

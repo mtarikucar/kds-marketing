@@ -200,13 +200,18 @@ pub struct PackageVersion {
     pub slot_id: Option<SlotId>,
 }
 
-/// A person's "Olmamış": what should change. It stands until a delivery answers it.
+/// A person's "Düzenleme iste": what should change. It stands until a delivery answers it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedoRequest {
     pub note: String,
     pub by: UserId,
     #[serde(with = "jt_studio::time_compat")]
     pub at: OffsetDateTime,
+    /// The planned posts the redo took back (of every redo standing, when a person wrote the
+    /// note again): where the content had posts that are now being made again. A redo from
+    /// before this field reads with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withdrawn: Vec<SlotId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -342,7 +342,8 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
  * folded under "Gelişmiş". An owner or manager with `social.work` changes them in person;
  * anyone else reads them (spec D21, D24–D29, D56).
  */
-export function SettingsDialog({ accounts }: { accounts: SocialAccount[] }) {
+/** `accounts`: `undefined` until they are read; until then the dialog says nothing of approval. */
+export function SettingsDialog({ accounts }: { accounts?: SocialAccount[] }) {
   const { t, i18n } = useTranslation();
   const [place, go] = useSocialPlace();
   const posts = usePostsRead(true);
@@ -354,12 +355,12 @@ export function SettingsDialog({ accounts }: { accounts: SocialAccount[] }) {
   const line = (rule: Rule) => settings && (
     <RuleLine key={rule.id} rule={rule} settings={settings} decider={decider} editing={editing === rule.id} onEdit={() => setEditing(rule.id)} onClose={() => setEditing(null)} />
   );
-  const paused = accounts.filter((a) => settings?.paused_capability_ids?.includes(a.capability_id) ?? a.paused);
+  const paused = (accounts ?? []).filter((a) => settings?.paused_capability_ids?.includes(a.capability_id) ?? a.paused);
   return (
     <Dialog open onOpenChange={(open) => { if (!open) go({ ...place, settings: undefined }, { replace: true }); }}>
       <DialogContent className="max-w-2xl" data-testid="posting-settings">
         <DialogTitle>{t('posts.settings.title')}</DialogTitle>
-        <DialogDescription>{approvalHelp(t, accounts)}</DialogDescription>
+        <DialogDescription>{accounts ? approvalHelp(t, accounts) : null}</DialogDescription>
         <QueryState query={posts} keepOnError>
           {settings && (
             <div className="min-w-0 space-y-5">

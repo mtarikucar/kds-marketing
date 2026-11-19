@@ -1,7 +1,7 @@
 import { request, seg } from './client';
 import type { Hypothesis, HypothesisInput, LaneKind, LedgerEntryOut } from './types';
 import type { MaterialCheck, ShootRequest, Subject } from './materials';
-import type { PlannedPost } from './posts';
+import type { PlannedPost, PostFormat } from './posts';
 export type Instant = string | number[];
 export interface Chain {
   workspace_id: string;
@@ -126,6 +126,33 @@ export interface SlotDetail {
   material_check?: MaterialCheck;
   /** The planned post the slot carries; absent for the weekly quotas' slots. */
   post?: PlannedPost;
+  /**
+   * The content the post was made of, to a session that reads the production line
+   * (`content.work` or `content.manage`); absent for a post of no content, and to anyone else.
+   */
+  content?: SlotContent;
+}
+/** One planned post of a content's current package (`SlotDetail.content.posts`). */
+export interface ContentPost {
+  slot_id: string;
+  format: PostFormat;
+  capability_id: string;
+  account_name: string | null;
+  scheduled_at: string;
+  state: Slot['state'];
+  published: boolean;
+  /** A redo now takes it back: still planned or ready, no send under way. */
+  withdrawn_by_redo: boolean;
+}
+export interface SlotContent {
+  project_id: string;
+  title: string;
+  /** The current package's revision, which `content.area_redo` names; `null`: none. */
+  package_revision: number | null;
+  /** The post is of the current package of an area not archived: a redo takes it back. */
+  current: boolean;
+  redo: { note: string; by: string; at: string; withdrawn?: string[] } | null;
+  posts: ContentPost[];
 }
 /** A publish attempt as `slot_get` shows it; only what the panel reads is typed. */
 export interface PublishAttempt {

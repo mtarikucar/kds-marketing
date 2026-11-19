@@ -68,6 +68,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
         note: "Again".into(),
         by: UserId::new_v7(),
         at: FIXED_NOW,
+        withdrawn: vec![],
     });
     open.push(redo);
     let mut awaiting = delivered(area(ws, 0), 5);
@@ -148,6 +149,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
         note: "Again".into(),
         by: UserId::new_v7(),
         at: FIXED_NOW,
+        withdrawn: vec![],
     });
     for p in [&waiting, &scheduled, &unfinished] {
         r.studio_projects()

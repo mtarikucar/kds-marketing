@@ -14,12 +14,15 @@ import { PlatformFrame } from '../content/PlatformFrame';
 import { useMaterialsKey } from '../materials/MaterialsShared';
 import { useSocialKey } from './data';
 import { placeHref, type SocialPlace } from './location';
+import { PostRevision } from './Revision';
 import type { PostState, TimelinePost } from './timeline';
 
 const TONE: Record<PostState, 'warning' | 'danger' | 'info' | 'neutral' | 'success'> = {
   approval: 'warning', tiktok: 'warning', failed: 'danger', held: 'danger', processing: 'info', due: 'info', at_provider: 'neutral', by_jeeta: 'neutral', published: 'success',
 };
 const METRICS = ['reach', 'views', 'engagement'] as const;
+/** Still to go out and nobody's to act on: held, due, left with the platform, or Jeeta's to send. */
+const QUEUED = new Set<PostState>(['held', 'due', 'at_provider', 'by_jeeta']);
 
 /** A write on a post: it refreshes Studio's reads, the social page's and the pending work. */
 export function usePostMutation() {
@@ -67,8 +70,11 @@ function ApproveButton({ post, account }: { post: TimelinePost; account?: Social
   );
 }
 
-/** Cancelling a post that could not be sent: the reason is asked for at that moment only. */
-export function CancelPost({ slotId, revision }: { slotId: string; revision: number }) {
+/**
+ * Cancelling a post with a reason, asked for at that moment only: one that could not be sent, or
+ * (with its own `intro` and `label`) a planned post made of no content.
+ */
+export function CancelPost({ slotId, revision, intro, label }: { slotId: string; revision: number; intro?: string; label?: string }) {
   const { t } = useTranslation();
   const refresh = usePostMutation();
   const [open, setOpen] = useState(false);
@@ -79,8 +85,8 @@ export function CancelPost({ slotId, revision }: { slotId: string; revision: num
   if (done) return <p role="status" className="text-sm text-muted-foreground">{t('socialAccounts.cancelled')}</p>;
   if (!open) return (
     <>
-      <p className="basis-full text-sm text-muted-foreground">{t('studio.notResent')}</p>
-      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>{t('studio.cancel')}</Button>
+      <p className="basis-full text-sm text-muted-foreground">{intro ?? t('studio.notResent')}</p>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>{label ?? t('studio.cancel')}</Button>
     </>
   );
   return (
@@ -237,7 +243,8 @@ export function PostRow({
   const waits = post.state === 'approval' || post.state === 'tiktok' || post.state === 'failed';
   const Icon = post.state === 'failed' || post.state === 'held' ? AlertTriangle : post.state === 'published' ? CheckCircle2 : waits ? UserRound : Clock;
   let actions: ReactNode = null;
-  if (post.state === 'approval') actions = manage ? <ApproveButton post={post} account={account} /> : <p className="text-sm text-muted-foreground">{t('socialAccounts.approveManagerOnly')}</p>;
+  // Instead of approving it, a revision of its content (or, made of none, its cancel).
+  if (post.state === 'approval') actions = <>{manage ? <ApproveButton post={post} account={account} /> : <p className="text-sm text-muted-foreground">{t('socialAccounts.approveManagerOnly')}</p>}<PostRevision post={post} approval /></>;
   else if (post.state === 'tiktok') actions = <Button size="sm" asChild><Link to={placeHref({ ...place, tiktok: post.slot_id })}>{t('socialAccounts.finishTiktok')}</Link></Button>;
   else if (post.state === 'failed') actions = <FailedActions post={post} manage={manage} />;
   else if (post.state === 'held' && post.blockers.length > 0) actions = <div className="basis-full"><Reason reason={post.blockers[0].reason} /></div>;
@@ -274,6 +281,8 @@ export function PostRow({
       {expanded && (
         <div id={panel} className="border-t border-border bg-surface-muted/40 px-3 py-4 sm:px-4">
           <PostDetail slotId={post.slot_id} account={account?.name ?? t('socialAccounts.unknownAccount')} format={post.format} materialIds={post.material_ids} files={files} />
+          {/* A post still to go asks for its revision in its detail: the quiet rows stay quiet. */}
+          {QUEUED.has(post.state) && <PostRevision post={post} approval={false} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border pt-4" />}
         </div>
       )}
     </article>

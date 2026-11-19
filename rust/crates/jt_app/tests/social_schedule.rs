@@ -515,6 +515,149 @@ async fn a_redo_cancels_the_planned_posts_that_have_not_gone_out_and_keeps_the_p
     assert_eq!(publish::publish_due(&w.d, w.f.ws).await.unwrap(), 0);
 }
 
+/// The social page asks for a revision from a post: `studio.slot_get` names the post's content,
+/// its package and what a redo does to each of its posts, to a reader of the production line
+/// only; the redo names the posts it took back, and a note written again keeps them.
+#[tokio::test]
+async fn a_posts_content_shows_with_its_slot_to_a_content_reader_only() {
+    let (mut w, x) = social_world().await;
+    let m = material(&w, true).await;
+    let other = material(&w, true).await;
+    let p = finished(
+        &w,
+        "content-of-slot",
+        &[&m, &other],
+        vec![
+            version(&w, &m, json!({})),
+            version(&w, &other, json!({"text":"İkinci gönderi"})),
+        ],
+    )
+    .await;
+    let a = agent(&w);
+    let first = social::version_schedule(&w.d, &a, input(schedule_input(&p, 0, &w, WHEN, "c1")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+    let later = datetime!(2026-10-26 10:00 UTC);
+    let second = social::version_schedule(&w.d, &a, input(schedule_input(&p, 1, &w, later, "c2")))
+        .await
+        .unwrap()
+        .publication
+        .slot;
+    w.d.clock = Arc::new(FixedClock(WHEN));
+    x.push_publish(Ok(sent()));
+    assert_eq!(publish::publish_due(&w.d, w.f.ws).await.unwrap(), 1);
+    let mut person = w.ctx.clone();
+    person.now = WHEN;
+
+    // The owner reads the content with the post: the area, its package, and both its posts.
+    let out = jt_app::usecases::studio::work::slot_get(&w.d, &person, second.id)
+        .await
+        .unwrap();
+    let c = out
+        .content
+        .expect("a content reader sees the post's content");
+    assert_eq!(c.project_id, p.id);
+    assert_eq!(c.title, p.title);
+    assert_eq!(c.package_revision, Some(1));
+    assert!(c.current);
+    assert_eq!(c.redo, None);
+    assert_eq!(c.posts.len(), 2);
+    assert_eq!(c.posts[0].slot_id, first.id);
+    assert!(c.posts[0].published);
+    assert!(!c.posts[0].withdrawn_by_redo);
+    assert_eq!(c.posts[1].slot_id, second.id);
+    assert_eq!(c.posts[1].format, PostFormat::FeedPost);
+    assert_eq!(c.posts[1].capability_id, w.f.slot.capability_id);
+    assert!(c.posts[1].account_name.is_some());
+    assert_eq!(c.posts[1].scheduled_at, later);
+    assert!(!c.posts[1].published);
+    assert!(c.posts[1].withdrawn_by_redo);
+    // The answer is the same JSON for the panel and the agent, the time in RFC 3339.
+    let json = serde_json::to_value(
+        jt_app::usecases::studio::work::slot_get(&w.d, &person, second.id)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(json["content"]["project_id"], json!(p.id));
+    assert_eq!(
+        json["content"]["posts"][1]["withdrawn_by_redo"],
+        json!(true)
+    );
+    assert!(json["content"]["posts"][1]["scheduled_at"].is_string());
+
+    // A session that may not read the production line sees the post without its content.
+    let mut social_only = person.clone();
+    social_only.permissions.remove(&Permission::ContentWork);
+    social_only.permissions.remove(&Permission::ContentManage);
+    let out = jt_app::usecases::studio::work::slot_get(&w.d, &social_only, second.id)
+        .await
+        .unwrap();
+    assert!(out.content.is_none());
+    assert!(serde_json::to_value(&out).unwrap().get("content").is_none());
+    // A content worker reads it.
+    let mut worker = social_only.clone();
+    worker.permissions.insert(Permission::ContentWork);
+    assert!(
+        jt_app::usecases::studio::work::slot_get(&w.d, &worker, second.id)
+            .await
+            .unwrap()
+            .content
+            .is_some()
+    );
+    // A post of no content has none.
+    assert!(
+        jt_app::usecases::studio::work::slot_get(&w.d, &person, w.f.slot.id)
+            .await
+            .unwrap()
+            .content
+            .is_none()
+    );
+
+    // The redo takes back the planned one and names it; the published one stays.
+    let redo = content::area_redo(
+        &w.d,
+        &person,
+        input(json!({"project_id":p.id,"package_revision":c.package_revision,"note":"Daha sade"})),
+    )
+    .await
+    .unwrap()
+    .project
+    .redo
+    .expect("the redo stands");
+    assert_eq!(redo.withdrawn, [second.id]);
+    // The post taken back still names its content, no longer of its package.
+    let back = jt_app::usecases::studio::work::slot_get(&w.d, &person, second.id)
+        .await
+        .unwrap()
+        .content
+        .expect("the post's content");
+    assert!(!back.current);
+    assert_eq!(
+        back.redo.as_ref().map(|r| r.note.as_str()),
+        Some("Daha sade")
+    );
+    assert_eq!(
+        back.posts.iter().map(|x| x.slot_id).collect::<Vec<_>>(),
+        [first.id]
+    );
+    // A note written again keeps what the first one took back.
+    let again = content::area_redo(
+        &w.d,
+        &person,
+        input(json!({"project_id":p.id,"package_revision":1,"note":"Daha da sade"})),
+    )
+    .await
+    .unwrap()
+    .project
+    .redo
+    .unwrap();
+    assert_eq!(again.note, "Daha da sade");
+    assert_eq!(again.withdrawn, [second.id]);
+}
+
 /// Sets how many organic posts a week the hypothesis asks for in the strategy in force.
 async fn organic_slots(w: &World, hypothesis: jt_strategy::HypothesisId, slots: u16) {
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();

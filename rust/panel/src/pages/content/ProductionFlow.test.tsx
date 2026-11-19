@@ -22,13 +22,13 @@ it('shows signed media, carousel pages, checks, steps and a required redo note',
   await userEvent.click(screen.getByRole('tab', { name: /Reels/ }));
   await waitFor(() => expect(document.querySelector('video')).toHaveAttribute('src', 'https://media.example/video.mp4'));
   expect(document.querySelector('video')).toHaveAttribute('controls');
-  await userEvent.click(screen.getByRole('button', { name: 'Olmamış' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Düzenleme iste' }));
   const dialog = screen.getByRole('dialog');
-  expect(within(dialog).getByRole('button', { name: 'Yeniden yap' })).toBeDisabled();
+  expect(within(dialog).getByRole('button', { name: 'Gönder' })).toBeDisabled();
   await userEvent.type(within(dialog).getByLabelText('Ne değişsin?'), 'Daha açık renkler');
-  await userEvent.click(within(dialog).getByRole('button', { name: 'Yeniden yap' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Gönder' }));
   await waitFor(() => expect(calls.find(c => c.path === '/api/content/areas/ready/redo')?.body).toEqual({ package_revision: 1, note: 'Daha açık renkler' }));
-  expect(await screen.findByText('Yeniden yapılıyor: “Daha açık renkler”')).toBeVisible();
+  expect(await screen.findByText('Düzenleme istendi: “Daha açık renkler”')).toBeVisible();
 });
 
 it('says there is no package yet and draws no frame', async () => {
@@ -50,10 +50,10 @@ it('lets a person send a held area back with a note, or archive it', async () =>
   await userEvent.click(screen.getByRole('button', { name: 'Not yazıp geri gönder' }));
   const dialog = screen.getByRole('dialog');
   await userEvent.type(within(dialog).getByLabelText('Ne değişsin?'), 'Tarih yazma');
-  await userEvent.click(within(dialog).getByRole('button', { name: 'Yeniden yap' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Gönder' }));
   // No package was ever accepted: the note is about none.
   await waitFor(() => expect(calls.find(c => c.path === '/api/content/areas/stuck/redo')?.body).toEqual({ package_revision: null, note: 'Tarih yazma' }));
-  expect(await screen.findByText('Yeniden yapılıyor: “Tarih yazma”')).toBeVisible();
+  expect(await screen.findByText('Düzenleme istendi: “Tarih yazma”')).toBeVisible();
   expect(screen.queryByRole('button', { name: 'Not yazıp geri gönder' })).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: 'Arşivle' }));
   await waitFor(() => expect(calls.find(c => c.method === 'PATCH')?.body).toEqual({ expected_revision: 4, archived: true }));
