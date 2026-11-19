@@ -232,28 +232,28 @@ async fn agents_in(repos: &mut dyn TenantRepos) -> Result<Vec<Agent>, AppError> 
     let mut roles: BTreeMap<UserId, BTreeSet<Permission>> = BTreeMap::new();
     let mut out = Vec::with_capacity(keys.len());
     for key in keys {
-        if !roles.contains_key(&key.issued_by) {
-            let membership = repos
-                .memberships()
-                .find_by_user(key.issued_by)
-                .await?
-                .filter(|m| m.status == MembershipStatus::Active);
-            let held = match membership {
-                Some(m) => repos
-                    .roles()
-                    .find(m.role_id)
+        let held = match roles.get(&key.issued_by) {
+            Some(held) => held.clone(),
+            None => {
+                let membership = repos
+                    .memberships()
+                    .find_by_user(key.issued_by)
                     .await?
-                    .map(|r| r.permissions)
-                    .unwrap_or_default(),
-                None => BTreeSet::new(),
-            };
-            roles.insert(key.issued_by, held);
-        }
-        let permissions = key
-            .scopes
-            .intersection(&roles[&key.issued_by])
-            .copied()
-            .collect();
+                    .filter(|m| m.status == MembershipStatus::Active);
+                let held = match membership {
+                    Some(m) => repos
+                        .roles()
+                        .find(m.role_id)
+                        .await?
+                        .map(|r| r.permissions)
+                        .unwrap_or_default(),
+                    None => BTreeSet::new(),
+                };
+                roles.insert(key.issued_by, held.clone());
+                held
+            }
+        };
+        let permissions = key.scopes.intersection(&held).copied().collect();
         let connections = connections
             .iter()
             .filter(|c| c.api_key_id == key.id)
