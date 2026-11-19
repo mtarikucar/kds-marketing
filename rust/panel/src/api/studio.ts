@@ -153,6 +153,8 @@ export interface SlotContent {
   current: boolean;
   redo: { note: string; by: string; at: string; withdrawn?: string[] } | null;
   posts: ContentPost[];
+  /** Cancelling this post leaves nothing of the content to go out: the content is archived with it. */
+  cancel_archives: boolean;
 }
 /** A publish attempt as `slot_get` shows it; only what the panel reads is typed. */
 export interface PublishAttempt {

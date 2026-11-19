@@ -828,7 +828,18 @@ async fn an_agent_that_cancels_a_planned_version_gives_it_another_time_and_a_per
     )
     .await
     .unwrap_err();
-    assert_eq!(e.details["reason"], "version_already_scheduled");
+    // Its only version cancelled and nothing out, the content was archived with it.
+    assert_eq!(e.code, ErrorCode::Conflict);
+    let s = w.uow.snapshot();
+    let area = s.production_projects.iter().find(|x| x.id == p.id).unwrap();
+    assert!(area.archived);
+    assert_eq!(
+        area.packages[0].versions[0]
+            .cancelled
+            .as_ref()
+            .map(|c| c.reason.as_str()),
+        Some("not this one")
+    );
 }
 
 /// The production line's row of area `p` (`content.areas`).
@@ -969,7 +980,14 @@ async fn a_cancelled_post_is_no_problem_and_a_failed_one_is() {
     let (mut w, x) = social_world().await;
     let a = agent(&w);
     let m = material(&w, true).await;
-    let cancelled = finished(&w, "cancelled", &[&m], vec![version(&w, &m, json!({}))]).await;
+    // Two versions: the content outlives the cancel of one (its last one would archive it).
+    let cancelled = finished(
+        &w,
+        "cancelled",
+        &[&m],
+        vec![version(&w, &m, json!({})), version(&w, &m, json!({}))],
+    )
+    .await;
     let slot = social::version_schedule(
         &w.d,
         &a,
@@ -1055,8 +1073,14 @@ async fn a_cancelled_post_is_no_problem_and_a_failed_one_is() {
     )
     .await
     .unwrap();
-    let row = line_row(&w, &failing).await;
-    assert!(!row.pipeline.has_problem());
+    // It was the content's only version and nothing went out: the content is archived with it.
+    assert!(
+        w.uow
+            .snapshot()
+            .production_projects
+            .iter()
+            .any(|x| x.id == failing.id && x.archived)
+    );
     assert_eq!(
         content::tree(&w.d, &w.ctx)
             .await

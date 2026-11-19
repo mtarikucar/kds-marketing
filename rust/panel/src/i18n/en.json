@@ -4321,6 +4321,7 @@
         "measurements_complete": "measurements complete",
         "other": "taken back"
       },
+      "cancelled": "cancelled: “{{reason}}”",
       "window": "{{hours}}-hour measurement",
       "link": "Open the post"
     },
@@ -4516,6 +4517,18 @@
       "help": "For the special days that are on, preparation starts in time: if the day's confirmed event holds a usable file, content is made; if not, the system adds a request to the shoot list. The system does not open the event; you do."
     }
   },
+  "socialCancel": {
+    "action": "Cancel",
+    "reason": "Why are you cancelling it?",
+    "leaves": "This post leaves the calendar and will not be planned again; the agent will not give it a new time.",
+    "othersStay_one": "This post of the content stays: {{list}}.",
+    "othersStay_other": "These posts of the content stay: {{list}}.",
+    "archives": "Nothing else of the content is left to go out, so the content is archived too.",
+    "confirm": "Cancel the post",
+    "keep": "Keep it",
+    "done": "Cancelled. This post will not be planned again.",
+    "stale": "The post changed in the meantime; the current version was loaded. Check it and try again."
+  },
   "socialRevision": {
     "request": "Request changes",
     "note": "What should change?",
@@ -4533,7 +4546,6 @@
     "stale": "The content changed in the meantime; the current version was loaded. Check your note and send it again.",
     "unconfirmed": "The platform did not confirm taking the scheduled post back; nothing changed. Try again in a moment.",
     "noContent": "This post did not come from a content, so there is nothing to revise. You can cancel it; it will not go out.",
-    "cancel": "Cancel the post",
     "group": "Being revised",
     "groupHelp": "Contents you asked to change. Each leaves this list when the agent's new version arrives.",
     "asked": "Your note: “{{note}}”",

@@ -316,3 +316,51 @@ describe('addresses', () => {
     expect(await screen.findByTestId('materials-calendar')).toBeVisible();
   });
 });
+
+describe('a cancelled post on the content page', () => {
+  const cancelled = { by: 'u1', at: '2026-11-19T10:05:00Z', reason: 'Aynı görseller', slot_id: 's1' };
+  const versions = [
+    { id: 'v1', format: 'feed_post', capability_id: null, title: null, material_ids: [], slot_id: 's1', cancelled },
+    { id: 'v2', format: 'story', capability_id: null, title: null, material_ids: [], slot_id: 's2' },
+  ];
+  const later = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  const k = row('k', {
+    area: { status: { state: 'done', step: 14, note: null, starts_at: '2026-10-01T09:00:00Z' } },
+    stages: stages({
+      hazirlik: 'done', fikir: 'done', metin: 'done', gorsel: 'done',
+      paket: { state: 'done', package: { revision: 1, delivered_at: '2026-11-01T10:00:00Z', summary: 's', released: false, versions } as never },
+      onay: 'done',
+      yayin: { state: 'current', publications: [
+        { version_id: 'v1', slot_id: 's1', capability_id: 'c1', account_name: '@figurunica', state: 'retired', scheduled_at: later, published_at: null, url: null, failed: false, retirement: 'cancelled' },
+        { version_id: 'v2', slot_id: 's2', capability_id: 'c1', account_name: '@figurunica', state: 'ready', scheduled_at: later, published_at: null, url: null, failed: false },
+      ] },
+    }),
+  });
+  const contentPost = (slot_id: string, patch: Record<string, unknown> = {}) => ({ slot_id, format: 'story', capability_id: 'c1', account_name: '@figurunica', scheduled_at: later, state: 'ready', published: false, withdrawn_by_redo: true, ...patch });
+
+  it('says where the cancelled version stopped and why, and offers the same cancel for the one still to go', async () => {
+    const slot = (await import('@/test/studio')).studioAnswers['GET /api/studio/slots/s1'] as Record<string, unknown>;
+    const calls = contentPageFetch({
+      'GET /api/content/areas': { areas: [k], next_cursor: null, next_done_before: null },
+      'GET /api/studio/projects/k': detail({ ...(await import('@/test/content')).area('k'), packages: [{ ...pack, versions: [
+        { ...version, id: 'v1', slot_id: 's1', cancelled }, { ...version, id: 'v2', format: 'story', slot_id: 's2' },
+      ] }] } as never),
+      'GET /api/studio/slots/s2': { ...slot, slot: { ...(slot.slot as object), id: 's2', state: 'ready', revision: 7 },
+        content: { project_id: 'k', title: 'İçerik k', package_revision: 1, current: true, redo: null, posts: [contentPost('s1', { state: 'retired', withdrawn_by_redo: false, format: 'feed_post' }), contentPost('s2')], cancel_archives: true } },
+      'POST /api/studio/slots/s2/cancel': slot,
+    });
+    renderAt('/content');
+    const article = await screen.findByRole('article', { name: 'İçerik k' });
+    // Quietly on the track: the cancelled one with its reason, the other planned.
+    expect(within(article).getAllByText('@figurunica · iptal edildi: “Aynı görseller”').length).toBeGreaterThan(0);
+    await userEvent.click(within(article).getByRole('button', { name: /İçerik k/ }));
+    const steps = await within(article).findByRole('list', { name: 'Üretim adımları' });
+    expect(within(steps).getByText('iptal edildi: “Aynı görseller”')).toBeVisible();
+    await userEvent.click(await within(steps).findByRole('button', { name: 'İptal et' }));
+    const form = within(steps).getByRole('form', { name: 'İptal et' });
+    expect(form).toHaveTextContent('içerik de arşive kalkar');
+    await userEvent.type(within(form).getByLabelText('Neden iptal ediyorsunuz?'), 'Bu da olmasın');
+    await userEvent.click(within(form).getByRole('button', { name: 'Paylaşımı iptal et' }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')).toMatchObject({ path: '/api/studio/slots/s2/cancel', body: { expected_revision: 7, reason: 'Bu da olmasın' } }));
+  });
+});
