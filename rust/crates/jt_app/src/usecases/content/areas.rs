@@ -305,6 +305,10 @@ pub struct SlotContent {
     pub redo: Option<RedoRequest>,
     /// Every planned post of the current package, in its versions' order, this one among them.
     pub posts: Vec<ContentPost>,
+    /// A person's cancel of this post leaves nothing of the content to go out (every other
+    /// version of its package was cancelled, nothing went out): the content is archived with it.
+    #[serde(default)]
+    pub cancel_archives: bool,
 }
 
 /// One planned post of an area's current package.
@@ -373,6 +377,7 @@ pub(crate) async fn slot_content(
             withdrawn_by_redo: crate::usecases::social::schedule::withdrawable(&s, &attempts),
         });
     }
+    let cancel_archives = crate::usecases::social::schedule::cancel_archives(r, &p, slot).await?;
     Ok(Some(SlotContent {
         project_id: p.id,
         title: p.title.clone(),
@@ -380,6 +385,7 @@ pub(crate) async fn slot_content(
         current: !p.archived && posts.iter().any(|x| x.slot_id == slot),
         redo: p.redo.clone(),
         posts,
+        cancel_archives,
     }))
 }
 

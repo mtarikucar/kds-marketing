@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, XCircle } from 'lucide-react';
 import { isApiError } from '@/api/client';
 import { areaRedo, contentAreas } from '@/api/content';
 import type { PostsOut } from '@/api/posts';
@@ -54,6 +54,24 @@ export function consequence(t: TFunction, lang: string, slotId: string, content:
   ].filter(Boolean).join(' ');
 }
 
+/**
+ * What "İptal et" does to post `slotId` of `content`, from what the server says of each of its
+ * posts: this one leaves the calendar and is never planned again; the content's other posts still
+ * to go stay (named); the published ones stay; and when nothing of the content is left to go out,
+ * the content is archived with it.
+ */
+export function cancelConsequence(t: TFunction, lang: string, slotId: string, content: studio.SlotContent): string {
+  const others = content.posts.filter((p) => p.slot_id !== slotId && !p.published && (p.state === 'planned' || p.state === 'ready'));
+  const published = content.posts.filter((p) => p.published);
+  const list = (posts: studio.ContentPost[]) => posts.map((p) => postName(t, lang, p)).join('; ');
+  return [
+    t('socialCancel.leaves'),
+    others.length > 0 && t('socialCancel.othersStay', { count: others.length, list: list(others) }),
+    published.length > 0 && t('socialRevision.publishedStays', { count: published.length, list: list(published) }),
+    content.cancel_archives && t('socialCancel.archives'),
+  ].filter(Boolean).join(' ');
+}
+
 /** The redo's refusals in words: a newer package, a platform that did not let the post go. */
 function RedoError({ error }: { error: unknown }) {
   const { t } = useTranslation();
@@ -70,24 +88,17 @@ function RedoError({ error }: { error: unknown }) {
  * send. The redo is the content's (`content.area_redo`, `content.manage`, in person) and names the
  * package the person saw; a newer one is refused and read again.
  */
-function RedoForm({ post, content, approval }: { post: TimelinePost; content: studio.SlotContent; approval: boolean }) {
+function RedoForm({ post, content, approval, onDismiss }: { post: TimelinePost; content: studio.SlotContent; approval: boolean; onDismiss: () => void }) {
   const { t, i18n } = useTranslation();
   const refresh = usePostMutation();
   const client = useQueryClient();
   const key = useStudioKey();
-  const [open, setOpen] = useState(false);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState(false);
   const id = `revision-${post.slot_id}`;
   if (done) return <p role="status" className="basis-full text-sm text-muted-foreground">{t('socialRevision.sent')}</p>;
-  if (!open) return (
-    <Button size="sm" variant="outline" onClick={() => { setOpen(true); setError(null); }}>
-      <RotateCcw aria-hidden="true" className="h-4 w-4" />
-      {t('socialRevision.request')}
-    </Button>
-  );
   return (
     <form
       aria-label={t('socialRevision.request')}
@@ -115,18 +126,127 @@ function RedoForm({ post, content, approval }: { post: TimelinePost; content: st
       <RedoError error={error} />
       <div className="flex flex-wrap gap-2">
         <Button size="sm" type="submit" loading={busy} disabled={!note.trim()}>{t('socialRevision.send')}</Button>
-        <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={() => { setOpen(false); setNote(''); setError(null); }}>{t('socialRevision.dismiss')}</Button>
+        <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={onDismiss}>{t('socialRevision.dismiss')}</Button>
       </div>
     </form>
   );
 }
 
 /**
+ * "İptal et" on a post of a content: one reason, inline, with what it does said above the send
+ * (`studio.slot_cancel` in person). The post does not go out and its version is never planned
+ * again; the content's other posts stay. A platform that does not let the post go is said here.
+ */
+export function CancelContentPost({ slotId, revision, content, onDismiss }: { slotId: string; revision: number; content: studio.SlotContent; onDismiss: () => void }) {
+  const { t, i18n } = useTranslation();
+  const refresh = usePostMutation();
+  const client = useQueryClient();
+  const key = useStudioKey();
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [done, setDone] = useState(false);
+  const id = `cancel-${slotId}`;
+  if (done) return <p role="status" className="basis-full text-sm text-muted-foreground">{t('socialCancel.done')}</p>;
+  return (
+    <form
+      aria-label={t('socialCancel.action')}
+      className="flex basis-full flex-col gap-2"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (busy || !reason.trim()) return;
+        setBusy(true);
+        setError(null);
+        try {
+          await studio.slotCancel(slotId, revision, reason.trim());
+          setDone(true);
+          await refresh();
+        } catch (err) {
+          setError(err);
+          // The post changed meanwhile (or the platform kept it): read it again.
+          if (isApiError(err) && err.code === 'CONFLICT') await client.invalidateQueries({ queryKey: [...key, 'slot', slotId] });
+        }
+        setBusy(false);
+      }}
+    >
+      <label htmlFor={id} className="text-sm font-medium">{t('socialCancel.reason')}</label>
+      <input id={id} className={inputClass} name="reason" required maxLength={MAX_NOTE} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+      <p className="text-sm text-muted-foreground">{cancelConsequence(t, i18n.language, slotId, content)}</p>
+      <CancelError error={error} />
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="destructive" type="submit" loading={busy} disabled={!reason.trim()}>{t('socialCancel.confirm')}</Button>
+        <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={onDismiss}>{t('socialCancel.keep')}</Button>
+      </div>
+    </form>
+  );
+}
+
+/** The cancel's refusals in words: a post that changed meanwhile, a platform that kept it. */
+function CancelError({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  if (!error) return null;
+  if (isApiError(error) && error.code === 'CONFLICT') {
+    const unconfirmed = error.details.reason === 'withdraw_unconfirmed';
+    return <p role="alert" className="basis-full rounded-md bg-danger-subtle px-3 py-2 text-sm">{t(unconfirmed ? 'socialRevision.unconfirmed' : 'socialCancel.stale')}</p>;
+  }
+  return <div className="basis-full"><StudioError error={error} /></div>;
+}
+
+/**
+ * "İptal et" for one planned post of a content outside the social page's rows (the content page's
+ * Yayın list): the same form, for the same sessions, read from the post's slot. Nothing while the
+ * post is not of the content's current package or is no longer still to go.
+ */
+export function PostCancel({ slotId }: { slotId: string }) {
+  const { t } = useTranslation();
+  const session = useSession();
+  const allowed = canAny(session.data, ['content.work', 'content.manage']) && can(session.data, 'social.manage');
+  const detail = useSlotDetail(slotId, allowed);
+  const [open, setOpen] = useState(false);
+  const data = detail.data;
+  const content = data?.content;
+  if (!allowed || !data || !content?.current) return null;
+  const toGo = data.slot.state === 'planned' || data.slot.state === 'ready';
+  if (!toGo || content.posts.some((p) => p.slot_id === slotId && p.published)) return null;
+  if (!open)
+    return (
+      <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
+        <XCircle aria-hidden="true" className="h-4 w-4" />
+        {t('socialCancel.action')}
+      </Button>
+    );
+  return <CancelContentPost slotId={slotId} revision={data.slot.revision} content={content} onDismiss={() => setOpen(false)} />;
+}
+
+/** The buttons a post of a content offers before one of them is opened. */
+function ContentActions({ redo, cancel, onOpen }: { redo: boolean; cancel: boolean; onOpen: (which: 'redo' | 'cancel') => void }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {redo && (
+        <Button size="sm" variant="outline" onClick={() => onOpen('redo')}>
+          <RotateCcw aria-hidden="true" className="h-4 w-4" />
+          {t('socialRevision.request')}
+        </Button>
+      )}
+      {cancel && (
+        <Button size="sm" variant="outline" onClick={() => onOpen('cancel')}>
+          <XCircle aria-hidden="true" className="h-4 w-4" />
+          {t('socialCancel.action')}
+        </Button>
+      )}
+    </>
+  );
+}
+
+/**
  * What a person may do instead of letting a planned post go as it is: ask for a revision of the
- * content it was made of, or, for a post made of no content (an agent proposed it directly), cancel
- * it with a reason (`studio.slot_cancel`). Only what the session may do shows, and only once the
- * post's slot says which applies; a session that does not read the production line cannot tell a
- * post of no content from one of a content, so it is offered neither.
+ * content it was made of, or cancel it with a reason (`studio.slot_cancel`). For a post of a
+ * content "İptal et" ends that version for good and leaves the content's other posts; a post made
+ * of no content (an agent proposed it directly) is cancelled as it is. Only what the session may
+ * do shows, and only once the post's slot says which applies; a session that does not read the
+ * production line cannot tell a post of no content from one of a content, so it is offered
+ * neither. One form opens at a time.
  */
 export function PostRevision({ post, approval, className }: { post: TimelinePost; approval: boolean; className?: string }) {
   const { t } = useTranslation();
@@ -135,18 +255,44 @@ export function PostRevision({ post, approval, className }: { post: TimelinePost
   const readsContent = canAny(session.data, ['content.work', 'content.manage']);
   const cancel = readsContent && can(session.data, 'social.manage');
   const detail = useSlotDetail(post.slot_id, redo || cancel);
+  const [open, setOpen] = useState<'redo' | 'cancel' | null>(null);
   const data = detail.data;
   if (!data) return null;
   const content = data.content;
+  const toGo = data.slot.state === 'planned' || data.slot.state === 'ready';
   let body = null;
   if (content?.current) {
     // The redo takes this post back only while it is still to go: one being sent stays.
-    if (redo && content.posts.some((p) => p.slot_id === post.slot_id && p.withdrawn_by_redo)) body = <RedoForm post={post} content={content} approval={approval} />;
-  } else if (cancel && (data.slot.state === 'planned' || data.slot.state === 'ready')) {
-    body = <CancelPost slotId={post.slot_id} revision={data.slot.revision} intro={t('socialRevision.noContent')} label={t('socialRevision.cancel')} />;
+    const mine = content.posts.find((p) => p.slot_id === post.slot_id);
+    const canRedo = redo && !!mine?.withdrawn_by_redo;
+    const canCancel = cancel && toGo && !mine?.published;
+    if (open === 'redo' && canRedo) body = <RedoForm post={post} content={content} approval={approval} onDismiss={() => setOpen(null)} />;
+    else if (open === 'cancel' && canCancel) body = <CancelContentPost slotId={post.slot_id} revision={data.slot.revision} content={content} onDismiss={() => setOpen(null)} />;
+    else if (canRedo || canCancel) body = <ContentActions redo={canRedo} cancel={canCancel} onOpen={setOpen} />;
+  } else if (cancel && toGo) {
+    body = <CancelPost slotId={post.slot_id} revision={data.slot.revision} intro={t('socialRevision.noContent')} label={t('socialCancel.action')} />;
   }
   if (!body) return null;
   return className ? <div className={className}>{body}</div> : body;
+}
+
+/**
+ * Whether the revised content `area` belongs in "Düzenleniyor" here: its redo took back a post on
+ * the account in view (on any account, with none in view). A redo that names none (one from
+ * before the field, or one that took nothing back) shows when the content has or had a post
+ * here, as the posts list says which content each post was made of.
+ */
+export function revisingHere(
+  area: { id: string; redo: { withdrawn?: string[] } | null },
+  scope: string | undefined,
+  account: Map<string, string>,
+  contents: { slot_id: string; project_id: string }[],
+): boolean {
+  if (!area.redo) return false;
+  const here = (slot: string) => (scope ? account.get(slot) === scope : true);
+  const withdrawn = area.redo.withdrawn ?? [];
+  if (withdrawn.length > 0) return withdrawn.some(here);
+  return contents.some((c) => c.project_id === area.id && account.has(c.slot_id) && here(c.slot_id));
 }
 
 /**
@@ -163,10 +309,7 @@ export function Revising({ scope, posts }: { scope?: string; posts?: PostsOut })
   const areas = useQuery({ queryKey: [...key, 'revising'], queryFn: () => contentAreas({ scope: 'open' }), enabled: reads, refetchInterval: 60_000 });
   if (!reads || !areas.data) return null;
   const account = new Map((posts?.posts ?? []).map((p) => [p.post.slot_id, p.post.capability_id]));
-  const rows = areas.data.areas.filter((r) => {
-    const withdrawn = r.area.redo?.withdrawn ?? [];
-    return withdrawn.length > 0 && (!scope || withdrawn.some((id) => account.get(id) === scope));
-  });
+  const rows = areas.data.areas.filter((r) => revisingHere(r.area, scope, account, posts?.contents ?? []));
   if (!rows.length) return null;
   const title = t('socialRevision.group');
   return (

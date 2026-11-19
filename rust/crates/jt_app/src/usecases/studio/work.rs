@@ -495,10 +495,22 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
     super::posts::retire_post_of(r.as_mut(), s.id, RetirementReason::Cancelled, ctx.now).await?;
     // An agent that cancels the planned post of a content version before anything was sent is
     // changing its time: the version waits for a time again (it has no other way to move it).
-    // A person's cancel is a decision not to post it, and a post that was attempted, even with
-    // an unknown outcome, is never offered again.
-    if ctx.agent_connection_id.is_some() && r.studio().slot_evidence(s.id).await?.0.is_empty() {
-        crate::usecases::social::schedule::free_version_of(r.as_mut(), ctx, s.id).await?;
+    // A person's cancel is a decision not to post it: the version is marked cancelled with the
+    // reason and never planned again, and the content is archived once nothing of it is left to
+    // go out. A post that was attempted, even with an unknown outcome, is never offered again.
+    if ctx.agent_connection_id.is_some() {
+        if r.studio().slot_evidence(s.id).await?.0.is_empty() {
+            crate::usecases::social::schedule::free_version_of(r.as_mut(), ctx, s.id).await?;
+        }
+    } else if let Some(by) = super::library::person(ctx) {
+        crate::usecases::social::schedule::cancel_version_of(
+            r.as_mut(),
+            ctx,
+            s.id,
+            by,
+            input.reason.trim(),
+        )
+        .await?;
     }
     let mut e = ledger_entry(
         ctx,

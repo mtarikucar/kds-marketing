@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { projectGet, projectUpdate } from '@/api/projects';
-import { areaRedo, deliveryAccept, type AreaRow, type Stage, type StageState } from '@/api/content';
+import { areaRedo, deliveryAccept, type AreaRow, type Stage, type StageState, type VersionCancel } from '@/api/content';
 import { listCapabilities } from '@/api/capabilities';
 import { Button, Callout, Dialog, DialogContent, DialogDescription, DialogTitle, Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
@@ -14,7 +14,8 @@ import { ProjectError } from '../projects/ProjectShared';
 import { areaTime, currentPackage, MiniThumb, StateBadge, stepName } from './AreaShared';
 import { PlatformFrame } from './PlatformFrame';
 import { AreaHistory } from './AreaHistory';
-import { blockedText, PostLink, publicationText, scheduleHref, StageNode } from './PipelineRow';
+import { blockedText, cancelOf, PostLink, publicationText, scheduleHref, StageNode } from './PipelineRow';
+import { PostCancel } from '../social/Revision';
 import { placeHref, useContentPlace } from './location';
 import { useUploads } from './uploads';
 
@@ -28,7 +29,7 @@ export function noteBeyondOutput(report: { note: string; output?: string }): str
 }
 
 /** The step stages' fourteen steps and what follows them, each with what the agent reported. */
-function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
+function Timeline({ row, files, versions }: { row: AreaRow; files: boolean; versions?: { cancelled?: VersionCancel }[] }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
   const current = row.pipeline.current_step;
@@ -99,15 +100,19 @@ function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
           )}
           {stage.key === 'yayin' && !!stage.publications?.length && (
             <ul className="space-y-1 border-s-2 border-border ps-4 text-sm">
-              {stage.publications.map((p) => (
-                <li key={p.slot_id} className="flex flex-wrap items-baseline gap-x-2 break-words">
-                  <Link className="font-medium underline decoration-border underline-offset-4" to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{p.account_name ?? t('contentAreas.account')}</Link>
-                  <span className={p.failed ? 'text-danger' : 'text-muted-foreground'}>
-                    {publicationText(t, p, lang, true)}
-                  </span>
-                  <PostLink url={p.url} />
-                </li>
-              ))}
+              {stage.publications.map((p) => {
+                const cancel = cancelOf(versions, p.slot_id);
+                return (
+                  <li key={p.slot_id} className="flex flex-wrap items-baseline gap-x-2 gap-y-1 break-words">
+                    <Link className="font-medium underline decoration-border underline-offset-4" to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{p.account_name ?? t('contentAreas.account')}</Link>
+                    <span className={p.failed && !cancel ? 'text-danger' : 'text-muted-foreground'}>
+                      {publicationText(t, p, lang, true, cancel)}
+                    </span>
+                    <PostLink url={p.url} />
+                    {!p.published_at && !p.failed && (p.state === 'planned' || p.state === 'ready') && <PostCancel slotId={p.slot_id} />}
+                  </li>
+                );
+              })}
             </ul>
           )}
           {stage.key === 'sonuc' && !!stage.results?.length && (
@@ -239,7 +244,7 @@ export function AreaDetail({ id, row, manage, files }: { id: string; row?: AreaR
             {row && (
               <section className="min-w-0 space-y-3">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('content.detail.steps')}</h3>
-                <Timeline row={row} files={files} />
+                <Timeline row={row} files={files} versions={versions} />
               </section>
             )}
             <section className="min-w-0 space-y-4">

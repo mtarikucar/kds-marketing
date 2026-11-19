@@ -7,6 +7,8 @@ use jt_app::{
         AreaCount, AreaOlay, AreaPosts, DoneCursor, ProductionProject, ProjectRepo,
     },
 };
+use jt_studio::MaterialId;
+use std::collections::BTreeSet;
 use uuid::Uuid;
 #[async_trait]
 impl ProjectRepo for MemTenant {
@@ -102,6 +104,26 @@ impl ProjectRepo for MemTenant {
             .collect();
         out.sort_by_key(|a| a.id);
         Ok(out)
+    }
+    async fn materials_in_areas(
+        &mut self,
+        ids: &[MaterialId],
+    ) -> Result<BTreeSet<MaterialId>, AppError> {
+        let mut held = BTreeSet::new();
+        for p in self
+            .state()
+            .production_projects
+            .iter()
+            .filter(|p| p.workspace_id == self.ws)
+        {
+            held.extend(p.sources.iter().map(|s| s.material_id));
+            for k in &p.packages {
+                for v in &k.versions {
+                    held.extend(v.material_ids.iter().copied());
+                }
+            }
+        }
+        Ok(ids.iter().copied().filter(|id| held.contains(id)).collect())
     }
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError> {
         let mut rows: Vec<_> = self

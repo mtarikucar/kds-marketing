@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, Clock, ExternalLink, Layers, RotateCcw, UserRound } from 'lucide-react';
-import { BLOCKED_REASONS, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait } from '@/api/content';
+import { BLOCKED_REASONS, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait, type VersionCancel } from '@/api/content';
 import { Button, cn } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { areaTime, MiniThumb, openedBy, StateBadge, stepName } from './AreaShared';
@@ -36,14 +36,22 @@ export const scheduleHref = (versionId?: string) => (versionId ? `/social?versio
 
 const RETIREMENTS = ['cancelled', 'missed_grace', 'replanned', 'hypothesis_retired', 'strategy_archived', 'week_ended', 'measurements_complete'] as const;
 
-/** A planned post's line: out, failed, taken back, due and being sent, or planned. */
-export function publicationText(t: TFunction, p: PublicationFact, lang: string, short = false): string {
+/** A person's cancellation of the post `slotId`, as the versions of a package carry it. */
+export function cancelOf(versions: { cancelled?: VersionCancel }[] | undefined, slotId: string): VersionCancel | undefined {
+  return versions?.find((v) => v.cancelled?.slot_id === slotId)?.cancelled;
+}
+
+/**
+ * A planned post's line: out, failed, taken back (a person's cancel with its reason, `cancel`),
+ * due and being sent, or planned.
+ */
+export function publicationText(t: TFunction, p: PublicationFact, lang: string, short = false, cancel?: VersionCancel): string {
   const who = p.account_name ?? t('contentAreas.account');
-  if (p.failed) return short ? t('content.out.failedShort') : t('content.out.failed', { account: who });
+  if (p.failed && !cancel) return short ? t('content.out.failedShort') : t('content.out.failed', { account: who });
   if (p.published_at) return short ? t('content.out.publishedAt', { at: areaTime(p.published_at, lang) }) : t('content.out.published', { account: who, at: areaTime(p.published_at, lang) });
   if (p.state === 'retired') {
     const known = RETIREMENTS.find((r) => r === p.retirement) ?? 'other';
-    const reason = t(`content.out.retirement.${known}`);
+    const reason = cancel ? t('content.out.cancelled', { reason: cancel.reason }) : t(`content.out.retirement.${known}`);
     return short ? reason : `${who} · ${reason}`;
   }
   if (Date.parse(p.scheduled_at) <= Date.now()) return short ? t('content.out.dueShort') : t('content.out.due', { account: who });
@@ -114,10 +122,12 @@ export function StageOutput({ stage, row, files }: { stage: Stage; row: AreaRow;
     if (a.approved_at) lines.push(<span key={`a-${a.slot_id}`}>{t('content.out.approved', { at: areaTime(a.approved_at, lang) })}</span>);
     else if (!a.required) lines.push(<span key={`a-${a.slot_id}`}>{t('content.out.noApproval')}</span>);
   }
+  const versions = row.pipeline.stages.find((s) => s.key === 'paket')?.package?.versions;
   for (const p of stage.publications ?? []) {
+    const cancel = cancelOf(versions, p.slot_id);
     lines.push(
-      <span key={`p-${p.slot_id}`} className={cn('block', p.failed && 'font-medium text-danger')}>
-        {publicationText(t, p, lang)}
+      <span key={`p-${p.slot_id}`} className={cn('block', p.failed && !cancel && 'font-medium text-danger')}>
+        {publicationText(t, p, lang, false, cancel)}
       </span>,
     );
   }

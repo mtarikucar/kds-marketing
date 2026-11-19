@@ -19,7 +19,7 @@ function slotDetail(id: string, content?: Record<string, unknown>, revision = 4)
 const contentPost = (slot_id: string, patch: Record<string, unknown> = {}) => ({
   slot_id, format: 'feed_post', capability_id: 'ig1', account_name: 'figurunica instagram', scheduled_at: inDays(2), state: 'ready', published: false, withdrawn_by_redo: true, ...patch,
 });
-const contentOf = (project_id: string, posts: unknown[], patch: Record<string, unknown> = {}) => ({ project_id, title: `İçerik ${project_id}`, package_revision: 1, current: true, redo: null, posts, ...patch });
+const contentOf = (project_id: string, posts: unknown[], patch: Record<string, unknown> = {}) => ({ project_id, title: `İçerik ${project_id}`, package_revision: 1, current: true, redo: null, posts, cancel_archives: false, ...patch });
 const areaRow = (id: string, redo: unknown, brief = 'Evcil dostum için yeni koleksiyon') => ({
   area: { id, title: `Evcil dostum ${id}`, brief, olay_id: null, opened_by: { kind: 'human' }, hints: { formats: [], capability_ids: [] }, status: { state: 'queued', step: null, note: null, starts_at: '2026-11-01T09:00:00Z' }, revision: 3, redo, open_requests: 0, created_at: '', updated_at: '' },
   pipeline: { current_step: null, stages: [], unscheduled: [] },
@@ -129,7 +129,7 @@ describe('asking for a revision instead of approving', () => {
     const row = await rowOf('Evcil dostum');
     expect(within(row).getByRole('button', { name: /^Onayla/ })).toBeVisible();
     expect(within(row).queryByRole('button', { name: 'Düzenleme iste' })).not.toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: 'Paylaşımı iptal et' })).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'İptal et' })).not.toBeInTheDocument();
     // Nothing of the production line is asked for.
     expect(calls.some((c) => c.path === '/api/content/areas')).toBe(false);
     expect(calls.some((c) => c.path === '/api/studio/slots/a1')).toBe(false);
@@ -149,7 +149,7 @@ describe('asking for a revision instead of approving', () => {
     const row = await rowOf('Evcil dostum');
     expect(await within(row).findByText('Bu paylaşım bir içerikten gelmedi; düzenlenecek içerik yok. İsterseniz iptal edin, gönderilmez.')).toBeVisible();
     expect(within(row).queryByRole('button', { name: 'Düzenleme iste' })).not.toBeInTheDocument();
-    await userEvent.click(within(row).getByRole('button', { name: 'Paylaşımı iptal et' }));
+    await userEvent.click(within(row).getByRole('button', { name: 'İptal et' }));
     await userEvent.type(within(row).getByLabelText('İptal nedeni'), 'Artık gerek yok');
     await userEvent.click(within(row).getByRole('button', { name: 'Paylaşımı iptal et' }));
     await waitFor(() => expect(calls.find((c) => c.method === 'POST')).toMatchObject({ path: '/api/studio/slots/a1/cancel', body: { expected_revision: 4, reason: 'Artık gerek yok' } }));
@@ -172,6 +172,28 @@ describe('asking for a revision instead of approving', () => {
     expect(within(row).getByRole('form', { name: 'Düzenleme iste' })).toHaveTextContent('Bu paylaşım takvimden çıkar. Ajan içeriği notunuza göre yeniden hazırlar, yeni hali yeniden sıraya girer.');
   });
 
+  it('shows a content whose redo names no post when it had a post on the chosen account', async () => {
+    // A redo recorded before `withdrawn` existed: the posts list says which content its posts were of.
+    mockFetch({
+      ...owner,
+      'GET /api/studio/posts': { posts: [
+        { post: { slot_id: 'old1', capability_id: 'ig1', material_ids: [], format: 'feed_post', publish_at: inDays(1) }, slot: slotOf('old1', 2, 'ig1', 'retired'), pending: false },
+        { post: { slot_id: 'old2', capability_id: 'fb1', material_ids: [], format: 'feed_post', publish_at: inDays(1) }, slot: slotOf('old2', 2, 'fb1', 'retired'), pending: false },
+      ], settings: socialAnswers['GET /api/studio/posts'].settings,
+      contents: [{ slot_id: 'old1', project_id: 'older' }, { slot_id: 'old2', project_id: 'elsewhere' }] },
+      'GET /api/content/areas': { ...noAreas, areas: [
+        areaRow('older', { note: 'Eski kayıt', by: 'u', at: '2026-11-19T09:13:00Z' }),
+        areaRow('elsewhere', { note: 'Başka hesap', by: 'u', at: '2026-11-19T09:14:00Z' }),
+        areaRow('none', { note: 'Postu yoktu', by: 'u', at: '2026-11-19T10:00:00Z' }),
+      ] },
+    });
+    renderAt('/social?account=ig1');
+    const group = await screen.findByRole('region', { name: 'Düzenleniyor' });
+    expect(within(group).getByText('Evcil dostum older')).toBeVisible();
+    expect(within(group).queryByText('Evcil dostum elsewhere')).not.toBeInTheDocument();
+    expect(within(group).queryByText('Evcil dostum none')).not.toBeInTheDocument();
+  });
+
   it('shows only the contents that had a post on the chosen account', async () => {
     mockFetch({
       ...owner,
@@ -191,5 +213,70 @@ describe('asking for a revision instead of approving', () => {
     expect(within(group).queryByText('Evcil dostum there')).not.toBeInTheDocument();
     // A redo that took back no post here is the content page's matter only.
     expect(within(group).queryByText('Evcil dostum none')).not.toBeInTheDocument();
+  });
+});
+
+describe('cancelling a post of a content', () => {
+  it('offers “İptal et” next to the approval and the revision, takes a reason inline and names the post that stays', async () => {
+    const posts = [
+      contentPost('a1'),
+      contentPost('x9', { capability_id: 'fb1', account_name: 'Figurunica Sayfa', format: 'story', scheduled_at: inDays(3, 9) }),
+    ];
+    const calls = mockFetch({ ...owner, 'GET /api/studio/slots/a1': slotDetail('a1', contentOf('p1', posts)), 'POST /api/studio/slots/a1/cancel': slotDetail('a1') });
+    renderAt('/social');
+    const row = await rowOf('Evcil dostum');
+    expect(within(row).getByRole('button', { name: /^Onayla · figurunica instagram, / })).toBeVisible();
+    expect(await within(row).findByRole('button', { name: 'Düzenleme iste' })).toBeVisible();
+    await userEvent.click(within(row).getByRole('button', { name: 'İptal et' }));
+    // One form at a time: the revision waits until the cancel is put away.
+    expect(within(row).queryByRole('button', { name: 'Düzenleme iste' })).not.toBeInTheDocument();
+    const form = within(row).getByRole('form', { name: 'İptal et' });
+    const reason = within(form).getByLabelText('Neden iptal ediyorsunuz?');
+    expect(reason).toBeRequired();
+    expect(form).toHaveTextContent(/^.*Bu paylaşım takvimden çıkar ve bir daha planlanmaz; ajan ona yeni bir saat vermez\. İçeriğin şu paylaşımı yerinde kalır: Figurunica Sayfa · Hikâye · .+\./);
+    expect(form).not.toHaveTextContent('arşive');
+    const send = within(form).getByRole('button', { name: 'Paylaşımı iptal et' });
+    expect(send).toBeDisabled();
+    await userEvent.type(reason, 'Aynı görsellerle ikinci kez hazırlanmış');
+    await userEvent.click(send);
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')).toMatchObject({ path: '/api/studio/slots/a1/cancel', body: { expected_revision: 4, reason: 'Aynı görsellerle ikinci kez hazırlanmış' } }));
+    expect(await within(row).findByText('İptal edildi. Bu paylaşım bir daha planlanmaz.')).toBeVisible();
+  });
+
+  it('says the content is archived when this is its last post, and puts the form away on “Vazgeç”', async () => {
+    mockFetch({ ...owner, 'GET /api/studio/slots/a1': slotDetail('a1', contentOf('p1', [contentPost('a1')], { cancel_archives: true })) });
+    renderAt('/social');
+    const row = await rowOf('Evcil dostum');
+    await userEvent.click(await within(row).findByRole('button', { name: 'İptal et' }));
+    const form = within(row).getByRole('form', { name: 'İptal et' });
+    expect(form).toHaveTextContent('Bu paylaşım takvimden çıkar ve bir daha planlanmaz; ajan ona yeni bir saat vermez. İçeriğin gidecek başka paylaşımı kalmadığı için içerik de arşive kalkar.');
+    await userEvent.click(within(form).getByRole('button', { name: 'Vazgeç' }));
+    expect(within(row).queryByRole('form', { name: 'İptal et' })).not.toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Düzenleme iste' })).toBeVisible();
+  });
+
+  it('offers it for a queued post inside its opened row', async () => {
+    mockFetch({
+      ...owner,
+      'GET /api/social/accounts': [socialAccount],
+      'GET /api/social/accounts/ig1': { ...accountDetail, recent: [] },
+      'GET /api/studio/pending': emptyPending,
+      'GET /api/studio/slots/ready': slotDetail('ready', contentOf('p3', [contentPost('ready', { account_name: '@atolye' })])),
+      'GET /api/studio/slots/held': slotDetail('held'),
+    });
+    renderAt('/social');
+    const row = await rowOf('Atölyeden');
+    expect(within(row).queryByRole('button', { name: 'İptal et' })).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: /Atölyeden/ }));
+    await userEvent.click(await within(row).findByRole('button', { name: 'İptal et' }));
+    expect(within(row).getByRole('form', { name: 'İptal et' })).toHaveTextContent('Bu paylaşım takvimden çıkar ve bir daha planlanmaz');
+  });
+
+  it('is not offered to a content reader who may not manage posts', async () => {
+    mockFetch({ ...owner, 'GET /api/auth/me': only('social.work', 'content.manage') });
+    renderAt('/social');
+    const row = await rowOf('Evcil dostum');
+    expect(await within(row).findByRole('button', { name: 'Düzenleme iste' })).toBeVisible();
+    expect(within(row).queryByRole('button', { name: 'İptal et' })).not.toBeInTheDocument();
   });
 });

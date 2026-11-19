@@ -75,6 +75,8 @@ export interface PostOut {
 }
 export interface PostsOut {
   posts: PostOut[];
+  /** The content each post made of a content version came from; empty unless the session reads the production line. */
+  contents?: { slot_id: string; project_id: string }[];
   /** With the settings' revision and the accounts a person paused (`social.account_pause`). */
   settings: PostingSettings & { revision?: number; paused_capability_ids?: string[] };
 }

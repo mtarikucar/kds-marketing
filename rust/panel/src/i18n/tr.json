@@ -4321,6 +4321,7 @@
         "measurements_complete": "ölçümleri tamamlandı",
         "other": "geri alındı"
       },
+      "cancelled": "iptal edildi: “{{reason}}”",
       "window": "{{hours}} saatlik ölçüm",
       "link": "Gönderiyi aç"
     },
@@ -4516,6 +4517,18 @@
       "help": "Açık olan özel günlerin hazırlığı zamanı gelince başlar: o günün onaylı olayında kullanılabilir dosya varsa içerik üretilir, yoksa sistem çekim listesine istek ekler. Olayı sistem açmaz; siz açarsınız."
     }
   },
+  "socialCancel": {
+    "action": "İptal et",
+    "reason": "Neden iptal ediyorsunuz?",
+    "leaves": "Bu paylaşım takvimden çıkar ve bir daha planlanmaz; ajan ona yeni bir saat vermez.",
+    "othersStay_one": "İçeriğin şu paylaşımı yerinde kalır: {{list}}.",
+    "othersStay_other": "İçeriğin şu paylaşımları yerinde kalır: {{list}}.",
+    "archives": "İçeriğin gidecek başka paylaşımı kalmadığı için içerik de arşive kalkar.",
+    "confirm": "Paylaşımı iptal et",
+    "keep": "Vazgeç",
+    "done": "İptal edildi. Bu paylaşım bir daha planlanmaz.",
+    "stale": "Paylaşım bu arada değişti; güncel hali yüklendi. Bakıp yeniden deneyin."
+  },
   "socialRevision": {
     "request": "Düzenleme iste",
     "note": "Ne değişsin?",
@@ -4533,7 +4546,6 @@
     "stale": "İçerik bu arada değişti; güncel hali yüklendi. Notunuza bakıp yeniden gönderin.",
     "unconfirmed": "Platform zamanlanmış paylaşımı geri aldığını doğrulamadı; hiçbir şey değişmedi. Biraz sonra yeniden deneyin.",
     "noContent": "Bu paylaşım bir içerikten gelmedi; düzenlenecek içerik yok. İsterseniz iptal edin, gönderilmez.",
-    "cancel": "Paylaşımı iptal et",
     "group": "Düzenleniyor",
     "groupHelp": "Düzenleme istediğiniz içerikler. Ajanın yeni hali gelince buradan kalkar.",
     "asked": "Notunuz: “{{note}}”",

@@ -296,7 +296,7 @@ pub(crate) async fn available_material_ids(
     Ok(ids)
 }
 /// Cancels active work and marks completed results historical when their project context changed.
-async fn invalidate(
+pub(crate) async fn invalidate(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     p: &mut ProductionProject,

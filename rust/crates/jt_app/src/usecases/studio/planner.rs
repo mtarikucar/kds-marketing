@@ -8,7 +8,8 @@
 //! - expires the package requests nobody answered within seven days;
 //! - with an approved strategy, keeps the paid lane's weekly positions as they were (D13, D33);
 //! - unless a person braked the organic lane, runs the three triggers: an olay's new eligible
-//!   materials, 30 minutes after their last change (D24); an occasion within its lead (D25); a
+//!   materials, 30 minutes after their last change (D24; what "new" means: `Triggers::settled`);
+//!   an occasion within its lead (D25); a
 //!   channel without a feed post for `floor_days` (D26). With nothing eligible, the calendar and
 //!   floor triggers add a çekim listesi item instead; the system's items close themselves once
 //!   their condition holds. What a trigger writes depends on the installed modules (design
@@ -340,6 +341,7 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
             social,
             floor_areas,
             ai_standalone,
+            used: BTreeSet::new(),
         };
         t.run(r.as_mut(), &slots, &posts).await?;
         changed += t.changed;
@@ -523,6 +525,38 @@ fn quiet_goal(account: &str, last: Option<OffsetDateTime>, now: OffsetDateTime) 
     }
 }
 
+/// The materials of an olay that a content or a post already took up (see `Triggers::settled`):
+/// those some area holds, archived or not, and those a post carries that is planned and not
+/// retired, or that went out.
+async fn taken_up(
+    r: &mut dyn TenantRepos,
+    materials: &[Material],
+    slots: &[Slot],
+    posts: &[PlannedPost],
+) -> Result<BTreeSet<MaterialId>, AppError> {
+    let of_olays: Vec<MaterialId> = materials
+        .iter()
+        .filter(|m| m.olay_id().is_some())
+        .map(|m| m.id)
+        .collect();
+    let mut used = r.studio_projects().materials_in_areas(&of_olays).await?;
+    let out: BTreeSet<SlotId> = slots
+        .iter()
+        .filter(|s| matches!(s.state, SlotState::Published | SlotState::Measured))
+        .map(|s| s.id)
+        .collect();
+    for p in posts {
+        let went_out = out.contains(&p.slot_id)
+            || p.retired
+                .as_ref()
+                .is_some_and(|x| x.reason == RetirementReason::MeasurementsComplete);
+        if p.retired.is_none() || went_out {
+            used.extend(p.material_ids.iter().copied());
+        }
+    }
+    Ok(used)
+}
+
 /// The three triggers of one run (D23–D26).
 struct Triggers<'a> {
     d: &'a Deps,
@@ -539,6 +573,8 @@ struct Triggers<'a> {
     floor_areas: BTreeSet<CapabilityId>,
     /// The materials policy lets an agent's own visual stand alone (design B39).
     ai_standalone: bool,
+    /// The materials a content or a post already took up ([`Triggers::settled`]).
+    used: BTreeSet<MaterialId>,
 }
 
 impl Triggers<'_> {
@@ -563,6 +599,7 @@ impl Triggers<'_> {
         let policy = settings.policy;
         let outcomes = post_rules::outcomes(r, posts, &lib.olays).await?;
         let mut shoots = r.studio_materials().list_shoot_requests().await?;
+        self.used = taken_up(r, &materials, slots, posts).await?;
         let posting = self.social && !channels.is_empty();
         if self.areas || posting {
             // The calendar first: within an occasion's lead its olay's materials are its.
@@ -739,10 +776,24 @@ impl Triggers<'_> {
         Ok(())
     }
 
-    /// Among `eligible`, olay `o`'s materials no open or answered request of `o` lists yet
-    /// (an expired request gives its materials back), oldest change first, once their clock
-    /// (D48: the latest of their changes and `o`'s confirmation) is `debounce_minutes` old: 20
-    /// photos make one request. `None` while there is none, or while they are still settling.
+    /// Among `eligible`, olay `o`'s materials that are new to it, oldest change first, once their
+    /// clock (D48: the latest of their changes and `o`'s confirmation) is `debounce_minutes` old:
+    /// 20 photos make one request. `None` while there is none, or while they are still settling.
+    ///
+    /// A material is new to its olay while nothing took it up yet:
+    /// - no open or answered request of `o` lists it. An expired request, which nobody answered,
+    ///   gives its materials back: they are asked for again under a new key (D48);
+    /// - no content holds it, archived or not: a source of a production area, or shown by a
+    ///   version of any of its packages, whoever put it there (a person, the trigger itself, an
+    ///   agent attaching it with `studio.project_materials`);
+    /// - no post carries it that is planned and not retired, or that went out.
+    ///
+    /// A content that a person archived, or whose posts a person cancelled, keeps its materials:
+    /// giving them back would open the same content again by itself, which is what the person
+    /// stopped. Taking a material out of a content's sources gives it back, unless a version of
+    /// the content shows it. Each material counts on its own: of a batch where some materials are
+    /// already used and some are new, the new ones make the request, and the olay that receives a
+    /// batch every day makes one content of each.
     fn settled<'m>(
         &self,
         o: &Olay,
@@ -757,7 +808,7 @@ impl Triggers<'_> {
             .collect();
         let mut fresh: Vec<&Material> = eligible
             .into_iter()
-            .filter(|m| !listed.contains(&m.id))
+            .filter(|m| !listed.contains(&m.id) && !self.used.contains(&m.id))
             .collect();
         if fresh.is_empty() {
             return None;
@@ -780,8 +831,8 @@ impl Triggers<'_> {
             .count()
     }
 
-    /// D24: an olay's confirmed, eligible materials not yet in any of its requests, once they
-    /// stopped changing for `debounce_minutes`: one request for them all.
+    /// D24: an olay's confirmed, eligible materials that are new to it ([`Triggers::settled`]),
+    /// once they stopped changing for `debounce_minutes`: one request for them all.
     async fn olays(
         &mut self,
         r: &mut dyn TenantRepos,

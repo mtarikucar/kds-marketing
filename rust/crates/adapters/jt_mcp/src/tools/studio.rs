@@ -97,7 +97,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.slot_cancel",
-            description: "Cancel a Planned or Ready slot at its expected revision with a reason. [risk: WRITE]",
+            description: "Cancel a Planned or Ready slot at its expected revision with a reason. A post you planned from a content version and never sent is moved this way: its version waits for a time again (jeeta.social.versions_waiting). A version whose post the owner cancelled in the panel is never planned again: jeeta.social.version_schedule refuses it (version_cancelled). [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
             schema: || Schema::try_from(schema::input("slot_cancel")).expect("studio schema"),
             run: slot_cancel,

@@ -298,6 +298,7 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
             hypothesis_id: v.hypothesis_id,
             content_type: v.content_type,
             slot_id: None,
+            cancelled: None,
         })
         .collect();
     let held = held_versions(d, r.as_mut(), ctx, frame.id, &p, &versions).await?;

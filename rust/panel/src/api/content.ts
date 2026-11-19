@@ -16,6 +16,15 @@ export interface PackageVersion {
   hypothesis_id: string;
   content_type: string | null;
   slot_id: string | null;
+  /** A person cancelled its planned post ("İptal et"): it is never planned again. */
+  cancelled?: VersionCancel;
+}
+/** A person's cancellation of a version's planned post: who, when, why, and which post. */
+export interface VersionCancel {
+  by: string;
+  at: string;
+  reason: string;
+  slot_id: string;
 }
 /** One step the agent reported in an area's current attempt (design 2026-11-18 O9). */
 export interface AreaStep {
@@ -109,7 +118,7 @@ export interface PackageSummary {
   delivered_at: string;
   summary: string;
   released: boolean;
-  versions: { id: string; format: PostFormat; capability_id: string | null; title: string | null; material_ids: string[]; slot_id: string | null }[];
+  versions: { id: string; format: PostFormat; capability_id: string | null; title: string | null; material_ids: string[]; slot_id: string | null; cancelled?: VersionCancel }[];
 }
 export interface ApprovalFact {
   version_id: string;
