@@ -47,11 +47,12 @@ async fn studio_schema_exact_table_delta() {
     // posting policy (0022_studio_posts), outreach (0026_outreach), distribution
     // (0027_distribution), mail files (0028), intelligence (0029), productions (0030),
     // production projects (0031), the workspace module registry (0032), the account
-    // snapshots (0037_social_accounts) and the ad campaigns (0040_ads_campaigns), less the
-    // three commission tables of 0008 that 0033_drop_commissions drops.
+    // snapshots (0037_social_accounts), the ad campaigns (0040_ads_campaigns) and the agents'
+    // wake rows (0045_agent_wake), less the three commission tables of 0008 that
+    // 0033_drop_commissions drops.
     assert_eq!(
         count,
-        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1 + 1 + 1 - 3
+        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1 + 1 + 1 + 1 - 3
     );
 }
 
