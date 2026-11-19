@@ -39,6 +39,11 @@ pub struct SlotOut {
     /// preparation start and grace. Absent for a slot of the weekly quotas or the paid lane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post: Option<jt_studio::PlannedPost>,
+    /// The content the post was made of (design 2026-11-18, the social page's "Düzenleme iste"),
+    /// in `studio.slot_get`'s answer to a reader of the production line (`content.work` or
+    /// `content.manage`) only. Absent for a post of no content, and to anyone else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<crate::usecases::content::areas::SlotContent>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingSlot {
@@ -368,7 +373,15 @@ pub async fn slot_get(d: &Deps, ctx: &Ctx, id: SlotId) -> Result<SlotOut, AppErr
         crate::usecases::studio::permissions::for_use_case("studio.slot_get"),
     )
     .await?;
-    slot_in(r.as_mut(), id, &frame, ctx.now).await
+    let mut out = slot_in(r.as_mut(), id, &frame, ctx.now).await?;
+    // The production line is the content module's: a session that may not read it sees no area.
+    if crate::usecases::content::views::AREA_PERMISSIONS
+        .iter()
+        .any(|p| ctx.permissions.contains(p))
+    {
+        out.content = crate::usecases::content::areas::slot_content(r.as_mut(), id).await?;
+    }
+    Ok(out)
 }
 /// The slot's detail at `now`: its piece shown with that piece's material check, at the time the
 /// piece would publish (`now`, or the slot's time when later).
@@ -432,6 +445,7 @@ pub(crate) async fn slot_in(
         measurements,
         material_check,
         post,
+        content: None,
     })
 }
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {

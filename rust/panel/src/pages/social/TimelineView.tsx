@@ -81,6 +81,7 @@ export function Timeline({
   manage,
   files,
   ready,
+  revising,
 }: {
   data: Data;
   accounts: SocialAccount[];
@@ -94,6 +95,8 @@ export function Timeline({
   files: boolean;
   /** Every read the timeline is made of has answered. */
   ready: boolean;
+  /** The contents being revised ("Düzenleniyor"), under what waits and not counted with it. */
+  revising?: ReactNode;
 }) {
   const { t, i18n } = useTranslation();
   const [limits, setLimits] = useState<Record<string, number>>({});
@@ -170,6 +173,7 @@ export function Timeline({
           {waiting.length > waitLimit && <Button variant="outline" size="sm" onClick={more('waiting', waitLimit)}>{t('socialAccounts.more', { count: waiting.length - waitLimit })}</Button>}
         </WaitingChips>
       )}
+      {!place.filter && revising}
       {!place.filter && !nothing && (
         <>
           <Section title={t('socialAccounts.sections.queued')} count={data.queued.length} more={data.queued.length - queuedShown.length} onMore={more('queued', queuedLimit)}>

@@ -1,5 +1,5 @@
 //! An agent's hold on a production area: taking it at its start time, reporting the step it is
-//! at, giving it back; a person's "Olmamış"; and the areas the system opens itself.
+//! at, giving it back; a person's "Düzenleme iste"; and the areas the system opens itself.
 use crate::{
     ctx::Ctx,
     error::AppError,
@@ -210,12 +210,13 @@ pub async fn area_release(d: &Deps, ctx: &Ctx, i: ReleaseInput) -> Result<AreaOu
     Ok(AreaOut { project })
 }
 
-/// `content.area_redo`: a person says "Olmamış" with what should change (design B7). Panel-only,
-/// and a person's in person: an agent's key does not carry it. The note stands until a delivery
-/// answers it; an agent working the area keeps its claim; a held area is released to the agent
-/// again. The note is about the package the person saw, so it is refused (`CONFLICT`) once a
-/// newer one was delivered; an agent's progress reports in between do not stand in its way.
-/// The package's planned posts that have not gone out are cancelled; a published one stays.
+/// `content.area_redo`: a person asks for a revision ("Düzenleme iste") with what should change
+/// (design B7). Panel-only, and a person's in person: an agent's key does not carry it. The note
+/// stands until a delivery answers it; an agent working the area keeps its claim; a held area is
+/// released to the agent again. The note is about the package the person saw, so it is refused
+/// (`CONFLICT`) once a newer one was delivered; an agent's progress reports in between do not
+/// stand in its way. The package's planned posts that have not gone out are cancelled, and the
+/// redo names them (`withdrawn`); a published one stays.
 pub async fn area_redo(
     d: &Deps,
     ctx: &Ctx,
@@ -255,11 +256,21 @@ pub async fn area_redo(
         return Err(AppError::conflict("the area's package changed"));
     }
     // What has not gone out yet does not go out as it is: its planned posts are taken back.
-    crate::usecases::social::schedule::withdraw_planned(r.as_mut(), ctx, &mut p).await?;
+    let mut withdrawn =
+        crate::usecases::social::schedule::withdraw_planned(r.as_mut(), ctx, &mut p).await?;
+    // A note written again keeps what the standing redo took back.
+    if let Some(standing) = &p.redo {
+        for slot in standing.withdrawn.iter().rev() {
+            if !withdrawn.contains(slot) {
+                withdrawn.insert(0, *slot);
+            }
+        }
+    }
     p.redo = Some(RedoRequest {
         note,
         by,
         at: ctx.now,
+        withdrawn,
     });
     // The package the steps led to is abandoned: the next attempt reports its own (design
     // 2026-11-18 §4). The delivered package keeps the steps that made it.
@@ -276,6 +287,100 @@ pub async fn area_redo(
     let out = projects::detail(r.as_mut(), p).await?;
     r.commit().await?;
     Ok(out)
+}
+
+/// The content a planned post was made of, as `studio.slot_get` shows it to a reader of the
+/// production line (`content.work` or `content.manage`): what the social page needs to ask for a
+/// revision from the post and to say what that does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlotContent {
+    pub project_id: Uuid,
+    /// The area's title (its goal's opening).
+    pub title: String,
+    /// The revision of its current package, which `content.area_redo` names; `None`: none.
+    pub package_revision: Option<u32>,
+    /// The post is of the current package of an area not archived: a redo takes it back.
+    pub current: bool,
+    /// The redo standing, if a person asked for one.
+    pub redo: Option<RedoRequest>,
+    /// Every planned post of the current package, in its versions' order, this one among them.
+    pub posts: Vec<ContentPost>,
+}
+
+/// One planned post of an area's current package.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentPost {
+    pub slot_id: jt_studio::SlotId,
+    pub format: jt_studio::PostFormat,
+    pub capability_id: jt_capability::CapabilityId,
+    /// The account's name as the workspace calls it.
+    pub account_name: Option<String>,
+    #[serde(with = "jt_studio::time_compat")]
+    pub scheduled_at: OffsetDateTime,
+    pub state: jt_studio::SlotState,
+    /// It went out; a redo leaves it as it is.
+    pub published: bool,
+    /// A redo now takes it back: still planned or ready, and no send under way.
+    pub withdrawn_by_redo: bool,
+}
+
+/// [`SlotContent`] of the planned post `slot`; `None` when it was not made of a content version
+/// (proposed directly by an agent, a weekly quota's) or its area is gone. The caller checks that
+/// the session reads the production line.
+pub(crate) async fn slot_content(
+    r: &mut dyn TenantRepos,
+    slot: jt_studio::SlotId,
+) -> Result<Option<SlotContent>, AppError> {
+    let Some(id) = crate::usecases::social::schedule::area_of(r, slot).await? else {
+        return Ok(None);
+    };
+    let Some(p) = r.studio_projects().get_project(id).await? else {
+        return Ok(None);
+    };
+    let package = p.packages.last();
+    let mut posts = Vec::new();
+    for v in package.map(|k| k.versions.as_slice()).unwrap_or_default() {
+        let Some(slot_id) = v.slot_id else {
+            continue;
+        };
+        let Some(s) = r.studio().get_slot(slot_id).await? else {
+            continue;
+        };
+        // A post waiting at its platform's scheduler is taken back there first (`area_redo`):
+        // its held attempt does not keep it on the calendar, unless the platform refuses.
+        let attempts: Vec<_> = r
+            .studio()
+            .slot_evidence(slot_id)
+            .await?
+            .0
+            .into_iter()
+            .filter(|a| !a.is_held())
+            .collect();
+        let published = !r.studio().publications_of(&[slot_id]).await?.is_empty();
+        let account_name = r
+            .capabilities()
+            .find(s.capability_id)
+            .await?
+            .map(|c| c.name);
+        posts.push(ContentPost {
+            slot_id,
+            format: v.format,
+            capability_id: s.capability_id,
+            account_name,
+            scheduled_at: s.scheduled_at,
+            state: s.state,
+            published,
+            withdrawn_by_redo: crate::usecases::social::schedule::withdrawable(&s, &attempts),
+        });
+    }
+    Ok(Some(SlotContent {
+        project_id: p.id,
+        title: p.title.clone(),
+        package_revision: package.map(|k| k.revision),
+        current: !p.archived && posts.iter().any(|x| x.slot_id == slot),
+        redo: p.redo.clone(),
+        posts,
+    }))
 }
 
 /// Opens an area for the system (design §6.3) inside the caller's transaction, once per `key`:

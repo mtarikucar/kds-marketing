@@ -187,7 +187,8 @@ export interface AreaSummary {
   hints: { formats: PostFormat[]; capability_ids: string[] };
   status: { state: AreaState; step: number | null; note: string | null; starts_at: string };
   revision: number;
-  redo: { note: string; by: string; at: string } | null;
+  /** `withdrawn`: the planned posts the redo took back. */
+  redo: { note: string; by: string; at: string; withdrawn?: string[] } | null;
   open_requests: number;
   created_at: string;
   updated_at: string;
@@ -251,7 +252,7 @@ export const contentAreas = (q: { scope?: 'open' | 'done'; done_before?: string;
   request<AreasOut>('GET', '/api/content/areas', { query: { ...q } });
 /** One olay, or `genel`. */
 export const olayView = (id: string) => request<OlayViewOut>('GET', `/api/content/olays/${seg(id)}`);
-/** "Olmamış": `package_revision` is the current package the person was looking at (`null`: none). */
+/** "Düzenleme iste": `package_revision` is the current package the person was looking at (`null`: none). */
 export const areaRedo = (id: string, body: { package_revision: number | null; note: string }) =>
   request<ProjectDetail>('POST', `/api/content/areas/${seg(id)}/redo`, { body });
 /** A person accepts the delivery that holds the area, when only its text is held. */

@@ -141,7 +141,7 @@ function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
 /**
  * An open content: its steps and what follows them (from the row's pipeline), the platform
  * versions of its current package one at a time in the platform's frame, and what a person may
- * do here: "Olmamış" with what should change, accept a delivery only its text check held, answer
+ * do here: "Düzenleme iste" with what should change, accept a delivery only its text check held, answer
  * the agent's capture requests, add or take out sources, archive it. Without a row (a content
  * not on the list, an archived one opened by its link) the steps are left out.
  */
@@ -201,7 +201,8 @@ export function AreaDetail({ id, row, manage, files }: { id: string; row?: AreaR
             )}
           </div>
           <ProjectError error={archive.error} />
-          {project.redo && !project.archived && <p role="status" className="text-sm">{t('contentAreas.redoStatus', { note: project.redo.note })}</p>}
+          {/* Under a production row its bar says it already: the note shows once. */}
+          {project.redo && !project.archived && !row && <p role="status" className="text-sm">{t('contentAreas.redoStatus', { note: project.redo.note })}</p>}
           {editable && held && (
             <Callout tone="warning">
               <div className="min-w-0 space-y-3">

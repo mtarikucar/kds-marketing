@@ -121,7 +121,7 @@ it('shows the three content work kinds and links each to its production area', a
   mockFetch({ 'GET /api/auth/me': me, 'GET /api/work/pending': { ...pendingOverdue, items } });
   renderAt('/');
   const list = await screen.findByRole('list', { name: 'Bekleyen' });
-  expect(within(list).getByText('Yeniden yapılıyor: “Daha kısa”')).toBeVisible();
+  expect(within(list).getByText('Düzenleme istendi: “Daha kısa”')).toBeVisible();
   expect(within(list).getByText(tr.home.pending.content_material_request)).toBeVisible();
   expect(within(list).getByText(tr.home.pending.content_area_held)).toBeVisible();
   expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(['/content?content=a%2F1', '/content?content=a2', '/content?content=a3']);

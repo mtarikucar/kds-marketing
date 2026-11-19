@@ -30,7 +30,7 @@ export interface ProductionProject {
   claim?: { agent: string; token: string; at: string; lease_until: string } | null;
   progress?: { step: number; note: string; at: string } | null;
   packages?: import('./content').ContentPackage[];
-  redo?: { note: string; by: string; at: string } | null;
+  redo?: { note: string; by: string; at: string; withdrawn?: string[] } | null;
   refused?: number;
   /** The delivery the checks last refused, while it is the area's open matter. */
   refusal?: import('./content').RefusedDelivery | null;

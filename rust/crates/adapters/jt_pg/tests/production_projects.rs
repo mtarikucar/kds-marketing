@@ -401,6 +401,7 @@ async fn mirrored_area_columns_follow_the_stored_document() {
         note: "Closer".into(),
         by: user,
         at: FIXED_NOW,
+        withdrawn: vec![jt_studio::SlotId::new_v7()],
     });
     let mut r = uow.tenant(ws).await.unwrap();
     r.studio_projects()

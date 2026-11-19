@@ -14,6 +14,7 @@ import { AccountRail } from './AccountRail';
 import { AccountHeader } from './AccountHeader';
 import { SettingsDialog } from './SettingsDialog';
 import { TiktokDialog } from './TiktokDialog';
+import { Revising } from './Revision';
 import { Timeline, waitChips, waitingKinds } from './TimelineView';
 import { useAccountDetails, useAccounts, usePackages, usePending, usePostsKey, usePostsRead } from './data';
 import { isHome, legacyTarget, placeHref, useSocialPlace, type WaitKind } from './location';
@@ -91,7 +92,8 @@ function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: 
             </p>
           )}
           {details.size > 0 && (
-            <Timeline data={timeline} accounts={accounts} posts={posts.data} details={details} place={place} go={go} onFilter={onFilter} manage={manage} files={files} ready={ready} />
+            <Timeline data={timeline} accounts={accounts} posts={posts.data} details={details} place={place} go={go} onFilter={onFilter} manage={manage} files={files} ready={ready}
+              revising={<Revising scope={scope} posts={posts.data} />} />
           )}
         </QueryState>
       </div>
