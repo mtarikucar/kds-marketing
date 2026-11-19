@@ -377,7 +377,7 @@ describe('a cancelled post on the content page', () => {
 });
 
 describe('a post that waits for the owner', () => {
-  const publication = (slot: string, account: string) => ({ version_id: slot, slot_id: slot, capability_id: 'c', account_name: account, state: 'ready', scheduled_at: '2026-11-24T16:00:00Z', published_at: null, url: null, failed: false });
+  const publication = (slot: string, account: string) => ({ version_id: slot, slot_id: slot, capability_id: 'c', account_name: account, state: 'ready' as const, scheduled_at: '2026-11-24T16:00:00Z', published_at: null, url: null, failed: false });
   const waiting = (slot: string, screen: boolean) => ({ version_id: slot, slot_id: slot, required: true, posting_screen: screen, waiting: true, approved_by: null, approved_at: null });
 
   it('leads a TikTok post to its posting screen with the social page’s words, never to a plain approval', async () => {
