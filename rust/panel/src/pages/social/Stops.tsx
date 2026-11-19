@@ -89,7 +89,9 @@ export function StopList({
   const { t } = useTranslation();
   // Preparing the draft is the consultation's (`team.manage`); anyone else is pointed to it.
   const strategy = can(useSession().data, 'team.manage');
-  if (!stops.length) return null;
+  // A content with no video for TikTok already says TikTok takes only video: once is enough.
+  const shown = stops.some((s) => s.code === 'media_missing') ? stops.filter((s) => s.code !== 'only_format') : stops;
+  if (!shown.length) return null;
   const action = (stop: Stop) => {
     switch (stop.action) {
       case 'reconnect':
@@ -122,12 +124,14 @@ export function StopList({
   };
   return (
     <ul aria-label={label ?? t('stops.title')} className="divide-y divide-border rounded-md border border-border bg-surface text-sm">
-      {stops.map((stop, i) => {
-        const Icon = stop.blocking ? AlertTriangle : Info;
+      {shown.map((stop, i) => {
+        // A missing video stops that content's post there, though the account itself can post.
+        const warn = stop.blocking || stop.code === 'media_missing';
+        const Icon = warn ? AlertTriangle : Info;
         const act = action(stop);
         return (
           <li key={`${stop.code}-${i}`} className="grid grid-cols-[1rem_minmax(0,1fr)] items-start gap-x-2.5 px-3 py-2">
-            <Icon aria-hidden="true" className={cn('mt-0.5 h-4 w-4', stop.blocking ? 'text-warning' : 'text-muted-foreground')} />
+            <Icon aria-hidden="true" className={cn('mt-0.5 h-4 w-4', warn ? 'text-warning' : 'text-muted-foreground')} />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
               <span className="min-w-0 break-words">
                 {stop.blocking && <span className="sr-only">{t('stops.blocking')}: </span>}
