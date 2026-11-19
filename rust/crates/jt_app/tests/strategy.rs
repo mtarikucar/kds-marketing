@@ -2683,3 +2683,121 @@ async fn a_persons_approval_wakes_the_agent_that_schedules_waiting_versions() {
     );
     assert!(pending(materials).is_none());
 }
+
+// ---------------------------------------------------------------------------------------------
+// add_channel and the owner's request (design 2026-11-19 F2, F3)
+// ---------------------------------------------------------------------------------------------
+
+/// The one action behind "the strategy does not post on this account": a draft with the channel
+/// and, for each segment, a hypothesis on it, submitted for the owner to approve.
+#[tokio::test]
+async fn add_channel_prepares_a_draft_with_the_channel_and_a_hypothesis_per_segment() {
+    let w = world().await;
+    approved(&w).await;
+    let deps = w.with_channels(&["instagram", "mailbox", "tiktok"]);
+    let kind = || strategy::AddChannelInput {
+        kind: "tiktok".into(),
+    };
+
+    // An agent's key does not prepare it, nor does a kind the workspace has no account of.
+    let agent = w.owner_agent(&["team.manage"]).await;
+    assert_eq!(
+        code(strategy::add_channel(&deps, &agent, kind()).await),
+        ErrorCode::Forbidden
+    );
+    assert_eq!(
+        code(
+            strategy::add_channel(
+                &deps,
+                &w.owner_ctx,
+                strategy::AddChannelInput {
+                    kind: "linkedin_page".into()
+                }
+            )
+            .await
+        ),
+        ErrorCode::Validation
+    );
+
+    let draft = strategy::add_channel(&deps, &w.owner_ctx, kind())
+        .await
+        .unwrap();
+    assert_eq!(draft.status, VersionStatus::Draft);
+    assert!(
+        draft
+            .sections
+            .channels
+            .iter()
+            .any(|c| c.channel == "tiktok")
+    );
+    let added: Vec<&Hypothesis> = draft
+        .hypotheses
+        .iter()
+        .filter(|h| h.channel == "tiktok")
+        .collect();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].segment_key, "students");
+    assert_eq!(added[0].state, HypothesisState::Added);
+    assert!(draft.gaps.is_empty(), "{:?}", draft.gaps);
+    assert!(
+        draft.submitted_at.is_some(),
+        "it waits for the owner's approval"
+    );
+    assert_eq!(w.entries("strategy.add_channel").len(), 1);
+
+    // The owner approves it as any draft; asked again, there is nothing to add.
+    let v = strategy::approve(&deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    assert_eq!(v.status, VersionStatus::Approved);
+    let again = strategy::add_channel(&deps, &w.owner_ctx, kind())
+        .await
+        .unwrap();
+    assert_eq!(again.id, v.id);
+    assert_eq!(w.entries("strategy.add_channel").len(), 1);
+}
+
+/// The owner's request is the system's hypothesis: never listed or counted with the strategy,
+/// and carried into the next version so the posts made for it keep their chain.
+#[tokio::test]
+async fn the_owners_request_is_never_listed_and_goes_on_into_the_next_version() {
+    use jt_app::usecases::studio::owner_request;
+    let w = world().await;
+    let v1 = approved(&w).await;
+    let built_in = owner_request::id(w.ws);
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.hypotheses()
+        .upsert(
+            v1.id,
+            owner_request::hypothesis(w.ws, HypothesisState::Added),
+        )
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let got = strategy::get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(
+        got.approved
+            .unwrap()
+            .hypotheses
+            .iter()
+            .all(|h| h.id != built_in)
+    );
+
+    // The next version is written without it: it is neither retired nor dropped.
+    complete_draft(&w, &w.owner_ctx).await;
+    let draft = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    assert!(draft.hypotheses.iter().all(|h| h.id != built_in));
+    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
+        .await
+        .unwrap();
+    assert!(v2.hypotheses.iter().all(|h| h.id != built_in));
+    let carried = w
+        .hypotheses(v2.id)
+        .into_iter()
+        .find(|h| h.id == built_in)
+        .expect("carried into the version now in force");
+    assert_eq!(carried.state, HypothesisState::Kept);
+    // The approval counts the strategy's own hypotheses in force: the one just written.
+    let approval = w.entries("strategy.approve").pop().unwrap();
+    assert_eq!(approval.payload["hypotheses"], 1);
+}

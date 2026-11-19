@@ -2,6 +2,7 @@ import { request, seg } from './client';
 import type { Actor, Material, MaterialIntelligence, Olay, OccasionKind } from './materials';
 import type { ProjectDetail } from './projects';
 import type { PostFormat } from './posts';
+import type { AccountStops } from './social';
 
 export type AreaState = 'queued' | 'working' | 'waiting_material' | 'done' | 'held' | 'archived';
 export interface PackageVersion {
@@ -124,6 +125,8 @@ export interface ApprovalFact {
   version_id: string;
   slot_id: string;
   required: boolean;
+  /** The person's step is TikTok's posting screen, never a plain approval. */
+  posting_screen?: boolean;
   waiting: boolean;
   approved_by: string | null;
   approved_at: string | null;
@@ -161,11 +164,13 @@ export interface Stage {
 }
 /** Why no account can take a waiting version, as `social.versions_waiting` says it. */
 export const BLOCKED_REASONS = [
+  'material_removed',
   'no_approved_strategy',
   'no_connected_account',
   'account_paused',
   'its_account_unavailable',
   'format_not_supported',
+  'media_not_accepted',
   'channel_not_in_strategy',
   'hypothesis_does_not_post',
 ] as const;
@@ -205,6 +210,8 @@ export interface AreaSummary {
 export interface AreaRow {
   area: AreaSummary;
   pipeline: Pipeline;
+  /** For a content naming its accounts: what stands between it and a post on each (absent otherwise). */
+  checks?: AccountStops[];
 }
 export interface AreasOut {
   areas: AreaRow[];

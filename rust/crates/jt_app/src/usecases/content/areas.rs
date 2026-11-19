@@ -460,6 +460,7 @@ pub async fn open_by_system(
             trigger,
             key: key.into(),
         },
+        requested_by: None,
         hints,
         claim: None,
         progress: None,

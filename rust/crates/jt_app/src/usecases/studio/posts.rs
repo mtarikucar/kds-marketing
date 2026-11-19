@@ -171,14 +171,33 @@ pub(crate) fn postable(d: &Deps, c: &Capability, now: OffsetDateTime) -> bool {
             .is_some_and(|p| d.connectors.publisher(p).is_some())
 }
 
-/// The channels posts may go out on at `now`, under strategy `frame`.
+/// The channels posts may go out on at `now`, under strategy `frame`: those of
+/// [`open_channels`] some hypothesis of the strategy posts on.
 pub(crate) async fn channels(
     d: &Deps,
     r: &mut dyn TenantRepos,
     frame: &StrategyVersion,
     now: OffsetDateTime,
 ) -> Result<Vec<Channel>, AppError> {
-    let hypotheses = r.hypotheses().list(frame.id).await?;
+    Ok(open_channels(d, r, frame, now)
+        .await?
+        .into_iter()
+        .filter(|c| !c.options.is_empty())
+        .collect())
+}
+
+/// Every organic account a post may go out on at `now` under strategy `frame` (connected, its
+/// publisher built, not paused, chosen by the strategy), each with the options of the strategy's
+/// own hypotheses on it, possibly none. The owner's request (`owner_request`) is never an option:
+/// it is not the strategy's, and only a content a person asked for takes it.
+pub(crate) async fn open_channels(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    frame: &StrategyVersion,
+    now: OffsetDateTime,
+) -> Result<Vec<Channel>, AppError> {
+    let hypotheses =
+        super::owner_request::without(frame.workspace_id, r.hypotheses().list(frame.id).await?);
     // An account a person paused takes no post (design 2026-11-10 §7.6).
     let paused = r
         .studio_posts()
@@ -206,12 +225,10 @@ pub(crate) async fn channels(
                 });
             }
         }
-        if !options.is_empty() {
-            out.push(Channel {
-                capability: c,
-                options,
-            });
-        }
+        out.push(Channel {
+            capability: c,
+            options,
+        });
     }
     Ok(out)
 }
@@ -466,6 +483,7 @@ pub(crate) async fn retire_posts_after(
     } else {
         RetirementReason::HypothesisRetired
     };
+    let ctx = super::measure::system_ctx(r.workspace().get().await?.id, at);
     for slot in unsent {
         if r.studio()
             .get_slot(*slot)
@@ -475,6 +493,9 @@ pub(crate) async fn retire_posts_after(
             r.studio_posts()
                 .retire_post(*slot, PostRetirement { reason, at })
                 .await?;
+            // A content version whose post the change took back waits for a time again, under
+            // the strategy now in force (design 2026-11-19 F4): nobody redoes the content.
+            crate::usecases::social::schedule::free_version_of(r, &ctx, *slot).await?;
         }
     }
     Ok(())
@@ -940,6 +961,14 @@ async fn check_item(
     let Some(h) = hypotheses.iter().find(|h| h.id == p.hypothesis_id) else {
         return refuse("hypothesis_not_postable");
     };
+    // The owner's request is a content version's, planned by `social.version_schedule` for a
+    // content a person asked for naming its account; no other package may name it.
+    if super::owner_request::is(frame.workspace_id, h.id)
+        && !(request.trigger == PackageTrigger::Project
+            && request.hints.hypothesis_id == Some(h.id))
+    {
+        return refuse("hypothesis_not_postable");
+    }
     let types = content_types(h, &kind);
     if types.is_empty() {
         return refuse("hypothesis_not_postable");

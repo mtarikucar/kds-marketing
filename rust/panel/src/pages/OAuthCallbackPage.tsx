@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useEntryCopy } from './entryCopy';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -25,6 +25,39 @@ import { kindLabel } from '@/lib/capabilities';
 import { callbackErrorMessage, oauthProviderErrorMessage } from '@/lib/errors';
 import { forgetFlow, rememberedFlow, restartPath, type RememberedFlow } from '@/lib/oauthFlow';
 import { invalidateCapabilities } from './capabilities/queries';
+import { accountsList } from '@/api/social';
+import { SOCIAL_KINDS, StopList } from './social/Stops';
+
+/**
+ * The connect flow's end for social accounts (design 2026-11-19 F3): what would stop a post on
+ * each account just connected, and what every post there will meet, said now, each with its one
+ * action, before the person moves on.
+ */
+function ConnectedChecks({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+  const { t } = useTranslation();
+  const accounts = useQuery({ queryKey: ['oauth-connected', ...ids], queryFn: accountsList, retry: false });
+  const connected = (accounts.data ?? []).filter((a) => ids.includes(a.capability_id) && (a.stops?.length ?? 0) > 0);
+  return (
+    <Card className="w-full max-w-3xl">
+      <CardHeader>
+        <CardTitle>{t('stops.connectedTitle')}</CardTitle>
+        {connected.length > 0 && <CardDescription>{t('stops.connectedBody')}</CardDescription>}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {accounts.isPending && <Spinner />}
+        {connected.map((a) => (
+          <section key={a.capability_id} className="space-y-2">
+            <h3 className="break-words text-sm font-medium">{`${kindLabel(t, a.kind)} · ${a.name}`}</h3>
+            <StopList kind={a.kind} capabilityId={a.capability_id} stops={a.stops ?? []} label={t('stops.accountLabel', { account: a.name })} />
+          </section>
+        ))}
+        <div>
+          <Button onClick={onDone}>{t('stops.continue')}</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 /** What the provider sent back in the address, read once when the page opens. */
 interface Answer {
@@ -194,6 +227,8 @@ export function OAuthCallbackPage() {
   const [completion, setCompletion] = useState<Completion>({ kind: 'waiting' });
   const pending = completion.kind === 'done' ? completion.out : null;
   const [selected, setSelected] = useState<string[]>([]);
+  // The social accounts just connected: their checklist is shown before moving on.
+  const [social, setSocial] = useState<string[] | null>(null);
   // The code is good once: the flow completes once, whatever renders (or runs effects) twice.
   const asked = useRef(false);
 
@@ -219,7 +254,11 @@ export function OAuthCallbackPage() {
       forgetFlow();
       toast.success(t('oauthCallback.connected', { count: connected.length }));
       await invalidateCapabilities(queryClient);
-      navigate('/capabilities');
+      const posting = connected
+        .filter((c) => (SOCIAL_KINDS as readonly string[]).includes(c.capability.kind_key))
+        .map((c) => c.capability.id);
+      if (posting.length) setSocial(posting);
+      else navigate('/capabilities');
     },
   });
 
@@ -236,7 +275,9 @@ export function OAuthCallbackPage() {
   }, [answer, complete, known, navigate]);
 
   let body;
-  if (!known) {
+  if (social) {
+    body = <ConnectedChecks ids={social} onDone={() => navigate('/capabilities')} />;
+  } else if (!known) {
     body = <Failed message={t('oauthCallback.unknownCallback')} flow={flow} />;
   } else if (answer.error !== null) {
     body = <Failed message={oauthProviderErrorMessage(t, answer.error)} flow={flow} />;

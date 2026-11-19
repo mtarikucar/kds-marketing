@@ -443,6 +443,9 @@ pub static CATALOG: &[UseCase] = &[
     twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
     twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
     twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
+    // The one action behind "the strategy does not post on this account" (design 2026-11-19 F3):
+    // a person prepares the draft that adds the channel; the owner approves it as any draft.
+    panel_only("strategy.add_channel", Exempt, ("POST", "/api/strategy/channels"), Write),
     // Capabilities, their groups and the budget are exempt from the strategy gate (the
     // consultation needs to know what the workspace has), but not from the status check.
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),

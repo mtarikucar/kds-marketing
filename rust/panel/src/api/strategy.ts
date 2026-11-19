@@ -21,6 +21,14 @@ export function getStrategy(): Promise<StrategyOut> {
   return request('GET', '/api/strategy');
 }
 
+/**
+ * `POST /api/strategy/channels`: prepares the draft that adds a connected account's channel, with a
+ * hypothesis on it for each segment, submitted for the owner's approval when it has no gap.
+ */
+export function addChannel(kind: string): Promise<VersionOut> {
+  return request('POST', '/api/strategy/channels', { body: { kind } });
+}
+
 /** `POST /api/strategy/consultation`: opens the next draft, or answers the one already open. */
 export function startConsultation(): Promise<VersionOut> {
   return request('POST', '/api/strategy/consultation');

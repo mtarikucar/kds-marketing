@@ -7,6 +7,7 @@ import { Badge, cn, Switch } from '@/components/ui';
 import { formatDateTime, formatNumber } from '@/lib/format';
 import { StudioError, StudioReadStatus } from '../StudioShared';
 import { useSocialKey } from './data';
+import { StopList } from './Stops';
 import type { SocialPlace } from './location';
 
 const METRICS: api.Metric[] = ['followers', 'reach', 'views', 'engagement', 'profile_visits'];
@@ -136,6 +137,10 @@ export function AccountHeader({
   const locked = account.status !== 'verified';
   const name = `${t(`capabilities.kinds.${account.kind}`)} · ${account.name}`;
   const strays = data?.at_platform?.filter((p) => !p.known) ?? [];
+  // An account that cannot post yet, or on which the agent posts nothing by itself, says what
+  // stands in the way, with the one action for each, right under its name.
+  const stops = data?.account.stops ?? account.stops ?? [];
+  const cannotPostYet = stops.some((s) => s.blocking || s.code === 'no_hypothesis');
   return (
     <section aria-label={name} className="min-w-0 space-y-4 rounded-lg border border-border bg-surface p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -144,12 +149,13 @@ export function AccountHeader({
           <p className="flex flex-wrap gap-2">
             {account.paused && <Badge tone="warning">{t('socialAccounts.paused')}</Badge>}
             {locked && <Badge tone="danger">{t(`status.capability.${account.status}`, { defaultValue: t('socialAccounts.locked') })}</Badge>}
-            {account.requires_human_approval && <Badge tone="info">{t('socialAccounts.needsApproval')}</Badge>}
+            {account.requires_human_approval && <Badge tone="info">{t(account.human_gate === 'posting_screen' ? 'socialAccounts.needsScreen' : 'socialAccounts.needsApproval')}</Badge>}
             {!account.paused && !locked && <Badge tone="success">{t('socialAccounts.active')}</Badge>}
           </p>
         </div>
         {manage && <PauseSwitch account={account} posts={posts} postsKey={postsKey} />}
       </header>
+      {cannotPostYet && <StopList kind={account.kind} capabilityId={account.capability_id} stops={stops} here />}
       <div role="group" aria-label={t('socialAccounts.period')} className="flex flex-wrap gap-1.5">
         {([7, 30, 90] as const).map((value) => (
           <button key={value} type="button" aria-pressed={period === value} onClick={() => go({ ...place, days: value === 30 ? undefined : value }, { replace: true })}

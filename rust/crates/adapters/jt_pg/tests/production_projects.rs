@@ -23,6 +23,7 @@ fn project(ws: jt_tenancy::WorkspaceId) -> ProductionProject {
         steps: vec![],
         start_at: None,
         opened_by: Default::default(),
+        requested_by: None,
         hints: Default::default(),
         claim: None,
         progress: None,

@@ -106,6 +106,8 @@ const RETRY_AFTER_MIN: Duration = Duration::seconds(10);
 pub const ROUTINE_ID_MAX: usize = 128;
 pub const URL_MAX: usize = 2048;
 pub const SECRET_MAX: usize = 4096;
+/// How a Claude routine's API trigger token begins (`sk-ant-oat01-...`).
+pub const ROUTINE_TOKEN_PREFIX: &str = "sk-ant-oat01-";
 
 const NO_SUCH_AGENT: &str = "no such agent";
 
@@ -817,6 +819,15 @@ pub async fn set(deps: &Deps, ctx: &Ctx, input: SetWake) -> Result<WakesOut, App
             }
             let token = secret_of("token", input.token.as_deref())?
                 .ok_or_else(|| invalid("token", "a routine needs its token"))?;
+            // A routine's token is the one claude.ai shows once for its API trigger. Anything
+            // else (a browser's saved password filled into the field, say) is refused here, at
+            // the field, before it is sealed and sent to claude.ai on every wake.
+            if !token.starts_with(ROUTINE_TOKEN_PREFIX) {
+                return Err(invalid(
+                    "token",
+                    "a routine's token starts with sk-ant-oat01-: copy it from the routine's API trigger",
+                ));
+            }
             (id.to_owned(), Some(token))
         }
         WakeKind::Webhook => {

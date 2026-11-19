@@ -269,6 +269,12 @@ pub struct ProductionProject {
     pub start_at: Option<OffsetDateTime>,
     #[serde(default)]
     pub opened_by: OpenedBy,
+    /// The person who asked for this content in person (`studio.project_create` from a panel
+    /// session, never an agent's key): their choice of account or format in `hints` is their
+    /// decision (design 2026-11-19 R3). `None` for an area an agent or the system opened, and for
+    /// one from before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_by: Option<UserId>,
     #[serde(default)]
     pub hints: AreaHints,
     #[serde(default)]

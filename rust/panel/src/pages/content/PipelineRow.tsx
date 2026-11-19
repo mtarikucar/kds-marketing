@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Check, ChevronDown, Clock, ExternalLink, RotateCcw, UserRound } from 'lucide-react';
-import { BLOCKED_REASONS, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait, type VersionCancel } from '@/api/content';
+import { BLOCKED_REASONS, type ApprovalFact, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait, type VersionCancel } from '@/api/content';
 import { Button, cn } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { areaTime, MiniThumb, openedBy, StateBadge, stepName } from './AreaShared';
@@ -30,6 +30,16 @@ export function blockedText(t: TFunction, wait: TimeWait): string {
   const reason = BLOCKED_REASONS.find((r) => r === wait.blocked);
   return reason ? t(`socialAccounts.blocked.${reason}`) : t('socialAccounts.noSuitableAccount');
 }
+
+/** What a planned post waits for at Onay: TikTok's posting screen, or a person's approval. */
+export function awaitsText(t: TFunction, approvals: ApprovalFact[] | undefined): string {
+  const waiting = (approvals ?? []).filter((a) => a.waiting);
+  return waiting.length > 0 && waiting.every((a) => a.posting_screen) ? t('socialAccounts.state.tiktok') : t('content.out.awaitsApproval');
+}
+
+/** Where the person does it: TikTok's screen over the social page, or the post's row there. */
+export const approvalHref = (a: ApprovalFact) =>
+  a.posting_screen ? `/social?tiktok=${encodeURIComponent(a.slot_id)}` : `/social?slot=${encodeURIComponent(a.slot_id)}`;
 
 /** Where a person gives a waiting version its account and time: its row on the social page. */
 export const scheduleHref = (versionId?: string) => (versionId ? `/social?version=${encodeURIComponent(versionId)}` : '/social?filter=times');
@@ -124,7 +134,7 @@ export function stageFacts(t: TFunction, stage: Stage, row: AreaRow, lang: strin
     if (numbers.length) facts.push({ text: numbers.slice(0, 3).map(([k, v]) => `${formatNumber(v, lang)} ${t(`content.metric.${k}`, { defaultValue: k })}`).join(' · ') });
   }
   if (stage.state === 'waiting_person')
-    facts.push({ text: stage.key === 'onay' ? t('content.out.awaitsApproval') : row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson'), tone: 'warning', state: true });
+    facts.push({ text: stage.key === 'onay' ? awaitsText(t, stage.approvals) : row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson'), tone: 'warning', state: true });
   if (stage.state === 'problem' && !(stage.publications ?? []).some((p) => p.failed) && !(stage.key === 'yayin' && unscheduled.some((x) => x.blocked)))
     facts.push({ text: t('content.out.stuck'), tone: 'danger', state: true });
   return facts;
@@ -174,12 +184,18 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
     </>;
   } else if (stage?.state === 'waiting_person' && stage.key === 'onay') {
     tone = 'warning';
-    title = t('content.out.awaitsApproval');
+    title = awaitsText(t, stage.approvals);
     const names = new Map((stages.find((s) => s.key === 'yayin')?.publications ?? []).map((p) => [p.slot_id, p]));
     actions = <>
       {(stage.approvals ?? []).filter((a) => a.waiting).map((a) => {
         const p = names.get(a.slot_id);
-        return <Button key={a.slot_id} size="sm" className={small} asChild><Link to={`/social?slot=${encodeURIComponent(a.slot_id)}`}><Check aria-hidden="true" className="h-4 w-4" />{p ? t('content.bar.approveAt', { account: p.account_name ?? t('contentAreas.account'), at: areaTime(p.scheduled_at, i18n.language) }) : t('content.bar.approve')}</Link></Button>;
+        const account = p?.account_name ?? t('contentAreas.account');
+        // TikTok's post is finished on its screen, never by a plain approval: the same words and
+        // the same screen as on the social page.
+        const label = a.posting_screen
+          ? (p ? t('content.bar.finishTiktokAt', { account, at: areaTime(p.scheduled_at, i18n.language) }) : t('socialAccounts.finishTiktok'))
+          : (p ? t('content.bar.approveAt', { account, at: areaTime(p.scheduled_at, i18n.language) }) : t('content.bar.approve'));
+        return <Button key={a.slot_id} size="sm" className={small} asChild><Link to={approvalHref(a)}>{!a.posting_screen && <Check aria-hidden="true" className="h-4 w-4" />}{label}</Link></Button>;
       })}
       {preview}
     </>;

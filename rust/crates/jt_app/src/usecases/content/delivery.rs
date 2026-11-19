@@ -158,7 +158,10 @@ async fn held_versions(
     let mut held = Vec::new();
     for (index, v) in versions.iter().enumerate() {
         let mut findings: Vec<Value> = Vec::new();
-        if !hypotheses.iter().any(|h| h.id == v.hypothesis_id) {
+        if crate::usecases::studio::owner_request::is(ctx.workspace_id, v.hypothesis_id) {
+            // The owner's request is settled when the version gets its time, never named.
+            findings.push(json!({"code":"hypothesis_reserved"}));
+        } else if !hypotheses.iter().any(|h| h.id == v.hypothesis_id) {
             findings.push(json!({"code":"hypothesis_not_in_approved_strategy"}));
         }
         let mut channel = None;

@@ -2,11 +2,13 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listCapabilities } from '@/api/capabilities';
+import { accountsList } from '@/api/social';
 import { projectCreate } from '@/api/projects';
 import { POST_FORMATS, type PostFormat } from '@/api/posts';
 import { Button, Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui';
 import { fieldClass, MaterialsReadStatus, useMaterialsKey, useMaterialsMutation } from '../materials/MaterialsShared';
 import { ProjectError, useRequestKey } from '../projects/ProjectShared';
+import { StopList } from '../social/Stops';
 
 /** Opens a content; from inside an olay it belongs to that olay (`olayId`), else to Genel. */
 export function OpenArea({ olayId, olayTitle, onClose, onCreated }: { olayId?: string; olayTitle?: string; onClose: () => void; onCreated: (id: string) => void }) {
@@ -21,6 +23,10 @@ export function OpenArea({ olayId, olayTitle, onClose, onCreated }: { olayId?: s
   const [format, setFormat] = useState<PostFormat | ''>('');
   const keyFor = useRequestKey();
   const accounts = useQuery({ queryKey: [...key, 'social-accounts'], queryFn: () => listCapabilities({ group: 'social_account', status: 'verified' }) });
+  // What a post on the chosen account will meet, said now (it is read from the facts there).
+  const social = useQuery({ queryKey: [...key, 'social-stops'], queryFn: accountsList, enabled: !!account, retry: false });
+  const chosen = social.data?.find((a) => a.capability_id === account);
+  const stops = (chosen?.stops ?? []).filter((s) => s.code !== 'lead' || !format || s.format === format);
   const create = useMaterialsMutation(() => {
     const input = { brief: goal.trim(), start_at: new Date(start).toISOString(), ...(olayId ? { olay_id: olayId } : {}), ...(account ? { capability_ids: [account] } : {}), ...(format ? { formats: [format] } : {}) };
     return projectCreate({ ...input, request_key: keyFor(input) });
@@ -35,6 +41,7 @@ export function OpenArea({ olayId, olayTitle, onClose, onCreated }: { olayId?: s
         <details><summary className="cursor-pointer text-sm">{t('contentAreas.optional')}</summary><div className="mt-3 space-y-3">
           <label className="block space-y-2 text-sm"><span>{t('contentAreas.platform')}</span><select className={fieldClass} value={account} onChange={e => setAccount(e.target.value)}><option value="">{t('contentAreas.agentChooses')}</option>{accounts.data?.map(({ capability: c }) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
           <MaterialsReadStatus query={accounts} />
+          {chosen && <StopList kind={chosen.kind} capabilityId={chosen.capability_id} stops={stops} label={t('stops.accountLabel', { account: chosen.name })} />}
           <label className="block space-y-2 text-sm"><span>{t('contentAreas.format')}</span><select className={fieldClass} value={format} onChange={e => setFormat(e.target.value as PostFormat | '')}><option value="">{t('contentAreas.agentChooses')}</option>{POST_FORMATS.map(f => <option key={f} value={f}>{t(`posts.format.${f}`)}</option>)}</select></label>
         </div></details>
         <ProjectError error={create.error} />
