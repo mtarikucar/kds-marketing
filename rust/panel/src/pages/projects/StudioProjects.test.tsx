@@ -281,7 +281,7 @@ it('opens a scheduled piece on the social accounts screen without a human editor
   const { router } = renderAt(path('publications'));
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: p.preparePublication }));
-  expect(await screen.findByRole('tab', { name: 'Hesaplar' })).toHaveAttribute('aria-selected', 'true');
+  expect(await screen.findByTestId('social')).toBeInTheDocument();
   expect(screen.queryByLabelText('İçerik metni')).not.toBeInTheDocument();
   expect(calls.some(call => call.method === 'POST' && call.path.endsWith('/piece'))).toBe(false);
   expect(router.state.location.pathname).toBe('/social');

@@ -32,7 +32,7 @@ describe('a finished package with no time', () => {
     const t = await screen.findByRole('article', { name: 'İçerik t' });
     expect(within(stagesOf(t)[5]).getByText('Paket hazır · paylaşım zamanı bekliyor', { selector: 'span' })).toBeInTheDocument();
     expect(within(t).getByText(/Ajan bir sonraki çalışmasında her sürüme hesap ve saat verecek/)).toBeVisible();
-    expect(within(t).getByRole('link', { name: 'Zamanı siz verin' })).toHaveAttribute('href', '/social?tab=packages#version-v1');
+    expect(within(t).getByRole('link', { name: 'Zamanı siz verin' })).toHaveAttribute('href', '/social?version=v1');
     // "Sizi bekleyenler" counts it, and leads to its folder.
     const strip = screen.getAllByRole('region', { name: 'Sizi bekleyenler' })[0];
     expect(within(strip).getByRole('link', { name: /1 içerik zaman bekliyor/ })).toHaveAttribute('href', '/content?olay=genel');
@@ -55,7 +55,7 @@ describe('a finished package with no time', () => {
     expect(within(stagesOf(x)[6]).getByText('Reels hiçbir hesaba gidemiyor')).toBeInTheDocument();
     expect(within(x).getByText('Hazır sürüm hiçbir hesaba gidemiyor')).toBeVisible();
     expect(within(x).getByText(/Uygun hesapların paylaşımı durdurulmuş/)).toBeVisible();
-    expect(within(x).getByRole('link', { name: 'Hazır paketlere git' })).toHaveAttribute('href', '/social?tab=packages#version-v1');
+    expect(within(x).getByRole('link', { name: 'Sosyal medyada çöz' })).toHaveAttribute('href', '/social?version=v1');
     expect(within(x).queryByText('Takıldı')).not.toBeInTheDocument();
   });
 

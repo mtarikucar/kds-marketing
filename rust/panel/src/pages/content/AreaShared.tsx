@@ -30,8 +30,9 @@ export function areaTime(at: string | null | undefined, lang: string) {
 /**
  * A material as a small square, opening its file in the drawer. The preview is the server's
  * signed one; without it (no `materials.work`, a video, an erased file) the medium's icon shows.
+ * With `link` false the preview is shown without opening anything (inside another button).
  */
-export function MiniThumb({ id, size = 'h-8 w-8', files = true }: { id: string; size?: string; files?: boolean }) {
+export function MiniThumb({ id, size = 'h-8 w-8', files = true, link = true }: { id: string; size?: string; files?: boolean; link?: boolean }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
   const [place] = useContentPlace();
@@ -41,6 +42,6 @@ export function MiniThumb({ id, size = 'h-8 w-8', files = true }: { id: string; 
     ? <img src={preview.data.url} alt="" className="h-full w-full object-cover" onError={() => setFailed(true)} />
     : <ImageIcon aria-hidden="true" className="h-4 w-4 text-muted-foreground" />;
   const box = `${size} flex shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-surface-muted`;
-  if (!files) return <span className={box}>{inner}</span>;
+  if (!files || !link) return <span className={box}>{inner}</span>;
   return <Link to={placeHref({ ...place, file: id })} aria-label={t('content.file.open')} className={`${box} hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}>{inner}</Link>;
 }
