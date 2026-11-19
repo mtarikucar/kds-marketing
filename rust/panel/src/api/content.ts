@@ -211,18 +211,6 @@ export interface AreasOut {
   next_cursor: string | null;
   next_done_before: string | null;
 }
-export interface Flow {
-  files: number;
-  analysed: number;
-  in_queue: number;
-  contents: number;
-  in_production: number;
-  /** Finished contents waiting for an account and a time. */
-  awaiting_time: number;
-  awaiting_approval: number;
-  published: number;
-  problems: number;
-}
 export interface FileRow {
   material: Material;
   intelligence: MaterialIntelligence;
@@ -244,7 +232,6 @@ export interface Need {
 export interface OlayViewOut {
   /** `null` for Genel. */
   olay: Olay | null;
-  flow: Flow;
   /** `null` without a content permission. */
   contents: AreaRow[] | null;
   /** `null` without `materials.work`. */

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Check, ChevronDown, Clock, ExternalLink, Layers, RotateCcw, UserRound } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, Clock, ExternalLink, RotateCcw, UserRound } from 'lucide-react';
 import { BLOCKED_REASONS, type AreaRow, type PublicationFact, type Stage, type StageState, type TimeWait, type VersionCancel } from '@/api/content';
 import { Button, cn } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
@@ -61,7 +61,7 @@ export function publicationText(t: TFunction, p: PublicationFact, lang: string, 
 export function StageNode({ state, small = false }: { state: StageState; small?: boolean }) {
   const icon = small ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5';
   return (
-    <span className={cn('relative grid shrink-0 place-items-center rounded-full border-2', small ? 'h-5 w-5' : 'h-6 w-6 max-sm:h-4 max-sm:w-4 max-sm:border-[1.5px]', NODE[state])}>
+    <span className={cn('relative grid shrink-0 place-items-center rounded-full border-2', small ? 'h-5 w-5 max-sm:h-4 max-sm:w-4' : 'h-6 w-6 max-sm:h-4 max-sm:w-4 max-sm:border-[1.5px]', NODE[state])}>
       {state === 'done' && <Check aria-hidden="true" className={icon} strokeWidth={3} />}
       {state === 'waiting_person' && <UserRound aria-hidden="true" className={icon} strokeWidth={2.5} />}
       {state === 'problem' && <AlertTriangle aria-hidden="true" className={icon} strokeWidth={2.5} />}
@@ -83,90 +83,63 @@ export function focusIndex(stages: Stage[]): number {
   return firstTodo === 0 ? 0 : firstTodo > 0 ? firstTodo - 1 : stages.length - 1;
 }
 
+/** A phrase of what a stage produced or waits for; `state` ones repeat what the row's bar says. */
+export interface StageFact {
+  text: string;
+  tone?: 'info' | 'warning' | 'danger';
+  state?: boolean;
+}
+
 /**
- * What a stage produced, as the server reports it, under its node: the steps' one-line outputs,
- * the chosen materials, the package's versions, the planned posts' approvals and times, and the
- * last measurement's numbers. A stage that produced nothing shows nothing; a stage that waits
- * says for whom.
+ * What a stage produced, as the server reports it, in short phrases: the steps' one-line outputs,
+ * the package's versions, the planned posts' approvals and times, the last measurement's
+ * numbers; and, while it runs or waits, its step or for whom. A stage still to do has none.
  */
-export function StageOutput({ stage, row, files }: { stage: Stage; row: AreaRow; files: boolean }) {
-  const { t, i18n } = useTranslation();
-  const lang = i18n.language;
-  if (stage.state === 'todo') return null;
-  const lines: ReactNode[] = [];
-  const outputs = (stage.steps ?? []).filter((s) => s.output).map((s) => s.output!);
-  if (stage.key === 'gorsel') {
-    const ids = [...new Set((stage.steps ?? []).flatMap((s) => s.material_ids ?? []))];
-    if (ids.length)
-      lines.push(
-        <span key="materials" className="flex flex-wrap items-center gap-1">
-          {ids.slice(0, 3).map((id) => <MiniThumb key={id} id={id} files={files} />)}
-          {ids.length > 3 && <span className="font-mono text-micro">+{ids.length - 3}</span>}
-        </span>,
-      );
-  }
-  if (stage.span && stage.key !== 'gorsel' && outputs.length)
-    lines.push(<span key="outputs" className="line-clamp-3 text-foreground">{outputs.join(' · ')}</span>);
-  if (stage.package)
-    lines.push(
-      <span key="package" className="flex flex-wrap gap-1">
-        {stage.package.versions.map((v) => (
-          <span key={v.id} className="rounded border border-primary/40 bg-primary/10 px-1.5 text-micro text-primary">
-            {t(`posts.format.${v.format}`)}
-          </span>
-        ))}
-      </span>,
-    );
+export function stageFacts(t: TFunction, stage: Stage, row: AreaRow, lang: string): StageFact[] {
+  if (stage.state === 'todo') return [];
+  const facts: StageFact[] = [];
+  if (stage.state === 'current' && stage.span && row.pipeline.current_step && row.pipeline.current_step >= stage.span[0] && row.pipeline.current_step <= stage.span[1])
+    facts.push({ text: stepName(t, row.pipeline.current_step), tone: 'info' });
+  if (stage.span) for (const s of stage.steps ?? []) if (s.output) facts.push({ text: s.output });
+  if (stage.package) facts.push({ text: stage.package.versions.map((v) => t(`posts.format.${v.format}`)).join(', ') });
   for (const a of stage.approvals ?? []) {
     if (a.waiting) continue;
-    if (a.approved_at) lines.push(<span key={`a-${a.slot_id}`}>{t('content.out.approved', { at: areaTime(a.approved_at, lang) })}</span>);
-    else if (!a.required) lines.push(<span key={`a-${a.slot_id}`}>{t('content.out.noApproval')}</span>);
+    if (a.approved_at) facts.push({ text: t('content.out.approved', { at: areaTime(a.approved_at, lang) }) });
+    else if (!a.required) facts.push({ text: t('content.out.noApproval') });
   }
   const versions = row.pipeline.stages.find((s) => s.key === 'paket')?.package?.versions;
   for (const p of stage.publications ?? []) {
     const cancel = cancelOf(versions, p.slot_id);
-    lines.push(
-      <span key={`p-${p.slot_id}`} className={cn('block', p.failed && !cancel && 'font-medium text-danger')}>
-        {publicationText(t, p, lang, false, cancel)}
-      </span>,
-    );
+    const failed = p.failed && !cancel;
+    facts.push({ text: publicationText(t, p, lang, false, cancel), tone: failed ? 'danger' : undefined, state: failed });
   }
   // The finished package's versions with no time yet: waiting for one, or blocked.
   const unscheduled = row.pipeline.unscheduled ?? [];
   if (stage.key === 'onay' && stage.state === 'current' && unscheduled.length)
-    lines.push(<span key="time" className="block text-info">{t('content.out.awaitsTime', { count: unscheduled.length })}</span>);
+    facts.push({ text: t('content.out.awaitsTime', { count: unscheduled.length }), tone: 'info', state: true });
   if (stage.key === 'yayin')
-    for (const w of unscheduled.filter((x) => x.blocked))
-      lines.push(<span key={`b-${w.version_id}`} className="block font-medium text-danger">{t('content.out.blocked', { format: t(`posts.format.${w.format}`) })}</span>);
+    for (const w of unscheduled.filter((x) => x.blocked)) facts.push({ text: t('content.out.blocked', { format: t(`posts.format.${w.format}`) }), tone: 'danger', state: true });
   for (const r of stage.results ?? []) {
     const numbers = Object.entries(r.metrics).filter(([, v]) => v !== null) as [string, number][];
-    if (numbers.length)
-      lines.push(
-        <span key={`r-${r.publication_id}`} className="flex flex-wrap gap-x-3 gap-y-1">
-          {numbers.slice(0, 3).map(([k, v]) => (
-            <span key={k} className="flex flex-col leading-tight">
-              <b className="text-sm font-medium text-foreground">{formatNumber(v, lang)}</b>
-              <small className="text-micro">{t(`content.metric.${k}`, { defaultValue: k })}</small>
-            </span>
-          ))}
-        </span>,
-      );
+    if (numbers.length) facts.push({ text: numbers.slice(0, 3).map(([k, v]) => `${formatNumber(v, lang)} ${t(`content.metric.${k}`, { defaultValue: k })}`).join(' · ') });
   }
-  if (stage.state === 'current' && stage.span && row.pipeline.current_step && row.pipeline.current_step >= stage.span[0] && row.pipeline.current_step <= stage.span[1])
-    lines.push(<span key="now" className="block text-info">{stepName(t, row.pipeline.current_step)}</span>);
   if (stage.state === 'waiting_person')
-    lines.push(
-      <span key="wait" className="block font-medium text-warning">
-        {stage.key === 'onay' ? t('content.out.awaitsApproval') : row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson')}
-      </span>,
-    );
+    facts.push({ text: stage.key === 'onay' ? t('content.out.awaitsApproval') : row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson'), tone: 'warning', state: true });
   if (stage.state === 'problem' && !(stage.publications ?? []).some((p) => p.failed) && !(stage.key === 'yayin' && unscheduled.some((x) => x.blocked)))
-    lines.push(<span key="problem" className="block font-medium text-danger">{t('content.out.stuck')}</span>);
-  if (!lines.length) return null;
-  return <div className="min-w-0 space-y-1 pe-3 text-xs leading-snug text-muted-foreground">{lines}</div>;
+    facts.push({ text: t('content.out.stuck'), tone: 'danger', state: true });
+  return facts;
 }
 
-/** The one thing under a track that asks a person for something, pointing at its stage. */
+/** Whether the row has a line under its track that asks a person for something or says why it waits. */
+function barShows(row: AreaRow): boolean {
+  const { stages, unscheduled = [] } = row.pipeline;
+  return stages.some((s) => s.state === 'problem' || s.state === 'waiting_person')
+    || unscheduled.some((w) => !w.blocked)
+    || !!row.area.redo
+    || (row.area.status.state === 'queued' && Date.parse(row.area.status.starts_at) > Date.now());
+}
+
+/** The one thing under a track that asks a person for something, as one line pointing at its stage. */
 function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () => void; expanded: boolean }) {
   const { t, i18n } = useTranslation();
   const stages = row.pipeline.stages;
@@ -175,10 +148,12 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
   const at = index >= 0 ? index : waiting;
   const stage = at >= 0 ? stages[at] : undefined;
   const folder = placeHref({ olay: folderOf(row.area.olay_id) });
-  const preview = !expanded && <Button size="sm" variant="ghost" onClick={onExpand}>{t('content.row.preview')}</Button>;
+  const small = 'h-7 px-2.5';
+  // On a phone the row's own line opens it; the bar keeps to what asks for the person.
+  const preview = !expanded && <Button size="sm" variant="ghost" className={cn(small, 'max-sm:hidden')} onClick={onExpand}>{t('content.row.preview')}</Button>;
   let tone: 'warning' | 'danger' | 'neutral' = 'neutral';
-  let title: ReactNode = null;
-  let body: ReactNode = null;
+  let title = '';
+  let body: string | null = null;
   let actions: ReactNode = null;
   const unscheduled = row.pipeline.unscheduled ?? [];
   const blocked = unscheduled.filter((w) => w.blocked);
@@ -193,9 +168,9 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
       ? t('contentAreas.held')
       : cannotTime ? [...new Set(blocked.map((w) => blockedText(t, w)))].join(' ') : null;
     actions = <>
-      {failed.map((p) => <Button key={p.slot_id} size="sm" variant="outline" asChild><Link to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{t('content.bar.openPost', { account: p.account_name ?? t('contentAreas.account') })}</Link></Button>)}
-      {cannotTime && <Button size="sm" variant="outline" asChild><Link to={scheduleHref(blocked[0].version_id)}>{t('content.bar.toSocial')}</Link></Button>}
-      {!expanded && <Button size="sm" variant="outline" onClick={onExpand}>{t('content.bar.inspect')}</Button>}
+      {failed.map((p) => <Button key={p.slot_id} size="sm" variant="outline" className={small} asChild><Link to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{t('content.bar.openPost', { account: p.account_name ?? t('contentAreas.account') })}</Link></Button>)}
+      {cannotTime && <Button size="sm" variant="outline" className={small} asChild><Link to={scheduleHref(blocked[0].version_id)}>{t('content.bar.toSocial')}</Link></Button>}
+      {!expanded && <Button size="sm" variant="outline" className={small} onClick={onExpand}>{t('content.bar.inspect')}</Button>}
     </>;
   } else if (stage?.state === 'waiting_person' && stage.key === 'onay') {
     tone = 'warning';
@@ -204,7 +179,7 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
     actions = <>
       {(stage.approvals ?? []).filter((a) => a.waiting).map((a) => {
         const p = names.get(a.slot_id);
-        return <Button key={a.slot_id} size="sm" asChild><Link to={`/social?slot=${encodeURIComponent(a.slot_id)}`}><Check aria-hidden="true" className="h-4 w-4" />{p ? t('content.bar.approveAt', { account: p.account_name ?? t('contentAreas.account'), at: areaTime(p.scheduled_at, i18n.language) }) : t('content.bar.approve')}</Link></Button>;
+        return <Button key={a.slot_id} size="sm" className={small} asChild><Link to={`/social?slot=${encodeURIComponent(a.slot_id)}`}><Check aria-hidden="true" className="h-4 w-4" />{p ? t('content.bar.approveAt', { account: p.account_name ?? t('contentAreas.account'), at: areaTime(p.scheduled_at, i18n.language) }) : t('content.bar.approve')}</Link></Button>;
       })}
       {preview}
     </>;
@@ -212,7 +187,7 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
     tone = 'warning';
     title = row.area.open_requests ? t('contentAreas.waiting', { n: row.area.open_requests }) : t('content.out.awaitsPerson');
     actions = <>
-      <Button size="sm" variant="outline" asChild><Link to={`${folder}#eksikler`}>{t('content.bar.toNeeds')}</Link></Button>
+      <Button size="sm" variant="outline" className={small} asChild><Link to={`${folder}#eksikler`}>{t('content.bar.toNeeds')}</Link></Button>
       {preview}
     </>;
   } else if (unscheduled.some((w) => !w.blocked)) {
@@ -222,7 +197,7 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
     title = t('content.bar.awaitsTime', { count: unscheduled.filter((w) => !w.blocked).length });
     body = t('content.bar.awaitsTimeHelp');
     actions = <>
-      <Button size="sm" variant="outline" asChild><Link to={scheduleHref(first.version_id)}>{t('content.bar.giveTime')}</Link></Button>
+      <Button size="sm" variant="outline" className={small} asChild><Link to={scheduleHref(first.version_id)}>{t('content.bar.giveTime')}</Link></Button>
       {preview}
     </>;
   } else if (row.area.redo) {
@@ -234,33 +209,55 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
   return (
     <div
       className={cn(
-        'mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2',
+        'mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2 py-1',
         tone === 'danger' ? 'border-danger/50 bg-danger-subtle' : tone === 'warning' ? 'border-warning/50 bg-warning-subtle' : 'border-border bg-surface-muted',
       )}
       data-stage={stage?.key}
     >
-      <div className="min-w-0 flex-[1_1_16rem] text-sm">
-        <p className={cn('flex items-center gap-1.5 font-medium', tone === 'danger' ? 'text-danger' : tone === 'warning' ? 'text-warning' : 'text-foreground')}>
-          <Icon aria-hidden="true" className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 break-words">{title}</span>
-        </p>
-        {body && <p className="mt-0.5 text-xs text-muted-foreground">{body}</p>}
-      </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      <Icon aria-hidden="true" className={cn('h-4 w-4 shrink-0', tone === 'danger' ? 'text-danger' : tone === 'warning' ? 'text-warning' : 'text-muted-foreground')} />
+      {/* One line while the row is closed (two on a phone); opened, the whole of it. */}
+      <p className={cn('min-w-0 flex-[1_1_12rem] text-sm', !expanded && 'max-sm:line-clamp-2 sm:truncate')} title={body ? `${title} · ${body}` : title}>
+        <span className={cn('font-medium', tone === 'danger' ? 'text-danger' : tone === 'warning' ? 'text-warning' : 'text-foreground')}>{title}</span>
+        {body && <span className="text-muted-foreground"> · {body}</span>}
+      </p>
+      {actions && <div className="flex flex-wrap gap-1.5">{actions}</div>}
     </div>
   );
 }
 
-/** The current package's first material, or a step's, to show the content by. */
-function coverOf(row: AreaRow): string | undefined {
-  const pkg = row.pipeline.stages.find((s) => s.key === 'paket')?.package;
-  return pkg?.versions.flatMap((v) => v.material_ids)[0] ?? row.pipeline.stages.flatMap((s) => s.steps ?? []).flatMap((s) => s.material_ids ?? [])[0];
+const TONE_TEXT = { info: 'text-info', warning: 'font-medium text-warning', danger: 'font-medium text-danger' } as const;
+
+/** The focused stage's one line: the visual stage's pictures, small, then its phrases. */
+function FocusLine({ stage, facts, files, className }: { stage: Stage; facts: StageFact[]; files: boolean; className?: string }) {
+  const ids = stage.key === 'gorsel' ? [...new Set((stage.steps ?? []).flatMap((s) => s.material_ids ?? []))] : [];
+  if (!facts.length && !ids.length) return null;
+  return (
+    <span className={cn('flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground', className)}>
+      {ids.length > 0 && (
+        <span className="flex shrink-0 items-center gap-0.5">
+          {ids.slice(0, 3).map((id) => <MiniThumb key={id} id={id} size="h-5 w-5" files={files} />)}
+          {ids.length > 3 && <span className="font-mono text-micro">+{ids.length - 3}</span>}
+        </span>
+      )}
+      {facts.length > 0 && (
+        <span aria-hidden="true" className="min-w-0 truncate" title={facts.map((f) => f.text).join(' · ')}>
+          {facts.map((f, i) => (
+            <span key={i} className={f.tone ? TONE_TEXT[f.tone] : 'text-foreground'}>
+              {i > 0 && <span className="text-muted-foreground"> · </span>}
+              {f.text}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
 }
 
 /**
- * One content as its production line: eight stages, each with its state from the server and,
- * finished, what it produced; under the track the one thing that waits for a person. Opening it
- * shows the fourteen steps and the package's versions in a phone frame.
+ * One content as its production line, compact: a line with its title, who opened it, when and
+ * its state; the eight stages as one slim track, where only the stage it stands at says what it
+ * produced or does (every stage's phrases are in its accessible name, and the opened row lists
+ * all fourteen steps); and under the track, in one line, the one thing that waits for a person.
  */
 export function PipelineRow({
   row,
@@ -277,17 +274,22 @@ export function PipelineRow({
   files: boolean;
 }) {
   const { t, i18n } = useTranslation();
+  const lang = i18n.language;
   const { area, pipeline } = row;
   const stages = pipeline.stages;
   const focus = focusIndex(stages);
   const allDone = stages.every((s) => s.state === 'done');
   const problem = stages.some((s) => s.state === 'problem');
   const waits = stages.some((s) => s.state === 'waiting_person');
-  const cover = coverOf(row);
+  const bar = barShows(row);
   const panel = `content-${area.id}-detail`;
   const stepText = pipeline.current_step && !stages.slice(0, 5).every((s) => s.state === 'done')
     ? t('content.row.step', { n: pipeline.current_step })
     : stages.slice(0, 5).every((s) => s.state === 'done') ? t('content.row.stepsDone') : null;
+  const meta = [openedBy(t, area.opened_by), !allDone ? areaTime(area.status.starts_at, lang) : '', stepText ?? ''].filter(Boolean).join(' · ');
+  const facts = stages.map((s) => stageFacts(t, s, row, lang));
+  // What the bar under the track says is not said again on the track.
+  const focusFacts = (facts[focus] ?? []).filter((f) => !(bar && f.state));
   return (
     <article
       id={`content-${area.id}`}
@@ -302,47 +304,40 @@ export function PipelineRow({
         aria-expanded={expanded}
         aria-controls={panel}
         onClick={onToggle}
-        className="grid w-full grid-cols-[2.75rem_minmax(0,1fr)_auto] items-center gap-3 rounded-t-lg px-4 pb-2 pt-3 text-start hover:bg-surface-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:grid-cols-[2.75rem_minmax(0,1fr)_auto_1.25rem]"
+        className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-t-lg px-3 pb-1 pt-2 text-start hover:bg-surface-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:flex-nowrap"
       >
-        {cover ? <MiniThumb id={cover} size="h-11 w-11" files={false} /> : <span className="flex h-11 w-11 items-center justify-center rounded bg-surface-muted"><Layers aria-hidden="true" className="h-5 w-5 text-muted-foreground" /></span>}
-        <span className="min-w-0">
-          <span className="block truncate font-medium">{area.title}</span>
-          <span className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            <span>{openedBy(t, area.opened_by)}</span>
-            {!allDone && <span>{areaTime(area.status.starts_at, i18n.language)}</span>}
-            {stepText && <span className="font-mono">{stepText}</span>}
-          </span>
+        <span className="min-w-0 flex-[1_1_0%] truncate font-medium sm:flex-[0_1_auto]">{area.title}</span>
+        <span className="min-w-0 flex-[0_1000_auto] truncate text-xs text-muted-foreground max-sm:order-last max-sm:basis-full">{meta}</span>
+        <span className="ms-auto flex shrink-0 items-center gap-1.5">
+          <StateBadge state={area.status.state} />
+          <ChevronDown aria-hidden="true" className={cn('h-4 w-4 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
         </span>
-        <StateBadge state={area.status.state} />
-        <ChevronDown aria-hidden="true" className={cn('hidden h-5 w-5 text-muted-foreground transition-transform sm:block', expanded && 'rotate-180')} />
       </button>
-      <div className="overflow-x-auto px-4 pb-3 max-sm:overflow-visible">
-        <ol aria-label={t('content.row.stages')} className="grid min-w-[52rem] grid-cols-8 max-sm:min-w-0">
-          {stages.map((stage, i) => (
-            <li key={stage.key} className="flex min-w-0 flex-col gap-1.5" aria-current={i === focus && !allDone ? 'step' : undefined}>
-              <div className="flex h-7 items-center max-sm:h-5">
-                <StageNode state={stage.state} />
+      <div className="px-3 pb-2">
+        <ol aria-label={t('content.row.stages')} className="flex min-w-0 items-center gap-0.5 sm:gap-1">
+          {stages.map((stage, i) => {
+            const isFocus = i === focus;
+            const said = facts[i].map((f) => f.text).join(' · ');
+            return (
+              <li
+                key={stage.key}
+                aria-current={isFocus && !allDone ? 'step' : undefined}
+                className={cn('flex items-center gap-1', isFocus ? 'flex-[0_1_auto] max-sm:min-w-fit sm:min-w-0' : 'min-w-0 flex-[1_1_auto]')}
+              >
+                <StageNode state={stage.state} small />
+                <span data-stage-label className={cn('shrink-0 whitespace-nowrap text-xs font-medium', LABEL[stage.state], !isFocus && 'max-sm:sr-only')}>
+                  {t(`content.stage.${stage.key}`)}
+                  <span className="sr-only">: {t(`content.stageState.${stage.state}`)}{said && ` · ${said}`}</span>
+                </span>
+                {isFocus && <FocusLine stage={stage} facts={focusFacts} files={files} className="max-sm:hidden" />}
                 {i < stages.length - 1 && (
-                  <span aria-hidden="true" className={cn('mx-1.5 h-0.5 flex-1 rounded max-sm:mx-0.5', stage.state === 'done' ? 'bg-primary' : 'bg-[repeating-linear-gradient(90deg,var(--border-strong)_0_4px,transparent_4px_8px)]')} />
+                  <span aria-hidden="true" className={cn('h-0.5 min-w-1.5 flex-1 rounded sm:min-w-2', stage.state === 'done' ? 'bg-primary' : 'bg-[repeating-linear-gradient(90deg,var(--border-strong)_0_3px,transparent_3px_6px)]')} />
                 )}
-              </div>
-              <p className={cn('whitespace-nowrap text-xs font-medium', LABEL[stage.state], i !== focus && 'max-sm:sr-only', i === focus && i > 4 && 'max-sm:-ms-[200%] max-sm:w-[300%] max-sm:text-end')}>
-                {t(`content.stage.${stage.key}`)}
-                <span className="sr-only">: {t(`content.stageState.${stage.state}`)}</span>
-              </p>
-              <div className="max-sm:hidden">
-                <StageOutput stage={stage} row={row} files={files} />
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
-        <div className="sm:hidden">
-          {stages[focus] && (
-            <div className="mt-2 rounded bg-surface-muted px-3 py-2 empty:hidden">
-              <StageOutput stage={stages[focus]} row={row} files={files} />
-            </div>
-          )}
-        </div>
+        {stages[focus] && <FocusLine stage={stages[focus]} facts={focusFacts} files={files} className="mt-1 sm:hidden" />}
         <ExceptionBar row={row} expanded={expanded} onExpand={onToggle} />
       </div>
       {expanded && (
@@ -353,6 +348,7 @@ export function PipelineRow({
     </article>
   );
 }
+
 
 /** A publication's link, when the post went out and has one. */
 export function PostLink({ url }: { url: string | null }) {

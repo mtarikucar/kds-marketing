@@ -4373,17 +4373,6 @@
       "filesOnly": "You may not see contents",
       "filesOnlyHelp": "The folders on the left lead to the files and missing items."
     },
-    "flow": {
-      "label": "The event's flow",
-      "files": "Files",
-      "analysed": "Analysed",
-      "analysedQueue": "Analysed · {{n}} queued",
-      "inProduction": "In production",
-      "awaitingTime": "Waiting for a time",
-      "awaitingApproval": "Awaiting approval",
-      "published": "Published",
-      "problems": "With a problem"
-    },
     "contents": {
       "title": "Contents",
       "empty": "No content yet",
@@ -4399,7 +4388,11 @@
       "noShareHelp": "No content is made from a file without a permission; the system waits. Open the file and give its share permission, or mark it not to be shared. “To review” shows these files.",
       "layout": "Layout",
       "grid": "Grid",
-      "list": "List"
+      "list": "List",
+      "analysing_one": "{{count}} awaiting analysis",
+      "analysing_other": "{{count}} awaiting analysis",
+      "erased_one": "{{count}} deleted file",
+      "erased_other": "{{count}} deleted files"
     },
     "needs": {
       "title": "Missing items",
@@ -4412,7 +4405,10 @@
       "status": {
         "done": "Done",
         "dismissed": "Not needed"
-      }
+      },
+      "more_one": "Show {{count}} more",
+      "more_other": "Show {{count}} more",
+      "less": "Show fewer"
     },
     "olay": {
       "proposed": "Proposed",
@@ -4428,7 +4424,9 @@
         "title": "Give the event a title.",
         "dates": "Enter a start date; the end cannot be before it.",
         "occasion": "Choose the calendar day."
-      }
+      },
+      "more": "more",
+      "less": "less"
     },
     "day": {
       "phase": {
