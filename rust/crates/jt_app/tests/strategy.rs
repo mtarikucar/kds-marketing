@@ -2628,3 +2628,58 @@ async fn submitting_gives_a_hypothesis_that_names_no_organic_cadence_the_default
     let submitted = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
     assert_eq!(organic(&submitted, "plain"), Value::Null);
 }
+
+/// Approving the strategy in person wakes the agent that plans posts: content versions that
+/// waited for a time (`jeeta.social.versions_waiting`) become schedulable with it. An agent of
+/// other work is not woken.
+#[tokio::test]
+async fn a_persons_approval_wakes_the_agent_that_schedules_waiting_versions() {
+    use jt_app::ports::wake::WakeReason;
+    use jt_app::usecases::wake::{self, SetWake, WakeKind};
+    let w = world().await;
+    jt_testkit::studio_contract::install_all_modules(&w.uow, w.ws).await;
+    let key = |name: &str, scopes: &[&str]| {
+        let (deps, ctx) = (w.deps.clone(), w.owner_ctx.clone());
+        let (name, scopes): (String, Vec<String>) = (
+            name.into(),
+            scopes.iter().map(|s| (*s).to_owned()).collect(),
+        );
+        async move {
+            api_keys::create(&deps, &ctx, CreateKey { name, scopes })
+                .await
+                .unwrap()
+                .id
+        }
+    };
+    let social = key("social", &["workspace.read", "social.work"]).await;
+    let materials = key("materials", &["workspace.read", "materials.work"]).await;
+    for k in [social, materials] {
+        wake::set(
+            &w.deps,
+            &w.owner_ctx,
+            SetWake {
+                api_key_id: k,
+                kind: WakeKind::ClaudeRoutine,
+                routine_id: Some("trig_01Social".into()),
+                token: Some("sk-ant-oat01-test".into()),
+                url: None,
+                secret: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    approved(&w).await;
+    let out = wake::list(&w.deps, &w.owner_ctx).await.unwrap();
+    let pending = |k| {
+        out.agents
+            .iter()
+            .find(|a| a.api_key_id == k)
+            .and_then(|a| a.pending.clone())
+    };
+    assert_eq!(
+        pending(social).unwrap().reasons,
+        [WakeReason::StrategyApproved]
+    );
+    assert!(pending(materials).is_none());
+}

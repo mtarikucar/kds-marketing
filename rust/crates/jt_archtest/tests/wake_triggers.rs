@@ -130,3 +130,21 @@ fn the_clocks_own_work_wakes_nobody() {
         );
     }
 }
+
+#[test]
+fn a_persons_cancel_wakes_nobody() {
+    // Cancelling a post (or a whole content with its last post) leaves nothing for an agent.
+    let root = workspace_dir().join("crates/jt_app/src/usecases");
+    for (file, name) in [
+        ("studio/work.rs", "slot_cancel"),
+        ("social/schedule.rs", "cancel_version_of"),
+    ] {
+        let source = std::fs::read_to_string(root.join(file))
+            .unwrap()
+            .replace("\r\n", "\n");
+        assert!(
+            !body(&source, name).contains("wake::request("),
+            "{file} {name} wakes an agent for a cancel"
+        );
+    }
+}
