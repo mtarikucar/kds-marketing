@@ -221,13 +221,15 @@
     "unknownAccount": "Social account",
     "noSuitableAccount": "No suitable account yet.",
     "blocked": {
-      "no_approved_strategy": "There is no approved strategy; no post can be planned.",
+      "material_removed": "A file of this version was deleted. Ask for a revision with a new file.",
+      "no_approved_strategy": "No strategy is approved; nothing can be planned. It goes on by itself once a strategy is approved.",
       "no_connected_account": "No social account is connected and working. Connect one or renew its connection.",
       "account_paused": "Posting is paused on the accounts that could take it. Resume one and the agent picks a time.",
       "its_account_unavailable": "The account this version was made for cannot take a post now.",
       "format_not_supported": "None of the connected accounts takes this format.",
-      "channel_not_in_strategy": "The approved strategy has not chosen the connected accounts’ channel. Add it to the strategy’s channels.",
-      "hypothesis_does_not_post": "This content’s hypothesis does not post in the strategy. If its cadence was never written, submitting the strategy again completes it; if it says zero, change it in the strategy."
+      "media_not_accepted": "This version's files do not suit the account's platform (TikTok, for one, takes only video). Ask for a revision with a fitting file.",
+      "channel_not_in_strategy": "The approved strategy has not chosen this account's channel. It goes on by itself once the channel is added.",
+      "hypothesis_does_not_post": "The approved strategy has no hypothesis that posts on this account's channel. It goes on by itself once one is added."
     },
     "metrics": {
       "followers": "Followers",
@@ -353,7 +355,9 @@
       "providerOff": "Jeeta sends every post at its time; the platform’s scheduler is not used",
       "paused": "Accounts with posting paused: {{accounts}}. The pause is on the account’s own view.",
       "stale": "The settings changed meanwhile; the current values are shown. Make your change again."
-    }
+    },
+    "needsScreen": "Every post waits for the TikTok screen",
+    "fixContent": "Open the content"
   },
   "contentAreas": {
     "existing": "Earlier work and sources",
@@ -1288,7 +1292,7 @@
         "metric": "metric"
       },
       "hypothesisSegment": "Hypothesis {{n}}: its segment is not in the audience.",
-      "hypothesisChannel": "Hypothesis {{n}}: its channel has no connected account.",
+      "hypothesisChannel": "Hypothesis {{n}}: its channel is not one of the strategy's channels, or it has no connected account.",
       "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
     },
     "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected.",
@@ -4623,5 +4627,41 @@
     "asked": "Your note: “{{note}}”",
     "askedAt": "Asked {{at}}",
     "open": "Open the content"
+  },
+  "stops": {
+    "title": "Before posting",
+    "blocking": "Stops posting",
+    "reconnect": "The {{platform}} connection cannot post right now.",
+    "paused": "Posting is paused on this account.",
+    "braked": "All posting is stopped.",
+    "no_approved_strategy": "No strategy is approved; nothing is planned.",
+    "channel_not_in_strategy": "The strategy has not chosen the {{platform}} channel; nothing goes out here.",
+    "no_hypothesis": "The strategy has no hypothesis for {{platform}}: the agent plans nothing here on its own. The contents you ask for still go out.",
+    "media_missing_video": "{{platform}} takes only video; this content has no video.",
+    "media_missing": "This content has no file {{platform}} takes ({{format}}).",
+    "only_format_video": "{{platform}} takes only video.",
+    "posting_screen": "You complete every {{platform}} post on the {{platform}} screen before it goes out.",
+    "approval": "Every post waits for your approval before it goes out.",
+    "lead": "A {{format}} is planned {{hours}} hours ahead at the earliest.",
+    "act": {
+      "reconnect": "Reconnect",
+      "resume": "Resume",
+      "approve_strategy": "Go to the strategy",
+      "prepare_strategy": "Prepare the strategy draft",
+      "prepared": "The draft is ready.",
+      "toApprove": "Approve it",
+      "add_video": "Add a video",
+      "add_material": "Add a file"
+    },
+    "note": {
+      "asked": "You are asked when it is time.",
+      "time": "The time is chosen with it.",
+      "braked": "Turned back on in the posting settings.",
+      "resumeHere": "Resume with the switch above."
+    },
+    "connectedTitle": "Account connected",
+    "connectedBody": "What to know before anything is posted on it:",
+    "continue": "Continue",
+    "accountLabel": "Before posting on {{account}}"
   }
 }

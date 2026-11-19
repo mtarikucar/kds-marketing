@@ -221,13 +221,15 @@
     "unknownAccount": "Sosyal hesap",
     "noSuitableAccount": "Uygun hesap henüz yok.",
     "blocked": {
-      "no_approved_strategy": "Onaylı strateji yok; paylaşım planlanamaz.",
+      "material_removed": "Bu sürümdeki bir dosya silindi. Yeni dosyayla düzenleme isteyin.",
+      "no_approved_strategy": "Onaylı strateji yok; paylaşım planlanamaz. Strateji onaylanınca kendiliğinden devam eder.",
       "no_connected_account": "Bağlı ve çalışan bir sosyal hesap yok. Bir hesap bağlayın ya da bağlantısını yenileyin.",
       "account_paused": "Uygun hesapların paylaşımı durdurulmuş. Hesabı sürdürünce ajan zaman seçer.",
       "its_account_unavailable": "Bu sürümün hazırlandığı hesap şu an paylaşım alamıyor.",
       "format_not_supported": "Bağlı hesapların hiçbiri bu biçimi almıyor.",
-      "channel_not_in_strategy": "Onaylı strateji bağlı hesapların kanalını seçmemiş. Stratejinin kanallarına ekleyin.",
-      "hypothesis_does_not_post": "Bu içeriğin hipotezi stratejide paylaşım yapmıyor. Sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar; sıfır yazılmışsa stratejide değiştirin."
+      "media_not_accepted": "Bu sürümün dosyaları hesabın platformuna uymuyor (örneğin TikTok yalnızca video alır). Uygun dosyayla düzenleme isteyin.",
+      "channel_not_in_strategy": "Onaylı strateji bu hesabın kanalını seçmemiş. Stratejiye eklenince kendiliğinden devam eder.",
+      "hypothesis_does_not_post": "Onaylı stratejide bu hesabın kanalı için paylaşım yapan bir hipotez yok. Stratejiye eklenince kendiliğinden devam eder."
     },
     "metrics": {
       "followers": "Takipçi",
@@ -353,7 +355,9 @@
       "providerOff": "Her paylaşımı saatinde Jeeta yayınlar; platformun zamanlayıcısı kullanılmaz",
       "paused": "Paylaşımı duraklatılan hesaplar: {{accounts}}. Duraklatma, hesabın kendi görünümünde.",
       "stale": "Ayarlar bu arada değişti; güncel değerler gösteriliyor. Değişikliğinizi yeniden yapın."
-    }
+    },
+    "needsScreen": "Her paylaşım TikTok ekranını bekler",
+    "fixContent": "İçeriği aç"
   },
   "contentAreas": {
     "existing": "Önceki çalışmalar ve kaynaklar",
@@ -1288,7 +1292,7 @@
         "metric": "ölçüt"
       },
       "hypothesisSegment": "{{n}}. hipotez: seçilen segment kitlede yok.",
-      "hypothesisChannel": "{{n}}. hipotez: bu kanal için bağlı hesap yok.",
+      "hypothesisChannel": "{{n}}. hipotez: bu kanal stratejinin kanalları arasında yok ya da bu kanalda bağlı hesap yok.",
       "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
     },
     "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin.",
@@ -4623,5 +4627,41 @@
     "asked": "Notunuz: “{{note}}”",
     "askedAt": "{{at}} istendi",
     "open": "İçeriği aç"
+  },
+  "stops": {
+    "title": "Paylaşmadan önce",
+    "blocking": "Paylaşımı durduruyor",
+    "reconnect": "{{platform}} bağlantısı şu an paylaşım yapamıyor.",
+    "paused": "Bu hesapta paylaşım durduruldu.",
+    "braked": "Tüm paylaşımlar durduruldu.",
+    "no_approved_strategy": "Onaylı strateji yok; hiçbir paylaşım planlanmaz.",
+    "channel_not_in_strategy": "Strateji {{platform}} kanalını seçmemiş; buraya paylaşım çıkmaz.",
+    "no_hypothesis": "Stratejide {{platform}} için hipotez yok: ajan buraya kendi başına paylaşım planlamaz. Sizin istediğiniz içerikler yine paylaşılır.",
+    "media_missing_video": "{{platform}} yalnızca video alır; bu içerikte video yok.",
+    "media_missing": "Bu içerikte {{platform}} için uygun dosya yok ({{format}}).",
+    "only_format_video": "{{platform}} yalnızca video alır.",
+    "posting_screen": "Her {{platform}} paylaşımını yayından önce {{platform}} ekranında siz tamamlarsınız.",
+    "approval": "Her paylaşım yayından önce onayınızı bekler.",
+    "lead": "{{format}} en erken {{hours}} saat sonrasına planlanır.",
+    "act": {
+      "reconnect": "Yeniden bağla",
+      "resume": "Sürdür",
+      "approve_strategy": "Stratejiye git",
+      "prepare_strategy": "Strateji taslağını hazırla",
+      "prepared": "Taslak hazır.",
+      "toApprove": "Onaya git",
+      "add_video": "Video ekle",
+      "add_material": "Dosya ekle"
+    },
+    "note": {
+      "asked": "Sırası gelince size sorulur.",
+      "time": "Zaman buna göre seçilir.",
+      "braked": "Paylaşım ayarlarından açılır.",
+      "resumeHere": "Yukarıdaki anahtardan sürdürün."
+    },
+    "connectedTitle": "Hesap bağlandı",
+    "connectedBody": "Bu hesaba paylaşım çıkmadan önce bilmeniz gerekenler:",
+    "continue": "Devam",
+    "accountLabel": "{{account}} için paylaşmadan önce"
   }
 }

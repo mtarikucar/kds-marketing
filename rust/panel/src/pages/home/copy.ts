@@ -62,7 +62,7 @@ const actionsTr: Record<string, string> = {
   // Strateji
   'strategy.start_consultation': 'strateji istişaresini başlattı', 'strategy.record': 'istişareye kayıt ekledi',
   'strategy.write_section': 'stratejinin bir bölümünü yazdı', 'strategy.set_hypotheses': 'stratejinin hipotezlerini yazdı',
-  'strategy.submit': 'stratejiyi onaya sundu', 'strategy.submission_withdrawn': 'onaya sunulan stratejiyi geri çekti',
+  'strategy.submit': 'stratejiyi onaya sundu', 'strategy.add_channel': 'stratejiye yeni bir kanal ekleyen taslağı hazırladı', 'strategy.submission_withdrawn': 'onaya sunulan stratejiyi geri çekti',
   'strategy.approve': 'stratejiyi onayladı', 'strategy.archive': 'bir strateji sürümünü arşivledi',
   // Yetenekler ve bağlı hesaplar
   'capability.declare': 'bir yetenek ekledi', 'capability.verify': 'bir yeteneği doğruladı', 'capability.update': 'bir yeteneği güncelledi',
@@ -155,7 +155,7 @@ const actionsTr: Record<string, string> = {
   'content.package.delivered': 'bir içerik paketi teslim etti',
   'content.package.refused': 'denetimden geçmeyen bir içerik paketi teslim etti',
   'content.package.released': 'bir içerik paketini olduğu gibi kabul etti',
-  'social.version.scheduled': 'bir paylaşıma zaman verdi', 'social.version.released': 'planlanmış bir paylaşımı geri aldı',
+  'social.version.scheduled': 'bir paylaşıma zaman verdi', 'social.version.released': 'planlanmış bir paylaşımı geri aldı', 'social.version.attributed': 'bir paylaşımın hangi hipotezle ölçüleceğini belirledi',
   'social.account.paused': 'bir hesabın paylaşımlarını durdurdu', 'social.account.resumed': 'bir hesabın paylaşımlarını sürdürdü',
   'ads.campaign.opened': 'bir reklam kampanyası açtı', 'ads.campaign.proposed': 'bir reklam kampanyası önerdi',
   'ads.campaign.approved': 'reklam kampanyası önerisini onayladı', 'ads.campaign.declined': 'reklam kampanyası önerisini reddetti',
@@ -263,7 +263,7 @@ const actionsEn: Record<string, string> = {
   // Strategy
   'strategy.start_consultation': 'started the strategy consultation', 'strategy.record': 'added a consultation record',
   'strategy.write_section': 'wrote a section of the strategy', 'strategy.set_hypotheses': 'wrote the hypotheses of the strategy',
-  'strategy.submit': 'submitted the strategy for approval', 'strategy.submission_withdrawn': 'withdrew the submitted strategy',
+  'strategy.submit': 'submitted the strategy for approval', 'strategy.add_channel': 'prepared a strategy draft adding a channel', 'strategy.submission_withdrawn': 'withdrew the submitted strategy',
   'strategy.approve': 'approved the strategy', 'strategy.archive': 'archived a strategy version',
   // Capabilities and connected accounts
   'capability.declare': 'added a capability', 'capability.verify': 'verified a capability', 'capability.update': 'updated a capability',
@@ -356,7 +356,7 @@ const actionsEn: Record<string, string> = {
   'content.package.delivered': 'delivered a content package',
   'content.package.refused': 'delivered a content package that did not pass the checks',
   'content.package.released': 'accepted a content package as it is',
-  'social.version.scheduled': 'gave a post its time', 'social.version.released': 'took a planned post back',
+  'social.version.scheduled': 'gave a post its time', 'social.version.released': 'took a planned post back', 'social.version.attributed': 'settled which hypothesis a post is measured under',
   'social.account.paused': 'paused an account’s posts', 'social.account.resumed': 'resumed an account’s posts',
   'ads.campaign.opened': 'opened an ad campaign', 'ads.campaign.proposed': 'proposed an ad campaign',
   'ads.campaign.approved': 'approved an ad campaign proposal', 'ads.campaign.declined': 'declined an ad campaign proposal',

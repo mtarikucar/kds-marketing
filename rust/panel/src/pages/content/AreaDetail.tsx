@@ -18,6 +18,7 @@ import { blockedText, cancelOf, PostLink, publicationText, scheduleHref, StageNo
 import { PostCancel } from '../social/Revision';
 import { placeHref, useContentPlace } from './location';
 import { useUploads } from './uploads';
+import { StopList } from '../social/Stops';
 
 const WINDOWS = { hours24: '24', hours72: '72', days7: '168' } as const;
 
@@ -159,6 +160,8 @@ export function AreaDetail({ id, row, manage, files }: { id: string; row?: AreaR
   const detailKey = [...key, 'areas', id];
   const detail = useQuery({ queryKey: detailKey, queryFn: () => projectGet(id), refetchInterval: 15_000 });
   const accounts = useQuery({ queryKey: [...key, 'social-accounts'], queryFn: () => listCapabilities({ group: 'social_account', status: 'verified' }) });
+  // The accounts a content names, whatever their state: one that must be reconnected is named too.
+  const named = useQuery({ queryKey: [...key, 'social-accounts', 'all'], queryFn: () => listCapabilities({ group: 'social_account' }), enabled: !!row?.checks?.length });
   const [selected, setSelected] = useState('');
   // The package the person was looking at when they opened the dialog (`null`: none yet);
   // `undefined`: the dialog is closed. The note is about that package, whatever arrives meanwhile.
@@ -208,6 +211,20 @@ export function AreaDetail({ id, row, manage, files }: { id: string; row?: AreaR
           <ProjectError error={archive.error} />
           {/* Under a production row its bar says it already: the note shows once. */}
           {project.redo && !project.archived && !row && <p role="status" className="text-sm">{t('contentAreas.redoStatus', { note: project.redo.note })}</p>}
+          {/* What stands between this content and a post on each account it names, said now. */}
+          {!project.archived && row?.checks?.map((check) => {
+            const account = named.data?.find((a) => a.capability.id === check.capability_id)?.capability;
+            return account && (
+              <StopList
+                key={check.capability_id}
+                kind={account.kind_key}
+                capabilityId={check.capability_id}
+                stops={check.stops}
+                label={t('stops.accountLabel', { account: account.name })}
+                onAddMaterial={uploads ? () => { uploads.pick(); setAttach(true); } : undefined}
+              />
+            );
+          })}
           {editable && held && (
             <Callout tone="warning">
               <div className="min-w-0 space-y-3">

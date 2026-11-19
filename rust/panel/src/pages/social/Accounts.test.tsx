@@ -328,7 +328,7 @@ describe('a version with no time', () => {
     mockFetch({ ...socialAnswers, 'GET /api/social/packages': [{ ...pack, versions: [{ ...pack.versions[0], accounts: [], blocked: 'hypothesis_does_not_post' }] }] });
     renderAt('/social');
     const row = await screen.findByRole('article', { name: 'Birlikte üretelim.' });
-    expect(within(row).getByText(/hipotezi stratejide paylaşım yapmıyor/)).toBeVisible();
+    expect(within(row).getByText(/paylaşım yapan bir hipotez yok/)).toBeVisible();
     expect(within(row).getByRole('link', { name: 'Stratejiye git' })).toHaveAttribute('href', '/strategy');
     expect(within(row).queryByRole('button', { name: 'Zamanı ver' })).not.toBeInTheDocument();
   });
@@ -464,5 +464,45 @@ describe('many accounts and many posts', () => {
     const published = screen.getByRole('region', { name: 'Yayınlananlar' });
     expect(within(published).getAllByRole('article')[0]).toHaveAccessibleName('Yayın 0');
     expect(within(published).getAllByRole('article')).toHaveLength(10);
+  });
+});
+
+describe('what stands between the account and a post', () => {
+  const tiktok = {
+    ...tiktokAccount, paused: false, requires_human_approval: true, human_gate: 'posting_screen',
+    stops: [
+      { code: 'no_hypothesis', blocking: false, action: 'prepare_strategy' },
+      { code: 'only_format', blocking: false, format: 'tiktok_video' },
+      { code: 'posting_screen', blocking: false },
+      { code: 'lead', blocking: false, format: 'tiktok_video', hours: 48 },
+    ],
+  };
+
+  it('says it under the account, each line with its one action, and prepares the strategy draft in one tap', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch({
+      ...socialAnswers,
+      'GET /api/social/accounts': [socialAccount, tiktok],
+      'GET /api/social/accounts/tt1': { ...socialAnswers['GET /api/social/accounts/tt1'], account: tiktok },
+      'POST /api/strategy/channels': { id: 'draft', status: 'draft' },
+    });
+    renderAt('/social?account=tt1');
+    const list = await screen.findByRole('list', { name: 'Paylaşmadan önce' });
+    expect(within(list).getByText('Stratejide TikTok için hipotez yok: ajan buraya kendi başına paylaşım planlamaz. Sizin istediğiniz içerikler yine paylaşılır.')).toBeVisible();
+    expect(within(list).getByText('TikTok yalnızca video alır.')).toBeVisible();
+    expect(within(list).getByText('Her TikTok paylaşımını yayından önce TikTok ekranında siz tamamlarsınız.')).toBeVisible();
+    expect(within(list).getByText('TikTok videosu en erken 48 saat sonrasına planlanır.')).toBeVisible();
+    expect(screen.getByText('Her paylaşım TikTok ekranını bekler')).toBeVisible();
+    await user.click(within(list).getByRole('button', { name: 'Strateji taslağını hazırla' }));
+    expect(await within(list).findByText('Taslak hazır.')).toBeVisible();
+    expect(within(list).getByRole('link', { name: 'Onaya git' })).toHaveAttribute('href', '/strategy');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/api/strategy/channels')?.body).toEqual({ kind: 'tiktok' });
+  });
+
+  it('says nothing on an account that posts by itself', async () => {
+    mockFetch({ ...socialAnswers, 'GET /api/social/accounts': [{ ...socialAccount, stops: [{ code: 'lead', blocking: false, format: 'feed_post', hours: 24 }] }, tiktok] });
+    renderAt('/social?account=ig1');
+    expect(await screen.findByRole('region', { name: 'Instagram · @atolye' })).toBeVisible();
+    expect(screen.queryByRole('list', { name: 'Paylaşmadan önce' })).not.toBeInTheDocument();
   });
 });

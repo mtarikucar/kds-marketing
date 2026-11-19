@@ -16,6 +16,7 @@ import { useMaterialsKey } from '../materials/MaterialsShared';
 import { inputClass } from '../StudioShared';
 import { usePostMutation } from './PostRow';
 import { placeHref } from './location';
+import { placeHref as contentHref } from '../content/location';
 import { suggestTimes, type TimelineVersion } from './timeline';
 
 /** The posting engine's refusal codes a person can read; any other shows as the server says it. */
@@ -34,10 +35,14 @@ export function refusalText(t: TFunction, error: unknown): string {
   return known ? t(`socialAccounts.refusal.${known}`) : code;
 }
 
-/** Where a blocked version is fixed: the strategy, the connections, or the paused account. */
-type FixLabel = 'socialAccounts.fixStrategy' | 'socialAccounts.connect' | 'socialAccounts.fixPaused';
-function fixOf(reason: string | undefined, accounts: api.SocialAccount[]): { to: string; label: FixLabel } | null {
+/** Where a blocked version is fixed: the strategy, the connections, the paused account, or its content. */
+type FixLabel = 'socialAccounts.fixStrategy' | 'socialAccounts.connect' | 'socialAccounts.fixPaused' | 'socialAccounts.fixContent';
+function fixOf(reason: string | undefined, accounts: api.SocialAccount[], projectId: string): { to: string; label: FixLabel } | null {
   switch (reason) {
+    // Its files do not fit or one was deleted: the content asks for a revision with a new one.
+    case 'media_not_accepted':
+    case 'material_removed':
+      return { to: contentHref({ view: 'all', content: projectId }), label: 'socialAccounts.fixContent' };
     case 'no_approved_strategy':
     case 'channel_not_in_strategy':
     case 'hypothesis_does_not_post':
@@ -171,7 +176,7 @@ export function VersionRow({
   const [giving, setGiving] = useState(expanded);
   const blocked = version.accounts.length === 0;
   const reason = BLOCKED_REASONS.find((r) => r === version.blocked);
-  const fix = blocked ? fixOf(version.blocked, accounts) : null;
+  const fix = blocked ? fixOf(version.blocked, accounts, pack.project_id) : null;
   const panel = `version-${version.version_id}-detail`;
   const opening = version.text.split('\n').find((l) => l.trim())?.trim() ?? '';
   const name = accounts.find((a) => a.capability_id === version.accounts[0])?.name ?? t('socialAccounts.unknownAccount');
