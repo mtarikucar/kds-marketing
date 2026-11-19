@@ -1,7 +1,7 @@
--- Reverts 0046_knowledge_base: drops the five knowledge tables, the trigger function and the
--- read-model index. Only for undoing this release before the next one (the knowledge base's
--- seeding) is deployed: it deletes the owner's knowledge, so it is never a step of a binary
--- rollback after that, and ops dumps the five tables first.
+-- Reverts 0046_knowledge_base: drops the five knowledge tables and the trigger function. Only for
+-- undoing this release before the next one (the knowledge base's seeding) is deployed: it
+-- deletes the owner's knowledge, so it is never a step of a binary rollback after that, and ops
+-- dumps the five tables first.
 --
 -- Refuses while a production area holds a version cancelled without a planned post
 -- (`VersionCancel.slot_id` absent or null), which a binary older than this release cannot read.
@@ -24,7 +24,6 @@ begin
     end if;
     perform set_config('app.platform', previous_platform, true);
 end $$;
-drop index if exists studio_production_projects_live;
 drop table if exists knowledge_proposals;
 drop table if exists knowledge_notes;
 drop table if exists knowledge_revisions;

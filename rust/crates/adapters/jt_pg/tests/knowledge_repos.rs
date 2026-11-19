@@ -44,8 +44,8 @@ async fn table_count(pool: &PgPool) -> i64 {
     .unwrap()
 }
 
-async fn index_exists(pool: &PgPool, name: &str) -> bool {
-    sqlx::query_scalar("select exists(select 1 from pg_indexes where indexname = $1)")
+async fn function_exists(pool: &PgPool, name: &str) -> bool {
+    sqlx::query_scalar("select exists(select 1 from pg_proc where proname = $1)")
         .bind(name)
         .fetch_one(pool)
         .await
@@ -317,12 +317,12 @@ async fn the_down_refuses_a_cancel_without_a_planned_post_and_round_trips() {
     for _ in 0..2 {
         sqlx::raw_sql(DOWN).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, all - 5);
-        assert!(!index_exists(&db.pool, "studio_production_projects_live").await);
+        assert!(!function_exists(&db.pool, "knowledge_revisions_immutable").await);
     }
     for _ in 0..2 {
         sqlx::raw_sql(UP).execute(&db.pool).await.unwrap();
         assert_eq!(table_count(&db.pool).await, all);
-        assert!(index_exists(&db.pool, "studio_production_projects_live").await);
+        assert!(function_exists(&db.pool, "knowledge_revisions_immutable").await);
     }
     jt_pg::recovery::check_rls(&db.pool).await.unwrap();
 }

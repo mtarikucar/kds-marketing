@@ -1395,8 +1395,8 @@ async fn outreach_down(pool: &PgPool) {
 /// trigger extension before restoring historical schemas. Narrower library-side-table checks
 /// intentionally retain these tables in TABLES_AFTER_ALL-based counts.
 async fn project_tables_down(pool: &PgPool) {
-    // Newest first: the knowledge base (its index sits on the production areas), the lane
-    // approval record on `studio_control`, then the account snapshots (they reference
+    // Newest first: the knowledge base (the tests that run this count tables after it), the
+    // lane approval record on `studio_control`, then the account snapshots (they reference
     // `capabilities`) and the pause columns on the posting policy.
     for down in [
         include_str!("../../../../migrations/0046_knowledge_base.down.sql"),

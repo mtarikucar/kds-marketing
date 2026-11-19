@@ -3,8 +3,10 @@
 -- revisions, its rules and goals, the caps and the post approval the system enforces, and what
 -- the frame was last derived from), the free cards, every change of a card, the rules and the
 -- goals as it was (append-only), the notes a person wrote to the agents, and the agents'
--- proposals. Additive: new tables and one new index only, nothing an existing row holds is read
--- or changed (every backfill is the application's), so it is safe on a live database and quick.
+-- proposals. Additive: new tables only, nothing an existing row holds is read or changed (every
+-- backfill is the application's), so it is safe on a live database and quick. The posts page's
+-- read of every live area by workspace needs no index of its own: `studio_projects_recent`
+-- (`0031`) is on `(workspace_id, archived, id desc)`, and the areas have no `updated_at` column.
 -- Repeatable: every statement is guarded. No foreign key to or from `strategy_*` (the frame stays
 -- its own, append-only), and no `studio_` prefix.
 
@@ -173,10 +175,6 @@ create unique index if not exists knowledge_proposals_one_pending on knowledge_p
     where status = 'pending';
 create index if not exists knowledge_proposals_list
     on knowledge_proposals (workspace_id, status, proposed_at desc);
-
--- Read-model support for the posts page: every live area of a workspace, newest first.
-create index if not exists studio_production_projects_live
-    on studio_production_projects (workspace_id, archived, updated_at desc);
 
 -- Row-level security, as every tenant table. `create policy` has no `if not exists`, hence the
 -- guards.

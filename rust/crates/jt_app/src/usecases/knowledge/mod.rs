@@ -14,7 +14,7 @@
 //!
 //! **Every knowledge write** (a card, the rules, the goals, an accepted proposal, a filed note)
 //! runs in one tenant bundle (design §4.4): it takes its locks in the one order of §4.10.13
-//! ([`lock`]: the draft and the execution frame first when the write may write a frame, then the
+//! (`lock`: the draft and the execution frame first when the write may write a frame, then the
 //! settings, then the row it changes, and nothing earlier after), writes the row, appends one
 //! revision row (the subject as it now is), moves the knowledge base's revision once per bundle
 //! (and the posting or prospecting revision when a card the frame is derived from changed), and

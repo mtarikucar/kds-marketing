@@ -193,7 +193,7 @@ pub struct PendingWake {
     #[serde(with = "time::serde::rfc3339")]
     pub last_at: OffsetDateTime,
     /// Distinct, in the order first asked, at most [`WAKE_REASONS_CAP`]. A code a later release
-    /// wrote is dropped on read ([`known_reasons`]).
+    /// wrote is dropped on read (`known_reasons`).
     #[serde(deserialize_with = "known_reasons::deserialize")]
     pub reasons: Vec<WakeReason>,
     /// The people whose actions asked for it, distinct, at most [`WAKE_CAUSED_BY_CAP`].
@@ -247,7 +247,7 @@ impl WakeOutcome {
 pub struct WakeAttempt {
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
-    /// A code a later release wrote is dropped on read ([`known_reasons`]).
+    /// A code a later release wrote is dropped on read (`known_reasons`).
     #[serde(deserialize_with = "known_reasons::deserialize")]
     pub reasons: Vec<WakeReason>,
     pub outcome: WakeOutcome,

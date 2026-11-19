@@ -9,7 +9,7 @@
 //!
 //! A change of a card the frame is derived from (its title, body, attachments, or its removal
 //! or restoration; a new card of the owner's own counts for both parts) moves the posting or the
-//! prospecting revision ([`super::moves`]); a position alone moves neither. An owner's edit of a
+//! prospecting revision (`moves`); a position alone moves neither. An owner's edit of a
 //! card supersedes the card's pending `card_edit` proposals: accepting one would overwrite the
 //! owner's newer text.
 
