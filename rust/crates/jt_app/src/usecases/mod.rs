@@ -24,6 +24,7 @@ pub mod groups;
 pub mod hours;
 pub mod inbox;
 pub mod jobs;
+pub mod knowledge;
 pub mod ledger;
 pub mod modules;
 pub mod outreach;

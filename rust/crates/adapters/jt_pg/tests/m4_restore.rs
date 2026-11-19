@@ -176,6 +176,62 @@ async fn restored_unknown_send_is_not_retried() {
 }
 
 #[tokio::test]
+async fn logical_restore_keeps_the_knowledge_base_and_its_history() {
+    use jt_app::usecases::knowledge::{cards, seed};
+    let source = TestDb::new().await;
+    let (ws, user) = source.seed_workspace("restore-knowledge").await;
+    let uow = Arc::new(PgUnitOfWork::new(source.pool.clone()));
+    let deps = jt_testkit::fakes::deps(uow.clone());
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::Human { user_id: user },
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    seed::ensure(&deps, &ctx).await.unwrap();
+    let card = cards::card_create(
+        &deps,
+        &ctx,
+        cards::CardCreateInput {
+            title: "Sık sorulanlar".into(),
+            body: "Kargo 2 gün.".into(),
+            attachments: vec![],
+            position: None,
+        },
+    )
+    .await
+    .unwrap();
+    let (settings, all, history) = {
+        let mut r = uow.tenant(ws).await.unwrap();
+        (
+            r.knowledge().settings().await.unwrap(),
+            r.knowledge().cards().await.unwrap(),
+            r.knowledge()
+                .revisions(jt_knowledge::Subject::Card, Some(card.id), None, 10)
+                .await
+                .unwrap(),
+        )
+    };
+    let target = TestDb::new().await;
+    copy_public(&source, &target).await;
+    check_rls(&target.pool).await.unwrap();
+    let restored = PgUnitOfWork::new(target.pool.clone());
+    let mut r = restored.tenant(ws).await.unwrap();
+    assert_eq!(r.knowledge().settings().await.unwrap(), settings);
+    assert_eq!(r.knowledge().cards().await.unwrap(), all);
+    assert_eq!(all.len(), 9);
+    assert_eq!(
+        r.knowledge()
+            .revisions(jt_knowledge::Subject::Card, Some(card.id), None, 10)
+            .await
+            .unwrap(),
+        history
+    );
+}
+
+#[tokio::test]
 async fn wal_probe_publishes_only_confirmed_archive_success() {
     use jt_pg::wal::{ArchiverState, publish};
     let root = std::env::temp_dir().join(format!("jeeta-wal-{}", uuid::Uuid::now_v7()));
