@@ -58,6 +58,8 @@ mod distribution;
 pub use distribution::MemDistribution;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod knowledge;
+pub use knowledge::MemKnowledge;
 mod outreach;
 pub use outreach::MemOutreach;
 mod mail_files;

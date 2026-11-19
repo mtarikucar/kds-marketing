@@ -31,6 +31,7 @@ mod events;
 mod groups;
 mod hypotheses;
 pub(crate) mod inbox;
+mod knowledge;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
 mod oauth_pending;

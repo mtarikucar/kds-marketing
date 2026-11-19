@@ -277,6 +277,10 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn knowledge(&mut self) -> &mut dyn jt_app::ports::knowledge::KnowledgeRepo {
+        self
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.tx.commit()
     }

@@ -145,6 +145,8 @@ pub struct MemState {
     pub outreach: super::outreach::MemOutreach,
     pub mail_files: super::mail_files::MemMailFiles,
     pub inbox: super::inbox::MemInbox,
+    /// The knowledge bases (`0046_knowledge_base`).
+    pub knowledge: super::knowledge::MemKnowledge,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,

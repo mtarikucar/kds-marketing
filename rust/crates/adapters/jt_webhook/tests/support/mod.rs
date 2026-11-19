@@ -512,6 +512,9 @@ impl TenantRepos for FailingTenant {
     fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
         self.0.outbound_jobs()
     }
+    fn knowledge(&mut self) -> &mut dyn jt_app::ports::knowledge::KnowledgeRepo {
+        self.0.knowledge()
+    }
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.0.commit().await
     }
