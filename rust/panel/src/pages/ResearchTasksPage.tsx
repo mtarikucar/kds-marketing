@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bot, Plus } from 'lucide-react';
 import { useSession } from '@/auth/useSession';
+import { AgentWakeLine, useWakeSpeaks } from '@/components/AgentWakeLine';
 import { agentIdle, useModuleAgents } from '@/components/ModuleStatusLine';
 import { QueryState } from '@/components/QueryState';
 import { Button, EmptyState } from '@/components/ui';
@@ -11,29 +12,39 @@ import { Composer } from './research/Composer';
 import { useTaskCopy } from './research/copy';
 import { useAllTasks, useOpenTasks, useSegmentNames } from './research/data';
 import { TaskRow } from './research/TaskRow';
+import { taskState } from './research/words';
 import type { ListedTask } from '@/api/types';
 
 type Filter = 'open' | 'closed';
 
 /**
- * Said once, when it matters: open tasks may still record today and no agent that may research
- * checked in on time (the content page's rule, `agentIdle`). Nothing otherwise.
+ * Said once for the page, when open tasks may still record today and wait for an agent: what will
+ * happen to them, from the wake states when an agent may take them (`AgentWakeLine`); else, when
+ * no agent that may research checked in on time, that (the content page's rule, `agentIdle`).
+ * `shown`: the page said it, so the rows waiting for an agent need not say it again.
  */
-function IdleLine({ open }: { open: ListedTask[] }) {
+function useAgentLine(open: ListedTask[], userId: string | undefined): { line: React.ReactNode; shown: boolean } {
   const copy = useTaskCopy();
   const { candidates } = useModuleAgents('prospects');
-  const waiting = open.filter((x) => x.remaining_today > 0).length;
-  const idle = candidates ? agentIdle(waiting, candidates) : null;
-  if (!idle) return null;
+  const speaks = useWakeSpeaks('research');
+  const due = open.filter((x) => x.remaining_today > 0);
+  // A task someone holds is on its way; the others wait for an agent to take them.
+  const waiting = open.filter((x) => taskState(x, userId).kind === 'waiting').length;
+  if (speaks) return { line: <AgentWakeLine need="research" waiting={waiting} />, shown: waiting > 0 };
+  const idle = candidates ? agentIdle(due.length, candidates) : null;
+  if (!idle) return { line: null, shown: false };
   const text = idle.last
-    ? copy('idleOverdue', { n: waiting, time: formatDateTime(idle.last, copy.language) })
-    : copy('idleNoAgent', { n: waiting });
-  return (
-    <p role="status" className="flex items-center gap-2 border-s-2 border-warning bg-warning-subtle px-4 py-2 text-sm">
-      <Bot aria-hidden="true" className="h-4 w-4 shrink-0 text-warning" />
-      <Link className="min-w-0 underline underline-offset-4" to="/agents">{text}</Link>
-    </p>
-  );
+    ? copy('idleOverdue', { n: due.length, time: formatDateTime(idle.last, copy.language) })
+    : copy('idleNoAgent', { n: due.length });
+  return {
+    line: (
+      <p role="status" className="flex items-center gap-2 border-s-2 border-warning bg-warning-subtle px-4 py-2 text-sm">
+        <Bot aria-hidden="true" className="h-4 w-4 shrink-0 text-warning" />
+        <Link className="min-w-0 underline underline-offset-4" to="/agents">{text}</Link>
+      </p>
+    ),
+    shown: true,
+  };
 }
 
 /**
@@ -62,6 +73,7 @@ export function ResearchTasksPage() {
     { key: 'closed', label: copy('closed'), count: allTasks.data ? `${closed.length}${moreClosed ? '+' : ''}` : '' },
   ];
   const query = filter === 'open' ? openTasks : allTasks;
+  const agentLine = useAgentLine(open, session.data?.user_id);
   return (
     <>
       <PoolHeader
@@ -88,7 +100,7 @@ export function ResearchTasksPage() {
           />
         </div>
       )}
-      <IdleLine open={open} />
+      {agentLine.line}
       {nothingAtAll ? (
         <EmptyState title={copy('emptyTitle')} description={copy('emptyBody')} />
       ) : (
@@ -114,6 +126,7 @@ export function ResearchTasksPage() {
                     item={item}
                     segments={segments}
                     userId={session.data?.user_id}
+                    quietWaiting={agentLine.shown}
                     expanded={expanded === item.task.id}
                     onToggle={() => setExpanded((id) => (id === item.task.id ? null : item.task.id))}
                   />

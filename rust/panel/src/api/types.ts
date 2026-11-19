@@ -182,6 +182,77 @@ export type Actor =
 export type ActorKind = Actor['kind'];
 export const ACTOR_KINDS: readonly ActorKind[] = ['human', 'agent', 'system'];
 
+// ---------------------------------------------------------------------------------------------
+// Waking an agent (`jt_app::usecases::wake`)
+// ---------------------------------------------------------------------------------------------
+
+/** `jt_app::ports::wake::WakeKind`. */
+export type WakeKind = 'claude_routine' | 'webhook';
+/** `jt_app::ports::wake::WakeOutcome`. */
+export type WakeOutcome = 'fired' | 'rate_limited' | 'unavailable' | 'gave_up' | 'refused' | 'rejected';
+/** `jt_app::ports::wake::WaitingFor`: why a pending wake has not gone out yet. */
+export type WaitingFor = 'settle' | 'rate' | 'retry';
+
+/** `jt_app::usecases::wake::WakeAddressOut`: never the token, the secret or the URL's path. */
+export interface WakeAddressOut {
+  kind: WakeKind;
+  /** The routine's id, or the webhook URL's host. */
+  target: string;
+  has_secret: boolean;
+  set_at: Rfc3339;
+  set_by: Uuid;
+  refused_at: Rfc3339 | null;
+}
+
+/** `jt_app::usecases::wake::RunNow`: the rate limits allow a fire only from `after` (`null`: now). */
+export interface RunNow {
+  api_key_id: Uuid;
+  after: Rfc3339 | null;
+}
+
+/** `jt_app::usecases::wake::AgentWakeOut`: one agent (an active key) and its wake state. */
+export interface AgentWakeOut {
+  api_key_id: Uuid;
+  address: WakeAddressOut | null;
+  pending: { due_at: Rfc3339; waiting_for: WaitingFor; reasons: string[] } | null;
+  last: {
+    at: Rfc3339;
+    reasons: string[];
+    outcome: WakeOutcome;
+    status: number | null;
+    session_id: string | null;
+    session_url: string | null;
+  } | null;
+  last_seen_at: Rfc3339 | null;
+  interval_minutes: number;
+  interval_learned: boolean;
+  next_expected_at: Rfc3339 | null;
+  run_now: RunNow | null;
+}
+
+/** `jt_app::usecases::wake::NeedWake`: what a kind of waiting work can expect, tagged by `state`. */
+export type NeedWake =
+  | { state: 'no_agent' }
+  | { state: 'working'; api_key_id: Uuid; last_seen_at: Rfc3339 }
+  | { state: 'calling'; api_key_id: Uuid; due_at: Rfc3339; waiting_for: WaitingFor }
+  | { state: 'called'; api_key_id: Uuid; at: Rfc3339 }
+  | { state: 'schedule'; next_expected_at: Rfc3339 | null; interval_minutes: number; has_address: boolean; failed_at: Rfc3339 | null; run_now: RunNow | null }
+  | { state: 'refused'; api_key_id: Uuid };
+
+/** `jt_app::usecases::wake::Need::key`. */
+export type NeedKey = 'content' | 'materials' | 'social' | 'ads' | 'research' | 'inbox';
+
+/** `jt_app::usecases::wake::WakesOut`. */
+export interface WakesOut {
+  agents: AgentWakeOut[];
+  needs: Record<NeedKey, NeedWake>;
+}
+
+/** `PUT /api/agents/{api_key_id}/wake`'s body. */
+export type SetWakeIn =
+  | { kind: 'claude_routine'; routine_id: string; token: string }
+  | { kind: 'webhook'; url: string; secret?: string };
+
 /** `jt_app::usecases::agents::WhoAmI`: who the caller is, where, and what it may do. */
 export interface WhoAmI {
   actor: Actor;

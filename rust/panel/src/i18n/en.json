@@ -939,6 +939,80 @@
       "submit": "Create the key"
     }
   },
+  "wake": {
+    "every": {
+      "hour": "every hour",
+      "minutes": "every {{n}} minutes",
+      "hours": "every {{n}} hours",
+      "day": "once a day",
+      "own": "on its own schedule"
+    },
+    "line": {
+      "working": "The agent is at work · last seen {{n}} s ago",
+      "workingMinutes": "The agent is at work · last seen {{n}} min ago",
+      "settle": "The agent will be called in {{n}} s",
+      "calling": "Calling the agent…",
+      "rate": "The agent was just called; the next call goes out at {{at}}",
+      "retry": "The agent could not be reached; trying again at {{at}}",
+      "called": "The agent was called ({{time}}); it takes a minute or two to start",
+      "failed": "The last call ({{time}}) did not reach the agent.",
+      "visits": "The agent comes {{phrase}}; next at {{time}}.",
+      "visitsLate": "The agent comes {{phrase}}; it was expected at {{at}} and is late.",
+      "neverCame": "The agent has not come yet.",
+      "runNowIntro": "To have it start now:",
+      "runNow": "Run now",
+      "runAfter": "You can run it after {{at}}.",
+      "noAddress": "To have it start at once, add a wake address on the <page>agents page</page>.",
+      "refused": "The agent’s wake address was refused; reconnect it on the <page>agents page</page>.",
+      "rateLimited": "The agent was just called; you can try again after {{at}}."
+    },
+    "key": {
+      "visits": "comes {{phrase}}",
+      "next": "next {{time}}",
+      "late": "expected at {{at}}, late"
+    },
+    "address": {
+      "none": "Wake address: none",
+      "routine": "Wake address: Claude routine · {{target}}",
+      "webhook": "Wake address: Webhook · {{target}}",
+      "refused": "The wake address was refused ({{time}}); reconnect it with a new token.",
+      "last": "last call {{time}}: {{outcome}}",
+      "outcome": {
+        "fired": "succeeded",
+        "rate_limited": "hit a limit, will try again",
+        "unavailable": "unreachable, will try again",
+        "gave_up": "unreachable",
+        "refused": "refused",
+        "rejected": "not accepted"
+      },
+      "session": "open the session",
+      "add": "Add",
+      "change": "Change",
+      "remove": "Remove",
+      "removeTitle": "Remove the wake address?",
+      "removeBody": "The agent will again come only on its own schedule.",
+      "removed": "Wake address removed.",
+      "saved": "Wake address saved.",
+      "kind": "How to wake it",
+      "kindRoutine": "Claude routine",
+      "kindWebhook": "Webhook",
+      "routineId": "Routine ID",
+      "routineIdPlaceholder": "trig_… or the trigger URL",
+      "token": "Token",
+      "url": "URL",
+      "secret": "Secret (optional)",
+      "routineHelp": "When someone gives this agent work, Jeeta calls it right away instead of waiting for its hour. Get the token at claude.ai/code/routines: open the routine, then «Add another trigger» → API → «Generate token»; it is shown only once.",
+      "webhookHelp": "When someone gives this agent work, Jeeta sends this URL a short POST (the area of work, the agent and the reason; no content). The URL must be a public https address.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "errors": {
+        "routine_id": "A routine ID starts with trig_ and has only letters, digits, _ or -; you can paste the trigger URL too.",
+        "token": "Paste the token from the routine’s API trigger, without spaces.",
+        "url": "Enter a public https URL (without a user name or password).",
+        "secret": "The secret must be printable characters without spaces."
+      }
+    }
+  },
   "ledger": {
     "title": "Ledger",
     "description": "Everything that happens in the workspace; agent and human actions side by side",

@@ -280,3 +280,29 @@ describe('cancelling a post of a content', () => {
     expect(within(row).queryByRole('button', { name: 'İptal et' })).not.toBeInTheDocument();
   });
 });
+
+describe('what the agent will do about the contents being revised', () => {
+  const none = { state: 'no_agent' } as const;
+  const wakes = (content: unknown) => ({ agents: [], needs: { content, materials: none, social: none, ads: none, research: none, inbox: none } });
+  const revising = { ...noAreas, areas: [
+    areaRow('p1', { note: 'Köpek yerine kedi olsun', by: 'u', at: '2026-11-19T10:00:00Z', withdrawn: ['a1'] }),
+    areaRow('p2', { note: 'Daha kısa', by: 'u', at: '2026-11-19T10:00:00Z', withdrawn: ['a2'] }),
+  ] };
+
+  it('says once, over the page, that the agent will be called in seconds', async () => {
+    mockFetch({ ...owner, 'GET /api/content/areas': revising, 'GET /api/agents/wakes': wakes({ state: 'calling', api_key_id: 'k1', due_at: new Date(Date.now() + 40_000).toISOString(), waiting_for: 'settle' }) });
+    renderAt('/social');
+    await screen.findByRole('region', { name: 'Düzenleniyor' });
+    expect(await screen.findByText(/^Ajan (39|40) sn içinde çağrılacak$/)).toBeInTheDocument();
+    expect(screen.getAllByTestId('agent-wake-line')).toHaveLength(1);
+  });
+
+  it('says nothing of the agent when no content is being revised', async () => {
+    const calls = mockFetch({ ...owner, 'GET /api/agents/wakes': wakes({ state: 'called', api_key_id: 'k1', at: new Date().toISOString() }) });
+    const { client } = renderAt('/social');
+    await rowOf('Evcil dostum');
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/agents/wakes')).toBe(true));
+    await waitFor(() => expect(client.isFetching()).toBe(0));
+    expect(screen.queryByTestId('agent-wake-line')).not.toBeInTheDocument();
+  });
+});

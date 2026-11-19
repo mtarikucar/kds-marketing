@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { listKeys, revokeKey } from '@/api/apiKeys';
-import type { AgentConnectionOut, KeySummary } from '@/api/types';
+import type { AgentConnectionOut, AgentWakeOut, KeySummary } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { PermissionList } from '@/components/PermissionList';
 import { QueryState } from '@/components/QueryState';
@@ -14,7 +14,9 @@ import { Badge, Button, ConfirmDialog, EmptyState, PageHeader, cn, toast } from 
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
 import { can } from '@/lib/roles';
+import { useAgentWakes } from '@/lib/wake';
 import { ConnectAgent, ConnectAgentDialog, KEYS_KEY } from './agents/keys';
+import { KeyWake } from './agents/wake';
 
 /** Contact within this many minutes reads as recent; it is a record of contact, never an online claim. */
 const RECENT_MINUTES = 15;
@@ -80,7 +82,7 @@ function AgentLine({ agent, live }: { agent: AgentConnectionOut; live: boolean }
   );
 }
 
-function AccessRow({ access, onRevoke }: { access: Access; onRevoke?: (key: KeySummary) => void }) {
+function AccessRow({ access, onRevoke, wake }: { access: Access; onRevoke?: (key: KeySummary) => void; wake?: AgentWakeOut }) {
   const { t, i18n } = useTranslation();
   const { key, agents } = access;
   const revoked = key?.status === 'revoked';
@@ -127,6 +129,8 @@ function AccessRow({ access, onRevoke }: { access: Access; onRevoke?: (key: KeyS
           </details>
         </div>
       )}
+      {/* A live key's wake address: a person who gives the agent work wakes it at once. */}
+      {!revoked && wake && <KeyWake agent={wake} />}
       {key && showPermissions && <PermissionList permissions={key.scopes} />}
     </li>
   );
@@ -148,6 +152,8 @@ export function AgentsPage() {
   const keys = useQuery({ queryKey: KEYS_KEY, queryFn: listKeys, enabled: canManage });
   const [connecting, setConnecting] = useState(() => params.get('connect') === '1');
   const [revoking, setRevoking] = useState<KeySummary | null>(null);
+  const wakes = useAgentWakes();
+  const wakeOf = (id: string) => wakes.data?.agents.find(a => a.api_key_id === id);
 
   const setConnect = (open: boolean) => {
     setConnecting(open);
@@ -185,7 +191,7 @@ export function AgentsPage() {
     <>
       {live.length > 0 ? (
         <ul aria-label={t('agents.title')}>
-          {live.map(access => <AccessRow key={access.id} access={access} onRevoke={canManage ? setRevoking : undefined} />)}
+          {live.map(access => <AccessRow key={access.id} access={access} onRevoke={canManage ? setRevoking : undefined} wake={wakeOf(access.id)} />)}
         </ul>
       ) : (
         <EmptyState

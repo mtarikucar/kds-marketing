@@ -301,13 +301,24 @@ export function revisingHere(
  * person, so not counted with what does. Read from the production line, so only for a session
  * that reads it; on one account's view, only those that had a post on it.
  */
-export function Revising({ scope, posts }: { scope?: string; posts?: PostsOut }) {
-  const { t, i18n } = useTranslation();
+function useRevisingAreas() {
   const session = useSession();
   const reads = canAny(session.data, ['content.work', 'content.manage']);
   const key = useSocialKey();
   const areas = useQuery({ queryKey: [...key, 'revising'], queryFn: () => contentAreas({ scope: 'open' }), enabled: reads, refetchInterval: 60_000 });
-  if (!reads || !areas.data) return null;
+  return reads ? areas.data : undefined;
+}
+
+/** How many contents "Düzenleniyor" holds on every account: content work waiting for the agent. */
+export function useRevisingCount(): number {
+  return useRevisingAreas()?.areas.filter((r) => (r.area.redo?.withdrawn ?? []).length > 0).length ?? 0;
+}
+
+export function Revising({ scope, posts }: { scope?: string; posts?: PostsOut }) {
+  const { t, i18n } = useTranslation();
+  const data = useRevisingAreas();
+  if (!data) return null;
+  const areas = { data };
   const account = new Map((posts?.posts ?? []).map((p) => [p.post.slot_id, p.post.capability_id]));
   const rows = areas.data.areas.filter((r) => revisingHere(r.area, scope, account, posts?.contents ?? []));
   if (!rows.length) return null;

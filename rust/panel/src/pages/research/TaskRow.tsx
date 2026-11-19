@@ -21,7 +21,7 @@ const NEWEST = 5;
 const AUTO_CLOSE_NOTE = 'target reached';
 
 /** A task's state as one short line with its icon and tone. */
-function StateLine({ state, who }: { state: TaskState; who: (s: Extract<TaskState, { kind: 'held' }>) => string }) {
+function StateLine({ state, who, quietWaiting }: { state: TaskState; who: (s: Extract<TaskState, { kind: 'held' }>) => string; quietWaiting?: boolean }) {
   const copy = useTaskCopy();
   const when = (at: string | null) => formatWhen(at, copy.language);
   let text: string;
@@ -34,7 +34,8 @@ function StateLine({ state, who }: { state: TaskState; who: (s: Extract<TaskStat
       tone = state.by === 'you' ? 'text-primary' : 'text-info';
       break;
     case 'waiting':
-      // Said quietly: when no agent comes, the page says so once above the list.
+      // Said once above the list when the page says what the agent will do; else quietly here.
+      if (quietWaiting) return null;
       text = copy('waiting');
       break;
     case 'doneToday':
@@ -242,12 +243,15 @@ export function TaskRow({
   onToggle,
   segments,
   userId,
+  quietWaiting,
 }: {
   item: ListedTask;
   expanded: boolean;
   onToggle: () => void;
   segments: ReadonlyMap<string, string>;
   userId: string | undefined;
+  /** The page says once what waiting tasks can expect: a row waiting for an agent says nothing more. */
+  quietWaiting?: boolean;
 }) {
   const copy = useTaskCopy();
   const { t } = useTranslation();
@@ -280,7 +284,7 @@ export function TaskRow({
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className={cn('block truncate font-medium', !open && 'text-muted-foreground')}>{name}</span>
           <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">{briefLine(copy, task, named)}</span>
-          <StateLine state={state} who={who} />
+          <StateLine state={state} who={who} quietWaiting={quietWaiting} />
           <span className="block truncate text-xs text-muted-foreground">{meta.join(' · ')}</span>
         </span>
         <Numbers item={item} copy={copy} />

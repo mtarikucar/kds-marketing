@@ -109,3 +109,40 @@ it('names the waiting work and the latest check-in of many stale agents in one l
   expect(lines).toHaveLength(1);
   expect(lines[0]).toHaveTextContent(/^2 iş ajanı bekliyor; ajan en son .*30.* yoklama yaptı\.$/);
 });
+
+// With the wake states (`GET /api/agents/wakes`) the page says what will happen to its waiting
+// work in one sentence, in place of the check-in's (2026-11-19: the owner asked for two revisions
+// and waited an hour).
+const none = { state: 'no_agent' } as const;
+const wakesWith = (needs: Record<string, unknown>) => ({ agents: [], needs: { content: none, materials: none, social: none, ads: none, research: none, inbox: none, ...needs } });
+
+it('says the agent will be called in seconds, once, in place of the stale check-in', async () => {
+  contentFetch({ answers: {
+    'GET /api/agents': stale,
+    'GET /api/work/pending': pending([{ kind: 'content_area', project_id: 'p1' }, { kind: 'content_area', project_id: 'p2' }]),
+    'GET /api/agents/wakes': wakesWith({ content: { state: 'calling', api_key_id: agents[0].api_key_id, due_at: new Date(Date.now() + 40_000).toISOString(), waiting_for: 'settle' } }),
+  } });
+  renderAt('/content');
+  expect(await screen.findByText(/^Ajan (39|40) sn içinde çağrılacak$/, undefined, { timeout: 5000 })).toBeInTheDocument();
+  expect(screen.getAllByTestId('agent-wake-line')).toHaveLength(1);
+  expect(screen.queryByText(/ajanı bekliyor/)).not.toBeInTheDocument();
+});
+
+it('keeps the no-agent sentence when no agent may take the work', async () => {
+  contentFetch({ answers: { 'GET /api/agents': [], 'GET /api/agents/wakes': wakesWith({}), 'GET /api/work/pending': { items: [{ kind: 'content_area', project_id: 'p1' }] } } });
+  renderAt('/content');
+  expect(await screen.findByRole('link', { name: '1 iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.' }, { timeout: 5000 })).toHaveAttribute('href', '/agents');
+  expect(screen.queryByTestId('agent-wake-line')).not.toBeInTheDocument();
+});
+
+it('says nothing about the agent while nothing waits for it, whatever the wake state', async () => {
+  const calls = contentFetch({ answers: {
+    'GET /api/work/pending': pending([{ kind: 'reply_due' }]),
+    'GET /api/agents/wakes': wakesWith({ content: { state: 'schedule', next_expected_at: null, interval_minutes: 60, has_address: false, failed_at: null, run_now: null } }),
+  } });
+  renderAt('/content');
+  await screen.findByRole('navigation', { name: 'Olaylar' }, { timeout: 5000 });
+  await waitFor(() => expect(calls.some(c => c.path === '/api/agents/wakes') && calls.some(c => c.path === '/api/work/pending')).toBe(true));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  expect(screen.queryByTestId('agent-wake-line')).not.toBeInTheDocument();
+});
