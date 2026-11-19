@@ -49,10 +49,11 @@ use time::Duration;
 // Helpers
 // ---------------------------------------------------------------------------------------------
 
-/// The owner's live strategy, version 5.
+/// A sample strategy of a fictional business (a coffee roastery) in the shape of a live one,
+/// version 5.
 fn v5() -> (Sections, Vec<Hypothesis>) {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../domain/jt_knowledge/tests/fixtures/strategy-v5.json"
+        "../../domain/jt_knowledge/tests/fixtures/strategy-sample.json"
     ))
     .unwrap();
     (
@@ -93,7 +94,7 @@ async fn version(
     id
 }
 
-/// The owner's strategy, approved.
+/// The sample strategy, approved.
 async fn approved_v5(w: &World) -> StrategyVersionId {
     let (s, h) = v5();
     version(w, 5, VersionStatus::Approved, s, h).await
@@ -179,7 +180,7 @@ fn note(key: &str, text: &str) -> NoteAddInput {
     NoteAddInput {
         request_key: key.into(),
         text: text.into(),
-        links: vec!["https://figurunica.example/fiyat".into()],
+        links: vec!["https://kahve.example/fiyat".into()],
         file_ids: vec![],
     }
 }
@@ -323,10 +324,7 @@ async fn the_owners_strategy_seeds_its_texts_caps_and_nothing_to_derive() {
     let (sections, _) = v5();
     assert_eq!(s.prohibitions, sections.prohibitions);
     assert_eq!(s.goals.len(), 5);
-    assert_eq!(
-        s.goals[0],
-        "Marka / kulüp / kurum ortaklığı: 3 ayda 1-2 imzalı anlaşma"
-    );
+    assert_eq!(s.goals[0], "Ofis aboneliği: 3 ayda 8 yeni abone ofis");
     let monthly = jt_strategy::Period::Monthly;
     assert_eq!(
         s.ad_cap,
@@ -350,7 +348,10 @@ async fn the_owners_strategy_seeds_its_texts_caps_and_nothing_to_derive() {
         "no social account"
     );
     let who = card_of(&w, "who_we_are").await;
-    assert!(who.body.starts_with("Figurunica: Hikâyeni üret."));
+    assert!(
+        who.body
+            .starts_with("Kavrulmuş Kahve Atölyesi: Taze kavrulur, aynı hafta içilir.")
+    );
     assert!(who.body.contains("\n\nBizi farklı kılan: "));
     assert_eq!(
         card_of(&w, "products_prices").await.body,
@@ -391,7 +392,7 @@ async fn the_owners_strategy_seeds_its_texts_caps_and_nothing_to_derive() {
     for e in w.entries("strategy.knowledge_changed") {
         assert_eq!(e.payload["cause"], "backfill");
         assert!(
-            !e.payload.to_string().contains("Figurunica"),
+            !e.payload.to_string().contains("Kavrulmuş"),
             "no text in the ledger"
         );
     }
@@ -1164,7 +1165,7 @@ async fn attachments_are_links_or_knowledge_files_of_the_workspace() {
         position: Some(0),
     };
     let link = AttachmentInput::Link {
-        url: "https://figurunica.example/fiyat".into(),
+        url: "https://kahve.example/fiyat".into(),
         title: Some("Fiyatlar".into()),
     };
     let c = card_create(
@@ -1210,7 +1211,7 @@ async fn attachments_are_links_or_knowledge_files_of_the_workspace() {
         &w.deps,
         &w.owner_ctx,
         attach(vec![AttachmentInput::Link {
-            url: "http://figurunica.example".into(),
+            url: "http://kahve.example".into(),
             title: None,
         }]),
     )
@@ -1587,7 +1588,7 @@ async fn a_note_is_claimed_and_filed_as_the_owners_words() {
     input.attachments = vec![jt_app::usecases::knowledge::notes::FiledAttachmentInput {
         card: 1,
         file_id: None,
-        url: Some("https://figurunica.example/fiyat".into()),
+        url: Some("https://kahve.example/fiyat".into()),
     }];
     input.rules = vec!["Kargo süresi sitede yazandan kısa söylenmez".into()];
     input.goals = vec!["Ayda 12 sipariş".into()];

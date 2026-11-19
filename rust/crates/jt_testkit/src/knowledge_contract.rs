@@ -26,9 +26,9 @@ pub fn card(key: Option<&str>, position: u32) -> Card {
         id: KnowledgeCardId::new_v7(),
         key: key.map(str::to_owned),
         title: "Biz kimiz".into(),
-        body: "Figür yaparız.".into(),
+        body: "Kahve kavururuz.".into(),
         attachments: vec![Attachment::Link {
-            url: "https://figurunica.example".into(),
+            url: "https://kahve.example".into(),
             title: None,
         }],
         position,
@@ -67,7 +67,7 @@ pub fn note(minutes: i64) -> Note {
     Note {
         id: KnowledgeNoteId::new_v7(),
         text: format!("Not {minutes}"),
-        links: vec!["https://figurunica.example/katalog".into()],
+        links: vec!["https://kahve.example/katalog".into()],
         file_ids: vec![],
         status: NoteStatus::Open,
         claim: None,

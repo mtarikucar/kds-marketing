@@ -6,7 +6,7 @@ three adversarial reviews (data, agents, owner; Appendix A); nothing waits for t
 that commit (`jeeta-design/map.json`, cited below as **A0–A6** for its areas and **A*n*.*m***
 for touchpoint *m* of area *n*), the approved mockups F (`MerkezTablo.dc.html`, Paylaşımlar) and H
 (`BilgiBankasi.dc.html`, Bilgi bankası), and the live strategy of the owner's workspace
-(`strategy-v5.json`, version 5, approved 2026-11-19). Builds on: the flow dead-ends note
+(version 5, approved 2026-11-19). Builds on: the flow dead-ends note
 (`2026-11-19-akis-tikanmalari-design.md`, "design 2026-11-19", rules **R1–R3**, decisions **F1–F6**),
 the olay root (`2026-11-18-icerik-olay-koku-design.md`, **O1–O17**), the content module
 (`2026-11-10-uc-modul-ve-panel-iskeleti-design.md`), the materials library
@@ -1476,7 +1476,7 @@ Revisions: one `knowledge_revisions` row per seeded card and for rules and goals
 `posting_revision = prospecting_revision = posting_derived = prospecting_derived = 1` (the cards were
 made *from* the frame: nothing to re-derive); without one, all four are 0.
 
-#### 4.3.3 The owner's workspace (strategy-v5.json) as seeded
+#### 4.3.3 The owner's workspace (version 5) as seeded
 
 | Card / box | Text (start) | From |
 |---|---|---|
@@ -2763,9 +2763,11 @@ Pure (`jt_knowledge/tests`):
 - limits and strict parsing of cards, rules, caps, goals, notes, proposals; tolerant reads of
   unknown fields; an unknown `WakeReason` in `pending.reasons` and `last.reasons` is dropped on read
   (PR 1);
-- the seed mapping against `strategy-v5.json` as a fixture (golden texts of every card, the
-  truncation rule, `ad_cap` as the lower of lane and item, `message_cap` = the organic lane 0 TRY,
-  the switch and the account list), the draft-difference proposals, the past conversations card;
+- the seed mapping against `fixtures/strategy-sample.json`, a fictional business in the shape of
+  version 5 (the same sections, list sizes, lanes and topic cadences), as a fixture (golden texts
+  of every card, the truncation rule, `ad_cap` as the lower of lane and item, `message_cap` = the
+  organic lane 0 TRY, the switch and the account list), the draft-difference proposals, the past
+  conversations card;
 - the frame merge: system fields recomputed (identity from the cards with its fallbacks, channels,
   prohibitions, goals, lanes from the caps, cadence); topic ids (given, title match, new); a kept
   topic sent without a cadence keeps its own, a new one gets the default; the retained set keeps a

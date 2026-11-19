@@ -1,6 +1,7 @@
 //! The knowledge base's rules, pure: limits and strict parsing at the write boundary, tolerant
-//! reads, the empty predicate, and the seed mapping against the owner's live strategy (version
-//! 5, `fixtures/strategy-v5.json`).
+//! reads, the empty predicate, and the seed mapping against a sample strategy of a fictional
+//! business, a coffee roastery, in the shape of a live one (version 5,
+//! `fixtures/strategy-sample.json`).
 
 use jt_knowledge::seed::{
     ARCHIVED_REASON, DRAFT_REASON, PAST_ENTRY_CHARS, SeedParts, fit, goal_lines,
@@ -20,7 +21,7 @@ const AT: time::OffsetDateTime = datetime!(2026-11-19 12:00 UTC);
 
 fn v5() -> (Sections, Vec<Hypothesis>) {
     let fixture: Value =
-        serde_json::from_str(include_str!("fixtures/strategy-v5.json")).expect("the fixture");
+        serde_json::from_str(include_str!("fixtures/strategy-sample.json")).expect("the fixture");
     (
         serde_json::from_value(fixture["sections"].clone()).expect("the sections read"),
         serde_json::from_value(fixture["hypotheses"].clone()).expect("the hypotheses read"),
@@ -67,11 +68,11 @@ fn titles_bodies_and_links_keep_their_limits() {
     );
 
     assert_eq!(
-        validate_link("url", " https://figurunica.com/katalog.pdf ").unwrap(),
-        "https://figurunica.com/katalog.pdf"
+        validate_link("url", " https://kahve.example/katalog.pdf ").unwrap(),
+        "https://kahve.example/katalog.pdf"
     );
     for bad in [
-        "http://figurunica.com",
+        "http://kahve.example",
         "https://",
         "https:///path",
         "ftp://x.example",
@@ -237,14 +238,14 @@ fn attachments_are_written_strictly() {
         })
     );
     let file: AttachmentInput = serde_json::from_value(
-        json!({"kind": "file", "file_id": "01a1a1d5-ef52-77fe-a112-3d19ce19232d"}),
+        json!({"kind": "file", "file_id": "01a1f78a-56bf-7afa-9228-7158c4849476"}),
     )
     .unwrap();
     assert_eq!(file.link("attachments[1]").unwrap(), None);
     // The stored name and type are the file's own: a writer cannot set them.
     assert!(
         serde_json::from_value::<AttachmentInput>(json!({
-            "kind": "file", "file_id": "01a1a1d5-ef52-77fe-a112-3d19ce19232d", "name": "x.pdf"
+            "kind": "file", "file_id": "01a1f78a-56bf-7afa-9228-7158c4849476", "name": "x.pdf"
         }))
         .is_err()
     );
@@ -308,12 +309,12 @@ fn the_knowledge_base_is_empty_until_a_live_card_has_text() {
     assert!(is_empty(&[]));
     assert!(is_empty(&[card("", false), card(" \n\t ", false)]));
     assert!(
-        is_empty(&[card("Biz figür yaparız", true)]),
+        is_empty(&[card("Biz kahve kavururuz", true)]),
         "a removed card does not count"
     );
     assert!(!is_empty(&[
         card("", false),
-        card("Biz figür yaparız", false)
+        card("Biz kahve kavururuz", false)
     ]));
     // Rules and goals are no input of `is_empty`: a workspace with only them is still empty
     // (`jt_app`'s `the_rules_are_saved_whole_and_derive_nothing` and `the_goals_are_saved_whole`
@@ -514,38 +515,39 @@ fn the_owners_strategy_seeds_these_cards() {
         )
     );
     assert!(parts.body("who_we_are").starts_with(
-        "Figurunica: Hikâyeni üret. Anlamı olan her şeyi (bir insanı, bir evcil hayvanı, bir \
-         arabayı, bir şehri, bir markanın maskotunu) elle tutulur bir esere dönüştüren 3D üretim \
-         stüdyosu. Tek parçadan yüzlerce adede, Türkiye geneli atölye ağıyla.\n\nBizi farklı \
-         kılan: Anlamı esere çeviren tasarım + yapay zekâ destekli hızlı tasarım + "
+        "Kavrulmuş Kahve Atölyesi: Taze kavrulur, aynı hafta içilir. Mahallenin kavurma atölyesi; \
+         tek kökenli ve harman çekirdekleri küçük partilerle kavurup ofislere, kafelere ve evlere \
+         aynı hafta ulaştırır. 250 gramlık paketten haftalık toptan siparişe, dükkândan ve \
+         kargoyla.\n\nBizi farklı kılan: Kavrulduğu hafta teslim + tek kökenli çekirdeklerde açık \
+         köken bilgisi + "
     ));
     // Ürünler ve fiyat, Ses tonu: as written.
     assert_eq!(parts.body("products_prices"), s.identity.product);
     assert!(parts.body("products_prices").starts_with(
-        "Anlamı olan şeyleri 3D üretimle elle tutulur esere dönüştürür. Ürün grupları: (1) Figür: \
-         fotoğraftan kişiye özel figür (insan, evcil hayvan), 15 cm SLA reçine, atölyede elle \
-         boyanır; tek fiyat ₺3.499, boyama ve kargo dahil."
+        "Çekirdeği küçük partilerle kavurur, kavrulduğu hafta teslim eder. Ürün grupları: (1) \
+         Paket kahve: tek kökenli ve harman çekirdek, 250 g ve 1 kg, çekirdek ya da demleme \
+         yöntemine göre öğütülmüş; 250 g ₺420'den başlar, şehir içi teslimat dahil."
     ));
     assert_eq!(parts.body("voice"), s.identity.voice);
     assert!(
         parts
             .body("voice")
-            .starts_with("Samimi, meraklı, sıcak ve hikâye anlatan: ")
+            .starts_with("Sıcak, meraklı, sade ve kahveyi anlatan: ")
     );
     assert!(
         parts
             .body("voice")
-            .ends_with("Kısa slogan: 'Hikâyeni üret.'")
+            .ends_with("Kısa slogan: 'Taze kavrulur, aynı hafta içilir.'")
     );
 
     // Müşterilerimiz: the objective, a blank line, then the ten segments.
     let customers = parts.body("customers");
     let (objective, segments) = customers.split_once("\n\n").unwrap();
     assert_eq!(objective, s.goals.objective);
-    assert!(objective.starts_with("Aynı üretim gücünü üç satış kapısından büyütmek: "));
+    assert!(objective.starts_with("Aynı kavurma kapasitesini üç satış kapısından büyütmek: "));
     let lines: Vec<&str> = segments.lines().collect();
     assert_eq!(lines.len(), 10);
-    assert!(lines[0].starts_with("• Marka, kulüp ve kurum ortaklıkları: ÖNCELİK 1. "));
+    assert!(lines[0].starts_with("• Ofis kahvesi aboneliği: Birinci öncelik. "));
     let names: Vec<&str> = lines
         .iter()
         .map(|l| l.trim_start_matches("• ").split(':').next().unwrap())
@@ -553,16 +555,16 @@ fn the_owners_strategy_seeds_these_cards() {
     assert_eq!(
         names,
         vec![
-            "Marka, kulüp ve kurum ortaklıkları",
-            "Toplu sipariş anlaşmaları",
-            "Kişiye özel figür",
-            "Satış ortakları",
-            "Üretim ağı (PR)",
-            "Influencer ve içerik üreticileri",
-            "Atölye (workshop) ortakları",
-            "Fuar ve etkinlik stantları",
-            "Okul ve eğitim kurumu iş birlikleri",
-            "Bayi adayları"
+            "Ofis kahvesi aboneliği",
+            "Kafe ve restoran toptan satışı",
+            "Ev kahvecileri",
+            "Raf ortakları",
+            "Tedarik ağı (PR)",
+            "Kahve içerik üreticileri",
+            "Tadım buluşması ortakları",
+            "Pazar ve festival stantları",
+            "Kampüs ve kurs merkezi iş birlikleri",
+            "Teslim noktası adayları"
         ]
     );
     for (line, segment) in lines.iter().zip(&s.audience) {
@@ -579,17 +581,17 @@ fn the_owners_strategy_seeds_these_cards() {
         assert_eq!(*line, format!("• {}: {}", h.title, h.angle));
     }
     assert!(ideas[0].starts_with(
-        "• Fotoğraftan figüre dönüşüm: Müşterinin fotoğrafı → tasarım → baskı → boyama → teslim; "
+        "• Çekirdekten fincana: Yeşil çekirdek → kavurma → dinlendirme → paketleme → demleme; "
     ));
-    assert!(ideas[6].starts_with("• Yılbaşı ve toplu hediye (TikTok): "));
+    assert!(ideas[6].starts_with("• Yılbaşı hediye kutusu (TikTok): "));
 
     // Kimi arıyoruz: the seven ICP entries; the rubric is not written.
     let seek: Vec<&str> = parts.body("who_we_seek").lines().collect();
     assert_eq!(seek.len(), 7);
     let first = &s.prospecting.icp[0];
-    assert_eq!(first.segment_key, "toplu");
+    assert_eq!(first.segment_key, "toptan");
     let expected = format!(
-        "• Toplu sipariş anlaşmaları: {}. Şehirler: {}. İşaretler: {}. Hariç: {}. Ölçek: {}.",
+        "• Kafe ve restoran toptan satışı: {}. Şehirler: {}. İşaretler: {}. Hariç: {}. Ölçek: {}.",
         first.sectors.join(", "),
         first
             .areas
@@ -603,9 +605,9 @@ fn the_owners_strategy_seeds_these_cards() {
     );
     assert_eq!(seek[0], expected);
     assert!(seek[0].starts_with(
-        "• Toplu sipariş anlaşmaları: Etkinlik ve organizasyon ajansı, Düğün ve davet \
-         organizasyonu, Pazarlama ve reklam ajansı, Kurumsal hediye ve promosyon tedarikçisi. \
-         Şehirler: İstanbul, Ankara, İzmir, Bursa, Antalya, Eskişehir, Konya, Kocaeli. İşaretler: "
+        "• Kafe ve restoran toptan satışı: Bağımsız kafe ve kahve dükkânı, Kahvaltı salonu ve \
+         brunch mekânı, Restoran ve bistro, Pastane ve fırın. Şehirler: İzmir, Manisa, Aydın, \
+         Muğla, Denizli, Balıkesir, Uşak, Çanakkale. İşaretler: "
     ));
     assert!(!parts.body("who_we_seek").contains("uygunluk"), "no rubric");
 
@@ -613,12 +615,12 @@ fn the_owners_strategy_seeds_these_cards() {
     let channels: Vec<&str> = parts.body("accounts_channels").lines().collect();
     assert_eq!(channels.len(), 7);
     assert!(channels[0].starts_with("• Instagram: Ana vitrin. "));
-    assert!(channels[1].starts_with("• E-posta: Kurumsal ve toplu siparişte birebir e-posta"));
-    assert!(channels[2].starts_with("• TikTok: TikTok (@figurunicaa): "));
+    assert!(channels[1].starts_with("• E-posta: Ofis ve kafe görüşmelerinde birebir e-posta"));
+    assert!(channels[2].starts_with("• TikTok: Kavurma makinesinin başından kısa videolar: "));
     assert!(channels[3].starts_with("• LinkedIn şirket sayfası "));
-    assert!(channels[4].starts_with("• WhatsApp Business 0850 840 73 03: "));
-    assert!(channels[5].starts_with("• Facebook sayfası (Figurunica): "));
-    assert!(channels[6].starts_with("• Yapay zekâ aramasında görünürlük "));
+    assert!(channels[4].starts_with("• WhatsApp Business hattı: "));
+    assert!(channels[5].starts_with("• Facebook sayfası (Kavrulmuş Kahve Atölyesi): "));
+    assert!(channels[6].starts_with("• Yapay zekâ aramasında ve haritalarda görünürlük: "));
 
     assert_eq!(parts.body("references"), "");
 
@@ -628,11 +630,11 @@ fn the_owners_strategy_seeds_these_cards() {
     assert_eq!(
         parts.goals,
         vec![
-            "Marka / kulüp / kurum ortaklığı: 3 ayda 1-2 imzalı anlaşma",
-            "Toplu sipariş anlaşması: Ayda 2 anlaşma, her biri 30+ adet",
-            "Kişiye özel figür siparişi: Ayda 5-6'dan 12'ye (3. ayın sonunda)",
-            "Satış ortağı: 3 ayda 3 aktif satış ortağı",
-            "İçerik üreticisi iş birliği: 3 ayda 3 ücretsiz iş birliği (para ödenmez)"
+            "Ofis aboneliği: 3 ayda 8 yeni abone ofis",
+            "Kafe ve restoran toptan anlaşması: Ayda 2 anlaşma, her biri haftada 5+ kg",
+            "Paket kahve satışı: Haftada 30-40 paketten 70'e (3. ayın sonunda)",
+            "Raf ortağı: 3 ayda 4 aktif raf ortağı",
+            "İçerik üreticisi iş birliği: 3 ayda 4 ücretsiz tadım ziyareti (para ödenmez)"
         ]
     );
     // Every body fits a card.
@@ -660,7 +662,7 @@ fn retired_topics_and_empty_texts_seed_nothing() {
     let parts = SeedParts::from_version(&s, &h);
     assert_eq!(parts.body("post_ideas").lines().count(), 6);
     assert_eq!(parts.body("who_we_are"), s.identity.positioning);
-    assert!(parts.body("customers").starts_with("• Marka, kulüp"));
+    assert!(parts.body("customers").starts_with("• Ofis kahvesi"));
     assert_eq!(parts.body("accounts_channels").lines().count(), 6);
     let blank = SeedParts::blank();
     assert!(blank.cards.iter().all(|c| c.body.is_empty()));
