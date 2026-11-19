@@ -683,21 +683,22 @@ async fn why_blocked(
     if connected.is_empty() {
         return Ok("no_connected_account");
     }
-    let open: Vec<_> = connected
-        .into_iter()
-        .filter(|c| !paused.contains(&c.id))
-        .collect();
-    if open.is_empty() {
-        return Ok("account_paused");
-    }
-    let own: Vec<_> = open
+    // The version's own account first: its pause is the cause, not another account's state.
+    let own: Vec<_> = connected
         .into_iter()
         .filter(|c| v.capability_id.is_none_or(|id| id == c.id))
         .collect();
     if own.is_empty() {
         return Ok("its_account_unavailable");
     }
-    let fitting: Vec<_> = own
+    let open: Vec<_> = own
+        .into_iter()
+        .filter(|c| !paused.contains(&c.id))
+        .collect();
+    if open.is_empty() {
+        return Ok("account_paused");
+    }
+    let fitting: Vec<_> = open
         .into_iter()
         .filter(|c| jt_studio::supported_formats(&c.kind_key).contains(&v.format))
         .collect();
