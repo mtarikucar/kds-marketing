@@ -137,6 +137,18 @@ describe('the analysis queue', () => {
     expect(analysisAgentLine(t, 'tr', agents, [{ id: 'k2', status: 'active', scopes: ['content.work'] }], 60, at)).toBe('Analizi yapabilecek bağlı ajan yok; dosyalar bir ajan bağlanana kadar sırada bekler.');
   });
 
+  it('says what the agent that analyses will do, from the wake states, in place of when it was seen', async () => {
+    const none = { state: 'no_agent' } as const;
+    contentPageFetch({
+      'GET /api/content/analysis-queue': { items: [queueItem('q1', 'waiting'), queueItem('q2', 'waiting')] },
+      'GET /api/agents': [{ id: 'c1', api_key_id: 'k1', last_seen_at: '2026-11-19T09:00:00Z' }],
+      'GET /api/agents/wakes': { agents: [], needs: { content: none, social: none, ads: none, research: none, inbox: none, materials: { state: 'called', api_key_id: 'k1', at: new Date().toISOString() } } },
+    });
+    renderAt('/content?view=queue');
+    expect(await screen.findByText(/^Ajan çağrıldı \(\d\d:\d\d\); çalışmaya başlaması bir iki dakika sürer$/)).toBeVisible();
+    expect(screen.queryByText(/Analizi yapabilecek ajan/)).not.toBeInTheDocument();
+  });
+
   it('says an upload nobody could place waits for a folder or deletion, and deletes it from its row', async () => {
     const calls = contentPageFetch({
       'GET /api/content/analysis-queue': { items: [queueItem('q2', 'needs_filing')] },

@@ -528,6 +528,15 @@ pub async fn tasks_create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<
     let policy = leads_policy(r.as_mut()).await?;
     let remaining_today =
         remaining(r.as_mut(), &policy.timezone, &task, Some(&version), ctx.now).await?;
+    if remaining_today > 0 {
+        super::wake::request(
+            r.as_mut(),
+            ctx,
+            &[super::wake::RESEARCH],
+            super::wake::WakeReason::ResearchRequested,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(TaskOut {
         task,

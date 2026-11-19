@@ -293,6 +293,13 @@ pub(crate) async fn request_production_in(
             json!({"kind":production.kind,"source_count":production.sources.len()}),
         )?)
         .await?;
+    crate::usecases::wake::request(
+        r,
+        ctx,
+        &[crate::usecases::wake::CONTENT],
+        crate::usecases::wake::WakeReason::ProductionRequested,
+    )
+    .await?;
     Ok(production)
 }
 pub async fn material_production_claim(

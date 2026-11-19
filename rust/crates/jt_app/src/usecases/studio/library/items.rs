@@ -725,6 +725,14 @@ pub async fn material_add(
             &encode(&AddReceipt::of(&out))?,
         )
         .await?;
+    // A person's upload waits for its analysis: the agent that analyses is woken for it.
+    crate::usecases::wake::request(
+        r.as_mut(),
+        ctx,
+        &[crate::usecases::wake::MATERIALS],
+        crate::usecases::wake::WakeReason::MaterialUploaded,
+    )
+    .await?;
     r.commit().await?;
     Ok(out)
 }

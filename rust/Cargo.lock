@@ -1342,6 +1342,7 @@ dependencies = [
  "jt_tenancy",
  "jt_testkit",
  "jt_tiktok",
+ "jt_wake",
  "jt_webhook",
  "jt_x",
  "libc",
@@ -1941,6 +1942,23 @@ dependencies = [
  "md-5",
  "serde_json",
  "sha2 0.11.1",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "jt_wake"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "jt_app",
+ "jt_outbound",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
  "time",
  "tokio",
  "tracing",

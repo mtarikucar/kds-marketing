@@ -149,11 +149,12 @@ pub enum Job {
     OutreachDispatch,
     CommentsPoll,
     PurgeRequestKeys,
+    AgentWake,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 35] = [
+    pub const ALL: [Job; 36] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -189,6 +190,7 @@ impl Job {
         Job::OutreachDispatch,
         Job::CommentsPoll,
         Job::PurgeRequestKeys,
+        Job::AgentWake,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -230,6 +232,7 @@ impl Job {
             Job::OutreachDispatch => "outreach_dispatch",
             Job::CommentsPoll => "comments_poll",
             Job::PurgeRequestKeys => "purge_request_keys",
+            Job::AgentWake => "agent_wake",
         }
     }
 
@@ -276,6 +279,7 @@ impl Job {
             Job::OutreachDispatch => run_outreach_dispatch(deps, now).await,
             Job::CommentsPoll => run_comments_poll(deps, now).await,
             Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
+            Job::AgentWake => run_agent_wake(deps, now).await,
         }
     }
 }
@@ -1397,6 +1401,77 @@ fn count_purged(job: Job, ws: WorkspaceId, purged: Result<u64, AppError>, report
             step_failed(job, ws, None, &Failure::App(e));
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// agent_wake
+// ---------------------------------------------------------------------------------------------
+
+/// Sends the agents' wakes that are due at `now` (`usecases::wake`), in every workspace holding
+/// one (found with one platform-wide read; a suspended workspace's wakes are dropped there),
+/// through the registry's waker; without one (`ConnectorRegistry::agent_waker`) nothing is sent.
+/// Each wake is read and answered in transactions of its own, the target called with none open
+/// ([`super::wake`]); the attempt is ledgered as `agent.wake`.
+///
+/// `touched` counts the wakes due, `changed` those the target accepted, `skipped` those that
+/// changed meanwhile, `failed` those the target did not accept (logged with the outcome, never
+/// the token) or that could not be sent.
+pub async fn run_agent_wake(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    use super::wake::{Sent, WakeOutcome};
+    let job = Job::AgentWake;
+    let mut report = JobReport::default();
+    let Some(waker) = deps.connectors.agent_waker() else {
+        return finish(job, report);
+    };
+    let due = async {
+        let mut platform = deps.uow.platform().await?;
+        platform.workspaces_with_due_wakes(now).await
+    };
+    let workspaces = match due.await {
+        Ok(found) => found,
+        Err(e) => {
+            report.failed += 1;
+            tracing::warn!(
+                job = job.name(),
+                code = e.code.as_str(),
+                "the workspaces with due wakes could not be listed"
+            );
+            return finish(job, report);
+        }
+    };
+    let component = format!("scheduler:{}", job.name());
+    for ws in workspaces {
+        let keys = match super::wake::due_in(deps, ws, now).await {
+            Ok(keys) => keys,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+                continue;
+            }
+        };
+        for key in keys {
+            report.touched += 1;
+            match super::wake::send_one(deps, waker.as_ref(), ws, key, now, &component).await {
+                Ok(Sent::Attempted(WakeOutcome::Fired)) => report.changed += 1,
+                Ok(Sent::Attempted(outcome)) => {
+                    report.failed += 1;
+                    tracing::warn!(
+                        job = job.name(),
+                        workspace_id = %ws,
+                        api_key_id = %key,
+                        outcome = outcome.key(),
+                        "an agent's wake was not accepted"
+                    );
+                }
+                Ok(Sent::Skipped) => report.skipped += 1,
+                Err(e) => {
+                    report.failed += 1;
+                    step_failed(job, ws, None, &Failure::App(e));
+                }
+            }
+        }
+    }
+    finish(job, report)
 }
 
 // ---------------------------------------------------------------------------------------------

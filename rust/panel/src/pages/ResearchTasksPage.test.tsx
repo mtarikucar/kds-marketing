@@ -444,6 +444,28 @@ describe('ResearchTasksPage', () => {
     expect(await screen.findByText('3 görev bugün aday bekliyor; bu işe bakabilecek bağlı bir ajan yok.', undefined, LOADED)).toBeInTheDocument();
   });
 
+  it('says_once_what_the_agent_will_do_and_rows_say_only_what_differs', async () => {
+    const byAgent = task(1, { ...bayi, claim: { by: { kind: 'agent', connection_id: AGENT_CONNECTION_ID, user_id: leadsMe.user_id }, until: at(hour) } });
+    const none = { state: 'no_agent' } as const;
+    mockFetch(answers({
+      'GET /api/agents': late,
+      'GET /api/agents/wakes': {
+        agents: [],
+        needs: { content: none, materials: none, social: none, ads: none, inbox: none, research: { state: 'calling', api_key_id: KEY_ID, due_at: at(40_000), waiting_for: 'settle' } },
+      },
+    }, [listed(byAgent), OPEN[1], OPEN[2]]));
+    renderAt('/prospects/tasks');
+    const [held, free, other] = await rows();
+    expect(await screen.findByText(/^Ajan (39|40) sn içinde çağrılacak$/, undefined, LOADED)).toBeInTheDocument();
+    expect(screen.getAllByTestId('agent-wake-line')).toHaveLength(1);
+    // The wake's sentence replaces the check-in's; the rows waiting for an agent say nothing more.
+    expect(screen.queryByText(/görev bugün aday bekliyor/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Bir ajanın alması bekleniyor')).not.toBeInTheDocument();
+    expect(free).not.toHaveTextContent('Bir ajanın alması bekleniyor');
+    expect(other).not.toHaveTextContent('Bir ajanın alması bekleniyor');
+    await waitFor(() => expect(held).toHaveTextContent('arastirma-ajani bu görevde · bitiş'));
+  });
+
   it('works_for_a_member_with_prospects_work_but_not_manage', async () => {
     const user = userEvent.setup();
     const calls = mockFetch({ ...answers({ 'GET /api/agents': late }), 'GET /api/auth/me': leadsRep });

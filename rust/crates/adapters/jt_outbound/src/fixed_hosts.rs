@@ -34,7 +34,9 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 ///   endpoint and media uploads (`www.linkedin.com`, the host of the `uploadUrl` the Images and
 ///   Videos APIs return);
 /// - `google`: the Google Ads API (`googleads.googleapis.com`) and the OAuth token and revoke
-///   endpoints (`oauth2.googleapis.com`).
+///   endpoints (`oauth2.googleapis.com`);
+/// - `anthropic`: a Claude Code routine's API trigger, which wakes an agent (`api.anthropic.com`,
+///   `jt_wake`).
 pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("meta", "graph.facebook.com"),
     host("meta", "graph.instagram.com"),
@@ -55,6 +57,7 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("linkedin", "www.linkedin.com"),
     host("google", "googleads.googleapis.com"),
     host("google", "oauth2.googleapis.com"),
+    host("anthropic", "api.anthropic.com"),
 ];
 
 /// The endpoints reached over plain `http`, as `(connector, host, port)`: only NetGSM's
@@ -110,6 +113,7 @@ mod tests {
                 ("linkedin", "www.linkedin.com"),
                 ("google", "googleads.googleapis.com"),
                 ("google", "oauth2.googleapis.com"),
+                ("anthropic", "api.anthropic.com"),
             ]
         );
         // Every provider host is on the public internet, and the table builds a client.

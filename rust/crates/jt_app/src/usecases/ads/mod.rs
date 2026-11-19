@@ -550,6 +550,16 @@ pub async fn campaign_open(d: &Deps, ctx: &Ctx, i: OpenInput) -> Result<AdCampai
     r.studio()
         .request_receipt("ads.campaign_open", &i.request_key, &payload, &json!(id))
         .await?;
+    // A campaign starting now waits for its plan: the ads agent is woken; a later one waits.
+    if out.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::ADS],
+            crate::usecases::wake::WakeReason::AdCampaignOpened,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(out)
 }
@@ -678,6 +688,15 @@ pub async fn campaign_approve(
     // It starts when it was meant to, or now when that time passed while it waited.
     c.start_at = c.start_at.max(ctx.now);
     let out = save(r.as_mut(), ctx, c, "ads.campaign.approved").await?;
+    if out.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::ADS],
+            crate::usecases::wake::WakeReason::AdCampaignOpened,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(out)
 }
@@ -867,7 +886,16 @@ pub async fn campaign_resume(
     let amount = c.committed_minor(ctx.now);
     check_money(r.as_mut(), c.id, amount, account.as_ref(), ctx.now).await?;
     c.stop = None;
-    let _ = save(r.as_mut(), ctx, c, "ads.campaign.resumed").await?;
+    let resumed = save(r.as_mut(), ctx, c, "ads.campaign.resumed").await?;
+    if resumed.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::ADS],
+            crate::usecases::wake::WakeReason::AdCampaignOpened,
+        )
+        .await?;
+    }
     r.commit().await?;
     watch::follow(d, ctx.workspace_id, i.campaign_id).await
 }

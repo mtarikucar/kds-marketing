@@ -351,6 +351,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_tiktok",
         "jt_linkedin",
         "jt_google",
+        "jt_wake",
         "jt_webhook",
         "jt_testkit",
         "jeeta",
@@ -531,6 +532,7 @@ const CONNECTOR_ADAPTERS: &[&str] = &[
     "jt_linkedin",
     "jt_google",
     "jt_mail",
+    "jt_wake",
 ];
 
 #[test]

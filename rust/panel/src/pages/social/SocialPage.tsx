@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useLocation } from 'react-router-dom';
 import { ChevronLeft, Settings } from 'lucide-react';
@@ -14,13 +14,13 @@ import { AccountRail } from './AccountRail';
 import { AccountHeader } from './AccountHeader';
 import { SettingsDialog } from './SettingsDialog';
 import { TiktokDialog } from './TiktokDialog';
-import { Revising } from './Revision';
+import { Revising, useRevisingCount } from './Revision';
 import { Timeline, waitChips, waitingKinds } from './TimelineView';
 import { useAccountDetails, useAccounts, usePackages, usePending, usePostsKey, usePostsRead } from './data';
 import { isHome, legacyTarget, placeHref, useSocialPlace, type WaitKind } from './location';
 import { buildTimeline } from './timeline';
 
-function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: boolean; files: boolean }) {
+function Body({ accounts, manage, files, onTimes }: { accounts: SocialAccount[]; manage: boolean; files: boolean; onTimes: (n: number) => void }) {
   const { t } = useTranslation();
   const [place, go] = useSocialPlace();
   const selected = accounts.find((a) => a.capability_id === place.account);
@@ -43,6 +43,9 @@ function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: 
     () => buildTimeline({ details: [...details.values()], pending: pending.data, posts: posts.data?.posts }),
     [details, pending.data, posts.data],
   );
+  // Versions waiting for a time wait for the agent that plans posts: the page's agent line counts them.
+  const times = (packages.data ?? []).flatMap((pack) => pack.versions).filter((v) => v.accounts.length > 0).length;
+  useEffect(() => onTimes(times), [times, onTimes]);
   const waits = new Map<string, number>();
   for (const p of [...everywhere.waiting.approvals, ...everywhere.waiting.tiktok, ...everywhere.waiting.failed]) waits.set(p.capability_id, (waits.get(p.capability_id) ?? 0) + 1);
   // An old `?slot=` link to a TikTok post to finish opens its posting screen, once.
@@ -116,6 +119,8 @@ export function SocialPage() {
   const manage = can(session.data, 'social.manage');
   const files = can(session.data, 'materials.work');
   const accounts = useAccounts(allowed);
+  const [times, setTimes] = useState(0);
+  const revising = useRevisingCount();
   const legacy = legacyTarget(location.search, location.hash);
   if (legacy) return <Navigate replace to={legacy} />;
   return (
@@ -134,11 +139,11 @@ export function SocialPage() {
       />
       {!allowed ? <p role="alert">{t('studio.forbidden')}</p> : (
         <>
-          <ModuleStatusLine module="social" />
+          <ModuleStatusLine module="social" extra={{ social: times, content: revising }} />
           <QueryState query={accounts} keepOnError>
             {accounts.data && (accounts.data.length === 0
               ? <EmptyState title={t('socialAccounts.empty')} description={t('socialAccounts.emptyHelp')} />
-              : <Body accounts={accounts.data} manage={manage} files={files} />)}
+              : <Body accounts={accounts.data} manage={manage} files={files} onTimes={setTimes} />)}
           </QueryState>
           {place.settings && <SettingsDialog accounts={accounts.data} />}
           {place.tiktok && <TiktokDialog id={place.tiktok} manage={manage} />}

@@ -635,6 +635,16 @@ pub async fn project_create(
             json!({"source_count":p.sources.len(),"olay_id":p.olay_id}),
         )?)
         .await?;
+    // A person's area that starts now wakes the agent; one starting later waits for its time.
+    if p.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::CONTENT],
+            crate::usecases::wake::WakeReason::ContentRequested,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(p)
 }
@@ -650,6 +660,7 @@ pub async fn project_update(
     let mut r = library::open(d, ctx, jt_tenancy::Permission::ContentManage).await?;
     r.studio_control().lock_control().await?;
     let mut p = load(r.as_mut(), i.project_id, Some(i.expected_revision), false).await?;
+    let was_archived = p.archived;
     if p.archived
         && (i.archived != Some(false)
             || i.title.is_some()
@@ -722,6 +733,15 @@ pub async fn project_update(
         p.archived = archived;
     }
     let p = save(r.as_mut(), ctx, p, "studio.project.updated").await?;
+    if was_archived && !p.archived && p.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::CONTENT],
+            crate::usecases::wake::WakeReason::ContentRequested,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(p)
 }
@@ -891,6 +911,16 @@ pub async fn project_request_update(
     p.requests[index].material_ids = i.material_ids;
     p.requests[index].resolved_at = (i.status != RequestStatus::Open).then_some(ctx.now);
     let p = save(r.as_mut(), ctx, p, "studio.project.request_updated").await?;
+    // The last capture answered gives the area back to the agent.
+    if i.status == RequestStatus::Done && p.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::CONTENT],
+            crate::usecases::wake::WakeReason::CaptureAnswered,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(p)
 }

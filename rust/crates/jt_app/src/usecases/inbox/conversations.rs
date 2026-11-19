@@ -291,6 +291,19 @@ async fn mutate(
         json!({"state":row.state,"executor":row.executor,"generation":row.executor_generation}),
     )
     .await?;
+    // A person giving the conversation to the agent (or back from a snooze) wakes it.
+    if matches!(
+        action,
+        "inbox.conversation.handed_to_agent" | "inbox.conversation.unsnoozed"
+    ) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::INBOX],
+            crate::usecases::wake::WakeReason::ConversationHanded,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(row)
 }

@@ -1620,3 +1620,94 @@ async fn last_checkin_at_finds_the_connections_latest_checkin_through_its_index(
     );
     tx.rollback().await.unwrap();
 }
+
+#[tokio::test]
+async fn agent_wakes_round_trip_keep_the_token_apart_and_are_found_when_due() {
+    use jt_app::ports::wake::{AgentWakeRow, PendingWake, WakeAddress, WakeKind, WakeReason};
+    let db = TestDb::new().await;
+    let (ws, owner) = db.seed_workspace("acme").await;
+    let (other, other_owner) = db.seed_workspace("beta").await;
+    let uow = uow(&db);
+    let key = api_key(ws, owner, "hash-wake");
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.api_keys().insert(key.clone()).await.unwrap();
+    let mut row = AgentWakeRow::new(key.id);
+    row.address = Some(WakeAddress {
+        kind: WakeKind::ClaudeRoutine,
+        target: "trig_01".into(),
+        has_secret: true,
+        set_at: T0,
+        set_by: owner,
+        refused_at: None,
+    });
+    row.pending = Some(PendingWake {
+        first_at: T0,
+        last_at: T0,
+        reasons: vec![WakeReason::ContentRevision],
+        caused_by: vec![owner],
+        manual: false,
+        failures: 0,
+        first_failure_at: None,
+        retry_at: None,
+    });
+    t.agent_connections().wake_save(row.clone()).await.unwrap();
+    t.agent_connections()
+        .wake_set_sealed(key.id, Some(b"sealed-bytes".to_vec()))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.agent_connections().wakes().await.unwrap(),
+        vec![row.clone()]
+    );
+    assert_eq!(
+        t.agent_connections().wake_lock(key.id).await.unwrap(),
+        Some(row.clone())
+    );
+    assert_eq!(
+        t.agent_connections().wake_sealed(key.id).await.unwrap(),
+        Some(b"sealed-bytes".to_vec())
+    );
+    // The document never holds the sealed bytes.
+    drop(t);
+    let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+    let data: serde_json::Value =
+        sqlx::query_scalar("select data from agent_wakes where workspace_id = $1")
+            .bind(ws.as_uuid())
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_eq!(data["address"]["target"], "trig_01");
+    assert!(!data.to_string().contains("sealed-bytes"));
+    tx.rollback().await.unwrap();
+
+    // Due 45 s after the request: found then, not before; another workspace's key is refused.
+    let mut p = uow.platform().await.unwrap();
+    assert!(
+        p.workspaces_with_due_wakes(T0 + Duration::seconds(44))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        p.workspaces_with_due_wakes(T0 + Duration::seconds(45))
+            .await
+            .unwrap(),
+        vec![ws]
+    );
+    drop(p);
+    let mut o = uow.tenant(other).await.unwrap();
+    assert_eq!(
+        code(o.agent_connections().wake_save(row).await),
+        ErrorCode::Internal
+    );
+    assert!(o.agent_connections().wakes().await.unwrap().is_empty());
+    assert_eq!(
+        code(o.agent_connections().wake_set_sealed(key.id, None).await),
+        ErrorCode::NotFound
+    );
+    let _ = other_owner;
+}

@@ -13,6 +13,7 @@ import { getPending } from '@/api/work';
 import { useSession } from '@/auth/useSession';
 import { Badge, Button, ConfirmDialog, EmptyState } from '@/components/ui';
 import { QueryState } from '@/components/QueryState';
+import { AgentWakeLine, useWakeSpeaks } from '@/components/AgentWakeLine';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
 import { fieldClass, MaterialPreview, materialLabel, MaterialsError, useDecider, useMaterialsMutation } from '../materials/MaterialsShared';
@@ -133,7 +134,9 @@ export function QueueView({ tree }: { tree: TreeOut }) {
   const waiting = items.filter((i) => i.stage === 'waiting').length;
   // The agents and their keys when the session may read them, else the workspace's check-in.
   const sightings = agents.data ?? (agent ? (agent.last_seen_at ? [{ api_key_id: '', last_seen_at: agent.last_seen_at }] : []) : undefined);
-  const line1 = waiting > 0 && sightings ? analysisAgentLine(t, i18n.language, sightings, agents.data ? keys.data : undefined, agent?.interval_minutes) : null;
+  // What will happen to them, from the wake states when an agent may take them; else when one was seen.
+  const wakeSpeaks = useWakeSpeaks('materials');
+  const line1 = waiting > 0 && sightings && !wakeSpeaks ? analysisAgentLine(t, i18n.language, sightings, agents.data ? keys.data : undefined, agent?.interval_minutes) : null;
   const noAgent = !!sightings && !sightings.length;
   const late = noAgent || !!agent?.overdue;
   const line = (item: QueueItem) => {
@@ -151,6 +154,7 @@ export function QueueView({ tree }: { tree: TreeOut }) {
           <p className="mt-0.5 text-sm text-muted-foreground">{t('content.queue.help')}</p>
         </div>
       </header>
+      {wakeSpeaks && <AgentWakeLine need="materials" waiting={waiting} />}
       {line1 && (
         <p role="status" className={`flex items-center gap-2 border-s-2 px-4 py-2 text-sm ${late ? 'border-warning bg-warning-subtle' : 'border-border bg-surface-muted'}`}>
           <Bot aria-hidden="true" className={`h-4 w-4 shrink-0 ${late ? 'text-warning' : 'text-muted-foreground'}`} />

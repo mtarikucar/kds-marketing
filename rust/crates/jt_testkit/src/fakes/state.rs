@@ -116,6 +116,14 @@ pub struct StoredWorkspacePolicy {
 }
 
 /// Every table, in insertion order.
+/// One key's wake row as the fake stores it (`AgentConnectionRepo::wake_*`).
+#[derive(Clone, Debug)]
+pub struct StoredWake {
+    pub workspace_id: WorkspaceId,
+    pub row: jt_app::ports::wake::AgentWakeRow,
+    pub sealed: Option<Vec<u8>>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MemState {
     pub module_registries: Vec<(WorkspaceId, serde_json::Value)>,
@@ -144,6 +152,8 @@ pub struct MemState {
     pub memberships: Vec<MembershipRow>,
     pub api_keys: Vec<ApiKeyRow>,
     pub agent_connections: Vec<AgentConnectionRow>,
+    /// The keys' wake rows, each with its workspace and sealed token.
+    pub agent_wakes: Vec<StoredWake>,
     pub ledger: Vec<LedgerRow>,
     pub operators: Vec<OperatorRow>,
     pub platform_sessions: Vec<PlatformSessionRow>,

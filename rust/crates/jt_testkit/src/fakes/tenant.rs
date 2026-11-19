@@ -713,6 +713,95 @@ impl AgentConnectionRepo for MemTenant {
             .find(|c| c.workspace_id == self.ws && c.id == id)
             .cloned())
     }
+
+    async fn wakes(&mut self) -> Result<Vec<jt_app::ports::wake::AgentWakeRow>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .agent_wakes
+            .iter()
+            .filter(|w| w.workspace_id == self.ws)
+            .map(|w| w.row.clone())
+            .collect();
+        rows.sort_by_key(|r| r.api_key_id);
+        Ok(rows)
+    }
+
+    async fn wake_lock(
+        &mut self,
+        key: ApiKeyId,
+    ) -> Result<Option<jt_app::ports::wake::AgentWakeRow>, AppError> {
+        Ok(self
+            .state()
+            .agent_wakes
+            .iter()
+            .find(|w| w.workspace_id == self.ws && w.row.api_key_id == key)
+            .map(|w| w.row.clone()))
+    }
+
+    async fn wake_save(&mut self, row: jt_app::ports::wake::AgentWakeRow) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            exists(
+                this.state()
+                    .api_keys
+                    .iter()
+                    .any(|k| k.workspace_id == ws && k.id == row.api_key_id),
+                "agent_wakes.api_key_id",
+            )?;
+            this.tx.write(move |s| {
+                match s
+                    .agent_wakes
+                    .iter_mut()
+                    .find(|w| w.workspace_id == ws && w.row.api_key_id == row.api_key_id)
+                {
+                    Some(stored) => stored.row = row.clone(),
+                    None => s.agent_wakes.push(super::state::StoredWake {
+                        workspace_id: ws,
+                        row: row.clone(),
+                        sealed: None,
+                    }),
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn wake_set_sealed(
+        &mut self,
+        key: ApiKeyId,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            if !this
+                .state()
+                .agent_wakes
+                .iter()
+                .any(|w| w.workspace_id == ws && w.row.api_key_id == key)
+            {
+                return Err(AppError::not_found("no such wake row"));
+            }
+            this.tx.write(move |s| {
+                if let Some(stored) = s
+                    .agent_wakes
+                    .iter_mut()
+                    .find(|w| w.workspace_id == ws && w.row.api_key_id == key)
+                {
+                    stored.sealed = sealed.clone();
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn wake_sealed(&mut self, key: ApiKeyId) -> Result<Option<Vec<u8>>, AppError> {
+        Ok(self
+            .state()
+            .agent_wakes
+            .iter()
+            .find(|w| w.workspace_id == self.ws && w.row.api_key_id == key)
+            .and_then(|w| w.sealed.clone()))
+    }
 }
 
 #[async_trait]

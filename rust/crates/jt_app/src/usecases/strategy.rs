@@ -676,6 +676,14 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
     };
     deps.transition_hook.apply(repos.as_mut(), &change).await?;
     super::research::plan_in(deps, ctx, repos.as_mut(), &draft).await?;
+    // The work an approved strategy opens (posts, campaigns, research) wakes its agents.
+    super::wake::request(
+        repos.as_mut(),
+        ctx,
+        &[super::wake::SOCIAL, super::wake::ADS, super::wake::RESEARCH],
+        super::wake::WakeReason::StrategyApproved,
+    )
+    .await?;
     let out = reread(repos.as_mut(), draft.id, &known).await?;
     repos.commit().await?;
     Ok(out)

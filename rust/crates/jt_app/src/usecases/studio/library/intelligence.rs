@@ -769,6 +769,13 @@ pub async fn material_analysis_retry(
             json!({"revision":material.revision}),
         )?)
         .await?;
+    crate::usecases::wake::request(
+        r.as_mut(),
+        ctx,
+        &[crate::usecases::wake::MATERIALS],
+        crate::usecases::wake::WakeReason::AnalysisRetried,
+    )
+    .await?;
     r.commit().await?;
     Ok(MaterialIntelligenceOut {
         material,

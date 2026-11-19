@@ -68,12 +68,14 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "work.checkin",
             description: "Check in: call this on your own schedule, at least once per check-in \
-                          interval (agent.interval_minutes); nothing will wake you, and the \
-                          owner sees a warning when you are late. Returns what is pending, as \
+                          interval (agent.interval_minutes, learned from your own check-ins), \
+                          and the owner sees a warning when you are late. When a person gives \
+                          you work in the panel and your key has a wake address, Jeeta also \
+                          wakes you; call this first then too. Returns what is pending, as \
                           jeeta.work.pending does; act on the items. The check-in is recorded \
                           at most once an hour. Uploaded materials remain pending until an \
-                          external agent polls, claims and analyzes them; no server vision job \
-                          or wake-up is implied. [risk: WRITE]",
+                          external agent claims and analyzes them; no server vision job runs. \
+                          [risk: WRITE]",
             permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: checkin,
@@ -82,6 +84,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "work.set_checkin_interval",
             description: "Set how often the workspace's agent is expected to check in, in \
                           minutes: 15 (a quarter hour) to 10080 (a week); a day unless set. \
+                          An agent with enough check-ins of its own is judged by its own \
+                          rhythm instead; this is the fallback. \
                           Returns the check-in state under the new interval: last_seen_at, \
                           interval_minutes and overdue. [risk: WRITE]",
             permissions: &[Permission::TeamManage],

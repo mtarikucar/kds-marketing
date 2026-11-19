@@ -30,6 +30,8 @@ jt_x.workspace = true
 jt_tiktok.workspace = true
 jt_linkedin.workspace = true
 jt_google.workspace = true
+# Wakes agents at their wake addresses (a routine's API trigger, a webhook).
+jt_wake.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true

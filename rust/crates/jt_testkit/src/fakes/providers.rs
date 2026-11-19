@@ -1936,9 +1936,16 @@ pub struct ScriptedRegistry {
     oauth: BTreeMap<Provider, Arc<ScriptedOAuth>>,
     public: BTreeMap<Provider, Arc<ScriptedPublic>>,
     pollers: BTreeMap<Provider, Arc<ScriptedPoller>>,
+    waker: Option<Arc<ScriptedWaker>>,
 }
 
 impl ScriptedRegistry {
+    /// Registers `waker` as the agents' waker ([`ConnectorRegistry::agent_waker`]).
+    pub fn with_waker(mut self, waker: Arc<ScriptedWaker>) -> Self {
+        self.waker = Some(waker);
+        self
+    }
+
     /// A registry with no adapter.
     pub fn new() -> Self {
         Self::default()
@@ -2066,6 +2073,103 @@ impl ConnectorRegistry for ScriptedRegistry {
             .get(&provider)
             .cloned()
             .map(|p| p as Arc<dyn PublicPoller>)
+    }
+
+    fn agent_waker(&self) -> Option<Arc<dyn jt_app::ports::wake::AgentWaker>> {
+        self.waker
+            .clone()
+            .map(|w| w as Arc<dyn jt_app::ports::wake::AgentWaker>)
+    }
+}
+
+/// One call a [`ScriptedWaker`] received, with what it was given (the token included, so a test
+/// can check it reached the target and nowhere else).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WakeCall {
+    Routine {
+        routine_id: String,
+        token: String,
+        text: String,
+    },
+    Webhook {
+        url: String,
+        secret: Option<String>,
+        body: serde_json::Value,
+    },
+}
+
+/// A waker answering from a script (one answer per call, in order; `Fired` once it runs out)
+/// and recording every call. Never reaches the network.
+#[derive(Default)]
+pub struct ScriptedWaker {
+    answers: std::sync::Mutex<std::collections::VecDeque<jt_app::ports::wake::WakeAnswer>>,
+    calls: std::sync::Mutex<Vec<WakeCall>>,
+}
+
+impl ScriptedWaker {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Queues `answer` for the next call.
+    pub fn answer(&self, answer: jt_app::ports::wake::WakeAnswer) {
+        self.answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(answer);
+    }
+
+    /// The calls so far, oldest first.
+    pub fn calls(&self) -> Vec<WakeCall> {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn next(&self, call: WakeCall) -> jt_app::ports::wake::WakeAnswer {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(call);
+        self.answers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or(jt_app::ports::wake::WakeAnswer::Fired {
+                status: 200,
+                session_id: Some("session_scripted".into()),
+                session_url: Some("https://claude.ai/code/session_scripted".into()),
+            })
+    }
+}
+
+#[async_trait]
+impl jt_app::ports::wake::AgentWaker for ScriptedWaker {
+    async fn fire_routine(
+        &self,
+        routine_id: &str,
+        token: &str,
+        text: &str,
+    ) -> jt_app::ports::wake::WakeAnswer {
+        self.next(WakeCall::Routine {
+            routine_id: routine_id.to_owned(),
+            token: token.to_owned(),
+            text: text.to_owned(),
+        })
+    }
+
+    async fn post_webhook(
+        &self,
+        url: &str,
+        secret: Option<&str>,
+        body: &jt_app::ports::wake::WebhookWake,
+    ) -> jt_app::ports::wake::WakeAnswer {
+        self.next(WakeCall::Webhook {
+            url: url.to_owned(),
+            secret: secret.map(str::to_owned),
+            body: serde_json::to_value(body).unwrap_or_default(),
+        })
     }
 }
 

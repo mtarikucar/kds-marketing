@@ -939,6 +939,80 @@
       "submit": "Anahtarı oluştur"
     }
   },
+  "wake": {
+    "every": {
+      "hour": "saat başı",
+      "minutes": "{{n}} dakikada bir",
+      "hours": "{{n}} saatte bir",
+      "day": "günde bir",
+      "own": "kendi saatinde"
+    },
+    "line": {
+      "working": "Ajan çalışıyor · son uğrama {{n}} sn önce",
+      "workingMinutes": "Ajan çalışıyor · son uğrama {{n}} dk önce",
+      "settle": "Ajan {{n}} sn içinde çağrılacak",
+      "calling": "Ajan çağrılıyor…",
+      "rate": "Ajan az önce çağrıldı; yeni çağrı {{at}} gidecek",
+      "retry": "Ajana ulaşılamadı; {{at}} yeniden denenecek",
+      "called": "Ajan çağrıldı ({{time}}); çalışmaya başlaması bir iki dakika sürer",
+      "failed": "Son çağrı ({{time}}) ajana ulaşmadı.",
+      "visits": "Ajan {{phrase}} uğruyor; sıradaki {{time}}.",
+      "visitsLate": "Ajan {{phrase}} uğruyor; {{at}} bekleniyordu, gecikti.",
+      "neverCame": "Ajan henüz uğramadı.",
+      "runNowIntro": "Hemen başlasın isterseniz:",
+      "runNow": "Şimdi çalıştır",
+      "runAfter": "{{at}} sonra çalıştırabilirsiniz.",
+      "noAddress": "Hemen başlaması için <page>ajanlar sayfasından</page> bir çağrı adresi ekleyin.",
+      "refused": "Ajanın çağrı adresi reddedildi; <page>ajanlar sayfasından</page> yeniden bağlayın.",
+      "rateLimited": "Ajan az önce çağrıldı; {{at}} sonra yeniden deneyebilirsiniz."
+    },
+    "key": {
+      "visits": "{{phrase}} uğruyor",
+      "next": "sıradaki {{time}}",
+      "late": "{{at}} bekleniyordu, gecikti"
+    },
+    "address": {
+      "none": "Çağrı adresi: yok",
+      "routine": "Çağrı adresi: Claude rutini · {{target}}",
+      "webhook": "Çağrı adresi: Webhook · {{target}}",
+      "refused": "Çağrı adresi reddedildi ({{time}}); yeni bir belirteçle yeniden bağlayın.",
+      "last": "son çağrı {{time}}: {{outcome}}",
+      "outcome": {
+        "fired": "başarılı",
+        "rate_limited": "sınıra takıldı, yeniden denenecek",
+        "unavailable": "ulaşılamadı, yeniden denenecek",
+        "gave_up": "ulaşılamadı",
+        "refused": "reddedildi",
+        "rejected": "kabul edilmedi"
+      },
+      "session": "oturumu aç",
+      "add": "Ekle",
+      "change": "Değiştir",
+      "remove": "Kaldır",
+      "removeTitle": "Çağrı adresi kaldırılsın mı?",
+      "removeBody": "Ajan yeniden yalnızca kendi saatinde uğrar.",
+      "removed": "Çağrı adresi kaldırıldı.",
+      "saved": "Çağrı adresi kaydedildi.",
+      "kind": "Nasıl çağrılsın",
+      "kindRoutine": "Claude rutini",
+      "kindWebhook": "Webhook",
+      "routineId": "Rutin kimliği",
+      "routineIdPlaceholder": "trig_… ya da tetikleyici adresi",
+      "token": "Belirteç",
+      "url": "Adres",
+      "secret": "Gizli anahtar (isteğe bağlı)",
+      "routineHelp": "Biri bu ajana iş verdiğinde Jeeta onu saatini beklemeden hemen çağırır. Belirteci claude.ai/code/routines'ta rutini açıp «Add another trigger» → API → «Generate token» ile alırsınız; yalnızca bir kez gösterilir.",
+      "webhookHelp": "Biri bu ajana iş verdiğinde Jeeta bu adrese kısa bir POST gönderir (iş alanı, ajan ve neden; içerik yok). Adres herkese açık bir https adresi olmalı.",
+      "save": "Kaydet",
+      "cancel": "Vazgeç",
+      "errors": {
+        "routine_id": "Rutin kimliği trig_ ile başlar, yalnızca harf, rakam, _ ya da - içerir; tetikleyici adresini de yapıştırabilirsiniz.",
+        "token": "Belirteci rutinin API tetikleyicisinden, boşluksuz yapıştırın.",
+        "url": "Herkese açık bir https adresi girin (kullanıcı adı ve parola olmadan).",
+        "secret": "Gizli anahtar boşluksuz, yazdırılabilir karakterlerden oluşmalı."
+      }
+    }
+  },
   "ledger": {
     "title": "Günlük",
     "description": "Çalışma alanında olan her şey; ajan ve insan eylemleri aynı biçimde durur",
