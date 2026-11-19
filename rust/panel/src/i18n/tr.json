@@ -1715,6 +1715,8 @@
       "submit": "{{provider}} ile oturum aç",
       "reconnectBody": "Bu hesabın girişi yenilenecek: sağlayıcıda aynı hesapla yeniden oturum açın.",
       "reconnectSubmit": "Yeniden bağla",
+      "reconnectOptionalBody": "Bağlantı çalışıyor; yeniden oturum açmanız gerekmez. Yalnızca izinleri yeniden vermek isterseniz (örneğin sağlayıcıda Jeeta’nın izinlerini değiştirdiyseniz ya da şifrenizi yenilediyseniz) aynı hesapla yeniden oturum açın.",
+      "reconnectOptionalSubmit": "Yine de yeniden oturum aç",
       "firstBindsNote": "Bu kabiliyet henüz bir hesaba bağlı değil: sağlayıcıda ilk seçtiğiniz hesap bu kabiliyete bağlanır, diğer seçtikleriniz yeni kabiliyetler olarak eklenir."
     },
     "whatsapp": {

@@ -266,6 +266,8 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
   // becomes it.
   const bound = capability !== null;
   const reconnecting = bound && capability.status !== 'declared';
+  // A working connection renews itself: signing in again is a choice, not a task.
+  const optional = reconnecting && capability.status === 'verified';
   const choosesNumber = kind === 'whatsapp_cloud' && !bound;
   const [number, setNumber] = useState<WhatsAppNumber | null>(null);
   const flow: OAuthFlow | undefined = choosesNumber && number === 'business_app' ? 'whatsapp_business_app' : undefined;
@@ -287,7 +289,7 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
     <Card>
       <CardHeader>
         <CardTitle>{t('connect.oauth.title')}</CardTitle>
-        <CardDescription>{reconnecting ? t('connect.oauth.reconnectBody') : t('connect.oauth.body')}</CardDescription>
+        <CardDescription>{optional ? t('connect.oauth.reconnectOptionalBody') : reconnecting ? t('connect.oauth.reconnectBody') : t('connect.oauth.body')}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {capability !== null && capability.external_id === null && (
@@ -313,7 +315,9 @@ function OAuthPanel({ kind, capability }: { kind: string; capability: Capability
               disabled={choosesNumber && number === null}
             >
               <LogIn className="h-4 w-4" aria-hidden="true" />
-              {reconnecting
+              {optional
+                ? t('connect.oauth.reconnectOptionalSubmit')
+                : reconnecting
                 ? t('connect.oauth.reconnectSubmit')
                 : t('connect.oauth.submit', { provider: PROVIDER_NAMES[provider] })}
             </Button>

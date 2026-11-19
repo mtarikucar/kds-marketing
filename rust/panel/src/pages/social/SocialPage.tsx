@@ -140,7 +140,7 @@ export function SocialPage() {
               ? <EmptyState title={t('socialAccounts.empty')} description={t('socialAccounts.emptyHelp')} />
               : <Body accounts={accounts.data} manage={manage} files={files} />)}
           </QueryState>
-          {place.settings && <SettingsDialog accounts={accounts.data ?? []} />}
+          {place.settings && <SettingsDialog accounts={accounts.data} />}
           {place.tiktok && <TiktokDialog id={place.tiktok} manage={manage} />}
         </>
       )}

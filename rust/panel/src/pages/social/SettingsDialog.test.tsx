@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
 import { repMe } from '@/test/materials';
 import { defaultSettings, postsAnswers } from '@/test/posts';
 import { socialAccount, socialAnswers, socialSettings } from '@/test/social';
@@ -171,4 +171,14 @@ describe('what the settings say of approval', () => {
     const id = await description();
     await waitFor(() => expect(document.getElementById(id)).toHaveTextContent(text));
   });
+
+  it('says nothing of approval until the accounts are read', async () => {
+    mockFetch({ ...answers, 'GET /api/social/accounts': delayed(400, [account('ig1', 'figurunica instagram', true)]) });
+    open();
+    const id = await description();
+    expect(document.getElementById(id)).toHaveTextContent(/^$/);
+    expect(screen.queryByText(/Onay gerekmez/)).not.toBeInTheDocument();
+    await waitFor(() => expect(document.getElementById(id)).toHaveTextContent('Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.'));
+  });
 });
+

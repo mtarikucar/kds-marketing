@@ -422,6 +422,14 @@ describe('what an access expiry means', () => {
     expect(await screen.findByText(sentence)).toBeInTheDocument();
     expect(screen.queryByText(/2026-11-20T07:24/)).not.toBeInTheDocument();
   });
+
+  it('offers a working connection’s sign-in again as a choice, not a task', async () => {
+    mockFetch({ 'GET /api/auth/me': me, [`GET /api/capabilities/${PAGE_ID}`]: connected('tiktok'), 'GET /api/connectors/hooks': { meta: null, netgsm: [] } });
+    renderAt(`/connect?capability=${PAGE_ID}`);
+    expect(await screen.findByText(tr.connect.oauth.reconnectOptionalBody)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: tr.connect.oauth.reconnectOptionalSubmit })).toBeInTheDocument();
+    expect(screen.queryByText(tr.connect.oauth.reconnectBody)).not.toBeInTheDocument();
+  });
 });
 
 it('keeps the browser and password managers from filling any provider credential', async () => {

@@ -1715,6 +1715,8 @@
       "submit": "Sign in with {{provider}}",
       "reconnectBody": "This account's login will be renewed: sign in at the provider with the same account again.",
       "reconnectSubmit": "Reconnect",
+      "reconnectOptionalBody": "The connection works; you do not need to sign in again. Sign in again with the same account only to grant the permissions again (for example after changing Jeeta’s permissions or your password at the provider).",
+      "reconnectOptionalSubmit": "Sign in again anyway",
       "firstBindsNote": "This capability is not bound to an account yet: the first account you choose at the provider becomes this capability, and the others you choose are added as new capabilities."
     },
     "whatsapp": {

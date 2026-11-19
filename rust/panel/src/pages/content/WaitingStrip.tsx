@@ -37,7 +37,7 @@ export interface WaitChip {
  * words when nothing does (none with `quiet`, when the caller says it below); `children`, the
  * waiting rows themselves, follow the title line. The content page's and the social page's.
  */
-export function WaitingChips({ chips, className, extra, quiet, children }: { chips: WaitChip[]; className?: string; extra?: ReactNode; quiet?: boolean; children?: ReactNode }) {
+export function WaitingChips({ chips, className, quiet, children }: { chips: WaitChip[]; className?: string; quiet?: boolean; children?: ReactNode }) {
   const { t } = useTranslation();
   const shown = chips.filter((c) => c.count > 0);
   return (
@@ -60,7 +60,6 @@ export function WaitingChips({ chips, className, extra, quiet, children }: { chi
           if (onClick) return <button key={key} type="button" aria-pressed={!!pressed} onClick={onClick} className={cn(chip, active, pressed && 'ring-2 ring-current ring-offset-1 ring-offset-background')}>{body}</button>;
           return <span key={key} className={chip}>{body}</span>;
         })}
-        {extra}
       </div>
       {children}
     </section>
