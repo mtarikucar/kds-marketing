@@ -183,6 +183,18 @@ function rules(t: TFunction, lang: string): { main: { group: string; rules: Rule
   };
 }
 
+/**
+ * What the dialog says of approval, true of the accounts in front of the person: none of them
+ * waits for one, every one does, or which do (named when three or fewer, else counted).
+ */
+export function approvalHelp(t: TFunction, accounts: SocialAccount[]): string {
+  const waiting = accounts.filter((a) => a.requires_human_approval);
+  if (!waiting.length) return t('posts.settings.help.none');
+  if (waiting.length === accounts.length) return t('posts.settings.help.all');
+  if (waiting.length > 3) return t('posts.settings.help.many', { n: waiting.length });
+  return t('posts.settings.help.some', { count: waiting.length, accounts: waiting.map((a) => a.name).join(', ') });
+}
+
 /** The settings as the server takes them: the policy, the zone and the scheduler choice. */
 const body = (s: Settings): p.PostingSettings => ({ tz: s.tz, policy: s.policy, provider_scheduling: s.provider_scheduling === true });
 
@@ -347,7 +359,7 @@ export function SettingsDialog({ accounts }: { accounts: SocialAccount[] }) {
     <Dialog open onOpenChange={(open) => { if (!open) go({ ...place, settings: undefined }, { replace: true }); }}>
       <DialogContent className="max-w-2xl" data-testid="posting-settings">
         <DialogTitle>{t('posts.settings.title')}</DialogTitle>
-        <DialogDescription>{t('posts.settings.help')}</DialogDescription>
+        <DialogDescription>{approvalHelp(t, accounts)}</DialogDescription>
         <QueryState query={posts} keepOnError>
           {settings && (
             <div className="min-w-0 space-y-5">

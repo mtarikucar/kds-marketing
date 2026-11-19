@@ -9,33 +9,15 @@ import { QueryState } from '@/components/QueryState';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { Button, cn, EmptyState, IconButton } from '@/components/ui';
 import { can } from '@/lib/roles';
-import { WaitingChips, type WaitChip } from '../content/WaitingStrip';
+import { WaitingChips } from '../content/WaitingStrip';
 import { AccountRail } from './AccountRail';
 import { AccountHeader } from './AccountHeader';
 import { SettingsDialog } from './SettingsDialog';
 import { TiktokDialog } from './TiktokDialog';
-import { Timeline } from './TimelineView';
+import { Timeline, waitChips, waitingKinds } from './TimelineView';
 import { useAccountDetails, useAccounts, usePackages, usePending, usePostsKey, usePostsRead } from './data';
-import { isHome, legacyTarget, placeHref, useSocialPlace, WAIT_KINDS, type WaitKind } from './location';
-import { buildTimeline, waitCount, type Timeline as TimelineData } from './timeline';
-
-const TONES: Record<WaitKind, WaitChip['tone']> = { approvals: 'warning', tiktok: 'warning', failed: 'danger', times: 'primary', blocked: 'danger' };
-
-/** "Sizi bekleyenler" over the timeline: a counted chip per kind, each filtering the list. */
-function Strip({ data, filter, onFilter, className, ready }: { data: TimelineData; filter?: WaitKind; onFilter: (kind: WaitKind) => void; className?: string; ready: boolean }) {
-  const { t } = useTranslation();
-  // Until every read answered, "nothing waits" would be a guess.
-  if (!ready) return null;
-  const chips = WAIT_KINDS.map((kind): WaitChip => ({
-    key: kind,
-    count: waitCount(data, kind),
-    label: t(`socialAccounts.wait.${kind}`, { count: waitCount(data, kind) }),
-    tone: TONES[kind],
-    onClick: () => onFilter(kind),
-    pressed: filter === kind,
-  }));
-  return <WaitingChips chips={chips} className={className} />;
-}
+import { isHome, legacyTarget, placeHref, useSocialPlace, type WaitKind } from './location';
+import { buildTimeline } from './timeline';
 
 function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: boolean; files: boolean }) {
   const { t } = useTranslation();
@@ -84,12 +66,15 @@ function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: 
     refetch: () => Promise.all([...detailQueries, packages].filter((q) => q.isError).map((q) => q.refetch())),
   };
   const onFilter = (kind: WaitKind) => go({ ...place, filter: place.filter === kind ? undefined : kind, slot: undefined, version: undefined, view: place.account ? undefined : 'all' });
+  // The phone's accounts screen says "Sizi bekleyenler" over the rail; a chip leads to the posts,
+  // filtered as the timeline's chips filter: only when more than one kind waits.
+  const railPick = (kind: WaitKind) => (waitingKinds(timeline).length > 1 ? onFilter(kind) : go({ view: 'all' }));
   const shownDetail = shown ? detailQueries[ids.indexOf(shown.capability_id)] : undefined;
   return (
     <div className="grid min-w-0 gap-5 md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[16.5rem_minmax(0,1fr)]">
       <aside className={cn('min-w-0 md:sticky md:top-4 md:max-h-[calc(100dvh-2rem)] md:self-start md:overflow-y-auto', !home && 'max-md:hidden')}>
         <AccountRail accounts={accounts} place={place} waits={waits}
-          top={<Strip ready={ready} data={timeline} filter={place.filter} onFilter={onFilter} className="mb-2 border-b border-border px-1 pb-3 md:hidden" />} />
+          top={ready && <WaitingChips chips={waitChips(t, timeline, place.filter, railPick)} className="mb-2 border-b border-border px-1 pb-3 md:hidden" />} />
       </aside>
       <div className={cn('min-w-0 space-y-4', home && 'max-md:hidden')}>
         <Link to={placeHref({})} className="inline-flex min-h-11 items-center gap-1 text-sm text-muted-foreground md:hidden">
@@ -98,7 +83,6 @@ function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: 
         </Link>
         {place.account && !selected && <p role="status" className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm">{t('socialAccounts.unknownSelected')}</p>}
         {shown && shownDetail && <AccountHeader account={shown} detail={shownDetail} place={place} go={go} manage={manage} posts={posts} postsKey={postsKey} />}
-        <Strip ready={ready} data={timeline} filter={place.filter} onFilter={onFilter} className="rounded-lg border border-border bg-surface px-3 py-2.5 max-md:hidden" />
         <QueryState query={status} keepOnError>
           {failedRead && details.size > 0 && (
             <p role="alert" className="flex flex-wrap items-center gap-2 rounded-md bg-danger-subtle px-3 py-2 text-sm">
@@ -107,7 +91,7 @@ function Body({ accounts, manage, files }: { accounts: SocialAccount[]; manage: 
             </p>
           )}
           {details.size > 0 && (
-            <Timeline data={timeline} accounts={accounts} posts={posts.data} details={details} place={place} go={go} manage={manage} files={files} ready={ready} />
+            <Timeline data={timeline} accounts={accounts} posts={posts.data} details={details} place={place} go={go} onFilter={onFilter} manage={manage} files={files} ready={ready} />
           )}
         </QueryState>
       </div>

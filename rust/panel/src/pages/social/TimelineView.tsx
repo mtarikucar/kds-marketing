@@ -1,17 +1,39 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type { AccountDetail, SocialAccount } from '@/api/social';
 import type { PostsOut } from '@/api/posts';
 import { Button, EmptyState } from '@/components/ui';
+import { WaitingChips, type WaitChip } from '../content/WaitingStrip';
 import { MissingPost, PostRow } from './PostRow';
 import { VersionRow } from './VersionRow';
-import type { SocialPlace, WaitKind } from './location';
-import type { Timeline as Data, TimelinePost, TimelineVersion } from './timeline';
+import { WAIT_KINDS, type SocialPlace, type WaitKind } from './location';
+import { waitCount, type Timeline as Data, type TimelinePost, type TimelineVersion } from './timeline';
 
 /** How many rows a section shows before "more". */
 const PAGE = 10;
 
 type Waiting = { kind: WaitKind; post?: TimelinePost; version?: TimelineVersion };
+
+const TONES: Record<WaitKind, WaitChip['tone']> = { approvals: 'warning', tiktok: 'warning', failed: 'danger', times: 'primary', blocked: 'danger' };
+
+/** The kinds that wait for a person on `data`. */
+export const waitingKinds = (data: Data) => WAIT_KINDS.filter((kind) => waitCount(data, kind) > 0);
+
+/**
+ * "Sizi bekleyenler"'s counted chip per kind; each one a button that calls `pick` (a filter, or
+ * on a phone the way to the posts), plain without `pick`.
+ */
+export function waitChips(t: TFunction, data: Data, filter: WaitKind | undefined, pick?: (kind: WaitKind) => void): WaitChip[] {
+  return WAIT_KINDS.map((kind): WaitChip => ({
+    key: kind,
+    count: waitCount(data, kind),
+    label: t(`socialAccounts.wait.${kind}`, { count: waitCount(data, kind) }),
+    tone: TONES[kind],
+    onClick: pick && (() => pick(kind)),
+    pressed: filter === kind,
+  }));
+}
 
 /** The local day of `at`, as a key and as words ("Bugün", "Yarın", else the date). */
 function dayOf(at: string, lang: string, words: { today: string; tomorrow: string }): { key: string; label: string } {
@@ -30,7 +52,8 @@ function Section({ title, count, children, more, onMore }: { title: string; coun
     <section aria-label={title} className="min-w-0 space-y-3">
       <h2 className="flex items-baseline gap-2 text-sm font-semibold">
         {title}
-        <span className="font-mono text-xs font-normal text-muted-foreground">{count}</span>
+        {/* An empty section says so in words below; a "0" would say it twice. */}
+        {count > 0 && <span className="font-mono text-xs font-normal text-muted-foreground">{count}</span>}
       </h2>
       {children}
       {more > 0 && <Button variant="outline" size="sm" onClick={onMore}>{t('socialAccounts.more', { count: more })}</Button>}
@@ -42,6 +65,10 @@ function Section({ title, count, children, more, onMore }: { title: string; coun
  * One timeline of posts, for every account or the selected one: what waits for a person, then
  * "Sırada" (soonest first, by day), then "Yayınlananlar" (newest first). Each section shows ten
  * rows and more on request; a row an address names is always among those shown.
+ *
+ * "Sizi bekleyenler" is said once, as the first section's title line: a counted chip per kind
+ * that waits, each a filter when more than one kind waits (one kind alone filters nothing), or
+ * a few words when nothing does.
  */
 export function Timeline({
   data,
@@ -50,6 +77,7 @@ export function Timeline({
   details,
   place,
   go,
+  onFilter,
   manage,
   files,
   ready,
@@ -60,6 +88,8 @@ export function Timeline({
   details: Map<string, AccountDetail>;
   place: SocialPlace;
   go: (place: SocialPlace, options?: { replace?: boolean }) => void;
+  /** A chip's filter: on, or off when it is the one on. */
+  onFilter: (kind: WaitKind) => void;
   manage: boolean;
   files: boolean;
   /** Every read the timeline is made of has answered. */
@@ -112,33 +142,43 @@ export function Timeline({
     else days.push({ ...day, posts: [post] });
   }
   const nothing = ready && !waiting.length && !data.queued.length && !data.published.length;
+  // A filter left on (an old `?filter=` link) keeps its chip, to take it off.
+  const chips = waitChips(t, data, place.filter, waitingKinds(data).length > 1 || place.filter ? onFilter : undefined);
+  const approvals = data.waiting.approvals.length;
   return (
     <div className="min-w-0 space-y-6">
       {ready && place.slot && !known.has(place.slot) && <MissingPost slotId={place.slot} files={files} accounts={accounts} />}
       {ready && place.version && !known.has(place.version) && (
         <p role="status" className="rounded-md border border-border bg-surface-muted px-3 py-2 text-sm">{t('socialAccounts.missingVersion')}</p>
       )}
-      {place.filter && (
-        <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          {t(`socialAccounts.filtered.${place.filter}`)}
-          <Button size="sm" variant="ghost" onClick={() => go({ ...place, filter: undefined })}>{t('socialAccounts.showAll')}</Button>
-        </p>
-      )}
-      {waiting.length > 0 && (
-        <Section title={t('content.waiting.title')} count={waiting.length} more={waiting.length - waitLimit} onMore={more('waiting', waitLimit)}>
+      {(ready || waiting.length > 0 || place.filter) && (
+        // Until every read answered, "nothing waits" would be a guess; with a filter on, the line
+        // under the title says what is shown.
+        <WaitingChips chips={chips} quiet={!ready || !!place.filter}>
+          {place.filter && (
+            <p className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              {ready && !waiting.length ? t('socialAccounts.noneOfKind') : t(`socialAccounts.filtered.${place.filter}`)}
+              <Button size="sm" variant="ghost" onClick={() => go({ ...place, filter: undefined })}>{t('socialAccounts.showAll')}</Button>
+            </p>
+          )}
           {waiting.slice(0, waitLimit).map((w) =>
             w.post ? row(w.post) : (
               <VersionRow key={w.version!.version.version_id} item={w.version!} accounts={accounts} posts={posts} details={details}
                 expanded={place.version === w.version!.version.version_id} onToggle={() => toggleVersion(w.version!.version.version_id)} files={files} />
             ),
           )}
-        </Section>
+          {waiting.length > waitLimit && <Button variant="outline" size="sm" onClick={more('waiting', waitLimit)}>{t('socialAccounts.more', { count: waiting.length - waitLimit })}</Button>}
+        </WaitingChips>
       )}
-      {place.filter && ready && !waiting.length && <p className="text-sm text-muted-foreground">{t('socialAccounts.noneOfKind')}</p>}
       {!place.filter && !nothing && (
         <>
           <Section title={t('socialAccounts.sections.queued')} count={data.queued.length} more={data.queued.length - queuedShown.length} onMore={more('queued', queuedLimit)}>
-            {ready && !data.queued.length && <p className="text-sm text-muted-foreground">{t('socialAccounts.noUpcoming')}</p>}
+            {ready && !data.queued.length && (
+              <p className="text-sm text-muted-foreground">
+                {/* Posts waiting for approval have their time: they come here once approved. */}
+                {approvals ? t('socialAccounts.afterApproval', { count: approvals }) : t('socialAccounts.noUpcoming')}
+              </p>
+            )}
             {days.map((day) => (
               <div key={day.key} className="space-y-2">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{day.label}</h3>

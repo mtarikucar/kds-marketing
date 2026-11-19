@@ -73,6 +73,27 @@ describe('the owner’s state: one account, two posts awaiting approval', () => 
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
   });
 
+  it('says "Sizi bekleyenler" and its count once, and that the waiting posts join "Sırada" once approved', async () => {
+    mockFetch(owner);
+    const { router } = renderAt('/social');
+    const [rail, list] = await screen.findAllByRole('region', { name: 'Sizi bekleyenler' });
+    // The rail's is the phone's accounts screen; on a desk the list's title line says it alone.
+    expect(rail).toHaveClass('md:hidden');
+    expect(within(list).getByRole('article', { name: 'Kasım koleksiyonu' })).toBeVisible();
+    expect(within(list).getAllByText('Sizi bekleyenler')).toHaveLength(1);
+    // One kind alone filters nothing: its chip is words, not a button.
+    expect(within(list).getByText('onay bekleyen paylaşım')).toBeVisible();
+    expect(within(list).queryByRole('button', { name: '2 onay bekleyen paylaşım' })).not.toBeInTheDocument();
+    expect(list).not.toHaveTextContent(/Sizi bekleyenlers*2s*2/);
+    const queued = screen.getByRole('region', { name: 'Sırada' });
+    expect(within(queued).getByRole('heading', { level: 2 })).toHaveTextContent(/^Sırada$/);
+    expect(queued).toHaveTextContent('Başka planlanmış paylaşım yok. Yukarıdaki 2 paylaşım onaylanınca buraya gelir.');
+    expect(queued).not.toHaveTextContent('Planlanmış paylaşım yok.');
+    // On the phone's accounts screen the one chip leads to the posts, unfiltered.
+    await userEvent.click(within(rail).getByRole('button', { name: '2 onay bekleyen paylaşım' }));
+    expect(router.state.location.search).toBe('?view=all');
+  });
+
   it('says a refused approval is stale and reads again', async () => {
     const calls = mockFetch({ ...owner, 'POST /api/studio/approvals': withStatus(409, { code: 'CONFLICT', message: 'stale', details: {} }) });
     renderAt('/social');
@@ -130,11 +151,48 @@ describe('the waiting strip', () => {
     expect(router.state.location.search).not.toContain('filter=');
   });
 
-  it('says in a few words when nothing waits', async () => {
-    mockFetch({ ...socialAnswers, 'GET /api/social/accounts': [socialAccount], 'GET /api/social/packages': [], 'GET /api/studio/pending': emptyPending });
+  it('filters from the list’s own title line when more than one kind waits', async () => {
+    mockFetch(crowded);
+    const { router } = renderAt('/social');
+    const list = (await screen.findAllByRole('region', { name: 'Sizi bekleyenler' }))[1];
+    await userEvent.click(await within(list).findByRole('button', { name: '1 gönderilemeyen paylaşım' }));
+    expect(router.state.location.search).toContain('filter=failed');
+    const filtered = screen.getAllByRole('region', { name: 'Sizi bekleyenler' })[1];
+    expect(filtered).toHaveTextContent('Yalnız gönderilemeyen paylaşımlar.');
+    expect(within(filtered).getByRole('button', { name: '1 gönderilemeyen paylaşım' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(filtered).getAllByRole('article')).toHaveLength(1);
+  });
+
+  it('says in a few words when nothing waits, once on each screen, and keeps "Sırada" plain', async () => {
+    mockFetch({ ...socialAnswers, 'GET /api/social/accounts': [socialAccount], 'GET /api/social/accounts/ig1': { ...accountDetail, upcoming: [] }, 'GET /api/social/packages': [], 'GET /api/studio/pending': emptyPending });
     renderAt('/social');
-    expect((await screen.findAllByText('Şu an sizi bekleyen bir şey yok.'))[0]).toBeInTheDocument();
+    const queued = await screen.findByRole('region', { name: 'Sırada' });
+    await waitFor(() => expect(queued).toHaveTextContent(/^Sıradas*Planlanmış paylaşım yok.$/));
+    const [rail, list] = screen.getAllByRole('region', { name: 'Sizi bekleyenler' });
+    expect(rail).toHaveClass('md:hidden');
+    expect(within(list).getAllByText('Şu an sizi bekleyen bir şey yok.')).toHaveLength(1);
+    expect(screen.getAllByText('Şu an sizi bekleyen bir şey yok.')).toHaveLength(2);
+    expect(screen.getByRole('region', { name: 'Yayınlananlar' })).toHaveTextContent(/^Yayınlananlars*1/);
     expect(screen.queryAllByRole('button', { pressed: false }).filter((b) => /bekleyen|tamamlanacak|gönderilemeyen|sürüm/.test(b.textContent ?? ''))).toHaveLength(0);
+  });
+
+  it.each([
+    ['other kinds wait', owner],
+    ['nothing waits at all', { ...owner, 'GET /api/social/accounts/ig1': accountDetail, 'GET /api/studio/pending': emptyPending }],
+  ])('says an old ?filter= link that matches nothing matches nothing, with the way back (%s)', async (_, answers) => {
+    mockFetch(answers);
+    const { router } = renderAt('/social?filter=failed');
+    const line = await screen.findByText('Bu türden bekleyen bir şey kalmadı.');
+    // The list's own "Sizi bekleyenler" (the rail's is the phone's other screen).
+    const list = line.closest('section')!;
+    expect(list).toHaveAccessibleName('Sizi bekleyenler');
+    expect(within(list).getAllByText('Sizi bekleyenler')).toHaveLength(1);
+    expect(screen.queryByText('Yalnız gönderilemeyen paylaşımlar.')).not.toBeInTheDocument();
+    expect(within(list).queryByText('Şu an sizi bekleyen bir şey yok.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Sırada' })).not.toBeInTheDocument();
+    await userEvent.click(within(line).getByRole('button', { name: 'Hepsini göster' }));
+    expect(router.state.location.search).not.toContain('filter=');
+    expect(await screen.findByRole('region', { name: 'Sırada' })).toBeVisible();
   });
 });
 

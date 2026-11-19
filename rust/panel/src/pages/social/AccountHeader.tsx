@@ -12,17 +12,35 @@ import type { SocialPlace } from './location';
 const METRICS: api.Metric[] = ['followers', 'reach', 'views', 'engagement', 'profile_visits'];
 
 /**
+ * The band of values a sparkline's height stands for. Min to max alone turns one follower on 69
+ * into a cliff, so the band is never narrower than a sixth of the largest value (1 when every
+ * value is 0), centred on the values: a ±1 change on 69 is a step of about a twelfth of the
+ * height, a flat series a flat line in the middle, and a move of 20% or more fills the height.
+ * `null` when no value is known.
+ */
+export function sparkBand(values: (number | null | undefined)[]): { lo: number; hi: number } | null {
+  const known = values.filter((v): v is number => v != null && Number.isFinite(v));
+  if (!known.length) return null;
+  const min = Math.min(...known);
+  const max = Math.max(...known);
+  const range = Math.max(max - min, Math.max(Math.abs(min), Math.abs(max)) / 6 || 1);
+  const mid = (min + max) / 2;
+  return { lo: mid - range / 2, hi: mid + range / 2 };
+}
+
+/** Where `value` sits in a 28-high sparkline drawn in `band`: 26 at its bottom, 2 at its top. */
+export const sparkY = (band: { lo: number; hi: number }, value: number) => 26 - ((value - band.lo) / (band.hi - band.lo)) * 24;
+
+/**
  * A metric's days as a small line: a day with no number (or a day not read at all) splits it,
  * never becomes zero; nothing to draw is "—".
  */
 export function Sparkline({ days, metric }: { days: api.AccountDay[]; metric: api.Metric }) {
   const { t } = useTranslation();
   const sorted = [...days].sort((a, b) => a.day.localeCompare(b.day));
-  const known = sorted.filter((d) => d[metric] != null);
   const label = t('socialAccounts.trend', { metric: t(`socialAccounts.metrics.${metric}`) });
-  if (!known.length) return null;
-  const min = Math.min(...known.map((d) => d[metric]!));
-  const max = Math.max(...known.map((d) => d[metric]!));
+  const band = sparkBand(sorted.map((d) => d[metric]));
+  if (!band) return null;
   const first = Date.parse(sorted[0].day);
   const span = Date.parse(sorted.at(-1)!.day) - first;
   const segments: { x: number; y: number; day: string }[][] = [];
@@ -34,7 +52,7 @@ export function Sparkline({ days, metric }: { days: api.AccountDay[]; metric: ap
       if (segment.length) segments.push(segment);
       segment = [];
     }
-    if (day[metric] != null) segment.push({ x: 2 + (span ? (at - first) / span : 0.5) * 116, y: max === min ? 14 : 26 - ((day[metric]! - min) / (max - min)) * 24, day: day.day });
+    if (day[metric] != null) segment.push({ x: 2 + (span ? (at - first) / span : 0.5) * 116, y: sparkY(band, day[metric]!), day: day.day });
     previous = at;
   }
   if (segment.length) segments.push(segment);
