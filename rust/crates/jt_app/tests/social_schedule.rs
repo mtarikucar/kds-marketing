@@ -1488,7 +1488,7 @@ async fn a_persons_cancel_ends_one_version_keeps_the_others_and_archives_the_con
         .as_ref()
         .expect("the version is cancelled");
     assert_eq!(cancelled.reason, "Yinelenen paylaşım");
-    assert_eq!(cancelled.slot_id, first.id);
+    assert_eq!(cancelled.slot_id, Some(first.id));
     assert_eq!(
         versions[0].slot_id,
         Some(first.id),

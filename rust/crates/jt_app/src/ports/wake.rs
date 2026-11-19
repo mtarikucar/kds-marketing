@@ -192,7 +192,9 @@ pub struct PendingWake {
     pub first_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub last_at: OffsetDateTime,
-    /// Distinct, in the order first asked, at most [`WAKE_REASONS_CAP`].
+    /// Distinct, in the order first asked, at most [`WAKE_REASONS_CAP`]. A code a later release
+    /// wrote is dropped on read ([`known_reasons`]).
+    #[serde(deserialize_with = "known_reasons::deserialize")]
     pub reasons: Vec<WakeReason>,
     /// The people whose actions asked for it, distinct, at most [`WAKE_CAUSED_BY_CAP`].
     pub caused_by: Vec<UserId>,
@@ -245,6 +247,8 @@ impl WakeOutcome {
 pub struct WakeAttempt {
     #[serde(with = "time::serde::rfc3339")]
     pub at: OffsetDateTime,
+    /// A code a later release wrote is dropped on read ([`known_reasons`]).
+    #[serde(deserialize_with = "known_reasons::deserialize")]
     pub reasons: Vec<WakeReason>,
     pub outcome: WakeOutcome,
     /// The HTTP status the target answered, when it answered.
@@ -432,6 +436,35 @@ impl AgentWakeRow {
     }
 }
 
+/// A stored list of [`WakeReason`] codes, read tolerantly (design 2026-11-19 "Paylaşımlar and
+/// Bilgi bankası" §4.2): a code this binary does not know, one a later release added, is dropped
+/// instead of failing the whole row, so a rollback to this binary still reads every wake row.
+/// Written as it is.
+mod known_reasons {
+    use serde::de::IgnoredAny;
+    use serde::{Deserialize, Deserializer};
+
+    use super::WakeReason;
+
+    /// One stored code: a reason this binary knows, or any other one.
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Known(WakeReason),
+        Unknown(IgnoredAny),
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<WakeReason>, D::Error> {
+        Ok(Vec::<Stored>::deserialize(d)?
+            .into_iter()
+            .filter_map(|code| match code {
+                Stored::Known(reason) => Some(reason),
+                Stored::Unknown(_) => None,
+            })
+            .collect())
+    }
+}
+
 /// `Vec<OffsetDateTime>` as RFC 3339 strings.
 mod rfc3339_vec {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -595,6 +628,32 @@ mod tests {
         r.mark_checkin(t);
         r.mark_checkin(t + Duration::hours(1));
         assert_eq!(r.learned_interval_minutes(15, 10_080), None);
+    }
+
+    #[test]
+    fn a_reason_code_of_a_later_release_is_dropped_on_read() {
+        let t = datetime!(2026-11-19 12:00 UTC);
+        let mut stored = serde_json::to_value(row()).unwrap();
+        stored["pending"] = serde_json::to_value(pending(t, t)).unwrap();
+        stored["pending"]["reasons"] =
+            serde_json::json!(["knowledge_changed", "content_revision", "posting_resumed"]);
+        stored["last"] = serde_json::json!({
+            "at": "2026-11-19T11:00:00Z",
+            "reasons": ["account_connected", "manual"],
+            "outcome": "fired",
+        });
+        let read: AgentWakeRow = serde_json::from_value(stored).unwrap();
+        assert_eq!(
+            read.pending.unwrap().reasons,
+            vec![WakeReason::ContentRevision]
+        );
+        assert_eq!(read.last.unwrap().reasons, vec![WakeReason::Manual]);
+        // Only unknown codes: the wake still reads, with no reason.
+        let mut stored = serde_json::to_value(row()).unwrap();
+        stored["pending"] = serde_json::to_value(pending(t, t)).unwrap();
+        stored["pending"]["reasons"] = serde_json::json!(["knowledge_note"]);
+        let read: AgentWakeRow = serde_json::from_value(stored).unwrap();
+        assert!(read.pending.unwrap().reasons.is_empty());
     }
 
     #[test]

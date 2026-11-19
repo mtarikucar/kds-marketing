@@ -219,8 +219,11 @@ pub struct VersionCancel {
     pub at: OffsetDateTime,
     /// What the person wrote when cancelling.
     pub reason: String,
-    /// The planned post that was cancelled.
-    pub slot_id: SlotId,
+    /// The planned post that was cancelled. Read as optional (design 2026-11-19 "Paylaşımlar
+    /// and Bilgi bankası" §3.7.3, D18), so that a version cancelled before it had a planned post
+    /// reads in every later binary's rollback target; every cancel written today names one.
+    #[serde(default)]
+    pub slot_id: Option<SlotId>,
 }
 
 /// A person's "Düzenleme iste": what should change. It stands until a delivery answers it.
