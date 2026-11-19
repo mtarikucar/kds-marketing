@@ -56,7 +56,7 @@
 //! wake held back waits, and the panel says until when). An agent that checks in drops its own
 //! pending wake when no request came after the check-in began: it read the work already. A
 //! routine answering `429` is tried again after its `Retry-After`; the network or a `5xx` with
-//! backoff from [`WAKE_RETRY_BASE`](crate::ports::wake::WAKE_RETRY_BASE), given up after [`WAKE_RETRY_FOR`](crate::ports::wake::WAKE_RETRY_FOR); `401`, `403` or `404`
+//! backoff from [`WAKE_RETRY_BASE`], given up after [`WAKE_RETRY_FOR`]; `401`, `403` or `404`
 //! marks the address refused (one ledger entry, the attempt's) and stops until a person sets it
 //! again. Every attempt that reached the network writes `agent.wake`: who caused it, which agent,
 //! the reasons, the outcome, the session a routine created; never the token.
