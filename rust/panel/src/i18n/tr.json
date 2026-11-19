@@ -3513,73 +3513,6 @@
       "saved": "Kaydedildi.",
       "openInInbox": "Gelen kutusunda aç"
     },
-    "tasks": {
-      "title": "Araştırma görevleri",
-      "description": "Stratejinin hedef müşteri profilinden gelen görevler ve sizin açtığınız tek seferlik görevler. Ajanlar bunlara göre araştırıp havuza aday ekler.",
-      "poolLink": "Aday havuzu",
-      "statusFilter": "Durum",
-      "statuses": {
-        "open": "Açık",
-        "done": "Tamamlandı",
-        "canceled": "İptal edildi",
-        "superseded": "Yeni strateji sürümüyle değişti"
-      },
-      "kind": {
-        "standing": "Strateji görevi · {{key}}",
-        "ad_hoc": "Tek seferlik · {{sectors}}"
-      },
-      "target": "Hedef {{n}}",
-      "remaining": "Bugün kalan: {{remaining}} (günlük üst sınır {{cap}})",
-      "claim": "Üstlen",
-      "claimed": "Görev iki saatliğine sizde.",
-      "heldByOther": "Görev şu an başka biri üzerinde.",
-      "claimedByYou": "Sizde, {{until}} tarihine kadar",
-      "claimedBy": "{{name}} üzerinde, {{until}} tarihine kadar",
-      "close": "Görevi kapat",
-      "outcome": "Sonuç",
-      "outcomes": {
-        "done": "Tamamlandı",
-        "canceled": "İptal"
-      },
-      "closeNote": "Not (isteğe bağlı)",
-      "closeSubmit": "Kapat",
-      "closed": "Görev kapatıldı.",
-      "progress": "İlerleme",
-      "found": "Bulunan: {{found}}",
-      "foundOf": "Bulunan: {{found}} / {{target}}",
-      "newest": "Son kaydedilen adaylar",
-      "prospectsLink": "Bu görevin adaylarını gör",
-      "empty": "Görev yok",
-      "emptyBody": "Onaylı stratejinin hedef müşteri profili her girdi için bir görev açar; aşağıdan tek seferlik bir görev de açabilirsiniz.",
-      "brief": {
-        "segment": "Segment",
-        "sectors": "Sektörler",
-        "areas": "Bölgeler",
-        "signals": "Aranan işaretler",
-        "exclusions": "Hariç tutulanlar",
-        "size": "Büyüklük",
-        "language": "Dil",
-        "note": "Not"
-      },
-      "create": {
-        "title": "Tek seferlik görev aç",
-        "description": "Ajanlara ne aramaları, nerede ve neyi hariç tutmaları gerektiğini anlatın.",
-        "sectors": "Sektörler (her satıra bir tane)",
-        "sectorsHint": "kafe",
-        "areas": "Bölgeler (her satıra bir tane: şehir ya da şehir / ilçe)",
-        "areasHint": "İzmir / Alsancak",
-        "signals": "Aranan işaretler (her satıra bir tane)",
-        "exclusions": "Hariç tutulanlar (her satıra bir tane)",
-        "segment": "Segment anahtarı (isteğe bağlı)",
-        "size": "Büyüklük ipucu",
-        "language": "Dil (ör. tr)",
-        "target": "Bulunacak aday sayısı",
-        "dailyCap": "Günlük üst sınır",
-        "note": "Not",
-        "submit": "Görevi aç",
-        "created": "Görev açıldı."
-      }
-    },
     "errors": {
       "not_editable": "Aktarılmış ya da iletişim yasağı konmuş bir aday değiştirilemez.",
       "stale_revision": "Bu kayıt siz bakarken değişti. Sayfayı yenileyip yeniden deneyin.",
@@ -3974,8 +3907,7 @@
     },
     "ux": {
       "moreFilters": "Diğer filtreler",
-      "hideFilters": "Ek filtreleri gizle",
-      "hideTaskForm": "Görev formunu gizle"
+      "hideFilters": "Ek filtreleri gizle"
     }
   },
   "posts": {

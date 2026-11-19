@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use jt_app::ports::prospects::{
     BlockReason, Inserted, ListCursor, Promoted, ProspectQuery, ResearchTaskQuery, ScoreRow,
-    Updated,
+    TaskTally, Updated,
 };
 use jt_app::ports::{UnitOfWork, WorkspacePolicy};
 use jt_ledger::Actor;
@@ -622,9 +622,41 @@ pub async fn list_filters_and_cursor(uow: Arc<dyn UnitOfWork>) {
             .unwrap(),
         0
     );
+    // The tasks' tallies in one read: found, qualified now, the newest's time; a task with none
+    // is left out.
+    // The "day" asked about here is [at(1), at(4)): only the prospect created at(2) is in it.
+    let none = ResearchTaskId::new_v7();
+    assert_eq!(
+        tx.prospects()
+            .task_tallies(&[none, t.id], at(1), at(4))
+            .await
+            .unwrap(),
+        [TaskTally {
+            task_id: t.id,
+            found: 3,
+            qualified: 1,
+            found_today: 1,
+            last_found_at: at(4),
+        }]
+    );
+    assert!(
+        tx.prospects()
+            .task_tallies(&[], at(0), at(9))
+            .await
+            .unwrap()
+            .is_empty()
+    );
     drop(tx);
     let mut o = uow.tenant(f.other).await.unwrap();
     assert_eq!(o.prospects().count_for_task(t.id).await.unwrap(), 0);
+    assert!(
+        o.prospects()
+            .task_tallies(&[t.id], at(0), at(9))
+            .await
+            .unwrap()
+            .is_empty(),
+        "another workspace's prospects are not counted"
+    );
     drop(o);
     // Pages of two, following the cursor.
     let mut t = uow.tenant(f.ws).await.unwrap();

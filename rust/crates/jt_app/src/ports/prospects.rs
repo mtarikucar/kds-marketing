@@ -190,6 +190,59 @@ impl ProspectRow {
     }
 }
 
+/// What a research task found so far: the prospects recorded for it whatever their status now
+/// (purged ones are gone), how many of those are qualified or promoted now (the pool report's
+/// "qualified"), how many were created in the day asked about, and when the newest was
+/// recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskTally {
+    pub task_id: ResearchTaskId,
+    pub found: u32,
+    pub qualified: u32,
+    pub found_today: u32,
+    pub last_found_at: OffsetDateTime,
+}
+
+impl TaskTally {
+    /// The tallies of `prospects` by task, for the tasks of `tasks` only, with those created in
+    /// `[from, to)` counted apart, by task id: the rule every adapter counts by.
+    pub fn of<'a>(
+        prospects: impl IntoIterator<Item = &'a Prospect>,
+        tasks: &[ResearchTaskId],
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Vec<TaskTally> {
+        let mut out: Vec<TaskTally> = Vec::new();
+        for p in prospects {
+            let Some(task_id) = p.research_task_id.filter(|t| tasks.contains(t)) else {
+                continue;
+            };
+            let qualified = u32::from(matches!(
+                p.status,
+                ProspectStatus::Qualified | ProspectStatus::Promoted
+            ));
+            let today = u32::from(p.created_at >= from && p.created_at < to);
+            match out.iter_mut().find(|x| x.task_id == task_id) {
+                Some(x) => {
+                    x.found += 1;
+                    x.qualified += qualified;
+                    x.found_today += today;
+                    x.last_found_at = x.last_found_at.max(p.created_at);
+                }
+                None => out.push(TaskTally {
+                    task_id,
+                    found: 1,
+                    qualified,
+                    found_today: today,
+                    last_found_at: p.created_at,
+                }),
+            }
+        }
+        out.sort_by_key(|x| x.task_id);
+        out
+    }
+}
+
 /// Whether `p` passes every filter of `q` but the cursor and the limit: the one predicate both
 /// adapters list by.
 pub fn prospect_matches(p: &Prospect, q: &ProspectQuery) -> bool {
@@ -289,6 +342,15 @@ pub trait ProspectRepo: Send + Sync {
     ) -> Result<u32, AppError>;
     /// Prospects recorded for `task`, whatever their status now (purged ones are gone).
     async fn count_for_task(&mut self, task: ResearchTaskId) -> Result<u32, AppError>;
+    /// [`TaskTally`] each of `tasks` that has a prospect recorded for it, with those created in
+    /// `[from, to)` (a local day) counted apart, in one read; by task id. A task with none is
+    /// left out.
+    async fn task_tallies(
+        &mut self,
+        tasks: &[ResearchTaskId],
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<TaskTally>, AppError>;
     /// Prospects promoted in `[from, to)`.
     async fn promoted_between(
         &mut self,

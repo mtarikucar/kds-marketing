@@ -15,7 +15,7 @@ use jt_app::error::AppError;
 use jt_app::ports::prospects::{
     BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
     ProspectQuery, ProspectRepo, ProspectRow, ResearchTaskQuery, ResearchTaskRepo, ScoreRow,
-    Updated, is_key_fingerprint, is_key_hash, prospect_matches,
+    TaskTally, Updated, is_key_fingerprint, is_key_hash, prospect_matches,
 };
 use jt_inbox::PersonId;
 use jt_prospects::{
@@ -523,6 +523,24 @@ impl ProspectRepo for MemTenant {
 
     async fn count_for_task(&mut self, task: ResearchTaskId) -> Result<u32, AppError> {
         Ok(self.count_where(|p| p.research_task_id == Some(task)))
+    }
+
+    async fn task_tallies(
+        &mut self,
+        tasks: &[ResearchTaskId],
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<TaskTally>, AppError> {
+        let ws = self.ws;
+        Ok(TaskTally::of(
+            self.pool()
+                .prospects
+                .iter()
+                .filter(|p| p.workspace_id == ws),
+            tasks,
+            from,
+            to,
+        ))
     }
 
     async fn promoted_between(

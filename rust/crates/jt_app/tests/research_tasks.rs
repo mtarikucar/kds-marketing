@@ -605,6 +605,22 @@ async fn the_list_and_one_task_carry_remaining_and_found() {
         page.items[1].remaining_today, 20,
         "the standing task recorded none (the workspace's ceiling is far)"
     );
+    // What each task found, counted for the page: the new prospect is not qualified yet.
+    assert_eq!((page.items[0].found, page.items[0].qualified), (1, 0));
+    assert_eq!(page.items[0].last_found_at, Some(FIXED_NOW));
+    assert_eq!(
+        (
+            page.items[1].found,
+            page.items[1].qualified,
+            page.items[1].last_found_at
+        ),
+        (0, 0, None),
+        "the standing task found none"
+    );
+    let listed = serde_json::to_value(&page.items[1]).unwrap();
+    assert_eq!(listed["found"], 0);
+    assert_eq!(listed["found_today"], 0);
+    assert_eq!(listed["last_found_at"], serde_json::Value::Null);
     let open = research::tasks_list(
         &w.deps,
         &w.owner_ctx,
@@ -632,4 +648,95 @@ async fn the_list_and_one_task_carry_remaining_and_found() {
     );
     let e = err(research::tasks_get(&w.deps, &w.owner_ctx, ResearchTaskId::new_v7()).await);
     assert_eq!(e.code, ErrorCode::NotFound);
+}
+
+#[tokio::test]
+async fn the_list_counts_what_each_task_found_and_qualified() {
+    let w = active_world().await;
+    approve(&w, 1, vec![entry("kafeler", 20, 0)]).await;
+    plan(&w, FIXED_NOW).await;
+    let task = research::tasks_create(&w.deps, &w.owner_ctx, ad_hoc(10, 5))
+        .await
+        .unwrap()
+        .task;
+    let first = prospects::create(
+        &w.deps,
+        &w.owner_ctx,
+        prospect("Kafe", "0500 000 00 01", Some(task.id)),
+    )
+    .await
+    .unwrap()
+    .prospect;
+    prospects::decide(
+        &w.deps,
+        &w.owner_ctx,
+        first.id,
+        prospects::DecideInput {
+            decision: prospects::DecideKind::Qualify,
+            reason: None,
+            note: None,
+            expected_revision: first.revision,
+        },
+    )
+    .await
+    .unwrap();
+    let later = jt_app::ctx::Ctx {
+        now: FIXED_NOW + Duration::hours(1),
+        ..w.owner_ctx.clone()
+    };
+    prospects::create(
+        &w.deps,
+        &later,
+        prospect("Fırın", "0500 000 00 02", Some(task.id)),
+    )
+    .await
+    .unwrap();
+    // A prospect of no task counts for none.
+    prospects::create(
+        &w.deps,
+        &w.owner_ctx,
+        prospect("Pastane", "0500 000 00 03", None),
+    )
+    .await
+    .unwrap();
+    let page = research::tasks_list(&w.deps, &later, ListInput::default())
+        .await
+        .unwrap();
+    let item = page.items.iter().find(|x| x.task.id == task.id).unwrap();
+    assert_eq!((item.found, item.qualified, item.found_today), (2, 1, 2));
+    assert_eq!(item.last_found_at, Some(FIXED_NOW + Duration::hours(1)));
+    let standing = page.items.iter().find(|x| x.task.id != task.id).unwrap();
+    assert_eq!((standing.found, standing.last_found_at), (0, None));
+    // The one task's read agrees on the count.
+    let one = research::tasks_get(&w.deps, &later, task.id).await.unwrap();
+    assert_eq!(one.found, item.found);
+}
+
+#[tokio::test]
+async fn found_today_counts_the_workspaces_local_day_only() {
+    let w = active_world().await;
+    approve(&w, 1, vec![entry("kafeler", 20, 0)]).await;
+    plan(&w, FIXED_NOW).await;
+    let task = research::tasks_create(&w.deps, &w.owner_ctx, ad_hoc(10, 5))
+        .await
+        .unwrap()
+        .task;
+    prospects::create(
+        &w.deps,
+        &w.owner_ctx,
+        prospect("Kafe", "0500 000 00 01", Some(task.id)),
+    )
+    .await
+    .unwrap();
+    // Two days on, the prospect still counts as found, not as found today.
+    let later = jt_app::ctx::Ctx {
+        now: FIXED_NOW + Duration::days(2),
+        ..w.owner_ctx.clone()
+    };
+    let page = research::tasks_list(&w.deps, &later, ListInput::default())
+        .await
+        .unwrap();
+    let item = page.items.iter().find(|x| x.task.id == task.id).unwrap();
+    assert_eq!((item.found, item.found_today), (1, 0));
+    assert_eq!(item.remaining_today, 5, "a new day, the whole cap");
 }

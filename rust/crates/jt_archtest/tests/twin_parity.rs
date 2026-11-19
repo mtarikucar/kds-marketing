@@ -4501,6 +4501,11 @@ async fn research_tasks_and_the_playbook_answer_the_same_over_the_panel_and_mcp(
     assert_eq!(human, agent);
     assert_eq!(human["items"].as_array().unwrap().len(), 1);
     assert_eq!(human["items"][0]["task"]["kind"]["type"], "standing");
+    // What the task found, the same on both: nothing yet.
+    assert_eq!(human["items"][0]["found"], 0);
+    assert_eq!(human["items"][0]["qualified"], 0);
+    assert_eq!(human["items"][0]["found_today"], 0);
+    assert_eq!(human["items"][0]["last_found_at"], Value::Null);
     let id = human["items"][0]["task"]["id"].as_str().unwrap().to_owned();
 
     let resp = send(

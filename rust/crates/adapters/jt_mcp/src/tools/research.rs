@@ -22,7 +22,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "research.tasks_list",
             description: "List the research tasks, newest first: filter status (open, done, \
                           canceled, superseded); limit 1 to 200 (50). Each item is {task, \
-                          remaining_today}: a task's kind is standing (icp_key: one per ICP \
+                          remaining_today, found, qualified, found_today, last_found_at}: \
+                          found counts the prospects recorded for the task, qualified those of \
+                          them qualified or promoted now, found_today those recorded today (the \
+                          workspace's local day), last_found_at when the newest was recorded \
+                          (null while none). A task's kind is standing (icp_key: one per ICP \
                           entry of the approved strategy, kept by Jeeta) or ad_hoc \
                           (target_count), with its brief (segment_key, sectors, areas, signals, \
                           exclusions, size_hint, language, note), rubric_digest, daily_cap, \

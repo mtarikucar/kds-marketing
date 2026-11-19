@@ -1,7 +1,7 @@
 import type { TFunction } from 'i18next';
-import type { PromoteOutcome, ResearchTask } from '@/api/types';
+import type { PromoteOutcome } from '@/api/types';
 
-// Words the pool's pages share with each other (and with the research tasks page).
+// Words the pool's pages share with each other.
 
 /** A promotion outcome in the panel's words. */
 export function promoteOutcomeText(t: TFunction, o: PromoteOutcome): string {
@@ -31,11 +31,4 @@ const PROMOTE_REFUSALS = [
 
 function isPromoteRefusal(reason: string): reason is (typeof PROMOTE_REFUSALS)[number] {
   return (PROMOTE_REFUSALS as readonly string[]).includes(reason);
-}
-
-/** What a research task is called in a list: its ICP entry, or its brief's sectors. */
-export function taskLabel(t: TFunction, task: ResearchTask): string {
-  return task.kind.type === 'standing'
-    ? t('leads.tasks.kind.standing', { key: task.kind.icp_key })
-    : t('leads.tasks.kind.ad_hoc', { sectors: task.brief.sectors.join(', ') });
 }
