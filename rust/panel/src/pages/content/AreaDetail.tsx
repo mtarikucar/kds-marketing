@@ -92,7 +92,7 @@ function Timeline({ row, files }: { row: AreaRow; files: boolean }) {
                   {w.blocked
                     ? <span className="text-danger">{blockedText(t, w)}</span>
                     : <span className="text-muted-foreground">{t('content.out.awaitsTimeOne')}</span>}{' '}
-                  <Link className="text-primary underline" to={scheduleHref(w.version_id)}>{t(w.blocked ? 'content.bar.toPackages' : 'content.bar.giveTime')}</Link>
+                  <Link className="text-primary underline" to={scheduleHref(w.version_id)}>{t(w.blocked ? 'content.bar.toSocial' : 'content.bar.giveTime')}</Link>
                 </li>
               ))}
             </ul>

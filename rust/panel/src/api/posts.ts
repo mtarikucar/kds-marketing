@@ -75,7 +75,8 @@ export interface PostOut {
 }
 export interface PostsOut {
   posts: PostOut[];
-  settings: PostingSettings;
+  /** With the settings' revision and the accounts a person paused (`social.account_pause`). */
+  settings: PostingSettings & { revision?: number; paused_capability_ids?: string[] };
 }
 
 export type RequestTrigger = 'olay' | 'calendar' | 'floor' | 'project';

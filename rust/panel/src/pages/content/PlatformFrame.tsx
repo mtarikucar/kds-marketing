@@ -18,7 +18,7 @@ function FrameMedia({ material }: { material?: Material }) {
     ? <video className="absolute inset-0 h-full w-full object-contain" controls playsInline preload="metadata" src={url} aria-label={alt} onError={() => setFailedUrl(url)} />
     : <img className="absolute inset-0 h-full w-full object-contain" src={url} alt={alt} onError={() => setFailedUrl(url)} />;
 }
-export function PlatformFrame({ version, materials, account }: { version: PackageVersion; materials: Material[]; account: string }) {
+export function PlatformFrame({ version, materials, account }: { version: Pick<PackageVersion, 'format' | 'text' | 'tags' | 'material_ids'>; materials: Material[]; account: string }) {
   const { t } = useTranslation();
   const [page, setPage] = useState(0);
   const vertical = ['story', 'reel', 'tiktok_video'].includes(version.format);

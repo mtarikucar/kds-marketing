@@ -45,4 +45,3 @@ export const versionSchedule = (body: { project_id: string; version_id: string; 
   request<unknown>('POST', `${root}/versions/schedule`, { body });
 export const accountPause = (id: string, paused: boolean, expected_revision: number) =>
   request<SocialPostingSettings>('POST', `${root}/accounts/${encodeURIComponent(id)}/pause`, { body: { paused, expected_revision } });
-export const postingSettings = () => request<{ settings: SocialPostingSettings }>('GET', '/api/studio/posts');

@@ -25,14 +25,14 @@ const LABEL: Record<StageState, string> = {
   todo: 'font-normal text-muted-foreground',
 };
 
-/** Why no account can take a waiting version, in the words of the social page's packages. */
+/** Why no account can take a waiting version, in the words of the social page. */
 export function blockedText(t: TFunction, wait: TimeWait): string {
   const reason = BLOCKED_REASONS.find((r) => r === wait.blocked);
   return reason ? t(`socialAccounts.blocked.${reason}`) : t('socialAccounts.noSuitableAccount');
 }
 
-/** Where a person gives a waiting version its account and time: the social page's packages. */
-export const scheduleHref = (versionId?: string) => `/social?tab=packages${versionId ? `#version-${encodeURIComponent(versionId)}` : ''}`;
+/** Where a person gives a waiting version its account and time: its row on the social page. */
+export const scheduleHref = (versionId?: string) => (versionId ? `/social?version=${encodeURIComponent(versionId)}` : '/social?filter=times');
 
 const RETIREMENTS = ['cancelled', 'missed_grace', 'replanned', 'hypothesis_retired', 'strategy_archived', 'week_ended', 'measurements_complete'] as const;
 
@@ -184,7 +184,7 @@ function ExceptionBar({ row, onExpand, expanded }: { row: AreaRow; onExpand: () 
       : cannotTime ? [...new Set(blocked.map((w) => blockedText(t, w)))].join(' ') : null;
     actions = <>
       {failed.map((p) => <Button key={p.slot_id} size="sm" variant="outline" asChild><Link to={`/social?slot=${encodeURIComponent(p.slot_id)}`}>{t('content.bar.openPost', { account: p.account_name ?? t('contentAreas.account') })}</Link></Button>)}
-      {cannotTime && <Button size="sm" variant="outline" asChild><Link to={scheduleHref(blocked[0].version_id)}>{t('content.bar.toPackages')}</Link></Button>}
+      {cannotTime && <Button size="sm" variant="outline" asChild><Link to={scheduleHref(blocked[0].version_id)}>{t('content.bar.toSocial')}</Link></Button>}
       {!expanded && <Button size="sm" variant="outline" onClick={onExpand}>{t('content.bar.inspect')}</Button>}
     </>;
   } else if (stage?.state === 'waiting_person' && stage.key === 'onay') {

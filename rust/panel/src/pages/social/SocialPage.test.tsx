@@ -7,7 +7,7 @@ import { socialAnswers as answers } from '@/test/social';
 
 it('keeps Turkish and English social labels in parity', () => {
   expect(Object.keys(tr.socialAccounts).sort()).toEqual(Object.keys(en.socialAccounts).sort());
-  expect(Object.keys(tr.socialAccounts.metrics).sort()).toEqual(Object.keys(en.socialAccounts.metrics).sort());
+  for (const group of ['metrics', 'blocked', 'state', 'wait', 'filtered', 'refusal', 'rules', 'sections'] as const) expect(Object.keys(tr.socialAccounts[group]).sort()).toEqual(Object.keys(en.socialAccounts[group]).sort());
 });
 
 it('panel_actions_match_every_studio_tool', async () => {
@@ -126,6 +126,6 @@ it('does not fetch social data with only another module permission', async () =>
 it('explains a module removed after navigation and links back to its installation', async () => {
   mockFetch({ ...answers, 'GET /api/social/accounts': withStatus(409, { code: 'MODULE_NOT_INSTALLED', message: 'removed', details: { module: 'social' } }) });
   renderAt('/social');
-  expect(await screen.findByText(tr.errors.MODULE_NOT_INSTALLED)).toBeVisible();
+  expect(await screen.findByText(tr.gates.moduleBody)).toBeVisible();
   expect(screen.getByRole('link', { name: tr.gates.moduleLink })).toHaveAttribute('href', '/modules/social');
 });
