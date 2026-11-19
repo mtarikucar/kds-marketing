@@ -34,31 +34,35 @@ export interface WaitChip {
 
 /**
  * "Sizi bekleyenler" as a strip: its title, then a counted chip per kind that waits, or a few
- * words when nothing does. The content page's and the social page's.
+ * words when nothing does (none with `quiet`, when the caller says it below); `children`, the
+ * waiting rows themselves, follow the title line. The content page's and the social page's.
  */
-export function WaitingChips({ chips, className, extra }: { chips: WaitChip[]; className?: string; extra?: ReactNode }) {
+export function WaitingChips({ chips, className, extra, quiet, children }: { chips: WaitChip[]; className?: string; extra?: ReactNode; quiet?: boolean; children?: ReactNode }) {
   const { t } = useTranslation();
   const shown = chips.filter((c) => c.count > 0);
   return (
-    <section aria-label={t('content.waiting.title')} className={cn('flex flex-wrap items-center gap-2', className)}>
-      <h2 className="me-1 flex items-center gap-1.5 text-sm font-medium">
-        <UserRound aria-hidden="true" className="h-4 w-4 text-warning" />
-        {t('content.waiting.title')}
-      </h2>
-      {shown.length === 0 && <p className="text-sm text-muted-foreground">{t('content.waiting.none')}</p>}
-      {shown.map(({ key, count, label, tone, to, onClick, pressed }) => {
-        const body = (
-          <>
-            <b className="font-mono font-medium">{count}</b> {label}
-          </>
-        );
-        const chip = cn('inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium', TONES[tone]);
-        const active = 'hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-        if (to) return <Link key={key} className={cn(chip, active)} to={to}>{body}</Link>;
-        if (onClick) return <button key={key} type="button" aria-pressed={!!pressed} onClick={onClick} className={cn(chip, active, pressed && 'ring-2 ring-current ring-offset-1 ring-offset-background')}>{body}</button>;
-        return <span key={key} className={chip}>{body}</span>;
-      })}
-      {extra}
+    <section aria-label={t('content.waiting.title')} className={cn('min-w-0 space-y-3', className)}>
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="me-1 flex items-center gap-1.5 text-sm font-medium">
+          <UserRound aria-hidden="true" className="h-4 w-4 text-warning" />
+          {t('content.waiting.title')}
+        </h2>
+        {shown.length === 0 && !quiet && <p className="text-sm text-muted-foreground">{t('content.waiting.none')}</p>}
+        {shown.map(({ key, count, label, tone, to, onClick, pressed }) => {
+          const body = (
+            <>
+              <b className="font-mono font-medium">{count}</b> {label}
+            </>
+          );
+          const chip = cn('inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-sm font-medium', TONES[tone]);
+          const active = 'hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+          if (to) return <Link key={key} className={cn(chip, active)} to={to}>{body}</Link>;
+          if (onClick) return <button key={key} type="button" aria-pressed={!!pressed} onClick={onClick} className={cn(chip, active, pressed && 'ring-2 ring-current ring-offset-1 ring-offset-background')}>{body}</button>;
+          return <span key={key} className={chip}>{body}</span>;
+        })}
+        {extra}
+      </div>
+      {children}
     </section>
   );
 }

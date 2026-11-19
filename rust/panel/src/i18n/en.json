@@ -212,6 +212,8 @@
     "approved": "Approved. It goes out at its time.",
     "approvalHelp": "This account's connection has “every action waits for a person's approval” switched on. Once you approve, the post goes out at its time; the setting is under Connections.",
     "noUpcoming": "No posts scheduled.",
+    "afterApproval_one": "Nothing else is scheduled. The post above comes here once approved.",
+    "afterApproval_other": "Nothing else is scheduled. The {{count}} posts above come here once approved.",
     "strays": "Scheduled at the platform, not known to Jeeta",
     "straysHelp": "These posts are in the platform’s own scheduler but are not among the posts Jeeta left there: scheduled by hand, or left by a hand-over whose outcome was never learnt. Jeeta does not follow them or take them back; delete them on the platform’s own screen if they should not go out.",
     "noRecent": "Nothing published yet.",
@@ -1480,7 +1482,13 @@
         "status": "Status"
       },
       "probing": "Probing…",
-      "redirecting": "Taking you to the provider…"
+      "redirecting": "Taking you to the provider…",
+      "renewal": {
+        "self": "This connection renews itself; nothing needs doing.",
+        "selfTiktok": "This connection renews itself; nothing needs doing. TikTok asks you to connect again about once a year.",
+        "person": "This connection ends on {{at}}; it must be connected again then.",
+        "tries": "Access ends on {{at}}. Jeeta tries to renew it before then; if it cannot, it asks you to connect again."
+      }
     },
     "hooks": {
       "title": "Webhook addresses",
@@ -1761,7 +1769,6 @@
     "assetsLabel": "Assets found",
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",
-    "expires": "Access ends: {{at}}",
     "together": "One account; connected together: {{kinds}}",
     "none": "This account reaches nothing that can be connected.",
     "confirm": "Connect the selected",
@@ -2534,7 +2541,6 @@
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
-    "expires": "Access expires at",
     "businessApp": {
       "title": "Sharing from the WhatsApp Business app",
       "contacts": "Contacts",
@@ -4053,7 +4059,13 @@
     },
     "settings": {
       "title": "Posting settings",
-      "help": "No approval needed: the material check, the truth check and these limits are the safety.",
+      "help": {
+        "none": "No approval needed: the material check, the truth check and these limits are the safety.",
+        "all": "Every post waits for your approval; these limits apply as well.",
+        "some_one": "Every post on {{accounts}} waits for your approval; the other accounts need none.",
+        "some_other": "Every post on {{accounts}} waits for your approval; the other accounts need none.",
+        "many": "On {{n}} accounts every post waits for your approval; the others need none."
+      },
       "lead": "Preparation (hours before)",
       "grace": "Grace (hours)",
       "feedCap": "Daily post limit (per channel)",

@@ -212,6 +212,8 @@
     "approved": "Onaylandı. Saatinde yayınlanacak.",
     "approvalHelp": "Bu hesabın bağlantısında “her eylem insan onayı bekler” ayarı açık. Onaylarsan paylaşım saatinde yayınlanır; ayarı Bağlantılar’dan kapatabilirsin.",
     "noUpcoming": "Planlanmış paylaşım yok.",
+    "afterApproval_one": "Başka planlanmış paylaşım yok. Yukarıdaki paylaşım onaylanınca buraya gelir.",
+    "afterApproval_other": "Başka planlanmış paylaşım yok. Yukarıdaki {{count}} paylaşım onaylanınca buraya gelir.",
     "strays": "Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler",
     "straysHelp": "Bu gönderiler platformun kendi zamanlayıcısında duruyor ama Jeeta’nın bıraktığı paylaşımlardan biri değil: elle zamanlanmış ya da sonucu öğrenilemeyen bir bırakmadan kalmış olabilir. Jeeta bunları izlemez ve geri çekmez; yayınlanmasını istemiyorsanız platformun kendi ekranından silin.",
     "noRecent": "Henüz yayınlanan paylaşım yok.",
@@ -1480,7 +1482,13 @@
         "status": "Durum"
       },
       "probing": "Yoklanıyor…",
-      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…"
+      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…",
+      "renewal": {
+        "self": "Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez.",
+        "selfTiktok": "Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez. TikTok yılda bir kez yeniden bağlanmanızı ister.",
+        "person": "Bu bağlantı {{at}} tarihinde sona erer; o zaman yeniden bağlamanız gerekir.",
+        "tries": "Erişim {{at}} tarihinde sona erer. Jeeta bundan önce yenilemeyi dener; yenileyemezse yeniden bağlamanızı ister."
+      }
     },
     "hooks": {
       "title": "Webhook adresleri",
@@ -1761,7 +1769,6 @@
     "assetsLabel": "Bulunan varlıklar",
     "externalId": "Kimlik: {{id}}",
     "scopes": "İzinler: {{scopes}}",
-    "expires": "Erişimin bitişi: {{at}}",
     "together": "Aynı hesap; birlikte bağlanır: {{kinds}}",
     "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
     "confirm": "Seçilenleri bağla",
@@ -2534,7 +2541,6 @@
     "help": "Bu dönüş adreslerini sağlayıcı uygulamasına kaydedin. Uygulama bilgilerini ve webhook doğrulamasını işletmen yapılandırır.",
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",
-    "expires": "Erişim bitiş zamanı",
     "businessApp": {
       "title": "WhatsApp Business uygulamasından aktarım",
       "contacts": "Kişiler",
@@ -4053,7 +4059,13 @@
     },
     "settings": {
       "title": "Paylaşım ayarları",
-      "help": "Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
+      "help": {
+        "none": "Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
+        "all": "Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.",
+        "some_one": "Her paylaşımı onayınızı bekleyen hesap: {{accounts}}; diğerlerinde onay gerekmez.",
+        "some_other": "Her paylaşımı onayınızı bekleyen hesaplar: {{accounts}}; diğerlerinde onay gerekmez.",
+        "many": "{{n}} hesapta her paylaşım onayınızı bekler; diğerlerinde onay gerekmez."
+      },
       "lead": "Hazırlık (saat önce)",
       "grace": "Gecikme payı (saat)",
       "feedCap": "Günlük gönderi sınırı (kanal başına)",

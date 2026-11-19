@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { repMe } from '@/test/materials';
 import { defaultSettings, postsAnswers } from '@/test/posts';
-import { socialAnswers, socialSettings } from '@/test/social';
+import { socialAccount, socialAnswers, socialSettings } from '@/test/social';
 
 const answers = { ...socialAnswers, 'GET /api/studio/posts': { posts: [], settings: socialSettings } };
 const open = () => renderAt('/social?settings=1');
@@ -152,5 +152,23 @@ describe('Paylaşım ayarları as sentences', () => {
     await dialog();
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
+});
+
+describe('what the settings say of approval', () => {
+  const account = (id: string, name: string, approval: boolean) => ({ ...socialAccount, capability_id: id, name, requires_human_approval: approval });
+  const description = async () => (await dialog()).getAttribute('aria-describedby')!;
+
+  it.each([
+    ['no account waits for approval', [account('ig1', '@atolye', false)], 'Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.'],
+    ['every account does (the owner’s)', [account('ig1', 'figurunica instagram', true)], 'Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.'],
+    ['one of two does', [account('ig1', 'figurunica instagram', true), account('tt1', '@atolye.video', false)], 'Her paylaşımı onayınızı bekleyen hesap: figurunica instagram; diğerlerinde onay gerekmez.'],
+    ['two of three do', [account('a', '@bir', true), account('b', '@iki', true), account('c', '@üç', false)], 'Her paylaşımı onayınızı bekleyen hesaplar: @bir, @iki; diğerlerinde onay gerekmez.'],
+    ['four of five do', ['a', 'b', 'c', 'd', 'e'].map((id) => account(id, `@${id}`, id !== 'e')), '4 hesapta her paylaşım onayınızı bekler; diğerlerinde onay gerekmez.'],
+  ])('when %s', async (_, accounts, text) => {
+    mockFetch({ ...answers, 'GET /api/social/accounts': accounts });
+    open();
+    const id = await description();
+    await waitFor(() => expect(document.getElementById(id)).toHaveTextContent(text));
   });
 });

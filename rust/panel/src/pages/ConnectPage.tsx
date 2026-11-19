@@ -16,6 +16,7 @@ import {
   type Provider,
 } from '@/api/types';
 import { useSession } from '@/auth/useSession';
+import { ConnectorRenewal } from '@/components/ConnectorRenewal';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
 import {
@@ -372,11 +373,13 @@ function BusinessAppSharing({ sharing }: { sharing: unknown }) {
 function ConnectorAccess({ capability }: { capability: Capability }) {
   const { t } = useTranslation();
   const access = capability.connector_public.access as { expires_at?: unknown } | undefined;
+  const asset = capability.connector_public.asset as { onboarding?: unknown } | undefined;
+  const reconnect = capability.connector_public.reconnect_required === true;
   return <>
-    {capability.connector_public.reconnect_required === true &&
-      <Callout tone="warning">{t('providerSetup.reconnect')}</Callout>}
-    {typeof access?.expires_at === 'string' &&
-      <p>{t('providerSetup.expires')}: <time dateTime={access.expires_at}>{access.expires_at}</time></p>}
+    {reconnect && <Callout tone="warning">{t('providerSetup.reconnect')}</Callout>}
+    {/* Once it asks to be reconnected, that is all a person needs to know of its access. */}
+    {!reconnect && typeof access?.expires_at === 'string' &&
+      <ConnectorRenewal kind={capability.kind_key} expiresAt={access.expires_at} onboarding={asset?.onboarding} />}
     {capability.kind_key === 'whatsapp_cloud' && <BusinessAppSharing sharing={capability.connector_public.business_app} />}
   </>;
 }
