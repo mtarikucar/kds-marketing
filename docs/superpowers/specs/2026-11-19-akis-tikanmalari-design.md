@@ -147,7 +147,32 @@ Where the journey tests live and how to extend them: §7.
 
 ## 5. Copy
 
-The checklist lines and the corrected blocked texts, as built, are listed here once the panel change lands (same branch).
+Checklist lines (`stops.*`, panel `pages/social/Stops.tsx`; `{{platform}}` is the account's kind, `{{format}}` the format's name):
+
+| Code | Line | Action, or what happens by itself |
+|---|---|---|
+| `reconnect` | {{platform}} bağlantısı şu an paylaşım yapamıyor. | Yeniden bağla |
+| `paused` | Bu hesapta paylaşım durduruldu. | Sürdür (on the account itself: "Yukarıdaki anahtardan sürdürün.") |
+| `braked` | Tüm paylaşımlar durduruldu. | Paylaşım ayarlarından açılır. |
+| `no_approved_strategy` | Onaylı strateji yok; hiçbir paylaşım planlanmaz. | Stratejiye git |
+| `channel_not_in_strategy` | Strateji {{platform}} kanalını seçmemiş; buraya paylaşım çıkmaz. | Strateji taslağını hazırla → "Taslak hazır. Onaya git" |
+| `no_hypothesis` | Stratejide {{platform}} için hipotez yok: ajan buraya kendi başına paylaşım planlamaz. Sizin istediğiniz içerikler yine paylaşılır. | Strateji taslağını hazırla |
+| `media_missing` | {{platform}} yalnızca video alır; bu içerikte video yok. (other formats: "Bu içerikte {{platform}} için uygun dosya yok ({{format}}).") | Video ekle / Dosya ekle |
+| `only_format` | {{platform}} yalnızca video alır. | — (left out when `media_missing` already says it) |
+| `posting_screen` | Her {{platform}} paylaşımını yayından önce {{platform}} ekranında siz tamamlarsınız. | Sırası gelince size sorulur. |
+| `approval` | Her paylaşım yayından önce onayınızı bekler. | Sırası gelince size sorulur. |
+| `lead` | {{format}} en erken {{hours}} saat sonrasına planlanır. ("TikTok videosu en erken 48 saat sonrasına planlanır.") | Zaman buna göre seçilir. |
+
+Where: the connect page's success state ("Hesap bağlandı" / "Bu hesaba paylaşım çıkmadan önce bilmeniz gerekenler:" / "Devam"), under a social account's header when a line blocks or the agent posts nothing there by itself, in the new-content composer for the chosen account, and on an opened content for each account it names. TikTok's badge reads "Her paylaşım TikTok ekranını bekler".
+
+Blocked texts (`socialAccounts.blocked.*`), as corrected:
+
+- `material_removed`: Bu sürümdeki bir dosya silindi. Yeni dosyayla düzenleme isteyin. (İçeriği aç)
+- `no_approved_strategy`: Onaylı strateji yok; paylaşım planlanamaz. Strateji onaylanınca kendiliğinden devam eder.
+- `media_not_accepted`: Bu sürümün dosyaları hesabın platformuna uymuyor (örneğin TikTok yalnızca video alır). Uygun dosyayla düzenleme isteyin. (İçeriği aç)
+- `channel_not_in_strategy`: Onaylı strateji bu hesabın kanalını seçmemiş. Stratejiye eklenince kendiliğinden devam eder.
+- `hypothesis_does_not_post`: Onaylı stratejide bu hesabın kanalı için paylaşım yapan bir hipotez yok. Stratejiye eklenince kendiliğinden devam eder. (was: "…Sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar…", not the cause)
+- Strategy gap `hypothesisChannel`: {{n}}. hipotez: bu kanal stratejinin kanalları arasında yok ya da bu kanalda bağlı hesap yok. (was: "bu kanal için bağlı hesap yok", false when the account is connected but the channel not chosen)
 
 ## 6. Needs the owner's decision
 
@@ -168,4 +193,8 @@ These change who may publish or send what, weaken a protection, or need a produc
 
 ## 7. Journey tests
 
-Filled in with the journey tests (same branch).
+`rust/crates/jt_app/tests/journeys.rs`, over the in-memory fakes and scripted providers, no network. A **platform** is one `Platform` row (kind, provider, format, a fitting material, its scopes, whether its policy asks for approval); `journey(p)` walks: connect an account of the kind with a strategy whose hypotheses post elsewhere → the account's stops say `no_hypothesis` (advice) and its person's step → the owner asks for a content naming the account, with a fitting material (no `media_missing`) → the agent delivers under the strategy's own hypothesis → `versions_waiting` offers the account with `owner_request` and the right `human_gate`, and the agent's check-in lists it → the version gets its time, attributed to the owner's request (ledger `social.version.attributed`), the strategy page does not list that hypothesis → the content waits for the owner exactly when the platform or policy asks → the owner's one step (TikTok screen, or approval) → the publisher sends it.
+
+Platforms walked today: TikTok (posting screen), X (no gate), X with approval. Variants: a strategy change mid-way (the production sequence: blocked `hypothesis_does_not_post`, approve TikTok hypotheses, schedulable at once under the same segment's hypothesis, no revision); a post taken back by a strategy change waits again; an account paused and resumed; a material deleted (`material_removed`, then a revision goes out); a revision after scheduling; a post past its grace waiting for the owner's screen waits for a new time; an agent that never comes (queued, not a problem; `media_missing` said at once). Strategy rules are in `tests/strategy.rs` (`add_channel…`, `the_owners_request…`).
+
+**To extend**: a new platform is a new `Platform` and one `#[tokio::test]` calling `journey`; Instagram, Facebook and LinkedIn are the next rows (their publishers need the media-URL path of the scripted Meta/LinkedIn connectors set up). A new gate is asserted where the journey meets it: the reason it gives, then clear its cause and assert the work goes on with nothing redone.
