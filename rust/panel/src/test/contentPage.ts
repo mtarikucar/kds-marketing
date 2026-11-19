@@ -46,7 +46,6 @@ export function tree(patch: Partial<TreeOut> = {}): TreeOut {
 export function view(patch: Partial<OlayViewOut> = {}): OlayViewOut {
   return {
     olay: null,
-    flow: { files: 0, analysed: 0, in_queue: 0, contents: 0, in_production: 0, awaiting_time: 0, awaiting_approval: 0, published: 0, problems: 0 },
     contents: [], files: [], needs: [],
     ...patch,
   } as OlayViewOut;

@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import i18n from 'i18next';
 import { renderAt } from '@/test/render';
-import { contentPageFetch, folder, olay, queueItem, row, stages, tree, view } from '@/test/contentPage';
+import { contentPageFetch, folder, queueItem, row, stages, tree } from '@/test/contentPage';
 import { area, detail } from '@/test/content';
 import { dayFrom } from '@/test/materials';
 import { groupTree } from './ContentTree';
@@ -30,7 +30,9 @@ describe('a finished package with no time', () => {
     });
     renderAt('/content');
     const t = await screen.findByRole('article', { name: 'İçerik t' });
-    expect(within(stagesOf(t)[5]).getByText('Paket hazır · paylaşım zamanı bekliyor', { selector: 'span' })).toBeInTheDocument();
+    // The stage names it; on screen the line under the track says it, once.
+    expect(stagesOf(t)[5]).toHaveTextContent('Onay: sürüyor · Paket hazır · paylaşım zamanı bekliyor');
+    expect(within(t).getAllByText('Paket hazır · paylaşım zamanı bekliyor')).toHaveLength(1);
     expect(within(t).getByText(/Ajan bir sonraki çalışmasında her sürüme hesap ve saat verecek/)).toBeVisible();
     expect(within(t).getByRole('link', { name: 'Zamanı siz verin' })).toHaveAttribute('href', '/social?version=v1');
     // "Sizi bekleyenler" counts it, and leads to its folder.
@@ -51,23 +53,11 @@ describe('a finished package with no time', () => {
     });
     renderAt('/content');
     const x = await screen.findByRole('article', { name: 'İçerik x' });
-    expect(stagesOf(x)[6].querySelector('p')?.textContent).toBe('Yayın: sorun var');
-    expect(within(stagesOf(x)[6]).getByText('Reels hiçbir hesaba gidemiyor')).toBeInTheDocument();
+    expect(stagesOf(x)[6].querySelector('[data-stage-label]')?.textContent).toBe('Yayın: sorun var · Reels hiçbir hesaba gidemiyor');
     expect(within(x).getByText('Hazır sürüm hiçbir hesaba gidemiyor')).toBeVisible();
     expect(within(x).getByText(/Uygun hesapların paylaşımı durdurulmuş/)).toBeVisible();
     expect(within(x).getByRole('link', { name: 'Sosyal medyada çöz' })).toHaveAttribute('href', '/social?version=v1');
     expect(within(x).queryByText('Takıldı')).not.toBeInTheDocument();
-  });
-
-  it('counts the contents waiting for a time in the olay flow', async () => {
-    const o = olay('o1', { title: 'Kasım', starts_on: dayFrom(-2), ends_on: dayFrom(2) });
-    contentPageFetch({
-      'GET /api/content/tree': tree({ olays: [{ ...folder(), olay: o }] as never }),
-      'GET /api/content/olays/o1': view({ olay: o as never, flow: { files: 1, analysed: 1, in_queue: 0, contents: 1, in_production: 0, awaiting_time: 1, awaiting_approval: 0, published: 0, problems: 0 } }),
-    });
-    renderAt('/content?olay=o1');
-    const flow = await screen.findByRole('list', { name: 'Olayın akışı' });
-    expect(within(flow).getByText('Zaman bekleyen').previousSibling).toHaveTextContent('1');
   });
 });
 

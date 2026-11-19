@@ -4447,17 +4447,6 @@
       "filesOnly": "İçerikleri görme izniniz yok",
       "filesOnlyHelp": "Soldaki klasörlerden dosyalara ve eksiklere ulaşabilirsiniz."
     },
-    "flow": {
-      "label": "Olayın akışı",
-      "files": "Dosya",
-      "analysed": "Analiz",
-      "analysedQueue": "Analiz · {{n}} sırada",
-      "inProduction": "Üretimde",
-      "awaitingTime": "Zaman bekleyen",
-      "awaitingApproval": "Onay bekleyen",
-      "published": "Yayında",
-      "problems": "Sorunlu"
-    },
     "contents": {
       "title": "İçerikler",
       "empty": "Henüz içerik yok",
@@ -4473,7 +4462,11 @@
       "noShareHelp": "İzni verilmeyen dosyadan içerik üretilmez; sistem bekler. Dosyayı açıp paylaşım iznini verin ya da paylaşılmayacak diye işaretleyin. “Bakılacaklar” bu dosyaları gösterir.",
       "layout": "Görünüm",
       "grid": "Izgara",
-      "list": "Liste"
+      "list": "Liste",
+      "analysing_one": "{{count}} analiz bekliyor",
+      "analysing_other": "{{count}} analiz bekliyor",
+      "erased_one": "{{count}} silinmiş dosya",
+      "erased_other": "{{count}} silinmiş dosya"
     },
     "needs": {
       "title": "Eksikler",
@@ -4486,7 +4479,10 @@
       "status": {
         "done": "Yapıldı",
         "dismissed": "Gerek yok dendi"
-      }
+      },
+      "more_one": "{{count}} tane daha göster",
+      "more_other": "{{count}} tane daha göster",
+      "less": "Daha azını göster"
     },
     "olay": {
       "proposed": "Önerildi",
@@ -4502,7 +4498,9 @@
         "title": "Olaya bir başlık verin.",
         "dates": "Başlangıç tarihi girin; bitiş başlangıçtan önce olamaz.",
         "occasion": "Takvimdeki günü seçin."
-      }
+      },
+      "more": "devamı",
+      "less": "kısalt"
     },
     "day": {
       "phase": {

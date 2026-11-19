@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderAt } from '@/test/render';
 import { coreModules, legacyModules } from '@/test/modules';
-import { contentPageFetch, folder, material, meWith, olay, queueItem, row, stages, tree, view } from '@/test/contentPage';
+import { contentPageFetch, folder, intelligence, material, meWith, olay, queueItem, row, stages, tree, view } from '@/test/contentPage';
 import { detail, pack, version } from '@/test/content';
 import { dayFrom } from '@/test/materials';
 import { groupTree } from './ContentTree';
@@ -12,6 +12,12 @@ const o1 = olay('o1', { title: 'Yılbaşı', starts_on: dayFrom(-2), ends_on: da
 const old = olay('o2', { title: 'Cadılar', starts_on: dayFrom(-30), ends_on: dayFrom(-20) });
 const late = olay('o3', { title: 'Ekim çekimi', starts_on: dayFrom(-40), ends_on: dayFrom(-35) });
 const next = olay('o4', { title: 'Sergi', starts_on: dayFrom(10), ends_on: dayFrom(11) });
+/** What a sighted person reads: the text without what is there for screen readers only. */
+function visibleText(el: HTMLElement): string {
+  const copy = el.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('.sr-only').forEach((n) => n.remove());
+  return copy.textContent ?? '';
+}
 const day = { key: 'sevgililer', year: 2027, name: 'Sevgililer Günü', kind: 'special_day', window_start: dayFrom(20), window_end: dayFrom(20), prepares_from: dayFrom(5) };
 
 describe('the tree', () => {
@@ -84,41 +90,42 @@ describe('a pipeline row', () => {
     }),
   ];
 
-  it('shows each stage in its server state, its outputs, and the one thing that waits under the track', async () => {
+  it('names every stage with its state and outputs, shows only the current one\'s, and the one thing that waits under the track', async () => {
     contentPageFetch({ 'GET /api/content/areas': { areas: rows, next_cursor: null, next_done_before: null } });
     renderAt('/content');
     const a = await screen.findByRole('article', { name: 'İçerik a' });
     const stagesOf = (el: HTMLElement) => within(within(el).getByRole('list', { name: 'Üretim aşamaları' })).getAllByRole('listitem');
-    expect(stagesOf(a).map((li) => li.querySelector('p')?.textContent)).toEqual([
-      'Hazırlık: tamamlandı', 'Fikir: tamamlandı', 'Metin: tamamlandı', 'Görsel: sizi bekliyor',
+    const label = (li: HTMLElement) => li.querySelector('[data-stage-label]')?.textContent;
+    expect(stagesOf(a).map(label)).toEqual([
+      'Hazırlık: tamamlandı · Instagram · Reels', 'Fikir: tamamlandı · Bir figür, bir hatıra', 'Metin: tamamlandı', 'Görsel: sizi bekliyor · Ajan 2 çekim istedi',
       'Paket: sırada', 'Onay: sırada', 'Yayın: sırada', 'Sonuç: sırada',
     ]);
-    expect(within(stagesOf(a)[0]).getByText('Instagram · Reels')).toBeInTheDocument();
-    expect(within(stagesOf(a)[1]).getByText('Bir figür, bir hatıra')).toBeInTheDocument();
-    // A finished stage that reported no output shows none; a stage still to do shows nothing.
-    expect(stagesOf(a)[2].textContent).toBe('Metin: tamamlandı');
-    expect(stagesOf(a)[4].textContent).toBe('Paket: sırada');
-    expect(within(a).getAllByText('Ajan 2 çekim istedi').length).toBeGreaterThan(0);
+    // A finished stage's output is in its name only; on screen the row shows its tick.
+    expect(visibleText(a)).not.toContain('Instagram · Reels');
+    expect(visibleText(a)).not.toContain('Bir figür, bir hatıra');
+    // What the bar says is said once.
+    expect(visibleText(a).match(/Ajan 2 çekim istedi/g)).toHaveLength(1);
     expect(within(a).getByRole('link', { name: 'Eksiklere git' })).toHaveAttribute('href', '/content?olay=genel#eksikler');
 
     const b = screen.getByRole('article', { name: 'İçerik b' });
-    expect(stagesOf(b)[4].querySelector('p')?.textContent).toBe('Paket: sorun var');
+    expect(label(stagesOf(b)[4])).toBe('Paket: sorun var · Takıldı');
     expect(within(b).getByText('Sorun var · Paket')).toBeVisible();
+    expect(visibleText(b)).not.toContain('Takıldı');
 
     const c = screen.getByRole('article', { name: 'İçerik c' });
-    expect(stagesOf(c).every((li) => li.querySelector('p')?.textContent?.endsWith('tamamlandı'))).toBe(true);
-    expect(within(stagesOf(c)[4]).getByText('Reels')).toBeInTheDocument();
-    expect(within(stagesOf(c)[5]).getByText('Onay gerekmedi')).toBeInTheDocument();
-    expect(within(stagesOf(c)[6]).getByText(/@figurunica · yayında/)).toBeInTheDocument();
-    // Sonuç: the measured numbers only, a null counter left out.
-    const sonuc = stagesOf(c)[7];
-    expect(within(sonuc).getByText('erişim')).toBeInTheDocument();
-    expect(within(sonuc).getByText('kayıt')).toBeInTheDocument();
-    expect(within(sonuc).queryByText('beğeni')).not.toBeInTheDocument();
+    expect(stagesOf(c).every((li) => label(li)?.split(' · ')[0].endsWith('tamamlandı'))).toBe(true);
+    expect(label(stagesOf(c)[4])).toContain('Reels');
+    expect(label(stagesOf(c)[5])).toContain('Onay gerekmedi');
+    expect(label(stagesOf(c)[6])).toMatch(/@figurunica · yayında/);
+    // All done: the row speaks of its results, the measured numbers only, a null counter left out.
+    expect(visibleText(stagesOf(c)[7])).toContain('6.240 erişim · 412 kayıt');
+    expect(visibleText(c)).not.toContain('beğeni');
+    expect(visibleText(c)).not.toContain('@figurunica');
 
     const d = screen.getByRole('article', { name: 'İçerik d' });
-    expect(stagesOf(d)[0].querySelector('p')?.textContent).toBe('Hazırlık: sürüyor');
-    expect(within(stagesOf(d)[0]).getByText('Hedef kitleyi tanımla')).toBeInTheDocument();
+    expect(label(stagesOf(d)[0])).toBe('Hazırlık: sürüyor · Hedef kitleyi tanımla');
+    expect(visibleText(stagesOf(d)[0])).toContain('Hedef kitleyi tanımla');
+    expect(stagesOf(d)[0]).toHaveAttribute('aria-current', 'step');
   });
 
   it('opens to the fourteen steps and the package versions in a phone frame, in the address', async () => {
@@ -198,14 +205,16 @@ describe('uploads and the analysis queue', () => {
 });
 
 describe('an olay', () => {
-  it('shows a proposed olay with its confirmation, its flow, files and Eksikler', async () => {
+  it('shows a proposed olay with its confirmation, files and Eksikler', async () => {
     const proposed = { ...o1, status: 'proposed', confirmed: null };
     const calls = contentPageFetch({
       'GET /api/content/tree': tree({ olays: [{ ...folder({ waits: ['olay_proposed'] }), olay: proposed }] as never }),
       'GET /api/content/olays/o1': view({
         olay: proposed as never,
-        flow: { files: 2, analysed: 1, in_queue: 1, contents: 0, in_production: 0, awaiting_time: 0, awaiting_approval: 0, published: 0, problems: 0 },
-        files: [{ material: material('m1', { title: 'Kupa ön' }), intelligence: { status: 'completed' }, used_in: [] }] as never,
+        files: [
+          { material: material('m1', { title: 'Kupa ön' }), intelligence: intelligence(), used_in: [] },
+          { material: material('m2', { title: 'Kupa yan' }), intelligence: intelligence({ status: 'pending' }), used_in: [] },
+        ] as never,
         needs: [{ kind: 'shoot_request', id: 'r1', text: 'Kutudan çıkış anı', status: 'open', created_at: '2026-10-02T09:00:00Z', resolved_at: null, project_id: null, project_title: null, material_ids: [], asked_by: null }],
       }),
       'POST /api/studio/olays/o1/confirm': { ...o1 },
@@ -213,7 +222,9 @@ describe('an olay', () => {
     });
     renderAt('/content?olay=o1');
     expect(await screen.findByText('Ajan bu olayı önerdi')).toBeVisible();
-    expect(screen.getByRole('list', { name: 'Olayın akışı' })).toHaveTextContent('Analiz · 1 sırada');
+    const files = screen.getByRole('region', { name: 'Dosyalar' });
+    // The file waiting for its analysis is said once beside the heading, leading to the queue.
+    expect(within(files).getByRole('link', { name: '1 analiz bekliyor' })).toHaveAttribute('href', '/content?view=queue');
     expect(screen.getByRole('link', { name: /Kupa ön/ })).toHaveAttribute('href', '/content?olay=o1&file=m1');
     const needs = screen.getByRole('region', { name: 'Eksikler' });
     await userEvent.click(within(needs).getByRole('button', { name: 'Gerek yok' }));
