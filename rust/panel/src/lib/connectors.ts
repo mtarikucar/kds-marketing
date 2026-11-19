@@ -68,6 +68,25 @@ export function tokenNeedsExternalId(kind: string): boolean {
   return kind === 'facebook_page' || kind === 'whatsapp_cloud';
 }
 
+/**
+ * Who keeps a connection's access alive past its expiry, as the server's hourly renewal does it
+ * (`jt_app::usecases::jobs::due_for_refresh`):
+ * - `self`: X and TikTok, renewed every run whatever the expiry (their refresh tokens outlive the
+ *   hours-long access tokens; TikTok's lasts a year, then TikTok asks for a new sign-in);
+ * - `person`: a WhatsApp number connected through the WhatsApp Business app's sign-in, whose
+ *   token is never renewed: a person signs in again when it ends;
+ * - `tries`: any other kind, renewed in the week before its expiry when the provider gives a way
+ *   to (a LinkedIn grant may have none); when it cannot be, the capability asks to be reconnected.
+ */
+export type Renewal = 'self' | 'person' | 'tries';
+
+export function renewalOf(kind: string, onboarding?: unknown): Renewal {
+  const provider = providerOf(kind);
+  if (provider === 'x' || provider === 'tiktok') return 'self';
+  if (kind === 'whatsapp_cloud' && onboarding === 'whatsapp_business_app') return 'person';
+  return 'tries';
+}
+
 /** How soon an expiring token is flagged. */
 export const TOKEN_WARNING_DAYS = 7;
 
@@ -82,7 +101,8 @@ export type HealthView =
 
 export function healthView(health: ConnectorHealth, now: Date = new Date()): HealthView {
   if (health.reconnect_required) return { kind: 'reconnect' };
-  if (health.token_expires_at) {
+  // X's and TikTok's access tokens live hours and are renewed every hour: their end is no warning.
+  if (health.token_expires_at && renewalOf(health.kind_key) !== 'self') {
     const left = new Date(health.token_expires_at).getTime() - now.getTime();
     if (left <= 0) return { kind: 'expired' };
     if (left <= TOKEN_WARNING_DAYS * 86_400_000) return { kind: 'expiresSoon', at: health.token_expires_at };

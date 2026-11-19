@@ -376,12 +376,14 @@ it('provider_missing_app_is_not_connection_success', async()=>{
   expect(screen.queryByText(tr.connect.result.verified)).not.toBeInTheDocument();
 });
 
-it('reconnect_and_expiry_are_visible',async()=>{
+it('reconnect_is_visible_and_says_alone_what_to_do',async()=>{
   mockFetch({'GET /api/auth/me':me,[`GET /api/capabilities/${PAGE_ID}`]:{...lostPage,capability:{...lostPage.capability,connector_public:{reconnect_required:true,access:{expires_at:'2026-10-24T12:00:00Z'}}}},
     'GET /api/connectors/hooks':{meta:{url:'https://public.jeeta.test/jeeta/hooks/meta',verify_token_hint:'operator'},netgsm:[]}});
   renderAt(`/connect?capability=${PAGE_ID}`);
   expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
-  expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
+  // Asked to reconnect: no expiry beside it, and never the raw instant.
+  expect(screen.queryByText(/2026-10-24T12:00:00Z/)).not.toBeInTheDocument();
+  expect(document.querySelector('[data-renewal]')).toBeNull();
   // Provider-app setup is operator material, folded away until opened.
   fireEvent.click(await screen.findByRole('button',{name:new RegExp(tr.providerSetup.title)}));
   expect(await screen.findByDisplayValue('https://public.jeeta.test/jeeta/oauth/callback/meta')).toBeInTheDocument();
@@ -398,7 +400,28 @@ it('shows access metadata on the freshly connected result as well as on revisit'
   await user.type(screen.getByLabelText(tr.connect.credentials.msgheader),'ALFA');
   await user.click(screen.getByRole('button',{name:tr.connect.credentials.submit}));
   expect(await screen.findByText('Yeniden bağlantı gerekli')).toBeInTheDocument();
-  expect(screen.getByText('2026-10-24T12:00:00Z')).toBeInTheDocument();
+  expect(screen.queryByText(/2026-10-24T12:00:00Z/)).not.toBeInTheDocument();
+});
+
+describe('what an access expiry means', () => {
+  const at = '2026-11-20T07:24:46.127254514Z';
+  const connected = (kind_key: string, extra: Record<string, unknown> = {}) => ({
+    ...lostPage,
+    capability: { ...lostPage.capability, kind_key, status: 'verified', connector_public: { reconnect_required: false, access: { expires_at: at }, ...extra } },
+  });
+  const shown = new Intl.DateTimeFormat('tr-TR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(at));
+
+  it.each([
+    ['tiktok', {}, 'Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez. TikTok yılda bir kez yeniden bağlanmanızı ister.'],
+    ['x', {}, 'Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez.'],
+    ['facebook_page', {}, `Erişim ${shown} tarihinde sona erer. Jeeta bundan önce yenilemeyi dener; yenileyemezse yeniden bağlamanızı ister.`],
+    ['whatsapp_cloud', { asset: { onboarding: 'whatsapp_business_app' } }, `Bu bağlantı ${shown} tarihinde sona erer; o zaman yeniden bağlamanız gerekir.`],
+  ])('%s', async (kind, extra, sentence) => {
+    mockFetch({ 'GET /api/auth/me': me, [`GET /api/capabilities/${PAGE_ID}`]: connected(kind, extra), 'GET /api/connectors/hooks': { meta: null, netgsm: [] } });
+    renderAt(`/connect?capability=${PAGE_ID}`);
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    expect(screen.queryByText(/2026-11-20T07:24/)).not.toBeInTheDocument();
+  });
 });
 
 it('keeps the browser and password managers from filling any provider credential', async () => {

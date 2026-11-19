@@ -267,4 +267,21 @@ describe('OAuthCallbackPage', () => {
     renderAt('/oauth/callback/meta?error=access_denied');
     expect(await screen.findByRole('link', { name: tr.oauthCallback.restart })).toHaveAttribute('href', '/connect');
   });
+
+  it('says a TikTok sign-in renews itself and a Meta one tries to, never a raw instant', async () => {
+    const at = '2026-11-20T07:24:46.127254514Z';
+    mockFetch({ 'GET /api/auth/me': me, [`GET /api/connectors/oauth/callback/tiktok`]: {
+      pending_id: PENDING_ID, assets: [{ kind_key: 'tiktok', external_id: 'open-1', name: 'atolye.video', public: { expires_at: at, scopes: ['video.publish'] } }],
+    }, [`GET ${CALLBACK}`]: pendingAssets });
+    renderAt('/oauth/callback/tiktok?state=s&code=c');
+    expect(await screen.findByText('Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez. TikTok yılda bir kez yeniden bağlanmanızı ister.')).toBeInTheDocument();
+    expect(screen.queryByText(/2026-11-20T07:24/)).not.toBeInTheDocument();
+  });
+
+  it('gives a Meta access end as a date and says Jeeta tries to renew it', async () => {
+    mockFetch({ 'GET /api/auth/me': me, [`GET ${CALLBACK}`]: pendingAssets });
+    renderAt('/oauth/callback/meta?state=s&code=c');
+    const shown = new Intl.DateTimeFormat('tr-TR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date('2026-12-21T09:00:00Z'));
+    expect(await screen.findByText(`Erişim ${shown} tarihinde sona erer. Jeeta bundan önce yenilemeyi dener; yenileyemezse yeniden bağlamanızı ister.`)).toBeInTheDocument();
+  });
 });

@@ -1482,7 +1482,13 @@
         "status": "Durum"
       },
       "probing": "Yoklanıyor…",
-      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…"
+      "redirecting": "Sağlayıcıya yönlendiriliyorsunuz…",
+      "renewal": {
+        "self": "Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez.",
+        "selfTiktok": "Bu bağlantı kendini yeniler; sizin bir şey yapmanız gerekmez. TikTok yılda bir kez yeniden bağlanmanızı ister.",
+        "person": "Bu bağlantı {{at}} tarihinde sona erer; o zaman yeniden bağlamanız gerekir.",
+        "tries": "Erişim {{at}} tarihinde sona erer. Jeeta bundan önce yenilemeyi dener; yenileyemezse yeniden bağlamanızı ister."
+      }
     },
     "hooks": {
       "title": "Webhook adresleri",
@@ -1763,7 +1769,6 @@
     "assetsLabel": "Bulunan varlıklar",
     "externalId": "Kimlik: {{id}}",
     "scopes": "İzinler: {{scopes}}",
-    "expires": "Erişimin bitişi: {{at}}",
     "together": "Aynı hesap; birlikte bağlanır: {{kinds}}",
     "none": "Bu hesabın bağlanabilecek bir varlığı bulunamadı.",
     "confirm": "Seçilenleri bağla",
@@ -2536,7 +2541,6 @@
     "help": "Bu dönüş adreslerini sağlayıcı uygulamasına kaydedin. Uygulama bilgilerini ve webhook doğrulamasını işletmen yapılandırır.",
     "callback": "{{provider}} dönüş adresi",
     "reconnect": "Yeniden bağlantı gerekli",
-    "expires": "Erişim bitiş zamanı",
     "businessApp": {
       "title": "WhatsApp Business uygulamasından aktarım",
       "contacts": "Kişiler",

@@ -1482,7 +1482,13 @@
         "status": "Status"
       },
       "probing": "Probing…",
-      "redirecting": "Taking you to the provider…"
+      "redirecting": "Taking you to the provider…",
+      "renewal": {
+        "self": "This connection renews itself; nothing needs doing.",
+        "selfTiktok": "This connection renews itself; nothing needs doing. TikTok asks you to connect again about once a year.",
+        "person": "This connection ends on {{at}}; it must be connected again then.",
+        "tries": "Access ends on {{at}}. Jeeta tries to renew it before then; if it cannot, it asks you to connect again."
+      }
     },
     "hooks": {
       "title": "Webhook addresses",
@@ -1763,7 +1769,6 @@
     "assetsLabel": "Assets found",
     "externalId": "Id: {{id}}",
     "scopes": "Permissions: {{scopes}}",
-    "expires": "Access ends: {{at}}",
     "together": "One account; connected together: {{kinds}}",
     "none": "This account reaches nothing that can be connected.",
     "confirm": "Connect the selected",
@@ -2536,7 +2541,6 @@
     "help": "Register these callback addresses in the provider application. The operator configures app credentials and webhook verification.",
     "callback": "{{provider}} callback address",
     "reconnect": "Reconnection required",
-    "expires": "Access expires at",
     "businessApp": {
       "title": "Sharing from the WhatsApp Business app",
       "contacts": "Contacts",

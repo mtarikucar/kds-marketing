@@ -5,6 +5,7 @@ import { useEntryCopy } from './entryCopy';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { completeOAuth, confirmAssets } from '@/api/connectors';
 import type { AssetPublic, PendingAssetsOut } from '@/api/types';
+import { ConnectorRenewal } from '@/components/ConnectorRenewal';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import {
   Badge,
@@ -22,7 +23,6 @@ import {
 } from '@/components/ui';
 import { kindLabel } from '@/lib/capabilities';
 import { callbackErrorMessage, oauthProviderErrorMessage } from '@/lib/errors';
-import { formatDateTime } from '@/lib/format';
 import { forgetFlow, rememberedFlow, restartPath, type RememberedFlow } from '@/lib/oauthFlow';
 import { invalidateCapabilities } from './capabilities/queries';
 
@@ -92,13 +92,15 @@ function AssetRow({
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const copy = useEntryCopy();
   const account = assets[0].external_id;
   const id = `asset-${account}`;
   const each = assets.map(facts);
   const scopes = [...new Set(each.flatMap((f) => f.scopes))];
   const expiresAt = each.flatMap((f) => (f.expiresAt ? [f.expiresAt] : [])).sort()[0] ?? null;
+  // The WhatsApp Business app's sign-in marks its asset; its token is never renewed.
+  const onboarding = assets.map((asset) => (asset.public as Record<string, unknown> | null)?.onboarding).find((o) => o !== undefined);
   const plain = [...new Map(each.flatMap((f) => f.plain).map((kv) => [kv.join('='), kv] as const)).values()];
   const names = [...new Set(assets.map((asset) => asset.name))];
   const kinds = assets.map((asset) => kindLabel(t, asset.kind_key));
@@ -127,9 +129,7 @@ function AssetRow({
           <p className="text-caption text-muted-foreground">{t('oauthCallback.scopes', { scopes: scopes.join(', ') })}</p>
         )}
         {expiresAt && (
-          <p className="text-caption text-muted-foreground">
-            {t('oauthCallback.expires', { at: formatDateTime(expiresAt, i18n.language) })}
-          </p>
+          <ConnectorRenewal kind={assets[0].kind_key} expiresAt={expiresAt} onboarding={onboarding} className="text-caption text-muted-foreground" />
         )}
         {plain.length > 0 && (
           <dl className="flex flex-wrap gap-x-3 gap-y-0.5 text-caption text-muted-foreground">
