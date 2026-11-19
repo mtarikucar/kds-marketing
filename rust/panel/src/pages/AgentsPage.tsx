@@ -1,159 +1,70 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { listAgents } from '@/api/agents';
 import { listKeys, revokeKey } from '@/api/apiKeys';
-import type { AgentConnectionOut, AgentWakeOut, KeySummary } from '@/api/types';
+import { listLedger } from '@/api/ledger';
+import { getPending } from '@/api/work';
 import { useSession } from '@/auth/useSession';
-import { PermissionList } from '@/components/PermissionList';
 import { QueryState } from '@/components/QueryState';
-import { KeyStatusBadge } from '@/components/StatusBadges';
-import { Badge, Button, ConfirmDialog, EmptyState, PageHeader, cn, toast } from '@/components/ui';
+import { Button, ConfirmDialog, EmptyState, PageHeader, toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
-import { formatDateTime, formatNumber, formatRelative } from '@/lib/format';
+import { useModules } from '@/lib/modules';
 import { can } from '@/lib/roles';
-import { useAgentWakes } from '@/lib/wake';
-import { ConnectAgent, ConnectAgentDialog, KEYS_KEY } from './agents/keys';
-import { KeyWake } from './agents/wake';
+import { useAgentWakes, useNow } from '@/lib/wake';
+import { AgentRow } from './agents/AgentRow';
+import { useAgentCopy } from './agents/copy';
+import { ConnectAgentDialog, KEYS_KEY } from './agents/keys';
+import { agentsOf, groupCounts, type Agent, type Group } from './agents/model';
+import { tabClass } from './prospects/PoolHeader';
 
-/** Contact within this many minutes reads as recent; it is a record of contact, never an online claim. */
-const RECENT_MINUTES = 15;
+/** How many of the agents' latest ledger entries an opened row looks through for its actions. */
+const LEDGER_LOOK = 200;
 
-/**
- * One way into the workspace: a key and the agents that connected with it. `key` is absent for a
- * member who may not read keys; the agents then stand under the key's name alone.
- */
-export interface Access {
-  id: string;
-  name: string;
-  key: KeySummary | null;
-  agents: AgentConnectionOut[];
-}
-
-const time = (iso: string | null | undefined) => (iso ? Date.parse(iso) || 0 : 0);
+type Filter = Exclude<Group, 'revoked'>;
+const CHIPS: { group: Filter; label: 'chipWorking' | 'chipAttention' | 'chipUnused' }[] = [
+  { group: 'attention', label: 'chipAttention' },
+  { group: 'working', label: 'chipWorking' },
+  { group: 'unused', label: 'chipUnused' },
+];
 
 /**
- * Keys and connections as one list: every key with the agents that used it, and the agents of a
- * key the viewer cannot read under that key's name. The latest contact comes first, then the
- * newest key that nobody has used yet.
- */
-export function accessesOf(keys: KeySummary[] | undefined, agents: AgentConnectionOut[]): Access[] {
-  const byKey = new Map<string, Access>();
-  for (const key of keys ?? []) byKey.set(key.id, { id: key.id, name: key.name, key, agents: [] });
-  for (const agent of agents) {
-    const access = byKey.get(agent.api_key_id)
-      ?? { id: agent.api_key_id, name: agent.api_key_name, key: null, agents: [] };
-    access.agents.push(agent);
-    byKey.set(access.id, access);
-  }
-  const contact = (access: Access) => Math.max(0, ...access.agents.map(agent => time(agent.last_seen_at)));
-  return [...byKey.values()]
-    .map(access => ({ ...access, agents: [...access.agents].sort((a, b) => time(b.last_seen_at) - time(a.last_seen_at)) }))
-    .sort((a, b) => contact(b) - contact(a) || time(b.key?.created_at) - time(a.key?.created_at) || a.name.localeCompare(b.name));
-}
-
-/** One connection. A revoked key's agent can no longer check in, so it carries no check-in state. */
-function AgentLine({ agent, live }: { agent: AgentConnectionOut; live: boolean }) {
-  const { t, i18n } = useTranslation();
-  const minutes = (Date.now() - time(agent.last_seen_at)) / 60_000;
-  const dot = !live ? 'bg-zinc-300 dark:bg-zinc-600' : agent.overdue ? 'bg-amber-500' : minutes <= RECENT_MINUTES ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-600';
-  return (
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-      <span className={cn('h-2 w-2 shrink-0 rounded-full', dot)} aria-hidden="true" />
-      <span className="font-medium text-foreground">{agent.client_name}</span>
-      <span className="font-mono text-caption text-muted-foreground" title={t('agents.protocol', { version: agent.protocol_version })}>
-        {agent.client_version}
-      </span>
-      {live && (agent.overdue
-        ? <Badge tone="danger" size="sm">{t('agents.overdue')}</Badge>
-        : <Badge tone="success" size="sm">{t('agents.onTime')}</Badge>)}
-      <span className="text-muted-foreground" title={formatDateTime(agent.last_seen_at, i18n.language)}>
-        {t('agents.lastContact', { when: formatRelative(agent.last_seen_at, i18n.language) })}
-      </span>
-      <span className="tabular-nums text-muted-foreground">
-        {t('agents.toolCalls', { count: formatNumber(agent.tool_calls, i18n.language) })}
-      </span>
-      <span className="text-caption text-muted-foreground">
-        {t('agents.firstSeen', { when: formatDateTime(agent.first_seen_at, i18n.language) })}
-      </span>
-    </li>
-  );
-}
-
-function AccessRow({ access, onRevoke, wake }: { access: Access; onRevoke?: (key: KeySummary) => void; wake?: AgentWakeOut }) {
-  const { t, i18n } = useTranslation();
-  const { key, agents } = access;
-  const revoked = key?.status === 'revoked';
-  const [showPermissions, setShowPermissions] = useState(false);
-  return (
-    <li className={cn('flex flex-col gap-2 border-b border-border px-4 py-3 last:border-0', revoked && 'opacity-70')}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h3 className="text-sm font-semibold text-foreground">{access.name}</h3>
-        {key && <span className="font-mono text-caption text-muted-foreground">{`${key.prefix}…`}</span>}
-        {revoked && key && <KeyStatusBadge status={key.status} />}
-        {key && (
-          <span className="text-caption text-muted-foreground">
-            {revoked && key.revoked_at
-              ? t('agents.revokedAt', { when: formatDateTime(key.revoked_at, i18n.language) })
-              : t('agents.issuedAt', { when: formatDateTime(key.created_at, i18n.language) })}
-          </span>
-        )}
-        {key && (
-          <span className="ms-auto flex flex-wrap items-center gap-1">
-            <Button variant="ghost" size="sm" aria-expanded={showPermissions} onClick={() => setShowPermissions(open => !open)}>
-              {t('agents.permissions', { count: key.scopes.length })}
-              <ChevronDown className={cn('h-4 w-4 transition-transform', showPermissions && 'rotate-180')} aria-hidden="true" />
-            </Button>
-            {!revoked && onRevoke && (
-              <Button variant="ghost" size="sm" onClick={() => onRevoke(key)}>
-                {t('agents.revoke')}
-              </Button>
-            )}
-          </span>
-        )}
-      </div>
-      {agents.length > 0 ? (
-        <ul className="flex flex-col gap-1.5" aria-label={t('agents.connected', { name: access.name })}>
-          {agents.map(agent => <AgentLine key={agent.id} agent={agent} live={!revoked} />)}
-        </ul>
-      ) : revoked ? (
-        <p className="text-sm text-muted-foreground">{t('agents.neverConnected')}</p>
-      ) : (
-        <div className="flex flex-col gap-2 text-sm">
-          <p className="text-muted-foreground">{t('agents.waiting')}</p>
-          <details>
-            <summary className="cursor-pointer text-primary underline underline-offset-4">{t('agents.howTo')}</summary>
-            <div className="mt-3 max-w-2xl"><ConnectAgent showTitle={false} missingKey={t('agents.keyShownOnce')} /></div>
-          </details>
-        </div>
-      )}
-      {/* A live key's wake address: a person who gives the agent work wakes it at once. */}
-      {!revoked && wake && <KeyWake agent={wake} />}
-      {key && showPermissions && <PermissionList permissions={key.scopes} />}
-    </li>
-  );
-}
-
-/**
- * Agents and their keys as one thing: an agent gets in with a key issued here, so each row is a
- * key with whoever connected through it. Connecting an agent issues its key; removing its access
- * revokes the key. A member without `api_keys.manage` sees the agents under their keys' names.
+ * `/agents`: one row per agent, where an agent is an API key (its wake address, its schedule and
+ * its connections all belong to the key). Each row says what the agent does and how it stands in
+ * a sentence, with "Şimdi çalıştır" and its wake address on the row, and opens in place for the
+ * rest. Agents not in use stand folded at the bottom; counted chips filter when there is more
+ * than one group. Connecting an agent issues its key; removing its access revokes the key.
  * `?connect=1` opens the connect dialog on arrival.
  */
 export function AgentsPage() {
+  const copy = useAgentCopy();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const session = useSession();
-  const canManage = can(session.data, 'api_keys.manage');
+  const workspace = session.data?.current_workspace;
+  const canKeys = can(session.data, 'api_keys.manage');
+  const manage = can(session.data, 'team.manage');
+  const canLedger = can(session.data, 'ledger.read');
   const [params, setParams] = useSearchParams();
-  const agents = useQuery({ queryKey: ['agents'], queryFn: listAgents });
-  const keys = useQuery({ queryKey: KEYS_KEY, queryFn: listKeys, enabled: canManage });
-  const [connecting, setConnecting] = useState(() => params.get('connect') === '1');
-  const [revoking, setRevoking] = useState<KeySummary | null>(null);
+  const connections = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const keys = useQuery({ queryKey: KEYS_KEY, queryFn: listKeys, enabled: canKeys });
   const wakes = useAgentWakes();
-  const wakeOf = (id: string) => wakes.data?.agents.find(a => a.api_key_id === id);
+  const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000, enabled: !!workspace, retry: false });
+  const modules = useModules();
+  const [connecting, setConnecting] = useState(() => params.get('connect') === '1');
+  const [revoking, setRevoking] = useState<Agent | null>(null);
+  const [filter, setFilter] = useState<Filter | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const ledger = useQuery({
+    queryKey: ['agents', 'ledger', workspace],
+    queryFn: () => listLedger({ actor_kind: 'agent', limit: LEDGER_LOOK }),
+    enabled: canLedger && expanded !== null,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const now = useNow(30_000);
 
   const setConnect = (open: boolean) => {
     setConnecting(open);
@@ -172,62 +83,89 @@ export function AgentsPage() {
     mutationFn: (id: string) => revokeKey(id),
     onSuccess: async () => {
       setRevoking(null);
-      toast.success(t('agents.revoked'));
+      toast.success(copy('revoked'));
       await queryClient.invalidateQueries({ queryKey: KEYS_KEY });
     },
     onError: (err) => toast.error(errorMessage(t, err)),
   });
 
-  const accesses = accessesOf(canManage ? keys.data : undefined, agents.data ?? []);
-  const live = accesses.filter(access => access.key?.status !== 'revoked');
-  const revoked = accesses.filter(access => access.key?.status === 'revoked');
-  const connect = canManage ? (
+  const agents = agentsOf({
+    keys: canKeys ? keys.data : undefined,
+    connections: connections.data ?? [],
+    wakes: wakes.data?.agents,
+    items: work.data?.items,
+    modules: modules.data?.modules,
+    now,
+  });
+  const counts = groupCounts(agents);
+  const groupsShown = CHIPS.filter((c) => counts[c.group] > 0);
+  const chips = groupsShown.length > 1 ? groupsShown : [];
+  const active = filter && counts[filter] > 0 ? filter : null;
+  const inUse = agents.filter((a) => (active ? a.group === active : a.group === 'attention' || a.group === 'working'));
+  const unused = agents.filter((a) => a.group === 'unused');
+  const revoked = agents.filter((a) => a.group === 'revoked');
+
+  const connect = canKeys ? (
     <Button onClick={() => setConnect(true)}>
       <Plus className="h-4 w-4" aria-hidden="true" />
-      {t('agents.connect')}
+      {copy('connect')}
     </Button>
   ) : null;
-  const list = (
-    <>
-      {live.length > 0 ? (
-        <ul aria-label={t('agents.title')}>
-          {live.map(access => <AccessRow key={access.id} access={access} onRevoke={canManage ? setRevoking : undefined} wake={wakeOf(access.id)} />)}
-        </ul>
-      ) : (
-        <EmptyState
-          className="rounded-none border-0"
-          title={t('agents.empty')}
-          description={canManage ? t('agents.emptyBody') : t('agents.emptyBodyReadOnly')}
-          action={connect}
-        />
+  const row = (agent: Agent) => (
+    <AgentRow
+      key={agent.id}
+      agent={agent}
+      now={now}
+      expanded={expanded === agent.id}
+      onToggle={() => setExpanded((id) => (id === agent.id ? null : agent.id))}
+      manage={manage}
+      onRevoke={canKeys && agent.key && agent.group !== 'revoked' ? () => setRevoking(agent) : undefined}
+      ledger={ledger.data}
+    />
+  );
+  const fold = (label: string, list: Agent[], open: boolean, help?: string) => (
+    <details className="group rounded-lg border border-border bg-surface" open={open || undefined}>
+      <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">{label}</summary>
+      <div className="space-y-2 border-t border-border p-2 sm:p-3">
+        {help && <p className="px-1 text-caption text-muted-foreground">{help}</p>}
+        {list.map(row)}
+      </div>
+    </details>
+  );
+
+  const list = agents.length === 0 ? (
+    <EmptyState title={copy('empty')} description={canKeys ? copy('emptyBody') : copy('emptyBodyReadOnly')} action={connect} />
+  ) : (
+    <section aria-label={copy('listLabel')} className="min-w-0 space-y-3">
+      {chips.length > 0 && (
+        <div role="group" aria-label={copy('filterLabel')} className="flex flex-wrap gap-0.5">
+          {chips.map((chip) => (
+            <button key={chip.group} type="button" aria-pressed={active === chip.group} onClick={() => setFilter((f) => (f === chip.group ? null : chip.group))} className={tabClass(active === chip.group)}>
+              {copy(chip.label)} <span className="ms-0.5 font-mono text-xs tabular-nums">{counts[chip.group]}</span>
+            </button>
+          ))}
+        </div>
       )}
-      {revoked.length > 0 && (
-        <details className="border-t border-border">
-          <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-muted-foreground">
-            {t('agents.revokedGroup', { count: revoked.length })}
-          </summary>
-          <ul aria-label={t('agents.revokedGroup', { count: revoked.length })}>
-            {revoked.map(access => <AccessRow key={access.id} access={access} />)}
-          </ul>
-        </details>
-      )}
-    </>
+      {inUse.length > 0 && <div className="min-w-0 space-y-2">{inUse.map(row)}</div>}
+      {!active && unused.length > 0 && fold(copy('unusedGroup', { n: unused.length }), unused, inUse.length === 0, copy('unusedHelp'))}
+      {!active && revoked.length > 0 && fold(copy('revokedGroup', { n: revoked.length }), revoked, false)}
+    </section>
   );
 
   return (
     <>
-      <PageHeader title={t('agents.title')} description={t('agents.description')} actions={connect} />
-      <QueryState query={agents}>
-        {canManage ? <QueryState query={keys}>{list}</QueryState> : list}
+      <PageHeader title={copy('title')} description={copy('description')} actions={agents.length > 0 ? connect : null} />
+      <QueryState query={connections}>
+        {canKeys ? <QueryState query={keys}>{list}</QueryState> : list}
       </QueryState>
-      {canManage && connecting && <ConnectAgentDialog key={session.data?.current_workspace} open onOpenChange={setConnect} />}
+      {canKeys && connecting && <ConnectAgentDialog key={workspace} open onOpenChange={setConnect} />}
       <ConfirmDialog
         open={revoking !== null}
         onOpenChange={(open) => !open && setRevoking(null)}
-        title={t('agents.revokeTitle')}
-        description={revoking ? t('agents.revokeBody', { name: revoking.name }) : undefined}
-        confirmLabel={t('agents.revoke')}
-        cancelLabel={t('common.cancel')}
+        title={copy('revokeTitle')}
+        description={revoking ? copy('revokeBody', { name: revoking.name }) : undefined}
+        confirmLabel={copy('revoke')}
+        cancelLabel={copy('cancel')}
         tone="danger"
         loading={revoke.isPending}
         onConfirm={() => revoking && revoke.mutate(revoking.id)}

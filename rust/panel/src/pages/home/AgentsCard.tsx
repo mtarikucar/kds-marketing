@@ -23,28 +23,47 @@ interface Props {
   className?: string;
 }
 
+/**
+ * One line per agent, where an agent is an API key: its latest connection speaks for it, and every
+ * connection it ever made counts for the modules assigned to it. Lateness is the agent's, never
+ * that of an old client version or a one-off script that connected with the same key once.
+ */
+export function perAgent(connections: readonly AgentConnectionOut[]): { agent: AgentConnectionOut; ids: string[] }[] {
+  const byKey = new Map<string, { agent: AgentConnectionOut; ids: string[] }>();
+  for (const c of connections) {
+    const found = byKey.get(c.api_key_id);
+    if (!found) byKey.set(c.api_key_id, { agent: c, ids: [c.id] });
+    else {
+      found.ids.push(c.id);
+      if (Date.parse(c.last_seen_at) > Date.parse(found.agent.last_seen_at)) found.agent = c;
+    }
+  }
+  return [...byKey.values()].sort((a, b) => Date.parse(b.agent.last_seen_at) - Date.parse(a.agent.last_seen_at));
+}
+
 /** The compact agents strip: who is connected, when it last made contact, and where it works. */
 export function AgentsCard({ copy, active, agents, loading, installed, connectHref, canConnect, className }: Props) {
   const language = copy.isTurkish ? 'tr' : 'en';
   const now = Date.now();
+  const lines = agents ? perAgent(agents) : undefined;
   return <section aria-labelledby="home-agents" className={cn('flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-surface p-4', className)}>
     <div className="flex items-center justify-between gap-3">
       <h2 id="home-agents" className="flex items-center gap-2 text-sm font-medium"><Bot className="h-4 w-4 text-muted-foreground" aria-hidden="true" />{copy('agents')}
-        {active && agents && <span className="text-xs tabular-nums text-muted-foreground">{agents.length}</span>}</h2>
+        {active && lines && <span className="text-xs tabular-nums text-muted-foreground">{lines.length}</span>}</h2>
       {active && <Button asChild size="sm" variant={agents?.length ? 'outline' : 'primary'}><Link to={connectHref}><Plus className="h-4 w-4" aria-hidden="true" />{canConnect ? copy('connect') : copy('manage')}</Link></Button>}
     </div>
     {!active ? <ActivationNotice />
       : loading ? <div className="h-10 animate-pulse rounded-md bg-surface-muted" />
-      : !agents?.length ? <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">{copy('noAgents')}</span> {copy('noAgentsBody')}</p>
+      : !lines?.length ? <p className="text-sm text-muted-foreground"><span className="font-medium text-foreground">{copy('noAgents')}</span> {copy('noAgentsBody')}</p>
       : <ul className="flex flex-col gap-1.5">
-        {agents.slice(0, SHOWN).map(agent => {
-          const assigned = installed.filter(module => module.config.agent_ids.includes(agent.id));
+        {lines.slice(0, SHOWN).map(({ agent, ids }) => {
+          const assigned = installed.filter(module => module.config.agent_ids.some(id => ids.includes(id)));
           const minutes = (now - new Date(agent.last_seen_at).getTime()) / 60_000;
           const when = formatRelative(agent.last_seen_at, language);
           const dot = agent.overdue ? 'bg-amber-500' : minutes <= RECENT_MINUTES ? 'bg-emerald-500' : 'bg-zinc-300 dark:bg-zinc-600';
-          return <li key={agent.id} className="flex min-w-0 items-center gap-2 text-sm">
+          return <li key={agent.api_key_id} className="flex min-w-0 items-center gap-2 text-sm">
             <span className={cn('h-2 w-2 shrink-0 rounded-full', dot)} aria-hidden="true" />
-            <span className="shrink-0 font-medium">{agent.client_name}</span>
+            <span className="min-w-0 max-w-[45%] shrink-0 truncate font-medium">{agent.api_key_name}</span>
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {agent.overdue ? copy('overdue', { when }) : copy('idle', { when })}
               {' · '}
@@ -52,7 +71,7 @@ export function AgentsCard({ copy, active, agents, loading, installed, connectHr
             </span>
           </li>;
         })}
-        {agents.length > SHOWN && <li><Link to="/agents" className="text-xs text-muted-foreground hover:text-foreground hover:underline">{copy('moreAgents', { n: agents.length - SHOWN })}</Link></li>}
+        {lines.length > SHOWN && <li><Link to="/agents" className="text-xs text-muted-foreground hover:text-foreground hover:underline">{copy('moreAgents', { n: lines.length - SHOWN })}</Link></li>}
       </ul>}
   </section>;
 }

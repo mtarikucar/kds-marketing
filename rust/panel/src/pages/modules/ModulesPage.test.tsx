@@ -37,7 +37,8 @@ describe('modular agent center', () => {
     renderAt('/');
     expect(await screen.findByRole('heading', { name: 'Ajan merkezi', level: 1 })).toBeInTheDocument();
     const strip = screen.getByRole('region', { name: /Ajanlar/ });
-    const row = await within(strip).findByText('ornek-istemci');
+    // One line per agent, named by its key, not by the client that last connected with it.
+    const row = await within(strip).findByText(agents[0].api_key_name);
     expect(row.closest('li')).toHaveTextContent(/son temas/);
     expect(row.closest('li')).toHaveTextContent(blueprint.name);
     expect(within(strip).getByRole('link', { name: 'Ajan bağla' })).toHaveAttribute('href', '/agents?connect=1');

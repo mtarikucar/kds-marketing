@@ -893,54 +893,9 @@
   },
   "apiKeys": {
     "dialog": {
-      "scopesHint": "If you choose none, the key carries all of your permissions.",
       "submit": "Create key",
       "plaintextTitle": "Your new key",
-      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again.",
-      "plaintextDescription": "Copy the key now; the steps to connect an agent are below."
-    },
-    "connect": {
-      "title": "Connect an agent",
-      "url": "MCP address",
-      "claudeCode": "In Claude Code, run this command:",
-      "command": "Claude Code command",
-      "needKey": "Create a key to connect; the ready-made command appears when you do.",
-      "otherClients": "Other MCP clients connect with this address, the streamable HTTP transport and an “Authorization: Bearer <key>” header. claude.ai connectors (OAuth) are not supported yet."
-    }
-  },
-  "agents": {
-    "title": "Agents",
-    "description": "Each agent connects to this workspace with a key issued here. Each row shows a key and the agents that connected with it.",
-    "connect": "Connect an agent",
-    "empty": "No agent is connected yet.",
-    "emptyBody": "Connect an agent: name it, take its key, run the command in your agent.",
-    "emptyBodyReadOnly": "An agent shows here once it connects. Connecting one needs the permission to manage API keys.",
-    "overdue": "Overdue",
-    "onTime": "On time",
-    "lastContact": "last contact {{when}}",
-    "toolCalls": "Tool calls: {{count}}",
-    "firstSeen": "first connected {{when}}",
-    "protocol": "Protocol {{version}}",
-    "connected": "Agents connected with the key {{name}}",
-    "issuedAt": "issued {{when}}",
-    "revokedAt": "access removed {{when}}",
-    "waiting": "No agent has connected with this key yet.",
-    "neverConnected": "No agent ever connected with this key.",
-    "howTo": "How to connect?",
-    "keyShownOnce": "The key itself is shown only when it is created. If you no longer have it, remove this access and connect a new agent.",
-    "permissions": "Permissions: {{count}}",
-    "revoke": "Remove access",
-    "revokeTitle": "Remove the agent’s access",
-    "revokeBody": "The key {{name}} will be revoked; agents that connect with it will no longer get in. This cannot be undone.",
-    "revoked": "Access removed.",
-    "revokedGroup": "Access removed: {{count}}",
-    "dialog": {
-      "title": "Connect an agent",
-      "description": "Name the agent and, if you wish, narrow what it may do. Once the key is created, the connection command is shown.",
-      "name": "Agent name",
-      "nameHint": "It appears in the list under this name; for example “Sales agent”.",
-      "permissions": "Permissions",
-      "submit": "Create the key"
+      "plaintextWarning": "This key is shown only now. Copy it and keep it somewhere safe; once closed you cannot see it again."
     }
   },
   "wake": {
@@ -969,52 +924,6 @@
       "noAddress": "To have it start at once, add a wake address on the <page>agents page</page>.",
       "refused": "The agent’s wake address was refused; reconnect it on the <page>agents page</page>.",
       "rateLimited": "The agent was just called; you can try again after {{at}}."
-    },
-    "key": {
-      "visits": "comes {{phrase}}",
-      "next": "next {{time}}",
-      "late": "expected at {{at}}, late"
-    },
-    "address": {
-      "none": "Wake address: none",
-      "routine": "Wake address: Claude routine · {{target}}",
-      "webhook": "Wake address: Webhook · {{target}}",
-      "refused": "The wake address was refused ({{time}}); reconnect it with a new token.",
-      "last": "last call {{time}}: {{outcome}}",
-      "outcome": {
-        "fired": "succeeded",
-        "rate_limited": "hit a limit, will try again",
-        "unavailable": "unreachable, will try again",
-        "gave_up": "unreachable",
-        "refused": "refused",
-        "rejected": "not accepted"
-      },
-      "session": "open the session",
-      "add": "Add",
-      "change": "Change",
-      "remove": "Remove",
-      "removeTitle": "Remove the wake address?",
-      "removeBody": "The agent will again come only on its own schedule.",
-      "removed": "Wake address removed.",
-      "saved": "Wake address saved.",
-      "kind": "How to wake it",
-      "kindRoutine": "Claude routine",
-      "kindWebhook": "Webhook",
-      "routineId": "Routine ID",
-      "routineIdPlaceholder": "trig_… or the trigger URL",
-      "token": "Token",
-      "url": "URL",
-      "secret": "Secret (optional)",
-      "routineHelp": "When someone gives this agent work, Jeeta calls it right away instead of waiting for its hour. Get the token at claude.ai/code/routines: open the routine, then «Add another trigger» → API → «Generate token»; it is shown only once.",
-      "webhookHelp": "When someone gives this agent work, Jeeta sends this URL a short POST (the area of work, the agent and the reason; no content). The URL must be a public https address.",
-      "save": "Save",
-      "cancel": "Cancel",
-      "errors": {
-        "routine_id": "A routine ID starts with trig_ and has only letters, digits, _ or -; you can paste the trigger URL too.",
-        "token": "Paste the token from the routine’s API trigger, without spaces.",
-        "url": "Enter a public https URL (without a user name or password).",
-        "secret": "The secret must be printable characters without spaces."
-      }
     }
   },
   "ledger": {
