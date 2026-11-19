@@ -54,6 +54,9 @@ const DOMAIN_CRATES: &[(&str, &[&str])] = &[
         "jt_outreach",
         &["jt_inbox", "jt_capability", "jt_prospects", "url"],
     ),
+    // The knowledge base: its seed mapping reads the strategy's sections, and its attachments
+    // and notes name studio files (`jt_studio::FileId`).
+    ("jt_knowledge", &["jt_strategy", "jt_studio"]),
 ];
 
 #[test]
@@ -254,6 +257,7 @@ const APP_ALLOW: &[&str] = &[
     "jt_device_protocol",
     "jt_prospects",
     "jt_outreach",
+    "jt_knowledge",
     "serde",
     "serde_json",
     "uuid",
