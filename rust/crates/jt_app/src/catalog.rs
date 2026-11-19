@@ -426,6 +426,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("api_keys.revoke", Exempt, "jeeta.api_keys.revoke", ("DELETE", "/api/api-keys/{key_id}"), Destructive),
     twin("agents.list", Exempt, "jeeta.agents.list", ("GET", "/api/agents"), Read),
     twin("agents.whoami", Exempt, "jeeta.agent.whoami", ("GET", "/api/whoami"), Read),
+    // An agent's wake address is a person's to read and set: no MCP tool (`usecases::wake`).
+    panel_only("agents.wakes", Exempt, ("GET", "/api/agents/wakes"), Read),
+    panel_only("agents.wake_set", Exempt, ("PUT", "/api/agents/{api_key_id}/wake"), Write),
+    panel_only("agents.wake_remove", Exempt, ("DELETE", "/api/agents/{api_key_id}/wake"), Write),
+    panel_only("agents.wake_now", Exempt, ("POST", "/api/agents/{api_key_id}/wake/run"), Write),
     twin("ledger.list", Exempt, "jeeta.ledger.list", ("GET", "/api/ledger"), Read),
     twin("strategy.get", Exempt, "jeeta.strategy.get", ("GET", "/api/strategy"), Read),
     twin("strategy.start_consultation", Exempt, "jeeta.strategy.start_consultation", ("POST", "/api/strategy/consultation"), Write),

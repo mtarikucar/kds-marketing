@@ -19,7 +19,7 @@
 //!   `commit` then reports it instead of letting Postgres roll back silently.
 //! - Timestamps come from the caller; column defaults are never relied on.
 
-mod agent_connections;
+pub(crate) mod agent_connections;
 pub(crate) mod api_keys;
 mod budget;
 pub(crate) mod calls;

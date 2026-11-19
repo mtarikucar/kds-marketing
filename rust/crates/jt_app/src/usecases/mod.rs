@@ -38,6 +38,7 @@ pub mod strategy;
 pub mod studio;
 pub mod team;
 pub mod v1_import;
+pub mod wake;
 pub mod webhook;
 pub mod whatsapp_app;
 pub mod work;

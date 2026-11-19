@@ -30,6 +30,11 @@ pub enum EgressScope {
     Connector(&'static str),
     /// A workspace, which may reach only the hosts it declared in its tenant tier.
     Tenant(WorkspaceId),
+    /// An agent's wake webhook (`jt_app::usecases::wake`): any host on the public internet
+    /// ([`validate_public_host`], the tenant tier's own rule, checked on every request), `https`
+    /// only. A person holding `team.manage` names the URL; the DNS guard still drops every
+    /// address that is not public, and redirects are never followed, as for every scope.
+    PublicWebhook,
 }
 
 /// Why an outbound request did not produce a response.
@@ -377,6 +382,34 @@ mod tests {
 
     fn reaches(egress: &Egress, ws: WorkspaceId, url: &str) -> bool {
         egress.permits(EgressScope::Tenant(ws), &Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn the_wake_webhook_scope_reaches_public_https_hosts_only() {
+        let egress = Egress::new(&[]);
+        let reaches =
+            |url: &str| egress.permits(EgressScope::PublicWebhook, &Url::parse(url).unwrap());
+        assert!(reaches("https://agents.example.com/wake"));
+        assert!(reaches("https://agents.example.com:8443/wake?x=1"));
+        assert!(reaches("https://93.184.216.34/wake"));
+        for refused in [
+            "http://agents.example.com/wake",
+            "https://10.0.0.5/wake",
+            "https://192.168.1.10/wake",
+            "https://169.254.169.254/latest/meta-data",
+            "https://[fd00::1]/wake",
+            "https://intranet/wake",
+            "https://printer.local/wake",
+            "ftp://agents.example.com/wake",
+        ] {
+            assert!(!reaches(refused), "{refused}");
+        }
+        // The fixed and tenant tiers are not widened by it.
+        let ws = WorkspaceId::new_v7();
+        assert!(!egress.permits(
+            EgressScope::Tenant(ws),
+            &Url::parse("https://agents.example.com/").unwrap()
+        ));
     }
 
     #[test]

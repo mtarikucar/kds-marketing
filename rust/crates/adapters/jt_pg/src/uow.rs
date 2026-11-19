@@ -22,7 +22,8 @@ use sqlx::{PgConnection, PgPool};
 use time::OffsetDateTime;
 
 use crate::repos::{
-    api_keys, calls, capabilities, ledger, map_sqlx, memberships, roles, workspaces,
+    agent_connections, api_keys, calls, capabilities, ledger, map_sqlx, memberships, roles,
+    workspaces,
 };
 use crate::tx::{PlatformTx, TenantTx, UserTx};
 
@@ -634,6 +635,13 @@ impl PlatformRepos for PgPlatformRepos {
 
     async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
         calls::workspaces_with_live_agent_calls(&mut self.tx).await
+    }
+
+    async fn workspaces_with_due_wakes(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        agent_connections::workspaces_with_due_wakes(&mut self.tx, now).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

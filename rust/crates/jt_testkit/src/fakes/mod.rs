@@ -76,8 +76,8 @@ mod user;
 
 pub use providers::{
     ConnectorCall, FakeAppConfig, OAuthCall, PollCall, PublicCall, ScriptedConnector,
-    ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, TEST_OAUTH_HOST,
-    TEST_PUBLIC_BASE_URL,
+    ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, ScriptedWaker,
+    TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL, WakeCall,
 };
 pub use services::{
     DEPS_TOKENS, FIXED_NOW, FakeJobLock, FakeOpsSnapshot, FixedChannelCatalog, FixedClock,
@@ -87,7 +87,7 @@ pub use services::{
 pub use state::{
     InMemoryUow, MemState, StoredBudgetLink, StoredCapability, StoredCapabilityGroup,
     StoredConsultationEntry, StoredGroupMember, StoredHypothesis, StoredInboundEvent,
-    StoredOutboundJob, StoredRole, StoredWorkspacePolicy,
+    StoredOutboundJob, StoredRole, StoredWake, StoredWorkspacePolicy,
 };
 
 mod inbox_merge;

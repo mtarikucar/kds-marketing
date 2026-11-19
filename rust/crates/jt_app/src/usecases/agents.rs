@@ -10,10 +10,12 @@
 //! Every tool call an agent makes is counted on its connection and ledgered as `mcp.tool_call`
 //! ([`record_tool_call`]).
 //!
-//! **Check-in.** The workspace expects its agent to call in at least once per check-in interval
-//! (`WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set). A connection not seen
-//! for longer is [`overdue`]; waking the agent is the tenant's job, never the system's (spec
-//! §4.2 rule 3), so the system only shows the warning.
+//! **Check-in.** The workspace expects each agent to call in at least once per its check-in
+//! interval: learned from the agent's own check-ins, else
+//! `WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set
+//! ([`super::wake::interval_of`]). A connection not seen for longer is [`overdue`]. An agent
+//! with a wake address is also woken when a person gives it work ([`super::wake`]); its address
+//! is read and set only through `agents.wakes` and `agents.wake_set`, in the panel.
 
 use std::collections::BTreeMap;
 
@@ -59,7 +61,7 @@ pub struct AgentConnectionOut {
     #[serde(with = "time::serde::rfc3339")]
     pub last_seen_at: OffsetDateTime,
     pub tool_calls: i64,
-    /// Not seen for longer than the workspace's check-in interval (see [`overdue`]).
+    /// Not seen for longer than its agent's check-in interval (see [`overdue`]).
     pub overdue: bool,
 }
 
@@ -222,16 +224,17 @@ pub fn overdue(
 }
 
 /// The workspace's agent connections, first seen first, with the names of their keys and
-/// whether each is [`overdue`] at `ctx.now` under the workspace's check-in interval. Needs
-/// `workspace.read`.
+/// whether each is [`overdue`] at `ctx.now` under its key's check-in interval (learned, else the
+/// workspace's). Needs `workspace.read`.
 pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<AgentConnectionOut>, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let interval = repos
+    let fallback = repos
         .workspace_policy()
         .get()
         .await?
         .agent_checkin_interval_minutes;
+    let intervals = super::wake::intervals(repos.as_mut(), fallback).await?;
     let names: BTreeMap<ApiKeyId, String> = repos
         .api_keys()
         .list()
@@ -259,7 +262,11 @@ pub async fn list(deps: &Deps, ctx: &Ctx) -> Result<Vec<AgentConnectionOut>, App
                 first_seen_at: c.first_seen_at,
                 last_seen_at: c.last_seen_at,
                 tool_calls: c.tool_calls,
-                overdue: overdue(Some(c.last_seen_at), interval, ctx.now),
+                overdue: overdue(
+                    Some(c.last_seen_at),
+                    intervals.get(&c.api_key_id).copied().unwrap_or(fallback),
+                    ctx.now,
+                ),
             })
         })
         .collect()

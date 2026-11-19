@@ -2009,6 +2009,11 @@ pub trait ConnectorRegistry: Send + Sync {
         let _ = provider;
         None
     }
+    /// What wakes an agent at its wake address (`usecases::wake`); `None`, the default, where
+    /// nothing may call out to one: the `agent_wake` job then sends nothing.
+    fn agent_waker(&self) -> Option<Arc<dyn super::wake::AgentWaker>> {
+        None
+    }
 }
 
 #[cfg(test)]

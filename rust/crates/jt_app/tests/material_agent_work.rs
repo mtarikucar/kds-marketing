@@ -39,7 +39,7 @@ async fn analysis_work_is_module_scoped_recovers_expired_leases_and_covers_legac
         item.hint
             .contains("Never infer capture or event dates from upload time")
     );
-    assert!(item.hint.contains("Nothing wakes you"));
+    assert!(item.hint.contains("poll jeeta.work.checkin"));
     assert!(has(&work::pending(&w.deps, &w.owner_ctx).await.unwrap()));
     let mut restricted = agent.clone();
     restricted.permissions.remove(&Permission::MaterialsWork);

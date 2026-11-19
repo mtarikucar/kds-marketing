@@ -28,6 +28,7 @@ use jt_app::ports::connectors::{
     InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider,
     PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
+use jt_app::ports::wake::AgentWaker;
 use jt_connector::Provider;
 use jt_google::{GoogleBases, GoogleConnector};
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
@@ -36,6 +37,7 @@ use jt_meta::{MetaBases, MetaConnector};
 use jt_netgsm::{NetgsmBases, NetgsmConnector};
 use jt_outbound::Egress;
 use jt_tiktok::{TiktokBases, TiktokConnector};
+use jt_wake::{EgressWaker, WakeBases};
 use jt_x::{XBases, XConnector};
 
 /// The registry of the production adapters over `egress` (the client whose tenant tier
@@ -72,10 +74,11 @@ pub fn registry(
             Arc::clone(&apps),
         )),
         google: Arc::new(GoogleConnector::new(
-            egress,
+            Arc::clone(&egress),
             GoogleBases::production(),
             apps,
         )),
+        waker: Arc::new(EgressWaker::new(egress, WakeBases::production())),
     })
 }
 
@@ -88,6 +91,7 @@ struct ProviderRegistry {
     tiktok: Arc<TiktokConnector>,
     linkedin: Arc<LinkedinConnector>,
     google: Arc<GoogleConnector>,
+    waker: Arc<EgressWaker>,
 }
 
 impl ConnectorRegistry for ProviderRegistry {
@@ -195,6 +199,10 @@ impl ConnectorRegistry for ProviderRegistry {
     fn public_poller(&self, provider: Provider) -> Option<Arc<dyn PublicPoller>> {
         (provider == Provider::Meta).then(|| self.meta.clone() as Arc<dyn PublicPoller>)
     }
+
+    fn agent_waker(&self) -> Option<Arc<dyn AgentWaker>> {
+        Some(self.waker.clone())
+    }
 }
 
 #[cfg(test)]
@@ -245,6 +253,12 @@ mod tests {
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
         registry(egress, Arc::new(NoPlatformApps))
+    }
+
+    #[test]
+    fn the_production_registry_wakes_agents_and_the_scripted_one_only_when_given_one() {
+        assert!(production().agent_waker().is_some());
+        assert!(ScriptedRegistry::new().agent_waker().is_none());
     }
 
     #[test]

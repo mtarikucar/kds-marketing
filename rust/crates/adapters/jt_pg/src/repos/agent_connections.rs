@@ -1,15 +1,42 @@
 //! `agent_connections`: agent clients seen through a workspace's API keys, one per (key, client
-//! name, client version).
+//! name, client version); and `agent_wakes`, each key's wake row (`0045_agent_wake`): its
+//! document in `data`, its sealed token in `sealed` (read only by `wake_sealed`), and the time
+//! its pending wake goes out in `due_at`, which `workspaces_with_due_wakes` is the one
+//! platform-wide read of.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
+use jt_app::ports::wake::AgentWakeRow;
 use jt_app::ports::{AgentConnectionRepo, AgentConnectionRow};
 use jt_tenancy::{AgentConnectionId, ApiKeyId, WorkspaceId};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{dangling, map_sqlx, same_workspace};
+use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
+
+/// A stored wake document as the application reads it; one that does not parse is `INTERNAL`.
+fn wake_of(data: serde_json::Value) -> Result<AgentWakeRow, AppError> {
+    serde_json::from_value(data).map_err(|_| AppError::internal("invalid stored agent wake"))
+}
+
+/// The workspaces with a wake due at `now`, in id order (see
+/// `PlatformRepos::workspaces_with_due_wakes`).
+pub(crate) async fn workspaces_with_due_wakes(
+    tx: &mut PlatformTx<'_>,
+    now: OffsetDateTime,
+) -> Result<Vec<WorkspaceId>, AppError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select distinct w.workspace_id from agent_wakes w where w.due_at is not null          and w.due_at <= $1 order by w.workspace_id",
+    )
+    .bind(now)
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list workspaces with a due wake"))?;
+    Ok(ids.into_iter().map(WorkspaceId).collect())
+}
 
 #[derive(sqlx::FromRow)]
 struct AgentConnectionRecord {
@@ -138,5 +165,93 @@ impl AgentConnectionRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "find agent connection"))?;
         Ok(record.map(AgentConnectionRow::from))
+    }
+
+    async fn wakes(&mut self) -> Result<Vec<AgentWakeRow>, AppError> {
+        let ws = self.workspace_id();
+        let data: Vec<serde_json::Value> = sqlx::query_scalar(
+            "select data from agent_wakes where workspace_id = $1 order by api_key_id",
+        )
+        .bind(ws.as_uuid())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list agent wakes"))?;
+        data.into_iter().map(wake_of).collect()
+    }
+
+    async fn wake_lock(&mut self, key: ApiKeyId) -> Result<Option<AgentWakeRow>, AppError> {
+        let ws = self.workspace_id();
+        let data: Option<serde_json::Value> = sqlx::query_scalar(
+            "select data from agent_wakes where workspace_id = $1 and api_key_id = $2              for update",
+        )
+        .bind(ws.as_uuid())
+        .bind(key.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "lock agent wake"))?;
+        data.map(wake_of).transpose()
+    }
+
+    /// The key must be this workspace's (a foreign key ignores row-level security), else
+    /// `INTERNAL`.
+    async fn wake_save(&mut self, row: AgentWakeRow) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let key: Option<i32> =
+            sqlx::query_scalar("select 1 from api_keys where workspace_id = $1 and id = $2")
+                .bind(ws.as_uuid())
+                .bind(row.api_key_id.as_uuid())
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "find API key"))?;
+        if key.is_none() {
+            return Err(dangling("agent_wakes.api_key_id"));
+        }
+        let data = serde_json::to_value(&row)
+            .map_err(|_| AppError::internal("the agent wake cannot be stored"))?;
+        sqlx::query(
+            "insert into agent_wakes (workspace_id, api_key_id, data, due_at)              values ($1, $2, $3, $4)              on conflict (workspace_id, api_key_id) do update              set data = excluded.data, due_at = excluded.due_at",
+        )
+        .bind(ws.as_uuid())
+        .bind(row.api_key_id.as_uuid())
+        .bind(data)
+        .bind(row.due_at())
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "store agent wake"))?;
+        Ok(())
+    }
+
+    async fn wake_set_sealed(
+        &mut self,
+        key: ApiKeyId,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let done = sqlx::query(
+            "update agent_wakes set sealed = $3 where workspace_id = $1 and api_key_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(key.as_uuid())
+        .bind(sealed)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "store agent wake token"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("no such wake row"));
+        }
+        Ok(())
+    }
+
+    async fn wake_sealed(&mut self, key: ApiKeyId) -> Result<Option<Vec<u8>>, AppError> {
+        let ws = self.workspace_id();
+        let sealed: Option<Option<Vec<u8>>> = sqlx::query_scalar(
+            "select sealed from agent_wakes where workspace_id = $1 and api_key_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(key.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read agent wake token"))?;
+        Ok(sealed.flatten())
     }
 }

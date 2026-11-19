@@ -415,6 +415,14 @@ pub async fn delivery_accept(
     // The person decided the content stands as it is: a note asking for a change is answered.
     p.redo = None;
     let p = projects::save(r.as_mut(), ctx, p, "content.package.released").await?;
+    // Its versions now wait for a time: the agent that plans posts is woken for them.
+    crate::usecases::wake::request(
+        r.as_mut(),
+        ctx,
+        &[crate::usecases::wake::SOCIAL],
+        crate::usecases::wake::WakeReason::DeliveryAccepted,
+    )
+    .await?;
     let out = projects::detail(r.as_mut(), p).await?;
     r.commit().await?;
     Ok(out)

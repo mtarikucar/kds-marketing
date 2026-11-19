@@ -570,6 +570,15 @@ pub async fn account_pause(
                 json!({"revision": settings.revision}),
             )?)
             .await?;
+        if !i.paused {
+            crate::usecases::wake::request(
+                r.as_mut(),
+                ctx,
+                &[crate::usecases::wake::SOCIAL],
+                crate::usecases::wake::WakeReason::AccountResumed,
+            )
+            .await?;
+        }
         r.commit().await?;
     }
     Ok(settings)

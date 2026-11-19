@@ -345,6 +345,10 @@ fn catalog_is_the_release_table() {
         ("api_keys.revoke", Some("jeeta.api_keys.revoke"), Some(("DELETE", "/api/api-keys/{key_id}")), false, Risk::Destructive),
         ("agents.list", Some("jeeta.agents.list"), Some(("GET", "/api/agents")), false, Risk::Read),
         ("agents.whoami", Some("jeeta.agent.whoami"), Some(("GET", "/api/whoami")), false, Risk::Read),
+        ("agents.wakes", None, Some(("GET", "/api/agents/wakes")), true, Risk::Read),
+        ("agents.wake_set", None, Some(("PUT", "/api/agents/{api_key_id}/wake")), true, Risk::Write),
+        ("agents.wake_remove", None, Some(("DELETE", "/api/agents/{api_key_id}/wake")), true, Risk::Write),
+        ("agents.wake_now", None, Some(("POST", "/api/agents/{api_key_id}/wake/run")), true, Risk::Write),
         ("ledger.list", Some("jeeta.ledger.list"), Some(("GET", "/api/ledger")), false, Risk::Read),
         ("strategy.get", Some("jeeta.strategy.get"), Some(("GET", "/api/strategy")), false, Risk::Read),
         ("strategy.start_consultation", Some("jeeta.strategy.start_consultation"), Some(("POST", "/api/strategy/consultation")), false, Risk::Write),
@@ -471,7 +475,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 298);
+    assert_eq!(CATALOG.len(), 302);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && uc.id != "calls.policy_get" && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || uc.id.starts_with("outreach.") { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

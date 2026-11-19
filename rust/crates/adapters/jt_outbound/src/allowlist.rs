@@ -235,6 +235,16 @@ impl Allowlist {
                 .unwrap_or_else(PoisonError::into_inner)
                 .get(&ws)
                 .is_some_and(|entries| entries_match(entries, &host, url)),
+            EgressScope::PublicWebhook => {
+                plain_http_allowed(&parsed)
+                    || url.host_str().is_some_and(|h| {
+                        let named = match url.port() {
+                            Some(port) => format!("{h}:{port}"),
+                            None => h.to_owned(),
+                        };
+                        crate::public_host::validate_public_host(&named).is_ok()
+                    })
+            }
         };
         if allowed { Ok(()) } else { Err(refused()) }
     }

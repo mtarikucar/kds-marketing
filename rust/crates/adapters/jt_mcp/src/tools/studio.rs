@@ -363,7 +363,7 @@ fn library_definitions() -> Vec<ToolDef> {
         ),
         def(
             "studio.material_analysis_retry",
-            "Return a failed or completed material analysis to pending at expected_revision. Your external agent must poll jeeta.work.checkin and claim it; this call does not wake an agent or run analysis. [risk: WRITE]",
+            "Return a failed or completed material analysis to pending at expected_revision. Your external agent claims it at its next check-in (jeeta.work.checkin); when a person asks from the panel, an agent with a wake address is woken for it. This call runs no analysis itself. [risk: WRITE]",
             || library_schema("material_analysis_retry"),
             material_analysis_retry,
         ),

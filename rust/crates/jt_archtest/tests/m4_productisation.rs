@@ -249,7 +249,7 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 35] = [
+const POST_M4_PANEL_ONLY: [&str; 39] = [
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
@@ -286,6 +286,11 @@ const POST_M4_PANEL_ONLY: [&str; 35] = [
     "ads.campaign_decline",
     "ads.campaign_resume",
     "ads.campaign_end",
+    // An agent's wake address is a person's alone (`usecases::wake`).
+    "agents.wakes",
+    "agents.wake_set",
+    "agents.wake_remove",
+    "agents.wake_now",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

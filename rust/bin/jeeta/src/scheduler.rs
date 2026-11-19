@@ -82,6 +82,7 @@ pub struct Intervals {
     pub outreach_dispatch: Duration,
     pub comments_poll: Duration,
     pub purge_request_keys: Duration,
+    pub agent_wake: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
 }
@@ -95,7 +96,8 @@ impl Default for Intervals {
     /// inbox poll hourly, the raw-body, probe-run and bridge-command purges daily, the OAuth-flow
     /// purge hourly, the call timers every second, the bridges' health checks and the phones'
     /// command expiry every minute, the device-file purge hourly, the comments backfill hourly,
-    /// the expired request keys' purge daily; first runs within 30 seconds of the start.
+    /// the expired request keys' purge daily, the agents' wakes every ten seconds; first runs
+    /// within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -133,6 +135,7 @@ impl Default for Intervals {
             outreach_dispatch: MINUTE,
             comments_poll: HOUR,
             purge_request_keys: DAY,
+            agent_wake: Duration::from_secs(10),
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -177,6 +180,7 @@ impl Intervals {
             Job::OutreachDispatch => self.outreach_dispatch,
             Job::CommentsPoll => self.comments_poll,
             Job::PurgeRequestKeys => self.purge_request_keys,
+            Job::AgentWake => self.agent_wake,
         }
     }
 }
@@ -500,6 +504,7 @@ mod tests {
             outreach_dispatch: every,
             comments_poll: every,
             purge_request_keys: every,
+            agent_wake: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -633,6 +638,8 @@ mod tests {
             "jeeta.jobs.purge_request_keys"
         );
         assert_eq!(Job::CommentsPoll.lock_name(), "jeeta.jobs.comments_poll");
+        assert_eq!(i.of(Job::AgentWake), Duration::from_secs(10));
+        assert_eq!(Job::AgentWake.lock_name(), "jeeta.jobs.agent_wake");
         assert_eq!(
             Job::DeviceBridgeHealth.lock_name(),
             "jeeta.jobs.device_bridge_health"

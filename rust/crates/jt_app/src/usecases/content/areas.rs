@@ -284,6 +284,16 @@ pub async fn area_redo(
     p.refused = 0;
     p.refusal = None;
     let p = projects::save(r.as_mut(), ctx, p, "content.area.redo").await?;
+    // The agent is woken for the note, unless one still holds its claim and is on it already.
+    if p.needs_agent(ctx.now) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::CONTENT],
+            crate::usecases::wake::WakeReason::ContentRevision,
+        )
+        .await?;
+    }
     let out = projects::detail(r.as_mut(), p).await?;
     r.commit().await?;
     Ok(out)

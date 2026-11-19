@@ -60,10 +60,12 @@
 //!
 //! Each item carries a hint in English, for the agent; the panel shows its own copy.
 //!
-//! **Check-in.** Waking the agent is the tenant's job, never the system's (spec §4.2 rule 3): the
-//! agent calls `jeeta.work.checkin` on its own schedule, at least once per check-in interval
-//! (`WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set), and the system only
-//! warns when it is late ([`agents::overdue`]). Every call an agent makes already moves its
+//! **Check-in.** The agent calls `jeeta.work.checkin` on its own schedule, at least once per
+//! check-in interval (learned from its own check-ins, else
+//! `WorkspacePolicy::agent_checkin_interval_minutes`, a day unless set: [`wake::interval_of`]),
+//! and the system warns when it is late ([`agents::overdue`]). Besides, a person's action that
+//! gives an agent work wakes it at its wake address, when it has one ([`wake`]); a check-in
+//! drops the agent's pending wake when nothing was asked since it began. Every call an agent makes already moves its
 //! connection's `last_seen_at` (the MCP gate counts it); the check-in itself is ledgered at most
 //! once an hour per connection, so a tight loop does not flood the ledger. A check-in answers with
 //! the caller seen at its own time, so an agent that was late is not told it is overdue by the
@@ -81,7 +83,7 @@ use super::calls::bridge::VOICE_BRIDGE_KIND;
 use super::capabilities::CapabilityOut;
 use super::devices::PHONE_KIND;
 use super::strategy::{self, StrategyOut};
-use super::{Deps, agents, connector, events, invalid, ledger_entry};
+use super::{Deps, agents, connector, events, invalid, ledger_entry, wake};
 use crate::catalog::status_exemption;
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -558,7 +560,7 @@ async fn pending_as_seen(
                 analyses.push(WorkItem {
                     kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision, unfiled },
                     priority: 2,
-                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. Nothing wakes you: poll jeeta.work.checkin on your own schedule.".into() },
+                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. A person's upload may wake you; otherwise poll jeeta.work.checkin on your own schedule.".into() },
                 });
             }
         }
@@ -572,7 +574,7 @@ async fn pending_as_seen(
                 productions.push(WorkItem {
                     kind: WorkKind::StudioMaterialProduction { production_id: row.production.id, expected_revision: row.production.revision },
                     priority: 2,
-                    hint: "Read jeeta.studio.material_production_list, claim this request at expected_revision, and inspect each source with jeeta.studio.material_preview. Use your own image/video tools; upload a new distinct file and add it as ai_generated material, then complete with your claim_token and output_material_id, or fail with a bounded error_code. Sources' people and privacy restrictions remain attached; a human must approve output share permission. This server does not generate media or wake you: poll jeeta.work.checkin.".into(),
+                    hint: "Read jeeta.studio.material_production_list, claim this request at expected_revision, and inspect each source with jeeta.studio.material_preview. Use your own image/video tools; upload a new distinct file and add it as ai_generated material, then complete with your claim_token and output_material_id, or fail with a bounded error_code. Sources' people and privacy restrictions remain attached; a human must approve output share permission. This server does not generate media; a person's request may wake you, otherwise poll jeeta.work.checkin.".into(),
                 });
             }
         }
@@ -1030,7 +1032,10 @@ async fn pending_as_seen(
 /// `FORBIDDEN` with `details.reason = "agents_only"`; it needs `workspace.read`.
 ///
 /// Writes `work.checkin` about the agent's connection (payload `{}`) unless that connection's
-/// last check-in was ledgered less than [`CHECKIN_LEDGER_RESOLUTION`] before `ctx.now`. The
+/// last check-in was ledgered less than [`CHECKIN_LEDGER_RESOLUTION`] before `ctx.now`. Keeps
+/// the check-in for learning the agent's interval (`wake::checkin_began`), and, once what is
+/// pending was read, drops the agent's pending wake unless a person asked for something after
+/// the check-in began (`wake::checkin_seen`). The
 /// connection's `last_seen_at` is not touched here: the MCP gate moves it on every call. Two
 /// check-ins racing on one connection may both be ledgered.
 ///
@@ -1047,18 +1052,35 @@ pub async fn checkin(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
         });
     };
     ctx.require(Permission::WorkspaceRead)?;
-    {
+    let seen = {
         let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+        let key = repos
+            .agent_connections()
+            .find(connection_id)
+            .await?
+            .map(|c| c.api_key_id);
+        let pending = match key {
+            Some(key) => wake::checkin_began(repos.as_mut(), key, ctx.now)
+                .await?
+                .map(|seq| (key, seq)),
+            None => None,
+        };
         if !checked_in_lately(repos.as_mut(), connection_id, ctx.now).await? {
             let in_force = version_in_force(repos.as_mut()).await?;
             let mut entry =
                 ledger_entry(ctx, CHECKIN, "agent_connection", connection_id, json!({}))?;
             entry.strategy_version_id = in_force.map(|id| id.as_uuid());
             repos.ledger().append(entry).await?;
-            repos.commit().await?;
         }
+        repos.commit().await?;
+        pending
+    };
+    let out = pending_as_seen(deps, ctx, Some(ctx.now)).await?;
+    // The agent has read its work: a wake asked for before the check-in began is not needed.
+    if let Some((key, seq)) = seen {
+        wake::checkin_seen(deps, ctx.workspace_id, key, seq).await?;
     }
-    pending_as_seen(deps, ctx, Some(ctx.now)).await
+    Ok(out)
 }
 
 /// Sets how often the workspace's agent is expected to check in, and returns the check-in state
@@ -1304,19 +1326,25 @@ async fn agent_state(
     now: OffsetDateTime,
     seen_now: Option<OffsetDateTime>,
 ) -> Result<AgentState, AppError> {
-    let interval_minutes = repos
+    let fallback = repos
         .workspace_policy()
         .get()
         .await?
         .agent_checkin_interval_minutes;
-    let last_seen_at = repos
-        .agent_connections()
-        .list()
-        .await?
-        .into_iter()
+    let intervals = wake::intervals(repos, fallback).await?;
+    let connections = repos.agent_connections().list().await?;
+    let last_seen_at = connections
+        .iter()
         .map(|c| c.last_seen_at)
         .chain(seen_now)
         .max();
+    // The interval of the agent seen last (learned from its own check-ins, else the
+    // workspace's number): the one whose lateness the workspace's state tells.
+    let interval_minutes = connections
+        .iter()
+        .max_by_key(|c| c.last_seen_at)
+        .and_then(|c| intervals.get(&c.api_key_id).copied())
+        .unwrap_or(fallback);
     Ok(AgentState {
         last_seen_at,
         interval_minutes,
@@ -1406,7 +1434,8 @@ const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no ola
     existing olay it comes from, or new_olay (kind, title, starts_on, ends_on, and place, occasion \
     or notes when known) when none fits, or genel only for an AI image. Never infer event dates \
     from upload time; when you cannot tell where it belongs, complete without a filing and a \
-    person files it. Never set its share permission. Nothing wakes you: poll jeeta.work.checkin.";
+    person files it. Never set its share permission. A person's upload may wake you; otherwise \
+    poll jeeta.work.checkin.";
 
 /// What an agent that has never seen the system needs to plan an ad campaign.
 const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \

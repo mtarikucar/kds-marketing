@@ -40,6 +40,7 @@ pub mod production_projects;
 pub mod prospects;
 pub mod public;
 pub mod studio;
+pub mod wake;
 use inbox::*;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -640,6 +641,27 @@ pub trait AgentConnectionRepo: Send + Sync {
     async fn list(&mut self) -> Result<Vec<AgentConnectionRow>, AppError>;
     async fn find(&mut self, id: AgentConnectionId)
     -> Result<Option<AgentConnectionRow>, AppError>;
+
+    // The keys' wake rows (`wake::AgentWakeRow`, one per key at most). The sealed token or
+    // secret is kept beside a row and read only with `wake_sealed`: no other read returns it.
+
+    /// Every wake row of the workspace, in key id order.
+    async fn wakes(&mut self) -> Result<Vec<wake::AgentWakeRow>, AppError>;
+    /// Key `key`'s wake row, locked until the bundle ends (`select … for update`).
+    async fn wake_lock(&mut self, key: ApiKeyId) -> Result<Option<wake::AgentWakeRow>, AppError>;
+    /// Inserts or replaces key `key`'s row with `row` (its `due_at` kept beside it, for the
+    /// platform-wide scan), leaving its sealed token as it is. A key that is not this
+    /// workspace's is `INTERNAL`.
+    async fn wake_save(&mut self, row: wake::AgentWakeRow) -> Result<(), AppError>;
+    /// Sets (or, `None`, removes) the sealed token of key `key`'s row, which must exist
+    /// (`NOT_FOUND` otherwise).
+    async fn wake_set_sealed(
+        &mut self,
+        key: ApiKeyId,
+        sealed: Option<Vec<u8>>,
+    ) -> Result<(), AppError>;
+    /// The sealed token of key `key`'s row, if any.
+    async fn wake_sealed(&mut self, key: ApiKeyId) -> Result<Option<Vec<u8>>, AppError>;
 }
 
 /// The action of an agent's check-in entry (`work.checkin`), which
@@ -1974,6 +1996,13 @@ pub trait PlatformRepos: Send + Sync {
     /// `agent` dialing to ending): those whose call timers have anything to do. Lets the
     /// once-a-second timer job skip every other workspace without opening a transaction in it.
     async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError>;
+    /// The workspaces, in id order, with a wake due at `now` (a key's `due_at` at or before it):
+    /// those the `agent_wake` job has anything to send for. Lets the job skip every other
+    /// workspace without opening a transaction in it.
+    async fn workspaces_with_due_wakes(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
