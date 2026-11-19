@@ -463,7 +463,10 @@ impl Journey {
             external_id: format!("post-{}", slot.id.0),
             url: None,
         }));
-        assert_eq!(publish::publish_due(&self.w.d, self.w.f.ws).await.unwrap(), 1);
+        assert_eq!(
+            publish::publish_due(&self.w.d, self.w.f.ws).await.unwrap(),
+            1
+        );
         let sent: Vec<_> = self
             .connector
             .calls()
@@ -522,7 +525,10 @@ impl Journey {
         for h in list {
             r.hypotheses().upsert(v.id, h).await.unwrap();
         }
-        w.d.transition_hook.apply(r.as_mut(), &change).await.unwrap();
+        w.d.transition_hook
+            .apply(r.as_mut(), &change)
+            .await
+            .unwrap();
         r.commit().await.unwrap();
         w.current = v.id;
     }
@@ -556,7 +562,9 @@ impl Journey {
             .map(|row| row.entry)
             .find(|e| {
                 e.action.as_str() == "social.version.attributed"
-                    && e.subject.as_ref().is_some_and(|s| s.id == slot.id.to_string())
+                    && e.subject
+                        .as_ref()
+                        .is_some_and(|s| s.id == slot.id.to_string())
             })
             .map(|e| e.payload)
     }
@@ -615,7 +623,10 @@ async fn journey(p: Platform) {
     // The agent delivers under the strategy's own hypothesis (which posts elsewhere). The version
     // is offered on the account, under the owner's request, with the person's step named.
     let area = j.deliver(&area, &m, j.other, "journey").await;
-    let v = j.waiting(&area).await.expect("the version waits for a time");
+    let v = j
+        .waiting(&area)
+        .await
+        .expect("the version waits for a time");
     assert_eq!(v.blocked, None);
     assert_eq!(v.accounts, [j.account]);
     assert_eq!(v.choices[0].attribution, Attribution::OwnerRequest);
@@ -695,7 +706,10 @@ async fn a_strategy_change_mid_way_unblocks_the_delivered_versions_without_a_red
     let m = material(&j.w, video()).await;
     let a = agent(&j.w);
     let area = j.ask(&a, "agents", &[&m]).await;
-    assert!(area.requested_by.is_none(), "an agent's key asks for nobody");
+    assert!(
+        area.requested_by.is_none(),
+        "an agent's key asks for nobody"
+    );
     let area = j.deliver(&area, &m, j.other, "agents").await;
     let v = j.waiting(&area).await.unwrap();
     assert_eq!(v.accounts, Vec::<CapabilityId>::new());
@@ -762,7 +776,10 @@ async fn an_account_paused_and_resumed_mid_way_goes_on_by_itself() {
     let settings = social::account_pause(&j.w.d, &j.w.ctx, pause(true, 0))
         .await
         .unwrap();
-    assert_eq!(j.waiting(&area).await.unwrap().blocked, Some("account_paused"));
+    assert_eq!(
+        j.waiting(&area).await.unwrap().blocked,
+        Some("account_paused")
+    );
     assert!(j.stops().await.contains(&StopCode::Paused));
     social::account_pause(&j.w.d, &j.w.ctx, pause(false, settings.revision))
         .await
@@ -836,8 +853,14 @@ async fn a_revision_after_scheduling_takes_the_post_back_and_the_next_delivery_g
     )
     .await
     .unwrap();
-    assert!(!j.waits_for_owner(&area).await, "nothing waits for a post taken back");
-    assert!(j.waiting(&area).await.is_none(), "nothing waits while the redo stands");
+    assert!(
+        !j.waits_for_owner(&area).await,
+        "nothing waits for a post taken back"
+    );
+    assert!(
+        j.waiting(&area).await.is_none(),
+        "nothing waits while the redo stands"
+    );
     let area = j.deliver(&area, &m, j.other, "redo-2").await;
     let v = j.waiting(&area).await.unwrap();
     assert_eq!((v.blocked, v.accounts.clone()), (None, vec![j.account]));
@@ -860,13 +883,11 @@ async fn a_post_that_waited_for_the_owner_past_its_grace_waits_for_a_new_time() 
         .await
         .unwrap();
     let s = j.w.uow.snapshot();
-    assert!(
-        s.posts
-            .posts
-            .iter()
-            .any(|p| p.slot_id == slot.id
-                && p.retired.is_some_and(|x| x.reason == RetirementReason::MissedGrace))
-    );
+    assert!(s.posts.posts.iter().any(|p| {
+        p.slot_id == slot.id
+            && p.retired
+                .is_some_and(|x| x.reason == RetirementReason::MissedGrace)
+    }));
     let v = j.waiting(&area).await.expect("the version waits again");
     assert_eq!((v.blocked, v.accounts.clone()), (None, vec![j.account]));
 }

@@ -41,7 +41,7 @@ pub enum StopCode {
     NoHypothesis,
     /// The content has no material the platform takes (`format`: what it would need).
     MediaMissing,
-    /// The platform takes one format only (`format`), say TikTok a video.
+    /// The platform takes one format only (`format`), and it is a video: TikTok.
     OnlyFormat,
     /// Every post passes the platform's posting screen, which a person fills (TikTok).
     PostingScreen,
@@ -173,7 +173,10 @@ impl Reader {
             }
         }
         let supported = jt_studio::supported_formats(&c.kind_key);
-        if let [only] = supported {
+        // Said where it surprises: a platform that takes only a video (an image will not do).
+        if let [only] = supported
+            && *only == PostFormat::TiktokVideo
+        {
             out.push(Stop {
                 format: Some(*only),
                 ..Stop::new(S::OnlyFormat, false, None)

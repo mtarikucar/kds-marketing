@@ -2721,7 +2721,13 @@ async fn add_channel_prepares_a_draft_with_the_channel_and_a_hypothesis_per_segm
         .await
         .unwrap();
     assert_eq!(draft.status, VersionStatus::Draft);
-    assert!(draft.sections.channels.iter().any(|c| c.channel == "tiktok"));
+    assert!(
+        draft
+            .sections
+            .channels
+            .iter()
+            .any(|c| c.channel == "tiktok")
+    );
     let added: Vec<&Hypothesis> = draft
         .hypotheses
         .iter()
@@ -2731,7 +2737,10 @@ async fn add_channel_prepares_a_draft_with_the_channel_and_a_hypothesis_per_segm
     assert_eq!(added[0].segment_key, "students");
     assert_eq!(added[0].state, HypothesisState::Added);
     assert!(draft.gaps.is_empty(), "{:?}", draft.gaps);
-    assert!(draft.submitted_at.is_some(), "it waits for the owner's approval");
+    assert!(
+        draft.submitted_at.is_some(),
+        "it waits for the owner's approval"
+    );
     assert_eq!(w.entries("strategy.add_channel").len(), 1);
 
     // The owner approves it as any draft; asked again, there is nothing to add.
@@ -2756,7 +2765,10 @@ async fn the_owners_request_is_never_listed_and_goes_on_into_the_next_version() 
     let built_in = owner_request::id(w.ws);
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.hypotheses()
-        .upsert(v1.id, owner_request::hypothesis(w.ws, HypothesisState::Added))
+        .upsert(
+            v1.id,
+            owner_request::hypothesis(w.ws, HypothesisState::Added),
+        )
         .await
         .unwrap();
     r.commit().await.unwrap();

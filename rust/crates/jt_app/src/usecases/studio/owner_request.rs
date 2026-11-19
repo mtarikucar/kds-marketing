@@ -108,8 +108,7 @@ pub(crate) async fn holds(
     ws: WorkspaceId,
     version: StrategyVersionId,
 ) -> Result<bool, AppError> {
-    Ok(r
-        .hypotheses()
+    Ok(r.hypotheses()
         .list(version)
         .await?
         .iter()

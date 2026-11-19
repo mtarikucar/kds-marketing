@@ -196,10 +196,8 @@ pub(crate) async fn open_channels(
     frame: &StrategyVersion,
     now: OffsetDateTime,
 ) -> Result<Vec<Channel>, AppError> {
-    let hypotheses = super::owner_request::without(
-        frame.workspace_id,
-        r.hypotheses().list(frame.id).await?,
-    );
+    let hypotheses =
+        super::owner_request::without(frame.workspace_id, r.hypotheses().list(frame.id).await?);
     // An account a person paused takes no post (design 2026-11-10 §7.6).
     let paused = r
         .studio_posts()

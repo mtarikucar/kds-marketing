@@ -787,7 +787,11 @@ impl VersionAccounts {
         p: &ProductionProject,
         v: &PackageVersion,
     ) -> Option<(HypothesisId, Attribution)> {
-        if ch.options.iter().any(|o| o.hypothesis_id == v.hypothesis_id) {
+        if ch
+            .options
+            .iter()
+            .any(|o| o.hypothesis_id == v.hypothesis_id)
+        {
             return Some((v.hypothesis_id, Attribution::Version));
         }
         let segment = self
