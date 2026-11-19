@@ -3,8 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from 'lucide-react';
-import { getPlaybook, listProspects, poolReport } from '@/api/prospects';
-import { listTasks } from '@/api/research';
+import { getPlaybook, listProspects } from '@/api/prospects';
 import {
   SCORE_BUCKETS,
   type NextPage,
@@ -42,11 +41,14 @@ import {
 } from './LeadsShared';
 import { ProspectPane } from './ProspectDetail';
 import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
+import { PoolHeader, tabClass } from './prospects/PoolHeader';
 import { ProspectFormDialog } from './prospects/ProspectFormDialog';
 import { usePoolSegments } from './prospects/segments';
-import { taskLabel } from './prospects/words';
+import { useTaskCopy } from './research/copy';
+import { useOpenTasks, useSegmentNames } from './research/data';
+import { taskName } from './research/words';
 
-export { promoteOutcomeText, taskLabel } from './prospects/words';
+export { promoteOutcomeText } from './prospects/words';
 export { segmentOptions, type SegmentOption } from './prospects/segments';
 
 /** Prospects per page; the server pages by `(created_at, id)`, newest first. */
@@ -79,41 +81,6 @@ const SCORE_TONE: Record<ScoreBucket, string> = {
   '25-49': 'bg-surface-muted text-muted-foreground',
   '0-24': 'bg-surface-muted text-muted-foreground',
 };
-
-/** This month's funnel in one line, from the pool's report; nothing while it cannot be read. */
-function Funnel() {
-  const copy = usePoolCopy();
-  const key = useLeadsKey();
-  const [from, to] = useMemo(() => {
-    const now = new Date();
-    return [
-      new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
-      new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
-    ];
-  }, []);
-  const report = useQuery({ queryKey: [...key, 'prospects', 'report', from, to], queryFn: () => poolReport(from, to), retry: false });
-  if (!report.data) return null;
-  const sum = (field: 'created' | 'qualified' | 'promoted' | 'replied' | 'won') =>
-    report.data.groups.reduce((total, group) => total + group[field], 0);
-  const parts: [number, PoolCopyKey][] = [
-    [sum('created'), 'found'],
-    [sum('qualified'), 'qualified'],
-    [sum('promoted'), 'inContact'],
-    [sum('replied'), 'replied'],
-    [sum('won'), 'won'],
-  ];
-  return (
-    <p className="hidden min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm text-muted-foreground md:flex" aria-label={copy('funnel')}>
-      <span>{copy('thisMonth')}:</span>
-      {parts.map(([n, label], i) => (
-        <span key={label}>
-          <span className="font-semibold tabular-nums text-foreground">{n}</span> {copy(label)}
-          {i < parts.length - 1 && <span aria-hidden="true"> ·</span>}
-        </span>
-      ))}
-    </p>
-  );
-}
 
 /** The agents' playbook as served (`prospects.playbook`), read when its dialog opens. */
 function PlaybookDialog({ onClose }: { onClose: () => void }) {
@@ -255,7 +222,9 @@ export function ProspectsPage() {
     queryFn: () => listProspects(query),
     placeholderData: keepPreviousData,
   });
-  const tasks = useQuery({ queryKey: [...key, 'research', 'list', 'open'], queryFn: () => listTasks({ status: 'open' }) });
+  const tasks = useOpenTasks();
+  const taskCopy = useTaskCopy();
+  const segmentNames = useSegmentNames();
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
   // The audience filter lists this workspace's own segments, never a fixed list.
   const segments = usePoolSegments(
@@ -300,24 +269,22 @@ export function ProspectsPage() {
 
   return (
     <div className="flex min-w-0 flex-col lg:h-[calc(100dvh-61px)] lg:min-h-[36rem]">
-      <header className={cn('flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border px-4 py-2.5', prospectId && 'hidden lg:flex')}>
-        <h1 className="font-display text-xl font-medium">{t('leads.prospects.title')}</h1>
-        <Funnel />
-        <div className="ms-auto flex items-center gap-1">
-          <Button size="sm" variant="ghost" onClick={() => setPlaybook(true)}>
-            {t('leads.prospects.playbook')}
-          </Button>
-          <Button asChild size="sm" variant="outline">
-            <Link to="/prospects/tasks">{t('leads.prospects.tasksLink')}</Link>
-          </Button>
-          {canAdd && (
-            <Button size="sm" onClick={() => setAdding(true)}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              {copy('addProspect')}
+      <PoolHeader
+        className={cn(prospectId && 'hidden lg:flex')}
+        actions={
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setPlaybook(true)}>
+              {t('leads.prospects.playbook')}
             </Button>
-          )}
-        </div>
-      </header>
+            {canAdd && (
+              <Button size="sm" onClick={() => setAdding(true)}>
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                {copy('addProspect')}
+              </Button>
+            )}
+          </>
+        }
+      />
 
       <div className={cn('flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2', prospectId && 'hidden lg:flex')}>
         <div role="group" aria-label={copy('tabs')} className="flex min-w-0 gap-0.5 overflow-x-auto">
@@ -327,10 +294,7 @@ export function ProspectsPage() {
               type="button"
               aria-pressed={filters.status === status}
               onClick={() => setFilter('status', status)}
-              className={cn(
-                'shrink-0 rounded-md px-2.5 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                filters.status === status ? 'bg-primary-50 font-semibold text-foreground dark:bg-primary-950/60' : 'text-muted-foreground hover:text-foreground',
-              )}
+              className={tabClass(filters.status === status)}
             >
               {copy(label)}
             </button>
@@ -389,7 +353,7 @@ export function ProspectsPage() {
             )}
             {taskItems.map(({ task }) => (
               <option key={task.id} value={task.id}>
-                {taskLabel(t, task)}
+                {taskName(taskCopy, task, segmentNames)}
               </option>
             ))}
           </select>

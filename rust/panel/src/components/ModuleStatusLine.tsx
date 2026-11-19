@@ -22,31 +22,47 @@ const AD_WRITE_SCOPES: Record<string, string | null> = { meta_ads: 'ads_manageme
  * line per agent.
  */
 export function agentNotice(t: TFunction, language: string, waiting: number, agents: { last_seen_at: string | null; overdue: boolean }[]): string | null {
-  if (waiting <= 0 || agents.some(a => !a.overdue && a.last_seen_at)) return null;
-  const last = agents.map(a => a.last_seen_at).filter((at): at is string => !!at).sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
-  return last
-    ? t('moduleStatus.overdue', { n: waiting, time: formatDateTime(last, language) })
+  const idle = agentIdle(waiting, agents);
+  if (!idle) return null;
+  return idle.last
+    ? t('moduleStatus.overdue', { n: waiting, time: formatDateTime(idle.last, language) })
     : t('moduleStatus.noAgent', { n: waiting });
 }
-export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
-  const { t, i18n } = useTranslation();
+/** [`agentNotice`]'s rule without its words: `null` when it says nothing, else the most recent check-in (`null`: none). */
+export function agentIdle(waiting: number, agents: { last_seen_at: string | null; overdue: boolean }[]): { last: string | null } | null {
+  if (waiting <= 0 || agents.some(a => !a.overdue && a.last_seen_at)) return null;
+  return { last: agents.map(a => a.last_seen_at).filter((at): at is string => !!at).sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1) ?? null };
+}
+/**
+ * The agents that may work a module: those its settings assign (every agent when none is), whose
+ * key is active and holds `{module}.work` where keys can be read. `undefined` until known, or
+ * while the module is not installed.
+ */
+export function useModuleAgents(module: 'content' | 'social' | 'ads' | 'prospects') {
   const session = useSession();
   const workspace = session.data?.current_workspace;
   const modules = useModules();
   const agents = useQuery({ queryKey: ['agents', workspace], queryFn: listAgents, refetchInterval: 60_000 });
   // Connections outlive revoked keys. Where key metadata is readable, exclude those connections.
   const keys = useQuery({ queryKey: ['api-keys', workspace], queryFn: listKeys, enabled: can(session.data, 'api_keys.manage'), refetchInterval: 60_000 });
+  const config = modules.data?.modules.find(m => m.blueprint.id === module)?.config;
+  const assigned = config?.agent_ids ?? [];
+  const candidates = config ? agents.data?.filter(a => (!assigned.length || assigned.includes(a.id)) && (!keys.data || keys.data.some(k => k.id === a.api_key_id && k.status === 'active' && k.scopes.includes(`${module}.work`)))) : undefined;
+  return { candidates, assigned };
+}
+export function ModuleStatusLine({ module }: { module: 'content' | 'social' | 'ads' }) {
+  const { t, i18n } = useTranslation();
+  const session = useSession();
+  const workspace = session.data?.current_workspace;
+  const { candidates, assigned } = useModuleAgents(module);
   const strategy = useQuery({ queryKey: ['strategy', workspace], queryFn: getStrategy });
   const budget = useQuery({ queryKey: ['budget-items', workspace], queryFn: listBudgetItems, enabled: module === 'ads' });
   const adAccounts = useQuery({ queryKey: ['capabilities', workspace, 'ads'], queryFn: () => listCapabilities({ group: 'ads' }), enabled: module === 'ads' });
   const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000 });
-  const config = modules.data?.modules.find(m => m.blueprint.id === module)?.config;
-  const assigned = config?.agent_ids ?? [];
-  const candidates = agents.data?.filter(a => (!assigned.length || assigned.includes(a.id)) && (!keys.data || keys.data.some(k => k.id === a.api_key_id && k.status === 'active' && k.scopes.includes(`${module}.work`))));
   const rows: { key: string; text: string; href: string }[] = [];
   // The agents' work of this module that waits; the content page's also counts the files in the analysis queue.
   const waiting = work.data?.items.filter(item => module === 'content' ? item.kind.startsWith('content_') || item.kind === 'studio_material_analysis' : module === 'social' ? ['studio_slot', 'studio_post_request'].includes(item.kind) || (item.kind === 'studio_approval' && 'slot' in item.target) : item.kind.startsWith('ads_campaign_') || item.kind === 'studio_budget_move' || (item.kind === 'studio_approval' && 'budget_move' in item.target)).length;
-  const notice = config && candidates ? agentNotice(t, i18n.language, waiting ?? 0, candidates) : null;
+  const notice = candidates ? agentNotice(t, i18n.language, waiting ?? 0, candidates) : null;
   if (notice) rows.push({ key: 'agent', text: notice, href: !candidates?.length && assigned.length ? `/modules/${module}` : '/agents' });
   if (strategy.data && !strategy.data.approved) rows.push({ key: 'strategy', text: t('moduleStatus.strategy'), href: '/strategy' });
   // The posting engine takes a post only for a live hypothesis with an organic cadence above zero

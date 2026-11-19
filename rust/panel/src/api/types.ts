@@ -1900,9 +1900,21 @@ export interface TaskOut {
   remaining_today: number;
 }
 
+/** `jt_app::usecases::research::ListedTask`: with what the task found so far. */
+export interface ListedTask extends TaskOut {
+  /** Prospects recorded for it, whatever their status now. */
+  found: number;
+  /** Of those, the ones qualified or promoted now. */
+  qualified: number;
+  /** Of those, the ones recorded today (the workspace's local day): what the daily cap counts. */
+  found_today: number;
+  /** When the newest of those was recorded; `null` while it found none. */
+  last_found_at: Rfc3339 | null;
+}
+
 /** `jt_app::usecases::research::ListOut`. */
 export interface TaskListOut {
-  items: TaskOut[];
+  items: ListedTask[];
   next: NextPage | null;
 }
 

@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
     BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, MAX_REPORT_ROWS, Page,
-    Promoted, ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, Updated, is_key_fingerprint,
-    is_key_hash,
+    Promoted, ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, TaskTally, Updated,
+    is_key_fingerprint, is_key_hash,
 };
 use jt_inbox::{JourneyId, PersonId};
 use jt_prospects::{
@@ -789,6 +789,50 @@ impl ProspectRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "count a task's prospects"))?;
         Ok(u32::try_from(n).unwrap_or(u32::MAX))
+    }
+
+    async fn task_tallies(
+        &mut self,
+        tasks: &[ResearchTaskId],
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Result<Vec<TaskTally>, AppError> {
+        if tasks.is_empty() {
+            return Ok(Vec::new());
+        }
+        // One pass over `prospects_task` (workspace, task, created_at) for every task asked.
+        let rows: Vec<(Uuid, i64, i64, i64, OffsetDateTime)> = sqlx::query_as(
+            "select research_task_id, count(*), \
+                    count(*) filter (where status in ('qualified', 'promoted')), \
+                    count(*) filter (where created_at >= $3 and created_at < $4), \
+                    max(created_at) \
+             from prospects where workspace_id = $1 and research_task_id = any($2) \
+             group by research_task_id order by research_task_id",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(
+            tasks
+                .iter()
+                .map(ResearchTaskId::as_uuid)
+                .collect::<Vec<Uuid>>(),
+        )
+        .bind(from)
+        .bind(to)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "tally the tasks' prospects"))?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(task_id, found, qualified, today, last_found_at)| TaskTally {
+                    task_id: ResearchTaskId(task_id),
+                    found: u32::try_from(found).unwrap_or(u32::MAX),
+                    qualified: u32::try_from(qualified).unwrap_or(u32::MAX),
+                    found_today: u32::try_from(today).unwrap_or(u32::MAX),
+                    last_found_at,
+                },
+            )
+            .collect())
     }
 
     async fn promoted_between(

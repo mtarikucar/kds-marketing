@@ -303,14 +303,30 @@ pub struct ListInput {
     pub before_id: Option<Uuid>,
 }
 
-/// A page of tasks, newest first, each with what it may still record today.
+/// A listed task: what it may still record today and what it found so far.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ListedTask {
+    pub task: ResearchTask,
+    pub remaining_today: u32,
+    /// Prospects recorded for it, whatever their status now (purged ones are gone).
+    pub found: u32,
+    /// Of those, the ones qualified or promoted now.
+    pub qualified: u32,
+    /// Of those, the ones recorded today (the workspace's local day): what its daily cap counts.
+    pub found_today: u32,
+    /// When the newest of those was recorded; `None` while it found none.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_found_at: Option<OffsetDateTime>,
+}
+
+/// A page of tasks, newest first, each with what it may still record today and what it found.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ListOut {
-    pub items: Vec<TaskOut>,
+    pub items: Vec<ListedTask>,
     pub next: Option<NextPage>,
 }
 
-/// `jeeta.research.tasks_list`.
+/// `jeeta.research.tasks_list`: what each task found is counted for the whole page in one read.
 pub async fn tasks_list(deps: &Deps, ctx: &Ctx, input: ListInput) -> Result<ListOut, AppError> {
     ctx.require(Permission::ProspectsWork)?;
     let limit = input.limit.unwrap_or(50);
@@ -330,6 +346,9 @@ pub async fn tasks_list(deps: &Deps, ctx: &Ctx, input: ListInput) -> Result<List
             after,
         })
         .await?;
+    let ids: Vec<ResearchTaskId> = page.items.iter().map(|t| t.id).collect();
+    let (from, to) = hours::local_day(&policy.timezone, ctx.now)?;
+    let tallies = r.prospects().task_tallies(&ids, from, to).await?;
     let mut items = Vec::with_capacity(page.items.len());
     for task in page.items {
         let remaining_today = remaining(
@@ -340,9 +359,14 @@ pub async fn tasks_list(deps: &Deps, ctx: &Ctx, input: ListInput) -> Result<List
             ctx.now,
         )
         .await?;
-        items.push(TaskOut {
+        let tally = tallies.iter().find(|x| x.task_id == task.id);
+        items.push(ListedTask {
             task,
             remaining_today,
+            found: tally.map_or(0, |x| x.found),
+            qualified: tally.map_or(0, |x| x.qualified),
+            found_today: tally.map_or(0, |x| x.found_today),
+            last_found_at: tally.map(|x| x.last_found_at),
         });
     }
     Ok(ListOut {

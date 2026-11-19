@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { LOADED, agentsList, leadsMe, playbook, prospect, prospectId, prospectOut, row, task, team } from '@/test/leads';
+import { approvedVersion, sections } from '@/test/fixtures';
 import { segmentOptions } from './ProspectsPage';
 
 const NEXT = { before_at: '2026-11-01T09:02:00Z', before_id: prospectId(2) };
@@ -13,7 +14,8 @@ function answers(extra: Record<string, unknown> = {}) {
     'GET /api/auth/me': leadsMe,
     'GET /api/agents': agentsList,
     'GET /api/team': team,
-    'GET /api/research/tasks': { items: [{ task: task(1), remaining_today: 8 }], next: null },
+    'GET /api/research/tasks': { items: [{ task: task(1), remaining_today: 8, found: 0, qualified: 0, found_today: 0, last_found_at: null }], next: null },
+    'GET /api/strategy': { approved: { ...approvedVersion, sections: { ...sections, audience: [{ key: 'kafeler', name: 'Kafeler', description: '' }] } }, draft: null, gaps: [] },
     'GET /api/prospects': { items: [row(1), row(2), row(3, { status: 'new', latest_score: null, bucket: null })], next: NEXT },
     ...extra,
   };
@@ -59,7 +61,8 @@ describe('ProspectsPage', () => {
     expect(screen.queryByRole('textbox', { name: tr.leads.prospects.filters.city })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /More filters|Diğer filtreler/ }));
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.bucket }), '75-100');
-    await screen.findByRole('option', { name: 'Strateji görevi · kafeler_izmir' }, LOADED);
+    // A task is named as the tasks page names it: its audience, never its key.
+    await within(screen.getByRole('combobox', { name: tr.leads.prospects.filters.task })).findByRole('option', { name: 'Kafeler' }, LOADED);
     await user.selectOptions(screen.getByRole('combobox', { name: tr.leads.prospects.filters.task }), task(1).id);
     await user.click(screen.getByRole('textbox', { name: tr.leads.prospects.filters.city }));
     await user.paste('İzmir');
@@ -98,6 +101,15 @@ describe('ProspectsPage', () => {
     });
     // Many steps, each a render of the list: more time than one interaction needs.
   }, 15_000);
+
+  it('switches_to_the_research_tasks_from_its_own_header', async () => {
+    mockFetch(answers());
+    renderAt('/prospects');
+    const nav = within(await screen.findByRole('navigation', { name: 'Aday havuzu bölümleri' }, LOADED));
+    expect(nav.getByRole('link', { name: 'Adaylar' })).toHaveAttribute('aria-current', 'page');
+    expect(nav.getByRole('link', { name: 'Araştırma görevleri' })).toHaveAttribute('href', '/prospects/tasks');
+    expect(nav.getByRole('link', { name: 'Araştırma görevleri' })).not.toHaveAttribute('aria-current');
+  });
 
   it('keeps a task filter visible when opened from a research task', async () => {
     const calls = mockFetch(answers());
