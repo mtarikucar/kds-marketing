@@ -428,6 +428,29 @@ async fn only_a_person_with_team_manage_sets_an_address_and_an_agent_never_reads
     .await
     .unwrap_err();
     support::assert_invalid(&bad, "routine_id");
+    // A login e-mail in the id, a saved password in the token (what a browser's password manager
+    // fills in): refused at the field, nothing sealed.
+    for (routine_id, token, field) in [
+        ("owner@acme.example", TOKEN, "routine_id"),
+        ("trig_1", "correct horse battery", "token"),
+        ("trig_1", "Hunter2!", "token"),
+    ] {
+        let bad = wake::set(
+            &r.w.deps,
+            &r.w.owner_ctx,
+            SetWake {
+                api_key_id: content,
+                kind: WakeKind::ClaudeRoutine,
+                routine_id: Some(routine_id.into()),
+                token: Some(token.into()),
+                url: None,
+                secret: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        support::assert_invalid(&bad, field);
+    }
 }
 
 #[tokio::test]
