@@ -1420,7 +1420,10 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
     or client. When the work needs a real photo or video, ask with \
     jeeta.studio.project_request and give the area back with jeeta.content.area_release; it \
     returns to your check-in once the capture is there. (5) Deliver every platform version in \
-    one call to jeeta.content.area_deliver, each with a hypothesis_id of the approved strategy; \
+    one call to jeeta.content.area_deliver, each with a hypothesis_id of the approved strategy \
+    (your preference: where it does not post on the account the version gets, the post goes \
+    out under another of the strategy that does, or under the owner's request when a person \
+    asked for this content naming the account; never name the owner's request yourself); \
     with no connected account leave capability_id out. A refusal lists, by version index, what \
     to fix: fix it and deliver again with a new request_key. Three refusals in a row hand the \
     area to a person. An accepted delivery finishes the area.";
@@ -1488,8 +1491,11 @@ const SOCIAL_SCHEDULE_HINT: &str = "A platform version of a finished content pac
     version_id, capability_id, publish_at as an RFC 3339 time, request_key). The posting limits \
     apply as jeeta.studio.posts_list shows them under settings: the lead before a post, quiet \
     hours, the daily cap and the spacing between posts of an account, and the planning horizon. \
-    A refusal names the limit: choose another time. Nobody approves the post; it goes out at \
-    its time.";
+    A refusal names the limit: choose another time. Every account the version lists may be \
+    scheduled: where its choice names a human_gate, the post waits after scheduling for the \
+    owner (their approval, or TikTok's posting screen) and goes out once they have done it; \
+    elsewhere it goes out at its time. The post goes out under the hypothesis its choice names \
+    (attribution); you choose none.";
 
 /// Assignment limits the offered work, never a human's visibility or underlying permissions.
 async fn module_work_offered(

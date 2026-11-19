@@ -15,19 +15,20 @@ use crate::{
         studio::{
             chain,
             files::{decode, encode, key},
-            materials,
+            materials, owner_request,
             pieces::{PieceContent, store_piece},
             planner::stable_id,
             posts::{
-                PackageProposalInput, PostOut, ProposedPost, channels, content_types, group_ids,
-                post_out, postable, posts_propose_locked, retire_post_of, selected,
+                Channel, PackageProposalInput, PostOut, ProposedPost, content_types, group_ids,
+                open_channels, post_out, postable, posts_propose_locked, retire_post_of, selected,
             },
             projects,
             work::{EmptyInput, gated},
         },
     },
 };
-use jt_capability::CapabilityId;
+use jt_capability::{Capability, CapabilityId};
+use jt_strategy::{Hypothesis, HypothesisId};
 use jt_studio::{
     ChannelContent, MaterialId, MediaAsset, PackageHints, PackageRequest, PackageRequestId,
     PackageStatus, PackageTrigger, PostFormat, RetirementReason, SlotId, SlotState,
@@ -162,8 +163,21 @@ pub async fn version_schedule(
         shown.push(projects::material(r.as_mut(), *id).await?);
     }
     let subject = content::delivery::subject_of(&shown);
+    // The version's hypothesis is a preference (design 2026-11-19 F1): on an account where it
+    // does not post, the post goes out under the one [`VersionAccounts::pick`] settles on, as
+    // `social.versions_waiting` offered it. An account nothing settles for is refused by the
+    // engine below with its reason, as before.
+    let reader = VersionAccounts::load(d, r.as_mut(), ctx.now).await?;
+    let settled = reader
+        .channel(i.capability_id)
+        .and_then(|ch| reader.pick(ch, &project, &version));
+    let hypothesis_id = settled.map_or(version.hypothesis_id, |(h, _)| h);
+    if let Some((h, Attribution::OwnerRequest)) = settled {
+        owner_request::ensure(r.as_mut(), ctx.workspace_id, frame.id, false).await?;
+        debug_assert!(owner_request::is(ctx.workspace_id, h));
+    }
     // The content type a version carries is its maker's label. It steers the post only when the
-    // strategy names it for the version's hypothesis on this kind of account; any other label
+    // strategy names it for the post's hypothesis on this kind of account; any other label
     // leaves the choice to the engine (the hypothesis's first type), so that a label the
     // strategy does not know never leaves a finished version without a way out.
     let content_type = match (
@@ -175,7 +189,7 @@ pub async fn version_schedule(
             .list(frame.id)
             .await?
             .iter()
-            .find(|h| h.id == version.hypothesis_id)
+            .find(|h| h.id == hypothesis_id)
             .is_some_and(|h| content_types(h, &account.kind_key).contains(named))
             .then(|| named.clone()),
         _ => None,
@@ -207,7 +221,7 @@ pub async fn version_schedule(
             hints: PackageHints {
                 max_posts: Some(1),
                 subject: Some(subject),
-                hypothesis_id: Some(version.hypothesis_id),
+                hypothesis_id: Some(hypothesis_id),
                 content_type: content_type.clone(),
                 ..Default::default()
             },
@@ -244,7 +258,7 @@ pub async fn version_schedule(
                 publish_at: i.publish_at,
                 material_ids: version.material_ids.clone(),
                 subject,
-                hypothesis_id: version.hypothesis_id,
+                hypothesis_id,
                 content_type,
             }],
         },
@@ -317,6 +331,21 @@ pub async fn version_schedule(
     }
     if let Some(package) = project.packages.last_mut() {
         package.versions[index].slot_id = Some(slot.id);
+    }
+    // What the post was attributed to, when it is not the version's own hypothesis: the
+    // measurement reads the slot's chain, the ledger says why it is that one.
+    if let Some((h, attribution)) = settled.filter(|(_, a)| *a != Attribution::Version) {
+        r.ledger()
+            .append(ledger_entry(
+                ctx,
+                "social.version.attributed",
+                "studio_slot",
+                slot.id,
+                json!({"project_id":project.id,"version_id":version.id,
+                       "version_hypothesis_id":version.hypothesis_id,"hypothesis_id":h,
+                       "attribution":attribution,"born_version_id":frame.id}),
+            )?)
+            .await?;
     }
     projects::save(r.as_mut(), ctx, project, "social.version.scheduled").await?;
     r.studio()
@@ -558,23 +587,82 @@ pub struct WaitingVersion {
     pub text: String,
     pub material_ids: Vec<MaterialId>,
     /// The accounts it could go out on now: the version's own when it names one, else every
-    /// live social account of the strategy that takes its format for its hypothesis.
+    /// live social account of the strategy that takes its format and its materials, and that a
+    /// hypothesis of the strategy posts on (or, for a content a person asked for naming the
+    /// account, the owner's request).
     pub accounts: Vec<CapabilityId>,
-    /// Why no account can take it now, when none can: `no_approved_strategy`,
-    /// `no_connected_account`, `account_paused`, `its_account_unavailable` (the account the
-    /// version was made for), `format_not_supported`, `channel_not_in_strategy`,
-    /// `hypothesis_does_not_post` (its hypothesis has no organic cadence for these accounts).
+    /// The same accounts, each with what stands between a time and the post going out there.
+    pub choices: Vec<AccountChoice>,
+    /// Why no account can take it now, when none can: `material_removed` (a material it shows was
+    /// deleted: only a revision helps), `no_approved_strategy`, `no_connected_account`, `account_paused`, `its_account_unavailable` (the account the
+    /// version was made for), `format_not_supported`, `media_not_accepted` (its materials are
+    /// not what the account's platform takes in this format, say an image for TikTok),
+    /// `channel_not_in_strategy`, `hypothesis_does_not_post` (no hypothesis of the strategy posts
+    /// on the accounts' channel). Each is read from the facts now: it goes the moment its cause
+    /// does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<&'static str>,
 }
 
-/// Why none of the workspace's social accounts can take version `v` at `now`, the first reason
-/// that holds, in the order a person would fix them.
+/// One account a waiting version could go out on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct AccountChoice {
+    pub capability_id: CapabilityId,
+    /// Who must act after the post has its time, before it goes out: a person's approval (the
+    /// account's policy), the platform's own posting screen a person fills (TikTok, every post),
+    /// or nobody.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_gate: Option<HumanGate>,
+    /// Which hypothesis the post is attributed to there ([`Attribution`]).
+    pub attribution: Attribution,
+}
+
+/// A person's step between a planned post and its publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanGate {
+    /// The account asks for a person's approval of every post (`requires_human_approval`).
+    Approval,
+    /// The platform's posting screen, which a person fills for every post (TikTok).
+    PostingScreen,
+}
+
+/// The person's step a post on `c` waits for, if any: TikTok's posting screen whatever the
+/// policy says, else the account's approval flag.
+pub(crate) fn human_gate(c: &Capability) -> Option<HumanGate> {
+    if jt_studio::requires_posting_screen(&c.kind_key) {
+        Some(HumanGate::PostingScreen)
+    } else if c.policy.requires_human_approval {
+        Some(HumanGate::Approval)
+    } else {
+        None
+    }
+}
+
+/// How the hypothesis of a post made of a version is settled on an account (design 2026-11-19
+/// F1): the version's own hypothesis is a preference, chosen when the agent delivered it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Attribution {
+    /// The version's own hypothesis posts there.
+    Version,
+    /// Another hypothesis of the same segment posts there.
+    Segment,
+    /// Another hypothesis of the strategy posts there.
+    Channel,
+    /// None does, and a person asked for this content naming the account: the owner's request
+    /// (`owner_request`), rule R3.
+    OwnerRequest,
+}
+
+/// Why none of the workspace's social accounts can take version `v` (with materials of `mimes`)
+/// at `now`, the first reason that holds, in the order a person would fix them.
 async fn why_blocked(
     d: &Deps,
     r: &mut dyn TenantRepos,
     frame: Option<&jt_strategy::StrategyVersion>,
     v: &PackageVersion,
+    mimes: &[String],
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
     let Some(frame) = frame else {
@@ -616,8 +704,15 @@ async fn why_blocked(
     if fitting.is_empty() {
         return Ok("format_not_supported");
     }
+    let taking: Vec<_> = fitting
+        .into_iter()
+        .filter(|c| takes_media(v, &c.kind_key, mimes))
+        .collect();
+    if taking.is_empty() {
+        return Ok("media_not_accepted");
+    }
     let mut chosen = Vec::new();
-    for c in fitting {
+    for c in taking {
         if selected(frame, &c.kind_key, &group_ids(r, c.id).await?) {
             chosen.push(c);
         }
@@ -626,6 +721,12 @@ async fn why_blocked(
         return Ok("channel_not_in_strategy");
     }
     Ok("hypothesis_does_not_post")
+}
+
+/// Whether a platform of `kind` takes version `v`'s materials, of `mimes`, in its format.
+fn takes_media(v: &PackageVersion, kind: &str, mimes: &[String]) -> bool {
+    let mimes: Vec<&str> = mimes.iter().map(String::as_str).collect();
+    jt_studio::media_types_ok(v.format, kind, &mimes)
 }
 
 /// `social.versions_waiting`: the versions of finished packages that no planned post was made
@@ -642,11 +743,12 @@ pub async fn versions_waiting(
     waiting(d, r.as_mut(), ctx.now).await
 }
 
-/// What decides which accounts can take a waiting version now: the approved strategy and the
-/// channels a post may go out on, read once for any number of versions.
+/// What decides which accounts can take a waiting version now: the approved strategy, its
+/// hypotheses and the accounts a post may go out on, read once for any number of versions.
 pub(crate) struct VersionAccounts {
     frame: Option<jt_strategy::StrategyVersion>,
-    live: Vec<crate::usecases::studio::posts::Channel>,
+    hypotheses: Vec<Hypothesis>,
+    open: Vec<Channel>,
 }
 
 impl VersionAccounts {
@@ -656,41 +758,102 @@ impl VersionAccounts {
         now: OffsetDateTime,
     ) -> Result<Self, AppError> {
         let frame = r.strategy().current_approved().await?;
-        let live = match &frame {
-            Some(frame) => channels(d, r, frame, now).await?,
-            None => Vec::new(),
+        let (hypotheses, open) = match &frame {
+            Some(frame) => (
+                r.hypotheses().list(frame.id).await?,
+                open_channels(d, r, frame, now).await?,
+            ),
+            None => (Vec::new(), Vec::new()),
         };
-        Ok(Self { frame, live })
+        Ok(Self {
+            frame,
+            hypotheses,
+            open,
+        })
     }
 
-    /// The accounts version `v` could go out on now, and, when none can, why
-    /// ([`WaitingVersion::blocked`]).
+    /// The account `id`, when a post may go out on it now.
+    pub(crate) fn channel(&self, id: CapabilityId) -> Option<&Channel> {
+        self.open.iter().find(|ch| ch.capability.id == id)
+    }
+
+    /// The hypothesis a post made of version `v` of area `p` goes out under on channel `ch`, and
+    /// why that one (design 2026-11-19 F1): the version's own when it posts there; else the first
+    /// of the same segment that does; else the first that does; else, when `p` is a person's
+    /// request naming the account, the owner's request; else none.
+    pub(crate) fn pick(
+        &self,
+        ch: &Channel,
+        p: &ProductionProject,
+        v: &PackageVersion,
+    ) -> Option<(HypothesisId, Attribution)> {
+        if ch.options.iter().any(|o| o.hypothesis_id == v.hypothesis_id) {
+            return Some((v.hypothesis_id, Attribution::Version));
+        }
+        let segment = self
+            .hypotheses
+            .iter()
+            .find(|h| h.id == v.hypothesis_id)
+            .map(|h| h.segment_key.as_str());
+        if let Some(o) = segment.and_then(|s| ch.options.iter().find(|o| o.segment_key == s)) {
+            return Some((o.hypothesis_id, Attribution::Segment));
+        }
+        if let Some(o) = ch.options.first() {
+            return Some((o.hypothesis_id, Attribution::Channel));
+        }
+        owner_request::names(p, &ch.capability).then(|| {
+            (
+                owner_request::id(ch.capability.workspace_id),
+                Attribution::OwnerRequest,
+            )
+        })
+    }
+
+    /// The accounts version `v` of area `p` could go out on now, each with its person's step and
+    /// attribution, and, when none can, why ([`WaitingVersion::blocked`]).
     pub(crate) async fn of(
         &self,
         d: &Deps,
         r: &mut dyn TenantRepos,
+        p: &ProductionProject,
         v: &PackageVersion,
         now: OffsetDateTime,
-    ) -> Result<(Vec<CapabilityId>, Option<&'static str>), AppError> {
-        let accounts: Vec<CapabilityId> = self
-            .live
+    ) -> Result<(Vec<AccountChoice>, Option<&'static str>), AppError> {
+        let mut mimes = Vec::new();
+        let mut removed = false;
+        for id in &v.material_ids {
+            match r.studio_materials().get_material(*id).await? {
+                Some(m) if m.erased_at.is_none() => mimes.push(m.mime),
+                _ => removed = true,
+            }
+        }
+        // A version showing a material that was deleted cannot go out as it is: only a revision
+        // (a new delivery without it) helps.
+        if removed {
+            return Ok((Vec::new(), Some("material_removed")));
+        }
+        let choices: Vec<AccountChoice> = self
+            .open
             .iter()
             .filter(|ch| {
                 v.capability_id.is_none_or(|c| c == ch.capability.id)
                     && jt_studio::supported_formats(&ch.capability.kind_key).contains(&v.format)
-                    && ch
-                        .options
-                        .iter()
-                        .any(|o| o.hypothesis_id == v.hypothesis_id)
+                    && takes_media(v, &ch.capability.kind_key, &mimes)
             })
-            .map(|ch| ch.capability.id)
+            .filter_map(|ch| {
+                self.pick(ch, p, v).map(|(_, attribution)| AccountChoice {
+                    capability_id: ch.capability.id,
+                    human_gate: human_gate(&ch.capability),
+                    attribution,
+                })
+            })
             .collect();
-        let blocked = if accounts.is_empty() {
-            Some(why_blocked(d, r, self.frame.as_ref(), v, now).await?)
+        let blocked = if choices.is_empty() {
+            Some(why_blocked(d, r, self.frame.as_ref(), v, &mimes, now).await?)
         } else {
             None
         };
-        Ok((accounts, blocked))
+        Ok((choices, blocked))
     }
 }
 
@@ -708,13 +871,14 @@ pub(crate) async fn waiting(
         };
         let mut versions = Vec::new();
         for v in area.waiting_versions() {
-            let (accounts, blocked) = reader.of(d, r, v, now).await?;
+            let (choices, blocked) = reader.of(d, r, &area, v, now).await?;
             versions.push(WaitingVersion {
                 version_id: v.id,
                 format: v.format,
                 text: v.text.clone(),
                 material_ids: v.material_ids.clone(),
-                accounts,
+                accounts: choices.iter().map(|c| c.capability_id).collect(),
+                choices,
                 blocked,
             });
         }

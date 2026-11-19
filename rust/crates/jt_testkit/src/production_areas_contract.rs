@@ -28,6 +28,7 @@ fn area(ws: WorkspaceId, start_minutes: i64) -> ProductionProject {
         updated_at: FIXED_NOW,
         start_at: Some(FIXED_NOW + Duration::minutes(start_minutes)),
         opened_by: OpenedBy::Human,
+        requested_by: None,
         hints: AreaHints::default(),
         claim: None,
         progress: None,

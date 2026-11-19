@@ -602,6 +602,8 @@ pub async fn project_create(
         steps: vec![],
         start_at: Some(start_at),
         opened_by: Default::default(),
+        // A person asking in person, never an agent's key (design 2026-11-19 R3).
+        requested_by: library::person(ctx),
         hints: AreaHints {
             formats: i.formats,
             capability_ids: i.capability_ids,

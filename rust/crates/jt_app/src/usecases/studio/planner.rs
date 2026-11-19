@@ -278,6 +278,12 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
         )?;
         e.strategy_version_id = version;
         r.ledger().append(e).await?;
+        // A content version whose post passed its time unsent and never tried (it waited for a
+        // person's approval or screen, a hold, a paused account) waits for a new time: its
+        // content is not lost (design 2026-11-19 F4). One that was tried and failed stays failed.
+        if attempts.is_empty() {
+            crate::usecases::social::schedule::free_version_of(r.as_mut(), &ctx, s.id).await?;
+        }
         retired.insert(s.id);
         changed += 1;
     }

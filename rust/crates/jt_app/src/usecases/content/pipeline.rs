@@ -175,9 +175,11 @@ pub struct TimeWait {
     /// The accounts it could go out on now.
     pub accounts: Vec<CapabilityId>,
     /// Why no account can take it now, as `jeeta.social.versions_waiting` says it
-    /// (`no_approved_strategy`, `no_connected_account`, `account_paused`,
-    /// `its_account_unavailable`, `format_not_supported`, `channel_not_in_strategy`,
-    /// `hypothesis_does_not_post`): a problem a person fixes. Absent while some account can.
+    /// (`material_removed`, `no_approved_strategy`, `no_connected_account`, `account_paused`,
+    /// `its_account_unavailable`, `format_not_supported`, `media_not_accepted`,
+    /// `channel_not_in_strategy`, `hypothesis_does_not_post`): a problem a person fixes, read
+    /// from the facts on every read, so it goes the moment its cause does. Absent while some
+    /// account can.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocked: Option<&'static str>,
 }
