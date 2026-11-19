@@ -16,10 +16,13 @@ use tokio::net::TcpListener;
 
 const TOKEN: &str = "sk-ant-oat01-TEST-token-never-logged";
 
+/// The mock's answer: its status, extra headers and body.
+type Reply = (u16, Vec<(&'static str, &'static str)>, &'static str);
+
 #[derive(Clone, Default)]
 struct Seen {
     requests: Arc<Mutex<Vec<(String, HeaderMap, String)>>>,
-    reply: Arc<Mutex<(u16, Vec<(&'static str, &'static str)>, &'static str)>>,
+    reply: Arc<Mutex<Reply>>,
 }
 
 async fn handle(State(seen): State<Seen>, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
