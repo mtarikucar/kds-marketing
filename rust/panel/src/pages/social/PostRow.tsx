@@ -245,7 +245,8 @@ export function PostRow({
   let actions: ReactNode = null;
   // Instead of approving it, a revision of its content (or, made of none, its cancel).
   if (post.state === 'approval') actions = <>{manage ? <ApproveButton post={post} account={account} /> : <p className="text-sm text-muted-foreground">{t('socialAccounts.approveManagerOnly')}</p>}<PostRevision post={post} approval /></>;
-  else if (post.state === 'tiktok') actions = <Button size="sm" asChild><Link to={placeHref({ ...place, tiktok: post.slot_id })}>{t('socialAccounts.finishTiktok')}</Link></Button>;
+  // TikTok's screen in place of an approval, and the same ways out as an approval's.
+  else if (post.state === 'tiktok') actions = <><Button size="sm" asChild><Link to={placeHref({ ...place, tiktok: post.slot_id })}>{t('socialAccounts.finishTiktok')}</Link></Button><PostRevision post={post} approval /></>;
   else if (post.state === 'failed') actions = <FailedActions post={post} manage={manage} />;
   else if (post.state === 'held' && post.blockers.length > 0) actions = <div className="basis-full"><Reason reason={post.blockers[0].reason} /></div>;
   else if (post.state === 'published') actions = <><PostNumbers post={post} /><PostLink url={post.url} /></>;

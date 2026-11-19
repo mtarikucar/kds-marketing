@@ -375,3 +375,31 @@ describe('a cancelled post on the content page', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'POST')).toMatchObject({ path: '/api/studio/slots/s2/cancel', body: { expected_revision: 7, reason: 'Bu da olmasın' } }));
   });
 });
+
+describe('a post that waits for the owner', () => {
+  const publication = (slot: string, account: string) => ({ version_id: slot, slot_id: slot, capability_id: 'c', account_name: account, state: 'ready', scheduled_at: '2026-11-24T16:00:00Z', published_at: null, url: null, failed: false });
+  const waiting = (slot: string, screen: boolean) => ({ version_id: slot, slot_id: slot, required: true, posting_screen: screen, waiting: true, approved_by: null, approved_at: null });
+
+  it('leads a TikTok post to its posting screen with the social page’s words, never to a plain approval', async () => {
+    contentPageFetch({ 'GET /api/content/areas': { areas: [row('t', { stages: stages({
+      onay: { state: 'waiting_person', approvals: [waiting('s1', true)] },
+      yayin: { state: 'todo', publications: [publication('s1', 'figurunica tiktok')] },
+    }) })], next_cursor: null, next_done_before: null } });
+    renderAt('/content');
+    const article = await screen.findByRole('article', { name: 'İçerik t' });
+    const finish = within(article).getByRole('link', { name: /^TikTok paylaşımını tamamla · figurunica tiktok/ });
+    expect(finish).toHaveAttribute('href', '/social?tiktok=s1');
+    expect(within(article).queryByRole('link', { name: /^Onayla/ })).not.toBeInTheDocument();
+    expect(within(article).getAllByText('TikTok’ta tamamlanacak').length).toBeGreaterThan(0);
+  });
+
+  it('keeps "Onayla" for a post whose account asks for an approval', async () => {
+    contentPageFetch({ 'GET /api/content/areas': { areas: [row('i', { stages: stages({
+      onay: { state: 'waiting_person', approvals: [waiting('s2', false)] },
+      yayin: { state: 'todo', publications: [publication('s2', 'figurunica')] },
+    }) })], next_cursor: null, next_done_before: null } });
+    renderAt('/content');
+    const article = await screen.findByRole('article', { name: 'İçerik i' });
+    expect(within(article).getByRole('link', { name: /^Onayla · figurunica/ })).toHaveAttribute('href', '/social?slot=s2');
+  });
+});

@@ -4418,7 +4418,8 @@
       "awaitsTime_one": "Package ready · waits for a posting time",
       "awaitsTime_other": "Package ready · {{count}} versions wait for a posting time",
       "awaitsTimeHelp": "On its next run the agent gives each version an account and a time. If you do not want to wait, give the time yourself.",
-      "giveTime": "Give the time yourself"
+      "giveTime": "Give the time yourself",
+      "finishTiktokAt": "Finish the TikTok post · {{account}}, {{at}}"
     },
     "row": {
       "preview": "Preview",
@@ -4568,7 +4569,8 @@
       "usedIn_one": "in {{count}} content",
       "usedIn_other": "in {{count}} contents",
       "usedInTitle": "Contents that use it",
-      "unused": "Not used in a content yet."
+      "unused": "Not used in a content yet.",
+      "video": "Video"
     },
     "upload": {
       "button": "Upload files",

@@ -306,3 +306,18 @@ describe('what the agent will do about the contents being revised', () => {
     expect(screen.queryByTestId('agent-wake-line')).not.toBeInTheDocument();
   });
 });
+
+describe('a TikTok post waiting for its posting screen', () => {
+  it('offers the same ways out as a post waiting for approval: a revision and a cancel', async () => {
+    mockFetch({
+      ...socialAnswers,
+      'GET /api/studio/slots/s1': { ...slotDetail('s1', contentOf('p1', [contentPost('s1', { format: 'tiktok_video', capability_id: 'tt1', account_name: 'figurunica tiktok' })])), slot: { ...slotOf('s1', 4, 'tt1') } },
+      'GET /api/content/areas': noAreas,
+    } as never);
+    renderAt('/social');
+    const row = await rowOf('Atölye videosu');
+    expect(within(row).getByRole('link', { name: 'TikTok paylaşımını tamamla' })).toBeVisible();
+    expect(await within(row).findByRole('button', { name: 'Düzenleme iste' })).toBeVisible();
+    expect(within(row).getByRole('button', { name: 'İptal et' })).toBeVisible();
+  });
+});

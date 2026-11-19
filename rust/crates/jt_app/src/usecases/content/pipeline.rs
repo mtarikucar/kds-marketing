@@ -99,6 +99,9 @@ pub struct ApprovalFact {
     pub slot_id: SlotId,
     /// Its account asks for a person's approval (or TikTok's posting screen).
     pub required: bool,
+    /// What the person does is TikTok's posting screen, never a plain approval: an approval
+    /// without the screen's choice does not release it.
+    pub posting_screen: bool,
     /// It waits for that approval now.
     pub waiting: bool,
     pub approved_by: Option<UserId>,
@@ -599,6 +602,7 @@ impl PostReads {
                     version_id: post.version_id,
                     slot_id: slot.id,
                     required,
+                    posting_screen: screen,
                     waiting,
                     approved_by: receipt.map(|a| a.by),
                     approved_at: receipt.map(|a| a.at),

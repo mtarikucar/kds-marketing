@@ -125,6 +125,8 @@ export interface ApprovalFact {
   version_id: string;
   slot_id: string;
   required: boolean;
+  /** The person's step is TikTok's posting screen, never a plain approval. */
+  posting_screen?: boolean;
   waiting: boolean;
   approved_by: string | null;
   approved_at: string | null;

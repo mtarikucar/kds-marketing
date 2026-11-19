@@ -14,7 +14,7 @@ import { ProjectError } from '../projects/ProjectShared';
 import { areaTime, currentPackage, MiniThumb, StateBadge, stepName } from './AreaShared';
 import { PlatformFrame } from './PlatformFrame';
 import { AreaHistory } from './AreaHistory';
-import { blockedText, cancelOf, PostLink, publicationText, scheduleHref, StageNode } from './PipelineRow';
+import { approvalHref, blockedText, cancelOf, PostLink, publicationText, scheduleHref, StageNode } from './PipelineRow';
 import { PostCancel } from '../social/Revision';
 import { placeHref, useContentPlace } from './location';
 import { useUploads } from './uploads';
@@ -79,7 +79,7 @@ function Timeline({ row, files, versions }: { row: AreaRow; files: boolean; vers
                 <li key={a.slot_id} className="break-words">
                   <span className="font-medium">{account(a.slot_id)}</span>{' · '}
                   {a.waiting
-                    ? <Link className="text-warning underline" to={`/social?slot=${encodeURIComponent(a.slot_id)}`}>{t('content.out.awaitsApproval')}</Link>
+                    ? <Link className="text-warning underline" to={approvalHref(a)}>{a.posting_screen ? t('socialAccounts.finishTiktok') : t('content.out.awaitsApproval')}</Link>
                     : a.approved_at ? t('content.out.approved', { at: areaTime(a.approved_at, lang) })
                       : a.required ? t('content.out.approvalRequired') : t('content.out.noApproval')}
                 </li>

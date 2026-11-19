@@ -4418,7 +4418,8 @@
       "awaitsTime_one": "Paket hazır · paylaşım zamanı bekliyor",
       "awaitsTime_other": "Paket hazır · {{count}} sürüm paylaşım zamanı bekliyor",
       "awaitsTimeHelp": "Ajan bir sonraki çalışmasında her sürüme hesap ve saat verecek. Beklemek istemezseniz zamanı siz verin.",
-      "giveTime": "Zamanı siz verin"
+      "giveTime": "Zamanı siz verin",
+      "finishTiktokAt": "TikTok paylaşımını tamamla · {{account}}, {{at}}"
     },
     "row": {
       "preview": "Önizle",
@@ -4568,7 +4569,8 @@
       "usedIn_one": "{{count}} içerikte",
       "usedIn_other": "{{count}} içerikte",
       "usedInTitle": "Kullanıldığı içerikler",
-      "unused": "Henüz bir içerikte kullanılmadı."
+      "unused": "Henüz bir içerikte kullanılmadı.",
+      "video": "Video"
     },
     "upload": {
       "button": "Dosya yükle",
