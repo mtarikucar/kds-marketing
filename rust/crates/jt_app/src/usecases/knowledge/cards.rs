@@ -10,13 +10,14 @@
 //! A change of a card the frame is derived from (its title, body, attachments, or its removal
 //! or restoration; a new card of the owner's own counts for both parts) moves the posting or the
 //! prospecting revision (`moves`); a position alone moves neither. An owner's edit of a
-//! card supersedes the card's pending `card_edit` proposals: accepting one would overwrite the
-//! owner's newer text.
+//! card's title or body, or its removal, supersedes the card's pending `card_edit` proposals:
+//! accepting one would overwrite the owner's newer text. A new position or new attachments leave
+//! them pending (an edit rewrites neither).
 
 use jt_knowledge::{
     Attachment, AttachmentInput, Card, Cause, HISTORY_PAGE, KnowledgeCardId, MAX_CARD_ATTACHMENTS,
-    MAX_LIVE_CARDS, ProposalKind, ProposalStatus, Revision, Subject, cut, is_knowledge_mime,
-    validate_body, validate_title,
+    MAX_CARD_POSITION, MAX_LIVE_CARDS, ProposalKind, ProposalStatus, Revision, Subject, cut,
+    is_knowledge_mime, validate_body, validate_position, validate_title,
 };
 use jt_studio::FileId;
 use serde::{Deserialize, Serialize};
@@ -79,6 +80,11 @@ pub async fn card_create(deps: &Deps, ctx: &Ctx, input: CardCreateInput) -> Resu
     let person = editor(ctx)?;
     let title = validate_title(&input.title).map_err(invalid)?;
     let body = validate_body(&input.body).map_err(invalid)?;
+    let position = input
+        .position
+        .map(validate_position)
+        .transpose()
+        .map_err(invalid)?;
     seed::ensure(deps, ctx).await?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let mut kb = lock(r.as_mut(), FrameWrite::WithoutFrame).await?;
@@ -93,7 +99,7 @@ pub async fn card_create(deps: &Deps, ctx: &Ctx, input: CardCreateInput) -> Resu
         title,
         body,
         attachments,
-        position: input.position.unwrap_or_else(|| next_position(&cards)),
+        position: position.unwrap_or_else(|| next_position(&cards)),
         revision: 1,
         created_at: ctx.now,
         created_by: ctx.actor.clone(),
@@ -157,6 +163,11 @@ pub async fn card_update(
         .map(validate_body)
         .transpose()
         .map_err(invalid)?;
+    let position = input
+        .position
+        .map(validate_position)
+        .transpose()
+        .map_err(invalid)?;
     seed::ensure(deps, ctx).await?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let mut kb = lock(r.as_mut(), FrameWrite::WithoutFrame).await?;
@@ -177,7 +188,7 @@ pub async fn card_update(
     if let Some(raw) = &input.attachments {
         card.attachments = attachments(r.as_mut(), raw).await?;
     }
-    if let Some(position) = input.position {
+    if let Some(position) = position {
         card.position = position;
     }
     if card == before {
@@ -241,7 +252,8 @@ pub async fn card_history(
 }
 
 /// Stores `card`, changed from `before` by `person`, at the next revision, records the change,
-/// supersedes the card's pending edits and saves the settings; the caller commits.
+/// supersedes the card's pending edits when its text moved ([`text_moved`]) and saves the
+/// settings; the caller commits.
 async fn write(
     deps: &Deps,
     ctx: &Ctx,
@@ -271,9 +283,17 @@ async fn write(
         },
     )
     .await?;
-    supersede_edits(r, card.id, ctx.now).await?;
+    if text_moved(before, &card) {
+        supersede_edits(r, card.id, ctx.now).await?;
+    }
     kb.save(r).await?;
     Ok(card)
+}
+
+/// Whether a change of a card from `before` to `after` moved what a `card_edit` rewrites (its
+/// title or body) or removed the card: only then do its pending edits stop being current.
+pub(crate) fn text_moved(before: &Card, after: &Card) -> bool {
+    before.title != after.title || before.body != after.body || !after.is_live()
 }
 
 /// Card `id`, locked, at `expected` revision: `NOT_FOUND`, or `CONFLICT` `card_changed` with
@@ -319,12 +339,12 @@ pub(crate) fn live(cards: &[Card]) -> usize {
     cards.iter().filter(|c| c.is_live()).count()
 }
 
-/// The position after every live card.
+/// The position after every live card (at most [`MAX_CARD_POSITION`]).
 pub(crate) fn next_position(cards: &[Card]) -> u32 {
     cards
         .iter()
         .filter(|c| c.is_live())
-        .map(|c| c.position.saturating_add(1))
+        .map(|c| c.position.saturating_add(1).min(MAX_CARD_POSITION))
         .max()
         .unwrap_or(0)
 }

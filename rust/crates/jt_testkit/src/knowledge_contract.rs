@@ -2,8 +2,10 @@
 //! PostgreSQL and the in-memory repository: one settings row per workspace, cards by position
 //! with one per key, a revision once per subject, card and revision, paged newest first, notes
 //! newest first by status, one pending proposal per kind, card and body, an agent's proposals
-//! counted, and expiry. Every bundle that meets a refusal is dropped (the fake spoils it, as
-//! Postgres aborts a transaction on a failed check).
+//! counted, and expiry. A duplicate insert is `CONFLICT` and leaves the bundle usable (`on
+//! conflict do nothing`): what the bundle writes after it commits. Every bundle that meets any
+//! other refusal is dropped (the fake spoils it, as Postgres aborts a transaction on a failed
+//! check).
 use crate::fakes::FIXED_NOW;
 use jt_app::{error::ErrorCode, ports::UnitOfWork};
 use jt_knowledge::*;
@@ -164,6 +166,12 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId, other: WorkspaceId)
     let mut dup = card(Some("who_we_are"), 9);
     let e = r.knowledge().insert_card(&dup).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict, "one card per key");
+    // The duplicate left the bundle usable: what it writes next commits.
+    let d = card(None, 3);
+    r.knowledge().insert_card(&d).await.unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    assert_eq!(r.knowledge().card(d.id).await.unwrap(), Some(d));
     drop(r);
     let mut r = uow.tenant(ws).await.unwrap();
     dup.key = None;
@@ -260,6 +268,21 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId, other: WorkspaceId)
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict, "a revision is recorded once");
+    r.knowledge()
+        .append_revision(&revision(Subject::Card, Some(a.id), 6))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        r.knowledge()
+            .revisions(Subject::Card, Some(a.id), None, 1)
+            .await
+            .unwrap()[0]
+            .revision,
+        6,
+        "the bundle that met the duplicate committed what followed"
+    );
     drop(r);
     let mut r = uow.tenant(ws).await.unwrap();
     let e = r
@@ -390,8 +413,7 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId, other: WorkspaceId)
         ErrorCode::Conflict,
         "one pending per kind, card and body"
     );
-    drop(r);
-    let mut r = uow.tenant(ws).await.unwrap();
+    // The same bundle goes on: skipping the pending one frees its place, and both commit.
     let mut skipped = r.knowledge().lock_proposal(rule.id).await.unwrap().unwrap();
     skipped.status = ProposalStatus::Skipped;
     skipped.decided_at = Some(FIXED_NOW);

@@ -31,7 +31,7 @@ mod text;
 pub use card::{
     Attachment, AttachmentInput, Card, KnowledgeCardId, PAST_CONVERSATIONS, SEED_CARDS,
     feeds_posting, feeds_prospecting, is_empty, is_knowledge_mime, valid_key, validate_body,
-    validate_link, validate_title,
+    validate_link, validate_position, validate_title,
 };
 pub use limits::*;
 pub use note::{

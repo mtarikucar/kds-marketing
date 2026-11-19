@@ -315,11 +315,9 @@ fn the_knowledge_base_is_empty_until_a_live_card_has_text() {
         card("", false),
         card("Biz figür yaparız", false)
     ]));
-    // Rules and goals are not cards: a workspace with only them is still empty.
-    let mut s = KnowledgeSettings::new(WorkspaceId::new_v7(), SeedSource::Empty, AT);
-    s.prohibitions = vec!["Rakip kötülenmez".into()];
-    s.goals = vec!["Ayda 12 sipariş".into()];
-    assert!(is_empty(&[card("", false)]));
+    // Rules and goals are no input of `is_empty`: a workspace with only them is still empty
+    // (`jt_app`'s `the_rules_are_saved_whole_and_derive_nothing` and `the_goals_are_saved_whole`
+    // check it through the use cases).
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -796,7 +794,7 @@ fn what_a_draft_wrote_and_no_approval_applied_becomes_proposals() {
         target: "3 ayda 2".into(),
     });
     draft.channels.clear();
-    let pending = unapplied(&applied, &SeedParts::from_version(&draft, &h), None);
+    let pending = unapplied(Some(&applied), &SeedParts::from_version(&draft, &h), None);
     assert_eq!(
         pending
             .iter()
@@ -810,10 +808,10 @@ fn what_a_draft_wrote_and_no_approval_applied_becomes_proposals() {
         "channels are no part of the knowledge base's proposals"
     );
     // A draft the same as the approved version proposes nothing.
-    assert!(unapplied(&applied, &applied, None).is_empty());
+    assert!(unapplied(Some(&applied), &applied, None).is_empty());
 
-    // No approved version: every non-empty part of the draft, and the log.
-    let all = unapplied(&SeedParts::blank(), &applied, Some("• Öncelik kurumsal"));
+    // No approved version: every non-empty part of the draft, its channels too, and the log.
+    let all = unapplied(None, &applied, Some("• Öncelik kurumsal"));
     let edits: Vec<&str> = all
         .iter()
         .filter(|p| p.kind == ProposalKind::CardEdit)
@@ -827,9 +825,16 @@ fn what_a_draft_wrote_and_no_approval_applied_becomes_proposals() {
             "voice",
             "customers",
             "post_ideas",
-            "who_we_seek"
+            "who_we_seek",
+            "accounts_channels"
         ]
     );
+    let channels = all
+        .iter()
+        .find(|p| p.card_key == Some("accounts_channels"))
+        .unwrap();
+    assert_eq!(channels.body, applied.body("accounts_channels"));
+    assert!(channels.body.starts_with("• Instagram: "));
     assert_eq!(
         all.iter()
             .filter(|p| p.kind == ProposalKind::RuleAdd)

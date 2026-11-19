@@ -15,14 +15,15 @@
 //!
 //! The caps come only from an approved version: the ad cap is the lower of its paid lane (when
 //! paid channels are on) and the live general ad budget in the lane's currency brought to the
-//! lane's period, and that item is lowered to it when it was above (or created from the lane when
-//! there is none); the paid-message limit is its organic lane as it is. The approval list holds
-//! every social account whose stored flag holds its posts today, and, from an approved version,
-//! the switch is on when every postable account but TikTok has it. Nothing a draft says takes
-//! effect, and no limit is lifted.
+//! lane's period, and that item is lowered to the cap brought back to its own period when it is
+//! above (or created from the lane when there is none); the paid-message limit is its organic lane
+//! as it is. The approval list holds every social account whose stored flag holds its posts today,
+//! and, from an approved version, the switch is on when every postable account but TikTok has it;
+//! more flagged accounts than the list holds turn the switch on instead, so none is dropped.
+//! Nothing a draft says takes effect, and no limit is lifted.
 //!
 //! Locks, in the order of design §4.10.13: the draft, the execution frame, the settings (the
-//! insert), then the general ad budget item.
+//! insert), then the general ad budget item, before anything is worked out from it.
 
 use jt_capability::{BudgetItem, BudgetItemId, BudgetKind, NewBudgetItem, StoredStatus, Unit};
 use jt_knowledge::seed::{
@@ -152,10 +153,14 @@ async fn seed_in(
     kb.settings.prohibitions = applied.prohibitions.clone();
     kb.settings.goals = applied.goals.clone();
     let social = social_accounts(r).await?;
-    kb.settings.post_approval_accounts = social
+    let flagged: Vec<uuid::Uuid> = social
         .iter()
         .filter(|c| c.policy.requires_human_approval)
         .map(|c| c.id.as_uuid())
+        .collect();
+    let flagged_count = flagged.len();
+    kb.settings.post_approval_accounts = flagged
+        .into_iter()
         .take(jt_knowledge::MAX_POST_APPROVAL_ACCOUNTS)
         .collect();
     kb.settings.post_gate_seeded_at = Some(sys.now);
@@ -168,6 +173,11 @@ async fn seed_in(
             !gated.is_empty() && gated.iter().all(|c| c.policy.requires_human_approval);
         kb.settings.message_cap = lane(v, LaneKind::Organic);
         kb.settings.ad_cap = ad_cap(deps, sys, r, v).await?;
+    }
+    // More flagged accounts than the list holds: every post waits instead, so no account whose
+    // posts wait today goes out (the ledger entry counts both).
+    if flagged_count > kb.settings.post_approval_accounts.len() {
+        kb.settings.post_approval = true;
     }
     for subject in [Subject::Rules, Subject::Goals] {
         kb.record(
@@ -202,7 +212,8 @@ async fn seed_in(
         } else {
             None
         };
-        for (n, p) in unapplied(&applied, pending, log).into_iter().enumerate() {
+        let base = approved.is_some().then_some(&applied);
+        for (n, p) in unapplied(base, pending, log).into_iter().enumerate() {
             let card_id = p.card_key.and_then(|key| {
                 cards
                     .iter()
@@ -267,6 +278,7 @@ async fn seed_in(
             "message_cap": kb.settings.message_cap,
             "post_approval": kb.settings.post_approval,
             "post_approval_accounts": kb.settings.post_approval_accounts.len(),
+            "post_approval_flagged": flagged_count,
         }),
     )?;
     entry.strategy_version_id = kb.frame.map(|v| v.as_uuid());
@@ -377,6 +389,11 @@ fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
 /// The ad cap version `v` seeds (see the module docs), lowering the general ad budget to it, or
 /// creating one from the paid lane when the workspace has none; each change ledgered with the
 /// reason `knowledge_backfill`.
+///
+/// The general item is locked before anything is worked out from it (after the settings, as
+/// design §4.10.13 orders), so an edit of it that committed meanwhile (Bütçe's writes lock only
+/// the item) is what the cap is taken from and what is lowered, never raised back. One retired or
+/// no longer general by then is `CONFLICT`: nothing is seeded, and the next call seeds again.
 async fn ad_cap(
     deps: &Deps,
     sys: &Ctx,
@@ -386,22 +403,31 @@ async fn ad_cap(
     let Some(paid) = lane(v, LaneKind::Paid).filter(|_| v.sections.paid_enabled) else {
         return Ok(None);
     };
+    let unit = Unit::Currency(paid.currency.clone());
+    let live_general = |i: &BudgetItem| i.general && i.retired_at.is_none();
     let items = r.budget().list_items().await?;
-    let general: Vec<&BudgetItem> = items
+    let Some(id) = items
         .iter()
-        .filter(|i| i.general && i.retired_at.is_none())
-        .collect();
-    let in_currency = general
-        .iter()
-        .find(|i| i.unit == Unit::Currency(paid.currency.clone()))
-        .and_then(|i| item_days(i.period).map(|days| (*i, days)));
-    let lane_days = lane_days(paid.period);
-    let Some((item, days)) = in_currency else {
-        if general.is_empty() {
+        .find(|i| live_general(i) && i.unit == unit)
+        .map(|i| i.id)
+    else {
+        if !items.iter().any(live_general) {
             create_general(deps, sys, r, v, &paid).await?;
         }
         return Ok(Some(paid));
     };
+    let mut item = r
+        .budget()
+        .lock_item(id)
+        .await?
+        .filter(live_general)
+        .ok_or_else(|| {
+            AppError::conflict("the general ad budget changed while the knowledge base was seeded")
+        })?;
+    let Some(days) = item_days(item.period) else {
+        return Ok(Some(paid));
+    };
+    let lane_days = lane_days(paid.period);
     let item_in_lane = i128::from(item.cap) * lane_days / days;
     let amount =
         i64::try_from(item_in_lane.min(i128::from(paid.amount_minor))).unwrap_or(paid.amount_minor);
@@ -409,19 +435,14 @@ async fn ad_cap(
         amount_minor: amount,
         ..paid
     };
-    // The item is lowered only when the lane was the lower: brought to the item's period, the
-    // cap may round below an item that was the lower one already.
+    // The item is held to the cap brought back to its period, prorated as `check_general` does,
+    // whichever of the two was the lower: so the cap, the item and the lane agree under that
+    // check's rounding (an item the lower one in another period may lose a few minor units).
     let allowed = i64::try_from(i128::from(amount) * days / lane_days).unwrap_or(i64::MAX);
-    if item_in_lane > i128::from(amount) && item.cap > allowed {
-        let id = item.id;
-        let mut locked = r
-            .budget()
-            .lock_item(id)
-            .await?
-            .ok_or_else(|| AppError::internal("the general ad budget is gone"))?;
-        let previous = locked.cap;
-        locked.cap = allowed;
-        r.budget().update_item(locked).await?;
+    if item.cap > allowed {
+        let previous = item.cap;
+        item.cap = allowed;
+        r.budget().update_item(item).await?;
         let mut entry = ledger_entry(
             sys,
             "budget.items.update",

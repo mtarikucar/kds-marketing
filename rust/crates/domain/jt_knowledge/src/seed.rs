@@ -28,8 +28,9 @@ pub const AD_BUDGET_NAME: &str = "Reklam bütçesi";
 /// The longest past conversation entry a card keeps, in characters.
 pub const PAST_ENTRY_CHARS: usize = 600;
 
-/// The seed cards whose text a version's unapplied parts (identity, audience, goals,
-/// prospecting, live hypotheses) are proposed for.
+/// The seed cards whose text an open draft's differences from the approved version (identity,
+/// audience, goals, prospecting, live hypotheses) are proposed for. Without an approved version
+/// every seed card the version gives text to is proposed, `accounts_channels` too.
 pub const PROPOSABLE_CARDS: [&str; 6] = [
     "who_we_are",
     "products_prices",
@@ -357,18 +358,25 @@ pub struct SeedProposal {
 }
 
 /// What a version's parts that were never applied (`unapplied`) become, against what the
-/// knowledge base was seeded with (`applied`, blank cards for a workspace with no approved
-/// version): a `card_edit` for each card of [`PROPOSABLE_CARDS`] whose text differs and is not
-/// empty, a `rule_add` per prohibition only `unapplied` has, a `goal_add` per goal line only it
-/// has, and, with `log` (the past conversations of a workspace without an approved version), a
-/// `card_new` "Önceki görüşmeler".
+/// knowledge base was seeded with (`applied`, the approved version's parts; none for a workspace
+/// with no approved version, whose seed cards are blank): a `card_edit` for each card whose text
+/// differs and is not empty (of [`PROPOSABLE_CARDS`] against an approved version, of every seed
+/// card without one, so nothing an archived or a draft version said is lost), a `rule_add` per
+/// prohibition only `unapplied` has, a `goal_add` per goal line only it has, and, with `log` (the
+/// past conversations of a workspace without an approved version), a `card_new` "Önceki
+/// görüşmeler".
 pub fn unapplied(
-    applied: &SeedParts,
+    applied: Option<&SeedParts>,
     unapplied: &SeedParts,
     log: Option<&str>,
 ) -> Vec<SeedProposal> {
+    let blank = SeedParts::blank();
+    let (applied, keys): (&SeedParts, Vec<&'static str>) = match applied {
+        Some(applied) => (applied, PROPOSABLE_CARDS.to_vec()),
+        None => (&blank, SEED_CARDS.iter().map(|(key, _)| *key).collect()),
+    };
     let mut out = Vec::new();
-    for key in PROPOSABLE_CARDS {
+    for key in keys {
         let text = unapplied.body(key);
         if !text.trim().is_empty() && text != applied.body(key) {
             out.push(SeedProposal {

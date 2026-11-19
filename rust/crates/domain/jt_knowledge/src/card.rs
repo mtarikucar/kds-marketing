@@ -9,7 +9,8 @@ use time::OffsetDateTime;
 
 use crate::Invalid;
 use crate::limits::{
-    MAX_ATTACHMENT_LABEL_CHARS, MAX_CARD_BODY_CHARS, MAX_CARD_TITLE_CHARS, MAX_LINK_CHARS,
+    MAX_ATTACHMENT_LABEL_CHARS, MAX_CARD_BODY_CHARS, MAX_CARD_POSITION, MAX_CARD_TITLE_CHARS,
+    MAX_LINK_CHARS,
 };
 use crate::text::validate_text;
 
@@ -169,6 +170,19 @@ pub fn validate_title(raw: &str) -> Result<String, Invalid> {
 /// A card's body as written: trimmed, at most [`MAX_CARD_BODY_CHARS`] characters, naming `body`.
 pub fn validate_body(raw: &str) -> Result<String, Invalid> {
     validate_text("body", raw, 0, MAX_CARD_BODY_CHARS)
+}
+
+/// A card's position as written: at most [`MAX_CARD_POSITION`]; else `out_of_range` naming
+/// `position`.
+pub fn validate_position(position: u32) -> Result<u32, Invalid> {
+    if position > MAX_CARD_POSITION {
+        return Err(Invalid::new(
+            "position",
+            "out_of_range",
+            format!("a position is 0 to {MAX_CARD_POSITION}"),
+        ));
+    }
+    Ok(position)
 }
 
 /// A link as written: trimmed, `https://` and a host, no whitespace, at most

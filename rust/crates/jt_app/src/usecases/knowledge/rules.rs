@@ -17,8 +17,8 @@
 //! Refusals: `VALIDATION` per field, `CONFLICT` `rules_changed` / `goals_changed` (the box moved
 //! past `expected_revision`, with its `revision`), `FORBIDDEN` naming `budget.manage`, `FORBIDDEN`
 //! `owner_or_manager`, `CONFLICT` `post_approval_all` (an account taken off the list while the
-//! switch holds every post), `NOT_FOUND` (an account that is not a social account of the
-//! workspace).
+//! switch holds every post), `NOT_FOUND` (an account put into the list that is not a live social
+//! account of the workspace; one listed already, retired since, stays and can be taken out).
 
 use std::collections::BTreeSet;
 
@@ -159,7 +159,15 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
     }
     let accounts = match accounts {
         Some(list) => {
-            social_accounts(r.as_mut(), &list, "post_approval_accounts").await?;
+            // An account already listed stays listable after it is retired: the box read back
+            // as it is saves, and leaving it out takes it off.
+            social_accounts(
+                r.as_mut(),
+                &list,
+                &now.post_approval_accounts,
+                "post_approval_accounts",
+            )
+            .await?;
             list
         }
         None => now.post_approval_accounts.clone(),
@@ -214,7 +222,11 @@ pub async fn post_approval_set(
         return Err(rules_changed(&kb.settings));
     }
     let id = input.capability_id.as_uuid();
-    social_accounts(r.as_mut(), &[id], "capability_id").await?;
+    // Only an account put into the list must be a live social account: any listed one, retired
+    // since, can be taken out.
+    if input.required {
+        social_accounts(r.as_mut(), &[id], &[], "capability_id").await?;
+    }
     if !input.required && kb.settings.post_approval {
         return Err(refused(
             ErrorCode::Conflict,
@@ -330,17 +342,17 @@ fn owner_or_manager(ctx: &Ctx) -> Result<(), AppError> {
 }
 
 /// A ceiling as stored from what was written: the amount, the period given (else the one in
-/// force, else monthly), and the currency in force (else `currency`, else `TRY`).
-fn cap(input: &CapInput, current: Option<&Cap>, currency: Option<String>) -> Cap {
+/// force, else monthly), and the currency `unit` (the ad cap's: the live general ad budget's,
+/// design §4.6.2), else the one in force, else `TRY`.
+fn cap(input: &CapInput, current: Option<&Cap>, unit: Option<String>) -> Cap {
     Cap {
         amount_minor: input.amount_minor,
         period: input
             .period
             .or(current.map(|c| c.period))
             .unwrap_or(Period::Monthly),
-        currency: current
-            .map(|c| c.currency.clone())
-            .or(currency)
+        currency: unit
+            .or_else(|| current.map(|c| c.currency.clone()))
             .unwrap_or_else(|| "TRY".to_owned()),
     }
 }
@@ -375,13 +387,17 @@ fn distinct_accounts(raw: &[CapabilityId]) -> Result<Vec<Uuid>, AppError> {
     Ok(list)
 }
 
-/// `NOT_FOUND` (naming `field`, with the index for a list) unless every id is a social account of
-/// the workspace (a kind posts go out on, not retired).
+/// `NOT_FOUND` (naming `field`, with the index for a list) unless every id but those already
+/// `listed` is a social account of the workspace (a kind posts go out on, not retired).
 async fn social_accounts(
     r: &mut dyn TenantRepos,
     ids: &[Uuid],
+    listed: &[Uuid],
     field: &str,
 ) -> Result<(), AppError> {
+    if ids.iter().all(|id| listed.contains(id)) {
+        return Ok(());
+    }
     let social: BTreeSet<Uuid> = r
         .capabilities()
         .list(CapabilityFilter::default())
@@ -392,7 +408,10 @@ async fn social_accounts(
         })
         .map(|c| c.id.as_uuid())
         .collect();
-    if let Some(i) = ids.iter().position(|id| !social.contains(id)) {
+    if let Some(i) = ids
+        .iter()
+        .position(|id| !listed.contains(id) && !social.contains(id))
+    {
         return Err(refused(
             ErrorCode::NotFound,
             "not_a_social_account",

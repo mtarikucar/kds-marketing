@@ -5,6 +5,10 @@
 //! proposal always with its decision time, a `card_edit` always naming a card of the workspace,
 //! and one pending proposal per kind, card and body.
 //!
+//! As PostgreSQL meets them: a row its checks refuse spoils the bundle (`INTERNAL`); a duplicate
+//! insert is `CONFLICT` and leaves the bundle usable (`on conflict do nothing`); a reference that
+//! points nowhere spoils it.
+//!
 //! Every `lock_*` takes the bundle's studio lock, as the execution frame's does, so two bundles
 //! that lock the knowledge base run one after the other and the second reads what the first
 //! committed (a concurrent seeding then finds the settings and seeds nothing).
@@ -242,18 +246,18 @@ impl KnowledgeRepo for MemTenant {
 
     async fn insert_card(&mut self, card: &Card) -> Result<(), AppError> {
         let card = card.clone();
+        let ws = self.ws;
+        self.call(|_| check_card(&card))?;
+        unique(
+            !self.kb().cards.iter().any(|(w, c)| {
+                *w == ws && (c.id == card.id || (card.key.is_some() && c.key == card.key))
+            }),
+            "the card id or key is taken",
+        )?;
         self.call(|this| {
-            let ws = this.ws;
-            check_card(&card)?;
             exists(
                 this.state().workspace(ws).is_some(),
                 "knowledge_cards.workspace_id",
-            )?;
-            unique(
-                !this.kb().cards.iter().any(|(w, c)| {
-                    *w == ws && (c.id == card.id || (card.key.is_some() && c.key == card.key))
-                }),
-                "the card id or key is taken",
             )?;
             this.tx
                 .write(move |s| s.knowledge.cards.push((ws, card.clone())));
@@ -292,30 +296,32 @@ impl KnowledgeRepo for MemTenant {
 
     async fn append_revision(&mut self, revision: &Revision) -> Result<(), AppError> {
         let revision = revision.clone();
-        self.call(|this| {
-            let ws = this.ws;
+        let ws = self.ws;
+        self.call(|_| {
             check(revision.revision > 0, "revision")?;
             check(
                 (revision.subject == Subject::Card) == revision.card_id.is_some(),
                 "knowledge_revisions_subject_rule",
             )?;
-            check(revision.content.is_object(), "content")?;
+            check(revision.content.is_object(), "content")
+        })?;
+        unique(
+            !self.kb().revisions.iter().any(|(w, r)| {
+                *w == ws
+                    && (r.id == revision.id
+                        || (r.subject == revision.subject
+                            && r.card_id == revision.card_id
+                            && r.revision == revision.revision))
+            }),
+            "the revision is already recorded",
+        )?;
+        self.call(|this| {
             if let Some(card) = revision.card_id {
                 exists(
                     has_card(this.state(), ws, card),
                     "knowledge_revisions.card_id",
                 )?;
             }
-            unique(
-                !this.kb().revisions.iter().any(|(w, r)| {
-                    *w == ws
-                        && (r.id == revision.id
-                            || (r.subject == revision.subject
-                                && r.card_id == revision.card_id
-                                && r.revision == revision.revision))
-                }),
-                "the revision is already recorded",
-            )?;
             this.tx
                 .write(move |s| s.knowledge.revisions.push((ws, revision.clone())));
             Ok(())
@@ -374,14 +380,14 @@ impl KnowledgeRepo for MemTenant {
 
     async fn insert_note(&mut self, note: &Note) -> Result<(), AppError> {
         let note = note.clone();
+        let ws = self.ws;
+        self.call(|_| check_note(&note))?;
+        unique(self.note_of(note.id).is_none(), "the note id is taken")?;
         self.call(|this| {
-            let ws = this.ws;
-            check_note(&note)?;
             exists(
                 this.state().workspace(ws).is_some(),
                 "knowledge_notes.workspace_id",
             )?;
-            unique(this.note_of(note.id).is_none(), "the note id is taken")?;
             this.tx
                 .write(move |s| s.knowledge.notes.push((ws, note.clone())));
             Ok(())
@@ -445,9 +451,21 @@ impl KnowledgeRepo for MemTenant {
 
     async fn insert_proposal(&mut self, proposal: &Proposal) -> Result<(), AppError> {
         let proposal = proposal.clone();
+        let ws = self.ws;
+        self.call(|_| check_proposal(&proposal))?;
+        let pending_twin = proposal.status == ProposalStatus::Pending
+            && self.kb().proposals.iter().any(|(w, p)| {
+                *w == ws
+                    && p.status == ProposalStatus::Pending
+                    && p.kind == proposal.kind
+                    && p.card_id == proposal.card_id
+                    && p.body == proposal.body
+            });
+        unique(
+            self.proposal_of(proposal.id).is_none() && !pending_twin,
+            "the proposal id is taken, or the same proposal is pending",
+        )?;
         self.call(|this| {
-            let ws = this.ws;
-            check_proposal(&proposal)?;
             exists(
                 this.state().workspace(ws).is_some(),
                 "knowledge_proposals.workspace_id",
@@ -458,18 +476,6 @@ impl KnowledgeRepo for MemTenant {
                     "knowledge_proposals.card_id",
                 )?;
             }
-            let pending_twin = proposal.status == ProposalStatus::Pending
-                && this.kb().proposals.iter().any(|(w, p)| {
-                    *w == ws
-                        && p.status == ProposalStatus::Pending
-                        && p.kind == proposal.kind
-                        && p.card_id == proposal.card_id
-                        && p.body == proposal.body
-                });
-            unique(
-                this.proposal_of(proposal.id).is_none() && !pending_twin,
-                "the proposal id is taken, or the same proposal is pending",
-            )?;
             this.tx
                 .write(move |s| s.knowledge.proposals.push((ws, proposal.clone())));
             Ok(())

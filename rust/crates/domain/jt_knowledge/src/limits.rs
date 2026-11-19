@@ -10,6 +10,8 @@ pub const MAX_CARD_BODY_CHARS: usize = 8_000;
 pub const MAX_CARD_ATTACHMENTS: usize = 10;
 /// The live (not archived) cards of a workspace.
 pub const MAX_LIVE_CARDS: usize = 50;
+/// A card's position (the column is an `integer`).
+pub const MAX_CARD_POSITION: u32 = i32::MAX as u32;
 /// The prohibitions of the rules.
 pub const MAX_PROHIBITIONS: usize = 100;
 /// One prohibition, in characters.

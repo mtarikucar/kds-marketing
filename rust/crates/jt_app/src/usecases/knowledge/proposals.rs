@@ -10,8 +10,10 @@
 //! `CONFLICT` `proposal_rate` (10 a day from one connection), `CONFLICT` `proposal_exists` (the
 //! same kind, card and text pending), `NOT_FOUND` (no such card), `CONFLICT` `card_archived`,
 //! `VALIDATION` (the limits). Accepting is a knowledge write (see [`super`]); a `card_edit` whose
-//! card moved past the revision it was written against is `CONFLICT` `proposal_superseded`, and
-//! the proposal is then superseded (committed): accepting would overwrite the owner's newer text.
+//! card's title or body moved past the revision it was written against (or that was removed) is
+//! `CONFLICT` `proposal_superseded`, and the proposal is then superseded (committed): accepting
+//! would overwrite the owner's newer text. A new position or new attachments since leave it
+//! current; it is applied onto the card as it now is.
 //! A proposal past its time is expired the same way (`CONFLICT` `proposal_expired`); one already
 //! decided is `CONFLICT` `proposal_closed`.
 
@@ -239,7 +241,7 @@ pub async fn proposal_accept(
                 .lock_card(card_id)
                 .await?
                 .ok_or_else(|| AppError::internal("a card a proposal names is gone"))?;
-            if Some(before.revision) != p.base_revision || !before.is_live() {
+            if !before.is_live() || !same_text_since(r.as_mut(), &before, p.base_revision).await? {
                 return close(r, ctx, p, ProposalStatus::Superseded, "proposal_superseded").await;
             }
             let mut card = before.clone();
@@ -336,6 +338,39 @@ fn accepted<'a>(
         posting,
         prospecting,
     }
+}
+
+/// Whether `card`'s title and body are what they were at revision `base`, the one a `card_edit`
+/// was written against: a change since that moved only its position or its attachments leaves
+/// the edit current (it rewrites neither).
+async fn same_text_since(
+    r: &mut dyn TenantRepos,
+    card: &Card,
+    base: Option<u64>,
+) -> Result<bool, AppError> {
+    let Some(base) = base else {
+        return Ok(false);
+    };
+    if card.revision == base {
+        return Ok(true);
+    }
+    if card.revision < base {
+        return Ok(false);
+    }
+    let at_base = r
+        .knowledge()
+        .revisions(Subject::Card, Some(card.id), Some(base + 1), 1)
+        .await?;
+    let text = |key: &str, now: &str| {
+        at_base
+            .first()
+            .and_then(|rev| rev.content.get(key))
+            .and_then(Value::as_str)
+            == Some(now)
+    };
+    Ok(at_base.first().is_some_and(|rev| rev.revision == base)
+        && text("title", &card.title)
+        && text("body", &card.body))
 }
 
 /// Proposal `id`, locked, still pending: `NOT_FOUND`, or `CONFLICT` `proposal_closed` with its

@@ -439,27 +439,21 @@ impl AgentWakeRow {
 /// A stored list of [`WakeReason`] codes, read tolerantly (design 2026-11-19 "Paylaşımlar and
 /// Bilgi bankası" §4.2): a code this binary does not know, one a later release added, is dropped
 /// instead of failing the whole row, so a rollback to this binary still reads every wake row.
+/// Only a string is a code: any other element still fails the row, as a corrupt one should.
 /// Written as it is.
 mod known_reasons {
-    use serde::de::IgnoredAny;
+    use serde::de::IntoDeserializer;
+    use serde::de::value::{Error, StrDeserializer};
     use serde::{Deserialize, Deserializer};
 
     use super::WakeReason;
 
-    /// One stored code: a reason this binary knows, or any other one.
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Stored {
-        Known(WakeReason),
-        Unknown(IgnoredAny),
-    }
-
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<WakeReason>, D::Error> {
-        Ok(Vec::<Stored>::deserialize(d)?
-            .into_iter()
-            .filter_map(|code| match code {
-                Stored::Known(reason) => Some(reason),
-                Stored::Unknown(_) => None,
+        Ok(Vec::<String>::deserialize(d)?
+            .iter()
+            .filter_map(|code| {
+                let code: StrDeserializer<'_, Error> = code.as_str().into_deserializer();
+                WakeReason::deserialize(code).ok()
             })
             .collect())
     }
@@ -652,8 +646,21 @@ mod tests {
         let mut stored = serde_json::to_value(row()).unwrap();
         stored["pending"] = serde_json::to_value(pending(t, t)).unwrap();
         stored["pending"]["reasons"] = serde_json::json!(["knowledge_note"]);
-        let read: AgentWakeRow = serde_json::from_value(stored).unwrap();
+        let read: AgentWakeRow = serde_json::from_value(stored.clone()).unwrap();
         assert!(read.pending.unwrap().reasons.is_empty());
+        // Only a string is a code: anything else in the list is a corrupt row, refused.
+        for corrupt in [
+            serde_json::json!([1]),
+            serde_json::json!([null]),
+            serde_json::json!(["manual", {"code": "manual"}]),
+            serde_json::json!([["manual"]]),
+        ] {
+            stored["pending"]["reasons"] = corrupt.clone();
+            assert!(
+                serde_json::from_value::<AgentWakeRow>(stored.clone()).is_err(),
+                "{corrupt}"
+            );
+        }
     }
 
     #[test]

@@ -203,7 +203,34 @@ async fn logical_restore_keeps_the_knowledge_base_and_its_history() {
     )
     .await
     .unwrap();
-    let (settings, all, history) = {
+    // An open note and a pending edit of the card (the proposals reference the cards).
+    jt_app::usecases::knowledge::notes::note_add(
+        &deps,
+        &ctx,
+        jt_app::usecases::knowledge::notes::NoteAddInput {
+            request_key: "restore-note".into(),
+            text: "Kargo artık 2 günde".into(),
+            links: vec!["https://figurunica.example/kargo".into()],
+            file_ids: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    {
+        let mut r = uow.tenant(ws).await.unwrap();
+        let mut edit = jt_testkit::knowledge_contract::proposal(
+            jt_knowledge::ProposalKind::CardEdit,
+            Some(card.id),
+            "Kargo 2 gün, İstanbul içi 1 gün.",
+            jt_knowledge::Proposer::System {
+                component: jt_knowledge::BACKFILL_COMPONENT.into(),
+            },
+        );
+        edit.expires_at = FIXED_NOW + jt_knowledge::SYSTEM_PROPOSAL_TTL;
+        r.knowledge().insert_proposal(&edit).await.unwrap();
+        r.commit().await.unwrap();
+    }
+    let (settings, all, history, notes, proposals) = {
         let mut r = uow.tenant(ws).await.unwrap();
         (
             r.knowledge().settings().await.unwrap(),
@@ -212,8 +239,11 @@ async fn logical_restore_keeps_the_knowledge_base_and_its_history() {
                 .revisions(jt_knowledge::Subject::Card, Some(card.id), None, 10)
                 .await
                 .unwrap(),
+            r.knowledge().notes(None, 10).await.unwrap(),
+            r.knowledge().proposals(None).await.unwrap(),
         )
     };
+    assert_eq!((notes.len(), proposals.len()), (1, 1));
     let target = TestDb::new().await;
     copy_public(&source, &target).await;
     check_rls(&target.pool).await.unwrap();
@@ -229,6 +259,8 @@ async fn logical_restore_keeps_the_knowledge_base_and_its_history() {
             .unwrap(),
         history
     );
+    assert_eq!(r.knowledge().notes(None, 10).await.unwrap(), notes);
+    assert_eq!(r.knowledge().proposals(None).await.unwrap(), proposals);
 }
 
 #[tokio::test]

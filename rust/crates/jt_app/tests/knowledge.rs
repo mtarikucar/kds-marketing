@@ -416,34 +416,98 @@ async fn general(w: &World, cap: i64, period: Period) {
 }
 
 async fn general_cap(w: &World) -> i64 {
+    general_item(w).await.cap
+}
+
+/// The live general ad budget as stored.
+async fn general_item(w: &World) -> jt_capability::BudgetItem {
     budget::list_items(&w.deps, &w.owner_ctx)
         .await
         .unwrap()
         .into_iter()
-        .find(|i| i.item.general)
+        .find(|i| i.item.general && i.item.retired_at.is_none())
         .unwrap()
         .item
-        .cap
 }
 
 #[tokio::test]
-async fn a_general_ad_budget_below_the_lane_is_the_ad_cap_and_stays() {
+async fn a_general_ad_budget_below_the_lane_is_the_ad_cap_and_held_to_it() {
     let w = world().await;
     // 50.000 a week is 214.285 a month: below the lane's 500.000.
     general(&w, 50_000, Period::Weekly).await;
     approved_v5(&w).await;
     seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
-    assert_eq!(settings(&w).await.ad_cap.unwrap().amount_minor, 214_285);
+    let cap = settings(&w).await.ad_cap.unwrap();
+    assert_eq!(cap.amount_minor, 214_285);
+    // Brought back to a week as `check_general` prorates it, the cap allows 49.999: the item is
+    // held to that, so the cap, the item and the lane agree and an edit of the item still passes.
+    let g = general_cap(&w).await;
+    assert_eq!(g, 49_999);
+    assert!(i128::from(cap.amount_minor) * 7 / 30 >= i128::from(g));
+    let update = w.entries("budget.items.update");
+    assert_eq!(update.len(), 1);
     assert_eq!(
-        general_cap(&w).await,
-        50_000,
-        "the lower one is left as it is"
+        update[0].payload,
+        json!({"cap": 49_999, "previous": {"cap": 50_000}, "reason": "knowledge_backfill"})
     );
-    assert!(w.entries("budget.items.update").is_empty());
     assert!(
         w.entries("budget.items.create").len() == 1,
         "only the test's own"
     );
+}
+
+#[tokio::test]
+async fn a_general_ad_budget_below_the_lane_in_its_period_stays() {
+    let w = world().await;
+    general(&w, 300_000, Period::Monthly).await;
+    approved_v5(&w).await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(settings(&w).await.ad_cap.unwrap().amount_minor, 300_000);
+    assert_eq!(general_cap(&w).await, 300_000);
+    assert!(w.entries("budget.items.update").is_empty());
+}
+
+#[tokio::test]
+async fn a_budget_edit_committed_while_seeding_is_never_raised_back() {
+    // Lowered after the seed listed the items: the lowering stands, and the cap is taken from it.
+    let w = world().await;
+    general(&w, 1_000_000, Period::Monthly).await;
+    approved_v5(&w).await;
+    let mut lowered = general_item(&w).await;
+    lowered.cap = 100_000;
+    w.uow.replace_budget_item_after_list(lowered);
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(general_cap(&w).await, 100_000);
+    assert_eq!(settings(&w).await.ad_cap.unwrap().amount_minor, 100_000);
+    assert!(w.entries("budget.items.update").is_empty());
+
+    // Moved to a day meanwhile: 10.000 a day is 300.000 a month, below the lane, and stays a day's.
+    let w = world().await;
+    general(&w, 1_000_000, Period::Monthly).await;
+    approved_v5(&w).await;
+    let mut daily = general_item(&w).await;
+    (daily.cap, daily.period) = (10_000, Period::Daily);
+    w.uow.replace_budget_item_after_list(daily);
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let g = general_item(&w).await;
+    assert_eq!((g.cap, g.period), (10_000, Period::Daily));
+    assert_eq!(settings(&w).await.ad_cap.unwrap().amount_minor, 300_000);
+    assert!(w.entries("budget.items.update").is_empty());
+
+    // Retired meanwhile: nothing is seeded, and the next call seeds again (a new general budget).
+    let w = world().await;
+    general(&w, 1_000_000, Period::Monthly).await;
+    approved_v5(&w).await;
+    let mut retired = general_item(&w).await;
+    retired.retired_at = Some(FIXED_NOW);
+    w.uow.replace_budget_item_after_list(retired);
+    let e = err(seed::ensure(&w.deps, &w.owner_ctx).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    assert!(t.knowledge().settings().await.unwrap().is_none());
+    drop(t);
+    assert!(seed::ensure(&w.deps, &w.owner_ctx).await.unwrap());
+    assert_eq!(general_cap(&w).await, 500_000, "made from the lane");
 }
 
 #[tokio::test]
@@ -561,7 +625,15 @@ async fn a_draft_alone_gives_blank_cards_proposals_and_no_frame() {
     assert!(is_empty(&cards(&w).await));
     let list = proposals(&w).await;
     let count = |kind| list.iter().filter(|p| p.kind == kind).count();
-    assert_eq!(count(ProposalKind::CardEdit), 6);
+    assert_eq!(
+        count(ProposalKind::CardEdit),
+        7,
+        "every seed card the draft gives text to, Hesaplar ve kanallar too"
+    );
+    let channels = card_of(&w, "accounts_channels").await;
+    assert!(list.iter().any(|p| p.kind == ProposalKind::CardEdit
+        && p.card_id == Some(channels.id)
+        && p.body.starts_with("• Instagram: ")));
     assert_eq!(count(ProposalKind::RuleAdd), 7);
     assert_eq!(count(ProposalKind::GoalAdd), 5);
     let log = list
@@ -591,8 +663,14 @@ async fn an_archived_strategy_waits_as_proposals_to_add_back() {
     seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
     assert_eq!(settings(&w).await.seed_source, SeedSource::Empty);
     let list = proposals(&w).await;
-    assert_eq!(list.len(), 6 + 7 + 5);
+    assert_eq!(
+        list.len(),
+        7 + 7 + 5,
+        "nothing the owner once approved is lost"
+    );
     assert!(list.iter().all(|p| p.reason == ARCHIVED_REASON));
+    let channels = card_of(&w, "accounts_channels").await;
+    assert!(list.iter().any(|p| p.card_id == Some(channels.id)));
 }
 
 #[tokio::test]
@@ -654,6 +732,145 @@ async fn the_accounts_whose_posts_wait_today_still_wait() {
     assert!(s.post_approval_accounts.contains(&account.as_uuid()));
     assert!(s.post_approval, "every postable account but TikTok waits");
     assert_eq!(s.post_gate_seeded_at, Some(FIXED_NOW));
+}
+
+#[tokio::test]
+async fn more_flagged_accounts_than_the_list_holds_hold_every_post() {
+    let w = studio_support::world().await;
+    let account = w.f.slot.capability_id;
+    // One postable account whose posts go out (the switch would stay off), and one flagged
+    // account more than the list holds.
+    w.approval(false).await;
+    w.uow.edit(|s| {
+        let base = s
+            .capabilities
+            .iter()
+            .find(|c| c.capability.id == account)
+            .unwrap()
+            .clone();
+        for _ in 0..=MAX_POST_APPROVAL_ACCOUNTS {
+            let mut c = base.clone();
+            c.capability.id = jt_capability::CapabilityId::new_v7();
+            c.capability.policy.requires_human_approval = true;
+            s.capabilities.push(c);
+        }
+    });
+    seed::ensure(&w.d, &w.ctx).await.unwrap();
+    let mut t = w.uow.tenant(w.f.ws).await.unwrap();
+    let s = t.knowledge().settings().await.unwrap().unwrap();
+    drop(t);
+    assert_eq!(s.post_approval_accounts.len(), MAX_POST_APPROVAL_ACCOUNTS);
+    assert!(
+        s.post_approval,
+        "every post waits: no account whose posts wait today goes out"
+    );
+    let seeded: Vec<_> = w
+        .uow
+        .snapshot()
+        .ledger
+        .into_iter()
+        .map(|row| row.entry)
+        .filter(|e| e.action.as_str() == "strategy.knowledge_seeded")
+        .collect();
+    assert_eq!(
+        (
+            &seeded[0].payload["post_approval_accounts"],
+            &seeded[0].payload["post_approval_flagged"]
+        ),
+        (
+            &json!(MAX_POST_APPROVAL_ACCOUNTS),
+            &json!(MAX_POST_APPROVAL_ACCOUNTS + 1)
+        )
+    );
+}
+
+/// The rules box as `s` holds it, to save back.
+fn as_read(s: &KnowledgeSettings) -> RulesInput {
+    let cap = |c: &Option<Cap>| {
+        c.as_ref().map(|c| CapInput {
+            amount_minor: c.amount_minor,
+            period: Some(c.period),
+        })
+    };
+    RulesInput {
+        expected_revision: s.rules_revision,
+        prohibitions: s.prohibitions.clone(),
+        ad_budget: cap(&s.ad_cap),
+        message_budget: cap(&s.message_cap),
+        post_approval: s.post_approval,
+        post_approval_accounts: Some(
+            s.post_approval_accounts
+                .iter()
+                .copied()
+                .map(jt_capability::CapabilityId)
+                .collect(),
+        ),
+    }
+}
+
+#[tokio::test]
+async fn an_account_retired_after_it_was_listed_saves_back_and_comes_off_the_list() {
+    let w = studio_support::world().await;
+    let account = w.f.slot.capability_id;
+    w.approval(true).await;
+    seed::ensure(&w.d, &w.ctx).await.unwrap();
+    let read = |w: &studio_support::World| {
+        let uow = w.uow.clone();
+        let ws = w.f.ws;
+        async move {
+            let mut t = uow.tenant(ws).await.unwrap();
+            t.knowledge().settings().await.unwrap().unwrap()
+        }
+    };
+    let s = read(&w).await;
+    assert!(s.post_approval_accounts.contains(&account.as_uuid()));
+    let off = rules_save(
+        &w.d,
+        &w.ctx,
+        RulesInput {
+            post_approval: false,
+            ..as_read(&s)
+        },
+    )
+    .await
+    .unwrap();
+    w.uow.edit(|st| {
+        st.capabilities
+            .iter_mut()
+            .find(|c| c.capability.id == account)
+            .unwrap()
+            .capability
+            .status = jt_capability::StoredStatus::Retired;
+    });
+    // The box read back as it is still saves.
+    let s = read(&w).await;
+    assert_eq!(s.rules_revision, off.revision);
+    let saved = rules_save(
+        &w.d,
+        &w.ctx,
+        RulesInput {
+            prohibitions: vec!["Rakip kötülenmez".into()],
+            ..as_read(&s)
+        },
+    )
+    .await
+    .unwrap();
+    assert!(saved.post_approval_accounts.contains(&account));
+    // It comes off the list one by one, and cannot be put back.
+    let set = |required, expected_revision| PostApprovalInput {
+        capability_id: account,
+        required,
+        expected_revision,
+    };
+    let out = post_approval_set(&w.d, &w.ctx, set(false, saved.revision))
+        .await
+        .unwrap();
+    assert!(!out.post_approval_accounts.contains(&account));
+    let e = err(post_approval_set(&w.d, &w.ctx, set(true, out.revision)).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::NotFound, "not_a_social_account")
+    );
 }
 
 #[tokio::test]
@@ -899,6 +1116,43 @@ async fn only_an_editor_in_person_writes_cards() {
 }
 
 #[tokio::test]
+async fn a_position_past_what_the_column_holds_is_refused_by_name() {
+    let w = world().await;
+    let placed = |position| CardCreateInput {
+        position: Some(position),
+        ..create("Konum", "")
+    };
+    let e = err(card_create(&w.deps, &w.owner_ctx, placed(MAX_CARD_POSITION + 1)).await);
+    assert_eq!(
+        (e.code, e.details["field"].as_str(), reason(&e)),
+        (ErrorCode::Validation, Some("position"), "out_of_range")
+    );
+    let last = card_create(&w.deps, &w.owner_ctx, placed(MAX_CARD_POSITION))
+        .await
+        .unwrap();
+    let e = err(card_update(
+        &w.deps,
+        &w.owner_ctx,
+        last.id,
+        CardUpdateInput {
+            expected_revision: 1,
+            position: Some(u32::MAX),
+            ..CardUpdateInput::default()
+        },
+    )
+    .await);
+    assert_eq!(
+        (e.code, e.details["field"].as_str(), reason(&e)),
+        (ErrorCode::Validation, Some("position"), "out_of_range")
+    );
+    // After a card at the last position, the next one stands there too (ties by creation).
+    let next = card_create(&w.deps, &w.owner_ctx, create("Sonra", ""))
+        .await
+        .unwrap();
+    assert_eq!(next.position, MAX_CARD_POSITION);
+}
+
+#[tokio::test]
 async fn attachments_are_links_or_knowledge_files_of_the_workspace() {
     let w = world().await;
     let pdf = stored_file(&w, "application/pdf").await;
@@ -1054,6 +1308,53 @@ async fn the_rules_are_saved_whole_and_derive_nothing() {
     assert!(is_empty(&cards(&w).await));
     let mut t = w.uow.tenant(w.ws).await.unwrap();
     assert!(t.strategy().current_approved().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_ad_caps_currency_is_the_general_budgets() {
+    let w = world().await;
+    budget::create_item(
+        &w.deps,
+        &w.owner_ctx,
+        BudgetItemInput {
+            name: "Ads".into(),
+            kind: BudgetKind::AdBudget,
+            unit: Unit::Currency("USD".into()),
+            cap: 10_000,
+            unit_cost_minor: None,
+            period: Period::Monthly,
+            general: true,
+        },
+    )
+    .await
+    .unwrap();
+    approved_v5(&w).await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let s = settings(&w).await;
+    assert_eq!(
+        s.ad_cap.as_ref().map(|c| c.currency.as_str()),
+        Some("TRY"),
+        "the lane's: no general budget in its currency, none made beside the USD one"
+    );
+    assert_eq!(general_item(&w).await.unit, Unit::Currency("USD".into()));
+    let out = rules_save(
+        &w.deps,
+        &w.owner_ctx,
+        RulesInput {
+            ad_budget: Some(CapInput {
+                amount_minor: 5_000,
+                period: None,
+            }),
+            ..as_read(&s)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out.ad_cap.map(|c| c.currency),
+        Some("USD".to_owned()),
+        "the general budget's unit (design §4.6.2)"
+    );
 }
 
 #[tokio::test]
@@ -1522,6 +1823,142 @@ async fn notes_are_the_owners_to_write_and_the_agents_to_file() {
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
+#[tokio::test]
+async fn a_filing_names_its_own_proposals_and_the_notes_own_files() {
+    use jt_app::usecases::knowledge::notes::FiledAttachmentInput;
+    let w = world().await;
+    approved_v5(&w).await;
+    let pdf = stored_file(&w, "application/pdf").await;
+    let elsewhere = stored_file(&w, "application/pdf").await;
+    let n = note_add(
+        &w.deps,
+        &w.owner_ctx,
+        NoteAddInput {
+            file_ids: vec![pdf],
+            ..note("n-8", "Fiyat listesi ekte")
+        },
+    )
+    .await
+    .unwrap();
+    let agent = w.agent(&["content.work"]).await;
+    let other = w.agent(&["social.work"]).await;
+    let mine = proposal_create(
+        &w.deps,
+        &agent,
+        propose(
+            "p-8",
+            ProposalKind::RuleAdd,
+            None,
+            "Listede olmayan fiyat verilmez",
+        ),
+    )
+    .await
+    .unwrap();
+    let theirs = proposal_create(
+        &w.deps,
+        &other,
+        propose("p-9", ProposalKind::GoalAdd, None, "Ayda 20 sipariş"),
+    )
+    .await
+    .unwrap();
+    let claim = note_claim(
+        &w.deps,
+        &agent,
+        NoteClaimInput {
+            note_id: n.id,
+            expected_revision: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let products = card_of(&w, "products_prices").await;
+    let mut input = filing(n.id, &claim.claim_token, "f-8");
+    input.cards = vec![FiledCardInput::Existing(ExistingCardInput {
+        card_id: products.id,
+        expected_revision: 1,
+        title: None,
+        body: format!("{}\nFiyat listesi ekte.", products.body),
+    })];
+    // Another agent's proposal is not this filing's to name.
+    input.proposals = vec![theirs.id];
+    let e = err(note_file(&w.deps, &agent, input.clone()).await);
+    assert_eq!(
+        (e.code, reason(&e), e.details["field"].as_str()),
+        (
+            ErrorCode::NotFound,
+            "no_such_proposal",
+            Some("proposals[0]")
+        )
+    );
+    // A file the note does not hold is no attachment of its filing.
+    input.proposals = vec![mine.id];
+    input.attachments = vec![FiledAttachmentInput {
+        card: 0,
+        file_id: Some(elsewhere),
+        url: None,
+    }];
+    let e = err(note_file(&w.deps, &agent, input.clone()).await);
+    assert_eq!(
+        (e.code, reason(&e), e.details["field"].as_str()),
+        (ErrorCode::Validation, "not_in_note", Some("attachments[0]"))
+    );
+    input.attachments[0].file_id = Some(pdf);
+    let filed = note_file(&w.deps, &agent, input).await.unwrap();
+    assert_eq!(filed.outcome.unwrap().proposals, vec![mine.id]);
+    assert!(
+        card_of(&w, "products_prices")
+            .await
+            .attachments
+            .contains(&Attachment::File {
+                file_id: pdf,
+                name: "fiyat-listesi.pdf".into(),
+                mime: "application/pdf".into()
+            })
+    );
+    assert_eq!(
+        status_of(&w, mine.id).await,
+        ProposalStatus::Pending,
+        "it waits for the owner"
+    );
+}
+
+#[tokio::test]
+async fn a_lapsed_claim_lets_another_agent_claim_the_note() {
+    let w = world().await;
+    let n = note_add(&w.deps, &w.owner_ctx, note("n-9", "Yeni ürün: anahtarlık"))
+        .await
+        .unwrap();
+    let a = w.agent(&["content.work"]).await;
+    let b = w.agent(&["prospects.work"]).await;
+    let first = note_claim(
+        &w.deps,
+        &a,
+        NoteClaimInput {
+            note_id: n.id,
+            expected_revision: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let again = NoteClaimInput {
+        note_id: n.id,
+        expected_revision: 2,
+    };
+    let e = err(note_claim(&w.deps, &b, again).await);
+    assert_eq!(reason(&e), "note_claimed");
+    let later = FIXED_NOW + NOTE_CLAIM_LEASE + Duration::seconds(1);
+    let second = note_claim(&w.deps, &at(&b, later), again).await.unwrap();
+    assert_eq!(second.until, later + NOTE_CLAIM_LEASE);
+    // The first agent's token files nothing now; the second's does.
+    let mut input = filing(n.id, &first.claim_token, "f-9");
+    input.rules = vec!["Anahtarlık fiyatı sorulursa listeye bak".into()];
+    let e = err(note_file(&w.deps, &at(&a, later), input.clone()).await);
+    assert_eq!(reason(&e), "not_claimed");
+    input.claim_token = second.claim_token;
+    let filed = note_file(&w.deps, &at(&b, later), input).await.unwrap();
+    assert_eq!(filed.status, NoteStatus::Filed);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Proposals
 // ---------------------------------------------------------------------------------------------
@@ -1681,7 +2118,7 @@ async fn the_seedings_proposals_count_toward_no_limit() {
     let (s, h) = v5();
     version(&w, 1, VersionStatus::Draft, s, h).await;
     seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
-    assert_eq!(proposals(&w).await.len(), 18, "the draft's parts wait");
+    assert_eq!(proposals(&w).await.len(), 19, "the draft's parts wait");
     let a = w.agent(&["content.work"]).await;
     proposal_create(
         &w.deps,
@@ -1692,8 +2129,17 @@ async fn the_seedings_proposals_count_toward_no_limit() {
     .unwrap();
 }
 
+async fn status_of(w: &World, id: KnowledgeProposalId) -> ProposalStatus {
+    proposals(w)
+        .await
+        .into_iter()
+        .find(|p| p.id == id)
+        .unwrap()
+        .status
+}
+
 #[tokio::test]
-async fn an_edit_of_a_card_that_moved_is_superseded_not_applied() {
+async fn an_edit_of_a_card_whose_text_moved_is_superseded_not_applied() {
     let w = world().await;
     seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
     let voice = card_of(&w, "voice").await;
@@ -1709,13 +2155,8 @@ async fn an_edit_of_a_card_that_moved_is_superseded_not_applied() {
     card_update(&w.deps, &w.owner_ctx, voice.id, body(1, "Resmî."))
         .await
         .unwrap();
-    let p = proposals(&w)
-        .await
-        .into_iter()
-        .find(|p| p.id == first.id)
-        .unwrap();
-    assert_eq!(p.status, ProposalStatus::Superseded);
-    // A card a note's filing moved: accepting refuses, and supersedes it.
+    assert_eq!(status_of(&w, first.id).await, ProposalStatus::Superseded);
+    // A note's filing that rewrites the card supersedes them too, at once.
     let second = proposal_create(
         &w.deps,
         &agent,
@@ -1744,22 +2185,77 @@ async fn an_edit_of_a_card_that_moved_is_superseded_not_applied() {
         body: "Resmî ve sıcak.".into(),
     })];
     note_file(&w.deps, &agent, input).await.unwrap();
+    assert_eq!(status_of(&w, second.id).await, ProposalStatus::Superseded);
     let e = err(proposal_accept(&w.deps, &w.owner_ctx, second.id).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Conflict, "proposal_closed")
+    );
+    assert_eq!(card_of(&w, "voice").await.body, "Resmî ve sıcak.");
+    // A text that moved by a write that superseded nothing: accepting refuses, and supersedes it.
+    let third = proposal_create(
+        &w.deps,
+        &agent,
+        propose("e-3", ProposalKind::CardEdit, Some(voice.id), "Kısa."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(third.base_revision, Some(3));
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    let mut moved = t.knowledge().lock_card(voice.id).await.unwrap().unwrap();
+    moved.body = "Başka bir ton.".into();
+    moved.revision = 4;
+    t.knowledge().save_card(&moved).await.unwrap();
+    t.commit().await.unwrap();
+    let e = err(proposal_accept(&w.deps, &w.owner_ctx, third.id).await);
     assert_eq!(
         (e.code, reason(&e)),
         (ErrorCode::Conflict, "proposal_superseded")
     );
-    let p = proposals(&w)
-        .await
-        .into_iter()
-        .find(|p| p.id == second.id)
-        .unwrap();
     assert_eq!(
-        p.status,
+        status_of(&w, third.id).await,
         ProposalStatus::Superseded,
         "committed with the refusal"
     );
-    assert_eq!(card_of(&w, "voice").await.body, "Resmî ve sıcak.");
+    assert_eq!(card_of(&w, "voice").await.body, "Başka bir ton.");
+}
+
+#[tokio::test]
+async fn a_new_position_leaves_a_pending_edit_current() {
+    let w = world().await;
+    // Only a draft: the seeding's proposals hold its text for the blank cards.
+    let (s, h) = v5();
+    version(&w, 1, VersionStatus::Draft, s, h).await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let voice = card_of(&w, "voice").await;
+    let edit = proposals(&w)
+        .await
+        .into_iter()
+        .find(|p| p.kind == ProposalKind::CardEdit && p.card_id == Some(voice.id))
+        .unwrap();
+    let moved = card_update(
+        &w.deps,
+        &w.owner_ctx,
+        voice.id,
+        CardUpdateInput {
+            expected_revision: 1,
+            position: Some(0),
+            ..CardUpdateInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(moved.revision, 2);
+    assert_eq!(status_of(&w, edit.id).await, ProposalStatus::Pending);
+    proposal_accept(&w.deps, &w.owner_ctx, edit.id)
+        .await
+        .unwrap();
+    let voice = card_of(&w, "voice").await;
+    assert_eq!(
+        (voice.body.as_str(), voice.position, voice.revision),
+        (edit.body.as_str(), 0, 3),
+        "applied onto the card as it now is"
+    );
 }
 
 #[tokio::test]

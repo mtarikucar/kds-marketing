@@ -7,7 +7,7 @@
 //!
 //! | Outcome | Effect |
 //! |---|---|
-//! | `cards` (1 to 3) | each card's whole new text, or a new card (`cause = note`); a filing that leaves a card's body shorter than half of what it was is `CONFLICT` `filing_removes_text` |
+//! | `cards` (1 to 3) | each card's whole new text, or a new card (`cause = note`); a filing that leaves a card's body shorter than half of what it was is `CONFLICT` `filing_removes_text`; a card whose text it rewrites has its pending `card_edit` proposals superseded |
 //! | `attachments` | the note's files and links onto those cards (knowledge, never library materials) |
 //! | `rules` (1 to 10) | prohibitions appended, duplicates skipped |
 //! | `goals` (1 to 5) | goals appended, duplicates skipped |
@@ -33,7 +33,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
-use super::cards::{file, live, locked_card, next_position, too_many_cards};
+use super::cards::{
+    file, live, locked_card, next_position, supersede_edits, text_moved, too_many_cards,
+};
 use super::{
     Change, FrameWrite, WORK_PERMISSIONS, agent, conflict, editor, invalid, lock, moves, person,
     refused, seed,
@@ -411,7 +413,9 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
                     updated_by: ctx.actor.clone(),
                     archived_at: None,
                 };
-                position = position.saturating_add(1);
+                position = position
+                    .saturating_add(1)
+                    .min(jt_knowledge::MAX_CARD_POSITION);
                 (None, card)
             }
         };
@@ -427,7 +431,13 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
             ));
         }
         match &before {
-            Some(_) => r.knowledge().save_card(&card).await?,
+            Some(before) => {
+                r.knowledge().save_card(&card).await?;
+                // The card's pending edits were written against the text the filing replaced.
+                if text_moved(before, &card) {
+                    supersede_edits(r.as_mut(), card.id, ctx.now).await?;
+                }
+            }
             None => {
                 r.knowledge().insert_card(&card).await?;
                 all.push(card.clone());
