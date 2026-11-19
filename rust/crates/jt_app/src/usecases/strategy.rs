@@ -58,6 +58,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+use super::studio::owner_request;
 use super::{Deps, acting_user, invalid, keyset_cursor, ledger_entry};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -461,11 +462,14 @@ pub async fn set_hypotheses(
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let draft = locked_draft(repos.as_mut()).await?;
     let approved = repos.strategy().current_approved().await?;
+    // The owner's request is not the strategy's to write: it is neither listed nor retired here,
+    // and approval carries it over (design 2026-11-19 F2).
+    let ws = ctx.workspace_id;
     let base = match &approved {
-        Some(v) => repos.hypotheses().list(v.id).await?,
+        Some(v) => owner_request::without(ws, repos.hypotheses().list(v.id).await?),
         None => Vec::new(),
     };
-    let current = repos.hypotheses().list(draft.id).await?;
+    let current = owner_request::without(ws, repos.hypotheses().list(draft.id).await?);
     let list = plan_hypotheses(inputs, &base, &current, || HypothesisId(deps.ids.uuid()))?;
     let count = |state: HypothesisState| list.iter().filter(|h| h.state == state).count();
     let payload = json!({
@@ -523,7 +527,8 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let draft = locked_draft(repos.as_mut()).await?;
     let in_force = version_in_force(repos.as_mut()).await?;
-    let hypotheses = repos.hypotheses().list(draft.id).await?;
+    let hypotheses =
+        owner_request::without(ctx.workspace_id, repos.hypotheses().list(draft.id).await?);
     let groups = group_ids(repos.as_mut()).await?;
     let gaps = approval_gaps(&draft.sections, &hypotheses, &known, &groups);
     if !gaps.is_empty() {
@@ -598,12 +603,25 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
     if draft.id != input.version_id || draft.submitted_at != Some(input.submitted_at) {
         return Err(draft_changed(&draft));
     }
-    let hypotheses = repos.hypotheses().list(draft.id).await?;
+    let ws = ctx.workspace_id;
     let groups = group_ids(repos.as_mut()).await?;
-    let gaps = approval_gaps(&draft.sections, &hypotheses, &known, &groups);
+    let gaps = approval_gaps(
+        &draft.sections,
+        &owner_request::without(ws, repos.hypotheses().list(draft.id).await?),
+        &known,
+        &groups,
+    );
     if !gaps.is_empty() {
         return Err(not_ready(gaps));
     }
+    // The owner's request goes on in the new version when the one in force has it, so that the
+    // posts made for it keep their chain (design 2026-11-19 F2).
+    if let Some(previous) = &previous
+        && owner_request::holds(repos.as_mut(), ws, previous.id).await?
+    {
+        owner_request::ensure(repos.as_mut(), ws, draft.id, true).await?;
+    }
+    let hypotheses = repos.hypotheses().list(draft.id).await?;
     let by = acting_user(&ctx.actor);
     if let Some(previous) = &previous {
         let moved = repos
@@ -644,7 +662,10 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         format!("version {} approved", draft.number),
     )
     .await?;
-    let in_force = hypotheses.iter().filter(|h| h.state.is_live()).count();
+    let in_force = hypotheses
+        .iter()
+        .filter(|h| h.state.is_live() && !owner_request::is(ws, h.id))
+        .count();
     append_ledger(
         repos.as_mut(),
         ctx,
@@ -774,6 +795,211 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
     deps.archived_hook
         .on_archived(ctx.workspace_id, approved.id)
         .await
+}
+
+/// `strategy.add_channel`'s input: the kind of a connected account (`tiktok`, `instagram`, ...).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddChannelInput {
+    pub kind: String,
+}
+
+/// A channel kind's name for a hypothesis title.
+fn channel_label(kind: &str) -> &str {
+    match kind {
+        "tiktok" => "TikTok",
+        "instagram" => "Instagram",
+        "facebook_page" => "Facebook",
+        "x" => "X",
+        "linkedin_member" | "linkedin_page" => "LinkedIn",
+        other => other,
+    }
+}
+
+/// The hypotheses to add so that each segment the strategy posts to also posts on `kind`: for
+/// each segment with a live hypothesis and none posting on `kind`, a copy of its first live
+/// hypothesis there, with its organic cadence (or the strategy's default one) and `new_id`s.
+fn mirrored(
+    hypotheses: &[Hypothesis],
+    kind: &str,
+    per_week: u16,
+    mut new_id: impl FnMut() -> HypothesisId,
+) -> Vec<Hypothesis> {
+    let posts_on = |h: &Hypothesis| {
+        h.state.is_live()
+            && (h.channel == kind || h.channel == ANY_CHANNEL)
+            && h.cadence
+                .get(&LaneKind::Organic)
+                .is_none_or(|c| c.slots_per_week > 0)
+    };
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for h in hypotheses.iter().filter(|h| h.state.is_live()) {
+        if !seen.insert(h.segment_key.clone())
+            || hypotheses
+                .iter()
+                .any(|x| x.segment_key == h.segment_key && posts_on(x))
+        {
+            continue;
+        }
+        let cadence = h
+            .cadence
+            .get(&LaneKind::Organic)
+            .filter(|c| c.slots_per_week > 0)
+            .cloned()
+            .unwrap_or_else(|| default_organic_cadence(per_week.max(1)));
+        let mut lanes = std::collections::BTreeMap::new();
+        lanes.insert(LaneKind::Organic, cadence);
+        out.push(Hypothesis {
+            id: new_id(),
+            title: format!("{} ({})", h.title, channel_label(kind)),
+            channel: kind.to_owned(),
+            cadence: lanes,
+            derived_confidence: None,
+            state: HypothesisState::Added,
+            ..h.clone()
+        });
+    }
+    out
+}
+
+/// The one action behind "the strategy does not post on this account" (design 2026-11-19 F3):
+/// prepares the draft that adds channel `kind` (a kind the workspace has) and, for each segment
+/// the strategy speaks to, a hypothesis on it mirroring that segment's, and submits it for
+/// approval when it has no gap. The owner approves it as any draft. Needs `team.manage`, in
+/// person. A draft that is open is used as it is (its other changes stay); without one, the
+/// draft starts from the approved version. With nothing to add, the draft is answered as it is.
+/// Writes `strategy.add_channel` (payload `kind`, `added`: how many hypotheses).
+pub async fn add_channel(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: AddChannelInput,
+) -> Result<VersionOut, AppError> {
+    require_consultant(ctx)?;
+    if super::studio::library::person(ctx).is_none() {
+        return Err(AppError::forbidden("a person prepares this draft"));
+    }
+    let known = channel_kinds(deps, ctx).await?;
+    let kind = input.kind.trim().to_owned();
+    if kind == ANY_CHANNEL || !known.contains(&kind) {
+        return Err(invalid("kind", "the workspace has no account of this kind"));
+    }
+    let ws = ctx.workspace_id;
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let approved = repos.strategy().current_approved().await?;
+    let open = repos.strategy().lock_draft().await?;
+    // Nothing to add to the strategy in force, and no draft: it is answered as it is.
+    if open.is_none()
+        && let Some(v) = &approved
+    {
+        let hypotheses = owner_request::without(ws, repos.hypotheses().list(v.id).await?);
+        if v.sections.channels.iter().any(|c| c.channel == kind)
+            && mirrored(&hypotheses, &kind, v.sections.cadence.per_week, || {
+                HypothesisId(Uuid::nil())
+            })
+            .is_empty()
+        {
+            return version_out(repos.as_mut(), v.clone(), &known).await;
+        }
+    }
+    let draft = match open {
+        Some(draft) => draft,
+        None => {
+            let (sections, hypotheses) = match &approved {
+                Some(v) => next_draft_from(v, &repos.hypotheses().list(v.id).await?),
+                None => (Sections::default(), Vec::new()),
+            };
+            let draft = StrategyVersion {
+                id: StrategyVersionId(deps.ids.uuid()),
+                workspace_id: ws,
+                number: repos.strategy().next_number().await?,
+                status: VersionStatus::Draft,
+                sections,
+                created_at: ctx.now,
+                created_by: ctx.actor.clone(),
+                submitted_at: None,
+                approved_at: None,
+                approved_by: None,
+                archived_at: None,
+            };
+            repos.strategy().insert(draft.clone()).await?;
+            if !hypotheses.is_empty() {
+                repos.hypotheses().replace_all(draft.id, hypotheses).await?;
+            }
+            draft
+        }
+    };
+    let mut sections = draft.sections.clone();
+    let mut changed = false;
+    if !sections.channels.iter().any(|c| c.channel == kind) {
+        sections.channels.push(jt_strategy::ChannelChoice {
+            channel: kind.clone(),
+            rationale: format!("A {} account is connected.", channel_label(&kind)),
+            group_id: None,
+        });
+        repos
+            .strategy()
+            .update_sections(draft.id, sections.clone(), ctx.now)
+            .await?;
+        changed = true;
+    }
+    let hypotheses = owner_request::without(ws, repos.hypotheses().list(draft.id).await?);
+    let added = mirrored(&hypotheses, &kind, sections.cadence.per_week, || {
+        HypothesisId(deps.ids.uuid())
+    });
+    for h in &added {
+        repos.hypotheses().upsert(draft.id, h.clone()).await?;
+        changed = true;
+    }
+    let in_force = approved.as_ref().map(|v| v.id);
+    if changed {
+        withdraw_submission(repos.as_mut(), &draft).await?;
+        log(
+            repos.as_mut(),
+            deps,
+            ctx,
+            draft.id,
+            ConsultationKind::Note,
+            Some("channels".into()),
+            format!(
+                "channel {kind} added for a connected account, with {} hypotheses",
+                added.len()
+            ),
+        )
+        .await?;
+        append_ledger(
+            repos.as_mut(),
+            ctx,
+            "strategy.add_channel",
+            draft.id,
+            in_force,
+            json!({ "kind": kind, "added": added.len() }),
+        )
+        .await?;
+    }
+    let groups = group_ids(repos.as_mut()).await?;
+    let hypotheses = owner_request::without(ws, repos.hypotheses().list(draft.id).await?);
+    if approval_gaps(&sections, &hypotheses, &known, &groups).is_empty()
+        && (changed || draft.submitted_at.is_none())
+    {
+        repos
+            .strategy()
+            .set_submitted(draft.id, Some(ctx.now))
+            .await?;
+        log(
+            repos.as_mut(),
+            deps,
+            ctx,
+            draft.id,
+            ConsultationKind::Submitted,
+            None,
+            format!("version {} submitted for approval", draft.number),
+        )
+        .await?;
+    }
+    let out = reread(repos.as_mut(), draft.id, &known).await?;
+    repos.commit().await?;
+    Ok(out)
 }
 
 /// Every version of the workspace's strategy, newest first. Needs `workspace.read`.
@@ -1138,7 +1364,11 @@ async fn version_out(
     version: StrategyVersion,
     known: &BTreeSet<String>,
 ) -> Result<VersionOut, AppError> {
-    let hypotheses = repos.hypotheses().list(version.id).await?;
+    // The owner's request is the system's, not the strategy's: never listed with it.
+    let hypotheses = owner_request::without(
+        version.workspace_id,
+        repos.hypotheses().list(version.id).await?,
+    );
     let consultation_count = repos.consultation().count(version.id).await?;
     let approved_by_email = match version.approved_by {
         Some(user) => repos

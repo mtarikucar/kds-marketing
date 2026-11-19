@@ -77,10 +77,18 @@ pub struct SocialAccount {
     pub kind: String,
     pub status: StoredStatus,
     pub paused: bool,
-    /// The account's policy (`jeeta.capability.get`'s `policy.requires_human_approval`): every
-    /// post planned on it waits for a person's approval before it goes out. Scheduling is not
-    /// refused for it; the planned post waits in the owner's approvals.
+    /// Whether every post planned on it waits for a person before it goes out: the account's
+    /// policy (`jeeta.capability.get`'s `policy.requires_human_approval`), or a platform whose
+    /// own posting screen a person fills for every post (TikTok), whatever that policy says.
+    /// Scheduling is not refused for it; the planned post waits for that person.
     pub requires_human_approval: bool,
+    /// Which person's step that is: `approval` or `posting_screen`; absent when posts go out by
+    /// themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_gate: Option<super::schedule::HumanGate>,
+    /// What would stop a post on it now, and what a post there will meet (design 2026-11-19
+    /// F3): each with whether it blocks and the one action that fixes it.
+    pub stops: Vec<super::ready::Stop>,
     pub latest: Option<DayOut>,
     pub next: Option<NextPost>,
 }
@@ -269,14 +277,18 @@ fn account_of(
     settings: &PostingSettings,
     latest: &[AccountDay],
     queue: &[(jt_studio::PlannedPost, jt_studio::Slot)],
+    stops: Vec<super::ready::Stop>,
 ) -> SocialAccount {
+    let human_gate = super::schedule::human_gate(c);
     SocialAccount {
         capability_id: c.id,
         name: c.name.clone(),
         kind: c.kind_key.clone(),
         status: c.status,
         paused: settings.paused_capability_ids.contains(&c.id),
-        requires_human_approval: c.policy.requires_human_approval,
+        requires_human_approval: human_gate.is_some(),
+        human_gate,
+        stops,
         latest: latest
             .iter()
             .find(|d| d.capability_id == c.id)
@@ -304,11 +316,13 @@ pub async fn accounts_list(
     let settings = r.studio_posts().posting_settings().await?;
     let latest = r.studio_posts().latest_account_days().await?;
     let queue = queued(r.as_mut()).await?;
-    Ok(accounts(r.as_mut())
-        .await?
-        .iter()
-        .map(|c| account_of(c, &settings, &latest, &queue))
-        .collect())
+    let ready = super::ready::Reader::load(r.as_mut()).await?;
+    let mut out = Vec::new();
+    for c in accounts(r.as_mut()).await? {
+        let stops = ready.account(d, r.as_mut(), &c, &[], ctx.now).await?;
+        out.push(account_of(&c, &settings, &latest, &queue, stops));
+    }
+    Ok(out)
 }
 
 /// `social.account_get`: one account over a period: its numbers day by day, the posts coming on
@@ -471,7 +485,11 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
             });
         }
     }
-    let account = account_of(&c, &settings, &latest, &queue);
+    let stops = super::ready::Reader::load(r.as_mut())
+        .await?
+        .account(d, r.as_mut(), &c, &[], ctx.now)
+        .await?;
+    let account = account_of(&c, &settings, &latest, &queue, stops);
     // What the platform's own scheduler holds, read with no transaction open. A read that
     // fails, or a connection that cannot be read now, leaves the list out: it never fails the
     // account's page.

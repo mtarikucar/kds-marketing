@@ -265,6 +265,11 @@ pub struct AreaSummary {
 pub struct AreaRow {
     pub area: AreaSummary,
     pub pipeline: Pipeline,
+    /// For a content that names its accounts, what stands between it and a post on each
+    /// (design 2026-11-19 F3): the account's stops and whether its materials are what the
+    /// platform takes. Empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<crate::usecases::social::ready::AccountStops>,
 }
 
 /// `content.areas`' answer: a page of the production line, as `studio.project_list` pages it.
@@ -424,12 +429,12 @@ async fn time_waits<'p>(
             let Some(accounts_of) = reader.as_ref() else {
                 continue;
             };
-            let (accounts, blocked) = accounts_of.of(d, r, v, now).await?;
+            let (choices, blocked) = accounts_of.of(d, r, p, v, now).await?;
             waits.push(TimeWait {
                 version_id: v.id,
                 format: v.format,
                 capability_id: v.capability_id,
-                accounts,
+                accounts: choices.iter().map(|c| c.capability_id).collect(),
                 blocked,
             });
         }
@@ -451,6 +456,20 @@ async fn rows(
     let slots: Vec<SlotId> = posts.iter().flatten().map(|p| p.slot_id).collect();
     let reads = PostReads::load(r, &slots).await?;
     let mut waits = time_waits(d, r, &areas, now).await?;
+    // What each content naming its accounts would meet there, read once for all of them.
+    let mut checks = BTreeMap::new();
+    if areas
+        .iter()
+        .any(|p| !p.archived && !p.hints.capability_ids.is_empty())
+    {
+        let ready = crate::usecases::social::ready::Reader::load(r).await?;
+        for p in &areas {
+            let list = ready.area(d, r, p, now).await?;
+            if !list.is_empty() {
+                checks.insert(p.id, list);
+            }
+        }
+    }
     Ok(areas
         .into_iter()
         .zip(posts)
@@ -458,12 +477,18 @@ async fn rows(
             let facts = reads.facts(&posts);
             let unscheduled = waits.remove(&p.id).unwrap_or_default();
             let pipeline = pipeline::project(&p, now, &facts, unscheduled);
-            row(p, now, pipeline)
+            let checks = checks.remove(&p.id).unwrap_or_default();
+            row(p, now, pipeline, checks)
         })
         .collect())
 }
 
-fn row(p: ProductionProject, now: OffsetDateTime, pipeline: Pipeline) -> AreaRow {
+fn row(
+    p: ProductionProject,
+    now: OffsetDateTime,
+    pipeline: Pipeline,
+    checks: Vec<crate::usecases::social::ready::AccountStops>,
+) -> AreaRow {
     let open_requests = count(
         p.requests
             .iter()
@@ -492,6 +517,7 @@ fn row(p: ProductionProject, now: OffsetDateTime, pipeline: Pipeline) -> AreaRow
             updated_at: p.updated_at,
         },
         pipeline,
+        checks,
     }
 }
 
