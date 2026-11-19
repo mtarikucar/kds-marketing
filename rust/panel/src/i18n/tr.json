@@ -889,54 +889,9 @@
   },
   "apiKeys": {
     "dialog": {
-      "scopesHint": "Hiçbirini seçmezseniz anahtar sizin tüm izinlerinizi taşır.",
       "submit": "Anahtar oluştur",
       "plaintextTitle": "Yeni anahtarınız",
-      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz.",
-      "plaintextDescription": "Anahtarı şimdi kopyalayın; aşağıda ajanı bağlama adımları var."
-    },
-    "connect": {
-      "title": "Ajanı bağlama",
-      "url": "MCP adresi",
-      "claudeCode": "Claude Code'da bu komutu çalıştırın:",
-      "command": "Claude Code komutu",
-      "needKey": "Bağlanmak için bir anahtar oluşturun; oluşturunca hazır komut gösterilir.",
-      "otherClients": "Başka MCP istemcileri: bu adres, “streamable HTTP” taşıması ve “Authorization: Bearer <anahtar>” başlığıyla bağlanır. claude.ai bağlayıcıları (OAuth) henüz desteklenmiyor."
-    }
-  },
-  "agents": {
-    "title": "Ajanlar",
-    "description": "Her ajan bu çalışma alanına burada verilen bir anahtarla bağlanır. Her satır bir anahtarı ve onunla bağlanan ajanları gösterir.",
-    "connect": "Ajan bağla",
-    "empty": "Henüz bağlı ajan yok.",
-    "emptyBody": "Bir ajan bağlayın: adını verin, anahtarını alın, komutu ajanınızda çalıştırın.",
-    "emptyBodyReadOnly": "Bir ajan bağlandığında burada görünür. Ajan bağlamak için API anahtarlarını yönetme izni gerekir.",
-    "overdue": "Gecikti",
-    "onTime": "Zamanında",
-    "lastContact": "son temas {{when}}",
-    "toolCalls": "Araç çağrısı: {{count}}",
-    "firstSeen": "ilk bağlantı {{when}}",
-    "protocol": "Protokol {{version}}",
-    "connected": "{{name}} anahtarıyla bağlanan ajanlar",
-    "issuedAt": "verildi {{when}}",
-    "revokedAt": "erişimi kesildi {{when}}",
-    "waiting": "Bu anahtarla henüz bağlanan ajan yok.",
-    "neverConnected": "Bu anahtarla hiç ajan bağlanmadı.",
-    "howTo": "Nasıl bağlanır?",
-    "keyShownOnce": "Anahtarın kendisi yalnızca oluşturulurken gösterilir. Elinizde yoksa bu erişimi kesip yeni bir ajan bağlayın.",
-    "permissions": "İzinler: {{count}}",
-    "revoke": "Erişimi kes",
-    "revokeTitle": "Ajanın erişimini kes",
-    "revokeBody": "{{name}} anahtarı iptal edilecek; onunla bağlanan ajanlar artık bağlanamayacak. Bu geri alınamaz.",
-    "revoked": "Erişim kesildi.",
-    "revokedGroup": "Erişimi kesilenler: {{count}}",
-    "dialog": {
-      "title": "Ajan bağla",
-      "description": "Ajana bir ad verin, isterseniz izinlerini daraltın. Anahtarı oluşturunca bağlantı komutu gösterilir.",
-      "name": "Ajanın adı",
-      "nameHint": "Listede bu adla görünür; örneğin “Satış ajanı”.",
-      "permissions": "İzinler",
-      "submit": "Anahtarı oluştur"
+      "plaintextWarning": "Bu anahtar yalnızca şimdi gösterilir. Kopyalayıp güvenli bir yerde saklayın; kapatınca bir daha göremezsiniz."
     }
   },
   "wake": {
@@ -965,52 +920,6 @@
       "noAddress": "Hemen başlaması için <page>ajanlar sayfasından</page> bir çağrı adresi ekleyin.",
       "refused": "Ajanın çağrı adresi reddedildi; <page>ajanlar sayfasından</page> yeniden bağlayın.",
       "rateLimited": "Ajan az önce çağrıldı; {{at}} sonra yeniden deneyebilirsiniz."
-    },
-    "key": {
-      "visits": "{{phrase}} uğruyor",
-      "next": "sıradaki {{time}}",
-      "late": "{{at}} bekleniyordu, gecikti"
-    },
-    "address": {
-      "none": "Çağrı adresi: yok",
-      "routine": "Çağrı adresi: Claude rutini · {{target}}",
-      "webhook": "Çağrı adresi: Webhook · {{target}}",
-      "refused": "Çağrı adresi reddedildi ({{time}}); yeni bir belirteçle yeniden bağlayın.",
-      "last": "son çağrı {{time}}: {{outcome}}",
-      "outcome": {
-        "fired": "başarılı",
-        "rate_limited": "sınıra takıldı, yeniden denenecek",
-        "unavailable": "ulaşılamadı, yeniden denenecek",
-        "gave_up": "ulaşılamadı",
-        "refused": "reddedildi",
-        "rejected": "kabul edilmedi"
-      },
-      "session": "oturumu aç",
-      "add": "Ekle",
-      "change": "Değiştir",
-      "remove": "Kaldır",
-      "removeTitle": "Çağrı adresi kaldırılsın mı?",
-      "removeBody": "Ajan yeniden yalnızca kendi saatinde uğrar.",
-      "removed": "Çağrı adresi kaldırıldı.",
-      "saved": "Çağrı adresi kaydedildi.",
-      "kind": "Nasıl çağrılsın",
-      "kindRoutine": "Claude rutini",
-      "kindWebhook": "Webhook",
-      "routineId": "Rutin kimliği",
-      "routineIdPlaceholder": "trig_… ya da tetikleyici adresi",
-      "token": "Belirteç",
-      "url": "Adres",
-      "secret": "Gizli anahtar (isteğe bağlı)",
-      "routineHelp": "Biri bu ajana iş verdiğinde Jeeta onu saatini beklemeden hemen çağırır. Belirteci claude.ai/code/routines'ta rutini açıp «Add another trigger» → API → «Generate token» ile alırsınız; yalnızca bir kez gösterilir.",
-      "webhookHelp": "Biri bu ajana iş verdiğinde Jeeta bu adrese kısa bir POST gönderir (iş alanı, ajan ve neden; içerik yok). Adres herkese açık bir https adresi olmalı.",
-      "save": "Kaydet",
-      "cancel": "Vazgeç",
-      "errors": {
-        "routine_id": "Rutin kimliği trig_ ile başlar, yalnızca harf, rakam, _ ya da - içerir; tetikleyici adresini de yapıştırabilirsiniz.",
-        "token": "Belirteci rutinin API tetikleyicisinden, boşluksuz yapıştırın.",
-        "url": "Herkese açık bir https adresi girin (kullanıcı adı ve parola olmadan).",
-        "secret": "Gizli anahtar boşluksuz, yazdırılabilir karakterlerden oluşmalı."
-      }
     }
   },
   "ledger": {
