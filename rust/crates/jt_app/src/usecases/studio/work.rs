@@ -148,6 +148,7 @@ pub(crate) async fn pending_in(
         .into_iter()
         .map(|p| (p.slot_id, p))
         .collect();
+    let knowledge = crate::usecases::social::approval::rules(r).await?;
     let mut out = PendingStudioOut::default();
     if control.is_braked(jt_strategy::LaneKind::Paid) {
         for binding in r.studio().list_bindings().await? {
@@ -249,7 +250,14 @@ pub(crate) async fn pending_in(
         // A TikTok piece waits for a human on its posting screen whatever the policies say,
         // and only an approval carrying the screen's choice releases it.
         let screen = jt_studio::requires_posting_screen(&cap.kind_key);
-        let required = screen || cap.policy.requires_human_approval;
+        // A post's approval is the knowledge base's (design 2026-11-19 §3.10.1, D1); a slot of
+        // another lane keeps the account's stored flag.
+        let required = screen
+            || if arm.key.lane == jt_strategy::LaneKind::Organic {
+                crate::usecases::social::approval::needs_approval(&cap, knowledge.as_ref())
+            } else {
+                cap.policy.requires_human_approval
+            };
         // A slot with an attempt is never claimed again, whatever revision it reaches: no
         // approval can send it.
         if s.state == SlotState::Ready

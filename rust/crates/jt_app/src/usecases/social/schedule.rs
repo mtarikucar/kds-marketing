@@ -19,15 +19,15 @@ use crate::{
             pieces::{PieceContent, store_piece},
             planner::stable_id,
             posts::{
-                Channel, PackageProposalInput, PostOut, ProposedPost, content_types, group_ids,
-                open_channels, post_out, postable, posts_propose_locked, retire_post_of, selected,
+                Channel, PackageProposalInput, PostOut, ProposedPost, content_types, open_channels,
+                post_out, postable, posts_propose_locked, retire_post_of,
             },
             projects,
             work::{EmptyInput, gated},
         },
     },
 };
-use jt_capability::{Capability, CapabilityId};
+use jt_capability::CapabilityId;
 use jt_strategy::{Hypothesis, HypothesisId};
 use jt_studio::{
     ChannelContent, MaterialId, MediaAsset, PackageHints, PackageRequest, PackageRequestId,
@@ -594,10 +594,12 @@ pub struct WaitingVersion {
     /// The same accounts, each with what stands between a time and the post going out there.
     pub choices: Vec<AccountChoice>,
     /// Why no account can take it now, when none can: `material_removed` (a material it shows was
-    /// deleted: only a revision helps), `no_approved_strategy`, `no_connected_account`, `account_paused`, `its_account_unavailable` (the account the
+    /// deleted: only a revision helps), `braked` (posting is stopped for every account: the
+    /// organic brake), `knowledge_empty` (no frame yet: the knowledge base has no card text),
+    /// `no_connected_account`, `account_paused`, `its_account_unavailable` (the account the
     /// version was made for), `format_not_supported`, `media_not_accepted` (its materials are
     /// not what the account's platform takes in this format, say an image for TikTok),
-    /// `channel_not_in_strategy`, `hypothesis_does_not_post` (no hypothesis of the strategy posts
+    /// `hypothesis_does_not_post` (no topic of the frame posts
     /// on the accounts' channel). Each is read from the facts now: it goes the moment its cause
     /// does.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -627,18 +629,6 @@ pub enum HumanGate {
     PostingScreen,
 }
 
-/// The person's step a post on `c` waits for, if any: TikTok's posting screen whatever the
-/// policy says, else the account's approval flag.
-pub(crate) fn human_gate(c: &Capability) -> Option<HumanGate> {
-    if jt_studio::requires_posting_screen(&c.kind_key) {
-        Some(HumanGate::PostingScreen)
-    } else if c.policy.requires_human_approval {
-        Some(HumanGate::Approval)
-    } else {
-        None
-    }
-}
-
 /// How the hypothesis of a post made of a version is settled on an account (design 2026-11-19
 /// F1): the version's own hypothesis is a preference, chosen when the agent delivered it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -661,13 +651,19 @@ async fn why_blocked(
     d: &Deps,
     r: &mut dyn TenantRepos,
     frame: Option<&jt_strategy::StrategyVersion>,
+    braked: bool,
     v: &PackageVersion,
     mimes: &[String],
     now: OffsetDateTime,
 ) -> Result<&'static str, AppError> {
-    let Some(frame) = frame else {
-        return Ok("no_approved_strategy");
-    };
+    // Posting is stopped for every account: nothing is offered until a person resumes it.
+    if braked {
+        return Ok("braked");
+    }
+    // No frame: the knowledge base has no card text yet (design §4.5.1).
+    if frame.is_none() {
+        return Ok("knowledge_empty");
+    }
     let paused = r
         .studio_posts()
         .posting_settings()
@@ -712,15 +708,8 @@ async fn why_blocked(
     if taking.is_empty() {
         return Ok("media_not_accepted");
     }
-    let mut chosen = Vec::new();
-    for c in taking {
-        if selected(frame, &c.kind_key, &group_ids(r, c.id).await?) {
-            chosen.push(c);
-        }
-    }
-    if chosen.is_empty() {
-        return Ok("channel_not_in_strategy");
-    }
+    // Every frame carries `channels = [any]` (K6): the defensive fall-through, which a
+    // normalised frame never reaches (`knowledge_settle` gives a live topic its cadence).
     Ok("hypothesis_does_not_post")
 }
 
@@ -750,6 +739,10 @@ pub(crate) struct VersionAccounts {
     frame: Option<jt_strategy::StrategyVersion>,
     hypotheses: Vec<Hypothesis>,
     open: Vec<Channel>,
+    /// The knowledge base's rules, for the effective post gate (none before seeding).
+    knowledge: Option<jt_knowledge::KnowledgeSettings>,
+    /// The organic brake: while it is on, no account is offered.
+    braked: bool,
 }
 
 impl VersionAccounts {
@@ -766,10 +759,18 @@ impl VersionAccounts {
             ),
             None => (Vec::new(), Vec::new()),
         };
+        let knowledge = super::approval::rules(r).await?;
+        let braked = r
+            .studio_control()
+            .lock_control()
+            .await?
+            .is_braked(jt_strategy::LaneKind::Organic);
         Ok(Self {
             frame,
             hypotheses,
             open,
+            knowledge,
+            braked,
         })
     }
 
@@ -824,6 +825,11 @@ impl VersionAccounts {
         v: &PackageVersion,
         now: OffsetDateTime,
     ) -> Result<(Vec<AccountChoice>, Option<&'static str>), AppError> {
+        // Posting is stopped, the first reason: the social agent schedules nothing into a
+        // stopped lane, so no freed post loops (design §3.10.2).
+        if self.braked {
+            return Ok((Vec::new(), Some("braked")));
+        }
         let mut mimes = Vec::new();
         let mut removed = false;
         for id in &v.material_ids {
@@ -848,13 +854,13 @@ impl VersionAccounts {
             .filter_map(|ch| {
                 self.pick(ch, p, v).map(|(_, attribution)| AccountChoice {
                     capability_id: ch.capability.id,
-                    human_gate: human_gate(&ch.capability),
+                    human_gate: super::approval::post_gate(&ch.capability, self.knowledge.as_ref()),
                     attribution,
                 })
             })
             .collect();
         let blocked = if choices.is_empty() {
-            Some(why_blocked(d, r, self.frame.as_ref(), v, &mimes, now).await?)
+            Some(why_blocked(d, r, self.frame.as_ref(), self.braked, v, &mimes, now).await?)
         } else {
             None
         };

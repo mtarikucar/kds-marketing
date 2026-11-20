@@ -154,15 +154,6 @@ pub async fn submit(
     Ok(Json(strategy::submit(&state.deps, &ctx).await?))
 }
 
-/// `200` with the draft that adds the channel (submitted for approval when it has no gap).
-pub async fn add_channel(
-    State(state): State<AppState>,
-    WorkspaceCtx(ctx): WorkspaceCtx,
-    ApiJson(body): ApiJson<strategy::AddChannelInput>,
-) -> Result<Json<VersionOut>, ApiError> {
-    Ok(Json(strategy::add_channel(&state.deps, &ctx, body).await?))
-}
-
 /// `200` with the version now in force.
 pub async fn approve(
     State(state): State<AppState>,

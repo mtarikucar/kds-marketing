@@ -257,7 +257,6 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/strategy/archive"),
     ("GET", "/api/strategy/versions"),
     ("GET", "/api/strategy/versions/{version_id}/consultation"),
-    ("POST", "/api/strategy/channels"),
     ("GET", "/api/capabilities"),
     ("GET", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities"),
@@ -1405,12 +1404,6 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/strategy/versions/{version_id}/consultation",
             "strategy.consultation",
             strategy::consultation,
-        ),
-        api_route(
-            "POST",
-            "/strategy/channels",
-            "strategy.add_channel",
-            strategy::add_channel,
         ),
         api_route(
             "GET",

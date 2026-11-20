@@ -376,7 +376,7 @@ fn lane(v: &StrategyVersion, kind: LaneKind) -> Option<Cap> {
 
 /// How many days a budget period counts as when caps are compared (as `budget::check_general`
 /// does); none for `total`, which has no rate.
-fn item_days(period: jt_capability::Period) -> Option<i128> {
+pub(crate) fn item_days(period: jt_capability::Period) -> Option<i128> {
     match period {
         jt_capability::Period::Daily => Some(1),
         jt_capability::Period::Weekly => Some(7),
@@ -386,7 +386,7 @@ fn item_days(period: jt_capability::Period) -> Option<i128> {
 }
 
 /// How many days a lane's period counts as.
-fn lane_days(period: jt_strategy::Period) -> i128 {
+pub(crate) fn lane_days(period: jt_strategy::Period) -> i128 {
     match period {
         jt_strategy::Period::Weekly => 7,
         jt_strategy::Period::Monthly => 30,
@@ -394,7 +394,7 @@ fn lane_days(period: jt_strategy::Period) -> i128 {
 }
 
 /// The budget period of a lane's.
-fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
+pub(crate) fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
     match period {
         jt_strategy::Period::Weekly => jt_capability::Period::Weekly,
         jt_strategy::Period::Monthly => jt_capability::Period::Monthly,

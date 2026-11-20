@@ -126,6 +126,13 @@ const EXEMPT_IDS: &[&str] = &[
     "billing.report_payment",
     "ledger.list",
     "studio.brake",
+    // Stopping what runs never waits for the gate (design 2026-11-19 D12); the posting policy
+    // is not the strategy. A campaign's resume still needs a frame (checked in the use case).
+    "studio.posting_policy_set",
+    "calls.end",
+    "calls.transfer",
+    "outreach.campaigns_control",
+    "outreach.enrollments_stop",
     "studio.ledger",
     "studio.ledger_export",
     // The materials library: the owner gathers materials before and while the strategy is

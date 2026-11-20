@@ -78,7 +78,7 @@ async fn the_general_ad_budget_is_one_periodic_ad_budget_within_the_strategy_cap
             .await
             .unwrap_err();
         assert_eq!(e.code, ErrorCode::Validation, "{period}: {e:?}");
-        assert_eq!(e.details["reason"], "above_strategy_cap", "{period}");
+        assert_eq!(e.details["reason"], "above_rules_cap", "{period}");
         assert_eq!(e.details["cap"], most, "{period}");
     }
     assert!(w.uow.snapshot().budget_items.iter().all(|i| !i.general));
@@ -115,7 +115,7 @@ async fn the_general_ad_budget_is_one_periodic_ad_budget_within_the_strategy_cap
     )
     .await
     .unwrap_err();
-    assert_eq!(e.details["reason"], "above_strategy_cap");
+    assert_eq!(e.details["reason"], "above_rules_cap");
     let e = budget::update_item(
         &w.d,
         &w.ctx,
@@ -149,7 +149,7 @@ async fn the_general_ad_budget_is_one_periodic_ad_budget_within_the_strategy_cap
     let e = budget::update_item(&w.d, &w.ctx, second.id, general(Some(true)))
         .await
         .unwrap_err();
-    assert_eq!(e.details["reason"], "above_strategy_cap");
+    assert_eq!(e.details["reason"], "above_rules_cap");
     let on = budget::update_item(
         &w.d,
         &w.ctx,

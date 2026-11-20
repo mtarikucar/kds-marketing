@@ -7,16 +7,11 @@
 use crate::{
     error::AppError,
     ports::{TenantRepos, posts::PostingSettings, production_projects::ProductionProject},
-    usecases::{
-        Deps,
-        studio::{
-            owner_request,
-            posts::{content_types, group_ids, postable, selected},
-        },
-    },
+    usecases::{Deps, studio::posts::postable},
 };
 use jt_capability::Capability;
-use jt_strategy::{Hypothesis, LaneKind, StrategyVersion};
+use jt_knowledge::KnowledgeSettings;
+use jt_strategy::LaneKind;
 use jt_studio::PostFormat;
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -32,13 +27,10 @@ pub enum StopCode {
     Paused,
     /// Posting is stopped for every account (the organic brake).
     Braked,
-    /// No strategy is approved: nothing is planned anywhere.
-    NoApprovedStrategy,
-    /// The approved strategy does not choose this account's channel.
-    ChannelNotInStrategy,
-    /// No hypothesis of the approved strategy posts on this channel: the agent plans nothing
-    /// there by itself; a content a person asks for naming the account still goes out (R3).
-    NoHypothesis,
+    /// The knowledge base has no card text yet, so there is no frame: nothing is planned
+    /// anywhere (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §4.5.1). Every connected
+    /// account is used once it has one (K6): no stop names a channel or a topic.
+    KnowledgeEmpty,
     /// The content has no material the platform takes (`format`: what it would need).
     MediaMissing,
     /// The platform takes one format only (`format`), and it is a video: TikTok.
@@ -57,10 +49,8 @@ pub enum StopCode {
 pub enum StopAction {
     Reconnect,
     Resume,
-    ApproveStrategy,
-    /// Prepare a strategy draft that adds the channel and its hypotheses, for the owner to
-    /// approve (`strategy.add_channel`).
-    PrepareStrategy,
+    /// Write a few lines in Bilgi bankası.
+    OpenKnowledge,
     AddMaterial,
 }
 
@@ -99,19 +89,17 @@ pub struct AccountStops {
 
 /// What the stops are read from, once for any number of accounts.
 pub(crate) struct Reader {
-    frame: Option<StrategyVersion>,
-    hypotheses: Vec<Hypothesis>,
+    frame: bool,
+    /// The knowledge base's rules, for the effective post gate (none before seeding).
+    knowledge: Option<KnowledgeSettings>,
     settings: PostingSettings,
     braked: bool,
 }
 
 impl Reader {
     pub(crate) async fn load(r: &mut dyn TenantRepos) -> Result<Self, AppError> {
-        let frame = r.strategy().current_approved().await?;
-        let hypotheses = match &frame {
-            Some(v) => owner_request::without(v.workspace_id, r.hypotheses().list(v.id).await?),
-            None => Vec::new(),
-        };
+        let frame = r.strategy().current_approved().await?.is_some();
+        let knowledge = super::approval::rules(r).await?;
         let settings = r.studio_posts().posting_settings().await?;
         let braked = r
             .studio_control()
@@ -120,23 +108,27 @@ impl Reader {
             .is_braked(LaneKind::Organic);
         Ok(Reader {
             frame,
-            hypotheses,
+            knowledge,
             settings,
             braked,
         })
     }
 
+    /// The knowledge base's rules the stops were read with (none before seeding).
+    pub(crate) fn knowledge(&self) -> Option<&KnowledgeSettings> {
+        self.knowledge.as_ref()
+    }
+
     /// What would stop a post on account `c` at `now`, blocking stops first, then what a post
     /// there will meet. `formats` narrows the lead to the formats asked for (all the platform's
     /// when empty).
-    pub(crate) async fn account(
+    pub(crate) fn account(
         &self,
         d: &Deps,
-        r: &mut dyn TenantRepos,
         c: &Capability,
         formats: &[PostFormat],
         now: OffsetDateTime,
-    ) -> Result<Vec<Stop>, AppError> {
+    ) -> Vec<Stop> {
         use StopAction as A;
         use StopCode as S;
         let mut out = Vec::new();
@@ -149,28 +141,8 @@ impl Reader {
         if self.braked {
             out.push(Stop::new(S::Braked, true, None));
         }
-        match &self.frame {
-            None => out.push(Stop::new(
-                S::NoApprovedStrategy,
-                true,
-                Some(A::ApproveStrategy),
-            )),
-            Some(frame) => {
-                if !selected(frame, &c.kind_key, &group_ids(r, c.id).await?) {
-                    out.push(Stop::new(
-                        S::ChannelNotInStrategy,
-                        true,
-                        Some(A::PrepareStrategy),
-                    ));
-                } else if !self
-                    .hypotheses
-                    .iter()
-                    .any(|h| !content_types(h, &c.kind_key).is_empty())
-                {
-                    // Not blocking: the owner's own requests still go out (R3).
-                    out.push(Stop::new(S::NoHypothesis, false, Some(A::PrepareStrategy)));
-                }
-            }
+        if !self.frame {
+            out.push(Stop::new(S::KnowledgeEmpty, true, Some(A::OpenKnowledge)));
         }
         let supported = jt_studio::supported_formats(&c.kind_key);
         // Said where it surprises: a platform that takes only a video (an image will not do).
@@ -182,7 +154,7 @@ impl Reader {
                 ..Stop::new(S::OnlyFormat, false, None)
             });
         }
-        match super::schedule::human_gate(c) {
+        match super::approval::post_gate(c, self.knowledge.as_ref()) {
             Some(super::schedule::HumanGate::PostingScreen) => {
                 out.push(Stop::new(S::PostingScreen, false, None));
             }
@@ -208,7 +180,7 @@ impl Reader {
                 ..Stop::new(S::Lead, false, None)
             });
         }
-        Ok(out)
+        out
     }
 
     /// The stops of area `p` on each account it names, with its materials: an account's own,
@@ -237,12 +209,10 @@ impl Reader {
             let Some(c) = r.capabilities().find(*id).await? else {
                 continue;
             };
-            let mut stops = self.account(d, r, &c, &p.hints.formats, now).await?;
+            let mut stops = self.account(d, &c, &p.hints.formats, now);
             if let Some(stop) = media(&c, &p.hints.formats, &mimes) {
                 stops.insert(0, stop);
             }
-            // A content a person asked for naming the account goes out under the owner's
-            // request: the strategy's missing hypothesis is advice only, as `NoHypothesis` says.
             out.push(AccountStops {
                 capability_id: c.id,
                 stops,

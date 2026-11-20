@@ -642,3 +642,189 @@ async fn the_hourly_planner_waits_for_a_frame_apply_on_postgres_and_supersedes_n
         assert_eq!((status.as_str(), *version), ("open", v6));
     }
 }
+
+/// Every way a bundle may end in the no-deadlock test: done, or refused for a reason of its own
+/// (a revision moved, a cap reached); never `INTERNAL`, which is what a deadlock or a
+/// serialisation failure becomes.
+fn settled<T>(what: &str, r: Result<T, jt_app::error::AppError>) {
+    if let Err(e) = r {
+        assert_ne!(e.code, ErrorCode::Internal, "{what}: {e:?}");
+    }
+}
+
+/// Design 2026-11-19 §4.10.13 (D35): the Kurallar save of the ad budget (draft, frame, settings,
+/// control, general item), the spend paths on the same general item (frame, capability,
+/// control, items; `refresh_period` takes the same locks in the same order as
+/// `reserve_metered_for`), Bütçe's own writes (the item, then the settings read without a lock)
+/// and a frame apply (draft, frame, settings, control) run at once, many times, and none
+/// deadlocks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_postgres() {
+    use jt_app::usecases::budget::{self, UpdateBudgetItem};
+    use jt_app::usecases::knowledge::frame::{self, Request, Waking};
+    use jt_app::usecases::knowledge::rules::{self, RulesInput};
+    use jt_capability::{Capability, CapabilityId, NewCapability};
+    use jt_knowledge::CapInput;
+    use jt_knowledge::frame::{FrameCause, FrameParts};
+
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("kb-deadlock").await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    approved_sample(&uow, ws, user).await;
+    let deps = Arc::new(jt_testkit::fakes::deps(Arc::new(uow.clone())));
+    let ctx = owner(ws, user);
+    seed::ensure(&deps, &ctx).await.unwrap();
+    // The general ad budget the seed made from the paid lane gets a unit price, and an SMS line
+    // is metered on it.
+    let general = budget::list_items(&deps, &ctx)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|i| i.item.general)
+        .expect("the seed made the general ad budget")
+        .item
+        .id;
+    budget::update_item(
+        &deps,
+        &ctx,
+        general,
+        UpdateBudgetItem {
+            unit_cost_minor: Some(Some(1)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sms = Capability::new(
+        CapabilityId::new_v7(),
+        ws,
+        NewCapability {
+            kind_key: "sms_line".into(),
+            name: "SMS".into(),
+            ..NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.capabilities().insert(sms.clone(), None).await.unwrap();
+    t.budget().link(sms.id, general).await.unwrap();
+    t.commit().await.unwrap();
+
+    let mut tasks = Vec::new();
+    for worker in 0..3_i64 {
+        // The owner saves the ad budget, up and down.
+        let (d, c, u) = (deps.clone(), ctx.clone(), uow.clone());
+        tasks.push(tokio::spawn(async move {
+            for round in 0..4_i64 {
+                let s = {
+                    let mut r = u.tenant(ws).await.unwrap();
+                    r.knowledge().settings().await.unwrap().unwrap()
+                };
+                let input = RulesInput {
+                    expected_revision: s.rules_revision,
+                    prohibitions: s.prohibitions.clone(),
+                    ad_budget: Some(CapInput {
+                        amount_minor: 3_000 + 100 * worker + round,
+                        period: None,
+                    }),
+                    message_budget: s.message_cap.as_ref().map(|m| CapInput {
+                        amount_minor: m.amount_minor,
+                        period: Some(m.period),
+                    }),
+                    post_approval: s.post_approval,
+                    post_approval_accounts: None,
+                };
+                settled("rules_save", rules::rules_save(&d, &c, input).await);
+            }
+        }));
+        // A metered send reserves on the general item.
+        let (u, cap) = (uow.clone(), sms.clone());
+        tasks.push(tokio::spawn(async move {
+            for round in 0..4_i64 {
+                let mut r = u.tenant(ws).await.unwrap();
+                let out = jt_app::usecases::studio::budget::reserve_metered_for(
+                    r.as_mut(),
+                    &cap,
+                    None,
+                    Some(1),
+                    format!("send-{worker}-{round}"),
+                    FIXED_NOW,
+                    Some("inbox"),
+                )
+                .await;
+                if out.is_ok() {
+                    settled("reserve commit", r.commit().await);
+                } else {
+                    settled("reserve_metered_for", out);
+                }
+            }
+        }));
+        // Bütçe lowers the general item.
+        let (d, c) = (deps.clone(), ctx.clone());
+        tasks.push(tokio::spawn(async move {
+            for round in 0..4_i64 {
+                settled(
+                    "update_item",
+                    budget::update_item(
+                        &d,
+                        &c,
+                        general,
+                        UpdateBudgetItem {
+                            cap: Some(2_000 + 10 * worker + round),
+                            ..Default::default()
+                        },
+                    )
+                    .await,
+                );
+            }
+        }));
+        // The housekeeping applies the frame.
+        let (d, u) = (deps.clone(), uow.clone());
+        tasks.push(tokio::spawn(async move {
+            let ctx = settle_ctx(ws);
+            for _ in 0..4 {
+                let mut r = u.tenant(ws).await.unwrap();
+                let out = frame::apply(
+                    &d,
+                    &ctx,
+                    r.as_mut(),
+                    Request {
+                        cause: FrameCause::Normalize,
+                        next: &FrameParts::default(),
+                        approver: None,
+                        waking: Waking::Nobody,
+                    },
+                )
+                .await;
+                if out.is_ok() {
+                    settled("frame apply commit", r.commit().await);
+                } else {
+                    settled("frame apply", out);
+                }
+            }
+        }));
+    }
+    for task in tasks {
+        tokio::time::timeout(std::time::Duration::from_secs(120), task)
+            .await
+            .expect("no bundle waits forever")
+            .expect("no task panicked");
+    }
+    // The three numbers agree at the end: the general item at or below the cap of the rules,
+    // and the paid lane mirrored from it.
+    let mut r = uow.tenant(ws).await.unwrap();
+    let s = r.knowledge().settings().await.unwrap().unwrap();
+    let cap = s.ad_cap.expect("an ad budget").amount_minor;
+    let item = r.budget().find_item(general).await.unwrap().unwrap();
+    assert!(item.cap <= cap, "{} > {cap}", item.cap);
+    let frame = r.strategy().current_approved().await.unwrap().unwrap();
+    let lane = frame
+        .sections
+        .budget_frame
+        .lanes
+        .iter()
+        .find(|l| l.lane == jt_strategy::LaneKind::Paid)
+        .map(|l| l.cap_minor);
+    assert_eq!(lane, Some(cap));
+}

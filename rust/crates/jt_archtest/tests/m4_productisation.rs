@@ -249,7 +249,7 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 40] = [
+const POST_M4_PANEL_ONLY: [&str; 39] = [
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
@@ -291,8 +291,6 @@ const POST_M4_PANEL_ONLY: [&str; 40] = [
     "agents.wake_set",
     "agents.wake_remove",
     "agents.wake_now",
-    // The draft that adds a connected account's channel (design 2026-11-19 F3).
-    "strategy.add_channel",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

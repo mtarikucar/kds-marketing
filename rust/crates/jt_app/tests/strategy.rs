@@ -2754,76 +2754,8 @@ async fn a_persons_approval_wakes_the_agent_that_schedules_waiting_versions() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// add_channel and the owner's request (design 2026-11-19 F2, F3)
+// The owner's request (design 2026-11-19 F2)
 // ---------------------------------------------------------------------------------------------
-
-/// The one action behind "the strategy does not post on this account": a draft with the channel
-/// and, for each segment, a hypothesis on it, submitted for the owner to approve.
-#[tokio::test]
-async fn add_channel_prepares_a_draft_with_the_channel_and_a_hypothesis_per_segment() {
-    let w = world().await;
-    approved(&w).await;
-    let deps = w.with_channels(&["instagram", "mailbox", "tiktok"]);
-    let kind = || strategy::AddChannelInput {
-        kind: "tiktok".into(),
-    };
-
-    // An agent's key does not prepare it, nor does a kind the workspace has no account of.
-    let agent = w.owner_agent(&["team.manage"]).await;
-    assert_eq!(
-        code(strategy::add_channel(&deps, &agent, kind()).await),
-        ErrorCode::Forbidden
-    );
-    assert_eq!(
-        code(
-            strategy::add_channel(
-                &deps,
-                &w.owner_ctx,
-                strategy::AddChannelInput {
-                    kind: "linkedin_page".into()
-                }
-            )
-            .await
-        ),
-        ErrorCode::Validation
-    );
-
-    let draft = strategy::add_channel(&deps, &w.owner_ctx, kind())
-        .await
-        .unwrap();
-    assert_eq!(draft.status, VersionStatus::Draft);
-    assert!(
-        draft
-            .sections
-            .channels
-            .iter()
-            .any(|c| c.channel == "tiktok")
-    );
-    let added: Vec<&Hypothesis> = draft
-        .hypotheses
-        .iter()
-        .filter(|h| h.channel == "tiktok")
-        .collect();
-    assert_eq!(added.len(), 1);
-    assert_eq!(added[0].segment_key, "students");
-    assert_eq!(added[0].state, HypothesisState::Added);
-    assert!(draft.gaps.is_empty(), "{:?}", draft.gaps);
-    assert!(
-        draft.submitted_at.is_some(),
-        "it waits for the owner's approval"
-    );
-    assert_eq!(w.entries("strategy.add_channel").len(), 1);
-
-    // The owner approves it as any draft; the knowledge base keeps the frame, so the version
-    // approved uses every connected account (design 2026-11-19 K6).
-    let v = strategy::approve(&deps, &w.owner_ctx, as_read(&w))
-        .await
-        .unwrap();
-    assert_eq!(v.status, VersionStatus::Approved);
-    let approved = w.version(v.id);
-    assert_eq!(approved.sections.channels.len(), 1);
-    assert_eq!(approved.sections.channels[0].channel, "any");
-}
 
 /// The owner's request is the system's hypothesis: never listed or counted with the strategy,
 /// and carried into the next version so the posts made for it keep their chain.

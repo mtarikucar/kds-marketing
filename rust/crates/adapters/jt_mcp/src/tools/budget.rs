@@ -165,7 +165,9 @@ struct ItemCreateArgs {
     period: Period,
     /// Whether it is the workspace's general ad budget: every paid spend counts against it and
     /// ad campaigns draw from it. Only an ad_budget in a currency with a period other than
-    /// total; at most one per workspace; its cap within the strategy's paid cap.
+    /// total; at most one per workspace; its cap within the ad budget of the owner's rules
+    /// (Kurallar, knowledge_get rules.ad_cap): above it is refused (above_rules_cap); only the
+    /// owner raises that ceiling.
     #[serde(default)]
     general: bool,
 }

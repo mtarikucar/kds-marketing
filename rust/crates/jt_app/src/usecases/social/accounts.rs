@@ -278,8 +278,11 @@ fn account_of(
     latest: &[AccountDay],
     queue: &[(jt_studio::PlannedPost, jt_studio::Slot)],
     stops: Vec<super::ready::Stop>,
+    knowledge: Option<&jt_knowledge::KnowledgeSettings>,
 ) -> SocialAccount {
-    let human_gate = super::schedule::human_gate(c);
+    // The effective post gate (design 2026-11-19 §3.10.1): the knowledge base's switch and list,
+    // TikTok's screen; the stored flag only before the workspace is seeded.
+    let human_gate = super::approval::post_gate(c, knowledge);
     SocialAccount {
         capability_id: c.id,
         name: c.name.clone(),
@@ -319,8 +322,15 @@ pub async fn accounts_list(
     let ready = super::ready::Reader::load(r.as_mut()).await?;
     let mut out = Vec::new();
     for c in accounts(r.as_mut()).await? {
-        let stops = ready.account(d, r.as_mut(), &c, &[], ctx.now).await?;
-        out.push(account_of(&c, &settings, &latest, &queue, stops));
+        let stops = ready.account(d, &c, &[], ctx.now);
+        out.push(account_of(
+            &c,
+            &settings,
+            &latest,
+            &queue,
+            stops,
+            ready.knowledge(),
+        ));
     }
     Ok(out)
 }
@@ -358,6 +368,7 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
         .collect();
 
     // What is coming: is it going out by itself, and if not, what does it wait for.
+    let knowledge = super::approval::rules(r.as_mut()).await?;
     let control = r.studio_control().lock_control().await?;
     let stopped = control.is_braked(jt_strategy::LaneKind::Organic)
         || settings.paused_capability_ids.contains(&c.id);
@@ -377,7 +388,7 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
             && approved.as_ref().is_none_or(|a| a.tiktok.is_none())
         {
             Some(WaitsFor::TiktokScreen)
-        } else if c.policy.requires_human_approval && approved.is_none() {
+        } else if super::approval::needs_approval(&c, knowledge.as_ref()) && approved.is_none() {
             Some(WaitsFor::Approval)
         } else {
             None
@@ -485,11 +496,9 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
             });
         }
     }
-    let stops = super::ready::Reader::load(r.as_mut())
-        .await?
-        .account(d, r.as_mut(), &c, &[], ctx.now)
-        .await?;
-    let account = account_of(&c, &settings, &latest, &queue, stops);
+    let ready = super::ready::Reader::load(r.as_mut()).await?;
+    let stops = ready.account(d, &c, &[], ctx.now);
+    let account = account_of(&c, &settings, &latest, &queue, stops, ready.knowledge());
     // What the platform's own scheduler holds, read with no transaction open. A read that
     // fails, or a connection that cannot be read now, leaves the list out: it never fails the
     // account's page.

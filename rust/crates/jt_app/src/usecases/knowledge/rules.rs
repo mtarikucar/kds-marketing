@@ -9,10 +9,24 @@
 //! approval off or taking an account off the list needs the role owner or manager (an agent's key
 //! never lowers it).
 //!
-//! This step stores them. What enforces them comes with the frame engine: the caps mirrored into
-//! the frame's lanes and the general ad budget held to `ad_cap`, and the posting paths reading the
-//! switch and the list. `rules_save` already takes the locks those need, in the order of design
-//! §4.10.13 (the draft, the execution frame, the settings), so they add to it without reordering.
+//! What enforces them, in the same transaction as the save:
+//!
+//! - **The caps** are mirrored into the frame's lanes (`frame::apply`, cause `rules`; design
+//!   §4.6.2, §4.6.4): the paid lane is `ad_cap` while it is above 0, the organic lane is
+//!   `message_cap`. A mirror that does not validate (a bug) ledgers `strategy.frame_skipped` and
+//!   the owner's save still commits; the next `knowledge_settle` tick writes it.
+//! - **The general ad budget** follows `ad_cap` (`cap` = its amount, in its period; created as
+//!   "Reklam bütçesi" when there is none; cap 0 for "Reklam yok"), as the person's own write, so
+//!   a lowering binds through `check_money`'s general check at once. `budget::check_general` holds
+//!   that item at or below `ad_cap` for everyone (`above_rules_cap`): only a person in person
+//!   with `budget.manage`, here, raises the ceiling (D2).
+//! - **A lowering** runs the ads watch right after the commit (`ads::watch`), so a running
+//!   campaign whose period spend already reached the new cap stops now, not at the job's next
+//!   pass; the answer says how many (`stopped_campaigns`).
+//! - **Post approval** is read by the effective post gate (`social::approval`, §3.10.1).
+//!
+//! Locks, in the order of design §4.10.13 (D35): the draft, the execution frame, the settings,
+//! then (in the mirror's transition hook) the studio control, then the general budget item.
 //!
 //! Refusals: `VALIDATION` per field, `CONFLICT` `rules_changed` / `goals_changed` (the box moved
 //! past `expected_revision`, with its `revision`), `FORBIDDEN` naming `budget.manage`, `FORBIDDEN`
@@ -22,7 +36,11 @@
 
 use std::collections::BTreeSet;
 
-use jt_capability::{CapabilityId, StoredStatus, Unit};
+use jt_capability::{
+    BudgetItem, BudgetItemId, BudgetKind, CapabilityId, NewBudgetItem, StoredStatus, Unit,
+};
+use jt_knowledge::frame::{FrameCause, FrameParts};
+use jt_knowledge::seed::AD_BUDGET_NAME;
 use jt_knowledge::{
     Cap, CapInput, Cause, KnowledgeSettings, MAX_POST_APPROVAL_ACCOUNTS, Subject, validate_cap,
     validate_goals, validate_prohibitions,
@@ -33,12 +51,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use super::{Change, FrameWrite, editor, invalid, lock, person, refused, seed};
+use super::{Change, FrameWrite, editor, frame, invalid, lock, person, refused, seed};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::{CapabilityFilter, TenantRepos};
-use crate::usecases::Deps;
+use crate::usecases::ads::watch;
 use crate::usecases::studio::chain::ORGANIC_KINDS;
+use crate::usecases::{Deps, ledger_entry};
 
 /// `strategy.rules_save`'s input: the whole box.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -90,6 +109,8 @@ pub struct RulesOut {
     pub message_cap: Option<Cap>,
     pub post_approval: bool,
     pub post_approval_accounts: Vec<CapabilityId>,
+    /// `rules_save` only: how many running ad campaigns a lowered ad budget stopped at once.
+    pub stopped_campaigns: u32,
 }
 
 impl RulesOut {
@@ -106,6 +127,7 @@ impl RulesOut {
                 .copied()
                 .map(CapabilityId)
                 .collect(),
+            stopped_campaigns: 0,
         }
     }
 }
@@ -188,6 +210,8 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
     if unchanged {
         return Ok(RulesOut::of(&kb.settings));
     }
+    let before_ad = now.ad_cap.clone();
+    let caps_moved = ad_cap != now.ad_cap || message_cap != now.message_cap;
     let s = &mut kb.settings;
     s.prohibitions = prohibitions;
     s.ad_cap = ad_cap;
@@ -195,10 +219,152 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
     s.post_approval = input.post_approval;
     s.post_approval_accounts = accounts;
     s.rules_revision += 1;
-    record(deps, ctx, r.as_mut(), &mut kb, Subject::Rules, person).await?;
-    let out = RulesOut::of(&kb.settings);
+    kb.record(r.as_mut(), deps, ctx, change(Subject::Rules, person))
+        .await?;
+    if caps_moved {
+        // The mirror (design §4.6.2): the lanes from the caps, as a person's action. Nothing to
+        // mirror into before the first frame (the bootstrap takes the caps from the settings).
+        if kb.frame.is_some() {
+            frame::apply_locked(
+                deps,
+                ctx,
+                r.as_mut(),
+                &mut kb.settings,
+                frame::Request {
+                    cause: FrameCause::Rules,
+                    next: &FrameParts::default(),
+                    approver: Some(person),
+                    waking: frame::Waking::InPerson,
+                },
+            )
+            .await?;
+        }
+        if kb.settings.ad_cap != before_ad {
+            follow_general(deps, ctx, r.as_mut(), kb.settings.ad_cap.as_ref()).await?;
+        }
+    }
+    kb.save(r.as_mut()).await?;
+    let mut out = RulesOut::of(&kb.settings);
     r.commit().await?;
+    if lowered_cap(before_ad.as_ref(), out.ad_cap.as_ref()) {
+        // Best effort: the `studio_control` job's next pass stops what this one did not.
+        match watch::watch_counted(deps, ctx.workspace_id, ctx.now).await {
+            Ok(w) => out.stopped_campaigns = w.stopped,
+            Err(e) => {
+                tracing::warn!(error = %e.message, "the ads watch after a lowered ad budget");
+            }
+        }
+    }
     Ok(out)
+}
+
+/// Whether the ad budget went down: removed, or a lower rate (per day) than before.
+fn lowered_cap(before: Option<&Cap>, after: Option<&Cap>) -> bool {
+    match (before, after) {
+        (Some(_), None) => true,
+        (Some(b), Some(a)) => {
+            b.currency != a.currency
+                || i128::from(a.amount_minor) * seed::lane_days(b.period)
+                    < i128::from(b.amount_minor) * seed::lane_days(a.period)
+        }
+        _ => false,
+    }
+}
+
+/// The reason the general ad budget's changes made by a rules save carry.
+const RULES_REASON: &str = "knowledge_rules";
+
+/// The live general ad budget follows the ad budget of the rules (design §4.6.2), as the
+/// person's write: its cap is the amount, in its period; with none, one is created ("Reklam
+/// bütçesi"); with no ad budget, its cap becomes 0 (it is kept, with its history). Locks the
+/// item: the last lock of design §4.10.13. Ledgered `budget.items.update` /
+/// `budget.items.create` with the reason `knowledge_rules`.
+async fn follow_general(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: Option<&Cap>,
+) -> Result<(), AppError> {
+    let live = |i: &BudgetItem| i.general && i.retired_at.is_none();
+    let found = r.budget().list_items().await?.into_iter().find(live);
+    let in_force = r
+        .strategy()
+        .current_approved()
+        .await?
+        .map(|v| v.id.as_uuid());
+    let Some(found) = found else {
+        let Some(cap) = cap.filter(|c| c.amount_minor > 0) else {
+            return Ok(());
+        };
+        let mut item = BudgetItem::new(
+            BudgetItemId(deps.ids.uuid()),
+            ctx.workspace_id,
+            NewBudgetItem {
+                name: AD_BUDGET_NAME.to_owned(),
+                kind: BudgetKind::AdBudget,
+                unit: Unit::Currency(cap.currency.clone()),
+                cap: cap.amount_minor,
+                unit_cost_minor: None,
+                period: seed::item_period(cap.period),
+            },
+            ctx.now,
+        )
+        .map_err(|e| AppError::internal(e.to_string()))?;
+        item.general = true;
+        item.strategy_version_id = in_force;
+        r.budget().insert_item(item.clone()).await?;
+        let mut entry = ledger_entry(
+            ctx,
+            "budget.items.create",
+            "budget_item",
+            item.id,
+            json!({
+                "name": item.name,
+                "kind": item.kind,
+                "unit": item.unit,
+                "cap": item.cap,
+                "unit_cost_minor": item.unit_cost_minor,
+                "period": item.period,
+                "general": true,
+                "reason": RULES_REASON,
+            }),
+        )?;
+        entry.strategy_version_id = in_force;
+        r.ledger().append(entry).await?;
+        return Ok(());
+    };
+    let mut item = r
+        .budget()
+        .lock_item(found.id)
+        .await?
+        .filter(live)
+        .ok_or_else(|| AppError::conflict("the general ad budget changed meanwhile"))?;
+    let (amount, period) = match cap {
+        Some(c) => (c.amount_minor, seed::item_period(c.period)),
+        None => (0, item.period),
+    };
+    if item.cap == amount && item.period == period {
+        return Ok(());
+    }
+    let previous = json!({ "cap": item.cap, "period": item.period });
+    item.cap = amount;
+    item.period = period;
+    r.budget().update_item(item).await?;
+    let mut entry = ledger_entry(
+        ctx,
+        "budget.items.update",
+        "budget_item",
+        found.id,
+        json!({
+            "cap": amount,
+            "period": period,
+            "previous": previous,
+            "reason": RULES_REASON,
+        }),
+    )?;
+    entry.strategy_version_id = in_force;
+    r.ledger().append(entry).await?;
+    Ok(())
 }
 
 /// Puts one social account into the list of accounts whose posts wait for the owner, or takes it
@@ -300,22 +466,21 @@ async fn record(
     subject: Subject,
     person: jt_tenancy::UserId,
 ) -> Result<(), AppError> {
-    kb.record(
-        r,
-        deps,
-        ctx,
-        Change {
-            subject,
-            card: None,
-            cause: Cause::Owner,
-            source_id: None,
-            person: Some(person),
-            posting: false,
-            prospecting: false,
-        },
-    )
-    .await?;
+    kb.record(r, deps, ctx, change(subject, person)).await?;
     kb.save(r).await
+}
+
+/// The change record of an owner's write of the rules or the goals.
+fn change(subject: Subject, person: jt_tenancy::UserId) -> Change<'static> {
+    Change {
+        subject,
+        card: None,
+        cause: Cause::Owner,
+        source_id: None,
+        person: Some(person),
+        posting: false,
+        prospecting: false,
+    }
 }
 
 /// `CONFLICT` `rules_changed`, with the rules' revision.

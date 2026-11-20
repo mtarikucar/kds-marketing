@@ -341,7 +341,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("studio.posts_propose", GateMode::Gated, "jeeta.studio.posts_propose", ("POST", "/api/studio/post-requests/{request_id}/proposal"), Write),
     twin("studio.posts_list", GateMode::Gated, "jeeta.studio.posts_list", ("GET", "/api/studio/posts"), Read),
     twin("studio.weekly_summary", GateMode::Gated, "jeeta.studio.weekly_summary", ("GET", "/api/studio/summary"), Read),
-    panel_only("studio.posting_policy_set", GateMode::Gated, ("PUT", "/api/studio/posting-policy"), Write),
+    panel_only("studio.posting_policy_set", Exempt, ("PUT", "/api/studio/posting-policy"), Write),
     // The inbox: reading and answering the workspace's own customers never waits for a marketing
     // strategy (owner decision of 2026-11-03), so every row is exempt from the strategy gate but
     // `inbox.send`, which writes to a person with commercial intent and may open a conversation
@@ -445,7 +445,6 @@ pub static CATALOG: &[UseCase] = &[
     twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
     // The one action behind "the strategy does not post on this account" (design 2026-11-19 F3):
     // a person prepares the draft that adds the channel; the owner approves it as any draft.
-    panel_only("strategy.add_channel", Exempt, ("POST", "/api/strategy/channels"), Write),
     // Capabilities, their groups and the budget are exempt from the strategy gate (the
     // consultation needs to know what the workspace has), but not from the status check.
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
@@ -502,11 +501,11 @@ pub static CATALOG: &[UseCase] = &[
     twin("calls.place", GateMode::Gated, "jeeta.calls.place", ("POST", "/api/calls"), Spend),
     twin("calls.get", GateMode::Gated, "jeeta.calls.get", ("GET", "/api/calls/{call_id}"), Read),
     twin("calls.list", GateMode::Gated, "jeeta.calls.list", ("GET", "/api/calls"), Read),
-    twin("calls.end", GateMode::Gated, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
+    twin("calls.end", Exempt, "jeeta.calls.end", ("POST", "/api/calls/{call_id}/end"), Write),
     // A long-poll of at most 25 seconds: `?after_seq&wait_s`.
     twin("calls.listen", GateMode::Gated, "jeeta.calls.listen", ("GET", "/api/calls/{call_id}/events"), Read),
     twin("calls.say", GateMode::Gated, "jeeta.calls.say", ("POST", "/api/calls/{call_id}/say"), Write),
-    twin("calls.transfer", GateMode::Gated, "jeeta.calls.transfer", ("POST", "/api/calls/{call_id}/transfer"), Write),
+    twin("calls.transfer", Exempt, "jeeta.calls.transfer", ("POST", "/api/calls/{call_id}/transfer"), Write),
     // The voice bridge's own surface (voice V1): served under /api/voice/bridge/* to the bridge's
     // API key alone (`calls.bridge`, nothing else), never to a panel session and never as an MCP
     // tool; exempt from the strategy gate, since the line is set up before any strategy.
@@ -579,10 +578,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("outreach.audience_preview", GateMode::Gated, "jeeta.outreach.audience_preview", ("POST", "/api/outreach/audience-preview"), Read),
     twin("outreach.campaigns_launch", GateMode::Gated, "jeeta.outreach.campaigns_launch", ("POST", "/api/outreach/campaigns/{campaign_id}/launch"), Write),
     twin("outreach.campaigns_approve", GateMode::Gated, "jeeta.outreach.campaigns_approve", ("POST", "/api/outreach/campaigns/{campaign_id}/approve"), Write),
-    twin("outreach.campaigns_control", GateMode::Gated, "jeeta.outreach.campaigns_control", ("POST", "/api/outreach/campaigns/{campaign_id}/control"), Write),
+    twin("outreach.campaigns_control", Exempt, "jeeta.outreach.campaigns_control", ("POST", "/api/outreach/campaigns/{campaign_id}/control"), Write),
     twin("outreach.enroll", GateMode::Gated, "jeeta.outreach.enroll", ("POST", "/api/outreach/campaigns/{campaign_id}/enrollments"), Write),
     twin("outreach.enrollments_list", GateMode::Gated, "jeeta.outreach.enrollments_list", ("GET", "/api/outreach/campaigns/{campaign_id}/enrollments"), Read),
-    twin("outreach.enrollments_stop", GateMode::Gated, "jeeta.outreach.enrollments_stop", ("POST", "/api/outreach/enrollments/{enrollment_id}/stop"), Write),
+    twin("outreach.enrollments_stop", Exempt, "jeeta.outreach.enrollments_stop", ("POST", "/api/outreach/enrollments/{enrollment_id}/stop"), Write),
     twin("outreach.personalize", GateMode::Gated, "jeeta.outreach.personalize", ("POST", "/api/outreach/enrollments/personalization"), Write),
     twin("outreach.test_send", GateMode::Gated, "jeeta.outreach.test_send", ("POST", "/api/outreach/campaigns/{campaign_id}/test"), Write),
     twin("outreach.report", GateMode::Gated, "jeeta.outreach.report", ("GET", "/api/outreach/report"), Read),

@@ -601,11 +601,11 @@ fn creator() -> TiktokCreator {
 async fn journey(p: Platform) {
     let mut j = world_for(p).await;
 
-    // Said at once, when the account is there: the agent will not post on it by itself (advice,
-    // not a block), and what every post there will meet.
+    // Said at once, when the account is there: what every post there will meet. No stop names a
+    // channel or a topic: every connected account is used (design 2026-11-19 K6).
     let stops = j.stops().await;
-    assert!(stops.contains(&StopCode::NoHypothesis), "{stops:?}");
     assert!(!stops.contains(&StopCode::Reconnect), "{stops:?}");
+    assert!(!stops.contains(&StopCode::KnowledgeEmpty), "{stops:?}");
     match p.gate() {
         Some(HumanGate::PostingScreen) => {
             assert!(stops.contains(&StopCode::PostingScreen), "{stops:?}");
@@ -724,7 +724,6 @@ async fn a_strategy_change_mid_way_unblocks_the_delivered_versions_without_a_red
 
     let tiktok = j.hypothesis_here().await;
     j.next_strategy(vec![tiktok.clone()], vec![]).await;
-    assert!(!j.stops().await.contains(&StopCode::NoHypothesis));
     let v = j.waiting(&area).await.unwrap();
     assert_eq!(v.blocked, None);
     assert_eq!(v.accounts, [j.account]);

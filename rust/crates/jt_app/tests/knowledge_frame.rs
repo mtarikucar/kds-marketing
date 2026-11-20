@@ -28,7 +28,7 @@ use jt_app::usecases::knowledge::notes::{
     note_claim, note_file,
 };
 use jt_app::usecases::knowledge::proposals::proposal_accept;
-use jt_app::usecases::knowledge::rules::{GoalsInput, goals_save};
+use jt_app::usecases::knowledge::rules::{self, GoalsInput, goals_save};
 use jt_app::usecases::knowledge::{seed, settle};
 use jt_app::usecases::strategy::{self, ApproveInput, ArchiveInput};
 use jt_app::usecases::studio::owner_request;
@@ -1331,6 +1331,371 @@ async fn a_rules_mirror_of_an_unchanged_cap_writes_no_version() {
             .map(|l| l.cap_minor),
         Some(50_000)
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Kurallar: `rules_save` whole (§4.6) and the effective post gate (§3.10.1, D1, D2)
+// ---------------------------------------------------------------------------------------------
+
+/// The Studio world's owner acting through an agent key with the same permissions
+/// (`budget.manage` among them): what an agent's key may do.
+fn studio_agent(w: &studio_support::World) -> Ctx {
+    let Actor::Human { user_id } = w.ctx.actor else {
+        panic!("the world's owner is a person")
+    };
+    let connection_id = jt_tenancy::AgentConnectionId::new_v7();
+    Ctx {
+        actor: Actor::Agent {
+            user_id,
+            connection_id,
+        },
+        agent_connection_id: Some(connection_id),
+        ..w.ctx.clone()
+    }
+}
+
+/// The rules box as stored, to save again with `edit`.
+async fn rules_input(
+    w: &studio_support::World,
+    edit: impl FnOnce(&mut rules::RulesInput),
+) -> rules::RulesInput {
+    let s = settings_of(&w.uow, w.f.ws).await;
+    let cap = |c: &Option<Cap>| {
+        c.as_ref().map(|c| CapInput {
+            amount_minor: c.amount_minor,
+            period: Some(c.period),
+        })
+    };
+    let mut input = rules::RulesInput {
+        expected_revision: s.rules_revision,
+        prohibitions: s.prohibitions.clone(),
+        ad_budget: cap(&s.ad_cap),
+        message_budget: cap(&s.message_cap),
+        post_approval: s.post_approval,
+        post_approval_accounts: None,
+    };
+    edit(&mut input);
+    input
+}
+
+/// Saves the rules box as `edit` changes it, as the world's owner.
+async fn save_rules(
+    w: &studio_support::World,
+    edit: impl FnOnce(&mut rules::RulesInput),
+) -> rules::RulesOut {
+    let input = rules_input(w, edit).await;
+    rules::rules_save(&w.d, &w.ctx, input).await.unwrap()
+}
+
+fn ad(amount_minor: i64) -> Option<CapInput> {
+    Some(CapInput {
+        amount_minor,
+        period: None,
+    })
+}
+
+/// The live general ad budget's cap and period.
+fn general_item(w: &studio_support::World) -> (i64, jt_capability::Period) {
+    let items = w.uow.snapshot().budget_items;
+    let g = items
+        .iter()
+        .find(|i| i.general && i.retired_at.is_none())
+        .expect("a general ad budget");
+    (g.cap, g.period)
+}
+
+/// The paid lane's cap of the frame in force.
+async fn paid_lane(w: &studio_support::World) -> Option<i64> {
+    let (v, _) = frame_of(&w.uow, w.f.ws).await.unwrap();
+    v.sections
+        .budget_frame
+        .lanes
+        .iter()
+        .find(|l| l.lane == LaneKind::Paid)
+        .map(|l| l.cap_minor)
+}
+
+async fn set_general_cap(w: &studio_support::World, ctx: &Ctx, cap: i64) -> Result<(), AppError> {
+    let id = w
+        .uow
+        .snapshot()
+        .budget_items
+        .iter()
+        .find(|i| i.general && i.retired_at.is_none())
+        .unwrap()
+        .id;
+    jt_app::usecases::budget::update_item(
+        &w.d,
+        ctx,
+        id,
+        jt_app::usecases::budget::UpdateBudgetItem {
+            cap: Some(cap),
+            ..Default::default()
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+#[tokio::test]
+async fn the_ad_budget_of_the_rules_is_a_ceiling_only_the_owner_raises() {
+    let w = studio().await;
+    // Seeded from the approved paid lane (100.000 a month), the general ad budget made from it.
+    let s = settings_of(&w.uow, w.f.ws).await;
+    assert_eq!(s.ad_cap.as_ref().map(|c| c.amount_minor), Some(100_000));
+    assert_eq!(general_item(&w).0, 100_000);
+
+    // The owner lowers it: the general item follows, and the frame's paid lane is mirrored in
+    // the same save, approved by the owner.
+    let out = save_rules(&w, |i| i.ad_budget = ad(50_000)).await;
+    assert_eq!(out.ad_cap.as_ref().map(|c| c.amount_minor), Some(50_000));
+    assert_eq!(out.stopped_campaigns, 0, "no campaign runs");
+    assert_eq!(general_item(&w), (50_000, jt_capability::Period::Monthly));
+    assert_eq!(paid_lane(&w).await, Some(50_000));
+    let (v, _) = frame_of(&w.uow, w.f.ws).await.unwrap();
+    let Actor::Human { user_id } = w.ctx.actor else {
+        panic!()
+    };
+    assert_eq!(v.approved_by, Some(user_id));
+    let ledger = w.uow.snapshot().ledger;
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.entry.action.as_str() == "budget.items.update"
+                && e.entry.payload["reason"] == "knowledge_rules"
+                && e.entry.payload["cap"] == 50_000)
+    );
+    assert!(
+        ledger
+            .iter()
+            .any(|e| e.entry.action.as_str() == "strategy.frame_applied"
+                && e.entry.payload["cause"] == "rules")
+    );
+
+    // An agent's key with `budget.manage` cannot raise the general item above it, for any
+    // period; the lane is unchanged. Its lowering is applied.
+    let a = studio_agent(&w);
+    let e = set_general_cap(&w, &a, 60_000).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(e.details["reason"], "above_rules_cap");
+    assert_eq!(e.details["cap"], 50_000);
+    assert_eq!(paid_lane(&w).await, Some(50_000));
+    set_general_cap(&w, &a, 40_000).await.unwrap();
+    assert_eq!(general_item(&w).0, 40_000);
+    // ... and back up to the ceiling, never above.
+    set_general_cap(&w, &a, 50_000).await.unwrap();
+
+    // Raising is the owner's, in Kurallar: the item and the lane follow.
+    save_rules(&w, |i| i.ad_budget = ad(80_000)).await;
+    assert_eq!(general_item(&w).0, 80_000);
+    assert_eq!(paid_lane(&w).await, Some(80_000));
+
+    // "Reklam yok": no paid lane, the general item kept at 0.
+    let out = save_rules(&w, |i| i.ad_budget = None).await;
+    assert_eq!(out.ad_cap, None);
+    assert_eq!(general_item(&w).0, 0);
+    assert_eq!(paid_lane(&w).await, None);
+    assert!(
+        !frame_of(&w.uow, w.f.ws)
+            .await
+            .unwrap()
+            .0
+            .sections
+            .paid_enabled
+    );
+    // With no ad budget there is nothing to compare with: nothing can be spent on ads anyway.
+    set_general_cap(&w, &a, 10_000).await.unwrap();
+
+    // Without `budget.manage` the money is not changed.
+    let mut no_budget = w.ctx.clone();
+    no_budget
+        .permissions
+        .remove(&jt_tenancy::Permission::BudgetManage);
+    let input = rules_input(&w, |i| i.ad_budget = ad(1)).await;
+    let e = rules::rules_save(&w.d, &no_budget, input)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Forbidden, "{e:?}");
+}
+
+#[tokio::test]
+async fn the_paid_message_limit_is_mirrored_and_lifted_only_by_the_owner() {
+    let w = studio().await;
+    metered(&w).await;
+    // Carried from the approved organic lane (100): 40 sends (120) are refused.
+    assert!(send(&w, "too-many", 40).await.is_err());
+    // The owner lifts it: the organic lane follows in the same save.
+    let out = save_rules(&w, |i| {
+        i.message_budget = Some(CapInput {
+            amount_minor: 500,
+            period: None,
+        })
+    })
+    .await;
+    assert_eq!(out.message_cap.as_ref().map(|c| c.amount_minor), Some(500));
+    let (v, _) = frame_of(&w.uow, w.f.ws).await.unwrap();
+    assert_eq!(
+        v.sections
+            .budget_frame
+            .lanes
+            .iter()
+            .find(|l| l.lane == LaneKind::Organic)
+            .map(|l| l.cap_minor),
+        Some(500)
+    );
+    send(&w, "now-within", 40).await.unwrap();
+    // A save that leaves the caps as they are writes no version.
+    let before = frame_of(&w.uow, w.f.ws).await.unwrap().0.id;
+    save_rules(&w, |i| i.prohibitions = vec!["Fiyat yazma".into()]).await;
+    assert_eq!(frame_of(&w.uow, w.f.ws).await.unwrap().0.id, before);
+}
+
+#[tokio::test]
+async fn the_approval_switch_and_its_list_hold_posts_and_nothing_else() {
+    let w = studio().await;
+    let account = w.f.slot.capability_id;
+    let held =
+        |e: &AppError| e.details["reason"] == jt_studio::StudioError::ApprovalRequired.to_string();
+    let waiting = || async {
+        jt_app::usecases::studio::work::pending(&w.d, &w.ctx)
+            .await
+            .unwrap()
+            .approvals
+            .contains(&jt_app::ports::studio::ApprovalTarget::Slot(w.f.slot.id))
+    };
+    let says = || async {
+        jt_app::usecases::social::accounts_list(
+            &w.d,
+            &w.ctx,
+            serde_json::from_value(json!({})).unwrap(),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|a| a.capability_id == account)
+        .unwrap()
+        .requires_human_approval
+    };
+    // Nothing waits: the post goes out by itself.
+    w.permit().await.expect("no approval asked");
+    assert!(!waiting().await);
+    assert!(!says().await);
+
+    // "Her paylaşım onayıma gelsin": the ready post waits for the owner, is listed as such,
+    // and the account says so. Nothing is written per account: the stored flag, which holds
+    // its comment replies, is untouched.
+    save_rules(&w, |i| i.post_approval = true).await;
+    assert!(held(&w.permit().await.unwrap_err()));
+    assert!(waiting().await);
+    assert!(says().await);
+    let flag = |w: &studio_support::World| {
+        w.uow
+            .snapshot()
+            .capabilities
+            .iter()
+            .find(|c| c.capability.id == account)
+            .unwrap()
+            .capability
+            .policy
+            .requires_human_approval
+    };
+    assert!(!flag(&w), "comment replies are not held by the switch");
+
+    // Taking the account off the list is refused while the switch holds every post.
+    let rev = settings_of(&w.uow, w.f.ws).await.rules_revision;
+    let e = rules::post_approval_set(
+        &w.d,
+        &w.ctx,
+        rules::PostApprovalInput {
+            capability_id: account,
+            required: false,
+            expected_revision: rev,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "post_approval_all");
+
+    // Switched off with the account in the list: its posts still wait.
+    save_rules(&w, |i| {
+        i.post_approval = false;
+        i.post_approval_accounts = Some(vec![account]);
+    })
+    .await;
+    assert!(held(&w.permit().await.unwrap_err()));
+    // An agent's policy write lowering the stored flag releases no post.
+    w.uow.edit(|s| {
+        for c in s
+            .capabilities
+            .iter_mut()
+            .filter(|c| c.capability.id == account)
+        {
+            c.capability.policy.requires_human_approval = false;
+        }
+    });
+    assert!(held(&w.permit().await.unwrap_err()));
+    // Removed from the list (by an owner): it goes out at its time.
+    let rev = settings_of(&w.uow, w.f.ws).await.rules_revision;
+    rules::post_approval_set(
+        &w.d,
+        &w.ctx,
+        rules::PostApprovalInput {
+            capability_id: account,
+            required: false,
+            expected_revision: rev,
+        },
+    )
+    .await
+    .unwrap();
+    w.permit().await.expect("released");
+    assert!(!says().await);
+
+    // A stored flag set after the seed asks nothing of a post either: the rules own it.
+    w.uow.edit(|s| {
+        for c in s
+            .capabilities
+            .iter_mut()
+            .filter(|c| c.capability.id == account)
+        {
+            c.capability.policy.requires_human_approval = true;
+        }
+    });
+    w.permit()
+        .await
+        .expect("the stored flag is not a post's gate");
+
+    // An agent's key never lowers it, and a member who is not owner or manager cannot either.
+    save_rules(&w, |i| i.post_approval = true).await;
+    let mut member = w.ctx.clone();
+    member.role_key = Some("member".into());
+    let input = rules_input(&w, |i| i.post_approval = false).await;
+    let e = rules::rules_save(&w.d, &member, input).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Forbidden, "{e:?}");
+    let input = rules_input(&w, |i| i.post_approval = false).await;
+    let e = rules::rules_save(&w.d, &studio_agent(&w), input)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Forbidden, "{e:?}");
+}
+
+#[tokio::test]
+async fn before_the_seed_a_post_waits_on_the_stored_flag() {
+    let w = studio_support::world().await;
+    w.approval(true).await;
+    let e = w.permit().await.unwrap_err();
+    assert_eq!(
+        e.details["reason"],
+        jt_studio::StudioError::ApprovalRequired.to_string()
+    );
+    // The seed copies the flag into the list: it still waits.
+    seed::ensure(&w.d, &w.ctx).await.unwrap();
+    let s = settings_of(&w.uow, w.f.ws).await;
+    assert!(s.post_gate_seeded_at.is_some());
+    assert!(
+        s.post_approval_accounts
+            .contains(&w.f.slot.capability_id.as_uuid())
+    );
+    assert!(w.permit().await.is_err());
 }
 
 // ---------------------------------------------------------------------------------------------
