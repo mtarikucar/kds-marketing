@@ -9,24 +9,44 @@ import { knowledgeError } from './words';
 /** How many goals the box shows before "{n} hedef daha". */
 const SHOWN = 3;
 
+/**
+ * "Düzenle" of Hedefler: the list, saved over the goals as they were when the dialog opened (the
+ * page reads again on its own meanwhile); a stale save shows them as they now are.
+ */
 function GoalsDialog({ goals, open, onOpenChange }: { goals: GoalsOut; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
+  const [base, setBase] = useState(goals.revision);
+  const [reload, setReload] = useState(false);
   const [lines, setLines] = useState(() => toLines(goals.items));
-  const save = useKnowledgeMutation(saveGoals, () => {
-    toast.success(t('knowledge.saved'));
-    onOpenChange(false);
-  });
+  const save = useKnowledgeMutation(
+    saveGoals,
+    () => {
+      toast.success(t('knowledge.saved'));
+      onOpenChange(false);
+    },
+    (err) => {
+      if (isStale(err)) setReload(true);
+    },
+  );
+  const load = (from: GoalsOut) => {
+    setBase(from.revision);
+    setLines(toLines(from.items));
+  };
   useEffect(() => {
     if (!open) return;
-    setLines(toLines(goals.items));
+    load(goals);
+    setReload(false);
     save.reset();
   }, [open]);
+  // After a stale save, the goals as they now are once the read has them.
   useEffect(() => {
-    if (open && save.isError && isStale(save.error)) setLines(toLines(goals.items));
-  }, [goals]);
+    if (!open || !reload || goals.revision === base) return;
+    load(goals);
+    setReload(false);
+  }, [goals.revision, reload]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    save.mutate({ expected_revision: goals.revision, items: fromLines(lines) });
+    save.mutate({ expected_revision: base, items: fromLines(lines) });
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

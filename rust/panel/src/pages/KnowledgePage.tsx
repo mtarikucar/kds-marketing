@@ -76,7 +76,8 @@ export function KnowledgePage() {
   const { t } = useTranslation();
   const session = useSession();
   const editable = can(session.data, 'team.manage');
-  const knowledge = useKnowledge();
+  // Agents file notes, propose and derive while the page is open: it reads again on its own.
+  const knowledge = useKnowledge({ live: true });
   const [params, setParams] = useSearchParams();
   const [autoClosed, setAutoClosed] = useState(false);
   const data = knowledge.data;

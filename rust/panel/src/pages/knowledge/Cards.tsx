@@ -123,26 +123,32 @@ function toBase64(file: File): Promise<string> {
 
 /**
  * A card being written: title, text, attachments, "Kaydet" / "Vazgeç", and in a quiet row
- * "Geçmiş" and "Kaldır". `card` is `null` for a new card. A stale save shows the card as it now
- * is, under the sentence that says so.
+ * "Geçmiş" and "Kaldır". `card` is `null` for a new card. The editor writes over the card as it
+ * was when opened (the page reads again on its own meanwhile): a newer card replaces an untouched
+ * editor's fields, and a stale save shows the card as it now is, under the sentence that says so.
+ * `removeError`: why "Kaldır" was refused, said here where the owner is.
  */
 function CardEditor({
   card,
   onClose,
   onHistory,
   onRemove,
+  removeError,
   autoFocus,
 }: {
   card: CardOut | null;
   onClose: () => void;
   onHistory: () => void;
   onRemove: () => void;
+  removeError: unknown;
   autoFocus: boolean;
 }) {
   const { t } = useTranslation();
   const session = useSession();
   const modules = useModules();
   const filesAllowed = !!modules.data?.modules.find((m) => m.blueprint.id === 'materials')?.installed && can(session.data, 'materials.work');
+  const [base, setBase] = useState(card);
+  const [reload, setReload] = useState(false);
   const [title, setTitle] = useState(card?.title ?? '');
   const [body, setBody] = useState(card?.body ?? '');
   const [attachments, setAttachments] = useState<KnowledgeAttachment[]>(card?.attachments ?? []);
@@ -154,17 +160,20 @@ function CardEditor({
   const bodyRef = useRef<HTMLTextAreaElement>(null);
   const save = useKnowledgeMutation(
     (input: { title: string; body: string; attachments: KnowledgeAttachment[] }) => {
-      if (!card) return createCard({ title: input.title, body: input.body, attachments: input.attachments.map(asInput) });
-      return updateCard(card.id, {
-        expected_revision: card.revision,
-        ...(input.title !== card.title ? { title: input.title } : {}),
-        ...(input.body !== card.body ? { body: input.body } : {}),
-        ...(!sameAttachments(input.attachments, card.attachments) ? { attachments: input.attachments.map(asInput) } : {}),
+      if (!base) return createCard({ title: input.title, body: input.body, attachments: input.attachments.map(asInput) });
+      return updateCard(base.id, {
+        expected_revision: base.revision,
+        ...(input.title !== base.title ? { title: input.title } : {}),
+        ...(input.body !== base.body ? { body: input.body } : {}),
+        ...(!sameAttachments(input.attachments, base.attachments) ? { attachments: input.attachments.map(asInput) } : {}),
       });
     },
     () => {
       toast.success(t('knowledge.saved'));
       onClose();
+    },
+    (err) => {
+      if (isStale(err)) setReload(true);
     },
   );
 
@@ -173,14 +182,26 @@ function CardEditor({
     (card ? bodyRef : titleRef).current?.focus();
   }, []);
 
-  // A stale save: the card as it now is, under the sentence that says so.
+  // A newer card: taken in while nothing was changed here, or after a stale save or removal
+  // (under the sentence that says so). Edits in progress are otherwise kept until they are saved.
+  const staleRemoval = useRef<unknown>(null);
+  const wanted = reload || (isStale(removeError) && staleRemoval.current !== removeError);
   useEffect(() => {
-    if (card && save.isError && isStale(save.error)) {
-      setTitle(card.title);
-      setBody(card.body);
-      setAttachments(card.attachments);
+    if (!card || !base) return;
+    if (card.revision === base.revision) {
+      // A refused removal is told once the page read again: the card here is already the latest.
+      staleRemoval.current = removeError;
+      return;
     }
-  }, [card?.revision]);
+    const untouched = title === base.title && body === base.body && sameAttachments(attachments, base.attachments);
+    if (!untouched && !wanted) return;
+    setBase(card);
+    setTitle(card.title);
+    setBody(card.body);
+    setAttachments(card.attachments);
+    setReload(false);
+    staleRemoval.current = removeError;
+  }, [card?.revision, wanted]);
 
   const addFiles = async (files: FileList | null) => {
     setProblem(null);
@@ -231,7 +252,7 @@ function CardEditor({
     setProblem(null);
     save.mutate({ title: title.trim(), body: body.trim(), attachments });
   };
-  const changed = !card || title.trim() !== card.title || body.trim() !== card.body || !sameAttachments(attachments, card.attachments);
+  const changed = !base || title.trim() !== base.title || body.trim() !== base.body || !sameAttachments(attachments, base.attachments);
   const label = card ? t('knowledge.cards.editLabel', { title: card.title }) : t('knowledge.cards.newCard');
 
   return (
@@ -299,6 +320,7 @@ function CardEditor({
       </div>
       {problem && <p role="alert" className="text-caption text-danger">{problem}</p>}
       {save.error && <p role="alert" className="text-sm text-danger">{knowledgeError(t, save.error)}</p>}
+      {!!removeError && <p role="alert" className="text-sm text-danger">{knowledgeError(t, removeError)}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="submit" loading={save.isPending} disabled={!changed || uploading > 0}>{t('knowledge.save')}</Button>
         <Button type="button" variant="outline" onClick={onClose}>{t('knowledge.cancel')}</Button>
@@ -334,8 +356,8 @@ export function revisionWho(t: TFunction, rev: RevisionOut, me: string | undefin
   }
 }
 
-/** "Geçmiş": every revision of a card, newest first, each with "Bu hâline dön". */
-function HistorySheet({ card, onClose }: { card: CardOut | undefined; onClose: () => void }) {
+/** "Geçmiş": every revision of a card, newest first, each with "Bu hâline dön" for who may change it. */
+function HistorySheet({ card, editable, onClose }: { card: CardOut | undefined; editable: boolean; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const session = useSession();
   const history = useInfiniteQuery({
@@ -385,7 +407,7 @@ function HistorySheet({ card, onClose }: { card: CardOut | undefined; onClose: (
                 </p>
                 {rev.content.title && <p className="text-sm font-semibold [overflow-wrap:anywhere]">{rev.content.title}</p>}
                 <p className="line-clamp-6 whitespace-pre-line text-sm [overflow-wrap:anywhere]">{rev.content.body || '—'}</p>
-                {!current && (
+                {editable && !current && (
                   <Button size="sm" variant="outline" className="self-start" loading={restore.isPending && restore.variables?.id === rev.id} onClick={() => restore.mutate(rev)}>
                     {t('knowledge.history.restore')}
                   </Button>
@@ -405,22 +427,15 @@ function HistorySheet({ card, onClose }: { card: CardOut | undefined; onClose: (
   );
 }
 
-/** One card as read: its title, its text cut to four lines, its attachments, "Yeni" after an agent filed. */
+/**
+ * One card as read: its title, its text cut to four lines, its attachments, "Yeni" after an agent
+ * filed. For an editor the title is a button inside the heading that covers the whole card (its
+ * text describes it), so the heading and the text read as they are.
+ */
 function CardView({ card, editable, onOpen, now }: { card: CardOut; editable: boolean; onOpen: () => void; now: number }) {
   const { t } = useTranslation();
   const fresh = card.filed && now - Date.parse(card.filed.at) < NEW_FOR_MS;
-  const content = (
-    <>
-      <span className="flex items-start gap-2">
-        <h3 className="min-w-0 flex-1 text-base font-semibold [overflow-wrap:anywhere]">{card.title}</h3>
-      </span>
-      {card.body.trim() ? (
-        <p className="line-clamp-4 whitespace-pre-line text-sm leading-relaxed text-foreground/90 [overflow-wrap:anywhere]">{card.body}</p>
-      ) : (
-        <p className="text-sm italic text-muted-foreground">{placeholderOf(t, card.key)}</p>
-      )}
-    </>
-  );
+  const bodyId = `card-body-${card.id}`;
   return (
     <article className="relative flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-surface p-4 transition-colors focus-within:border-primary hover:border-border-strong">
       {fresh && card.filed && (
@@ -431,15 +446,27 @@ function CardView({ card, editable, onOpen, now }: { card: CardOut; editable: bo
           </span>
         </span>
       )}
-      {editable ? (
-        <button type="button" className="flex flex-col gap-2 rounded-md text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={t('knowledge.cards.editLabel', { title: card.title })} onClick={onOpen}>
-          {content}
-        </button>
+      <h3 className={cn('min-w-0 text-base font-semibold [overflow-wrap:anywhere]', fresh && 'pe-12')}>
+        {editable ? (
+          <button
+            type="button"
+            className="text-start after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring"
+            aria-describedby={bodyId}
+            onClick={onOpen}
+          >
+            {card.title}
+          </button>
+        ) : (
+          card.title
+        )}
+      </h3>
+      {card.body.trim() ? (
+        <p id={bodyId} className="line-clamp-4 whitespace-pre-line text-sm leading-relaxed text-foreground/90 [overflow-wrap:anywhere]">{card.body}</p>
       ) : (
-        <div className="flex flex-col gap-2">{content}</div>
+        <p id={bodyId} className="text-sm italic text-muted-foreground">{placeholderOf(t, card.key)}</p>
       )}
       {card.attachments.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5" aria-label={t('knowledge.cards.attachments')}>
+        <ul className="relative z-10 flex flex-wrap gap-1.5" aria-label={t('knowledge.cards.attachments')}>
           {card.attachments.map((a, i) => <AttachmentChip key={i} attachment={a} />)}
         </ul>
       )}
@@ -477,12 +504,35 @@ export function Cards({
   const open = openId && openId !== 'new' ? cards.find((c) => c.id === openId) : undefined;
   const creating = openId === 'new' && editable;
 
-  const remove = useKnowledgeMutation((card: CardOut) => archiveCard(card.id, { expected_revision: card.revision, archived: true }), (out) => {
-    setRemoving(null);
-    onOpen(null);
-    setUndo(out);
+  const removedHere = useRef<string | null>(null);
+  const remove = useKnowledgeMutation(
+    (card: CardOut) => archiveCard(card.id, { expected_revision: card.revision, archived: true }),
+    (out) => {
+      removedHere.current = out.id;
+      setRemoving(null);
+      onOpen(null);
+      setUndo(out);
+    },
+    // The question closes, so the refusal (said in the editor) and the card as it now is show.
+    () => setRemoving(null),
+  );
+  const restore = useKnowledgeMutation((card: CardOut) => archiveCard(card.id, { expected_revision: card.revision, archived: false }), () => {
+    removedHere.current = null;
+    setUndo(null);
   });
-  const restore = useKnowledgeMutation((card: CardOut) => archiveCard(card.id, { expected_revision: card.revision, archived: false }), () => setUndo(null));
+  // A card in the address that the read no longer holds (removed meanwhile, or never there):
+  // its editor and history close, and the owner is told, unless the removal was made here.
+  useEffect(() => {
+    const gone = (id: string | null) => !!id && id !== 'new' && !cards.some((c) => c.id === id);
+    // One address change at a time: the history closes on the next pass.
+    if (gone(openId)) {
+      if (openId !== removedHere.current) toast.warning(t('knowledge.cards.archived'), { id: `knowledge-card-gone-${openId}` });
+      onOpen(null);
+    } else if (gone(historyId)) {
+      onHistory(null);
+    }
+  }, [cards, openId, historyId]);
+
   useEffect(() => {
     if (!undo) return;
     const id = window.setTimeout(() => setUndo(null), UNDO_MS);
@@ -494,9 +544,17 @@ export function Cards({
       key={card?.id ?? 'new'}
       card={card}
       autoFocus
-      onClose={() => onOpen(null)}
+      removeError={card && remove.variables?.id === card.id ? remove.error : null}
+      onClose={() => {
+        remove.reset();
+        onOpen(null);
+      }}
       onHistory={() => card && onHistory(card.id)}
-      onRemove={() => card && setRemoving(card)}
+      onRemove={() => {
+        if (!card) return;
+        remove.reset();
+        setRemoving(card);
+      }}
     />
   );
   const sheet = phone && editable && (open || creating);
@@ -517,7 +575,6 @@ export function Cards({
           {restore.error && <span role="alert" className="text-danger">{knowledgeError(t, restore.error)}</span>}
         </p>
       )}
-      {remove.error && <p role="alert" className="text-sm text-danger">{knowledgeError(t, remove.error)}</p>}
       {shown.length === 0 && query.trim() && <p className="text-sm text-muted-foreground">{t('knowledge.cards.noMatch')}</p>}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
         {shown.map((card) =>
@@ -558,10 +615,11 @@ export function Cards({
           cancelLabel={t('knowledge.cancel')}
           tone="danger"
           loading={remove.isPending}
-          onConfirm={() => removing && remove.mutate(removing)}
+          // The card as the page now holds it: pressed again after a refusal, at its latest revision.
+          onConfirm={() => removing && remove.mutate(cards.find((c) => c.id === removing.id) ?? removing)}
         />
       )}
-      <HistorySheet card={historyId ? cards.find((c) => c.id === historyId) : undefined} onClose={() => onHistory(null)} />
+      <HistorySheet card={historyId ? cards.find((c) => c.id === historyId) : undefined} editable={editable} onClose={() => onHistory(null)} />
     </section>
   );
 }

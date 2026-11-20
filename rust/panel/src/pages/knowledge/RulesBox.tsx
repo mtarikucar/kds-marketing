@@ -164,7 +164,7 @@ function CapField({
             </SelectContent>
           </Select>
         ) : (
-          <span>{t('knowledge.rules.dialog.monthly')}</span>
+          <span>{t(`knowledge.rules.dialog.${period ?? 'monthly'}`)}</span>
         )}
         <span>{t('knowledge.rules.dialog.atMost')}</span>
         <div className="w-36">
@@ -179,11 +179,17 @@ function CapField({
   );
 }
 
-/** "Düzenle" of Kurallar: the prohibitions, the two ceilings and post approval, saved whole. */
+/**
+ * "Düzenle" of Kurallar: the prohibitions, the two ceilings and post approval, saved whole over
+ * the rules as they were when the dialog opened (`base`; the page reads again on its own
+ * meanwhile). A stale save shows the rules as they now are, under the sentence that says so.
+ */
 function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
   const session = useSession();
   const money = can(session.data, 'budget.manage');
+  const [base, setBase] = useState(rules);
+  const [reload, setReload] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const [adOff, setAdOff] = useState(false);
   const [adAmount, setAdAmount] = useState<number | null>(null);
@@ -193,15 +199,22 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const [approval, setApproval] = useState(false);
   const [accounts, setAccounts] = useState<ApprovalAccount[]>([]);
   const [invalid, setInvalid] = useState(false);
-  const showMessage = !!rules.message_cap || rules.metered;
+  const showMessage = !!base.message_cap || base.metered;
 
-  const save = useKnowledgeMutation(saveRules, (out) => {
-    toast.success(t('knowledge.saved'));
-    if (out.stopped_campaigns) toast.warning(t('knowledge.rules.stopped', { n: out.stopped_campaigns }));
-    onOpenChange(false);
-  });
+  const save = useKnowledgeMutation(
+    saveRules,
+    (out) => {
+      toast.success(t('knowledge.saved'));
+      if (out.stopped_campaigns) toast.warning(t('knowledge.rules.stopped', { n: out.stopped_campaigns }));
+      onOpenChange(false);
+    },
+    (err) => {
+      if (isStale(err)) setReload(true);
+    },
+  );
 
   const load = (from: RulesOut) => {
+    setBase(from);
     setLines(toLines(from.prohibitions));
     setAdOff(!from.ad_cap);
     setAdAmount(from.ad_cap?.amount_minor ?? null);
@@ -217,13 +230,16 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     if (!open) return;
     load(rules);
     setInvalid(false);
+    setReload(false);
     save.reset();
   }, [open]);
 
-  // A stale save shows the rules as they now are, under the sentence that says so.
+  // After a stale save, the rules as they now are once the read has them.
   useEffect(() => {
-    if (open && save.isError && isStale(save.error)) load(rules);
-  }, [rules]);
+    if (!open || !reload || rules.revision === base.revision) return;
+    load(rules);
+    setReload(false);
+  }, [rules.revision, reload]);
 
   const current = (cap: RulesOut['ad_cap']): CapInput | null => (cap ? { amount_minor: cap.amount_minor, period: cap.period } : null);
 
@@ -237,18 +253,18 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     }
     setInvalid(false);
     const input: RulesInput = {
-      expected_revision: rules.revision,
+      expected_revision: base.revision,
       prohibitions: fromLines(lines),
-      ad_budget: !money ? current(rules.ad_cap) : adOff ? null : { amount_minor: adAmount ?? 0, period: adPeriod },
+      ad_budget: !money ? current(base.ad_cap) : adOff ? null : { amount_minor: adAmount ?? 0, period: adPeriod },
       message_budget:
         !money || !showMessage
-          ? current(rules.message_cap)
+          ? current(base.message_cap)
           : msgOff
             ? null
-            : { amount_minor: msgAmount ?? 0, period: rules.message_cap?.period ?? 'monthly' },
+            : { amount_minor: msgAmount ?? 0, period: base.message_cap?.period ?? 'monthly' },
       post_approval: approval,
     };
-    if (accounts.length !== rules.post_approval_accounts.length) input.post_approval_accounts = accounts.map((a) => a.capability_id);
+    if (accounts.length !== base.post_approval_accounts.length) input.post_approval_accounts = accounts.map((a) => a.capability_id);
     save.mutate(input);
   };
 
@@ -277,7 +293,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               id="knowledge-ad-cap"
               label={t('knowledge.rules.dialog.ad')}
               offLabel={t('knowledge.rules.dialog.noAds')}
-              currency={rules.ad_cap?.currency ?? 'TRY'}
+              currency={base.ad_cap?.currency ?? 'TRY'}
               amount={adAmount}
               off={adOff}
               period={adPeriod}
@@ -291,9 +307,10 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
                 id="knowledge-message-cap"
                 label={t('knowledge.rules.dialog.message')}
                 offLabel={t('knowledge.rules.dialog.noLimit')}
-                currency={rules.message_cap?.currency ?? 'TRY'}
+                currency={base.message_cap?.currency ?? 'TRY'}
                 amount={msgAmount}
                 off={msgOff}
+                period={base.message_cap?.period ?? 'monthly'}
                 onAmount={setMsgAmount}
                 onOff={setMsgOff}
                 readOnly={!money}

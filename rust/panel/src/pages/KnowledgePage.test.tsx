@@ -24,6 +24,8 @@ import { wakeTime } from '@/lib/wake';
 import { approvalLine } from './knowledge/words';
 import { markAdded } from './knowledge/Proposals';
 import { cardMatches } from './knowledge/Cards';
+import { KNOWLEDGE_BUSY_MS, KNOWLEDGE_IDLE_MS, knowledgeRefresh } from './knowledge/queries';
+import { measuredPosts } from './knowledge/Learned';
 
 const k = tr.knowledge;
 const routes = (over: FetchRoutes = {}, data: KnowledgeOut = knowledge): FetchRoutes => ({
@@ -43,6 +45,16 @@ const none: NeedWake = { state: 'no_agent' };
 function wakes(knowledgeWake: NeedWake): WakesOut {
   return { agents: [], needs: { content: none, materials: none, social: none, ads: none, research: none, inbox: none, knowledge: knowledgeWake } };
 }
+
+/** One revision of "Ürünler ve fiyat" as `GET …/history` lists it. */
+const revision = (n: number, body: string, cause: string, by: object) => ({
+  id: `rev-${n}`, subject: 'card', card_id: CARD_PRODUCTS, revision: n, kb_revision: n + 4,
+  content: { key: 'products_prices', title: 'Ürünler ve fiyat', body, attachments: [] }, cause, source_id: null,
+  at: '2026-11-18T09:00:00Z', by,
+});
+
+/** The card button of the grid: its name is the card's title, its description the card's text. */
+const cardButton = (title: string) => screen.getByRole('button', { name: title });
 
 /** The page with its read answered: Kurallar is drawn once the knowledge base is read. */
 async function page() {
@@ -81,6 +93,9 @@ describe('KnowledgePage', () => {
     expect(within(grid).getByText(k.cards.newBadge)).toBeInTheDocument();
     expect(within(grid).getByRole('tooltip', { hidden: true })).toHaveTextContent(i18n.t('knowledge.cards.filed', { summary: 'Ders fiyatı eklendi' }));
     expect(within(grid).getByRole('link', { name: 'Fiyat listesi' })).toHaveAttribute('href', 'https://alfa.example/fiyatlar');
+    // Each card's title is a heading holding the button that opens it; its text describes the button.
+    const heading = within(grid).getByRole('heading', { level: 3, name: 'Ürünler ve fiyat' });
+    expect(within(heading).getByRole('button', { name: 'Ürünler ve fiyat' })).toHaveAccessibleDescription(PRODUCTS_BODY);
     // No internal word on the owner's page (the whole check is `i18n/ownerWords.test.tsx`).
     expect(screen.getByRole('main').textContent ?? '').not.toMatch(/strateji|hipotez|sürüm/i);
   });
@@ -138,6 +153,23 @@ describe('KnowledgePage', () => {
     });
     expect(await screen.findByText(i18n.t('knowledge.rules.stopped', { n: 2 }))).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('names the paid-message limit by its own period in the dialog, and keeps it', async () => {
+    const user = userEvent.setup();
+    const weekly = { ...knowledge.rules, message_cap: { amount_minor: 20000, period: 'weekly' as const, currency: 'TRY' } };
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': weekly }, { ...knowledge, rules: weekly }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).getByText('Ücretli mesajlara haftada en çok ₺200.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    const field = within(dialog).getByRole('group', { name: k.rules.dialog.message });
+    expect(within(field).getByText(k.rules.dialog.weekly)).toBeInTheDocument();
+    expect(within(field).queryByText(k.rules.dialog.monthly)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({ message_budget: { amount_minor: 20000, period: 'weekly' } });
   });
 
   it('turns the ad budget off with "Reklam yok" and shows the message field only for a metered workspace', async () => {
@@ -241,7 +273,7 @@ describe('KnowledgePage', () => {
     const calls = mockFetch(routes({ [`PATCH /api/knowledge/cards/${CARD_WHO}`]: knowledge.cards[0] }));
     const { router } = renderAt('/knowledge');
     await page();
-    await user.click(screen.getByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) }));
+    await user.click(cardButton('Biz kimiz'));
     expect(router.state.location.search).toBe(`?card=${CARD_WHO}`);
     const form = screen.getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
     const body = within(form).getByLabelText(k.cards.bodyField);
@@ -289,13 +321,52 @@ describe('KnowledgePage', () => {
     expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)[1].body).toEqual({ expected_revision: 2, archived: false });
   });
 
+  it('says in the editor why a removal was refused, shows the card as it now is, and removes that one', async () => {
+    const user = userEvent.setup();
+    const own = knowledge.cards[4];
+    const archive = `POST /api/knowledge/cards/${CARD_OWN}/archive`;
+    const answers = routes({ [archive]: withStatus(409, { code: 'CONFLICT', message: 'stale', details: { reason: 'card_changed', revision: 2 } }) });
+    const calls = mockFetch(answers);
+    renderAt(`/knowledge?card=${CARD_OWN}`);
+    const form = await screen.findByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Kargo' }) });
+    answers['GET /api/knowledge'] = { ...knowledge, cards: knowledge.cards.map((c) => (c.id === CARD_OWN ? { ...c, body: 'Siparişler ertesi gün kargoda.', revision: 2 } : c)) };
+    await user.click(within(form).getByRole('button', { name: k.cards.remove }));
+    await user.click(within(await screen.findByRole('dialog', { name: k.cards.removeTitle })).getByRole('button', { name: k.cards.remove }));
+    // The question closes: the refusal and the card as it now is show where the owner is.
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: k.cards.removeTitle })).not.toBeInTheDocument());
+    expect(await within(form).findByText(k.conflict)).toBeInTheDocument();
+    await waitFor(() => expect(within(form).getByLabelText(k.cards.bodyField)).toHaveValue('Siparişler ertesi gün kargoda.'));
+
+    answers[archive] = { ...own, revision: 3 };
+    await user.click(within(form).getByRole('button', { name: k.cards.remove }));
+    await user.click(within(await screen.findByRole('dialog', { name: k.cards.removeTitle })).getByRole('button', { name: k.cards.remove }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)).toHaveLength(2));
+    expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`).map((c) => c.body)).toEqual([
+      { expected_revision: 1, archived: true },
+      { expected_revision: 2, archived: true },
+    ]);
+    expect(await screen.findByText(i18n.t('knowledge.cards.removed', { title: 'Kargo' }))).toBeInTheDocument();
+  });
+
+  it('closes the editor of a card removed meanwhile and says so', async () => {
+    const user = userEvent.setup();
+    const answers = routes({ [`PATCH /api/knowledge/cards/${CARD_OWN}`]: withStatus(409, { code: 'CONFLICT', message: 'removed', details: { reason: 'card_archived' } }) });
+    const calls = mockFetch(answers);
+    const { router } = renderAt(`/knowledge?card=${CARD_OWN}`);
+    const name = i18n.t('knowledge.cards.editLabel', { title: 'Kargo' });
+    const form = await screen.findByRole('form', { name });
+    await user.type(within(form).getByLabelText(k.cards.bodyField), ' Pazar hariç.');
+    const before = reads(calls);
+    answers['GET /api/knowledge'] = { ...knowledge, cards: knowledge.cards.filter((c) => c.id !== CARD_OWN) };
+    await user.click(within(form).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.queryByRole('form', { name })).not.toBeInTheDocument());
+    expect(await screen.findByText(k.cards.archived)).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
+
   it('lists a card’s history in the owner’s words and puts an older text back', async () => {
     const user = userEvent.setup();
-    const revision = (n: number, body: string, cause: string, by: object) => ({
-      id: `rev-${n}`, subject: 'card', card_id: CARD_PRODUCTS, revision: n, kb_revision: n + 4,
-      content: { key: 'products_prices', title: 'Ürünler ve fiyat', body, attachments: [] }, cause, source_id: null,
-      at: '2026-11-18T09:00:00Z', by,
-    });
     const calls = mockFetch(routes({
       [`GET /api/knowledge/cards/${CARD_PRODUCTS}/history`]: {
         revisions: [
@@ -319,6 +390,23 @@ describe('KnowledgePage', () => {
     expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_PRODUCTS}`)[0].body).toEqual({
       expected_revision: 3, title: 'Ürünler ve fiyat', body: 'El yapımı kupa ₺400.', attachments: [],
     });
+  });
+
+  it('shows a member a card’s history without "Bu hâline dön"', async () => {
+    mockFetch(routes({
+      'GET /api/auth/me': repMe,
+      [`GET /api/knowledge/cards/${CARD_PRODUCTS}/history`]: {
+        revisions: [
+          revision(3, PRODUCTS_BODY, 'note', { kind: 'agent', connection_id: 'c1', api_key_id: 'k1' }),
+          revision(1, 'Kupa', 'backfill', { kind: 'system', component: 'knowledge_backfill' }),
+        ],
+        next_before: null,
+      },
+    }));
+    renderAt(`/knowledge?history=${CARD_PRODUCTS}`);
+    const sheet = await screen.findByRole('dialog', { name: k.history.title });
+    expect(await within(sheet).findByText(/İlk kurulum/)).toBeInTheDocument();
+    expect(within(sheet).queryByRole('button', { name: k.history.restore })).not.toBeInTheDocument();
   });
 
   it('finds cards by their title or text', async () => {
@@ -430,6 +518,118 @@ describe('KnowledgePage', () => {
     expect(await screen.findByTestId('agent-wake-line')).toBeInTheDocument();
   });
 
+  it('reads again often while a note waits or a derivation is due, else now and then', () => {
+    expect(knowledgeRefresh(undefined)).toBe(KNOWLEDGE_IDLE_MS);
+    expect(knowledgeRefresh(knowledge)).toBe(KNOWLEDGE_BUSY_MS);
+    const quiet = { ...knowledge, notes: knowledge.notes.filter((n) => n.status !== 'open'), frame: { number: 2, derive_due: [] } };
+    expect(knowledgeRefresh(quiet)).toBe(KNOWLEDGE_IDLE_MS);
+    expect(knowledgeRefresh({ ...quiet, frame: { number: 2, derive_due: ['posting'] } })).toBe(KNOWLEDGE_BUSY_MS);
+  });
+
+  it('reads again on its own, so a note the agent filed shows what became of it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const answers = routes();
+      const calls = mockFetch(answers);
+      renderAt('/knowledge');
+      await page();
+      expect(within(screen.getByRole('list', { name: k.notes.title })).getByText(k.notes.waiting)).toBeInTheDocument();
+      const filed: KnowledgeOut = {
+        ...knowledge,
+        cards: knowledge.cards.map((c) => (c.id === CARD_OWN ? { ...c, revision: 2, filed: { at: new Date().toISOString(), summary: 'Yılbaşı tarihi eklendi' } } : c)),
+        notes: knowledge.notes.map((n) =>
+          n.id === NOTE_OPEN ? { ...n, status: 'filed', closed_at: new Date().toISOString(), outcome: { cards: [{ card_id: CARD_OWN, revision: 2 }], summary: 'Yılbaşı tarihi eklendi' } } : n,
+        ),
+      };
+      answers['GET /api/knowledge'] = filed;
+      const before = reads(calls);
+      await vi.advanceTimersByTimeAsync(KNOWLEDGE_BUSY_MS);
+      await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+      const list = screen.getByRole('list', { name: k.notes.title });
+      await waitFor(() => expect(within(list).queryByText(k.notes.waiting)).not.toBeInTheDocument());
+      expect(within(list).getByText(i18n.t('knowledge.notes.card', { card: 'Kargo', summary: 'Yılbaşı tarihi eklendi' }))).toBeInTheDocument();
+      // Nothing waits any more: the next read comes a minute later, not in 15 seconds.
+      const settled = reads(calls);
+      await vi.advanceTimersByTimeAsync(KNOWLEDGE_BUSY_MS + 1_000);
+      expect(reads(calls)).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps what the owner is typing when a newer card is read, and saves over the one opened', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const answers = routes({
+        [`PATCH /api/knowledge/cards/${CARD_WHO}`]: withStatus(409, { code: 'CONFLICT', message: 'stale', details: { reason: 'card_changed', revision: 3 } }),
+      });
+      const calls = mockFetch(answers);
+      renderAt(`/knowledge?card=${CARD_WHO}`);
+      const form = await screen.findByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
+      const body = within(form).getByLabelText(k.cards.bodyField);
+      await user.clear(body);
+      await user.type(body, 'Benim metnim');
+      answers['GET /api/knowledge'] = { ...knowledge, cards: knowledge.cards.map((c) => (c.id === CARD_WHO ? { ...c, body: 'Ortağın yazdığı metin', revision: 3 } : c)) };
+      const before = reads(calls);
+      await vi.advanceTimersByTimeAsync(KNOWLEDGE_BUSY_MS);
+      await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+      expect(body).toHaveValue('Benim metnim');
+      await user.click(within(form).getByRole('button', { name: k.save }));
+      await waitFor(() => expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_WHO}`)).toHaveLength(1));
+      expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_WHO}`)[0].body).toEqual({ expected_revision: 2, body: 'Benim metnim' });
+      expect(await within(form).findByText(k.conflict)).toBeInTheDocument();
+      await waitFor(() => expect(body).toHaveValue('Ortağın yazdığı metin'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('takes a newer card into an editor nothing was changed in', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const answers = routes();
+      const calls = mockFetch(answers);
+      renderAt(`/knowledge?card=${CARD_WHO}`);
+      const form = await screen.findByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
+      answers['GET /api/knowledge'] = { ...knowledge, cards: knowledge.cards.map((c) => (c.id === CARD_WHO ? { ...c, body: 'Ortağın yazdığı metin', revision: 3 } : c)) };
+      const before = reads(calls);
+      await vi.advanceTimersByTimeAsync(KNOWLEDGE_BUSY_MS);
+      await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+      await waitFor(() => expect(within(form).getByLabelText(k.cards.bodyField)).toHaveValue('Ortağın yazdığı metin'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('saves Kurallar over the rules the dialog opened with, though the page read newer ones', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const answers = routes({ 'PUT /api/knowledge/rules': withStatus(409, { code: 'CONFLICT', message: 'stale', details: { reason: 'rules_changed' } }) });
+      const calls = mockFetch(answers);
+      renderAt('/knowledge');
+      await page();
+      await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+      const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+      await user.click(within(dialog).getByRole('button', { name: i18n.t('knowledge.rules.dialog.remove', { n: 1 }) }));
+      const newer = { ...knowledge.rules, revision: 5, prohibitions: ['Ortağın yasağı.'] };
+      answers['GET /api/knowledge'] = { ...knowledge, rules: newer };
+      const before = reads(calls);
+      await vi.advanceTimersByTimeAsync(KNOWLEDGE_BUSY_MS);
+      await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+      // The owner's edit stays; the save is made over revision 4, so the server can refuse it.
+      expect(within(dialog).queryByDisplayValue('Sitede yazmayan fiyat sözü verilmez.')).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: k.save }));
+      await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+      expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({ expected_revision: 4 });
+      expect(await within(dialog).findByText(k.conflict)).toBeInTheDocument();
+      expect(await within(dialog).findByDisplayValue('Ortağın yasağı.')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('has no agent line when nothing waits for an agent', async () => {
     const schedule: NeedWake = { state: 'schedule', next_expected_at: new Date(Date.now() + 3600_000).toISOString(), interval_minutes: 60, has_address: false, failed_at: null, run_now: null };
     const calls = mockFetch(routes({ 'GET /api/agents/wakes': wakes(schedule) }, { ...knowledge, notes: knowledge.notes.filter((n) => n.status !== 'open'), frame: { number: 2, derive_due: [] } }));
@@ -462,19 +662,39 @@ describe('KnowledgePage', () => {
     await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/proposals/${PROPOSAL_RULE}/skip`)).toHaveLength(1));
   });
 
-  it('says a proposal no longer holds when its card changed meanwhile', async () => {
+  it('says a proposal no longer holds when its card changed meanwhile, also once the read drops it', async () => {
     const user = userEvent.setup();
-    const calls = mockFetch(routes({
+    const answers = routes({
       [`POST /api/knowledge/proposals/${PROPOSAL_EDIT}/accept`]: withStatus(409, { code: 'CONFLICT', message: 'superseded', details: { reason: 'proposal_superseded' } }),
-    }));
+    });
+    const calls = mockFetch(answers);
     renderAt('/knowledge');
     await page();
     const before = reads(calls);
     const box = screen.getByRole('region', { name: k.proposals.title });
-    const edit = within(box).getByRole('heading', { name: i18n.t('knowledge.proposals.cardEdit', { card: 'Ürünler ve fiyat' }) }).closest('li') as HTMLElement;
+    const heading = i18n.t('knowledge.proposals.cardEdit', { card: 'Ürünler ve fiyat' });
+    const edit = within(box).getByRole('heading', { name: heading }).closest('li') as HTMLElement;
+    // The read again lists pending proposals only: the superseded one is gone from it.
+    answers['GET /api/knowledge'] = { ...knowledge, proposals: knowledge.proposals.filter((p) => p.id !== PROPOSAL_EDIT) };
     await user.click(within(edit).getByRole('button', { name: k.proposals.accept }));
-    expect(await within(box).findByText(k.proposals.superseded)).toBeInTheDocument();
     await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+    await waitFor(() => expect(within(box).queryByRole('heading', { name: heading })).not.toBeInTheDocument());
+    expect(within(box).getByRole('alert')).toHaveTextContent(k.proposals.superseded);
+    expect(screen.queryByText(k.proposals.accepted)).not.toBeInTheDocument();
+  });
+
+  it('says a refusal under the proposal while it is still listed', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes({
+      [`POST /api/knowledge/proposals/${PROPOSAL_RULE}/skip`]: withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }),
+    }));
+    renderAt('/knowledge');
+    await page();
+    const box = screen.getByRole('region', { name: k.proposals.title });
+    const rule = within(box).getByRole('heading', { name: k.proposals.ruleAdd }).closest('li') as HTMLElement;
+    await user.click(within(rule).getByRole('button', { name: k.proposals.skip }));
+    expect(await within(rule).findByRole('alert')).toBeInTheDocument();
+    expect(within(box).getAllByRole('alert')).toHaveLength(1);
   });
 
   it('marks the words a card edit adds', () => {
@@ -493,7 +713,7 @@ describe('KnowledgePage', () => {
   });
 
   it('shows what works, by topic, only with evidence and to a viewer who works on posts', async () => {
-    const overview = (evidence: { id: string; status: string; raw_metrics: Record<string, number | null> }[]) => ({
+    const overview = (evidence: { id: string; status: string; publication_id?: string; window?: string; raw_metrics: Record<string, number | null> }[]) => ({
       hypotheses: [
         { id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel', derived_confidence: 0.7 },
         { id: 'h2', title: 'Sahibin isteği', segment_key: 'owner_request', derived_confidence: 0.9 },
@@ -501,12 +721,21 @@ describe('KnowledgePage', () => {
       learned: {
         arms: [
           { arm: { id: 'a1', key: { hypothesis_id: 'h1', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence },
-          { arm: { id: 'a2', key: { hypothesis_id: 'h2', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm9', status: 'measured', raw_metrics: {} }] },
+          { arm: { id: 'a2', key: { hypothesis_id: 'h2', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm9', status: 'complete', publication_id: 'p9', raw_metrics: {} }] },
         ],
         hypotheses: [{ hypothesis_id: 'h1', derived_confidence: 0.7 }],
       },
     });
-    mockFetch(routes({ 'GET /api/studio/overview': overview([{ id: 'm1', status: 'measured', raw_metrics: {} }, { id: 'm2', status: 'measured', raw_metrics: {} }]) }));
+    // Two posts: one read at 24 h and 72 h, one at 24 h; a third whose reading is missing, a fourth failed.
+    mockFetch(routes({
+      'GET /api/studio/overview': overview([
+        { id: 'm1', status: 'complete', publication_id: 'p1', window: 'hours24', raw_metrics: {} },
+        { id: 'm2', status: 'complete', publication_id: 'p1', window: 'hours72', raw_metrics: {} },
+        { id: 'm3', status: 'complete', publication_id: 'p2', window: 'hours24', raw_metrics: {} },
+        { id: 'm4', status: 'missing', publication_id: 'p3', window: 'hours24', raw_metrics: {} },
+        { id: 'm5', status: 'failed', publication_id: 'p4', window: 'hours24', raw_metrics: {} },
+      ]),
+    }));
     renderAt('/knowledge');
     await page();
     const learned = await screen.findByRole('region', { name: k.learned.title });
@@ -516,9 +745,22 @@ describe('KnowledgePage', () => {
     expect(within(learned).queryByText('Sahibin isteği')).not.toBeInTheDocument();
   });
 
-  it('hides "Neler işe yarıyor" without evidence', async () => {
+  it('counts each measured post once, by its complete readings', () => {
+    expect(measuredPosts([
+      { id: 'm1', status: 'complete', publication_id: 'p1', raw_metrics: {} },
+      { id: 'm2', status: 'complete', publication_id: 'p1', raw_metrics: {} },
+      { id: 'm3', status: 'complete', publication_id: null, binding_id: 'b1', raw_metrics: {} },
+      { id: 'm4', status: 'complete', publication_id: null, binding_id: 'b1', raw_metrics: {} },
+      { id: 'm5', status: 'failed', publication_id: 'p2', raw_metrics: {} },
+    ])).toBe(2);
+  });
+
+  it('hides "Neler işe yarıyor" without evidence, and without a complete reading', async () => {
     const calls = mockFetch(routes({
-      'GET /api/studio/overview': { hypotheses: [{ id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel' }], learned: { arms: [], hypotheses: [] } },
+      'GET /api/studio/overview': {
+        hypotheses: [{ id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel' }],
+        learned: { arms: [{ arm: { id: 'a1', key: { hypothesis_id: 'h1', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm1', status: 'failed', publication_id: 'p1', raw_metrics: {} }] }], hypotheses: [] },
+      },
     }));
     renderAt('/knowledge');
     await page();
@@ -535,7 +777,8 @@ describe('KnowledgePage', () => {
     expect(screen.queryByRole('button', { name: k.rules.editLabel })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: k.goals.editLabel })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: k.cards.new })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Biz kimiz' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Biz kimiz' })).toBeInTheDocument();
     const box = screen.getByRole('region', { name: k.proposals.title });
     expect(within(box).queryByRole('button', { name: k.proposals.accept })).not.toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: k.notes.title })).queryByRole('button', { name: k.notes.withdraw })).not.toBeInTheDocument();
@@ -594,7 +837,7 @@ describe('KnowledgePage', () => {
     mockFetch(routes());
     renderAt('/knowledge');
     await page();
-    await user.click(screen.getByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) }));
+    await user.click(cardButton('Biz kimiz'));
     const sheet = await screen.findByRole('dialog', { name: 'Biz kimiz' });
     expect(within(sheet).getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).toBeInTheDocument();
   });
