@@ -853,6 +853,8 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
     t.capabilities().insert(sms.clone(), None).await.unwrap();
     t.budget().link(sms.id, general).await.unwrap();
     t.commit().await.unwrap();
+    // Every module installed: a lane whose module is not stops (`StudioControl::removed`).
+    jt_testkit::studio_contract::install_all_modules(&uow, ws).await;
     let binding = ad_set_on(&deps, &uow, ws, v5, general).await;
 
     let mut tasks = Vec::new();
