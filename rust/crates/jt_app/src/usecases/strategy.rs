@@ -272,6 +272,24 @@ pub(crate) async fn versions(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppE
     })
 }
 
+/// The panel's strategy writes (`/api/strategy`'s consultation, sections, hypotheses, submit,
+/// approve and archive) once the workspace's knowledge base is seeded: `CONFLICT`
+/// (`details.reason = "use_knowledge_base"`). The owner keeps the business in Bilgi bankası
+/// (`/api/knowledge`), whose edits apply at once; the page these routes served is gone (design
+/// 2026-11-19 §4.3.4). The MCP tools keep working, with the re-sync, until they are retired.
+/// Before the seed the routes still write: the seed copies what they approve.
+pub async fn panel_write_open(deps: &Deps, ctx: &Ctx) -> Result<(), AppError> {
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    if repos.knowledge().settings().await?.is_some() {
+        return Err(conflict(
+            "the knowledge base replaced the strategy page: change it in Bilgi bankasi \
+             (/api/knowledge)",
+            "use_knowledge_base",
+        ));
+    }
+    Ok(())
+}
+
 /// Opens the next draft and returns it; while a draft is open, returns that one instead and
 /// changes nothing. Needs `team.manage`.
 ///

@@ -518,6 +518,42 @@ async fn a_material_takes_its_capture_time_from_its_bytes_and_suggests_its_olays
     );
 }
 
+/// A PDF is uploaded for the knowledge base (a card's or a note's attachment) and never becomes a
+/// material, so nothing posts it (design 2026-11-19 D17). Bytes that are not one are refused.
+#[tokio::test]
+async fn a_pdf_is_stored_for_the_knowledge_base_and_never_becomes_a_material() {
+    let (w, _) = publishing_world().await;
+    let pdf = upload(
+        &w,
+        "price-list",
+        "application/pdf",
+        b"%PDF-1.7 fiyat listesi",
+    )
+    .await;
+    let e = library::material_add(
+        &w.d,
+        &w.ctx,
+        add_input("price-list", pdf, json!({"genel":true,"share":"shareable"})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Validation, "file_not_media")
+    );
+    let e = files::file_upload(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"not-a-pdf","filename":"m.pdf","mime":"application/pdf",
+            "content":{"kind":"bytes_base64","data":STANDARD.encode(b"PK\x03\x04 zip")}}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Validation);
+}
+
 /// `material_add` reads a capture time from what it needs of the file, never the whole of it
 /// (spec D41): a JPEG's first part, a video's box headers and its `mvhd`.
 #[tokio::test]

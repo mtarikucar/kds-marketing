@@ -1,6 +1,7 @@
 //! The strategy on the panel, end to end through Postgres: a consultation from an empty
 //! workspace to an approved version (with the gaps an early submission shows), who may do what,
-//! archiving a named version, and the consultation log's keyset pages.
+//! every write refused once the approval seeded the knowledge base (the page is Bilgi bankası,
+//! design 2026-11-19 §4.3.4), and the consultation log's keyset pages.
 
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
@@ -485,34 +486,78 @@ async fn the_draft_lists_its_assumptions_and_strict_bodies_refuse_unknown_fields
 }
 
 #[tokio::test]
-async fn archive_is_refused_once_the_knowledge_base_keeps_the_frame() {
+async fn the_old_page_writes_nothing_once_the_knowledge_base_keeps_the_strategy() {
     let p = Panel::new().await;
     let (owner, _) = p.register(OWNER, "Alpha").await;
     let approved = approve_a_strategy(&p, &owner).await;
     let id = approved["id"].as_str().unwrap();
-    let archive = |body: Value| post(&p, "/api/strategy/archive", &owner, Some(body));
 
-    // The right version without confirmation, or with a malformed id: refused as before.
-    let resp = archive(json!({ "version_id": id })).await;
-    let refused = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
-    assert_eq!(refused["details"]["field"], "confirm");
-    let resp = archive(json!({ "version_id": id, "confirm": false })).await;
-    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
-    let resp = archive(json!({ "version_id": "v1", "confirm": true })).await;
+    // A body the route cannot read is refused before anything else, as before.
+    let resp = post(
+        &p,
+        "/api/strategy/archive",
+        &owner,
+        Some(json!({ "version_id": "v1", "confirm": true })),
+    )
+    .await;
     expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
 
-    // The approval seeded the knowledge base, which keeps the frame (design 2026-11-19 §4.3.4,
-    // D10): a confirmed archive, of this version or another, is refused; posting is stopped
-    // with the brake instead.
-    for version in [id, "0192f0c0-0000-7000-8000-000000000001"] {
-        let resp = archive(json!({ "version_id": version, "confirm": true })).await;
+    // The approval seeded the knowledge base (design 2026-11-19 §4.3.4): the strategy page is
+    // Bilgi bankası now, so every write of the old page is refused, archiving the frame the
+    // knowledge base keeps among them (D10; posting is stopped with the brake instead).
+    let stamp = json!({ "version_id": id, "submitted_at": "2026-10-22T09:00:00Z" });
+    let other = "0192f0c0-0000-7000-8000-000000000001";
+    for (method, path, body) in [
+        (Method::POST, "/api/strategy/consultation", None),
+        (
+            Method::POST,
+            "/api/strategy/consultation/entries",
+            Some(json!({ "kind": "note", "text": "x" })),
+        ),
+        (
+            Method::PUT,
+            "/api/strategy/draft/sections/prohibitions",
+            Some(json!(["rakip adı"])),
+        ),
+        (
+            Method::PUT,
+            "/api/strategy/draft/hypotheses",
+            Some(hypotheses()),
+        ),
+        (Method::POST, "/api/strategy/draft/submit", None),
+        (Method::POST, "/api/strategy/draft/approve", Some(stamp)),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": id, "confirm": true })),
+        ),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": other, "confirm": true })),
+        ),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": id })),
+        ),
+    ] {
+        let resp = send(&p, method, path, &owner, body).await;
         let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
-        assert_eq!(refused["details"]["reason"], "use_brake");
+        assert_eq!(refused["details"]["reason"], "use_knowledge_base", "{path}");
     }
+
+    // Nothing moved, and the reads still answer: the frame in force, no draft, its log.
     let still = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(still["approved"]["id"], json!(id));
+    assert_eq!(still["draft"], Value::Null);
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;
+    assert_eq!(versions.as_array().unwrap().len(), 1);
     assert_eq!(versions[0]["status"], "approved");
+    assert_eq!(
+        consultation(&p, &owner, id, "").await[0]["kind"],
+        "approved"
+    );
 }
 
 /// `at` as a query value.
