@@ -3679,6 +3679,7 @@
     "settings": {
       "title": "E-posta ayarları",
       "description": "Kampanyaların gönderen bilgileri, onay, ısınma ve sıklık sınırları.",
+      "descriptionEmail": "E-postalarının altına eklenen gönderen bilgileri ve işletmelere ilk mesaj izni.",
       "general": "Genel ayarlar",
       "readOnly": "Bu ayarları yalnızca yöneticiler değiştirebilir.",
       "identity": "Gönderen bilgileri (her e-postanın altbilgisi)",

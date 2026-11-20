@@ -3679,6 +3679,7 @@
     "settings": {
       "title": "Email settings",
       "description": "Campaigns' sender details, approval, warm-up and frequency limits.",
+      "descriptionEmail": "The sender details added under your emails, and the permission for first messages to businesses.",
       "general": "General settings",
       "readOnly": "Only managers can change these settings.",
       "identity": "Sender details (the footer of every email)",

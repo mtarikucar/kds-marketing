@@ -690,3 +690,111 @@ async fn the_public_links_only_ever_reduce_what_may_be_sent() {
     dispatch(&o.w, days_later(4)).await;
     assert_eq!(sent_mail(&o.mail).len(), 1);
 }
+
+/// Whether the campaigns module (`outreach`) is installed in the world's workspace.
+async fn campaigns_installed(o: &Outreach) -> bool {
+    let mut r = o.w.uow.tenant(o.w.ws).await.unwrap();
+    jt_app::usecases::modules::installed(r.as_mut(), "outreach")
+        .await
+        .unwrap()
+}
+
+/// An email to one person rests on email, not on the campaigns module (owner report
+/// 2026-11-21): without Kampanyalar installed, and after it was installed and removed again, it
+/// goes out, and every check of a commercial email still holds — the business basis, the sender
+/// identity and its footer with the one-click unsubscribe, the suppression list.
+#[tokio::test]
+async fn a_one_to_one_email_needs_no_campaigns_module_and_keeps_every_check() {
+    use jt_app::usecases::{inbox::consent, modules};
+    let o = outreach_world().await;
+    let w = &o.w;
+    assert!(
+        !campaigns_installed(&o).await,
+        "the world starts without it"
+    );
+    for round in ["never installed", "installed, then removed"] {
+        if round != "never installed" {
+            modules::install(&w.deps, &w.owner_ctx, "outreach", Default::default())
+                .await
+                .unwrap();
+            modules::remove(&w.deps, &w.owner_ctx, "outreach")
+                .await
+                .unwrap();
+            assert!(!campaigns_installed(&o).await, "{round}");
+        }
+        let key = |k: &str| format!("{round}:{k}");
+        // The settings an email needs are read and written without the module.
+        outreach::settings_get(&w.deps, &w.owner_ctx).await.unwrap();
+        // A first email to a business: no basis yet, so no permission.
+        let bora = person(w, "Bora", &format!("bora-{}@example.invalid", round.len())).await;
+        business(w, bora).await;
+        outreach::settings_set(
+            &w.deps,
+            &w.owner_ctx,
+            serde_json::from_value(json!({"b2b_basis": [], "require_iys_lookup": true})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let e = err(replies::send(
+            &w.deps,
+            &w.owner_ctx,
+            bora,
+            send_input("commercial", &key("a")),
+        )
+        .await);
+        assert_eq!(e.message, "IZIN_YOK", "{round}");
+        // The owner opens the basis: it goes, with its footer and one-click unsubscribe.
+        open_b2b(w, false).await;
+        o.mail.push_mail(accepted(&key("sent")));
+        let out = replies::send(
+            &w.deps,
+            &w.owner_ctx,
+            bora,
+            send_input("commercial", &key("b")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.state, "sent", "{round}");
+        assert_footed(&o, sent_mail(&o.mail).last().unwrap(), PUBLIC_DATA_LINE);
+        // Without the sender identity it is refused, never sent bare.
+        let before = sent_mail(&o.mail).len();
+        outreach::settings_set(
+            &w.deps,
+            &w.owner_ctx,
+            serde_json::from_value(json!({"sender_address": ""})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let e = err(replies::send(
+            &w.deps,
+            &w.owner_ctx,
+            bora,
+            send_input("commercial", &key("c")),
+        )
+        .await);
+        assert_eq!(e.message, "sender_identity_missing", "{round}");
+        sender_identity(w).await;
+        // A suppressed address is refused whatever the basis.
+        consent::add_suppression(
+            &w.deps,
+            &w.owner_ctx,
+            bora,
+            serde_json::from_value(json!({"channel": "email", "reason": "manual"})).unwrap(),
+        )
+        .await
+        .unwrap();
+        let e = err(replies::send(
+            &w.deps,
+            &w.owner_ctx,
+            bora,
+            send_input("commercial", &key("d")),
+        )
+        .await);
+        assert_eq!(e.code, ErrorCode::Forbidden, "{round}");
+        assert_eq!(
+            sent_mail(&o.mail).len(),
+            before,
+            "{round}: nothing more went out"
+        );
+    }
+}

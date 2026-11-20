@@ -50,7 +50,7 @@ const tr = {
   sent: 'Mesaj gönderildi.', queued: 'Mesaj sıraya alındı.', held: 'Mesaj onay bekliyor.', sendState: 'Mesajın durumu: {state}',
   handedOff: '{way} açıldı; mesajı oradan gönder.',
   popupBlocked: 'Tarayıcı yeni sekmeyi engelledi. Aday iletişime alındı; sohbeti buradan aç:', openLink: '{way} sohbetini aç',
-  noPermission: 'Bu alıcıya bu kanaldan ticari mesaj izni yok. Kampanya ayarlarından “işletme alıcısı dayanağını” bu kanal için açabilirsin.',
+  noPermission: 'Bu alıcıya bu kanaldan ticari mesaj izni yok. E-posta ayarlarından “işletme alıcısı dayanağını” bu kanal için açabilirsin.',
   noWay: 'Bu adaya ulaşılabilecek bir kanal yok.',
   // The person's own form: adding a prospect, editing one's details.
   addProspect: 'Aday ekle', addTitle: 'Yeni aday',
@@ -116,7 +116,7 @@ const en: typeof tr = {
   sent: 'Message sent.', queued: 'Message queued.', held: 'Message awaits approval.', sendState: 'The message is: {state}',
   handedOff: '{way} opened; send the message there.',
   popupBlocked: 'The browser blocked the new tab. The prospect is in contact; open the chat here:', openLink: 'Open the {way} chat',
-  noPermission: 'There is no permission for a commercial message to this recipient on this channel. Open the “business-recipient basis” for it in the campaign settings.',
+  noPermission: 'There is no permission for a commercial message to this recipient on this channel. Open the “business-recipient basis” for it in the email settings.',
   noWay: 'There is no channel to reach this prospect on.',
   addProspect: 'Add prospect', addTitle: 'New prospect',
   addBody: 'Add a business you know of to the pool. Only its name is required; the rest can follow later.',

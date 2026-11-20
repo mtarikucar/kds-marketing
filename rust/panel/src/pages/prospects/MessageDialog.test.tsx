@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { LOADED, agentsList, leadsMe, outreachSettings, prospectId, prospectOut, team } from '@/test/leads';
+import { legacyModules } from '@/test/modules';
 import { handoffUrl } from './MessageDialog';
 
 const ID = prospectId(1);
@@ -215,3 +216,50 @@ async function openDialogWith(extra: Record<string, unknown>) {
   const dialog = within(await screen.findByRole('dialog'));
   return { user, calls, dialog };
 }
+
+/** The workspace's modules with Kampanyalar (`outreach`) not installed: email needs only a mailbox. */
+const withoutCampaigns = {
+  ...legacyModules,
+  modules: legacyModules.modules.map((m) => ({ ...m, installed: m.blueprint.id !== 'outreach' })),
+};
+
+describe('MessageDialog without the campaigns module', () => {
+  it('sends a first email with only a mailbox connected', async () => {
+    const { user, calls, dialog } = await openDialog({ 'GET /api/workspace/modules': withoutCampaigns });
+    expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeChecked();
+    await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Tanışma');
+    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Merhaba');
+    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+    await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
+    expect(posts(calls, '/api/inbox/people/person-1/send')[0].body).toMatchObject({ channel: 'email', intent: 'commercial', subject: 'Tanışma' });
+    // Nothing of the campaigns is asked for.
+    expect(calls.some((c) => c.path.startsWith('/api/outreach/campaigns'))).toBe(false);
+  });
+
+  it('a missing sender identity still closes email, and its link opens a page where it can be filled in', async () => {
+    const user = userEvent.setup();
+    const incomplete = { ...open, sender_company: '', sender_identity_complete: false };
+    const calls = mockFetch(answers({
+      'GET /api/workspace/modules': withoutCampaigns,
+      'GET /api/outreach/settings': incomplete,
+      'PUT /api/outreach/settings': open,
+    }));
+    renderAt(`/prospects/${ID}`);
+    await user.click(await screen.findByRole('button', { name: 'Mesaj gönder' }, LOADED));
+    const dialog = within(await screen.findByRole('dialog'));
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeDisabled());
+    const row = within(dialog.getByRole('radio', { name: 'E-posta' }).closest('label')!);
+    expect(row.getByText(/Gönderen kimliği eksik/)).toBeInTheDocument();
+    await user.click(row.getByRole('link', { name: 'Tamamla' }));
+    // The page opens: not the "install the module" screen.
+    const form = within(await screen.findByRole('form', { name: tr.leads.settings.general }, LOADED));
+    expect(screen.queryByText('Bu modül çalışma alanına eklenmemiş')).not.toBeInTheDocument();
+    await user.type(form.getByRole('textbox', { name: tr.leads.settings.company }), 'Alfa Atölye');
+    await user.click(form.getByRole('button', { name: tr.common.save }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      sender_company: 'Alfa Atölye',
+      sender_address: open.sender_address,
+      privacy_notice_url: open.privacy_notice_url,
+    }));
+  });
+});

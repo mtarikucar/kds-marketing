@@ -10,14 +10,18 @@ import { QueryState } from '@/components/QueryState';
 import { Button, Callout, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, PageHeader, Textarea, toast } from '@/components/ui';
 import { formatDateTime } from '@/lib/format';
 import { useInFlight } from '@/lib/leads';
+import { useModules } from '@/lib/modules';
 import { can, currentMembership } from '@/lib/roles';
 import { useLeadsRefresh } from './LeadsShared';
 import { LockNotice, useOutreachSettings } from './OutreachShared';
 
 const isNumber = (s: string, min: number, max: number) => /^\d+$/.test(s) && Number(s) >= min && Number(s) <= max;
 
-/** Sender identity, approval, warm-up, frequency and click tracking (`outreach.manage`). */
-function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; editable: boolean }) {
+/**
+ * Sender identity, approval, warm-up, frequency and click tracking (`outreach.manage`). Without
+ * the campaigns module only the sender identity is shown and saved: the rest is the campaigns'.
+ */
+function GeneralForm({ settings, editable, campaigns }: { settings: OutreachSettingsOut; editable: boolean; campaigns: boolean }) {
   const { t } = useTranslation();
   const refresh = useLeadsRefresh();
   const guard = useInFlight();
@@ -39,15 +43,18 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
       await refresh();
     },
   });
-  const valid =
-    isNumber(start, 1, 500) && isNumber(step, 0, 100) && isNumber(max, 1, 500) && isNumber(gap, 0, 30) && isNumber(per30, 1, 30);
+  const valid = !campaigns ||
+    (isNumber(start, 1, 500) && isNumber(step, 0, 100) && isNumber(max, 1, 500) && isNumber(gap, 0, 30) && isNumber(per30, 1, 30));
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!valid || !editable) return;
-    const input: OutreachSettingsInput = {
+    const identity: OutreachSettingsInput = {
       sender_company: company.trim(),
       sender_address: address.trim(),
       privacy_notice_url: privacy.trim(),
+    };
+    const input: OutreachSettingsInput = !campaigns ? identity : {
+      ...identity,
       requires_approval: approval,
       click_tracking_default: clicks,
       warmup: { enabled: warmupOn, start: Number(start), step: Number(step), max: Number(max) },
@@ -72,6 +79,7 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="url" value={privacy} onChange={(e) => setPrivacy(e.target.value)} />
         </label>
       </fieldset>
+      {campaigns && <>
       <fieldset className="flex min-w-0 flex-col gap-3 rounded-lg border border-border p-4 text-sm" disabled={!editable}>
         <legend className="px-1 font-semibold">{t('leads.settings.sending')}</legend>
         <label className="flex items-center gap-2">
@@ -113,6 +121,7 @@ function GeneralForm({ settings, editable }: { settings: OutreachSettingsOut; ed
           <Input type="number" value={per30} onChange={(e) => setPer30(e.target.value)} />
         </label>
       </fieldset>
+      </>}
       <ErrorCallout error={save.error} />
       {editable && (
         <div>
@@ -231,21 +240,27 @@ export function OutreachSettings() {
   const settings = useOutreachSettings();
   const manage = can(session.data, 'outreach.manage');
   const owner = currentMembership(session.data)?.role_key === 'owner' && manage;
+  // Reachable without the campaigns module: an email to a person needs the sender details and
+  // the first-message permission too. Without it the page shows only those.
+  const modules = useModules();
+  const campaigns = !!modules.data?.modules.some((m) => m.blueprint.id === 'outreach' && m.installed);
   const s = settings.data;
   return (
     <>
       <PageHeader
         title={t('leads.settings.title')}
-        description={t('leads.settings.description')}
+        description={t(campaigns ? 'leads.settings.description' : 'leads.settings.descriptionEmail')}
         actions={
-          <Button asChild variant="outline">
-            <Link to="/outreach">{t('leads.outreach.title')}</Link>
-          </Button>
+          campaigns && (
+            <Button asChild variant="outline">
+              <Link to="/outreach">{t('leads.outreach.title')}</Link>
+            </Button>
+          )
         }
       />
       <LockNotice settings={s} />
       <QueryState query={settings}>
-        {s && (
+        {s && (modules.data || modules.isError) && (
           <div className="flex flex-col gap-4">
             <Card>
               <CardHeader>
@@ -253,7 +268,7 @@ export function OutreachSettings() {
                 {!manage && <CardDescription>{t('leads.settings.readOnly')}</CardDescription>}
               </CardHeader>
               <CardContent>
-                <GeneralForm key={JSON.stringify(s)} settings={s} editable={manage} />
+                <GeneralForm key={`${campaigns}:${JSON.stringify(s)}`} settings={s} editable={manage} campaigns={campaigns} />
               </CardContent>
             </Card>
             {owner && <B2bForm key={JSON.stringify([s.b2b_basis, s.require_iys_lookup, s.legal_ack])} settings={s} />}

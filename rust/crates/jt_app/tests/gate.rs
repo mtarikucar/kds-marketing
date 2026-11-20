@@ -608,3 +608,44 @@ fn the_content_pages_library_reads_are_gated_by_the_library() {
         assert_eq!(gating_module(id), Some("content"), "{id}");
     }
 }
+
+/// An email to one person needs a mailbox, not the campaigns module (owner report 2026-11-21):
+/// the send, the reply and the settings it reads (sender identity, the business basis) pass the
+/// gate with Kampanyalar removed, while the settings still need a connected sending channel. The
+/// campaigns' own use cases keep the module's capability requirement.
+#[test]
+fn a_one_to_one_email_never_waits_for_the_campaigns_module() {
+    use jt_app::catalog::find;
+    use jt_app::gate::gating_module;
+    let ws = WorkspaceId::new_v7();
+    let check = |id: &str, gate: &dyn StrategyGate| {
+        let uc = find(id).unwrap_or_else(|| panic!("{id} is a catalog row"));
+        ready(check_gate(uc, WorkspaceStatus::Active, gate, ws))
+    };
+    for id in [
+        "inbox.send",
+        "inbox.reply",
+        "outreach.settings_get",
+        "outreach.settings_set",
+        "inbox.suppressions.add",
+        "inbox.consent.record",
+    ] {
+        assert!(check(id, &Removed("outreach")).is_ok(), "{id}");
+    }
+    // Their checks still hold: no sending channel, no settings.
+    for id in ["outreach.settings_get", "outreach.settings_set"] {
+        let err = check(id, &NothingConnected).expect_err("a channel is needed");
+        assert_eq!(err.code, ErrorCode::CapabilityRequired, "{id}");
+        assert_eq!(err.details["module"], "outreach", "{id}");
+    }
+    for id in [
+        "outreach.campaigns_save",
+        "outreach.campaigns_launch",
+        "outreach.enroll",
+    ] {
+        assert!(find(id).is_some(), "{id} is a catalog row");
+        assert_eq!(gating_module(id), Some("outreach"), "{id}");
+        let err = check(id, &NothingConnected).expect_err("a locked campaign refuses");
+        assert_eq!(err.code, ErrorCode::CapabilityRequired, "{id}");
+    }
+}
