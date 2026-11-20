@@ -1,5 +1,7 @@
 import { request, seg } from './client';
 import type { StageKey, StageState } from './content';
+import type { CalendarEntry } from './materials';
+import type { ProductionProject } from './projects';
 import type { PostFormat } from './posts';
 import type { Rfc3339, Uuid } from './types';
 
@@ -11,8 +13,9 @@ import type { Rfc3339, Uuid } from './types';
 // `jt_panel_http::routes::content`). Every other action of the page calls an existing endpoint
 // (§3.8) through its own client.
 //
-// Written against §3 before the server existed (PR 4); what the spec left open is marked
-// "assumed" below, so the contract check against the real DTOs has one place to look.
+// Aligned with PR 4's DTOs (`jt_app::usecases::content::{posts, compose}`, routes in
+// `jt_panel_http::routes::{mod, content}`). Every `Option` there is serialised as `null`, every
+// `Vec` as an array (never absent); sum types are internally tagged by `kind`.
 
 // ---------------------------------------------------------------------------------------------
 // Rows
@@ -81,14 +84,21 @@ export const FOUND_MARKS: readonly FoundMark[] = ['face', 'name', 'child', 'logo
 /** Why a post did not go out (`RedactedPublishError` class, §2.6 "Reasons in words"). */
 export type FailReason = 'auth' | 'permission' | 'rate_limited' | 'validation' | 'refused' | 'unreachable' | 'missed_grace';
 
+/** What a `files_quality` wait's `finding` is: the first such file's quality tag (`unset`: none). */
+export type QualityFinding = 'needs_crop' | 'unusable' | 'publishable' | 'unset';
+
 /**
- * `Wait.facts`: what the sentence needs (§3.2.2 says only "account name, platform kind, request
- * text, finding code, error"). Assumed keys, each present only for the codes that name it:
- * - `account`: the account's name (`account_unavailable`, `account_paused`);
- * - `kind`: the platform's kind key (`failed`, `media`, `no_account_for_platform`);
- * - `request`: the request's sentence (`capture`, `need_photo`);
- * - `found`: what analysis found (`files_permission`; empty or absent: the files were not checked);
- * - `finding`: the first finding's code (`delivery_held`, `check_hold`, `files_quality`);
+ * `Wait.facts` (a JSON object built per code in `content/posts.rs`); each key is present only for
+ * the codes that name it, and may be `null` where the server knows no value:
+ * - `account`: the account's name (`approval`, `posting_screen`, `failed`, `tiktok_draft`,
+ *   `account_paused`, `account_unavailable`, and a version's waits);
+ * - `kind`: the platform's kind key (the same codes; for `no_account_for_platform` the platform
+ *   that takes the format);
+ * - `request`: the request's sentence (`capture`, `need_photo`); `request_id` with `capture`;
+ * - `found`: what analysis found (`files_permission`; empty: the files were not checked);
+ * - `material_ids`: the files a `files_permission` or `files_quality` wait is about;
+ * - `finding`: the first finding's code (`delivery_held`, `check_hold`), or for `files_quality`
+ *   the file's quality tag ({@link QualityFinding});
  * - `reason`: the failure's class (`failed`);
  * - `recovered`: an `auth` / `permission` failure whose account posts again (`failed`).
  */
@@ -96,10 +106,12 @@ export interface WaitFacts {
   account?: string | null;
   kind?: string | null;
   request?: string | null;
-  found?: FoundMark[] | null;
+  request_id?: Uuid;
+  found?: FoundMark[];
+  material_ids?: Uuid[];
   finding?: string | null;
-  reason?: FailReason | string | null;
-  recovered?: boolean | null;
+  reason?: FailReason;
+  recovered?: boolean;
 }
 
 /** `Wait` (§3.2.2): one reason the row waits for the owner; the first of a row is the one shown. */
@@ -109,10 +121,7 @@ export interface Wait {
   facts: WaitFacts;
 }
 
-/**
- * `SubState` (§2.4) of a `preparing` row. Assumed internally tagged by `kind`, as the server's
- * other sum types the panel reads (`Binding`, `Origin`).
- */
+/** `SubState` (§2.4) of a `preparing` row, tagged by `kind`. */
 export type SubState =
   | { kind: 'claimed'; stage: StageKey }
   | { kind: 'queued'; wakes_now: boolean; next_at: Rfc3339 | null; late: boolean }
@@ -183,24 +192,28 @@ export interface MaterialRef {
   material_id: Uuid;
   expected_revision: number;
 }
-/** `FilesTarget` (§3.7.1); assumed tagged by `kind`. */
+/** `FilesTarget` (§3.7.1), tagged by `kind`. */
 export type FilesTarget =
   | { kind: 'capture'; project_id: Uuid; request_id: Uuid }
   | { kind: 'need'; shoot_request_id: Uuid }
   | { kind: 'special_day'; key: string; year: number };
 /**
- * `DismissRef`, "capture request or need" (§3.2.2). Assumed tagged by `kind`; a capture request
- * carries the area's revision `studio.project_request_update` needs.
+ * `DismissRef`, "capture request or need" (§3.2.2), tagged by `kind`; a capture request carries
+ * the area's revision `studio.project_request_update` needs.
  */
 export type DismissRef =
   | { kind: 'capture'; project_id: Uuid; request_id: Uuid; expected_revision: number }
   | { kind: 'need'; shoot_request_id: Uuid };
+/** `expected_revision` is what `social.account_pause` names: the posting settings' revision. */
 export interface AccountRef {
   capability_id: Uuid;
   expected_revision: number;
 }
 
-/** `RowActions` (§3.2.2–§3.2.3): only what this caller may do now. Absent fields read as none. */
+/**
+ * `RowActions` (§3.2.2–§3.2.3): only what this caller may do now. The server sends every field
+ * (`null`, `[]`, `false` for none); the type keeps them optional so a reader treats absent as none.
+ */
 export interface RowActions {
   approve?: SlotRef | null;
   tiktok?: SlotRef | null;
@@ -210,8 +223,8 @@ export interface RowActions {
   release_check?: SlotRef | null;
   accept_held?: AreaRef | null;
   /**
-   * The files a `files_permission` wait names, with their revisions. Assumed to list the files of
-   * a `files_quality` wait too (for `Yine de kullan`), as the spec gives that action no ref.
+   * The pending files of the row's `files_permission` and `files_quality` waits together, with
+   * their revisions; each wait's `facts.material_ids` says which are its own.
    */
   permit_files?: MaterialRef[];
   add_files?: FilesTarget | null;
@@ -249,10 +262,10 @@ export interface PostRow {
   ai_illustration: boolean;
   siblings: Sibling[];
   /**
-   * Assumed: a TikTok post sent to the creator's drafts (§2.4 `tiktok_draft`), kept true once it
-   * reads `published` so the pill says `TikTok'a gönderildi` rather than `Yayında`.
+   * A TikTok post sent to the creator's drafts (§2.4 `tiktok_draft`), kept true once it reads
+   * `published` so the pill says `TikTok'a gönderildi` rather than `Yayında`.
    */
-  tiktok_draft?: boolean;
+  tiktok_draft: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -281,16 +294,23 @@ export interface SpecialDayLine {
   shoot_request_id: Uuid | null;
   can_add: boolean;
   can_skip: boolean;
-  files: { state: DayFilesState; material_ids: Uuid[]; found: FoundMark[] };
+  files: {
+    state: DayFilesState;
+    /** The day's pending files. */
+    material_ids: Uuid[];
+    /** Their revisions, in the same order, for `İzin ver` and `Yine de kullan`. */
+    permit: MaterialRef[];
+    found: FoundMark[];
+  };
 }
 
 /** The composer's stops (§2.8): said before sending, never blocking it (D20). */
 export type ComposerStopCode = 'knowledge_empty' | 'braked' | 'no_account' | 'no_content_agent' | 'agent_sleeps' | 'agent_late';
 export const COMPOSER_STOP_CODES: readonly ComposerStopCode[] = ['knowledge_empty', 'braked', 'no_account', 'no_content_agent', 'agent_sleeps', 'agent_late'];
-/** Assumed: `agent_sleeps` and `agent_late` carry the next expected check-in as `at`. */
+/** `Stop`: `at` is the next expected check-in of `agent_sleeps` and `agent_late`, else `null`. */
 export interface ComposerStop {
   code: ComposerStopCode;
-  at?: Rfc3339 | null;
+  at: Rfc3339 | null;
 }
 export type ComposerAdvice = 'approval' | 'posting_screen' | 'video_only';
 
@@ -306,7 +326,10 @@ export interface ComposerState {
   connected: { kind: string; name: string }[];
 }
 
-/** `BrakeState`: the organic brake is on; the control revision `studio.brake` needs. */
+/**
+ * `BrakeState`: present only while the organic brake is on, with the control revision
+ * `studio.brake` needs to release it (turning it on still reads the revision elsewhere).
+ */
 export interface BrakeState {
   revision: number;
   can_resume: boolean;
@@ -326,7 +349,7 @@ export interface PostsOut {
   as_of: Rfc3339;
 }
 
-/** `filter`: `you`, or a stage key; absent, every row. */
+/** `filter`: `you`, or a stage key; absent, every row (an unknown key: `VALIDATION unknown_filter`). */
 export type PostsFilter = 'you' | StageKey;
 
 /** `PostDetail` (§3.3): `GET /api/content/posts/{row_id}`. */
@@ -338,23 +361,38 @@ export interface PostDetail {
   redo_note: string | null;
   cancelled: { by_name: string; at: Rfc3339; reason: string } | null;
   /**
-   * Assumed (PR 4): `false` when no list holds the row any more (an archived content's, a
-   * cancelled version's, a retired post's), so the panel says it is gone (§2.10); `actions` is
-   * then empty. Absent counts as listed.
+   * `false` when no list holds the row any more (an archived content's, a cancelled version's, a
+   * retired post's), so the panel says it is gone (§2.10); `actions` is then empty.
    */
-  listed?: boolean;
+  listed: boolean;
 }
 
-/** `PostRequestOut` (§3.4.1); assumed `stops` are the composer's stop shape. */
+/** `PostRequestOut` (§3.4.1): the new row and the composer's stops at that moment. */
 export interface PostRequestOut {
   row: PostRow;
   stops: ComposerStop[];
 }
 
-/** Assumed: `content.files_add` answers the row it changed, or the day line. */
+/**
+ * `content.files_add`'s answer: the row it changed, or the special day's line (`null` once the day
+ * has a usable file and its content shows as a row).
+ */
 export interface FilesAddOut {
-  row?: PostRow | null;
-  day?: SpecialDayLine | null;
+  row: PostRow | null;
+  day: SpecialDayLine | null;
+}
+
+/** `content.version_cancel`'s answer: the area, and whether it was archived with the version. */
+export interface VersionCancelOut {
+  project: ProductionProject;
+  archived: boolean;
+}
+
+/** `content.post_dismiss`'s answer: `failed` (`Bırak`) or `tiktok_draft` (`Tamamladım`). */
+export interface PostDismissOut {
+  slot_id: Uuid;
+  kind: 'failed' | 'tiktok_draft';
+  acknowledged: { by: Uuid; at: Rfc3339 };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -363,7 +401,7 @@ export interface FilesAddOut {
 
 const root = '/api/content';
 
-/** `content.posts`: one page (50 unless `limit`), in the order of §3.2.6. */
+/** `content.posts`: one page (`limit` 1..=100, 50 unless given), in the order of §3.2.6. */
 export const postsRead = (q: { filter?: PostsFilter; cursor?: string | null; limit?: number } = {}) =>
   request<PostsOut>('GET', `${root}/posts`, { query: { filter: q.filter, cursor: q.cursor ?? undefined, limit: q.limit } });
 
@@ -378,17 +416,23 @@ export const postRequest = (body: { request_key: string; text: string; file_ids:
 export const filesAdd = (body: { request_key: string; target: FilesTarget; file_ids: Uuid[] }) =>
   request<FilesAddOut>('POST', `${root}/files`, { body });
 
-/** `content.special_day_skip`: "Bu yıl geç". Assumed to take an empty body. */
+/**
+ * `content.special_day_skip`: "Bu yıl geç" (an empty body; `key` and `year` are the path). It
+ * answers the year's entry as saved, disabled; `Geri al` is `studio.calendar_set` of it, enabled.
+ */
 export const specialDaySkip = (key: string, year: number) =>
-  request<unknown>('POST', `${root}/special-days/${seg(key)}/${year}/skip`, { body: {} });
+  request<CalendarEntry>('POST', `${root}/special-days/${seg(key)}/${year}/skip`, { body: {} });
 
 /** `content.version_cancel`: a version with no planned post yet is never planned. */
 export const versionCancel = (projectId: Uuid, versionId: Uuid, body: { package_revision: number; reason: string }) =>
-  request<unknown>('POST', `${root}/areas/${seg(projectId)}/versions/${seg(versionId)}/cancel`, { body });
+  request<VersionCancelOut>('POST', `${root}/areas/${seg(projectId)}/versions/${seg(versionId)}/cancel`, { body });
 
-/** `content.post_dismiss`: `Bırak` on a failed post, `Tamamladım` on a TikTok draft. */
+/**
+ * `content.post_dismiss`: `Bırak` on a failed post, `Tamamladım` on a TikTok draft. The path names
+ * the slot's bare uuid (not the row id `slot:{uuid}`).
+ */
 export const postDismiss = (slotId: Uuid, expected_revision: number) =>
-  request<unknown>('POST', `${root}/posts/${seg(slotId)}/dismiss`, { body: { expected_revision } });
+  request<PostDismissOut>('POST', `${root}/posts/${seg(slotId)}/dismiss`, { body: { expected_revision } });
 
 // ---------------------------------------------------------------------------------------------
 // Helpers on the shapes

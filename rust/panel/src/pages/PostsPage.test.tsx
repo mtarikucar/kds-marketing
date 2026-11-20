@@ -232,7 +232,7 @@ describe('every wait, its sentence and its action', () => {
     ['tiktok_draft', waiting('tiktok_draft', {}, { acknowledge: { slot_id: 'w1', expected_revision: 3 } }, { status: 'tiktok_draft', channel: TIKTOK }), W.tiktok_draft.sentence, P.actions.done, ['POST', '/api/content/posts/w1/dismiss', { expected_revision: 3 }]],
     ['account_paused', waiting('account_paused', { account: 'alfa.atolye' }, { resume_account: { capability_id: 'cap-ig', expected_revision: 9 } }), 'alfa.atolye hesabında paylaşım durduruldu.', P.actions.resume, ['POST', '/api/social/accounts/cap-ig/pause', { paused: false, expected_revision: 9 }]],
     ['files_permission', waiting('files_permission', { found: ['face', 'child'] }, { permit_files: [{ material_id: 'm7', expected_revision: 2 }] }), 'Dosyanda yüz, çocuk görünüyor; paylaşılması için izin ver.', P.actions.permit, ['PUT', '/api/studio/materials/m7/permission', undefined]],
-    ['files_quality', waiting('files_quality', { finding: 'quality' }, { permit_files: [{ material_id: 'm8', expected_revision: 5 }] }), /^Ajan bu dosyayı paylaşmaya uygun bulmadı: /, P.actions.useAnyway, ['PATCH', '/api/studio/materials/m8/tags', undefined]],
+    ['files_quality', waiting('files_quality', { finding: 'needs_crop', material_ids: ['m8'] }, { permit_files: [{ material_id: 'm8', expected_revision: 5 }] }), 'Ajan bu dosyayı paylaşmaya uygun bulmadı: kırpılması gerekiyor.', P.actions.useAnyway, ['PATCH', '/api/studio/materials/m8/tags', undefined]],
     ['need_photo dismissed', waiting('need_photo', { request: 'Raftaki kupaları çek' }, { dismiss: { kind: 'need', shoot_request_id: 'n9' } }, { kind: 'need' }), 'Raftaki kupaları çek', P.actions.notNeeded, ['POST', '/api/studio/shoot-requests/n9/resolve', { status: 'dismissed' }]],
     ['capture dismissed', waiting('capture', { request: 'Kupanın altını göster' }, { dismiss: { kind: 'capture', project_id: 'area-1', request_id: 'r1', expected_revision: 6 } }, { kind: 'content' }), 'Ajan bunun için bir fotoğraf ya da video istiyor: “Kupanın altını göster”', P.actions.notNeeded, ['PATCH', '/api/studio/projects/area-1/requests/r1', { expected_revision: 6, status: 'dismissed' }]],
     ['delivery_held accepted', waiting('delivery_held', { finding: 'names_other_olay' }, { redo: { project_id: 'area-1', package_revision: 1 }, accept_held: { project_id: 'area-1', expected_revision: 4 } }, { kind: 'content' }), /^Ajan bunu üç kez hazırladı ama kontrolden geçemedi: /, P.actions.acceptHeld, ['POST', '/api/content/areas/area-1/delivery/accept', { expected_revision: 4 }]],
@@ -260,6 +260,30 @@ describe('every wait, its sentence and its action', () => {
       ['/api/studio/materials/m1/permission', { expected_revision: 2, permission: 'shareable' }],
       ['/api/studio/materials/m2/permission', { expected_revision: 8, permission: 'shareable' }],
     ]));
+  });
+
+  it('permits only the files of the wait shown, not those of its quality wait', async () => {
+    const user = userEvent.setup();
+    const row = postRow('content:area-7', {
+      kind: 'content', area_id: 'area-7', status: 'waiting_you',
+      waits: [wait('files_permission', { found: ['face'], material_ids: ['m1'] }), wait('files_quality', { finding: 'unusable', material_ids: ['m2'] })],
+      actions: { permit_files: [{ material_id: 'm1', expected_revision: 2 }, { material_id: 'm2', expected_revision: 8 }] },
+    });
+    const { calls } = open('/posts?content=area-7', postsOut({ rows: [row] }), { 'PUT /api/studio/materials/m1/permission': {} });
+    await user.click(await within(await panel()).findByRole('button', { name: P.actions.permit }));
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PUT').map((c) => c.path)).toEqual(['/api/studio/materials/m1/permission']));
+  });
+
+  it('goes on without the file at the content’s revision the read gave', async () => {
+    const user = userEvent.setup();
+    const row = waiting('files_permission', { found: ['logo'], material_ids: ['m3'] }, {
+      permit_files: [{ material_id: 'm3', expected_revision: 1 }],
+      cancel: { kind: 'content', project_id: 'area-9', expected_revision: 12 },
+    }, { kind: 'content', area_id: 'area-9' });
+    const { calls } = open('/posts?slot=w1', postsOut({ rows: [row] }), { 'POST /api/studio/projects/area-9/materials': {} });
+    await user.click(await within(await panel()).findByRole('button', { name: P.actions.withoutFile }));
+    await waitFor(() => expect(sent(calls, 'POST', '/api/studio/projects/area-9/materials')?.body).toEqual({ expected_revision: 12, add: [], remove: ['m3'] }));
+    expect(sent(calls, 'GET', '/api/studio/projects/area-9')).toBeUndefined();
   });
 
   it('goes on without the file at the content’s revision read now', async () => {
@@ -474,7 +498,7 @@ describe('the brake', () => {
   it('says it once, shows unsent rows stopped and resumes posting', async () => {
     const user = userEvent.setup();
     const stopped = postRow('slot:p1', { title: 'Bekleyen gönderi', status: 'paused' });
-    const { calls } = open('/posts?slot=p1', postsOut({ rows: [stopped], brake: { revision: 12, can_resume: true }, composer: { ...postsOut().composer, stops: [{ code: 'braked' }] } }), { 'POST /api/studio/brake': { revision: 13, brake_engaged: false, lanes: {} } });
+    const { calls } = open('/posts?slot=p1', postsOut({ rows: [stopped], brake: { revision: 12, can_resume: true }, composer: { ...postsOut().composer, stops: [{ code: 'braked', at: null }] } }), { 'POST /api/studio/brake': { revision: 13, brake_engaged: false, lanes: {} } });
     const line = await screen.findByRole('alert');
     expect(line).toHaveTextContent(P.brake.line);
     expect(within(await rowButton('Bekleyen gönderi')).getByText(P.status.paused)).toBeInTheDocument();
@@ -606,7 +630,7 @@ describe('the composer', () => {
 describe('special days', () => {
   const day = (state: 'none' | 'analysing' | 'needs_permission' | 'unchecked' | 'quality', found: ('face' | 'name')[] = []) => ({
     key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', window_start: '2026-11-24', window_end: '2026-11-24', prepares_from: '2026-11-10',
-    phase: 'preparing' as const, shoot_request_id: null, can_add: true, can_skip: true, files: { state, material_ids: ['m5'], found },
+    phase: 'preparing' as const, shoot_request_id: null, can_add: true, can_skip: true, files: { state, material_ids: ['m5'], permit: [{ material_id: 'm5', expected_revision: 3 }], found },
   });
 
   it.each([
@@ -627,8 +651,7 @@ describe('special days', () => {
     const { calls } = open('/posts', postsOut({ days: [day('none')], days_more: 2 }), {
       'POST /api/studio/files': { id: 'file-d' },
       'POST /api/content/files': {},
-      'POST /api/content/special-days/ogretmenler_gunu/2026/skip': {},
-      'GET /api/studio/calendar': { year: 2026, entries: [{ key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', kind: 'special_day', window_start: '2026-11-24', window_end: '2026-11-24', lead_days: null, enabled: false }], rows: [], policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: false } },
+      'POST /api/content/special-days/ogretmenler_gunu/2026/skip': { key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', kind: 'special_day', window_start: '2026-11-24', window_end: '2026-11-24', lead_days: null, enabled: false },
       'PUT /api/studio/calendar/ogretmenler_gunu/2026': {},
     });
     const region = await screen.findByRole('region', { name: P.days.region });
@@ -640,13 +663,23 @@ describe('special days', () => {
     expect(await screen.findByText('Bu yıl Öğretmenler Günü için paylaşım yapılmayacak.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: P.days.undo }));
     await waitFor(() => expect(sent(calls, 'PUT', '/api/studio/calendar/ogretmenler_gunu/2026')?.body).toMatchObject({ enabled: true, name: 'Öğretmenler Günü' }));
+    expect(sent(calls, 'GET', '/api/studio/calendar')).toBeUndefined();
+  });
+
+  it('permits the day’s photos at the revisions the read gave', async () => {
+    const user = userEvent.setup();
+    const { calls } = open('/posts', postsOut({ days: [day('needs_permission', ['face'])] }), { 'PUT /api/studio/materials/m5/permission': {} });
+    const region = await screen.findByRole('region', { name: P.days.region });
+    await user.click(within(region).getByRole('button', { name: P.actions.permit }));
+    await waitFor(() => expect(sent(calls, 'PUT', '/api/studio/materials/m5/permission')?.body).toEqual({ expected_revision: 3, permission: 'shareable' }));
+    expect(sent(calls, 'GET', '/api/studio/materials/m5')).toBeUndefined();
   });
 
   it('says a failed undo of a skipped day', async () => {
     const user = userEvent.setup();
     open('/posts', postsOut({ days: [day('none')] }), {
-      'POST /api/content/special-days/ogretmenler_gunu/2026/skip': {},
-      'GET /api/studio/calendar': withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }),
+      'POST /api/content/special-days/ogretmenler_gunu/2026/skip': { key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', kind: 'special_day', window_start: '2026-11-24', window_end: '2026-11-24', lead_days: null, enabled: false },
+      'PUT /api/studio/calendar/ogretmenler_gunu/2026': withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }),
     });
     const region = await screen.findByRole('region', { name: P.days.region });
     await user.click(within(region).getByRole('button', { name: P.days.skip }));

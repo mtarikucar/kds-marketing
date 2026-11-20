@@ -207,7 +207,7 @@ function everyRow(): PostRow[] {
 }
 const day = (state: 'none' | 'analysing' | 'needs_permission' | 'unchecked' | 'quality', i: number) => ({
   key: `gun_${i}`, year: 2026, name: `Özel gün ${i}`, window_start: '2026-12-01', window_end: '2026-12-01', prepares_from: '2026-11-20',
-  phase: 'preparing' as const, shoot_request_id: null, can_add: true, can_skip: true, files: { state, material_ids: ['m1'], found: ['face' as const] },
+  phase: 'preparing' as const, shoot_request_id: null, can_add: true, can_skip: true, files: { state, material_ids: ['m1'], permit: [{ material_id: 'm1', expected_revision: 1 }], found: ['face' as const] },
 });
 
 describe('the owner’s words on Paylaşımlar', () => {

@@ -4768,7 +4768,9 @@
       "files_quality": {
         "status": "File not fit",
         "sentence": "The agent found this file unfit to post: {{reason}}.",
-        "plain": "The agent found this file unfit to post."
+        "plain": "The agent found this file unfit to post.",
+        "needs_crop": "it needs cropping",
+        "unusable": "it cannot be used"
       },
       "delivery_held": {
         "status": "Stuck",

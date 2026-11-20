@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CalendarHeart } from 'lucide-react';
 import * as m from '@/api/materials';
-import { filesAdd, specialDaySkip, type SpecialDayLine } from '@/api/postsPage';
+import { filesAdd, specialDaySkip, type MaterialRef, type SpecialDayLine } from '@/api/postsPage';
 import { Button, toast } from '@/components/ui';
 import { ACCEPT, fileAccepted, uploadFile } from '../content/uploads';
 import { MaterialsError } from '../materials/MaterialsShared';
@@ -42,20 +42,14 @@ export function PickFiles({ label, onFiles, loading, variant = 'outline' }: { la
   );
 }
 
-/** "İzin ver" on a day's photos: each file's share set by the owner, at its revision read now. */
-async function permitAll(ids: string[]) {
-  for (const id of ids) {
-    const detail = await m.materialGet(id);
-    if (!detail.material.share) await m.materialPermission(id, detail.material.revision, 'shareable');
-  }
+/** "İzin ver" on a day's photos: each pending file's share set by the owner, at the read's revision. */
+async function permitAll(files: MaterialRef[]) {
+  for (const f of files) await m.materialPermission(f.material_id, f.expected_revision, 'shareable');
 }
 
-/** "Yine de kullan": the owner's quality tag on each of the day's photos. */
-async function useAnyway(ids: string[]) {
-  for (const id of ids) {
-    const detail = await m.materialGet(id);
-    await m.materialTag(id, detail.material.revision, { quality: 'publishable' });
-  }
+/** "Yine de kullan": the owner's quality tag on each of the day's pending photos. */
+async function useAnyway(files: MaterialRef[]) {
+  for (const f of files) await m.materialTag(f.material_id, f.expected_revision, { quality: 'publishable' });
 }
 
 /** One special day with no usable photo yet (§2.7.5): its line follows its files' state. */
@@ -67,21 +61,16 @@ function DayLine({ day }: { day: SpecialDayLine }) {
   const date = dayWords(day.window_start, i18n.language);
   const target = { kind: 'special_day' as const, key: day.key, year: day.year };
   const add = usePostsMutation((files: File[]) => addFiles(files, target));
-  const permit = usePostsMutation(() => permitAll(day.files.material_ids));
-  const use = usePostsMutation(() => useAnyway(day.files.material_ids));
-  const skip = usePostsMutation(() => specialDaySkip(day.key, day.year), () => {
+  const permit = usePostsMutation(() => permitAll(day.files.permit));
+  const use = usePostsMutation(() => useAnyway(day.files.permit));
+  const skip = usePostsMutation(() => specialDaySkip(day.key, day.year), (skipped) => {
     toast.success(t('postsPage.days.skipped', { day: name }), {
       duration: 10_000,
       action: {
         label: t('postsPage.days.undo'),
         onClick: () => {
-          void (async () => {
-            const calendar = await m.calendarList(day.year);
-            const entry = calendar.entries.find((e) => e.key === day.key);
-            if (!entry) throw new Error('day_not_found');
-            await m.calendarSet({ ...entry, enabled: true });
-            await refresh();
-          })().catch(undoFailed);
+          // The skip answered the entry it saved: the same entry, enabled again.
+          void m.calendarSet({ ...skipped, enabled: true }).then(() => refresh(), undoFailed);
         },
       },
     });

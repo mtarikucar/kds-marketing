@@ -42,6 +42,7 @@ export function postRow(id: string, patch: Partial<PostRow> = {}): PostRow {
     actions: {},
     ai_illustration: false,
     siblings: [],
+    tiktok_draft: false,
     ...patch,
   };
 }
@@ -157,7 +158,7 @@ export function postsOut(patch: Partial<PostsOut> = {}): PostsOut {
 
 /** `content.post_get` of `row`: its whole text. */
 export function detailOf(row: PostRow, patch: Partial<PostDetail> = {}): PostDetail {
-  return { row, text: `${row.title}\n\nAtölyemizde elde şekillendirildi.`, materials: row.cover ? [row.cover] : [], redo_note: null, cancelled: null, ...patch };
+  return { row, text: `${row.title}\n\nAtölyemizde elde şekillendirildi.`, materials: row.cover ? [row.cover] : [], redo_note: null, cancelled: null, listed: true, ...patch };
 }
 
 const none: NeedWake = { state: 'no_agent' };

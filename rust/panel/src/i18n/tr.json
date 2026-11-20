@@ -4768,7 +4768,9 @@
       "files_quality": {
         "status": "Dosya uygun değil",
         "sentence": "Ajan bu dosyayı paylaşmaya uygun bulmadı: {{reason}}.",
-        "plain": "Ajan bu dosyayı paylaşmaya uygun bulmadı."
+        "plain": "Ajan bu dosyayı paylaşmaya uygun bulmadı.",
+        "needs_crop": "kırpılması gerekiyor",
+        "unusable": "kullanılamaz durumda"
       },
       "delivery_held": {
         "status": "Takıldı",

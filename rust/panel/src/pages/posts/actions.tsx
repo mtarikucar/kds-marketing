@@ -170,7 +170,10 @@ function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
   const [dialog, setDialog] = useState<null | { kind: 'redo'; prefill?: string } | { kind: 'cancel' } | { kind: 'release' } | { kind: 'pick' }>(null);
   const a = row.actions;
   const wait: Wait | undefined = row.waits[0];
-  const files = a.permit_files ?? [];
+  // `permit_files` holds the pending files of both file waits; the shown wait's own are those its
+  // facts name (a row can wait for a permission on one file and a quality tag on another).
+  const own = wait?.facts.material_ids;
+  const files = (a.permit_files ?? []).filter((f) => !own || own.includes(f.material_id));
 
   const approve = usePostsMutation(
     () => studio.approve({ slot: a.approve!.slot_id }, a.approve!.expected_revision),
@@ -180,7 +183,12 @@ function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
   const useAnyway = usePostsMutation(async () => { for (const f of files) await m.materialTag(f.material_id, f.expected_revision, { quality: 'publishable' }); });
   const without = usePostsMutation(async () => {
     const area = row.area_id!;
-    const revision = (await projectGet(area)).project.revision;
+    // The area's revision as the read gave it with the row's other area refs; the read has no ref
+    // of its own for this action, so a viewer given neither reads the area first.
+    const given = a.cancel?.kind === 'content' ? a.cancel.expected_revision
+      : a.dismiss?.kind === 'capture' ? a.dismiss.expected_revision
+        : a.accept_held?.expected_revision;
+    const revision = given ?? (await projectGet(area)).project.revision;
     return projectMaterials(area, { expected_revision: revision, add: [], remove: files.map((f) => f.material_id) });
   });
   const accept = usePostsMutation(() => deliveryAccept(a.accept_held!.project_id, { expected_revision: a.accept_held!.expected_revision }));
@@ -195,6 +203,8 @@ function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
   });
   const release = usePostsMutation(async () => {
     const ref = a.release_check!;
+    // `release_check` carries the slot's revision only; the release names the findings' digest,
+    // which only the slot's own read gives.
     const detail = (await studio.slotGet(ref.slot_id)) as studio.SlotDetail & { material_check?: m.MaterialCheck };
     if (!detail.material_check) throw new Error('no_material_check');
     return m.materialCheckRelease(ref.slot_id, ref.expected_revision, detail.material_check.digest);

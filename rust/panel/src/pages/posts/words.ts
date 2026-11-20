@@ -160,6 +160,10 @@ export function waitSentence(t: TFunction, wait: Wait, channel: ChannelRef | nul
       return found ? t('postsPage.waits.files_permission.sentence', { found }) : t('postsPage.waits.files_permission.unchecked');
     }
     case 'files_quality':
+      // The finding of a quality wait is the file's quality tag, not a check's finding code.
+      return f.finding === 'needs_crop' || f.finding === 'unusable'
+        ? t('postsPage.waits.files_quality.sentence', { reason: t(`postsPage.waits.files_quality.${f.finding}`) })
+        : t('postsPage.waits.files_quality.plain');
     case 'delivery_held':
     case 'check_hold':
       return f.finding
