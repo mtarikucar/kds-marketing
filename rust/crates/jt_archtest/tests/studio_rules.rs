@@ -86,6 +86,8 @@ const EXEMPT: &[&str] = &[
     "project_publication",
     "project_production",
     "brake",
+    // The posting policy is not the strategy (design 2026-11-19 D12).
+    "posting_policy_set",
     "ledger",
     "ledger_export",
     "file_upload",
