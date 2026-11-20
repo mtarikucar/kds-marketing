@@ -176,6 +176,94 @@ async fn restored_unknown_send_is_not_retried() {
 }
 
 #[tokio::test]
+async fn logical_restore_keeps_the_knowledge_base_and_its_history() {
+    use jt_app::usecases::knowledge::{cards, seed};
+    let source = TestDb::new().await;
+    let (ws, user) = source.seed_workspace("restore-knowledge").await;
+    let uow = Arc::new(PgUnitOfWork::new(source.pool.clone()));
+    let deps = jt_testkit::fakes::deps(uow.clone());
+    let ctx = jt_app::ctx::Ctx {
+        workspace_id: ws,
+        actor: jt_ledger::Actor::Human { user_id: user },
+        permissions: jt_tenancy::SystemRole::Owner.permissions(),
+        role_key: Some("owner".into()),
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    };
+    seed::ensure(&deps, &ctx).await.unwrap();
+    let card = cards::card_create(
+        &deps,
+        &ctx,
+        cards::CardCreateInput {
+            title: "Sık sorulanlar".into(),
+            body: "Kargo 2 gün.".into(),
+            attachments: vec![],
+            position: None,
+        },
+    )
+    .await
+    .unwrap();
+    // An open note and a pending edit of the card (the proposals reference the cards).
+    jt_app::usecases::knowledge::notes::note_add(
+        &deps,
+        &ctx,
+        jt_app::usecases::knowledge::notes::NoteAddInput {
+            request_key: "restore-note".into(),
+            text: "Kargo artık 2 günde".into(),
+            links: vec!["https://figurunica.example/kargo".into()],
+            file_ids: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    {
+        let mut r = uow.tenant(ws).await.unwrap();
+        let mut edit = jt_testkit::knowledge_contract::proposal(
+            jt_knowledge::ProposalKind::CardEdit,
+            Some(card.id),
+            "Kargo 2 gün, İstanbul içi 1 gün.",
+            jt_knowledge::Proposer::System {
+                component: jt_knowledge::BACKFILL_COMPONENT.into(),
+            },
+        );
+        edit.expires_at = FIXED_NOW + jt_knowledge::SYSTEM_PROPOSAL_TTL;
+        r.knowledge().insert_proposal(&edit).await.unwrap();
+        r.commit().await.unwrap();
+    }
+    let (settings, all, history, notes, proposals) = {
+        let mut r = uow.tenant(ws).await.unwrap();
+        (
+            r.knowledge().settings().await.unwrap(),
+            r.knowledge().cards().await.unwrap(),
+            r.knowledge()
+                .revisions(jt_knowledge::Subject::Card, Some(card.id), None, 10)
+                .await
+                .unwrap(),
+            r.knowledge().notes(None, 10).await.unwrap(),
+            r.knowledge().proposals(None).await.unwrap(),
+        )
+    };
+    assert_eq!((notes.len(), proposals.len()), (1, 1));
+    let target = TestDb::new().await;
+    copy_public(&source, &target).await;
+    check_rls(&target.pool).await.unwrap();
+    let restored = PgUnitOfWork::new(target.pool.clone());
+    let mut r = restored.tenant(ws).await.unwrap();
+    assert_eq!(r.knowledge().settings().await.unwrap(), settings);
+    assert_eq!(r.knowledge().cards().await.unwrap(), all);
+    assert_eq!(all.len(), 9);
+    assert_eq!(
+        r.knowledge()
+            .revisions(jt_knowledge::Subject::Card, Some(card.id), None, 10)
+            .await
+            .unwrap(),
+        history
+    );
+    assert_eq!(r.knowledge().notes(None, 10).await.unwrap(), notes);
+    assert_eq!(r.knowledge().proposals(None).await.unwrap(), proposals);
+}
+
+#[tokio::test]
 async fn wal_probe_publishes_only_confirmed_archive_success() {
     use jt_pg::wal::{ArchiverState, publish};
     let root = std::env::temp_dir().join(format!("jeeta-wal-{}", uuid::Uuid::now_v7()));

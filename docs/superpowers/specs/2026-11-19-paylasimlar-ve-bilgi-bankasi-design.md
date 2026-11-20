@@ -6,7 +6,7 @@ three adversarial reviews (data, agents, owner; Appendix A); nothing waits for t
 that commit (`jeeta-design/map.json`, cited below as **A0–A6** for its areas and **A*n*.*m***
 for touchpoint *m* of area *n*), the approved mockups F (`MerkezTablo.dc.html`, Paylaşımlar) and H
 (`BilgiBankasi.dc.html`, Bilgi bankası), and the live strategy of the owner's workspace
-(`strategy-v5.json`, version 5, approved 2026-11-19). Builds on: the flow dead-ends note
+(version 5, approved 2026-11-19). Builds on: the flow dead-ends note
 (`2026-11-19-akis-tikanmalari-design.md`, "design 2026-11-19", rules **R1–R3**, decisions **F1–F6**),
 the olay root (`2026-11-18-icerik-olay-koku-design.md`, **O1–O17**), the content module
 (`2026-11-10-uc-modul-ve-panel-iskeleti-design.md`), the materials library
@@ -1121,7 +1121,7 @@ replacing the per-page invalidations of `PostRow.usePostMutation` and the conten
 
 | Port | Method | Notes |
 |---|---|---|
-| `ProductionProjects` | `list_live_areas()` | every area with `archived = false`, documents; pg: one select on `studio_production_projects` by workspace and `archived` (index exists with 0044's `olay_id` index; add `(workspace_id, archived, updated_at)` in 0046 if the plan needs it) |
+| `ProductionProjects` | `list_live_areas()` | every area with `archived = false`, documents; pg: one select on `studio_production_projects` by workspace and `archived`, served by 0031's `studio_projects_recent (workspace_id, archived, id desc)`; 0046 adds no index on an existing table (the areas have no `updated_at` column) |
 | `ProductionProjects` | `find_area_by_version(version_id)` | jsonb path query over the packages' versions |
 | `StudioRepo` | `get_pieces(&[SlotId])` | batch of `get_piece` |
 | `StudioMaterials` | `get_materials(&[MaterialId])` | batch of `get_material` |
@@ -1338,9 +1338,9 @@ create unique index if not exists knowledge_proposals_one_pending on knowledge_p
     where status = 'pending';
 create index if not exists knowledge_proposals_list on knowledge_proposals (workspace_id, status, proposed_at desc);
 
--- Read-model support for `content.posts` (§3.9).
-create index if not exists studio_production_projects_live
-    on studio_production_projects (workspace_id, archived, updated_at desc);
+-- Read-model support for `content.posts` (§3.9): none of its own. The read of every live area by
+-- workspace uses 0031's `studio_projects_recent (workspace_id, archived, id desc)`; the areas have
+-- no `updated_at` column, and 0046 adds no index on an existing table.
 
 -- RLS: for each of the five tables, as 0045:
 --   alter table … enable row level security; alter table … force row level security;
@@ -1357,8 +1357,8 @@ per day (system proposals, `knowledge_backfill` and `strategy_resync`, count tow
 studio file of the workspace, image, MP4 or **PDF** (D17: `files.rs` `limit` gains `application/pdf`,
 20 MB, magic `%PDF-`; `material_add` refuses it with `VALIDATION file_not_media`).
 
-**Down** (`0046_knowledge_base.down.sql`, idempotent): drops the five tables, the trigger function
-and the index. It refuses (`raise exception`) while a production area holds a version cancelled
+**Down** (`0046_knowledge_base.down.sql`, idempotent): drops the five tables and the trigger function
+(0046 makes no index on an existing table, so none is dropped). It refuses (`raise exception`) while a production area holds a version cancelled
 without a slot (`VersionCancel.slot_id` absent, §3.7.3), which a binary older than PR 1 cannot read;
 the guard runs under `set_config('app.platform', 'on', true)` (restored after, as 0009's down and
 0039 do), since the areas table forces RLS and would otherwise show no row. The down is only for
@@ -1448,7 +1448,11 @@ version is the source; a draft or no version gives none of them):
   - *L* and *G*: `ad_cap` = *L*'s period and currency, amount = the lower of *L*'s cap and *G*'s cap
     brought to *L*'s period (prorated as `check_general` does); *G*'s cap is lowered to `ad_cap`
     brought to *G*'s period when it is above (system, ledger `budget.items.update {reason:
-    "knowledge_backfill"}`).
+    "knowledge_backfill"}`), whichever of the two was the lower: both proratings round down, so a
+    *G* that bound in another period may lose a few minor units (50.000 a week → `ad_cap`
+    214.285 a month → *G* 49.999), and the three then agree under `check_general`. *G* is locked
+    (after the settings, §4.10.13) before anything is worked out from it, so an edit of it
+    committed meanwhile is what is lowered, never raised back.
   - Only *L*: `ad_cap` = *L*; a general item is created from it (`name = "Reklam bütçesi"`,
     `kind = ad_budget`, unit the lane's currency, `cap = L.cap_minor`, `period = L.period`, ledger
     `budget.items.create {reason: "knowledge_backfill"}`).
@@ -1462,14 +1466,17 @@ version is the source; a draft or no version gives none of them):
 - **Post approval**: `post_approval = true` when the workspace has at least one postable social
   account other than TikTok and every such account has `requires_human_approval`; else `false`.
   `post_approval_accounts` = every social account whose stored flag is `true`; `post_gate_seeded_at
-  = now`. So every account whose posts wait today still waits (§3.10.1).
+  = now`. So every account whose posts wait today still waits (§3.10.1). More flagged accounts than
+  the list holds (200, any source): `post_approval = true` instead (every post waits, none is
+  dropped), and `strategy.knowledge_seeded` counts both (`post_approval_accounts`,
+  `post_approval_flagged`).
 
 Revisions: one `knowledge_revisions` row per seeded card and for rules and goals, `cause = backfill`
 (or `seed` for blank seeds), `kb_revision = 1`; `knowledge_settings.revision = 1`; with a frame,
 `posting_revision = prospecting_revision = posting_derived = prospecting_derived = 1` (the cards were
 made *from* the frame: nothing to re-derive); without one, all four are 0.
 
-#### 4.3.3 The owner's workspace (strategy-v5.json) as seeded
+#### 4.3.3 The owner's workspace (version 5) as seeded
 
 | Card / box | Text (start) | From |
 |---|---|---|
@@ -1739,10 +1746,12 @@ outcome: a note asking to change them is dismissed with a reason that sends the 
   `body` (the card's whole new text) and optionally `title`; `base_revision` = the card's revision
   at proposal time. `rule_add`: `body` ≤ 500, appended to the prohibitions. `goal_add`: `body` ≤ 300,
   appended to the goals. Accepting is a knowledge write (§4.4); a card proposal may bootstrap.
-- Accepting a `card_edit` whose card moved past `base_revision` is `CONFLICT proposal_superseded`
-  and the proposal becomes `superseded`; every owner edit of a card also supersedes its pending
-  `card_edit` proposals (accepting would overwrite the owner's newer text). The agent may propose
-  again.
+- Accepting a `card_edit` whose card's title or body moved past `base_revision` (or that was
+  removed) is `CONFLICT proposal_superseded` and the proposal becomes `superseded`; every owner edit
+  of a card's title or body, its removal, and a note filing that rewrites it also supersede its
+  pending `card_edit` proposals (accepting would overwrite the newer text). A new position or new
+  attachments leave them pending: an edit rewrites neither, and is applied onto the card as it now
+  is. The agent may propose again.
 - Refusals at create: `CONFLICT too_many_proposals` (20 pending), `CONFLICT proposal_rate`
   (10 per connection per day), `CONFLICT proposal_exists` (same kind, card and body pending),
   `NOT_FOUND` card, `VALIDATION` limits.
@@ -2600,7 +2609,7 @@ A5 the agent contract, A6 the data model). Minor touchpoints fall under the same
 | A4.16 | M | `rust/crates/jt_app/src/usecases/studio/work.rs:121-364 (pending_in) material_check_hold blockers` | `check_hold` wait from `publish_check` (§3.2.4). |
 | A4.17 | M | `rust/crates/jt_app/src/catalog.rs:229-345; rust/crates/adapters/jt_panel_http/src/routes/mod.rs:57-155, 557-635, 2081; rust/crates/jt_app/tests/catalog.rs:479; rust/crates/jt_ap…` | Rows, routes and counts per §3.1, §5.1, §8.4. |
 | A4.18 | M | `rust/crates/jt_app/src/gate.rs:125-162 (LIBRARY_PAGE_READS, gating_module) and rust/crates/jt_app/src/usecases/studio/permissions.rs:9-48` | Shared list gated by `materials`; `post_request` and `version_cancel` by `content` (§3.1). |
-| A4.19 | M | `rust/crates/jt_app/src/ports/production_projects.rs:505-548 and rust/crates/adapters/jt_pg/src/repos/studio/projects.rs:24-221` | `list_live_areas`, `find_area_by_version`, index in 0046 (§3.9, §4.2). |
+| A4.19 | M | `rust/crates/jt_app/src/ports/production_projects.rs:505-548 and rust/crates/adapters/jt_pg/src/repos/studio/projects.rs:24-221` | `list_live_areas`, `find_area_by_version` (§3.9; the live-areas read uses 0031's `studio_projects_recent`, no new index). |
 | A5.1 | B | `rust/crates/adapters/jt_mcp/src/tools/strategy.rs:26-380 (all 10 tool definitions, arg structs, schemas)` | Per §5.1. |
 | A5.2 | B | `rust/crates/jt_app/src/usecases/strategy.rs (get 229-247, start_consultation 258, record 339, write_section 395, set_hypotheses 453, submit 524, approve 593-711, archive 725-798…` | Approve's effects in frame apply (§4.10.2); until PR 7 an old approval re-syncs the knowledge base (§4.3.4); the consultation use cases removed in PR 7. |
 | A5.3 | B | `rust/crates/jt_app/src/gate.rs:199-200; rust/crates/adapters/jt_pg/src/strategy_gate.rs:29-44; rust/crates/jt_app/src/catalog.rs (82 Gated rows, 73 MCP tools)` | As A0.10. |
@@ -2638,7 +2647,8 @@ A5 the agent contract, A6 the data model). Minor touchpoints fall under the same
 
 Contents (§4.2): the tables `knowledge_settings`, `knowledge_cards`, `knowledge_revisions`
 (append-only trigger), `knowledge_notes`, `knowledge_proposals`, their indexes and forced RLS
-policies, and the index `studio_production_projects_live`. Nothing in an existing table is read or
+policies; no index on an existing table (the live-areas read of `content.posts` uses 0031's
+`studio_projects_recent`, and the areas have no `updated_at` column). Nothing in an existing table is read or
 changed by the migration: every backfill is the application's (§4.3), so the migration is safe on a
 live database and quick. Pins that move with it: `MIGRATIONS = 46`, `TABLES_AFTER_ALL = 109`
 (`jt_pg/tests/migrations.rs`), the newest-first down list (0046 first, run twice), archtest
@@ -2753,9 +2763,11 @@ Pure (`jt_knowledge/tests`):
 - limits and strict parsing of cards, rules, caps, goals, notes, proposals; tolerant reads of
   unknown fields; an unknown `WakeReason` in `pending.reasons` and `last.reasons` is dropped on read
   (PR 1);
-- the seed mapping against `strategy-v5.json` as a fixture (golden texts of every card, the
-  truncation rule, `ad_cap` as the lower of lane and item, `message_cap` = the organic lane 0 TRY,
-  the switch and the account list), the draft-difference proposals, the past conversations card;
+- the seed mapping against `fixtures/strategy-sample.json`, a fictional business in the shape of
+  version 5 (the same sections, list sizes, lanes and topic cadences), as a fixture (golden texts
+  of every card, the truncation rule, `ad_cap` as the lower of lane and item, `message_cap` = the
+  organic lane 0 TRY, the switch and the account list), the draft-difference proposals, the past
+  conversations card;
 - the frame merge: system fields recomputed (identity from the cards with its fallbacks, channels,
   prohibitions, goals, lanes from the caps, cadence); topic ids (given, title match, new); a kept
   topic sent without a cadence keeps its own, a new one gets the default; the retained set keeps a

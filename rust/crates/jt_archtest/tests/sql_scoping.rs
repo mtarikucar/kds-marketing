@@ -147,6 +147,11 @@ fn tenant_tables_are_read_from_the_migrations() {
         "public_subjects",
         "public_items",
         "public_cursors",
+        "knowledge_settings",
+        "knowledge_cards",
+        "knowledge_revisions",
+        "knowledge_notes",
+        "knowledge_proposals",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

@@ -1425,6 +1425,7 @@ dependencies = [
  "jt_device_protocol",
  "jt_devices",
  "jt_inbox",
+ "jt_knowledge",
  "jt_ledger",
  "jt_mail",
  "jt_meta",
@@ -1600,6 +1601,21 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "time",
+ "uuid",
+]
+
+[[package]]
+name = "jt_knowledge"
+version = "0.1.0"
+dependencies = [
+ "jt_ledger",
+ "jt_strategy",
+ "jt_studio",
+ "jt_tenancy",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "time",
  "uuid",
@@ -1806,6 +1822,7 @@ dependencies = [
  "jt_capability",
  "jt_connector",
  "jt_inbox",
+ "jt_knowledge",
  "jt_ledger",
  "jt_outreach",
  "jt_prospects",
@@ -1910,6 +1927,7 @@ dependencies = [
  "jt_connector",
  "jt_device_protocol",
  "jt_inbox",
+ "jt_knowledge",
  "jt_ledger",
  "jt_outreach",
  "jt_panel_http",

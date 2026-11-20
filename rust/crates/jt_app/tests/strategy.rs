@@ -326,6 +326,9 @@ impl TenantRepos for SpyTenant {
     fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo {
         self.inner.outbound_jobs()
     }
+    fn knowledge(&mut self) -> &mut dyn jt_app::ports::knowledge::KnowledgeRepo {
+        self.inner.knowledge()
+    }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.spy.push("commit");

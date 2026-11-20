@@ -569,6 +569,7 @@ impl BudgetRepo for MemTenant {
             .cloned()
             .collect();
         items.sort_by_key(|i| (i.created_at, i.id));
+        self.tx.commit_budget_item_after_list(self.ws);
         Ok(items)
     }
 

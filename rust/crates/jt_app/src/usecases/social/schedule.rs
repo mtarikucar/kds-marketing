@@ -547,7 +547,7 @@ pub(crate) async fn cancel_version_of(
         by,
         at: ctx.now,
         reason: reason.to_owned(),
-        slot_id: slot,
+        slot_id: Some(slot),
     });
     if archive {
         projects::invalidate(r, ctx, &mut p, None, "project_archived", false).await?;

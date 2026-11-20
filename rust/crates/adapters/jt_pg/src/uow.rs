@@ -324,6 +324,10 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn knowledge(&mut self) -> &mut dyn jt_app::ports::knowledge::KnowledgeRepo {
+        self
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         let mut this = *self;
         ensure_not_aborted(this.tx.conn()).await?;

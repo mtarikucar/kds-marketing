@@ -145,6 +145,8 @@ pub struct MemState {
     pub outreach: super::outreach::MemOutreach,
     pub mail_files: super::mail_files::MemMailFiles,
     pub inbox: super::inbox::MemInbox,
+    /// The knowledge bases (`0046_knowledge_base`).
+    pub knowledge: super::knowledge::MemKnowledge,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,
@@ -436,6 +438,7 @@ pub struct InMemoryUow {
     mail_cursor_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
+    budget_item_after_list: Arc<Mutex<Option<BudgetItem>>>,
     after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
     bundle_seq: Arc<AtomicU64>,
     lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
@@ -476,6 +479,14 @@ impl InMemoryUow {
     /// list returns the old row; subsequent reads see this committed replacement.
     pub fn replace_capability_after_list(&self, row: StoredCapability) {
         *lock(&self.capability_after_list) = Some(row);
+    }
+
+    /// Model a budget edit (Bütçe's writes lock only the item) committing after a bundle listed
+    /// the items, under READ COMMITTED: the next `BudgetRepo::list_items` of the item's workspace
+    /// answers the old row; every read after it in that bundle (a lock) and every later bundle
+    /// sees this committed replacement.
+    pub fn replace_budget_item_after_list(&self, item: BudgetItem) {
+        *lock(&self.budget_item_after_list) = Some(item);
     }
 
     /// Fail the next brake writes to exercise atomic binding rollback.
@@ -540,6 +551,7 @@ pub(super) struct MemTx {
     mail_cursor_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
+    budget_item_after_list: Arc<Mutex<Option<BudgetItem>>>,
     pub(super) after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
     bundle: u64,
     lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
@@ -580,6 +592,7 @@ impl MemTx {
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
             studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
+            budget_item_after_list: Arc::clone(&uow.budget_item_after_list),
             after_call_insert: Arc::clone(&uow.after_call_insert),
             bundle: uow.bundle_seq.fetch_add(1, Ordering::SeqCst) + 1,
             lock_journal: Arc::clone(&uow.lock_journal),
@@ -606,6 +619,21 @@ impl MemTx {
                 .find(|c| c.capability.id == row.capability.id)
                 .expect("existing capability");
             *stored = row.clone();
+        }
+    }
+
+    /// Commits the replacement [`InMemoryUow::replace_budget_item_after_list`] holds for `ws`,
+    /// into the shared tables and this bundle's working copy.
+    pub(super) fn commit_budget_item_after_list(&mut self, ws: WorkspaceId) {
+        let mut pending = lock(&self.budget_item_after_list);
+        if pending.as_ref().is_none_or(|i| i.workspace_id != ws) {
+            return;
+        }
+        let item = pending.take().expect("checked above");
+        for state in [&mut *lock(&self.shared), &mut self.work] {
+            if let Some(stored) = state.budget_items.iter_mut().find(|i| i.id == item.id) {
+                *stored = item.clone();
+            }
         }
     }
 

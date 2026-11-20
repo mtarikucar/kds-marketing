@@ -1,0 +1,801 @@
+{
+  "number": 5,
+  "sections": {
+    "audience": [
+      {
+        "description": "Birinci öncelik. Çalışanlarına her ay taze kavrulmuş çekirdek ve filtre kahve isteyen 10-100 kişilik ofisler, ortak çalışma alanları ve butik şirketler: aylık abonelik, ofise teslim, ekipman seçiminde yönlendirme. Karar verici: ofis yöneticisi, insan kaynakları ya da kurucu.",
+        "key": "ofis_abonelik",
+        "name": "Ofis kahvesi aboneliği"
+      },
+      {
+        "description": "Kendi çekirdeğini kavurmayan mahalle kafeleri, kahvaltı salonları, restoranlar ve pastaneler: haftalık ya da iki haftalık düzenli çekirdek siparişi, menüye özel harman ve barista eğitimi. Kilo ve anlaşma bazlı satış.",
+        "key": "toptan",
+        "name": "Kafe ve restoran toptan satışı"
+      },
+      {
+        "description": "Evde filtre, moka ya da espresso hazırlayan bireyler; dükkândan ya da siteden 250 g ve 1 kg paket alanlar, hediye kutusu isteyenler. Bugün haftada 30-40 paket.",
+        "key": "bireysel",
+        "name": "Ev kahvecileri"
+      },
+      {
+        "description": "Atölyenin paketlerini kendi rafında satan şarküteriler, organik pazarlar, kitapçı-kafeler ve e-ticaret satıcıları. Mesaj: küçük ya da büyük, her rafa aynı tazelikte kahve ulaştırırız.",
+        "key": "rafta_satis",
+        "name": "Raf ortakları"
+      },
+      {
+        "description": "Yeşil çekirdek ithalatçıları ve küçük çiftlik kooperatifleri. Şu an yeni tedarikçi aranmıyor: mevcut ağ yeterli. Yalnızca PR ve güven mesajı olarak kullanılır: 'Çekirdeğimizi kimden ve nasıl aldığımızı açıkça anlatırız.' Teklif gelirse kaydedilir, aktif arama yapılmaz.",
+        "key": "tedarik",
+        "name": "Tedarik ağı (PR)"
+      },
+      {
+        "description": "Para ödenmeden destek olabilecek içerik üreticileri: demleme videoları çeken, mahalle kafelerini gezen ya da tadım notu paylaşan kişiler. Diğer satış kapılarının görünürlüğünü artırır.",
+        "key": "icerik_ortagi",
+        "name": "Kahve içerik üreticileri"
+      },
+      {
+        "description": "Atölyenin tadım (cupping) ve demleme buluşmalarını birlikte düzenleyebileceği mekânlar ve topluluklar: kitap kulüpleri, ortak çalışma alanları, kültür merkezleri, hobi atölyeleri ve kurs merkezleri. Amaç paket satmak değil, ortak etkinlik: mekân ev sahipliği yapar, tadımı atölye yürütür. Toptan satış görüşmelerinden ayrı yürütülür.",
+        "key": "tadim",
+        "name": "Tadım buluşması ortakları"
+      },
+      {
+        "description": "Atölyenin stant açabileceği semt pazarları, yerel üretici pazarları, kahve ve gastronomi festivalleri ile AVM etkinlik yönetimleri. Amaç paket satmaktan çok tanınmak ve tadım yaptırmak; toptan satış görüşmelerinden ayrı yürütülür.",
+        "key": "pazar",
+        "name": "Pazar ve festival stantları"
+      },
+      {
+        "description": "Üniversite kantinleri, öğrenci kulüpleri, dil okulları ve kurs merkezleri: sınav dönemi kahve köşesi, kulüp etkinliği ve öğretmenler odası için kurumla yapılan iş birlikleri. Muhatap kurumun kendisidir; öğrencilere ait kişisel bilgi kaydedilmez.",
+        "key": "kampus",
+        "name": "Kampüs ve kurs merkezi iş birlikleri"
+      },
+      {
+        "description": "Kendi semtinde sipariş teslim alıp müşteriye verebilecek, fiziksel dükkânı olan işletmeler: kırtasiyeler, çiçekçiler, bakkallar ve kuru kahveciler. Raf ortaklarından farkı, bölgesinde düzenli teslim noktası olmasıdır.",
+        "key": "teslim_noktasi",
+        "name": "Teslim noktası adayları"
+      }
+    ],
+    "budget_frame": {
+      "lanes": [
+        {
+          "cap_minor": 500000,
+          "currency": "TRY",
+          "lane": "paid",
+          "period": "monthly"
+        },
+        {
+          "cap_minor": 0,
+          "currency": "TRY",
+          "lane": "organic",
+          "period": "monthly"
+        }
+      ]
+    },
+    "cadence": {
+      "channel_mix": [
+        {
+          "channel": "instagram",
+          "share_pct": 100
+        }
+      ],
+      "per_week": 7
+    },
+    "channels": [
+      {
+        "channel": "instagram",
+        "group_id": null,
+        "rationale": "Ana vitrin. Profilin başında 3 sabit gönderi: Ofis aboneliği, Kafelere toptan, Haftanın çekirdeği; her biri kendi mesaj/talep yoluna gider. Ev kahvecilerine yönelik reklam denemesi (ayda 3-5 bin TL) burada yapılır."
+      },
+      {
+        "channel": "mailbox",
+        "group_id": null,
+        "rationale": "Ofis ve kafe görüşmelerinde birebir e-posta (siparis@example.com). Ajanlar hedef ve kişiye özel taslak hazırlar, gönderimi insan yapar; otomatik toplu soğuk e-posta hukuki görüş gelene kadar kapalı."
+      },
+      {
+        "channel": "tiktok",
+        "group_id": null,
+        "rationale": "Kavurma makinesinin başından kısa videolar: çekirdeğin renk değiştirmesi, dinlendirme, paketleme ve demleme denemeleri. Hesap 19.11.2026 tarihinde Jeeta'ya bağlandı; her gönderi sahibin TikTok tamamlama ekranından geçerek çıkar."
+      },
+      {
+        "channel": "any",
+        "group_id": null,
+        "rationale": "LinkedIn şirket sayfası (açıldı): yalnızca ofis aboneliği ve toptan satışla ilgili paylaşımlar; ofis yöneticilerine ve kafe sahiplerine güven ve referans vitrini. Jeeta'dan paylaşım LinkedIn'in şirket sayfası iznini bekliyor; o zamana kadar elle."
+      },
+      {
+        "channel": "any",
+        "group_id": null,
+        "rationale": "WhatsApp Business hattı: gelen siparişler ve hızlı teklif yazışması; telefon uygulamasıyla birlikte kullanım (coexistence) bağlanınca kanal olarak eklenecek."
+      },
+      {
+        "channel": "any",
+        "group_id": null,
+        "rationale": "Facebook sayfası (Kavrulmuş Kahve Atölyesi): Instagram paylaşımlarının yansıması; bağlanınca kanal olarak eklenecek."
+      },
+      {
+        "channel": "any",
+        "group_id": null,
+        "rationale": "Yapay zekâ aramasında ve haritalarda görünürlük: ofis müşterilerinin çoğu atölyeyi 'yakınımdaki kahve kavurucusu' aramasıyla buldu. Web sitesinde her satış kapısı için net sayfa, sık sorulan sorular ve izinli referanslar; LLM'lerin alıntılayabileceği açık bilgiler."
+      }
+    ],
+    "goals": {
+      "kpis": [
+        {
+          "name": "Ofis aboneliği",
+          "target": "3 ayda 8 yeni abone ofis"
+        },
+        {
+          "name": "Kafe ve restoran toptan anlaşması",
+          "target": "Ayda 2 anlaşma, her biri haftada 5+ kg"
+        },
+        {
+          "name": "Paket kahve satışı",
+          "target": "Haftada 30-40 paketten 70'e (3. ayın sonunda)"
+        },
+        {
+          "name": "Raf ortağı",
+          "target": "3 ayda 4 aktif raf ortağı"
+        },
+        {
+          "name": "İçerik üreticisi iş birliği",
+          "target": "3 ayda 4 ücretsiz tadım ziyareti (para ödenmez)"
+        }
+      ],
+      "objective": "Aynı kavurma kapasitesini üç satış kapısından büyütmek: ofis abonelikleri, kafe ve restoranlara toptan satış ve ev kahvecilerine paket satışı. Tek bir ofis ya da kafe anlaşması aylarca düzenli sipariş getirdiği için öncelik abonelik ve toptan satışta; paket satışı dükkânın vitrini ve günlük gelir."
+    },
+    "identity": {
+      "positioning": "Kavrulmuş Kahve Atölyesi: Taze kavrulur, aynı hafta içilir. Mahallenin kavurma atölyesi; tek kökenli ve harman çekirdekleri küçük partilerle kavurup ofislere, kafelere ve evlere aynı hafta ulaştırır. 250 gramlık paketten haftalık toptan siparişe, dükkândan ve kargoyla.",
+      "product": "Çekirdeği küçük partilerle kavurur, kavrulduğu hafta teslim eder. Ürün grupları: (1) Paket kahve: tek kökenli ve harman çekirdek, 250 g ve 1 kg, çekirdek ya da demleme yöntemine göre öğütülmüş; 250 g ₺420'den başlar, şehir içi teslimat dahil. (2) Ofis aboneliği: her ay ofise taze çekirdek ve filtre kahve, kişi sayısına göre paket. (3) Kafelere toptan: haftalık çekirdek, menüye özel harman ve barista eğitimi. (4) Hediye kutuları: yılbaşı, bayram ve özel günlere özel paketler. (5) Atölyeler: tadım (cupping) ve demleme buluşmaları. Ayrıca demleme ekipmanı rafı. Her ürün üç yoldan satılır: tek paket (dükkân ve site), düzenli abonelik (ofisler ve evler), toptan anlaşma (kafe, restoran ve pastaneler için haftalık sipariş ve özel harman).",
+      "usp": "Kavrulduğu hafta teslim + tek kökenli çekirdeklerde açık köken bilgisi + kafeye ve ofise özel harman + mahalle dükkânının samimiyeti sayesinde tek paketten haftalık toptan siparişe aynı tazelikle ölçeklenme. Eve de ofise de aynı özen.",
+      "voice": "Sıcak, meraklı, sade ve kahveyi anlatan: her çekirdeğin arkasındaki kökeni ve kavurma tercihini öne çıkarır ('bu nereden geldi, neden böyle kavruldu'). Ofis ve kafe tarafında güven veren, net ve ölçülü; abartısız. Her ölçekten müşteriye aynı saygı. Kısa slogan: 'Taze kavrulur, aynı hafta içilir.'"
+    },
+    "paid_enabled": true,
+    "prohibitions": [
+      "Sitede yazmayan fiyat, kargo ya da teslim günü sözü verilmez; toptan ve ofis aboneliği fiyatları yalnızca teklifle verilir.",
+      "Müşterilerin ve mekânların fotoğrafları izin alınmadan paylaşılmaz.",
+      "Ofis ve kafe referansları yalnızca o işletmenin izniyle paylaşılır.",
+      "Kahve için sağlık iddiası (zayıflatır, hastalığa iyi gelir, bağışıklığı güçlendirir gibi) içeren ifadeler kullanılmaz.",
+      "Rakip kavurucular ve zincir kafeler kötülenmez.",
+      "İçerik üreticilerine para ödenmez; iş birlikleri ücretsiz tadım ve ürünle olur.",
+      "Otomatik toplu soğuk e-posta gönderilmez (hukuki görüş gelene kadar); ofis ve kafe iletişimi birebir ve insan onaylıdır."
+    ],
+    "prospecting": {
+      "icp": [
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 100,
+          "daily_cap": 20,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Kendi çekirdeğini kavuran kafeler ve kavurma atölyeleri"
+          ],
+          "key": "toptan_kafe",
+          "language": "tr",
+          "sectors": [
+            "Bağımsız kafe ve kahve dükkânı",
+            "Kahvaltı salonu ve brunch mekânı",
+            "Restoran ve bistro",
+            "Pastane ve fırın"
+          ],
+          "segment_key": "toptan",
+          "signals": [
+            "Menüsünde filtre kahve ya da espresso bazlı içecekler öne çıkıyor",
+            "Yeni şube açıyor ya da menüsünü yeniliyor",
+            "Son 90 günde kahve tedarikçisi aradığını ya da değiştirdiğini paylaşmış"
+          ],
+          "size_hint": "Haftada 5-20 kg çekirdek tüketebilecek bağımsız kafeler, restoranlar ve küçük zincirler"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 50,
+          "daily_cap": 10,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Kendi çekirdeğini kavuran kafeler ve kavurma atölyeleri",
+            "Kahve makinesi kiralama sözleşmesiyle tek tedarikçiye bağlı ofisler"
+          ],
+          "key": "ofis_kurumsal",
+          "language": "tr",
+          "sectors": [
+            "Yazılım ve teknoloji şirketi",
+            "Ortak çalışma alanı",
+            "Mimarlık, hukuk ve danışmanlık bürosu",
+            "Ajans ve tasarım stüdyosu"
+          ],
+          "segment_key": "ofis_abonelik",
+          "signals": [
+            "10 kişiden kalabalık bir ekibi ve ortak mutfağı var",
+            "Çalışan deneyimini ve ofis olanaklarını paylaşıyor",
+            "Son 90 günde yeni ofise taşınmış ya da işe alım duyurmuş"
+          ],
+          "size_hint": "Kahve kararını verecek bir ofis yöneticisi ya da kurucusu olan 10-100 kişilik ekipler"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 50,
+          "daily_cap": 10,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Kendi çekirdeğini kavuran kafeler ve kavurma atölyeleri"
+          ],
+          "key": "raf_sarkuteri",
+          "language": "tr",
+          "sectors": [
+            "Şarküteri ve gurme market",
+            "Organik ve yerel ürün pazarı",
+            "Kitapçı-kafe ve konsept mağaza"
+          ],
+          "segment_key": "rafta_satis",
+          "signals": [
+            "Yerel üreticilerin ürünlerine rafında yer veriyor",
+            "Paketli kahve ya da çay satıyor",
+            "Son 90 günde yeni ürün ya da raf düzeni duyurmuş"
+          ],
+          "size_hint": "Kendi müşterisine paket kahve sunabilecek bağımsız mağazalar ve çevrim içi satıcılar"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 50,
+          "daily_cap": 10,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Kendi çekirdeğini kavuran kafeler ve kavurma atölyeleri"
+          ],
+          "key": "tadim_mekan",
+          "language": "tr",
+          "sectors": [
+            "Etkinlik düzenleyen kitapçı ve kafe",
+            "Hobi ve sanat atölyesi",
+            "Kültür merkezi ve AVM etkinlik birimi",
+            "Ortak çalışma alanı ve kurs merkezi"
+          ],
+          "segment_key": "tadim",
+          "signals": [
+            "Düzenli atölye ya da etkinlik takvimi yayınlıyor",
+            "Tadım, yemek ya da el işi atölyelerine ev sahipliği yapıyor",
+            "Son 90 günde bir atölye ya da buluşma duyurmuş"
+          ],
+          "size_hint": "10-20 kişilik bir tadım buluşmasına ev sahipliği yapabilecek mekânlar ve düzenli buluşma yapan topluluklar"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 30,
+          "daily_cap": 5,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Yalnızca sektör profesyonellerine açık, ziyaretçisi olmayan fuarlar"
+          ],
+          "key": "pazar_festival",
+          "language": "tr",
+          "sectors": [
+            "Semt ve üretici pazarı yönetimi",
+            "Kahve ve gastronomi festivali organizatörü",
+            "Yerel tasarım ve el yapımı pazarı organizatörü",
+            "AVM ve mekân etkinlik yönetimi"
+          ],
+          "segment_key": "pazar",
+          "signals": [
+            "Önümüzdeki altı ay içinde tarihi duyurulmuş bir etkinliği var",
+            "Stant ya da üretici başvurusu alıyor",
+            "Geçmiş etkinliklerinde yiyecek-içecek ve yerel üretici stantlarına yer vermiş"
+          ],
+          "size_hint": "Ziyaretçiye açık, tadım standı açılabilen pazar, festival ve topluluk etkinlikleri"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            }
+          ],
+          "backlog_target": 30,
+          "daily_cap": 5,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Öğrencilere ya da velilere ait kişisel iletişim bilgileri (yalnızca kurumun kendi kanalları kaydedilir)"
+          ],
+          "key": "kampus_isbirligi",
+          "language": "tr",
+          "sectors": [
+            "Üniversite kantini ve öğrenci kulübü",
+            "Dil okulu ve kurs merkezi",
+            "Özel okul öğretmenler odası"
+          ],
+          "segment_key": "kampus",
+          "signals": [
+            "Sınav dönemi, mezuniyet ya da kulüp etkinliği düzenliyor",
+            "Kampüste kahve köşesi ya da kantin işletiyor",
+            "Öğrenci etkinliklerini ve atölyelerini duyuruyor"
+          ],
+          "size_hint": "Onlarca öğrenci ya da çalışan için düzenli kahve ya da etkinlik yapabilecek kurumlar"
+        },
+        {
+          "areas": [
+            {
+              "city": "İzmir",
+              "district": null
+            },
+            {
+              "city": "Manisa",
+              "district": null
+            },
+            {
+              "city": "Aydın",
+              "district": null
+            },
+            {
+              "city": "Muğla",
+              "district": null
+            },
+            {
+              "city": "Denizli",
+              "district": null
+            },
+            {
+              "city": "Balıkesir",
+              "district": null
+            },
+            {
+              "city": "Uşak",
+              "district": null
+            },
+            {
+              "city": "Çanakkale",
+              "district": null
+            },
+            {
+              "city": "İstanbul",
+              "district": null
+            },
+            {
+              "city": "Ankara",
+              "district": null
+            },
+            {
+              "city": "Bursa",
+              "district": null
+            },
+            {
+              "city": "Antalya",
+              "district": null
+            },
+            {
+              "city": "Eskişehir",
+              "district": null
+            },
+            {
+              "city": "Kütahya",
+              "district": null
+            },
+            {
+              "city": "Afyonkarahisar",
+              "district": null
+            },
+            {
+              "city": "Isparta",
+              "district": null
+            }
+          ],
+          "backlog_target": 30,
+          "daily_cap": 5,
+          "exclusions": [
+            "Son 60 gündür paylaşım yapmayan ya da kapanmış görünen işletmeler",
+            "İletişim bilgisini kendi sitesinde ya da profilinde açıkça vermeyen işletmeler",
+            "Kendi çekirdeğini kavuran kafeler ve kavurma atölyeleri"
+          ],
+          "key": "teslim_noktasi_adayi",
+          "language": "tr",
+          "sectors": [
+            "Kırtasiye ve kitapçı",
+            "Çiçekçi",
+            "Bakkal ve şarküteri",
+            "Kuru kahveci ve baharatçı"
+          ],
+          "segment_key": "teslim_noktasi",
+          "signals": [
+            "Fiziksel bir dükkânı ve yerel müşteri kitlesi var",
+            "Başka üreticilerin siparişlerini teslim noktası olarak dağıtıyor",
+            "Uzun çalışma saatleriyle ve hafta sonu da açık olduğunu duyurmuş"
+          ],
+          "size_hint": "Kendi semtinde sipariş teslim alıp müşteriye verebilecek, tezgâhı olan işletmeler"
+        }
+      ],
+      "rubric": {
+        "criteria": [
+          {
+            "description": "İşletme, hedef müşteri tanımındaki sektöre ve bölgeye uyuyor",
+            "key": "uygunluk",
+            "weight": 30
+          },
+          {
+            "description": "Hedef tanımındaki amaca dair güncel ve kaynağı belli bir işaret var (toptan sipariş, abonelik, raf, ortak buluşma ya da stant)",
+            "key": "ihtiyac_isareti",
+            "weight": 30
+          },
+          {
+            "description": "Karar vericiye ulaşmak için işletmenin kendi yayınladığı bir iletişim kanalı var",
+            "key": "ulasilabilirlik",
+            "weight": 20
+          },
+          {
+            "description": "Son 90 günde etkin: paylaşım, yeni şube, etkinlik ya da yeni ürün",
+            "key": "etkinlik",
+            "weight": 10
+          },
+          {
+            "description": "Amaca uygun ölçekte: düzenli sipariş, süren bir abonelik ya da düzenli bir etkinlik kaldırabilir",
+            "key": "olcek",
+            "weight": 10
+          }
+        ],
+        "qualify_at": 60
+      }
+    }
+  },
+  "hypotheses": [
+    {
+      "angle": "Yeşil çekirdek → kavurma → dinlendirme → paketleme → demleme; kavurma makinesinin başından kısa videolar (reels). TikTok bağlanınca orada da.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 7
+        }
+      },
+      "channel": "instagram",
+      "derived_confidence": null,
+      "id": "01a1f78a-5300-72ad-a261-76d789cc6be0",
+      "metric": "Paket kahve siparişi ve dükkân ziyareti",
+      "prior_confidence": 0.6,
+      "segment_key": "bireysel",
+      "state": "kept",
+      "title": "Çekirdekten fincana"
+    },
+    {
+      "angle": "Her hafta bir tek köken çekirdeğin hikâyesi, tadım notları ve önerilen demleme yöntemi; 'bu hafta bunu dene' çağrısı.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 7
+        }
+      },
+      "channel": "instagram",
+      "derived_confidence": null,
+      "id": "01a1f78a-5389-7dd3-b197-e660e460aa58",
+      "metric": "Kaydetme, mesaj ve paket siparişi",
+      "prior_confidence": 0.45,
+      "segment_key": "bireysel",
+      "state": "kept",
+      "title": "Haftanın çekirdeği"
+    },
+    {
+      "angle": "Bir mahalle kafesiyle birlikte menüsüne özel harman geliştirme süreci: tadım, deneme kavurmaları ve ilk fincan; 'kafeniz için özel harman' çağrısı. Eylül-Ekim menü yenileme penceresi.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 7
+        }
+      },
+      "channel": "instagram",
+      "derived_confidence": null,
+      "id": "01a1f78a-5412-7542-b153-3fff15cefdcb",
+      "metric": "Toptan satış talebi (kafe ve restoran)",
+      "prior_confidence": 0.5,
+      "segment_key": "toptan",
+      "state": "kept",
+      "title": "Kafene özel harman"
+    },
+    {
+      "angle": "Abone ofislerin kahve köşeleri, aylık teslimat günü ve çalışanların favori çekirdekleri; izinli referans hikâyeleri ve 'ofisiniz için deneme paketi' çağrısı. LinkedIn sayfası bağlanınca orada da.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 7
+        }
+      },
+      "channel": "instagram",
+      "derived_confidence": null,
+      "id": "01a1f78a-549b-7748-89bd-4fd2f1209f28",
+      "metric": "Ofis aboneliği talebi (DM, e-posta, WhatsApp)",
+      "prior_confidence": 0.4,
+      "segment_key": "ofis_abonelik",
+      "state": "kept",
+      "title": "Ofisin kahve molası"
+    },
+    {
+      "angle": "Toptan siparişin hazırlanışı: aynı harmanın büyük partide kavrulup dinlendirilip paketlenmesi (reels); tazelik ve tutarlılık güveni. TikTok bağlanınca orada da.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 7
+        }
+      },
+      "channel": "instagram",
+      "derived_confidence": null,
+      "id": "01a1f78a-5524-7fe6-9370-6e187ddae6b5",
+      "metric": "Toptan satış talebi",
+      "prior_confidence": 0.35,
+      "segment_key": "toptan",
+      "state": "kept",
+      "title": "Bir kavurmada otuz kilo"
+    },
+    {
+      "angle": "Kavurma sesi, çekirdeğin rengini değiştirmesi ve ilk demlemeyi gösteren kısa dikey videolar; paket siparişi için DM çağrısı.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 2
+        }
+      },
+      "channel": "tiktok",
+      "derived_confidence": null,
+      "id": "01a1f78a-55ad-7a06-b6d3-7c934b6fc9c6",
+      "metric": "TikTok üzerinden gelen paket kahve siparişi",
+      "prior_confidence": 0.5,
+      "segment_key": "bireysel",
+      "state": "added",
+      "title": "Çekirdekten fincana (TikTok)"
+    },
+    {
+      "angle": "Yılbaşı hediye kutularını ve şirketlere özel toplu kahve hediyesi fikrini gösteren kısa dikey videolar; teklif için DM çağrısı.",
+      "cadence": {
+        "organic": {
+          "content_types": [
+            {
+              "key": "general",
+              "max_bps": 10000,
+              "min_bps": 0
+            }
+          ],
+          "exploration_bps": 0,
+          "slots_per_week": 2
+        }
+      },
+      "channel": "tiktok",
+      "derived_confidence": null,
+      "id": "01a1f78a-5636-7f73-8e7b-a43f99a9bf6b",
+      "metric": "TikTok üzerinden gelen toptan ve hediye kutusu teklif talebi",
+      "prior_confidence": 0.4,
+      "segment_key": "toptan",
+      "state": "added",
+      "title": "Yılbaşı hediye kutusu (TikTok)"
+    }
+  ]
+}

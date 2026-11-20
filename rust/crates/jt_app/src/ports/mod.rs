@@ -31,6 +31,7 @@ pub mod devices;
 pub mod distribution;
 pub mod files;
 pub mod inbox;
+pub mod knowledge;
 pub mod mail_files;
 pub mod material_productions;
 pub mod materials;
@@ -1790,6 +1791,8 @@ pub trait TenantRepos: Send + Sync {
     fn oauth_pending(&mut self) -> &mut dyn OAuthPendingRepo;
     fn probe_runs(&mut self) -> &mut dyn ProbeRunRepo;
     fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo;
+    /// The knowledge base (`0046_knowledge_base`).
+    fn knowledge(&mut self) -> &mut dyn knowledge::KnowledgeRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 
