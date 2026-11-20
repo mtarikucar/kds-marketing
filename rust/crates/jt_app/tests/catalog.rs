@@ -201,6 +201,13 @@ fn catalog_is_the_release_table() {
         ("content.area_deliver", Some("jeeta.content.area_deliver"), Some(("POST", "/api/content/areas/{project_id}/delivery")), false, Risk::Write),
         ("content.area_redo", None, Some(("POST", "/api/content/areas/{project_id}/redo")), true, Risk::Write),
         ("content.delivery_accept", None, Some(("POST", "/api/content/areas/{project_id}/delivery/accept")), true, Risk::Write),
+        ("content.posts", None, Some(("GET", "/api/content/posts")), true, Risk::Read),
+        ("content.post_get", None, Some(("GET", "/api/content/posts/{row_id}")), true, Risk::Read),
+        ("content.post_request", None, Some(("POST", "/api/content/post-requests")), true, Risk::Write),
+        ("content.files_add", None, Some(("POST", "/api/content/files")), true, Risk::Write),
+        ("content.special_day_skip", None, Some(("POST", "/api/content/special-days/{key}/{year}/skip")), true, Risk::Write),
+        ("content.version_cancel", None, Some(("POST", "/api/content/areas/{project_id}/versions/{version_id}/cancel")), true, Risk::Write),
+        ("content.post_dismiss", None, Some(("POST", "/api/content/posts/{row_id}/dismiss")), true, Risk::Write),
         ("social.version_schedule", Some("jeeta.social.version_schedule"), Some(("POST", "/api/social/versions/schedule")), false, Risk::Write),
         ("social.versions_waiting", Some("jeeta.social.versions_waiting"), Some(("GET", "/api/social/packages")), false, Risk::Read),
         ("social.accounts_list", Some("jeeta.social.accounts_list"), Some(("GET", "/api/social/accounts")), false, Risk::Read),
@@ -487,7 +494,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 314);
+    assert_eq!(CATALOG.len(), 321);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

@@ -146,6 +146,35 @@ impl PostRepo for PgTenantRepos {
         rows.into_iter().map(decode).collect()
     }
 
+    async fn acknowledge_post(
+        &mut self,
+        slot: SlotId,
+        ack: jt_studio::PostAck,
+    ) -> Result<bool, AppError> {
+        // One statement: only a post not acknowledged yet takes it, nothing else of it changes.
+        let done = sqlx::query(
+            "update studio_posts set data=jsonb_set(data,'{acknowledged}',$3) \
+             where workspace_id=$1 and slot_id=$2 \
+             and nullif(data->'acknowledged','null'::jsonb) is null",
+        )
+        .bind(self.workspace_id().0)
+        .bind(slot.0)
+        .bind(encode(&ack)?)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "acknowledge post"))?;
+        if done.rows_affected() == 1 {
+            return Ok(true);
+        }
+        if self
+            .posts_ref_stored(POST_STORED, slot.0, "read post")
+            .await?
+        {
+            Ok(false)
+        } else {
+            Err(AppError::not_found("post"))
+        }
+    }
     async fn retire_post(
         &mut self,
         slot: SlotId,

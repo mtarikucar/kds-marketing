@@ -431,6 +431,7 @@ async fn requested() -> (World, Olay, Vec<Material>, PackageRequestId) {
         permission: SharePermission::NotShareable,
         by: Some(UserId::new_v7()),
         at: FIXED_NOW,
+        rule: None,
     });
     closed.revision += 1;
     r.studio_materials()

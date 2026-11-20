@@ -1,6 +1,9 @@
 //! A material: a real photo or video (or an AI-generated image) in the file store, with its olay
 //! or `genel`, its share permission and its tags (spec 2026-11-03 §4.2).
-use crate::{FileId, MaterialId, OlayId, PieceId, SlotId, StudioError, olay::label_ok, require_id};
+use crate::{
+    FileId, MaterialId, OlayId, PieceId, ShootRequestId, SlotId, StudioError, olay::label_ok,
+    require_id,
+};
 use jt_ledger::Actor;
 use jt_tenancy::{UserId, WorkspaceId};
 use serde::{Deserialize, Serialize};
@@ -181,11 +184,46 @@ pub enum SharePermission {
 }
 
 /// A share permission and who gave it: a human, or (`by: None`) the agent that added an AI image
-/// with no `depicts` flag and no person (spec D5, D17, D38).
+/// with no `depicts` flag and no person (spec D5, D17, D38), or a rule (`rule`, design
+/// 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.4.4, D5): a file a person attached to a post,
+/// analysed for people and marks and found to show none ([`PERSON_UPLOAD_RULE`]). A rule's share
+/// keeps `by: None` on purpose: a face, a child or a name a later analysis finds makes the
+/// publish gate refuse it (`sensitive_needs_human`) until a person looks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareDecision {
     pub permission: SharePermission,
     pub by: Option<UserId>,
+    #[serde(with = "crate::time_compat")]
+    pub at: OffsetDateTime,
+    /// The rule that gave it, when no person or agent did. Absent on every other share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
+/// The rule of a person's upload for a post (design 2026-11-19 §3.4.4): shared once an analysis
+/// that looked for people and marks found none.
+pub const PERSON_UPLOAD_RULE: &str = "person_upload";
+
+/// A special day a file was attached to: its calendar key and season year.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadDay {
+    pub key: String,
+    pub year: i32,
+}
+
+/// Why a person attached a file to work (design 2026-11-19 §3.4.4): the content it is for (the
+/// composer, a capture answer), the çekim listesi request it answers, or the special day, and who
+/// attached it. Such a file is shared by rule once its analysis finds no person and no mark
+/// ([`PERSON_UPLOAD_RULE`]); until then the work waits for it. Absent on every other material.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadFor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shoot_request_id: Option<ShootRequestId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub day: Option<UploadDay>,
+    pub by: UserId,
     #[serde(with = "crate::time_compat")]
     pub at: OffsetDateTime,
 }
@@ -223,6 +261,9 @@ pub struct Material {
     pub created_at: OffsetDateTime,
     #[serde(default, with = "crate::time_compat::option")]
     pub erased_at: Option<OffsetDateTime>,
+    /// A person attached it to work ([`UploadFor`]); absent on every other material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload_for: Option<UploadFor>,
 }
 
 /// A generator name: 1–40 of `[a-z0-9_.-]`.
@@ -258,9 +299,15 @@ impl Material {
         if self.binding == Binding::Genel && !self.is_ai() && self.freed.is_none() {
             return Err(invalid("binding"));
         }
+        // A rule's share is the person-upload rule's, of a real material (design 2026-11-19
+        // §3.4.4): what a later analysis finds is the publish gate's to refuse.
         if let Some(share) = &self.share
             && share.by.is_none()
-            && (!self.is_ai() || self.needs_human_permission())
+            && match share.rule.as_deref() {
+                Some(PERSON_UPLOAD_RULE) => self.is_ai(),
+                Some(_) => true,
+                None => !self.is_ai() || self.needs_human_permission(),
+            }
         {
             return Err(invalid("share"));
         }

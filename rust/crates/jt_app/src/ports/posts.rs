@@ -133,6 +133,14 @@ pub trait PostRepo: Send + Sync {
         slot: SlotId,
         retired: PostRetirement,
     ) -> Result<bool, AppError>;
+    /// Records that a person acknowledged the post of `slot` (design 2026-11-19 "Paylaşımlar and
+    /// Bilgi bankası" §3.7.4), once: `false` (nothing written) when it was acknowledged already,
+    /// `NOT_FOUND` when the slot has no post. Its retirement and the rest are untouched.
+    async fn acknowledge_post(
+        &mut self,
+        slot: SlotId,
+        ack: jt_studio::PostAck,
+    ) -> Result<bool, AppError>;
 
     /// Adds the request unless one with its key exists: `false` then, and nothing is written.
     async fn insert_package_request(&mut self, request: PackageRequest) -> Result<bool, AppError>;

@@ -1187,6 +1187,40 @@ list empties with no shared file stays open (`need_photo` again). Until this lan
 could keep an area waiting for analysis forever (`needs_agent` false) with the row saying
 `Dosyaların inceleniyor`. The `material_removed` wait of `version` rows is unchanged.
 
+### 3.11 As built (PR 4)
+
+Where the build settled what this section left open, or departs from it:
+
+- **The acknowledgement is the planned post's** (`studio_posts.data.acknowledged {by, at}`, written
+  once by `PostRepo::acknowledge_post`), not the slot's, and the slot's revision does not move:
+  a slot's revision names its piece revision, which approvals and pieces are keyed by. The
+  dismiss route is `POST /api/content/posts/{row_id}/dismiss` (the router takes one parameter name
+  per position, shared with the read's `{row_id}`); its value is the slot id.
+- **A need's pending files** are the live materials whose `upload_for.shoot_request_id` names it
+  and whose share is unset: found by what they were attached for, as a day's are, not a field of
+  the shoot request.
+- `get_pieces` takes `(slot, revision)` pairs and answers `(slot, piece)` pairs.
+- The read's shapes add what the panel (PR 5) reads: `PostRow.tiktok_draft` (stays true once a
+  draft reads `published`), `PostDetail.listed` (`false` for a row no list holds),
+  `SpecialDayLine.files.permit` (each file's revision for `İzin ver` / `Yine de kullan`),
+  `Stop {code, at}` (`at` for `agent_sleeps` / `agent_late`); `RowActions.permit_files` also lists
+  a `files_quality` wait's files. `MediaSummary.video_seconds` is `null` until the analysis
+  records a length; `CancelFact.by_name` is empty. `AccountRef.expected_revision` is the posting
+  settings' revision, which `social.account_pause` checks. Sub-states, cancel refs, files
+  targets and dismiss refs are tagged by `kind`; a capture's dismiss ref carries the area's
+  revision.
+- A failed post's failure time is its scheduled time (the attempt's own time is not read).
+- `content.files_add` answers `{row, day}`: the row it changed, or the special day's line (absent
+  once the day's content shows as a row). `content.special_day_skip` answers the saved entry;
+  `content.version_cancel` `{project, archived}`; `content.post_dismiss` `{slot_id, kind,
+  acknowledged}`.
+- The calendar trigger a special day's shared file starts is `planner::calendar_for`, the
+  planner's calendar step for that day alone without the settle wait.
+- `ready::Reader`, `VersionAccounts` and `account_get` read the brake with `read_control`.
+- A note's `post_request` outcome stays refused (`not_available`) here; the composer's internals
+  are `content::compose::open_request_in` (the caller's transaction, waking on the note's person's
+  behalf) for PR 6 to call.
+
 ## 4. Bilgi bankası
 
 ### 4.1 Two layers
@@ -2791,7 +2825,7 @@ Run against jeetagrowth.com with the owner's workspace (MCP with an owner key, a
 |---|---|---|
 | PR 1 | revert; 0046's down only if PR 2 was never deployed | nothing else changed |
 | PR 2 (+3) | revert the binaries to PR 1's (0046 stays). **Before switching**, run `rust/scripts/rollback/write_back_post_approval.sql` (idempotent, under `app.platform`): for each seeded workspace it sets `requires_human_approval` on every live social account when `post_approval` is on, else on each account of `post_approval_accounts` (ledgered `capability.set_policy {reason: "rollback"}`; this also holds comment replies on those accounts until a person changes it, which errs safe) | frames written stay (ordinary approved versions the older code reads); carried research tasks stay carried (valid); budget items stay lowered; the knowledge tables stay, unread; archived drafts stay archived (their text is in the proposals); new wake reasons are dropped on read (PR 1's tolerant decoding) |
-| PR 4 (+5) | revert to PR 3's binaries | versions cancelled without a slot are read by PR 1's tolerant decoding; composer materials keep their share and their `upload_for` field (ignored); `pending_files` is ignored, so such areas are offered to agents at once (a delivery with an unshared file is refused `share_unset`, as before) |
+| PR 4 (+5) | revert to PR 3's binaries. **Before switching**, run `rust/scripts/rollback/clear_rule_shares.sql` (idempotent, under `app.platform`): it clears every share the person-upload rule gave (`share.rule = "person_upload"`, which PR 3 takes for an invalid row and refuses every write to), raising the material's revision, with one `studio.material.permission_set {reason: "rollback"}` per material (errs safe under D5: a person decides again, the publish gate holds a post showing it meanwhile) | versions cancelled without a slot are read by PR 1's tolerant decoding; composer materials keep their `upload_for` field (ignored) and a person's share; `pending_files` is ignored, so such areas are offered to agents at once (a delivery with an unshared file is refused `share_unset`, as before) |
 | PR 3, PR 5 | revert (panel only) | none; the old pages come back with the server unchanged (after PR 3's revert the old strategy page reads, but its writes stay refused on a seeded workspace: revert PR 2 with it to write there again, with the re-sync) |
 | PR 6 | revert | items and tools of agents go; the frame stays as last applied; nothing in the data depends on them |
 | PR 7 | revert | removed tools come back; nothing in the data depends on them |

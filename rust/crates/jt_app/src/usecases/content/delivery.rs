@@ -38,7 +38,11 @@ pub struct VersionInput {
     pub link: Option<String>,
     /// The area's materials it shows, in display order.
     pub material_ids: Vec<MaterialId>,
-    pub hypothesis_id: HypothesisId,
+    /// The topic of the frame the version is about. Optional only for an area a person asked for
+    /// (design 2026-11-19 §3.5, D11): left out, the post is the owner's request and is measured on
+    /// its own.
+    #[serde(default)]
+    pub hypothesis_id: Option<HypothesisId>,
     #[serde(default)]
     pub content_type: Option<String>,
 }
@@ -145,6 +149,9 @@ pub(crate) fn subject_of(materials: &[jt_studio::Material]) -> Subject {
 /// every version passes. A finding is `{"code", ...}`; one of the material gate carries
 /// `"kind":"material"`, one of the truth check `"kind":"text"` (the only kind a person may
 /// release, spec 2026-11-03 D19).
+///
+/// `assigned[n]` says the server gave version `n` the owner's request as its hypothesis (a
+/// person's content delivered without a topic, §3.5): that is never refused as reserved.
 async fn held_versions(
     d: &Deps,
     r: &mut dyn crate::ports::TenantRepos,
@@ -152,13 +159,16 @@ async fn held_versions(
     strategy: jt_strategy::StrategyVersionId,
     p: &ProductionProject,
     versions: &[PackageVersion],
+    assigned: &[bool],
 ) -> Result<Vec<Value>, AppError> {
     let available = projects::available_material_ids(r, p).await?;
     let hypotheses = r.hypotheses().list(strategy).await?;
     let mut held = Vec::new();
     for (index, v) in versions.iter().enumerate() {
         let mut findings: Vec<Value> = Vec::new();
-        if crate::usecases::studio::owner_request::is(ctx.workspace_id, v.hypothesis_id) {
+        if assigned.get(index).copied().unwrap_or(false) {
+            // The owner's request, settled when the version gets its time (`owner_request::ensure`).
+        } else if crate::usecases::studio::owner_request::is(ctx.workspace_id, v.hypothesis_id) {
             // The owner's request is settled when the version gets its time, never named.
             findings.push(json!({"code":"hypothesis_reserved"}));
         } else if !hypotheses.iter().any(|h| h.id == v.hypothesis_id) {
@@ -287,6 +297,19 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
     }
     let mut p = projects::load(r.as_mut(), i.project_id, None, true).await?;
     let seen = areas::claim(&p, ctx, &i.claim_token)?.redo_seen.clone();
+    // A topic is required on an area an agent or the system opened; on a person's area, left out,
+    // the version is the owner's request (design 2026-11-19 §3.5, D11).
+    let owner = crate::usecases::studio::owner_request::id(ctx.workspace_id);
+    let mut assigned = Vec::with_capacity(versions.len());
+    for (index, v) in versions.iter().enumerate() {
+        if v.hypothesis_id.is_none() && p.requested_by.is_none() {
+            return Err(invalid(
+                &format!("versions[{index}].hypothesis_id"),
+                "hypothesis_id is required: name a topic of the frame (jeeta.strategy.knowledge_get frame.topics)",
+            ));
+        }
+        assigned.push(v.hypothesis_id.is_none());
+    }
     let versions: Vec<PackageVersion> = versions
         .into_iter()
         .map(|v| PackageVersion {
@@ -298,13 +321,13 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
             tags: v.tags,
             link: v.link,
             material_ids: v.material_ids,
-            hypothesis_id: v.hypothesis_id,
+            hypothesis_id: v.hypothesis_id.unwrap_or(owner),
             content_type: v.content_type,
             slot_id: None,
             cancelled: None,
         })
         .collect();
-    let held = held_versions(d, r.as_mut(), ctx, frame.id, &p, &versions).await?;
+    let held = held_versions(d, r.as_mut(), ctx, frame.id, &p, &versions, &assigned).await?;
     if !held.is_empty() {
         p.refused = p.refused.saturating_add(1);
         p.refusal = Some(RefusedDelivery {
@@ -313,6 +336,7 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
             summary,
             versions,
             findings: json!(held),
+            assigned,
         });
         projects::save(r.as_mut(), ctx, p, "content.package.refused").await?;
         let details = json!({"reason":"package_refused","versions":held});
@@ -340,10 +364,23 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
     if p.redo == seen {
         p.redo = None;
     }
+    let requested_by = p.requested_by;
     let project = projects::save(r.as_mut(), ctx, p, "content.package.delivered").await?;
     r.studio()
         .request_receipt(&action, &i.request_key, &payload, &json!(project.id))
         .await?;
+    // A content a person asked for is ready for its time: the social agent is woken on their
+    // behalf (design 2026-11-19 §3.6, P3). Agent-made and system-made contents wake nobody.
+    if let Some(person) = requested_by {
+        crate::usecases::wake::request_for(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::SOCIAL],
+            crate::usecases::wake::WakeReason::ContentDelivered,
+            person,
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(AreaOut { project })
 }
@@ -380,20 +417,19 @@ pub async fn delivery_accept(
     else {
         return Err(AppError::conflict("the area holds no delivery to release"));
     };
-    let held = held_versions(d, r.as_mut(), ctx, frame.id, &p, &kept.versions).await?;
-    let text_only = |finding: &Value| finding["kind"] == "text";
-    let blocking: Vec<Value> = held
-        .iter()
-        .filter_map(|v| {
-            let rest: Vec<&Value> = v["findings"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|f| !text_only(f))
-                .collect();
-            (!rest.is_empty()).then(|| json!({"index":v["index"],"findings":rest}))
-        })
-        .collect();
+    // The owner's request is the hypothesis only of the versions the server gave it, as the
+    // delivery recorded them (§3.5): one whose agent named it stays refused `hypothesis_reserved`.
+    let held = held_versions(
+        d,
+        r.as_mut(),
+        ctx,
+        frame.id,
+        &p,
+        &kept.versions,
+        &kept.assigned,
+    )
+    .await?;
+    let blocking = blocking(&held);
     if !blocking.is_empty() {
         return Err(AppError {
             code: ErrorCode::Conflict,
@@ -429,6 +465,31 @@ pub async fn delivery_accept(
     let out = projects::detail(r.as_mut(), p).await?;
     r.commit().await?;
     Ok(out)
+}
+
+/// What in `held` (`[{"index", "findings"}]`, as [`held_versions`] gives it) a person may not
+/// release: each version's findings other than the truth check's (`"kind":"text"`).
+fn blocking(held: &[Value]) -> Vec<Value> {
+    held.iter()
+        .filter_map(|v| {
+            let rest: Vec<&Value> = v["findings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|f| f["kind"] != "text")
+                .collect();
+            (!rest.is_empty()).then(|| json!({"index":v["index"],"findings":rest}))
+        })
+        .collect()
+}
+
+/// Whether a kept delivery refused with `findings` is one a person may release
+/// (`content.delivery_accept`'s check, made pure for the read): something holds it, and only the
+/// truth check does.
+pub(crate) fn releasable(findings: &Value) -> bool {
+    findings
+        .as_array()
+        .is_some_and(|held| !held.is_empty() && blocking(held).is_empty())
 }
 
 fn refusal(details: Value) -> AppError {

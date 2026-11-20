@@ -571,17 +571,22 @@ fn people_records_never_wait_for_the_inbox() {
 #[test]
 fn the_content_pages_library_reads_are_gated_by_the_library() {
     use jt_app::catalog::find;
-    use jt_app::gate::{LIBRARY_PAGE_READS, gating_module};
+    use jt_app::gate::{SHARED_PAGE_USE_CASES, gating_module};
     let ws = WorkspaceId::new_v7();
     assert_eq!(
-        LIBRARY_PAGE_READS,
+        SHARED_PAGE_USE_CASES,
         [
             "content.tree",
             "content.olay_view",
-            "content.analysis_queue"
+            "content.analysis_queue",
+            "content.posts",
+            "content.post_get",
+            "content.files_add",
+            "content.special_day_skip",
+            "content.post_dismiss",
         ]
     );
-    for id in LIBRARY_PAGE_READS {
+    for id in SHARED_PAGE_USE_CASES {
         assert!(find(id).is_some(), "{id} is a catalog row");
         assert_eq!(gating_module(id), Some("materials"), "{id}");
         let err = ready(check_gate(
@@ -597,6 +602,8 @@ fn the_content_pages_library_reads_are_gated_by_the_library() {
         "content.areas",
         "content.area_redo",
         "content.delivery_accept",
+        "content.post_request",
+        "content.version_cancel",
     ] {
         assert_eq!(gating_module(id), Some("content"), "{id}");
     }

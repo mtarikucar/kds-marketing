@@ -248,6 +248,8 @@ fn library(action: &str) -> Option<(Value, &'static [&'static str])> {
                 "captured_at":{"type":["string","null"],"format":"date-time"},
                 "date_source":{"type":"string","enum":["unknown","exif","file_modified","agent_inferred"]},
                 "quality":quality(),"depicts":{"type":["array","null"],"uniqueItems":true,"items":{"type":"string","enum":keys::<jt_studio::Depicts>()}},
+                "sensitive_checked":{"type":"boolean",
+                    "description":"You looked for every face, name, child, client logo and corporate reference and marked each in depicts. Leave out (false) when you did not look."},
                 "filing":{"type":["object","null"],"additionalProperties":false,"properties":{
                     "olay_id":{"type":["string","null"],"format":"uuid"},
                     "new_olay":{"type":["object","null"],"additionalProperties":false,"properties":{

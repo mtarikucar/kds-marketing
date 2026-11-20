@@ -835,6 +835,7 @@ pub(crate) async fn posts_propose_locked(
             content_type: c.content_type.clone(),
             retired: None,
             created_at: now,
+            acknowledged: None,
         });
         slots.push(slot);
     }

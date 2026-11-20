@@ -135,6 +135,36 @@ impl PostRepo for MemTenant {
         })
     }
 
+    async fn acknowledge_post(
+        &mut self,
+        slot: SlotId,
+        ack: jt_studio::PostAck,
+    ) -> Result<bool, AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            let post = this
+                .store()
+                .posts
+                .iter()
+                .find(|p| p.workspace_id == ws && p.slot_id == slot)
+                .ok_or_else(|| AppError::not_found("post"))?;
+            if post.acknowledged.is_some() {
+                return Ok(false);
+            }
+            this.tx.write(move |s| {
+                if let Some(p) = s
+                    .posts
+                    .posts
+                    .iter_mut()
+                    .find(|p| p.workspace_id == ws && p.slot_id == slot)
+                {
+                    p.acknowledged = Some(ack);
+                }
+            });
+            Ok(true)
+        })
+    }
+
     async fn insert_package_request(&mut self, request: PackageRequest) -> Result<bool, AppError> {
         self.call(|this| {
             let ws = this.ws;

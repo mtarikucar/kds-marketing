@@ -938,7 +938,13 @@ async fn every_studio_use_case_asks_its_module_permission() {
     let w = support::world().await;
     for row in CATALOG.iter().filter(|r| r.id.starts_with("studio.")) {
         let action = row.id.strip_prefix("studio.").unwrap();
-        let expected = expected_permissions(action);
+        // A person cancels a post with social.manage or content.manage (design 2026-11-19 D13);
+        // an agent keeps social.work.
+        let expected = if action == "slot_cancel" {
+            &[Permission::SocialManage, Permission::ContentManage][..]
+        } else {
+            expected_permissions(action)
+        };
         let id = "00000000-0000-4000-8000-000000000001";
         let input = match action {
             "tiktok_posting" | "tiktok_metrics" => json!({"slot_id":id}),

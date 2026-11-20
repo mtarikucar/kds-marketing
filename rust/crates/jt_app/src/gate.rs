@@ -122,21 +122,27 @@ pub fn studio_module(id: &str) -> Option<&'static str> {
     })
 }
 
-/// The content page's reads that a library worker needs as much as a content worker (design
-/// 2026-11-18 §5: any of `materials.work`, `content.work`, `content.manage`). The library
-/// comes with the content, social and ads modules, so these are gated by it: a workspace with
-/// the library but not the content module still has its olays, files, "Eksikler" and analysis
-/// queue on the one page. The production line (`content.areas`) stays the content module's.
-pub const LIBRARY_PAGE_READS: &[&str] = &[
+/// The page use cases that a library, social or content worker needs alike, gated by the library
+/// module, which comes with the content, social and ads modules and has no requirement: the
+/// content page's reads (design 2026-11-18 §5), and Paylaşımlar's read and file writes (design
+/// 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.1, D33), so a workspace with social but not the
+/// content module has the page. The production line (`content.areas`), the composer
+/// (`content.post_request`) and the version cancel stay the content module's.
+pub const SHARED_PAGE_USE_CASES: &[&str] = &[
     "content.tree",
     "content.olay_view",
     "content.analysis_queue",
+    "content.posts",
+    "content.post_get",
+    "content.files_add",
+    "content.special_day_skip",
+    "content.post_dismiss",
 ];
 
 /// The module that gates use case `id`, if any: `inbox.*` (people records excepted: the People
 /// module works without the inbox), each `studio.*` use case's own module ([`studio_module`]),
 /// `outreach.*` and `calls.*` (the device bridge's `calls.bridge.*` plumbing excepted), less
-/// [`CAPABILITY_EXEMPT`]; the content page's library reads ([`LIBRARY_PAGE_READS`]) are the
+/// [`CAPABILITY_EXEMPT`]; the shared page use cases ([`SHARED_PAGE_USE_CASES`]) are the
 /// library's.
 pub fn gating_module(id: &str) -> Option<&'static str> {
     if CAPABILITY_EXEMPT.contains(&id)
@@ -145,7 +151,7 @@ pub fn gating_module(id: &str) -> Option<&'static str> {
     {
         return None;
     }
-    if LIBRARY_PAGE_READS.contains(&id) {
+    if SHARED_PAGE_USE_CASES.contains(&id) {
         return Some(MATERIALS);
     }
     match id.split('.').next()? {

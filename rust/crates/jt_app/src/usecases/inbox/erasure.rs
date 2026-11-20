@@ -83,7 +83,8 @@ pub async fn erase(
     // The materials that show the person, and the olays naming them (spec 2026-11-03 §9.2), in
     // the same transaction; the materials' bytes go once it is committed (best effort:
     // `StudioFilesCleanup` deletes an erased material's file too).
-    let files = crate::usecases::studio::library::erase_person(r.as_mut(), ctx, person).await?;
+    let files =
+        crate::usecases::studio::library::erase_person(deps, r.as_mut(), ctx, person).await?;
     r.commit().await?;
     for file in files {
         let _ = deps.files.delete(ctx.workspace_id, file).await;

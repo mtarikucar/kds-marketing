@@ -316,6 +316,21 @@ impl MaterialRepo for PgTenantRepos {
             .next())
     }
 
+    async fn get_materials(&mut self, ids: &[MaterialId]) -> Result<Vec<Material>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_materials where workspace_id=$1 and id = any($2) order by id",
+        )
+        .bind(self.workspace_id().0)
+        .bind(ids.iter().map(|m| m.0).collect::<Vec<Uuid>>())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read materials"))?;
+        rows.into_iter().map(decode).collect()
+    }
+
     async fn material_by_file(&mut self, file: FileId) -> Result<Option<Material>, AppError> {
         Ok(self
             .material_rows("and file_id=$2", Some(file.0))

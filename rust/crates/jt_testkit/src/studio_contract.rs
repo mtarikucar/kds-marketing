@@ -230,6 +230,7 @@ pub fn eligible_material(olay: &jt_studio::Olay, file: FileId) -> jt_studio::Mat
             permission: jt_studio::SharePermission::Shareable,
             by: Some(by),
             at: FIXED_NOW,
+            rule: None,
         }),
         tags: jt_studio::Tags {
             quality: Some(jt_studio::Quality::Publishable),
@@ -242,6 +243,7 @@ pub fn eligible_material(olay: &jt_studio::Olay, file: FileId) -> jt_studio::Mat
         revision: 1,
         created_at: FIXED_NOW,
         erased_at: None,
+        upload_for: None,
     }
 }
 
@@ -1915,6 +1917,7 @@ pub async fn attach_post(uow: &dyn UnitOfWork, f: &Fixture) -> jt_studio::Planne
         content_type: "text".into(),
         retired: None,
         created_at: FIXED_NOW,
+        acknowledged: None,
     };
     r.studio_posts().insert_post(post.clone()).await.unwrap();
     r.commit().await.unwrap();
