@@ -132,7 +132,9 @@ fn mcp_registry_matches_catalog() {
 /// -1: the approval that remains is each connection's own, design B35) gives 234. The count
 /// stood at 244 when `jeeta.inbox.public_report` left with the marketplace module (owner
 /// decision 2026-11-12, `inbox` -1: no surface takes reports): 243. The knowledge base's read
-/// (`jeeta.strategy.knowledge_get`, design 2026-11-19 §5.1, `strategy` +1) gives 245.
+/// (`jeeta.strategy.knowledge_get`, design 2026-11-19 §5.1, `strategy` +1) gives 245, and the
+/// agents' side of it (`frame_apply`, `note_claim`, `note_file`, `note_release`,
+/// `proposal_create`, §5.1, `strategy` +5) 250.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -145,7 +147,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("api_keys", 3),
     ("agents", 1),
     ("ledger", 1),
-    ("strategy", 11),
+    ("strategy", 16),
     ("capability", 16),
     ("budget", 7),
     ("work", 3),
@@ -167,9 +169,9 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 #[test]
 fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 245);
+    assert_eq!(specs.len(), 250);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 245);
+    assert_eq!(total, 250);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -178,7 +180,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 245);
+    assert_eq!(catalog, 250);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.
@@ -201,6 +203,12 @@ fn agent_workflows_are_mcp_only() {
             "studio.material_production_claim",
             "studio.material_production_complete",
             "studio.material_production_fail",
+            // The agents' side of the knowledge base (design 2026-11-19 §5.1).
+            "strategy.frame_apply",
+            "strategy.note_claim",
+            "strategy.note_file",
+            "strategy.note_release",
+            "strategy.proposal_create",
         ])
     );
 }
@@ -317,7 +325,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 321);
+    assert_eq!(CATALOG.len(), 326);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

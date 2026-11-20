@@ -688,7 +688,11 @@ pub fn merge(
                         message: e.to_owned(),
                     });
                 }
-                h.cadence.insert(LaneKind::Paid, p.cadence.clone());
+                let before = h.cadence.insert(LaneKind::Paid, p.cadence.clone());
+                // What a live binding or ad uses still passes under the new cadence (step 3).
+                if let Some(types) = retained.get(&h.id).and_then(|l| l.get(&LaneKind::Paid)) {
+                    keep_used(h, LaneKind::Paid, types, before.as_ref());
+                }
             }
         }
     }

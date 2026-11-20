@@ -72,7 +72,7 @@ fn file_ids(ids: &[FileId], min: usize) -> Result<(), AppError> {
 }
 
 /// Whether a stored file is something a post can show: an image, or an MP4 video.
-fn media(mime: &str) -> bool {
+pub(crate) fn media(mime: &str) -> bool {
     let mime = mime.trim().to_ascii_lowercase();
     mime.starts_with("image/") || mime == "video/mp4"
 }

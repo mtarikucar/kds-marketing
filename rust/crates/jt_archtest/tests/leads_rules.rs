@@ -31,7 +31,7 @@ fn playbook_text_matches_the_spec_appendix() {
     let served = jt_prospects::playbook::TEXT.replace("\r\n", "\n");
     let spec = appendix_a();
     assert!(
-        spec.starts_with("JEETA PROSPECTING PLAYBOOK v1\n"),
+        spec.starts_with("JEETA PROSPECTING PLAYBOOK v2\n"),
         "{spec}"
     );
     assert_eq!(served, spec);

@@ -7,6 +7,7 @@
 //! - [`rules`]: `strategy.rules_save`, `post_approval_set` and `goals_save`.
 //! - [`notes`]: `strategy.note_add`, `note_withdraw`, `note_claim`, `note_file`, `note_release`.
 //! - [`proposals`]: `strategy.proposal_create`, `proposal_accept`, `proposal_skip`.
+//! - [`derive`](mod@derive): `strategy.frame_apply`, an agent's derivation applied to the frame (§4.10.3).
 //! - [`frame`]: the internal frame the system applies from the knowledge base (§4.10), and its
 //!   bootstrap from the first card text a person writes or accepts (D4).
 //! - [`settle`]: the `knowledge_settle` job's body (seeding, the bootstrap's repair, the
@@ -29,6 +30,7 @@
 //! ([`WORK_PERMISSIONS`]) and an agent connection (`FORBIDDEN` `agent_only` for a person).
 
 pub mod cards;
+pub mod derive;
 pub mod frame;
 pub mod notes;
 pub mod proposals;
@@ -45,7 +47,7 @@ use jt_tenancy::{AgentConnectionId, Permission, UserId};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{Deps, ledger_entry};
+use super::{Deps, ledger_entry, wake};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
@@ -127,6 +129,9 @@ pub(crate) struct Locked {
     pub(crate) frame: Option<StrategyVersionId>,
     /// Whether this bundle moved the knowledge base's revision already.
     bumped: bool,
+    /// The posting and prospecting revisions when the locks were taken: a write that moved one
+    /// wakes the agent that derives it ([`Locked::wake`]).
+    revisions_at_lock: (u64, u64),
 }
 
 /// Takes a knowledge write's locks in the order of design §4.10.13 and answers the settings,
@@ -157,6 +162,7 @@ pub(crate) async fn lock(
         .await?
         .ok_or_else(|| AppError::internal("the knowledge base is not seeded"))?;
     Ok(Locked {
+        revisions_at_lock: (settings.posting_revision, settings.prospecting_revision),
         settings,
         frame: frame.map(|v| v.id),
         bumped: false,
@@ -283,6 +289,37 @@ impl Locked {
         entry.strategy_version_id = self.frame.map(|v| v.as_uuid());
         r.ledger().append(entry).await?;
         Ok(kb)
+    }
+
+    /// The wakes of a knowledge write (design §4.4 step 5, §5.3): `KNOWLEDGE` when the write moved
+    /// the posting revision, `RESEARCH` when it moved the prospecting revision, with
+    /// `knowledge_changed`, as `waking` says (the person in person, or on behalf of the note's
+    /// person for an agent's filing; the filer's own key is among those woken, so its next
+    /// check-in lists the derivation). A write that moved neither wakes nobody: agents read it
+    /// live. After the bootstrap, whose raised revisions count as moved.
+    pub(crate) async fn wake(
+        &self,
+        r: &mut dyn TenantRepos,
+        ctx: &Ctx,
+        waking: frame::Waking,
+    ) -> Result<(), AppError> {
+        let (posting, prospecting) = self.revisions_at_lock;
+        let mut needs = Vec::new();
+        if self.settings.posting_revision > posting {
+            needs.push(wake::KNOWLEDGE);
+        }
+        if self.settings.prospecting_revision > prospecting {
+            needs.push(wake::RESEARCH);
+        }
+        if needs.is_empty() {
+            return Ok(());
+        }
+        let reason = wake::WakeReason::KnowledgeChanged;
+        match waking {
+            frame::Waking::InPerson => wake::request(r, ctx, &needs, reason).await,
+            frame::Waking::For(person) => wake::request_for(r, ctx, &needs, reason, person).await,
+            frame::Waking::Nobody => Ok(()),
+        }
     }
 
     /// Stores the settings as the write left them.

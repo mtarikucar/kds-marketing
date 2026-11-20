@@ -911,6 +911,59 @@ fn a_paid_cadence_replaces_one_topics_and_retires_nothing() {
     );
 }
 
+/// A paid cadence the ads agent sends cannot drop what a live ad-set binding uses (design
+/// §4.10.2 step 3): the bound content type stays with a share, and the lane keeps a slot.
+#[test]
+fn a_paid_cadence_keeps_what_a_binding_uses() {
+    let mut f = Facts::new();
+    let (s, mut h) = v5();
+    h[3].cadence.insert(
+        LaneKind::Paid,
+        HypothesisCadence {
+            slots_per_week: 2,
+            exploration_bps: 0,
+            content_types: vec![ContentTypeShare {
+                key: "reel".into(),
+                min_bps: 0,
+                max_bps: 6_000,
+            }],
+        },
+    );
+    f.retained.insert(
+        h[3].id,
+        BTreeMap::from([(LaneKind::Paid, BTreeSet::from(["reel".to_owned()]))]),
+    );
+    for slots in [1, 0] {
+        let next = FrameParts {
+            kb_revision: 1,
+            paid_cadence: Some(vec![jt_knowledge::frame::PaidCadence {
+                topic_id: h[3].id,
+                cadence: HypothesisCadence {
+                    slots_per_week: slots,
+                    exploration_bps: 0,
+                    content_types: vec![ContentTypeShare {
+                        key: "carousel".into(),
+                        min_bps: 0,
+                        max_bps: 10_000,
+                    }],
+                },
+            }]),
+            ..FrameParts::default()
+        };
+        let m = f.merge(FrameCause::Derive, Some((&s, &h)), &next).unwrap();
+        let paid = &m.hypotheses[3].cadence[&LaneKind::Paid];
+        assert!(paid.slots_per_week >= 1, "{slots}");
+        let reel = paid
+            .content_types
+            .iter()
+            .find(|t| t.key == "reel")
+            .expect("the bound content type stays");
+        assert_eq!(reel.max_bps, 6_000, "its previous share");
+        assert!(paid.content_types.iter().any(|t| t.key == "carousel"));
+        assert!(paid.validate().is_ok());
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The structural diff
 // ---------------------------------------------------------------------------------------------

@@ -25,8 +25,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Read this first: how to research businesses with your own tools \
                           (Jeeta calls no data service), what to record with what evidence, \
                           what is forbidden, how to score and when to promote (text, with its \
-                          version), and the workspace's section: prospecting_on, the approved \
-                          ICP entries, the rubric with the rubric_digest to send with every \
+                          version), and the workspace's section: prospecting_on, the ICP \
+                          entries and the rubric of the frame, derived from the card \
+                          who_we_seek (prospecting_off: the knowledge base has no ICP yet: \
+                          derive it, knowledge_derive part prospecting), the rubric_digest to \
+                          send with every \
                           score, today's caps (timezone, daily_prospects, recorded_today, \
                           resets_at), each open research task's remaining count, the retention \
                           in days and the blocklist's rules (listed: phone, email, instagram, \
@@ -116,7 +119,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "prospects.score",
             description: "Score a new or qualified prospect (prospect_id) 0-100 with the \
-                          approved strategy's rubric: one reason per criterion {criterion, \
+                          frame's rubric (derived from the card who_we_seek): one reason per \
+                          criterion {criterion, \
                           points up to its weight, evidence: one sentence, source?}; the points \
                           add up to the score; rubric_digest is the digest the playbook gives. \
                           A score at or above the rubric's qualify_at qualifies a new prospect. \
@@ -210,7 +214,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "prospects.report",
-            description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly with jeeta.outreach.report:                           adapt targeting within the approved ICP, and propose rubric or ICP changes to the owner through                           the strategy consultation. [risk: READ]",
+            description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly with jeeta.outreach.report:                           adapt targeting within the ICP of the frame; change the ICP or the rubric through                           jeeta.strategy.frame_apply (prospecting) when the card who_we_seek says so, else propose it                           with jeeta.strategy.proposal_create. [risk: READ]",
             permissions: &[Permission::ProspectsWork],
             schema: report_schema,
             run: report,

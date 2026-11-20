@@ -166,6 +166,7 @@ pub(crate) async fn after(
     by: Option<UserId>,
 ) -> Result<(), AppError> {
     let mut kb = Locked {
+        revisions_at_lock: (settings.posting_revision, settings.prospecting_revision),
         settings,
         frame: Some(approved.id),
         bumped: false,

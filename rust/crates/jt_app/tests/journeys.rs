@@ -1064,6 +1064,7 @@ async fn approved_piece_stands(p: Platform) {
     .await
     .unwrap_err();
     assert_eq!(e.details["reason"], "approved_piece", "{e:?}");
+    assert!(e.message.is_ascii() && !e.message.contains("  "), "{e:?}");
     assert_eq!(j.current(&slot).await, (now, piece));
     assert_eq!(j.listed(&a, &slot).await, (false, false));
 

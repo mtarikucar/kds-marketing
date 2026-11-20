@@ -36,7 +36,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "modules.remove",
-            description: "Remove an optional module from navigation, preserving its data and ongoing jobs. Inbox and strategy cannot be removed. [risk: WRITE]",
+            description: "Remove an optional module from navigation, preserving its data and ongoing jobs. Inbox and the knowledge base cannot be removed. [risk: WRITE]",
             permissions: &[Permission::CapabilitiesManage],
             schema: schema_for::<IdArgs>,
             run: remove,

@@ -84,7 +84,7 @@ pub(crate) fn prospecting_off() -> AppError {
     refused(
         ErrorCode::Conflict,
         "prospecting_off",
-        "the approved strategy has no prospecting (no ICP entry)",
+        "the knowledge base has no ICP yet: derive it (knowledge_derive, part prospecting)",
         json!({}),
     )
 }

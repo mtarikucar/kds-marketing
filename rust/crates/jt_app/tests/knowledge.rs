@@ -1743,11 +1743,12 @@ async fn a_filing_never_wipes_a_card_and_follows_its_claim() {
     let e = err(note_file(&w.deps, &agent, input.clone()).await);
     assert_eq!(reason(&e), "card_changed");
     input.cards = vec![];
-    input.post_request = Some(json!({}));
+    // A post request takes nothing of its own: the note is its text and files.
+    input.post_request = Some(json!({"text": "Başka bir metin"}));
     let e = err(note_file(&w.deps, &agent, input.clone()).await);
     assert_eq!(
-        (e.details["field"].as_str(), reason(&e)),
-        (Some("post_request"), "not_available")
+        (e.code, e.details["field"].as_str(), reason(&e)),
+        (ErrorCode::Validation, Some("post_request"), "invalid")
     );
     input.post_request = None;
     let e = err(note_file(&w.deps, &agent, input.clone()).await);

@@ -59,6 +59,11 @@ fn mcp_only_use_cases_have_no_panel_route() {
             "studio.material_analysis_claim",
             "studio.material_analysis_complete",
             "studio.material_analysis_fail",
+            "strategy.frame_apply",
+            "strategy.note_claim",
+            "strategy.note_file",
+            "strategy.note_release",
+            "strategy.proposal_create",
             "work.checkin",
         ]
     );
@@ -379,6 +384,11 @@ fn catalog_is_the_release_table() {
         ("strategy.note_withdraw", None, Some(("POST", "/api/knowledge/notes/{note_id}/withdraw")), true, Risk::Write),
         ("strategy.proposal_accept", None, Some(("POST", "/api/knowledge/proposals/{proposal_id}/accept")), true, Risk::Write),
         ("strategy.proposal_skip", None, Some(("POST", "/api/knowledge/proposals/{proposal_id}/skip")), true, Risk::Write),
+        ("strategy.frame_apply", Some("jeeta.strategy.frame_apply"), None, false, Risk::Write),
+        ("strategy.note_claim", Some("jeeta.strategy.note_claim"), None, false, Risk::Write),
+        ("strategy.note_file", Some("jeeta.strategy.note_file"), None, false, Risk::Write),
+        ("strategy.note_release", Some("jeeta.strategy.note_release"), None, false, Risk::Write),
+        ("strategy.proposal_create", Some("jeeta.strategy.proposal_create"), None, false, Risk::Write),
         ("capability.list", Some("jeeta.capability.list"), Some(("GET", "/api/capabilities")), false, Risk::Read),
         ("capability.get", Some("jeeta.capability.get"), Some(("GET", "/api/capabilities/{capability_id}")), false, Risk::Read),
         ("capability.declare", Some("jeeta.capability.declare"), Some(("POST", "/api/capabilities")), false, Risk::Write),
@@ -494,7 +504,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 321);
+    assert_eq!(CATALOG.len(), 326);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -557,6 +567,11 @@ fn catalog_is_the_release_table() {
             "strategy.note_withdraw",
             "strategy.proposal_accept",
             "strategy.proposal_skip",
+            "strategy.frame_apply",
+            "strategy.note_claim",
+            "strategy.note_file",
+            "strategy.note_release",
+            "strategy.proposal_create",
             "work.pending",
             "work.checkin",
             "work.set_checkin_interval",

@@ -454,6 +454,7 @@ pub(crate) async fn lock_for_policy(
     }
     Ok(Some(PolicyLock {
         kb: super::Locked {
+            revisions_at_lock: (settings.posting_revision, settings.prospecting_revision),
             settings,
             frame: frame.map(|v| v.id),
             bumped: false,

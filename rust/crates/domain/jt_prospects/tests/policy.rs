@@ -210,8 +210,8 @@ fn task_kind_is_tagged_by_type() {
 
 #[test]
 fn the_playbook_is_versioned_english_text() {
-    assert_eq!(playbook::PLAYBOOK_VERSION, 1);
-    assert!(playbook::TEXT.starts_with("JEETA PROSPECTING PLAYBOOK v1\n"));
+    assert_eq!(playbook::PLAYBOOK_VERSION, 2);
+    assert!(playbook::TEXT.starts_with("JEETA PROSPECTING PLAYBOOK v2\n"));
     assert!(playbook::TEXT.contains("jeeta.prospects.check"));
     assert!(!playbook::TEXT.ends_with('\n'));
 }

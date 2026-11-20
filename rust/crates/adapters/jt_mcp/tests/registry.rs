@@ -142,6 +142,11 @@ const TOOLS: &[&str] = &[
     "jeeta.ledger.list",
     "jeeta.strategy.get",
     "jeeta.strategy.knowledge_get",
+    "jeeta.strategy.frame_apply",
+    "jeeta.strategy.note_claim",
+    "jeeta.strategy.note_file",
+    "jeeta.strategy.note_release",
+    "jeeta.strategy.proposal_create",
     "jeeta.strategy.start_consultation",
     "jeeta.strategy.record",
     "jeeta.strategy.write_section",
@@ -261,7 +266,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 245);
+    assert_eq!(TOOLS.len(), 250);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -361,18 +366,46 @@ fn registry_with_appends_extra_tools_and_refuses_a_taken_name() {
 
 #[test]
 fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
+    // Design 2026-11-19 §5.1: reading with workspace.read; the agents' side of the knowledge
+    // base with a work permission (frame_apply with the one of each part, which its use case
+    // checks); the consultation's changes, kept until the routines move, with team.manage.
     for spec in registry()
         .iter()
         .filter(|s| s.use_case.starts_with("strategy."))
     {
-        let expected = match spec.name {
+        let expected: &[Permission] = match spec.name {
             "jeeta.strategy.get"
             | "jeeta.strategy.knowledge_get"
             | "jeeta.strategy.list_versions"
-            | "jeeta.strategy.consultation" => Permission::WorkspaceRead,
-            _ => Permission::TeamManage,
+            | "jeeta.strategy.consultation" => &[Permission::WorkspaceRead],
+            "jeeta.strategy.frame_apply" => &[
+                Permission::ContentWork,
+                Permission::ProspectsWork,
+                Permission::AdsWork,
+            ],
+            "jeeta.strategy.note_claim"
+            | "jeeta.strategy.note_file"
+            | "jeeta.strategy.note_release"
+            | "jeeta.strategy.proposal_create" => jt_app::usecases::knowledge::WORK_PERMISSIONS,
+            _ => &[Permission::TeamManage],
         };
-        assert_eq!(spec.permissions, &[expected], "{}", spec.name);
+        assert_eq!(spec.permissions, expected, "{}", spec.name);
+        // The consultation's tools say they go (§5.1), first.
+        if spec.permissions == [Permission::TeamManage]
+            || matches!(
+                spec.name,
+                "jeeta.strategy.list_versions" | "jeeta.strategy.consultation"
+            )
+        {
+            assert!(
+                spec.description.starts_with(
+                    "Retired soon: the strategy is the knowledge base now; read \
+                     jeeta.strategy.knowledge_get and apply with jeeta.strategy.frame_apply."
+                ),
+                "{}",
+                spec.description
+            );
+        }
     }
     let get = registry()
         .into_iter()

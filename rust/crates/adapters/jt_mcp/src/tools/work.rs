@@ -21,8 +21,20 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "work.pending",
             description: "What is pending for the workspace, most urgent first: start here. \
-                          strategy is missing, submitted, {draft_open: {gaps}} or {approved: \
-                          {number}}. Each item has a kind (consult_strategy, approve_strategy, \
+                          knowledge is {empty, revision, frame, derive_due}: the knowledge \
+                          base's state (empty: no card has text yet, so nothing is planned, \
+                          delivered or sent; revision: what jeeta.strategy.frame_apply names as \
+                          kb_revision; frame: the number of the frame in force; derive_due: \
+                          posting or prospecting, the derivations a card change waits for). \
+                          strategy is deprecated: missing without a frame, {approved: {number}} \
+                          with one. Each item has a kind (knowledge_derive with kb_revision and \
+                          part (to an agent with content.work for posting, prospects.work for \
+                          prospecting: read jeeta.strategy.knowledge_get and apply with \
+                          jeeta.strategy.frame_apply), knowledge_note with note_id and \
+                          expected_revision (to an agent with any work permission: claim it \
+                          with jeeta.strategy.note_claim and file it with \
+                          jeeta.strategy.note_file), knowledge_proposal with proposal_id and \
+                          knowledge_empty (to a person who keeps the knowledge base), \
                           verify_capability with capability_id, name and stale, \
                           connect_connector and reconnect_connector with capability_id and name, \
                           voice_bridge_offline and phone_offline with capability_id, name and \
@@ -56,9 +68,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           to a key with capabilities.manage), research_due \
                           with task_id and remaining_today (research businesses for that task \
                           with your own tools and record them; to a key with prospects.work), \
-                          prospects_to_score with count (new prospects without a score under \
-                          the approved rubric)), a priority \
-                          (1 is the most urgent) and a hint saying what to do. agent says when an agent was last seen, the \
+                          prospects_to_score with count (new prospects to score under the \
+                          frame's rubric)), a priority \
+                          (1 is the most urgent) and a hint saying what to do. No item asks you \
+                          to redo what a person already approved. agent says when an agent was \
+                          last seen, the \
                           check-in interval in minutes and whether the agent is overdue. \
                           [risk: READ]",
             permissions: &[Permission::WorkspaceRead],

@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 125] = [
+const POST_M4_ADDED: [(&str, &str); 130] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -225,6 +225,12 @@ const POST_M4_ADDED: [(&str, &str); 125] = [
     ("ads.ad_preview", "jeeta.ads.ad_preview"),
     // The knowledge base's read (design 2026-11-19 §4.11.1).
     ("strategy.knowledge_get", "jeeta.strategy.knowledge_get"),
+    // The agents' side of the knowledge base (design 2026-11-19 §5.1).
+    ("strategy.frame_apply", "jeeta.strategy.frame_apply"),
+    ("strategy.note_claim", "jeeta.strategy.note_claim"),
+    ("strategy.note_file", "jeeta.strategy.note_file"),
+    ("strategy.note_release", "jeeta.strategy.note_release"),
+    ("strategy.proposal_create", "jeeta.strategy.proposal_create"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

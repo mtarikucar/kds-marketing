@@ -130,6 +130,7 @@ pub async fn card_create(deps: &Deps, ctx: &Ctx, input: CardCreateInput) -> Resu
     .await?;
     kb.bootstrap(deps, ctx, r.as_mut(), person, Waking::InPerson)
         .await?;
+    kb.wake(r.as_mut(), ctx, Waking::InPerson).await?;
     kb.save(r.as_mut()).await?;
     r.commit().await?;
     Ok(card)
@@ -293,6 +294,7 @@ async fn write(
         supersede_edits(r, card.id, ctx.now).await?;
     }
     kb.bootstrap(deps, ctx, r, person, Waking::InPerson).await?;
+    kb.wake(r, ctx, Waking::InPerson).await?;
     kb.save(r).await?;
     Ok(card)
 }

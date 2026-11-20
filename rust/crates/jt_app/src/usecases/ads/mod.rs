@@ -213,7 +213,7 @@ pub(crate) async fn check_money(
         .ok_or_else(|| {
             refuse(
                 "no_paid_lane",
-                "the approved strategy has no paid lane in the ad budget's currency",
+                "the frame has no paid lane in the ad budget's currency",
             )
         })?;
     let others = committed(r, &currency, Some(id), None, now).await?;

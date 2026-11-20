@@ -20,7 +20,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.ledger",
-            description: "Read tenant-filtered Studio evidence, also after strategy archive. [risk: READ]",
+            description: "Read tenant-filtered Studio evidence. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.ledger"),
             schema: || Schema::try_from(schema::input("ledger")).expect("studio schema"),
             run: ledger,
@@ -55,7 +55,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.learned",
-            description: "Read hypothesis results and evidence, lane performance and spend versus caps. [risk: READ]",
+            description: "Read the results and evidence of each topic (hypothesis_id: a topic id of jeeta.strategy.knowledge_get frame.topics), lane performance and spend versus caps. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.learned"),
             schema: || Schema::try_from(schema::input("learned")).expect("studio schema"),
             run: learned,
@@ -69,7 +69,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.file_upload",
-            description: "Store validated tenant media with a replay key; needs no approved strategy. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
+            description: "Store validated tenant media with a replay key; needs no frame. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.file_upload"),
             schema: || Schema::try_from(schema::input("file_upload")).expect("studio schema"),
             run: file_upload,
@@ -111,7 +111,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.hypothesis_propose",
-            description: "Append one hypothesis to the strategy draft, requiring team.manage as well as content.work, social.work or ads.work. [risk: WRITE]",
+            description: "Retired soon: the strategy is the knowledge base now; read jeeta.strategy.knowledge_get and apply with jeeta.strategy.frame_apply. Append one hypothesis to the strategy draft, requiring team.manage as well as content.work, social.work or ads.work. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.hypothesis_propose"),
             schema: || {
                 Schema::try_from(schema::input("hypothesis_propose")).expect("studio schema")
@@ -178,8 +178,8 @@ fn posting_definitions() -> Vec<ToolDef> {
              images; LinkedIn feed_post images or one video; TikTok tiktok_video one video), \
              publish_at (at least the format's lead ahead, within the horizon, outside the quiet \
              hours), material_ids (eligible for the subject at publish_at, one an anchor), \
-             subject, hypothesis_id (a live hypothesis whose organic cadence names a content \
-             type for the channel) and content_type (default the cadence's first). All or \
+             subject, hypothesis_id (a topic id of jeeta.strategy.knowledge_get frame.topics \
+             whose organic cadence names a content type for the channel) and content_type (default the cadence's first). All or \
              nothing: a refused package names each refused post's reason (VALIDATION \
              package_refused, details.items: index, reason) and writes nothing; caps and spacing \
              count every planned or published post. A valid package becomes planned slots at \
@@ -251,7 +251,7 @@ fn library_definitions() -> Vec<ToolDef> {
              panel. Read it before filing a material a person uploaded with no olay \
              (jeeta.studio.material_analysis_complete's filing): its kinds and dates tell you \
              which olay the files come from. Returns {olays: [{olay, materials}]}. Needs no \
-             approved strategy. [risk: READ]",
+             frame. [risk: READ]",
             || library_schema("olays_list"),
             olays_list,
         ),

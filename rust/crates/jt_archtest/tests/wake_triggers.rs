@@ -86,6 +86,23 @@ const TRIGGERS: &[(&str, &str, &str, &str)] = &[
         "KnowledgeApplied",
         "SOCIAL",
     ),
+    // A knowledge write that moves what a derivation reads (a person's card write, an accepted
+    // card proposal, an agent's filing of a person's note): the agent that derives it (§5.3).
+    ("knowledge/mod.rs", "wake", "KnowledgeChanged", "KNOWLEDGE"),
+    ("knowledge/mod.rs", "wake", "KnowledgeChanged", "RESEARCH"),
+    // A person's note to the agents: the agents that file notes.
+    (
+        "knowledge/notes.rs",
+        "note_add",
+        "KnowledgeNote",
+        "KNOWLEDGE",
+    ),
+    (
+        "knowledge/notes.rs",
+        "note_add",
+        "KnowledgeNote",
+        "RESEARCH",
+    ),
     // A person releasing the organic brake: the posts waiting for a time get one now (D40).
     ("studio/control.rs", "brake", "PostingResumed", "SOCIAL"),
     // A person connecting or verifying an account a waiting post can go out on (D40).
@@ -213,5 +230,40 @@ fn a_persons_cancel_wakes_nobody() {
             !body(&source, name).contains("wake::request("),
             "{file} {name} wakes an agent for a cancel"
         );
+    }
+}
+
+#[test]
+fn every_knowledge_write_reaches_its_wake() {
+    // The knowledge writes that may move what a derivation reads (design 2026-11-19 §4.4 step 5,
+    // §5.3): each runs `Locked::wake` (the `KnowledgeChanged` row above) before it commits, a
+    // card update or archive through the shared `write`; a note's post request opens its content
+    // through the composer's internals (the `open_request_in` rows above), on the note's
+    // person's behalf.
+    let root = workspace_dir().join("crates/jt_app/src/usecases");
+    for (file, name, call) in [
+        ("knowledge/cards.rs", "card_create", "kb.wake("),
+        ("knowledge/cards.rs", "card_update", "write("),
+        ("knowledge/cards.rs", "card_archive", "write("),
+        ("knowledge/cards.rs", "write", "kb.wake("),
+        ("knowledge/proposals.rs", "proposal_accept", "kb.wake("),
+        ("knowledge/notes.rs", "note_file", "kb.wake("),
+        ("knowledge/notes.rs", "note_file", "post_request_outcome("),
+        (
+            "knowledge/notes.rs",
+            "post_request_outcome",
+            "compose::open_request_in(",
+        ),
+    ] {
+        let source = std::fs::read_to_string(root.join(file))
+            .unwrap()
+            .replace("\r\n", "\n");
+        let body = body(&source, name);
+        let at = body
+            .find(call)
+            .unwrap_or_else(|| panic!("{file} {name} never calls {call}"));
+        if let Some(commit) = body.rfind(".commit().await") {
+            assert!(at < commit, "{file} {name} wakes after it commits");
+        }
     }
 }

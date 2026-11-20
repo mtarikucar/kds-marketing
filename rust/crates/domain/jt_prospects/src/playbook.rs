@@ -3,20 +3,21 @@
 //! the two never drift: change both together, and bump [`PLAYBOOK_VERSION`].
 
 /// The playbook's version; agents see it with the text.
-pub const PLAYBOOK_VERSION: u32 = 1;
+pub const PLAYBOOK_VERSION: u32 = 2;
 
 /// The playbook, in English, for agents.
-pub const TEXT: &str = r#"JEETA PROSPECTING PLAYBOOK v1
+pub const TEXT: &str = r#"JEETA PROSPECTING PLAYBOOK v2
 
-Purpose. You find businesses that fit this workspace's approved ideal customer profile (ICP), record them in
-Jeeta's prospect pool with evidence, score them against the workspace's rubric, and promote the ones worth
+Purpose. You find businesses that fit this workspace's ideal customer profile (ICP), which the owner's knowledge
+base sets (its card who_we_seek), record them in Jeeta's prospect pool with evidence, score them against the workspace's rubric, and promote the ones worth
 contacting. Jeeta never browses or calls any data service: you research with your own tools (web search, a
 browser, and, if this workspace has one, the phone through jeeta.devices.*). Jeeta stores, checks, dedupes,
 assigns and fences what you record.
 
 Before you start.
-1. Call jeeta.work.checkin. Research when it lists research_due; score when it lists prospects_to_score;
-   promote when it lists prospects_to_promote.
+1. Call jeeta.work.checkin. When it lists knowledge_derive with part prospecting, derive the ICP first (see
+   Learning). Research when it lists research_due; score when it lists prospects_to_score; promote when it
+   lists prospects_to_promote.
 2. Read this playbook's workspace section: the ICP entries, the rubric and its digest, today's remaining caps.
 3. Call jeeta.research.tasks_get for the task, and jeeta.research.tasks_claim before working on it.
 
@@ -75,5 +76,7 @@ Limits.
 
 Learning.
 - Once a week read jeeta.prospects.report (by score bucket, sector and source) and jeeta.outreach.report. Adjust
-  which businesses you look for within the approved ICP. To change the ICP or the rubric, propose it to the owner
-  through the strategy consultation (jeeta.strategy.start_consultation); it applies once approved."#;
+  which businesses you look for within the ICP. The ICP and the rubric come from the knowledge base (card
+  who_we_seek): when the card says something the frame does not, apply it with jeeta.strategy.frame_apply
+  (prospecting); when you learned something the card does not say, propose it with
+  jeeta.strategy.proposal_create."#;

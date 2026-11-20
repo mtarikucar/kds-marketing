@@ -65,7 +65,7 @@ async fn home_data_shows_agent_overdue() {
     );
     assert_eq!(
         kinds(&pending),
-        ["consult_strategy", "declare_first_capability"]
+        ["knowledge_empty", "declare_first_capability"]
     );
     assert_eq!(pending["items"][0]["priority"], 1);
     assert!(pending["items"][0]["hint"].is_string());
@@ -91,7 +91,7 @@ async fn home_data_shows_agent_overdue() {
     )
     .await;
     let pending = ok_json(p.get("/api/work/pending", &owner).await).await;
-    assert_eq!(kinds(&pending), ["consult_strategy", "verify_capability"]);
+    assert_eq!(kinds(&pending), ["knowledge_empty", "verify_capability"]);
     let verify = &pending["items"][1];
     assert_eq!(verify["capability_id"], computer["capability"]["id"]);
     assert_eq!(verify["name"], "Saha bilgisayarı");

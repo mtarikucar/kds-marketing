@@ -467,6 +467,13 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("strategy.note_withdraw", Exempt, ("POST", "/api/knowledge/notes/{note_id}/withdraw"), Write),
     panel_only("strategy.proposal_accept", Exempt, ("POST", "/api/knowledge/proposals/{proposal_id}/accept"), Write),
     panel_only("strategy.proposal_skip", Exempt, ("POST", "/api/knowledge/proposals/{proposal_id}/skip"), Write),
+    // The agents' side of the knowledge base (design 2026-11-19 §5.1): a derivation applied to
+    // the frame, the owner's notes filed, the agents' proposals. Agent workflows: no panel route.
+    mcp_only("strategy.frame_apply", Exempt, "jeeta.strategy.frame_apply", Write),
+    mcp_only("strategy.note_claim", Exempt, "jeeta.strategy.note_claim", Write),
+    mcp_only("strategy.note_file", Exempt, "jeeta.strategy.note_file", Write),
+    mcp_only("strategy.note_release", Exempt, "jeeta.strategy.note_release", Write),
+    mcp_only("strategy.proposal_create", Exempt, "jeeta.strategy.proposal_create", Write),
     // Capabilities, their groups and the budget are exempt from the strategy gate (the
     // consultation needs to know what the workspace has), but not from the status check.
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),

@@ -1219,7 +1219,7 @@ Where the build settled what this section left open, or departs from it:
 - `ready::Reader`, `VersionAccounts` and `account_get` read the brake with `read_control`.
 - A note's `post_request` outcome stays refused (`not_available`) here; the composer's internals
   are `content::compose::open_request_in` (the caller's transaction, waking on the note's person's
-  behalf) for PR 6 to call.
+  behalf) for PR 6 to call. PR 6 calls it (§5.7).
 
 ## 4. Bilgi bankası
 
@@ -2312,7 +2312,7 @@ PR 6):
 | `jeeta.inbox.context` | adds `knowledge` (with open notes); prohibitions from the knowledge base; answers without a frame; "Read recent conversation context and the knowledge base" |
 | `jeeta.studio.slot_get` | `brand_rules` per §4.12 |
 | `jeeta.studio.overview` | goals from Hedefler |
-| `jeeta.studio.material_analysis_complete` | new input `sensitive_checked: bool` (default false); "read jeeta.strategy.knowledge_get (products_prices, who_we_are) to reuse groups and labels; look for every face, name, child, client logo and corporate reference and mark each in depicts, every named person in people, then send sensitive_checked true: a file a person attached to a post becomes shareable by itself only when you checked and found none" |
+| `jeeta.studio.material_analysis_complete` | new input `sensitive_checked: bool` (default false); "read jeeta.strategy.knowledge_get (products_prices, who_we_are) to reuse groups and labels; look for every face, name, child, client logo and corporate reference and mark each in depicts, then send sensitive_checked true: a file a person attached to a post becomes shareable by itself only when you checked and found none" |
 | `jeeta.studio.posts_propose`, `trend_record`, `judgment_record`, `jeeta.ads.plan_submit`, `campaign_move`, `jeeta.studio.adset_bind`, `project_schedule` | "hypothesis_id: a topic id of jeeta.strategy.knowledge_get frame.topics" in place of "of the approved strategy" |
 | `jeeta.prospects.playbook`, `score`, … ; `jeeta.research.tasks_*` | "the ICP and rubric of the frame, derived from the card who_we_seek"; `prospecting_off`: "the knowledge base has no ICP yet: derive it (knowledge_derive, part prospecting)"; changes "through jeeta.strategy.frame_apply (prospecting) when the card says so, else jeeta.strategy.proposal_create" |
 | `jeeta.budget.items_create`, `items_update` | "the general ad budget may not exceed the ad budget of the owner's rules (Kurallar, knowledge_get rules.ad_cap): above it is refused (above_rules_cap). You may lower it; only the owner raises the ceiling, in Kurallar." |
@@ -2527,7 +2527,7 @@ Every run:
      human_gate means the owner acts after scheduling (approval or TikTok's screen), not that you
      must not schedule there.
    - studio_material_analysis: look for faces, names, children, client logos and corporate
-     references and mark each in depicts, named people in people, then send sensitive_checked true;
+     references and mark each in depicts, then send sensitive_checked true;
      never set a share permission.
 3. When you learn something the cards do not say (a question customers keep asking, a topic that
    works), propose it with jeeta.strategy.proposal_create: one line of reason in Turkish.
@@ -2559,6 +2559,31 @@ Other routines: the inbox routine reads `jeeta.inbox.context.knowledge` (or
 `jeeta.strategy.knowledge_get` (the ad budget of the rules is its hard limit; `jeeta.budget.items_*`
 can only lower the general item) and sets a topic's paid cadence with `jeeta.strategy.frame_apply`
 `paid_cadence` when it runs ads for a topic that has none. Nothing else changes for them.
+
+### 5.7 As built (PR 6)
+
+Where the build settled what this section and §4.8 left open, or departs from them:
+
+- **A note's post request** (`note_file` with `post_request: {}`, which takes no field of its own:
+  anything else is `VALIDATION post_request invalid`) calls `content::compose::open_request_in` in
+  the filing's transaction, after the knowledge locks and the cards' bootstrap (it takes the Studio
+  control lock, later in the order of §4.10.13). The note's images and MP4s (live files of the
+  workspace) are read before the transaction as the composer reads them; its PDFs, and a file
+  deleted since, are left out. Without the content module it is `CONFLICT module_not_installed`
+  before anything is written. The composer takes at most 2000 characters (`MAX_GOAL_CHARS`) while a
+  note takes 4000: a longer note is `VALIDATION note_too_long` (`field: post_request`; the agent
+  files it as a card or dismisses it). The note records `outcome.post_request = {area_id}`; the
+  ledger `strategy.note_filed` carries `post_request: area_id`. Materials are written with the
+  agent as `created_by` and the note's person as `freed.by` and `upload_for.by`; the content's
+  `requested_by` is the note's person, and the wake is `request_for` that person (`MATERIALS` with
+  files, else `CONTENT`).
+- `jeeta.studio.material_analysis_complete` has no `people` input (PR 4 built `depicts` and
+  `sensitive_checked` only); §5.1's row and §5.6's block say "mark each in depicts", without
+  "named people in people".
+- The knowledge wakes of §4.4 step 5 run through `knowledge::Locked::wake` (card create, update,
+  archive, an accepted proposal, a filing); `jt_archtest/tests/wake_triggers.rs` has its
+  `KNOWLEDGE` and `RESEARCH` rows, `note_add`'s two, and `every_knowledge_write_reaches_its_wake`,
+  which pins each write's call to it before its commit.
 
 ## 6. Every blocker and major touchpoint, resolved
 

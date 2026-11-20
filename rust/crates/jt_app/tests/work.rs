@@ -12,7 +12,9 @@ use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::capabilities::{self, CapabilityQuery};
 use jt_app::usecases::events;
 use jt_app::usecases::strategy;
-use jt_app::usecases::work::{self, AgentState, PendingOut, StrategyState, WorkItem, WorkKind};
+use jt_app::usecases::work::{
+    self, AgentState, KnowledgeState, PendingOut, StrategyState, WorkItem, WorkKind,
+};
 use jt_capability::{CapabilityId, EffectiveStatus, Evidence, StoredStatus};
 use jt_connector::{EventKind, InboundEvent, InboundEventId, Provider};
 use jt_ledger::{Actor, Subject};
@@ -21,7 +23,6 @@ use jt_tenancy::AgentConnectionId;
 use jt_testkit::fakes::FIXED_NOW;
 use serde_json::json;
 use support::*;
-use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 // ---------------------------------------------------------------------------------------------
@@ -122,7 +123,7 @@ async fn pending(w: &World, ctx: &Ctx) -> PendingOut {
 }
 
 // ---------------------------------------------------------------------------------------------
-// work.pending: the strategy
+// work.pending: the knowledge base (design 2026-11-19 §5.2)
 // ---------------------------------------------------------------------------------------------
 
 #[tokio::test]
@@ -136,26 +137,32 @@ async fn pending_needs_workspace_read() {
 }
 
 #[tokio::test]
-async fn pending_lists_consult_when_no_strategy() {
+async fn an_empty_knowledge_base_asks_the_person_who_keeps_it_for_a_card() {
     let w = active_world().await;
-    // Declaring a capability needs `capabilities.manage`: a rep is not asked to.
+    // Writing a card needs `team.manage`, declaring a capability `capabilities.manage`: a rep is
+    // asked for neither.
     let rep = w.member("rep").await;
-    assert_eq!(kinds(&pending(&w, &rep).await), [WorkKind::ConsultStrategy]);
+    assert_eq!(kinds(&pending(&w, &rep).await), []);
     let out = pending(&w, &w.owner_ctx).await;
 
     assert_eq!(out.strategy, StrategyState::Missing);
-    // Highest priority first: the consultation, then the first capability.
+    assert_eq!(
+        out.knowledge,
+        KnowledgeState {
+            empty: true,
+            revision: 0,
+            frame: None,
+            derive_due: Vec::new(),
+        }
+    );
+    // Highest priority first: the knowledge base, then the first capability.
     assert_eq!(
         kinds(&out),
-        [WorkKind::ConsultStrategy, WorkKind::DeclareFirstCapability]
+        [WorkKind::KnowledgeEmpty, WorkKind::DeclareFirstCapability]
     );
-    let consult = item(&out, &WorkKind::ConsultStrategy);
-    assert_eq!(consult.priority, 1);
-    assert!(
-        consult.hint.contains("jeeta.strategy.start_consultation"),
-        "{}",
-        consult.hint
-    );
+    let empty = item(&out, &WorkKind::KnowledgeEmpty);
+    assert_eq!(empty.priority, 1);
+    assert!(empty.hint.contains("Bilgi bankasi"), "{}", empty.hint);
     let declare = item(&out, &WorkKind::DeclareFirstCapability);
     assert_eq!(declare.priority, 3);
     assert!(
@@ -164,13 +171,24 @@ async fn pending_lists_consult_when_no_strategy() {
         declare.hint
     );
     for i in &out.items {
-        assert!(i.hint.is_ascii() && !i.hint.is_empty(), "{i:?}");
+        assert!(
+            i.hint.is_ascii() && !i.hint.is_empty() && !i.hint.contains("  "),
+            "{i:?}"
+        );
     }
+    // An agent's key, even with team.manage, is not asked to write the owner's cards.
+    let key = w.agent(&["workspace.read", "team.manage"]).await;
+    assert!(!kinds(&pending(&w, &key).await).contains(&WorkKind::KnowledgeEmpty));
 
-    // On the wire: the strategy state as a word, each item's kind beside its fields.
+    // On the wire: the knowledge state first, the strategy's as a word, each item's kind beside
+    // its fields.
     let wire = serde_json::to_value(&out).unwrap();
+    assert_eq!(
+        wire["knowledge"],
+        json!({ "empty": true, "revision": 0, "frame": null, "derive_due": [] })
+    );
     assert_eq!(wire["strategy"], "missing");
-    assert_eq!(wire["items"][0]["kind"], "consult_strategy");
+    assert_eq!(wire["items"][0]["kind"], "knowledge_empty");
     assert_eq!(wire["items"][0]["priority"], 1);
     assert_eq!(wire["items"][1]["kind"], "declare_first_capability");
     assert_eq!(
@@ -179,92 +197,56 @@ async fn pending_lists_consult_when_no_strategy() {
     );
 }
 
+/// An older routine's draft is no work any more (design §5.2): the knowledge base has no
+/// drafts, and its state says only whether a frame is in force.
 #[tokio::test]
-async fn an_open_draft_asks_to_continue_the_consultation_with_its_gaps() {
+async fn an_open_or_submitted_draft_lists_nothing_about_the_strategy() {
     let w = active_world().await;
     strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
     let out = pending(&w, &w.owner_ctx).await;
-
-    let gaps = strategy::get(&w.deps, &w.owner_ctx).await.unwrap().gaps;
-    assert!(!gaps.is_empty());
-    assert_eq!(out.strategy, StrategyState::DraftOpen { gaps });
-    let consult = item(&out, &WorkKind::ConsultStrategy);
-    assert_eq!(consult.priority, 1);
-    assert!(
-        consult.hint.contains("continue the consultation"),
-        "{}",
-        consult.hint
+    assert_eq!(out.strategy, StrategyState::Missing);
+    assert_eq!(
+        kinds(&out),
+        [WorkKind::KnowledgeEmpty, WorkKind::DeclareFirstCapability]
     );
-    let wire = serde_json::to_value(&out).unwrap();
-    assert!(wire["strategy"]["draft_open"]["gaps"].is_array(), "{wire}");
-}
 
-#[tokio::test]
-async fn a_submitted_draft_is_listed_for_approval_only_to_who_may_approve() {
     let w = active_world().await;
-    let id = draft(&w, 1, true).await;
-    let submitted = StrategyState::Submitted {
-        version_id: id,
-        submitted_at: FIXED_NOW,
-    };
-
-    // An owner and a manager may approve: the approval is their top item.
+    draft(&w, 1, true).await;
     let manager = w.member("manager").await;
     for ctx in [&w.owner_ctx, &manager] {
         let out = pending(&w, ctx).await;
-        assert_eq!(out.strategy, submitted);
-        let approve = item(&out, &WorkKind::ApproveStrategy);
-        assert_eq!(approve.priority, 1);
+        assert_eq!(out.strategy, StrategyState::Missing);
         assert!(
-            approve.hint.contains("jeeta.strategy.approve"),
-            "{}",
-            approve.hint
+            out.items
+                .iter()
+                .all(|i| !i.kind.cleared_by().starts_with("strategy.approve")),
+            "{:?}",
+            out.items
         );
-        assert!(!kinds(&out).contains(&WorkKind::ConsultStrategy));
     }
-
-    // A rep, and an owner's key without team.manage, may not: nothing about the strategy, and
-    // without capabilities.manage nothing about the first capability either.
-    let rep = w.member("rep").await;
-    let narrowed = w.agent(&["workspace.read"]).await;
-    for ctx in [&rep, &narrowed] {
-        let out = pending(&w, ctx).await;
-        assert_eq!(out.strategy, submitted);
-        assert_eq!(kinds(&out), []);
-    }
-    // On the wire, the draft as approving it names it.
-    assert_eq!(
-        serde_json::to_value(pending(&w, &rep).await).unwrap()["strategy"],
-        json!({ "submitted": {
-            "version_id": id,
-            "submitted_at": FIXED_NOW.format(&Rfc3339).unwrap(),
-        } })
-    );
 }
 
 #[tokio::test]
-async fn an_approved_strategy_leaves_nothing_to_do_about_it() {
+async fn a_frame_leaves_nothing_to_do_about_the_knowledge_base() {
     let w = active_world().await;
     w.approve_strategy().await;
     let out = pending(&w, &w.owner_ctx).await;
     assert_eq!(out.strategy, StrategyState::Approved { number: 1 });
+    assert_eq!(out.knowledge.frame, Some(1));
+    assert!(!out.knowledge.empty);
     assert_eq!(kinds(&out), [WorkKind::DeclareFirstCapability]);
     assert_eq!(
         serde_json::to_value(&out).unwrap()["strategy"],
         json!({ "approved": { "number": 1 } })
     );
 
-    // A new draft beside it is the pending work.
+    // A new draft beside it is no work either.
     draft(&w, 2, false).await;
     let out = pending(&w, &w.owner_ctx).await;
-    assert!(
-        matches!(out.strategy, StrategyState::DraftOpen { .. }),
-        "{:?}",
-        out.strategy
-    );
-    assert_eq!(item(&out, &WorkKind::ConsultStrategy).priority, 1);
+    assert_eq!(out.strategy, StrategyState::Approved { number: 1 });
+    assert_eq!(kinds(&out), [WorkKind::DeclareFirstCapability]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -317,7 +299,7 @@ async fn pending_lists_stale_devices() {
     assert_eq!(
         kinds(&out),
         [
-            WorkKind::ConsultStrategy,
+            WorkKind::KnowledgeEmpty,
             WorkKind::VerifyCapability {
                 capability_id: computer,
                 name: "Saha bilgisayarı".into(),
@@ -398,7 +380,7 @@ async fn pending_lists_connect_connector_for_declared_connector_kinds() {
     assert_eq!(
         kinds(&out),
         [
-            WorkKind::ConsultStrategy,
+            WorkKind::KnowledgeEmpty,
             WorkKind::ConnectConnector {
                 capability_id: declared,
                 name: "Destek".to_owned(),
@@ -426,13 +408,13 @@ async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
     inbound(&w, 2).await;
     assert_eq!(
         kinds(&pending(&w, &w.owner_ctx).await),
-        [WorkKind::ConsultStrategy]
+        [WorkKind::KnowledgeEmpty]
     );
 
     jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
     let out = pending(&w, &w.owner_ctx).await;
     for kind in [
-        WorkKind::ConsultStrategy,
+        WorkKind::KnowledgeEmpty,
         WorkKind::VerifyCapability {
             capability_id: device,
             name: "Kabuk".to_owned(),
@@ -452,7 +434,7 @@ async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
             exemption.allows(jt_tenancy::WorkspaceStatus::Active),
             "{kind:?}"
         );
-        // Strategy items alone run while the workspace awaits payment.
+        // The knowledge base's items alone run while the workspace awaits payment.
         let strategy = kind.cleared_by().starts_with("strategy.");
         assert_eq!(
             exemption.allows(jt_tenancy::WorkspaceStatus::PendingPayment),
@@ -462,8 +444,18 @@ async fn a_workspace_awaiting_payment_lists_only_what_it_can_act_on() {
     }
     // Every item's use case is a catalogued one.
     for kind in [
-        WorkKind::ConsultStrategy,
-        WorkKind::ApproveStrategy,
+        WorkKind::KnowledgeEmpty,
+        WorkKind::KnowledgeDerive {
+            kb_revision: 1,
+            part: jt_knowledge::frame::DerivePart::Posting,
+        },
+        WorkKind::KnowledgeNote {
+            note_id: jt_knowledge::KnowledgeNoteId::new_v7(),
+            expected_revision: 1,
+        },
+        WorkKind::KnowledgeProposal {
+            proposal_id: jt_knowledge::KnowledgeProposalId::new_v7(),
+        },
         WorkKind::DeclareFirstCapability,
         WorkKind::InboundEvents { count: 1 },
         WorkKind::ResearchDue {
@@ -930,7 +922,7 @@ async fn work_pending_is_derived_and_preserves_status_gating() {
     let first = work::pending(&w.deps, &w.owner_ctx).await.unwrap();
     assert_eq!(first, work::pending(&w.deps, &w.owner_ctx).await.unwrap());
     assert_eq!(w.uow.snapshot().ledger.len(), before);
-    assert!(matches!(first.items[0].kind, WorkKind::ConsultStrategy));
+    assert!(matches!(first.items[0].kind, WorkKind::KnowledgeEmpty));
     assert!(first.items.iter().any(|i| i.kind
         == WorkKind::ReplyDue {
             conversation_id: id
@@ -1025,6 +1017,6 @@ async fn work_pending_is_derived_and_preserves_status_gating() {
     assert!(
         held.items
             .iter()
-            .any(|i| matches!(i.kind, WorkKind::ConsultStrategy))
+            .any(|i| matches!(i.kind, WorkKind::KnowledgeEmpty))
     );
 }
