@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// The eight stages: five over the workflow's steps, then approval, publishing and results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKey {
     /// Steps 1 to 3: goal, audience, platform and format.
@@ -178,9 +178,9 @@ pub struct TimeWait {
     /// The accounts it could go out on now.
     pub accounts: Vec<CapabilityId>,
     /// Why no account can take it now, as `jeeta.social.versions_waiting` says it
-    /// (`material_removed`, `no_approved_strategy`, `no_connected_account`, `account_paused`,
+    /// (`material_removed`, `braked`, `knowledge_empty`, `no_connected_account`, `account_paused`,
     /// `its_account_unavailable`, `format_not_supported`, `media_not_accepted`,
-    /// `channel_not_in_strategy`, `hypothesis_does_not_post`): a problem a person fixes, read
+    /// `hypothesis_does_not_post`): a problem a person fixes, read
     /// from the facts on every read, so it goes the moment its cause does. Absent while some
     /// account can.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -465,6 +465,8 @@ pub struct PostReads {
     publications: BTreeMap<SlotId, Publication>,
     retired: BTreeMap<SlotId, RetirementReason>,
     accounts: BTreeMap<CapabilityId, Option<Capability>>,
+    /// The knowledge base's rules, for the effective post gate (none before seeding).
+    knowledge: Option<jt_knowledge::KnowledgeSettings>,
 }
 
 impl PostReads {
@@ -517,6 +519,7 @@ impl PostReads {
                 e.insert(r.capabilities().find(s.capability_id).await?);
             }
         }
+        let knowledge = crate::usecases::social::approval::rules(r).await?;
         Ok(PostReads {
             slots,
             approvals,
@@ -525,7 +528,31 @@ impl PostReads {
             publications,
             retired,
             accounts,
+            knowledge,
         })
+    }
+
+    /// The stored slot `id` among those read.
+    pub(crate) fn slot(&self, id: SlotId) -> Option<&Slot> {
+        self.slots.get(&id)
+    }
+
+    /// The approval of slot `id` at its revision, when one was given.
+    pub(crate) fn receipt(&self, id: SlotId) -> Option<&ApprovalReceipt> {
+        self.approvals.get(&id)
+    }
+
+    /// The publish attempts of slot `id` (a planned post has at most one).
+    pub(crate) fn attempts(&self, id: SlotId) -> &[PublishAttempt] {
+        self.attempts
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// The account `id` of a slot read, when it is stored.
+    pub(crate) fn account(&self, id: CapabilityId) -> Option<&Capability> {
+        self.accounts.get(&id).and_then(Option::as_ref)
     }
 
     /// What the planned posts `posts` of one area are now, in their order: each version's slot,
@@ -548,7 +575,11 @@ impl PostReads {
                 .get(&slot.capability_id)
                 .and_then(Option::as_ref);
             let screen = account.is_some_and(|c| jt_studio::requires_posting_screen(&c.kind_key));
-            let required = screen || account.is_some_and(|c| c.policy.requires_human_approval);
+            // The effective post gate (design 2026-11-19 §3.10.1), not the stored flag alone.
+            let required = screen
+                || account.is_some_and(|c| {
+                    crate::usecases::social::approval::needs_approval(c, self.knowledge.as_ref())
+                });
             let receipt = self.approvals.get(&slot.id);
             let attempts: &[PublishAttempt] = self
                 .attempts

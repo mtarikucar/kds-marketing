@@ -731,6 +731,59 @@ impl ResearchTaskRepo for MemTenant {
         })
     }
 
+    async fn carry(
+        &mut self,
+        id: ResearchTaskId,
+        version: StrategyVersionId,
+        rubric_digest: &str,
+        daily_cap: u16,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            if this.state().version_in(this.ws, version).is_none() {
+                return Err(AppError::not_found("no such strategy version"));
+            }
+            let Some(task) = this
+                .task_in(id)
+                .filter(|t| t.status == TaskStatus::Open)
+                .cloned()
+            else {
+                return Err(AppError::not_found("no such open standing research task"));
+            };
+            let TaskKind::Standing { icp_key } = &task.kind else {
+                return Err(AppError::not_found("no such open standing research task"));
+            };
+            if !(1..=500).contains(&daily_cap) || !(1..=64).contains(&rubric_digest.chars().count())
+            {
+                return Err(AppError::internal("research_tasks check constraint"));
+            }
+            // `research_tasks_one_standing`: one open standing task per entry and version.
+            unique(
+                !this.pool().tasks.iter().any(|x| {
+                    x.workspace_id == this.ws
+                        && x.id != id
+                        && x.strategy_version_id == version
+                        && x.status == TaskStatus::Open
+                        && matches!(&x.kind, TaskKind::Standing { icp_key: k } if k == icp_key)
+                }),
+                "the entry already has an open standing task of this version",
+            )?;
+            let (ws, digest) = (this.ws, rubric_digest.to_owned());
+            this.tx.write(move |s: &mut MemState| {
+                if let Some(t) = s
+                    .prospects
+                    .tasks
+                    .iter_mut()
+                    .find(|t| t.workspace_id == ws && t.id == id)
+                {
+                    t.strategy_version_id = version;
+                    t.rubric_digest = digest.clone();
+                    t.daily_cap = daily_cap;
+                }
+            });
+            Ok(())
+        })
+    }
+
     async fn set_claim(
         &mut self,
         id: ResearchTaskId,

@@ -100,6 +100,18 @@ pub enum WakeReason {
     StrategyApproved,
     /// A person pressed "run now".
     Manual,
+    /// A person changed a card of the knowledge base a derivation reads.
+    KnowledgeChanged,
+    /// A person told the agents something to file in the knowledge base.
+    KnowledgeNote,
+    /// The knowledge base changed what the agents work from (a frame applied).
+    KnowledgeApplied,
+    /// A content a person asked for was delivered and waits for its time.
+    ContentDelivered,
+    /// A person connected an account that unsent posts can take.
+    AccountConnected,
+    /// A person resumed posting.
+    PostingResumed,
 }
 
 impl WakeReason {
@@ -118,6 +130,12 @@ impl WakeReason {
             WakeReason::ConversationHanded => "conversation_handed",
             WakeReason::StrategyApproved => "strategy_approved",
             WakeReason::Manual => "manual",
+            WakeReason::KnowledgeChanged => "knowledge_changed",
+            WakeReason::KnowledgeNote => "knowledge_note",
+            WakeReason::KnowledgeApplied => "knowledge_applied",
+            WakeReason::ContentDelivered => "content_delivered",
+            WakeReason::AccountConnected => "account_connected",
+            WakeReason::PostingResumed => "posting_resumed",
         }
     }
 
@@ -144,6 +162,18 @@ impl WakeReason {
             WakeReason::ConversationHanded => "A person handed a conversation to the agent.",
             WakeReason::StrategyApproved => "A person approved the strategy.",
             WakeReason::Manual => "A person asked the agent to run now.",
+            WakeReason::KnowledgeChanged => "A person changed the knowledge base.",
+            WakeReason::KnowledgeNote => {
+                "A person told the agents something to file in the knowledge base."
+            }
+            WakeReason::KnowledgeApplied => "The knowledge base changed what the agents work from.",
+            WakeReason::ContentDelivered => "A content a person asked for is ready for its time.",
+            WakeReason::AccountConnected => {
+                "A person connected an account that unsent posts can take."
+            }
+            WakeReason::PostingResumed => {
+                "A person resumed posting: posts waiting for a time can go out again."
+            }
         }
     }
 }
@@ -630,22 +660,22 @@ mod tests {
         let mut stored = serde_json::to_value(row()).unwrap();
         stored["pending"] = serde_json::to_value(pending(t, t)).unwrap();
         stored["pending"]["reasons"] =
-            serde_json::json!(["knowledge_changed", "content_revision", "posting_resumed"]);
+            serde_json::json!(["a_later_reason", "content_revision", "knowledge_changed"]);
         stored["last"] = serde_json::json!({
             "at": "2026-11-19T11:00:00Z",
-            "reasons": ["account_connected", "manual"],
+            "reasons": ["another_later_reason", "manual"],
             "outcome": "fired",
         });
         let read: AgentWakeRow = serde_json::from_value(stored).unwrap();
         assert_eq!(
             read.pending.unwrap().reasons,
-            vec![WakeReason::ContentRevision]
+            vec![WakeReason::ContentRevision, WakeReason::KnowledgeChanged]
         );
         assert_eq!(read.last.unwrap().reasons, vec![WakeReason::Manual]);
         // Only unknown codes: the wake still reads, with no reason.
         let mut stored = serde_json::to_value(row()).unwrap();
         stored["pending"] = serde_json::to_value(pending(t, t)).unwrap();
-        stored["pending"]["reasons"] = serde_json::json!(["knowledge_note"]);
+        stored["pending"]["reasons"] = serde_json::json!(["a_later_reason"]);
         let read: AgentWakeRow = serde_json::from_value(stored.clone()).unwrap();
         assert!(read.pending.unwrap().reasons.is_empty());
         // Only a string is a code: anything else in the list is a corrupt row, refused.

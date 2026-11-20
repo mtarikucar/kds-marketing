@@ -200,6 +200,12 @@ pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverv
     today
         .paid_alerts
         .retain(|a| bindings.iter().any(|b| json!(b.id) == a["binding_id"]));
+    // The goals are the owner's Hedefler, live (design 2026-11-19 §4.12); the objective the
+    // frame's.
+    let mut goals = strategy.sections.goals.clone();
+    if let Some(k) = r.knowledge().settings().await? {
+        goals.kpis = jt_knowledge::frame::kpis(&k.goals);
+    }
     // Release the tenant bundle before entering another shared service (the fake serializes it).
     drop(r);
     let learned = learning::learned_for(
@@ -210,7 +216,7 @@ pub async fn overview(d: &Deps, ctx: &Ctx, q: StudioQuery) -> Result<StudioOverv
     )
     .await?;
     Ok(StudioOverview {
-        goals: strategy.sections.goals.clone(),
+        goals,
         strategy,
         hypotheses,
         control,

@@ -699,6 +699,7 @@ async fn tools_list_hides_tools_the_key_cannot_use() {
         "jeeta.roles.list",
         "jeeta.agents.list",
         "jeeta.strategy.get",
+        "jeeta.strategy.knowledge_get",
         "jeeta.strategy.list_versions",
         "jeeta.strategy.consultation",
         "jeeta.capability.list",
@@ -1061,7 +1062,7 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     let strategy = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
     assert_eq!(
         strategy,
-        json!({ "approved": null, "draft": null, "gaps": [] })
+        json!({ "approved": null, "draft": null, "gaps": [], "knowledge": null })
     );
 
     // The agent runs the consultation with the owner's key.
@@ -1144,7 +1145,9 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     let refused = err(&call(&b_client, "jeeta.demo.gated", json!({})).await);
     assert_eq!(refused["code"], "STRATEGY_REQUIRED");
 
-    // The agent reads the version in force and archives it by name, confirmed.
+    // The agent reads the version in force. Archiving it is refused: the approval seeded the
+    // knowledge base, which keeps the frame (design 2026-11-19 §4.3.4, D10), so the gate stays
+    // open.
     let strategy = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
     let version_id = strategy["approved"]["id"].clone();
     assert_eq!(version_id, approved["id"]);
@@ -1156,26 +1159,26 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     .await);
     assert_eq!(refused["code"], "VALIDATION");
     assert_eq!(refused["details"], json!({ "field": "confirm" }));
-    let archived = ok(&call(
+    let refused = err(&call(
         &client,
         "jeeta.strategy.archive",
         json!({ "version_id": version_id, "confirm": true }),
     )
     .await);
+    assert_eq!(refused["code"], "CONFLICT");
+    assert_eq!(refused["details"]["reason"], "use_brake");
     assert_eq!(
-        archived,
-        json!({ "version_id": version_id, "archived": true })
+        ok(&call(&client, "jeeta.demo.gated", json!({})).await),
+        json!({ "ran": true })
     );
-    let refused = err(&call(&client, "jeeta.demo.gated", json!({})).await);
-    assert_eq!(refused["code"], "STRATEGY_REQUIRED");
 
     // The record: the versions and the log over MCP, and every strategy call ledgered.
     let versions = ok(&call(&client, "jeeta.strategy.list_versions", json!({})).await);
-    assert_eq!(versions["versions"][0]["status"], "archived");
+    assert_eq!(versions["versions"][0]["status"], "approved");
     let log = ok(&call(
         &client,
         "jeeta.strategy.consultation",
-        json!({ "version_id": version_id, "limit": 2 }),
+        json!({ "version_id": version_id, "limit": 1 }),
     )
     .await);
     let kinds: Vec<&str> = log["entries"]
@@ -1184,10 +1187,10 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
         .iter()
         .map(|e| e["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["archived", "approved"]);
+    assert_eq!(kinds, ["approved"]);
     assert_eq!(log["entries"][0]["actor"]["kind"], "agent");
     assert_eq!(w.entries(w.a, "strategy.approve").await.len(), 1);
-    assert_eq!(w.entries(w.a, "strategy.archive").await.len(), 1);
+    assert!(w.entries(w.a, "strategy.archive").await.is_empty());
 }
 
 #[tokio::test]
@@ -1716,7 +1719,7 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
         .expect("the client initialises over the pipe");
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 22, "only the workspace.read tools");
+    assert_eq!(tools.len(), 23, "only the workspace.read tools");
     let me = ok(&call(&client, "jeeta.agent.whoami", json!({})).await);
     assert_eq!(me["permissions"], json!(["workspace.read"]));
     let listed = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();

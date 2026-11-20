@@ -1793,6 +1793,7 @@ dependencies = [
  "jt_app",
  "jt_capability",
  "jt_connector",
+ "jt_knowledge",
  "jt_ledger",
  "jt_mcp",
  "jt_outreach",

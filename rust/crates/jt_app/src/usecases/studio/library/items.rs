@@ -473,6 +473,13 @@ async fn add_checks(
     i: &MaterialAddInput,
 ) -> Result<StoredFile, AppError> {
     let file = stored_file(r, ctx, i.file_id).await?;
+    // A PDF is stored for the knowledge base only (design 2026-11-19 D17): it is never posted.
+    if !crate::usecases::studio::files::is_media(&file.mime) {
+        return Err(AppError::validation(
+            "a material is an image or an MP4 video; a PDF stays knowledge",
+            json!({"field":"file_id","reason":"file_not_media"}),
+        ));
+    }
     if let Some(m) = r.studio_materials().material_by_file(i.file_id).await? {
         return Err(AppError {
             details: json!({"reason":"file_has_material","material_id":m.id}),
@@ -547,6 +554,7 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
             permission,
             by: Some(by),
             at: ctx.now,
+            rule: None,
         }),
         // An unfiled upload carries no form: its permission is given later, by a person, and
         // until then nothing may use it anyway.
@@ -564,6 +572,7 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
                 permission,
                 by: None,
                 at: ctx.now,
+                rule: None,
             })
         }
         (Some(_), None) => return Err(human_required()),
@@ -587,7 +596,8 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
 /// another person) adds a real material with no permission, and an AI image with a permission only
 /// while it depicts nothing and names no person (D38). An AI image names its `depicts` (possibly
 /// empty). Replayed by `request_key`, answering the material and the suggested olays as they are
-/// now (D40).
+/// now (D40). A PDF is `VALIDATION` `file_not_media`: it is stored for the knowledge base only
+/// (design 2026-11-19 D17).
 pub async fn material_add(
     d: &Deps,
     ctx: &Ctx,
@@ -646,6 +656,7 @@ pub async fn material_add(
         revision: 1,
         created_at: ctx.now,
         erased_at: None,
+        upload_for: None,
     };
     material.validate().map_err(invalid)?;
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
@@ -865,6 +876,8 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     }
     if share_cleared {
         super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, false).await?;
+        // A person's file for a post waits for `İzin ver` again where it is still used (§3.4.4).
+        crate::usecases::content::pending::reopened(r.as_mut(), ctx, &m).await?;
     }
     append(
         r.as_mut(),
@@ -896,6 +909,7 @@ pub async fn material_permission(
         permission: i.permission,
         by: Some(by),
         at: ctx.now,
+        rule: None,
     });
     m.validate().map_err(invalid)?;
     r.studio_materials()
@@ -915,6 +929,15 @@ pub async fn material_permission(
     {
         super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, false).await?;
     }
+    // A person's file for a post got its share: the work waiting for it goes on (§3.4.4).
+    crate::usecases::content::pending::left(
+        d,
+        r.as_mut(),
+        ctx,
+        &m,
+        crate::usecases::content::pending::Left::Shared,
+    )
+    .await?;
     r.commit().await?;
     Ok(m)
 }
@@ -1048,6 +1071,16 @@ pub async fn material_delete(
             .await?;
         r.studio_materials().delete_intelligence(m.id).await?;
         super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, true).await?;
+        // No live content keeps a deleted file as a source or waits for it (§3.10.4): a
+        // content whose pending files empty goes to its agent again.
+        crate::usecases::content::pending::left(
+            d,
+            r.as_mut(),
+            ctx,
+            &m,
+            crate::usecases::content::pending::Left::Deleted,
+        )
+        .await?;
         append(r.as_mut(), ctx, "studio.material.deleted", &m, json!({})).await?;
         r.commit().await?;
         m

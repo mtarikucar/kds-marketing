@@ -219,6 +219,36 @@ impl ProjectRepo for PgTenantRepos {
         .map_err(|e| map_sqlx(e, "list waiting production areas"))?;
         rows.into_iter().map(decode).collect()
     }
+    async fn list_live_areas(&mut self) -> Result<Vec<ProductionProject>, AppError> {
+        // Served by 0031's `studio_projects_recent (workspace_id, archived, id desc)`.
+        let rows: Vec<Value> = sqlx::query_scalar(
+            "select data from studio_production_projects \
+             where workspace_id=$1 and not archived order by id desc",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list live production areas"))?;
+        rows.into_iter().map(decode).collect()
+    }
+    async fn find_area_by_version(
+        &mut self,
+        version_id: Uuid,
+    ) -> Result<Option<ProductionProject>, AppError> {
+        let row: Option<Value> = sqlx::query_scalar(
+            r#"select data from studio_production_projects
+               where workspace_id=$1
+                 and jsonb_path_exists(data, '$.packages[*].versions[*] ? (@.id == $v)',
+                                       jsonb_build_object('v', $2::text))
+               order by id limit 1"#,
+        )
+        .bind(self.workspace_id().0)
+        .bind(version_id.to_string())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "find production area by version"))?;
+        row.map(decode).transpose()
+    }
     async fn save_project(
         &mut self,
         mut p: ProductionProject,

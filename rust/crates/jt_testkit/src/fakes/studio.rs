@@ -160,6 +160,7 @@ impl StudioControlRepo for MemTenant {
         })
     }
     async fn lock_control(&mut self) -> Result<StudioControl, AppError> {
+        self.tx.journal_lock("studio_control");
         self.tx.lock_studio().await;
         // A removed module stops its lane (design 2026-11-10 S25); derived here, never stored.
         let removed = {
@@ -196,6 +197,36 @@ impl StudioControlRepo for MemTenant {
             Ok(())
         })?;
         Ok(StudioControl { removed, ..c })
+    }
+    async fn read_control(&mut self) -> Result<StudioControl, AppError> {
+        // No lock: a read never queues behind the publisher's fence.
+        let removed = {
+            let state = self.state();
+            let registry = state
+                .module_registries
+                .iter()
+                .find(|(ws, _)| *ws == self.ws)
+                .map(|(_, data)| data);
+            jt_app::usecases::modules::removed_lanes(registry)?
+        };
+        let stored = self
+            .state()
+            .studio
+            .controls
+            .iter()
+            .find(|c| c.workspace_id == self.ws)
+            .cloned();
+        Ok(match stored {
+            Some(c) => StudioControl { removed, ..c },
+            None => StudioControl {
+                spend_stopped: Default::default(),
+                workspace_id: self.ws,
+                brake_engaged: false,
+                revision: 0,
+                lanes: Default::default(),
+                removed,
+            },
+        })
     }
     async fn set_brake(
         &mut self,

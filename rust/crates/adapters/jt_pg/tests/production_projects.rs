@@ -19,6 +19,7 @@ fn project(ws: jt_tenancy::WorkspaceId) -> ProductionProject {
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        pending_files: vec![],
         olay_id: None,
         steps: vec![],
         start_at: None,

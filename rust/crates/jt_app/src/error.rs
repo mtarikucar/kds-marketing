@@ -146,10 +146,12 @@ impl AppError {
         )
     }
 
+    /// `STRATEGY_REQUIRED`: the workspace has no frame yet, which is the knowledge base having no
+    /// card text (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §4.10.11; the code is kept).
     pub fn strategy_required() -> Self {
         Self::new(
             ErrorCode::StrategyRequired,
-            "an approved strategy is required first",
+            "the knowledge base is empty: the owner fills it in Bilgi bankasi first",
             json!({}),
         )
     }

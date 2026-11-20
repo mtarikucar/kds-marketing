@@ -12,6 +12,8 @@
 //! - [`Proposal`]: what an agent (or the seeding) proposes and the owner adds or skips ("Ajanın
 //!   önerileri").
 //! - [`seed`]: the cards, rules, goals and proposals a workspace's strategy versions give it once.
+//! - [`frame`]: the internal frame the system applies from the knowledge base (the merge, the
+//!   system fields, the structural diff).
 //!
 //! The stored types read tolerantly (a missing field reads as its default, an unknown one is
 //! ignored), so a row a newer or an older binary wrote still reads. What a person or an agent
@@ -20,6 +22,7 @@
 //! ([`Invalid`]). The limits are the database's own (`0046_knowledge_base`).
 
 mod card;
+pub mod frame;
 mod limits;
 mod note;
 mod proposal;

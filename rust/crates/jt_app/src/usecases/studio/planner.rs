@@ -348,12 +348,90 @@ pub async fn plan(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u64,
             floor_areas,
             ai_standalone,
             used: BTreeSet::new(),
+            debounce: true,
         };
         t.run(r.as_mut(), &slots, &posts).await?;
         changed += t.changed;
     }
     r.commit().await?;
     Ok(changed)
+}
+
+/// The calendar trigger of the special day `key` of `year`, run inside the caller's transaction
+/// when a person's file for it became usable (design 2026-11-19 "Paylaşımlar and Bilgi bankası"
+/// §3.7.1, R2): as the planner's own run would at its next tick, without waiting for the files to
+/// settle (the person's action is the decision). Nothing without a frame, under the organic brake
+/// or without the content module. Answers whether it opened something. The planner's own tick
+/// is unchanged.
+pub(crate) async fn calendar_for(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    key: &str,
+    year: i32,
+) -> Result<bool, AppError> {
+    let Some(frame) = r.strategy().current_approved().await? else {
+        return Ok(false);
+    };
+    let control = r.studio_control().lock_control().await?;
+    if control.brake_engaged_for(LaneKind::Organic) {
+        return Ok(false);
+    }
+    let registry = r.workspace().module_registry().await?;
+    let areas = modules::installed_in(registry.as_ref(), modules::CONTENT)?;
+    let social = modules::installed_in(registry.as_ref(), modules::SOCIAL)?;
+    if !areas {
+        return Ok(false);
+    }
+    let now = ctx.now;
+    let lib = super::materials::library(r, now).await?;
+    let blocked_derivatives = super::library::blocked_derivatives(r).await?;
+    let materials: Vec<Material> = r
+        .studio_materials()
+        .list_materials()
+        .await?
+        .into_iter()
+        .filter(|m| m.erased_at.is_none() && !blocked_derivatives.contains(&m.id))
+        .collect();
+    let slots = r
+        .studio()
+        .list_slots(SlotQuery {
+            from: time::Date::MIN.midnight().assume_utc(),
+            until: now + SLOT_HORIZON,
+            hypothesis_id: None,
+            lane: None,
+        })
+        .await?;
+    let posts = r.studio_posts().list_posts().await?;
+    let policy = r.studio_posts().posting_settings().await?.policy;
+    let outcomes = post_rules::outcomes(r, &posts, &lib.olays).await?;
+    let mut shoots = r.studio_materials().list_shoot_requests().await?;
+    let requests = r.studio_posts().list_package_requests().await?;
+    let used = taken_up(r, &materials, &slots, &posts).await?;
+    let mut t = Triggers {
+        d,
+        ctx,
+        frame: &frame,
+        requests,
+        changed: 0,
+        areas,
+        social,
+        floor_areas: BTreeSet::new(),
+        ai_standalone: lib.ai_standalone,
+        used,
+        debounce: false,
+    };
+    t.calendar(
+        r,
+        &lib,
+        &materials,
+        &outcomes,
+        &policy,
+        &mut shoots,
+        Some((key, year)),
+    )
+    .await?;
+    Ok(t.changed > 0)
 }
 
 /// The paid lane's weekly positions (D13, D33): its arms and slots, as before olay-driven
@@ -372,6 +450,8 @@ async fn plan_paid(
         return Ok(0);
     }
     let start = istanbul_week_start(now);
+    // A closing topic gets no new work (design 2026-11-19 §4.10.6).
+    let closing = crate::usecases::knowledge::read::closing_topics(r).await?;
     let hypotheses = r.hypotheses().list(frame.id).await?;
     let groups = r.capability_groups().list().await?;
     let caps = r.capabilities().list(CapabilityFilter::default()).await?;
@@ -398,7 +478,10 @@ async fn plan_paid(
         });
     }
     let mut lanes = Vec::new();
-    for h in hypotheses.iter().filter(|h| h.state.is_live()) {
+    for h in hypotheses
+        .iter()
+        .filter(|h| h.state.is_live() && !closing.contains(&h.id))
+    {
         let Some(cadence) = h.cadence.get(&LaneKind::Paid) else {
             continue;
         };
@@ -581,6 +664,9 @@ struct Triggers<'a> {
     ai_standalone: bool,
     /// The materials a content or a post already took up ([`Triggers::settled`]).
     used: BTreeSet<MaterialId>,
+    /// Whether new materials wait `debounce_minutes` to settle: the clock's run waits, a
+    /// person's file becoming usable for a special day does not ([`calendar_for`]).
+    debounce: bool,
 }
 
 impl Triggers<'_> {
@@ -609,7 +695,7 @@ impl Triggers<'_> {
         let posting = self.social && !channels.is_empty();
         if self.areas || posting {
             // The calendar first: within an occasion's lead its olay's materials are its.
-            self.calendar(r, &lib, &materials, &outcomes, &policy, &mut shoots)
+            self.calendar(r, &lib, &materials, &outcomes, &policy, &mut shoots, None)
                 .await?;
             self.olays(r, &lib, &materials, &outcomes, &policy).await?;
         }
@@ -826,7 +912,8 @@ impl Triggers<'_> {
             .chain(o.confirmed.as_ref().map(|c| c.at))
             .max()?;
         let now = self.ctx.now;
-        (now >= last + Duration::minutes(i64::from(policy.debounce_minutes))).then_some(fresh)
+        (!self.debounce || now >= last + Duration::minutes(i64::from(policy.debounce_minutes)))
+            .then_some(fresh)
     }
 
     /// How many requests olay `o` had: the olay key's sequence (D48).
@@ -894,7 +981,8 @@ impl Triggers<'_> {
     /// posting horizon), a request for its confirmed olay of the season year: the olay's eligible
     /// materials no request lists yet, once they settled as the olay trigger's do, so that one
     /// set of materials makes one request; with no eligible material (or no such olay), a çekim
-    /// listesi item from the lead on.
+    /// listesi item from the lead on. `only`: that occasion and year alone.
+    #[allow(clippy::too_many_arguments)]
     async fn calendar(
         &mut self,
         r: &mut dyn TenantRepos,
@@ -903,11 +991,15 @@ impl Triggers<'_> {
         outcomes: &[PostOutcome],
         policy: &PostingPolicy,
         shoots: &mut Vec<ShootRequest>,
+        only: Option<(&str, i32)>,
     ) -> Result<(), AppError> {
         let now = self.ctx.now;
         let today = istanbul_day(now);
         let mpolicy = r.studio_materials().material_policy().await?;
         for entry in &lib.calendar.entries {
+            if only.is_some_and(|(key, year)| entry.key != key || entry.year != year) {
+                continue;
+            }
             let Some((start, end)) = entry.window() else {
                 continue;
             };

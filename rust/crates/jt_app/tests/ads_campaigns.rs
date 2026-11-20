@@ -19,7 +19,9 @@ use jt_app::{
     },
     usecases::{
         ads::{self, watch::watch_all},
-        budget, jobs, modules, spending,
+        budget, jobs,
+        knowledge::{rules, seed},
+        modules, spending,
         work::{self, WorkKind},
     },
 };
@@ -1146,6 +1148,68 @@ async fn a_campaign_is_stopped_let_go_on_and_ended_and_the_budget_ends_it_too() 
         .campaign;
     assert_eq!(ended.ended.as_ref().unwrap().reason, EndReason::BudgetSpent);
     let _ = FixedClock(FIXED_NOW);
+}
+
+/// Kurallar's ad budget (design 2026-11-19 §4.6.2, journey `lowering_the_ad_budget_stops_what_
+/// reached_it`): a campaign runs, 3.200 is spent this month; the owner lowers the budget to 3.000
+/// and the same save stops it; a new campaign of 500 is refused; an agent raising the general
+/// ad budget back up is refused.
+#[tokio::test]
+async fn lowering_the_ad_budget_stops_what_reached_it() {
+    let t = ads_world().await;
+    let c = t.running("run", 50_000, 1).await;
+    seed::ensure(&t.w.d, &t.w.ctx).await.unwrap();
+    let general = budget::list_items(&t.w.d, &t.w.ctx).await.unwrap()[0]
+        .item
+        .id;
+    budget::record_spend(&t.w.d, &t.w.ctx, general, 3_200, None)
+        .await
+        .unwrap();
+    let s = {
+        let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+        r.knowledge().settings().await.unwrap().unwrap()
+    };
+    assert_eq!(s.ad_cap.as_ref().map(|c| c.amount_minor), Some(100_000));
+    // What the watch the save runs meets at the provider.
+    t.w.ads.push_set_status(Ok(()));
+    t.provider(&[("ad-0", ProviderAdStatus::Active, None)], vec![]);
+    let out = rules::rules_save(
+        &t.w.d,
+        &t.w.ctx,
+        rules::RulesInput {
+            expected_revision: s.rules_revision,
+            prohibitions: s.prohibitions.clone(),
+            ad_budget: Some(jt_knowledge::CapInput {
+                amount_minor: 3_000,
+                period: None,
+            }),
+            message_budget: None,
+            post_approval: s.post_approval,
+            post_approval_accounts: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.stopped_campaigns, 1);
+    let held = t.get(c.id).await;
+    assert_eq!(
+        held.stop.as_ref().map(|s| (s.by, s.reason.as_str())),
+        Some((StopBy::Budget, "budget_exhausted"))
+    );
+    assert!(
+        t.open("more", 500).await.is_err(),
+        "nothing is left this month"
+    );
+    let e = budget::update_item(
+        &t.w.d,
+        &agent(&t.w),
+        general,
+        input(json!({ "cap": 100_000 })),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "above_rules_cap");
+    assert_eq!(e.details["cap"], 3_000);
 }
 
 #[tokio::test]

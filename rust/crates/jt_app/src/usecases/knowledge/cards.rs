@@ -13,6 +13,9 @@
 //! card's title or body, or its removal, supersedes the card's pending `card_edit` proposals:
 //! accepting one would overwrite the owner's newer text. A new position or new attachments leave
 //! them pending (an edit rewrites neither).
+//!
+//! The first card text of a workspace without a frame bootstraps one in the same transaction
+//! (design §4.10.5, D4): the gate opens the moment the owner writes a card.
 
 use jt_knowledge::{
     Attachment, AttachmentInput, Card, Cause, HISTORY_PAGE, KnowledgeCardId, MAX_CARD_ATTACHMENTS,
@@ -24,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
+use super::frame::Waking;
 use super::{Change, FrameWrite, conflict, editor, invalid, lock, moves, refused, seed};
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
@@ -124,6 +128,8 @@ pub async fn card_create(deps: &Deps, ctx: &Ctx, input: CardCreateInput) -> Resu
         },
     )
     .await?;
+    kb.bootstrap(deps, ctx, r.as_mut(), person, Waking::InPerson)
+        .await?;
     kb.save(r.as_mut()).await?;
     r.commit().await?;
     Ok(card)
@@ -286,6 +292,7 @@ async fn write(
     if text_moved(before, &card) {
         supersede_edits(r, card.id, ctx.now).await?;
     }
+    kb.bootstrap(deps, ctx, r, person, Waking::InPerson).await?;
     kb.save(r).await?;
     Ok(card)
 }

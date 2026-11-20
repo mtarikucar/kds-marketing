@@ -1,6 +1,7 @@
 //! The strategy on the panel, end to end through Postgres: a consultation from an empty
 //! workspace to an approved version (with the gaps an early submission shows), who may do what,
-//! archiving a named version, and the consultation log's keyset pages.
+//! every write refused once the approval seeded the knowledge base (the page is Bilgi bankası,
+//! design 2026-11-19 §4.3.4), and the consultation log's keyset pages.
 
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
@@ -146,7 +147,7 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     let empty = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(
         empty,
-        json!({ "approved": null, "draft": null, "gaps": [] })
+        json!({ "approved": null, "draft": null, "gaps": [], "knowledge": null })
     );
     assert_eq!(
         ok_json(p.get("/api/strategy/versions", &owner).await).await,
@@ -239,9 +240,38 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     assert!(approved["approved_at"].is_string());
     assert_eq!(approved["gaps"], json!([]));
 
-    // The strategy in force, and no draft left.
+    // The strategy in force, and no draft left. The approval seeded the knowledge base, so the
+    // read is its compatibility projection (design 2026-11-19 §5.4): the version in force with
+    // the owner's words as the cards and the rules now hold them.
     let strategy = ok_json(p.get("/api/strategy", &owner).await).await;
-    assert_eq!(strategy["approved"], approved);
+    let shown = &strategy["approved"];
+    for field in [
+        "id",
+        "number",
+        "status",
+        "approved_at",
+        "approved_by_email",
+        "hypotheses",
+    ] {
+        assert_eq!(shown[field], approved[field], "{field}");
+    }
+    assert_eq!(
+        shown["sections"]["audience"],
+        approved["sections"]["audience"]
+    );
+    assert_eq!(shown["sections"]["identity"]["product"], "Kahve");
+    assert_eq!(
+        shown["sections"]["identity"]["positioning"], "mahalle\n\nBizi farklı kılan: taze",
+        "the who_we_are card's text"
+    );
+    assert_eq!(shown["sections"]["identity"]["usp"], "taze");
+    assert_eq!(
+        shown["sections"]["goals"]["kpis"],
+        json!([{ "name": "dm: 50", "target": "" }]),
+        "Hedefler, one line a goal"
+    );
+    assert_eq!(shown["sections"]["channels"][0]["channel"], "any");
+    assert_eq!(strategy["knowledge"]["revision"], 1);
     assert_eq!(strategy["draft"], Value::Null);
     assert_eq!(strategy["gaps"], json!([]));
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;
@@ -271,11 +301,20 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     assert_eq!(log[7]["text"], "Kahve");
     assert_eq!(log[0]["actor"]["kind"], "human");
 
-    // The ledger names each change, the approval under the version it put in force.
-    let ledger = ok_json(p.get("/api/ledger?action_prefix=strategy.", &owner).await).await;
-    let actions: Vec<&str> = ledger
+    // The ledger names each change, the approval under the version it put in force. The
+    // knowledge base the approval seeded writes its own entries (design 2026-11-19 §4.3.4).
+    let ledger: Vec<Value> = ok_json(p.get("/api/ledger?action_prefix=strategy.", &owner).await)
+        .await
         .as_array()
         .unwrap()
+        .iter()
+        .filter(|e| {
+            let action = e["entry"]["action"].as_str().unwrap();
+            !action.starts_with("strategy.knowledge_") && action != "strategy.rules_changed"
+        })
+        .cloned()
+        .collect();
+    let actions: Vec<&str> = ledger
         .iter()
         .map(|e| e["entry"]["action"].as_str().unwrap())
         .collect();
@@ -296,7 +335,7 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
         ]
     );
     assert_eq!(ledger[0]["entry"]["strategy_version_id"], json!(id));
-    assert!(!ledger.to_string().contains("Ne satıyorsunuz?"));
+    assert!(!json!(ledger).to_string().contains("Ne satıyorsunuz?"));
 }
 
 #[tokio::test]
@@ -447,50 +486,78 @@ async fn the_draft_lists_its_assumptions_and_strict_bodies_refuse_unknown_fields
 }
 
 #[tokio::test]
-async fn archive_with_wrong_version_is_409() {
+async fn the_old_page_writes_nothing_once_the_knowledge_base_keeps_the_strategy() {
     let p = Panel::new().await;
     let (owner, _) = p.register(OWNER, "Alpha").await;
     let approved = approve_a_strategy(&p, &owner).await;
     let id = approved["id"].as_str().unwrap();
-    let archive = |body: Value| post(&p, "/api/strategy/archive", &owner, Some(body));
 
-    // Another version than the one in force: refused, naming the one in force.
+    // A body the route cannot read is refused before anything else, as before.
+    let resp = post(
+        &p,
+        "/api/strategy/archive",
+        &owner,
+        Some(json!({ "version_id": "v1", "confirm": true })),
+    )
+    .await;
+    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+
+    // The approval seeded the knowledge base (design 2026-11-19 §4.3.4): the strategy page is
+    // Bilgi bankası now, so every write of the old page is refused, archiving the frame the
+    // knowledge base keeps among them (D10; posting is stopped with the brake instead).
+    let stamp = json!({ "version_id": id, "submitted_at": "2026-10-22T09:00:00Z" });
     let other = "0192f0c0-0000-7000-8000-000000000001";
-    let resp = archive(json!({ "version_id": other, "confirm": true })).await;
-    let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
-    assert_eq!(refused["details"]["approved_version_id"], json!(id));
+    for (method, path, body) in [
+        (Method::POST, "/api/strategy/consultation", None),
+        (
+            Method::POST,
+            "/api/strategy/consultation/entries",
+            Some(json!({ "kind": "note", "text": "x" })),
+        ),
+        (
+            Method::PUT,
+            "/api/strategy/draft/sections/prohibitions",
+            Some(json!(["rakip adı"])),
+        ),
+        (
+            Method::PUT,
+            "/api/strategy/draft/hypotheses",
+            Some(hypotheses()),
+        ),
+        (Method::POST, "/api/strategy/draft/submit", None),
+        (Method::POST, "/api/strategy/draft/approve", Some(stamp)),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": id, "confirm": true })),
+        ),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": other, "confirm": true })),
+        ),
+        (
+            Method::POST,
+            "/api/strategy/archive",
+            Some(json!({ "version_id": id })),
+        ),
+    ] {
+        let resp = send(&p, method, path, &owner, body).await;
+        let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
+        assert_eq!(refused["details"]["reason"], "use_knowledge_base", "{path}");
+    }
 
-    // The right version without confirmation, or with a malformed id: refused.
-    let resp = archive(json!({ "version_id": id })).await;
-    let refused = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
-    assert_eq!(refused["details"]["field"], "confirm");
-    let resp = archive(json!({ "version_id": id, "confirm": false })).await;
-    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
-    let resp = archive(json!({ "version_id": "v1", "confirm": true })).await;
-    expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+    // Nothing moved, and the reads still answer: the frame in force, no draft, its log.
     let still = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(still["approved"]["id"], json!(id));
-
-    // Confirmed: archived (`200` with the confirmation `jeeta.strategy.archive` answers), and the
-    // strategy gate is closed again.
-    let resp = archive(json!({ "version_id": id, "confirm": true })).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        body_json(resp).await,
-        json!({ "version_id": id, "archived": true })
-    );
-    let strategy = ok_json(p.get("/api/strategy", &owner).await).await;
-    assert_eq!(strategy["approved"], Value::Null);
+    assert_eq!(still["draft"], Value::Null);
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;
-    assert_eq!(versions[0]["status"], "archived");
-    assert!(versions[0]["archived_at"].is_string());
-    let log = consultation(&p, &owner, id, "?limit=1").await;
-    assert_eq!(kinds(&log), ["archived"]);
-
-    // Nothing is left to archive.
-    let resp = archive(json!({ "version_id": id, "confirm": true })).await;
-    let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
-    assert_eq!(refused["details"]["reason"], "no_approved_version");
+    assert_eq!(versions.as_array().unwrap().len(), 1);
+    assert_eq!(versions[0]["status"], "approved");
+    assert_eq!(
+        consultation(&p, &owner, id, "").await[0]["kind"],
+        "approved"
+    );
 }
 
 /// `at` as a query value.

@@ -100,14 +100,15 @@ pub fn catalog() -> Vec<Blueprint> {
             vec!["Görüşmeyi incele", "Yanıtla ve takip et"],
         ),
         (
+            // The knowledge base (design 2026-11-19 §4.12); the id stays `strategy`.
             "strategy",
-            "Strateji",
-            "Ajanların ve modüllerin ortak hedefleri.",
+            "Bilgi bankası",
+            "Ajanların işletmen hakkında bildiği her şey.",
             vec![],
             vec![
-                "Hedefi tanımla",
-                "Stratejiyi onayla",
-                "Sonuçları değerlendir",
+                "Bilgiyi yaz",
+                "Ajanlar okur ve uygular",
+                "Önerileri değerlendir",
             ],
         ),
         (
@@ -118,9 +119,9 @@ pub fn catalog() -> Vec<Blueprint> {
             // The agent's working guide for an area (design 2026-11-10 §6.2): it reports each
             // step by its number, 1 to 14, and the area page shows them under the same names.
             vec![
-                "Amacı belirle: hedef cümlesinden ve onaylı stratejiden bu içeriğin tek amacını çıkar.",
-                "Hedef kitleyi tanımla: stratejideki kitlelerden bu içeriğin seslendiğini seç, içerik için daralt.",
-                "Platformu ve biçimi seç: alan açılırken seçildiyse ona uy; seçilmediyse bağlı hesaplara ve stratejiye göre belirle.",
+                "Amacı belirle: hedef cümlesinden ve bilgi bankasından bu içeriğin tek amacını çıkar.",
+                "Hedef kitleyi tanımla: bilgi bankasındaki müşterilerden bu içeriğin seslendiğini seç, içerik için daralt.",
+                "Platformu ve biçimi seç: alan açılırken seçildiyse ona uy; seçilmediyse bağlı hesapların hepsi arasından, kişinin isteğine göre seç (“sadece TikTok” gibi).",
                 "Konu araştırması: konuyu araştır, dayandığın kaynakları kısa bir liste olarak not et.",
                 "Fikir ve yaklaşım: içeriğin fikrini ve anlatım biçimini bir cümleyle yaz.",
                 "Ana mesaj: izleyenin aklında kalacak tek mesajı bir cümleyle yaz.",

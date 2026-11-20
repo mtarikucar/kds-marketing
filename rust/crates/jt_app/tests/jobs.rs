@@ -305,6 +305,7 @@ fn every_job_has_a_lock_named_after_it() {
             "comments_poll",
             "purge_request_keys",
             "agent_wake",
+            "knowledge_settle",
         ]
     );
     for job in Job::ALL {

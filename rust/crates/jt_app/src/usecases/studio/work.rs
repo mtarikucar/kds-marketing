@@ -16,10 +16,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
+/// What a post must keep to (design 2026-11-19 §4.12): once the knowledge base is seeded, the
+/// identity the owner's cards give, the prohibitions, the voice card and the open notes (which
+/// bind at once), all live; before, the frame's identity and prohibitions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrandRules {
     pub identity: Identity,
     pub prohibitions: Vec<String>,
+    /// The voice card's text (the frame's voice before seeding).
+    #[serde(default)]
+    pub voice: String,
+    /// What the owner told the agents and no agent has filed yet, newest first.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// The knowledge base's revision read; 0 before seeding.
+    #[serde(default)]
+    pub knowledge_revision: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SlotOut {
@@ -154,6 +166,7 @@ pub(crate) async fn pending_in(
         .into_iter()
         .map(|p| (p.slot_id, p))
         .collect();
+    let knowledge = crate::usecases::social::approval::rules(r).await?;
     let mut out = PendingStudioOut::default();
     if control.is_braked(jt_strategy::LaneKind::Paid) {
         for binding in r.studio().list_bindings().await? {
@@ -255,7 +268,14 @@ pub(crate) async fn pending_in(
         // A TikTok piece waits for a human on its posting screen whatever the policies say,
         // and only an approval carrying the screen's choice releases it.
         let screen = jt_studio::requires_posting_screen(&cap.kind_key);
-        let required = screen || cap.policy.requires_human_approval;
+        // A post's approval is the knowledge base's (design 2026-11-19 §3.10.1, D1); a slot of
+        // another lane keeps the account's stored flag.
+        let required = screen
+            || if arm.key.lane == jt_strategy::LaneKind::Organic {
+                crate::usecases::social::approval::needs_approval(&cap, knowledge.as_ref())
+            } else {
+                cap.policy.requires_human_approval
+            };
         // A slot with an attempt is never claimed again, whatever revision it reaches: no
         // approval can send it.
         if s.state == SlotState::Ready
@@ -449,14 +469,27 @@ pub(crate) async fn slot_in(
         None => None,
     };
     let post = r.studio_posts().get_post(id).await?;
+    let brand_rules = match crate::usecases::knowledge::read::Live::read(r).await? {
+        Some(k) => BrandRules {
+            identity: k.identity(Some(frame)),
+            prohibitions: k.settings.prohibitions.clone(),
+            voice: k.voice(),
+            notes: k.notes(),
+            knowledge_revision: k.settings.revision,
+        },
+        None => BrandRules {
+            identity: frame.sections.identity.clone(),
+            prohibitions: frame.sections.prohibitions.clone(),
+            voice: frame.sections.identity.voice.clone(),
+            notes: Vec::new(),
+            knowledge_revision: 0,
+        },
+    };
     Ok(SlotOut {
         slot,
         piece,
         hypothesis,
-        brand_rules: BrandRules {
-            identity: frame.sections.identity.clone(),
-            prohibitions: frame.sections.prohibitions.clone(),
-        },
+        brand_rules,
         learned,
         attempts,
         measurements,
@@ -465,10 +498,18 @@ pub(crate) async fn slot_in(
         content: None,
     })
 }
+/// Who may cancel a planned post (design 2026-11-19 "Paylaşımlar and Bilgi bankası" D13): a
+/// person in person with `social.manage` or `content.manage` (the page offers `İptal` per post to
+/// both); an agent (or a key used through a connection) with `social.work`, as before.
+fn cancel_permissions(ctx: &Ctx) -> &'static [Permission] {
+    if super::library::person(ctx).is_some() {
+        &[Permission::SocialManage, Permission::ContentManage]
+    } else {
+        crate::usecases::studio::permissions::for_use_case("studio.slot_cancel")
+    }
+}
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {
-    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
-        "studio.slot_cancel",
-    ))?;
+    ctx.require_any(cancel_permissions(ctx))?;
     if input.reason.trim().is_empty() || input.reason.len() > 2000 {
         return Err(AppError::validation(
             "cancellation reason required (max 2000 bytes)",
@@ -479,12 +520,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
     // §7.3): cancelled here and still going out there would be the worst of both.
     {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
-        gated(
-            r.as_mut(),
-            ctx,
-            crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
-        )
-        .await?;
+        gated(r.as_mut(), ctx, cancel_permissions(ctx)).await?;
         let s = r
             .studio()
             .get_slot(input.slot_id)
@@ -498,12 +534,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
             .await?;
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(
-        r.as_mut(),
-        ctx,
-        crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
-    )
-    .await?;
+    let frame = gated(r.as_mut(), ctx, cancel_permissions(ctx)).await?;
     r.studio_control().lock_control().await?;
     let s = r
         .studio()

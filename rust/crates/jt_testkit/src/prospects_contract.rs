@@ -1151,6 +1151,117 @@ pub async fn research_tasks_round_trip_and_one_standing_per_entry(uow: Arc<dyn U
     assert_eq!(err.code, jt_app::error::ErrorCode::NotFound);
 }
 
+/// `ResearchTaskRepo::carry` (design 2026-11-19 K5): an open standing task re-stamped to a newer
+/// version keeps its id, claim and brief, and takes the version's rubric digest and daily cap;
+/// nothing else can be carried, and the one-open-standing-task-per-entry rule still holds.
+pub async fn research_tasks_are_carried_to_a_newer_version(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let v1 = approved_version(&uow, f.ws).await;
+    let v2 = StrategyVersionId::new_v7();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.strategy()
+        .insert(StrategyVersion {
+            id: v2,
+            workspace_id: f.ws,
+            number: 2,
+            status: VersionStatus::Draft,
+            sections: Sections::default(),
+            created_at: FIXED_NOW,
+            created_by: Actor::System {
+                component: "prospects_contract".into(),
+            },
+            submitted_at: None,
+            approved_at: None,
+            approved_by: None,
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    let standing = |version, key: &str, s: i64| {
+        task(
+            f.ws,
+            f.user,
+            version,
+            TaskKind::Standing {
+                icp_key: key.into(),
+            },
+            at(s),
+        )
+    };
+    let (a, b) = (standing(v1, "kafeler", 0), standing(v1, "pastaneler", 1));
+    let taken = standing(v2, "pastaneler", 2);
+    let adhoc = task(f.ws, f.user, v1, TaskKind::AdHoc { target_count: 5 }, at(3));
+    for x in [&a, &b, &taken, &adhoc] {
+        assert!(t.research_tasks().insert(x).await.unwrap());
+    }
+    let claim = Claim {
+        by: human(f.user),
+        until: at(7_200),
+    };
+    t.research_tasks()
+        .set_claim(a.id, Some(&claim))
+        .await
+        .unwrap();
+    let digest = "e".repeat(64);
+    t.research_tasks()
+        .carry(a.id, v2, &digest, 33)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let carried = t.research_tasks().get(a.id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            carried.strategy_version_id,
+            carried.rubric_digest.as_str(),
+            carried.daily_cap,
+            carried.status,
+        ),
+        (v2, digest.as_str(), 33, TaskStatus::Open)
+    );
+    assert_eq!(carried.claim, Some(claim));
+    assert_eq!(carried.brief, a.brief);
+    assert_eq!(carried.created_at, a.created_at);
+    let open: Vec<ResearchTaskId> = t
+        .research_tasks()
+        .open_standing(v2)
+        .await
+        .unwrap()
+        .iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(open, [a.id, taken.id]);
+    t.research_tasks()
+        .set_status(a.id, TaskStatus::Superseded, at(10), "")
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    // An ad-hoc task, an unknown one, an unknown version and a closed task are not carried; each
+    // refusal in a bundle of its own (a refusal spoils it).
+    for (id, version, what) in [
+        (adhoc.id, v2, "an ad-hoc task"),
+        (ResearchTaskId::new_v7(), v2, "an unknown task"),
+        (b.id, StrategyVersionId::new_v7(), "an unknown version"),
+        (a.id, v1, "a closed task"),
+    ] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
+        let err = t
+            .research_tasks()
+            .carry(id, version, &digest, 10)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, jt_app::error::ErrorCode::NotFound, "{what}");
+    }
+    // The entry already has an open standing task of the target version: refused.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let err = t
+        .research_tasks()
+        .carry(b.id, v2, &digest, 10)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, jt_app::error::ErrorCode::Conflict);
+}
+
 pub async fn blocklist_dnc_upgrades_rejected(uow: Arc<dyn UnitOfWork>) {
     let f = Fixture::new(uow.clone()).await;
     let mut t = uow.tenant(f.ws).await.unwrap();

@@ -291,6 +291,20 @@ pub struct PlannedPost {
     pub retired: Option<PostRetirement>,
     #[serde(with = "crate::time_compat")]
     pub created_at: OffsetDateTime,
+    /// A person acknowledged it (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.7.4): a
+    /// failed post they let go ("Bırak"), or a TikTok draft they finished in the app
+    /// ("Tamamladım"). It stops waiting for them; nothing is sent, cancelled or redone. Absent on
+    /// every other post.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged: Option<PostAck>,
+}
+
+/// Who acknowledged a post and when ([`PlannedPost::acknowledged`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostAck {
+    pub by: jt_tenancy::UserId,
+    #[serde(with = "crate::time_compat")]
+    pub at: OffsetDateTime,
 }
 
 impl PlannedPost {
