@@ -1893,7 +1893,8 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 
 CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `design/**`
 dallarına gönderimde, her çekme isteğinde ve elle başlatıldığında çalışır: `rust-checks` (fmt, clippy, doc,
-cargo-deny), `rust-test` (PostgreSQL 16 hizmetiyle `cargo nextest run --workspace`, belge testleri için
+cargo-deny), `rust-test` (PostgreSQL 16 hizmetiyle `cargo nextest run --workspace`, testler üç koşucuya
+bölünür; belge testleri için
 `cargo test --workspace --doc` ve `make smoke-productisation`), `rust-production-build` (tek
 `cargo test --locked -p jt_outbound --test production_build` çalıştırması) ve `panel` (`pnpm install
 --frozen-lockfile`, `pnpm test`, `pnpm typecheck`, `pnpm build`). Paketlenmiş adayı çalıştıran tek test

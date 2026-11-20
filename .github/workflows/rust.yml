@@ -127,8 +127,14 @@ jobs:
   # ones that open throwaway databases. The service's `postgres` role is a superuser;
   # jt_testkit::TestDb only uses it to create and drop each test's own ordinary (non-superuser,
   # non-BYPASSRLS) role and database, so row-level security binds the tests. nextest runs each
-  # test in a process of its own, all binaries at once.
+  # test in a process of its own, all binaries at once. The tests keep a 4-CPU runner busy for
+  # about ten minutes, so three runners each build the same test tree and run a third of them
+  # (`--partition count`: every third test, so every test runs exactly once).
   rust-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -174,20 +180,21 @@ jobs:
           make-default: false
       - name: CI build profile
         run: printf '%s\n' "$CI_CARGO_CONFIG" >> "$CARGO_HOME/config.toml"
-      # Shared with rust-release-binary, which builds part of the same test tree; only this job
-      # saves it.
+      # Shared by the three partitions and rust-release-binary, which build the same test tree;
+      # only partition 1 saves it.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
           shared-key: rust-test
           env-vars: ImageOS CI_CARGO_CONFIG
-          save-if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
+          save-if: ${{ matrix.partition == 1 }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9
       # The service is a throwaway: commits and CREATE/DROP DATABASE stop waiting for the disk.
       # No test asserts durability (the restore drill below runs its own cluster).
       - name: Throwaway PostgreSQL without fsync
+        if: matrix.partition != 2
         run: |
           docker exec ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 \
             -c "ALTER SYSTEM SET fsync = off" \
@@ -198,19 +205,16 @@ jobs:
         name: cargo nextest run --locked --workspace --no-fail-fast
         run: >-
           cargo nextest run --locked --workspace --no-fail-fast
+          --partition count:${{ matrix.partition }}/3
           -E 'not (binary_id(jeeta::m4_deployment) & test(=production_build_refuses_test_loopback))'
       # nextest does not run documentation tests; `cargo test` ran them with the rest, so they run
       # whether or not a test above failed.
       - name: cargo test --locked --workspace --doc
-        if: ${{ !cancelled() && steps.nextest.outcome != 'skipped' }}
+        if: ${{ matrix.partition == 1 && !cancelled() && steps.nextest.outcome != 'skipped' }}
         run: cargo test --locked --workspace --doc
       - name: Synthetic productisation smoke (no external provider traffic)
+        if: matrix.partition == 1
         run: make smoke-productisation
-      - name: Linker check (temporary)
-        run: |
-          for f in target/debug/deps/m4_deployment-*; do
-            if [ -f "$f" ] && [ -x "$f" ]; then readelf -p .comment "$f"; fi
-          done
 
   # A whole-workspace build unifies the dev-only `test-loopback` feature into jt_outbound, so the
   # production-build egress test is compiled separately, without dev features. No database.
@@ -483,7 +487,7 @@ jobs:
           workspaces: rust
           key: release-production
           env-vars: ImageOS
-          save-if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
+          save-if: true
       - uses: pnpm/action-setup@v4
         with:
           version: 9
