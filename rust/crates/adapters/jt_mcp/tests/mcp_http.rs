@@ -699,6 +699,7 @@ async fn tools_list_hides_tools_the_key_cannot_use() {
         "jeeta.roles.list",
         "jeeta.agents.list",
         "jeeta.strategy.get",
+        "jeeta.strategy.knowledge_get",
         "jeeta.strategy.list_versions",
         "jeeta.strategy.consultation",
         "jeeta.capability.list",
@@ -1718,7 +1719,7 @@ async fn stdio_transport_serves_the_same_handler_for_a_fixed_principal() {
         .expect("the client initialises over the pipe");
 
     let tools = client.list_all_tools().await.unwrap();
-    assert_eq!(tools.len(), 22, "only the workspace.read tools");
+    assert_eq!(tools.len(), 23, "only the workspace.read tools");
     let me = ok(&call(&client, "jeeta.agent.whoami", json!({})).await);
     assert_eq!(me["permissions"], json!(["workspace.read"]));
     let listed = agents::list(&w.deps, &w.owner_ctx(w.a)).await.unwrap();

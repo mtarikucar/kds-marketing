@@ -44,7 +44,7 @@
 //! - `agents.wake_now`: `manual`, for the one agent named.
 //!
 //! An action the system or an agent takes because a person asked (a frame applied from their
-//! note, say) records its request on that person's behalf ([`request_for`]); the clock's own
+//! note, say) records its request on that person's behalf (`request_for`); the clock's own
 //! work never does.
 //!
 //! **What deliberately does not.** Work the clock or the system makes: the planner's areas (an

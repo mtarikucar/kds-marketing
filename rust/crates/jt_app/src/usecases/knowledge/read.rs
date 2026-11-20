@@ -3,10 +3,10 @@
 //! - `strategy.knowledge_get` (`GET /api/knowledge`, `jeeta.strategy.knowledge_get`): everything
 //!   the owner's page and the agents read. It seeds a workspace not seeded yet first, in a bundle
 //!   of its own (§4.3).
-//! - [`Live`]: what the agents' work reads take from the knowledge base, read once in the
+//! - `Live`: what the agents' work reads take from the knowledge base, read once in the
 //!   caller's bundle and without a lock: the identity the cards give, the prohibitions, the
 //!   goals, the voice and the open notes (`inbox.context`, `studio.slot_get`, `studio.overview`).
-//! - [`project`]: the compatibility projection of `strategy.get` (§5.4, K7).
+//! - `project`: the compatibility projection of `strategy.get` (§5.4, K7).
 //!
 //! Every read here is live: an owner's edit is in the next read, with no approval in between.
 
