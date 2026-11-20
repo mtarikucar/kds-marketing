@@ -105,6 +105,26 @@ describe('KnowledgePage', () => {
     expect(approvalLine(t, { post_approval: true, post_approval_accounts: [], tiktok_connected: false })).toBe(k.rules.approvalAll);
     expect(approvalLine(t, { post_approval: false, post_approval_accounts: [], tiktok_connected: false })).toBe(k.rules.approvalNone);
     expect(approvalLine(t, { post_approval: false, post_approval_accounts: [], tiktok_connected: true })).toBe(`${k.rules.approvalNone} ${k.rules.tiktok}`);
+    // An account the workspace no longer has is named with an empty name by the read: nothing
+    // posts there, so the line names only the ones still connected.
+    const gone = { capability_id: 'cap-gone', name: '', kind: '' };
+    const kept = { capability_id: 'cap-ig', name: 'Alfa Instagram', kind: 'instagram' };
+    expect(approvalLine(t, { post_approval: false, post_approval_accounts: [gone], tiktok_connected: false })).toBe(k.rules.approvalNone);
+    expect(approvalLine(t, { post_approval: false, post_approval_accounts: [gone, kept], tiktok_connected: false })).toBe(
+      i18n.t('knowledge.rules.approvalExcept', { accounts: 'Alfa Instagram' }),
+    );
+  });
+
+  it('lets only an owner or a manager turn post approval off', async () => {
+    const user = userEvent.setup();
+    const editor: MeOut = { ...me, memberships: [{ ...me.memberships[0], role_key: 'editor' }] };
+    mockFetch(routes({ 'GET /api/auth/me': editor }, { ...knowledge, rules: { ...knowledge.rules, post_approval: true } }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(within(screen.getByRole('region', { name: k.rules.title })).getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    expect(within(dialog).getByRole('switch', { name: k.rules.dialog.approval })).toBeDisabled();
+    expect(within(dialog).getByText(k.rules.dialog.approvalOwnerOnly)).toBeInTheDocument();
   });
 
   it('leaves the message line out while no limit is set, and says when nothing is forbidden yet', async () => {
@@ -392,21 +412,33 @@ describe('KnowledgePage', () => {
     });
   });
 
-  it('shows a member a card’s history without "Bu hâline dön"', async () => {
+  it('names a teammate in a card’s history from the team list', async () => {
     mockFetch(routes({
-      'GET /api/auth/me': repMe,
+      'GET /api/team': [
+        { membership_id: 'm2', user_id: 'u-2', email: 'ayse@alfa.example', display_name: 'Ayşe', role_key: 'manager', role_name: 'Yönetici', status: 'active', created_at: '2026-11-01T09:00:00Z' },
+      ],
       [`GET /api/knowledge/cards/${CARD_PRODUCTS}/history`]: {
         revisions: [
-          revision(3, PRODUCTS_BODY, 'note', { kind: 'agent', connection_id: 'c1', api_key_id: 'k1' }),
-          revision(1, 'Kupa', 'backfill', { kind: 'system', component: 'knowledge_backfill' }),
+          revision(3, PRODUCTS_BODY, 'owner', { kind: 'human', user_id: 'u-2' }),
+          revision(2, 'El yapımı kupa ₺400.', 'proposal', { kind: 'human', user_id: 'u-3' }),
         ],
         next_before: null,
       },
     }));
     renderAt(`/knowledge?history=${CARD_PRODUCTS}`);
     const sheet = await screen.findByRole('dialog', { name: k.history.title });
-    expect(await within(sheet).findByText(/İlk kurulum/)).toBeInTheDocument();
-    expect(within(sheet).queryByRole('button', { name: k.history.restore })).not.toBeInTheDocument();
+    expect(await within(sheet).findByText(/· Ayşe$/)).toBeInTheDocument();
+    // Someone the team list does not name (gone since) reads as a teammate.
+    expect(within(sheet).getByText(new RegExp(`· ${k.history.member} · ${k.history.proposal}$`))).toBeInTheDocument();
+  });
+
+  it('keeps a card’s history to its editors', async () => {
+    const calls = mockFetch(routes({ 'GET /api/auth/me': repMe }));
+    renderAt(`/knowledge?history=${CARD_PRODUCTS}`);
+    await page();
+    // `strategy.card_history` is the editors' (`team.manage`): a member's address opens nothing.
+    expect(screen.queryByRole('dialog', { name: k.history.title })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path === `/api/knowledge/cards/${CARD_PRODUCTS}/history`)).toBe(false);
   });
 
   it('finds cards by their title or text', async () => {

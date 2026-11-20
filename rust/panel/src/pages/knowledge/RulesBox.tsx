@@ -23,9 +23,9 @@ import {
   Switch,
   toast,
 } from '@/components/ui';
-import { can } from '@/lib/roles';
+import { can, isOwnerOrManager } from '@/lib/roles';
 import { isStale, useKnowledgeMutation } from './queries';
-import { adLine, approvalLine, knowledgeError, messageLine } from './words';
+import { adLine, approvalLine, knowledgeError, listedNames, messageLine } from './words';
 
 /** How many prohibitions the box shows before "{n} kural daha". */
 const SHOWN = 2;
@@ -188,6 +188,9 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const { t } = useTranslation();
   const session = useSession();
   const money = can(session.data, 'budget.manage');
+  // Lowering post approval (the switch off, an account off the list) is an owner's or a
+  // manager's (`strategy.rules_save` refuses `owner_or_manager` otherwise).
+  const lowers = isOwnerOrManager(session.data);
   const [base, setBase] = useState(rules);
   const [reload, setReload] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
@@ -321,15 +324,18 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
           </section>
           <section className="flex flex-col gap-2" aria-label={t('knowledge.rules.dialog.approval')}>
             <label className="flex items-center gap-2 text-sm font-medium">
-              <Switch checked={approval} onCheckedChange={setApproval} />
+              <Switch checked={approval} onCheckedChange={setApproval} disabled={base.post_approval && !lowers} />
               {t('knowledge.rules.dialog.approval')}
             </label>
-            {!approval && accounts.length > 0 && (
+            {base.post_approval && !lowers && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.approvalOwnerOnly')}</p>}
+            {!approval && listedNames(accounts).length > 0 && (
               <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
-                {t('knowledge.rules.dialog.stillWaits', { accounts: accounts.map((a) => a.name).join(', ') })}
-                <Button type="button" variant="ghost" size="sm" onClick={() => setAccounts([])}>
-                  {t('knowledge.rules.dialog.clearAccounts')}
-                </Button>
+                {t('knowledge.rules.dialog.stillWaits', { accounts: listedNames(accounts).join(', ') })}
+                {lowers && (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setAccounts([])}>
+                    {t('knowledge.rules.dialog.clearAccounts')}
+                  </Button>
+                )}
               </p>
             )}
           </section>

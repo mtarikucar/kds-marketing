@@ -437,6 +437,7 @@
     "overdue": "{{n}} iş ajanı bekliyor; ajan en son {{time}} yoklama yaptı.",
     "paid": "Kurallar'da reklam bütçesi yok.",
     "budget": "Bütçe’de reklam bütçesi yok; kampanyalar bekler.",
+    "budgetZero": "Bütçe’deki genel reklam bütçesi 0; kampanyalar harcama yapamaz. Kurallar'daki sınıra kadar açabilirsin.",
     "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin.",
     "knowledge": "Bilgi bankası boş: ajanlar paylaşım hazırlayamaz."
   },
@@ -709,7 +710,8 @@
     "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı.",
     "upstreamRetryAfter": "Sağlayıcı şu anda yanıt vermiyor. Yaklaşık {{seconds}} saniye sonra yeniden deneyin.",
     "noPaidLane": "Kurallar'da reklam bütçesi yok.",
-    "aboveRulesCap": "Kurallar'daki reklam bütçesini aşıyor."
+    "aboveRulesCap": "Kurallar'daki reklam bütçesini aşıyor.",
+    "rulesCapCurrency": "Genel reklam bütçesi, Kurallar'daki reklam sınırının para biriminde olur: {{currency}}."
   },
   "login": {
     "title": "Giriş yap",
@@ -4490,6 +4492,7 @@
         "approval": "Her paylaşım yayından önce onayıma gelsin",
         "stillWaits": "{{accounts}} hesaplarındaki paylaşımlar yine onayına gelir.",
         "clearAccounts": "Bunlarda da kapat",
+        "approvalOwnerOnly": "Onayı yalnızca sahip ya da yönetici kapatır.",
         "approvalAll": "Tüm paylaşımlar onayına geliyor; önce Kurallar'da kapat."
       }
     },
@@ -4514,6 +4517,7 @@
       "newCard": "Yeni kart",
       "newBadge": "Yeni",
       "filed": "Ajan ekledi: {{summary}}",
+      "filedPlain": "Ajan bu karta ekledi.",
       "editLabel": "{{title}} kartını düzenle",
       "titleField": "Başlık",
       "bodyField": "Metin",

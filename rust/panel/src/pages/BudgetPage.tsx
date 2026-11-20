@@ -106,9 +106,28 @@ function RulesCeiling() {
   );
 }
 
-/** Under the general item's cap: the ceiling, and whether the amount typed goes over it. */
-function CeilingCheck({ ceiling, cap, currency }: { ceiling: number | null; cap: number | null; currency: string }) {
+/**
+ * The ceiling's currency when a general ad budget would be counted in another one: the server
+ * refuses that (`rules_cap_currency`, design 2026-11-19 §4.6.2), so the dialog says it first.
+ */
+export function otherCeilingCurrency(cap: Cap | null | undefined, currency: string | null): string | null {
+  return cap && currency !== null && currency !== cap.currency ? cap.currency : null;
+}
+
+/**
+ * Under the general item's cap: the ceiling, and whether the amount typed goes over it or the
+ * item is counted in another currency than the ceiling's (`mismatch`).
+ */
+function CeilingCheck({ ceiling, cap, currency, mismatch }: { ceiling: number | null; cap: number | null; currency: string; mismatch: string | null }) {
   const { t, i18n } = useTranslation();
+  if (mismatch) {
+    return (
+      <div className="flex flex-col gap-1">
+        <RulesCeiling />
+        <p role="alert" className="text-caption text-danger">{t('errors.rulesCapCurrency', { currency: mismatch })}</p>
+      </div>
+    );
+  }
   if (ceiling === null) return null;
   return (
     <div className="flex flex-col gap-1">
@@ -198,7 +217,8 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   const generalItem = kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' && general;
   const ceiling = generalItem && unit.kind === 'currency' ? ceilingIn(adCap, period, unit.value) : null;
-  const above = ceiling !== null && cap !== null && cap > ceiling;
+  const mismatch = generalItem && unit.kind === 'currency' ? otherCeilingCurrency(adCap, unit.value) : null;
+  const above = (ceiling !== null && cap !== null && cap > ceiling) || mismatch !== null;
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (above) return;
@@ -306,7 +326,7 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             </Field>
           </div>
           {kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
-          {unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={unit.value} />}
+          {unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={unit.value} mismatch={mismatch} />}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
@@ -376,7 +396,8 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
   const changed = Object.keys(input).length > 0;
   const generalItem = item.kind === 'ad_budget' && item.unit.kind === 'currency' && period !== 'total' && general;
   const ceiling = generalItem && item.unit.kind === 'currency' ? ceilingIn(adCap, period, item.unit.value) : null;
-  const above = ceiling !== null && cap !== null && cap > ceiling;
+  const mismatch = generalItem && item.unit.kind === 'currency' ? otherCeilingCurrency(adCap, item.unit.value) : null;
+  const above = (ceiling !== null && cap !== null && cap > ceiling) || mismatch !== null;
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (changed && !above) save.mutate({ id: item.id, input });
@@ -426,7 +447,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
             </Field>
           </div>
           {item.kind === 'ad_budget' && item.unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
-          {item.unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={item.unit.value} />}
+          {item.unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={item.unit.value} mismatch={mismatch} />}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}

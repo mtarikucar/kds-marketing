@@ -437,6 +437,7 @@
     "overdue": "{{n}} items wait for an agent; an agent last checked in at {{time}}.",
     "paid": "The rules set no ad budget.",
     "budget": "No ad budget has been set in Budget; campaigns are waiting.",
+    "budgetZero": "The general ad budget in Budget is 0; campaigns cannot spend. You can open it up to the limit in the rules.",
     "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen.",
     "knowledge": "The knowledge base is empty: the agents cannot prepare posts."
   },
@@ -709,7 +710,8 @@
     "accountTaken": "Another capability of the same kind already holds this account.",
     "upstreamRetryAfter": "The provider is not answering right now. Try again in about {{seconds}} seconds.",
     "noPaidLane": "The rules set no ad budget.",
-    "aboveRulesCap": "It exceeds the ad budget in the rules."
+    "aboveRulesCap": "It exceeds the ad budget in the rules.",
+    "rulesCapCurrency": "The general ad budget is counted in the currency of the ad budget in the rules: {{currency}}."
   },
   "login": {
     "title": "Sign in",
@@ -4490,6 +4492,7 @@
         "approval": "Every post waits for my approval before it goes out",
         "stillWaits": "Posts on {{accounts}} still wait for your approval.",
         "clearAccounts": "Turn it off for them too",
+        "approvalOwnerOnly": "Only an owner or a manager turns approval off.",
         "approvalAll": "Every post waits for your approval; turn it off in the rules first."
       }
     },
@@ -4514,6 +4517,7 @@
       "newCard": "New card",
       "newBadge": "New",
       "filed": "The agent added: {{summary}}",
+      "filedPlain": "The agent added to this card.",
       "editLabel": "Edit the card {{title}}",
       "titleField": "Title",
       "bodyField": "Text",
