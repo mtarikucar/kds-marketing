@@ -8,8 +8,9 @@ neither action promotes the Rust panel to staging or yeni.
 ## Build and verification
 
 The **Rust** workflow runs for changes under `rust/**` or its own workflow file:
-pushes to `main`, `feat/**` and `design/**`, and pull requests. It checks the
-backend and panel, builds a complete production candidate, and uploads
+pushes to `main` and `design/**`, pull requests, and manual runs. It checks the
+backend and panel. On every push and manual run, and on a pull request that changes what the
+package is built from, it builds a complete production candidate and uploads
 `jeeta-release-<full SHA>` containing `jeeta-release.tar`. It does not publish or
 deploy. Artifacts expire after 14 days; preserve the selected candidate and its
 checksums before expiry.
