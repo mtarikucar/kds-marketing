@@ -620,7 +620,11 @@ strateji sürümü) sistem uygular: ilk kart metni yeni bir alanda çerçeveyi k
 ve ücretli mesaj sınırları çerçevenin şeritlerine yansır, `knowledge_settle` işi her 10 dakikada
 çerçeveyi bilgi bankasına göre düzeltir. Eski istişare araçları rutinler taşınana kadar çalışır; onları
 kullanan bir onay bilgi bankasını eşitler, onaylı sürümü arşivlemek ise kurulmuş bir alanda
-`CONFLICT use_brake` ile reddedilir.
+`CONFLICT use_brake` ile reddedilir. Panelin `/api/strategy` yazma yolları (istişare, kayıt, bölüm,
+hipotezler, sunma, onay, arşiv) bilgi bankası kurulmuş bir alanda `409 CONFLICT`,
+`details.reason = "use_knowledge_base"` döner: o sayfanın yerini Bilgi bankası aldı; okuma yolları
+çalışır. Bilgi bankasına PDF de eklenebilir (`studio.file_upload`, en çok 20 MB); PDF hiçbir zaman
+materyal olmaz (`material_add` `422 VALIDATION file_not_media`) ve paylaşılmaz.
 
 | Adım | Panel | MCP aracı | İzin |
 |---|---|---|---|

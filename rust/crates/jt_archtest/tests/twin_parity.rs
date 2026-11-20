@@ -10,9 +10,9 @@
 //!   2026-11-19 §5.4), with the owner's card and rules edits in it at once.
 //! - `strategy.knowledge_get`: `GET /api/knowledge` and `jeeta.strategy.knowledge_get` answer
 //!   the same knowledge base, field for field.
-//! - `strategy.archive`: archiving the version in force answers `{version_id, archived: true}` on
-//!   both surfaces (each archives a version of its own: one can be archived only once), and the
-//!   same error once nothing is left to archive.
+//! - `strategy.archive`: once an approval seeded the knowledge base, which keeps the frame, both
+//!   surfaces refuse it: the panel as every write of the old strategy page
+//!   (`use_knowledge_base`), the tool as the archive itself (`use_brake`).
 //! - `strategy.approve`: approving a draft submitted again since it was read answers the same
 //!   `CONFLICT` on both surfaces, naming the draft as it now stands.
 //! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
@@ -357,9 +357,14 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let deps = deps(&db);
     let app = app(&db, &deps);
     let cookie = sign_in(&app, user).await;
+    // The MCP surface, with a key the same owner issued (issued first: the knowledge base says
+    // whether an agent can be reached for the owner's notes).
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
 
-    // The owner works out a strategy on the panel and approves it, then opens the next draft so
-    // both halves of the answer are filled.
+    // The owner works out a strategy on the panel and approves it: before the workspace has a
+    // knowledge base, the old page still writes (design 2026-11-19 §4.3.4). An older routine
+    // then opens the next draft through its tools, so both halves of the answer are filled.
     let ok = |resp: Response| async move {
         let status = resp.status();
         let body = json_body(resp).await;
@@ -399,20 +404,57 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let as_read = |draft: &Value| {
         Some(json!({ "version_id": draft["id"], "submitted_at": draft["submitted_at"] }))
     };
+
+    // Approving a draft submitted again since it was read: the same refusal on both surfaces.
+    let read = ok(post("/api/strategy/draft/submit", None).await).await;
     let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
-    ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await;
-    ok(post("/api/strategy/consultation", None).await).await;
-    ok(put(
-        "/api/strategy/draft/sections/prohibitions".to_owned(),
-        json!(["rakip adı"]),
+    let resp = post("/api/strategy/draft/approve", as_read(&read)).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let human = json_body(resp).await;
+    let agent = tool_result(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.approve",
+        as_read(&read).unwrap(),
     )
-    .await)
+    .await;
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(human, agent["structuredContent"]);
+    assert_eq!(human["message"], "the draft changed since you read it");
+    assert_eq!(
+        human["details"],
+        json!({ "version_id": submitted["id"], "submitted_at": submitted["submitted_at"] })
+    );
+    let first =
+        ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await["id"].clone();
+
+    // The approval seeded the knowledge base: the panel's strategy writes are refused from now
+    // on (the page is Bilgi bankası), and an older routine's tools keep writing.
+    let resp = post("/api/strategy/consultation", None).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(resp).await["details"]["reason"],
+        "use_knowledge_base"
+    );
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.start_consultation",
+        json!({}),
+    )
+    .await;
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.write_section",
+        json!({ "section_key": "prohibitions", "value": ["rakip adı"] }),
+    )
     .await;
 
-    // The panel surface, then the MCP surface with a key the same owner issued (issued first:
-    // the knowledge base says whether an agent can be reached for the owner's notes).
-    let key = issue_key(&app, &cookie).await;
-    let session = mcp_session(&app, &key).await;
+    // The panel surface, then the MCP surface.
     let resp = send(
         &app,
         panel(Method::GET, "/api/strategy", Some(&cookie), None),
@@ -496,18 +538,21 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         "a hypothesis keeps its identity across versions"
     );
     assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
-    assert!(human["approved"]["id"].is_string());
+    assert_eq!(human["approved"]["id"], first);
 
     // Archiving: once an approval seeded the knowledge base, which keeps the frame (design
-    // 2026-11-19 §4.3.4, D10), the archive is refused, the same on both surfaces.
-    let first = human["approved"]["id"].clone();
+    // 2026-11-19 §4.3.4, D10), the archive is refused on both surfaces: on the panel as every
+    // write of the old strategy page, through the tool as the archive itself.
     let resp = post(
         "/api/strategy/archive",
         Some(json!({ "version_id": first, "confirm": true })),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    let refused = json_body(resp).await;
+    assert_eq!(
+        json_body(resp).await["details"]["reason"],
+        "use_knowledge_base"
+    );
     let agent = tool_result(
         &app,
         &key,
@@ -517,33 +562,19 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     )
     .await;
     assert_eq!(agent["isError"], json!(true));
-    assert_eq!(refused, agent["structuredContent"]);
-    assert_eq!(refused["details"]["reason"], "use_brake");
-    let read = ok(post("/api/strategy/draft/submit", None).await).await;
+    assert_eq!(agent["structuredContent"]["details"]["reason"], "use_brake");
 
-    // Approving a draft that changed since it was read: the same refusal on both surfaces.
-    let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
-    let resp = post("/api/strategy/draft/approve", as_read(&read)).await;
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-    let human = json_body(resp).await;
-    let agent = tool_result(
+    // The routine's draft is approved through its tools, with the re-sync.
+    let submitted = call_tool(&app, &key, &session, "jeeta.strategy.submit", json!({})).await;
+    let second = call_tool(
         &app,
         &key,
         &session,
         "jeeta.strategy.approve",
-        as_read(&read).unwrap(),
+        as_read(&submitted).unwrap(),
     )
-    .await;
-    assert_eq!(agent["isError"], json!(true));
-    assert_eq!(human, agent["structuredContent"]);
-    assert_eq!(human["message"], "the draft changed since you read it");
-    assert_eq!(
-        human["details"],
-        json!({ "version_id": submitted["id"], "submitted_at": submitted["submitted_at"] })
-    );
-
-    let second =
-        ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await["id"].clone();
+    .await["id"]
+        .clone();
     assert_ne!(second, first);
 }
 
@@ -4307,8 +4338,9 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         assert_eq!(http, mcp, "invalid {action}");
         assert_eq!(http["code"], "VALIDATION");
     }
-    // The knowledge base the approval seeded keeps the frame: archiving it is refused (design
-    // 2026-11-19 §4.3.4, D10), and the overview and the ledger answer the same on both surfaces.
+    // The knowledge base the approval seeded keeps the frame: archiving it is refused, on the
+    // panel as every write of the old strategy page (design 2026-11-19 §4.3.4, D10), and the
+    // overview and the ledger answer the same on both surfaces.
     let mut r = d.uow.tenant(ws).await.unwrap();
     let current = r.strategy().lock_execution_frame().await.unwrap().unwrap();
     drop(r);
@@ -4323,7 +4355,10 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
     )
     .await;
     assert_eq!(archived.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(archived).await["details"]["reason"], "use_brake");
+    assert_eq!(
+        json_body(archived).await["details"]["reason"],
+        "use_knowledge_base"
+    );
     for action in ["overview", "ledger"] {
         let path =
             format!("/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z");

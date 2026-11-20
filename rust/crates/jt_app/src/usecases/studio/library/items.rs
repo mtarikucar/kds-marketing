@@ -473,6 +473,13 @@ async fn add_checks(
     i: &MaterialAddInput,
 ) -> Result<StoredFile, AppError> {
     let file = stored_file(r, ctx, i.file_id).await?;
+    // A PDF is stored for the knowledge base only (design 2026-11-19 D17): it is never posted.
+    if !crate::usecases::studio::files::is_media(&file.mime) {
+        return Err(AppError::validation(
+            "a material is an image or an MP4 video; a PDF stays knowledge",
+            json!({"field":"file_id","reason":"file_not_media"}),
+        ));
+    }
     if let Some(m) = r.studio_materials().material_by_file(i.file_id).await? {
         return Err(AppError {
             details: json!({"reason":"file_has_material","material_id":m.id}),
@@ -589,7 +596,8 @@ fn decide(ctx: &Ctx, i: &MaterialAddInput) -> Result<Decided, AppError> {
 /// another person) adds a real material with no permission, and an AI image with a permission only
 /// while it depicts nothing and names no person (D38). An AI image names its `depicts` (possibly
 /// empty). Replayed by `request_key`, answering the material and the suggested olays as they are
-/// now (D40).
+/// now (D40). A PDF is `VALIDATION` `file_not_media`: it is stored for the knowledge base only
+/// (design 2026-11-19 D17).
 pub async fn material_add(
     d: &Deps,
     ctx: &Ctx,

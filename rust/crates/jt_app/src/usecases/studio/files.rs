@@ -15,6 +15,11 @@ use url::Url;
 
 pub const IMAGE_LIMIT: u64 = 25_000_000;
 pub const VIDEO_LIMIT: u64 = 200_000_000;
+/// A PDF (a price list, a catalogue) is stored as knowledge only: a card's or a note's
+/// attachment, never a material or a post's medium (design 2026-11-19 D17, [`is_media`]).
+pub const PDF_LIMIT: u64 = 20_000_000;
+/// `application/pdf`.
+pub const PDF: &str = "application/pdf";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UploadContent {
@@ -32,11 +37,27 @@ pub struct FileUploadInput {
 pub fn invalid() -> AppError {
     AppError::validation("invalid media", json!({"field":"media"}))
 }
+/// The largest stored file of type `mime`: an image, an MP4 video or a PDF; any other type is
+/// `VALIDATION` "invalid media".
 pub fn limit(mime: &str) -> Result<u64, AppError> {
     match mime {
         "image/jpeg" | "image/png" | "image/webp" | "image/gif" => Ok(IMAGE_LIMIT),
         "video/mp4" => Ok(VIDEO_LIMIT),
+        PDF => Ok(PDF_LIMIT),
         _ => Err(invalid()),
+    }
+}
+/// Whether a stored file of type `mime` can be a medium: a material, or what a post shows. A PDF
+/// is stored for the knowledge base only.
+pub fn is_media(mime: &str) -> bool {
+    limit(mime).is_ok() && mime != PDF
+}
+/// [`limit`] for a medium ([`is_media`]): a PDF is `VALIDATION` "invalid media" too.
+pub fn media_limit(mime: &str) -> Result<u64, AppError> {
+    if is_media(mime) {
+        limit(mime)
+    } else {
+        Err(invalid())
     }
 }
 pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
@@ -55,6 +76,7 @@ pub fn validate_upload(u: &MediaUpload) -> Result<(), AppError> {
         "image/webp" => b.starts_with(b"RIFF") && b.get(8..12) == Some(b"WEBP"),
         "video/mp4" => mp4_file_type(b)
             .is_some_and(|ftyp| mp4_brand(&ftyp[..4]) || ftyp[8..].chunks_exact(4).any(mp4_brand)),
+        PDF => b.starts_with(b"%PDF-"),
         _ => false,
     };
     if !matches {
@@ -185,7 +207,8 @@ impl Staging {
         }
     }
 }
-/// Stores a medium for Studio, replayed by `request_key`. Needs `materials.work` and an active
+/// Stores a medium for Studio (or a PDF, which only the knowledge base takes, design 2026-11-19
+/// D17), replayed by `request_key`. Needs `materials.work` and an active
 /// workspace, not an approved strategy (spec 2026-11-03 D35): the owner gathers materials before
 /// and while the strategy is worked out.
 pub async fn file_upload(d: &Deps, ctx: &Ctx, i: FileUploadInput) -> Result<StoredFile, AppError> {
