@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
+import { listBudgetItems } from '@/api/budget';
 import { CAP_PERIODS, LIMITS, saveRules, type ApprovalAccount, type CapInput, type CapPeriod, type RulesInput, type RulesOut } from '@/api/knowledge';
 import { useSession } from '@/auth/useSession';
 import { MoneyInput } from '@/components/forms';
@@ -192,6 +194,16 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   // manager's (`strategy.rules_save` refuses `owner_or_manager` otherwise).
   const lowers = isOwnerOrManager(session.data);
   const [base, setBase] = useState(rules);
+  // A new ad budget is counted in the general ad budget's currency, else TRY (`rules_save`); a
+  // ceiling in force keeps its own.
+  const items = useQuery({
+    queryKey: ['budget-items', session.data?.current_workspace],
+    queryFn: listBudgetItems,
+    enabled: open && money && !base.ad_cap,
+    retry: false,
+  });
+  const generalUnit = items.data?.find((b) => b.item.general && b.item.kind === 'ad_budget' && !b.item.retired_at)?.item.unit;
+  const adCurrency = base.ad_cap?.currency ?? (generalUnit?.kind === 'currency' ? generalUnit.value : 'TRY');
   const [reload, setReload] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
   const [adOff, setAdOff] = useState(false);
@@ -296,7 +308,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               id="knowledge-ad-cap"
               label={t('knowledge.rules.dialog.ad')}
               offLabel={t('knowledge.rules.dialog.noAds')}
-              currency={base.ad_cap?.currency ?? 'TRY'}
+              currency={adCurrency}
               amount={adAmount}
               off={adOff}
               period={adPeriod}
