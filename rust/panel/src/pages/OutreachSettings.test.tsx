@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { delayed, mockFetch, renderAt } from '@/test/render';
+import { legacyModules } from '@/test/modules';
 import { LOADED, leadsManager, leadsMe, leadsRep, outreachSettings } from '@/test/leads';
 
 function answers(extra: Record<string, unknown> = {}) {
@@ -75,5 +76,36 @@ describe('OutreachSettings', () => {
       warmup: { enabled: true, start: 20, step: 10, max: 150 },
       frequency: { min_gap_days: 3, max_per_30_days: 4 },
     });
+  });
+});
+
+describe('OutreachSettings without the campaigns module', () => {
+  const withoutCampaigns = {
+    ...legacyModules,
+    modules: legacyModules.modules.map((m) => ({ ...m, installed: m.blueprint.id !== 'outreach' })),
+  };
+
+  it('opens with only what an email to a person needs: the sender details and, for the owner, the first-message permission', async () => {
+    mockFetch(answers({ 'GET /api/workspace/modules': withoutCampaigns }));
+    renderAt('/outreach/settings');
+    const form = within(await screen.findByRole('form', { name: tr.leads.settings.general }, LOADED));
+    expect(form.getByRole('textbox', { name: tr.leads.settings.company })).toHaveValue('Alfa Atölye');
+    expect(form.getByRole('textbox', { name: tr.leads.settings.address })).toBeInTheDocument();
+    expect(screen.getByRole('form', { name: tr.leads.settings.b2b.title })).toBeInTheDocument();
+    expect(screen.getByText(tr.leads.settings.descriptionEmail)).toBeInTheDocument();
+    // The campaigns' own settings and the way to the campaigns are not there.
+    expect(form.queryByRole('checkbox', { name: tr.leads.settings.requiresApproval })).not.toBeInTheDocument();
+    expect(form.queryByRole('checkbox', { name: tr.leads.settings.warmupOn })).not.toBeInTheDocument();
+    expect(form.queryByRole('spinbutton', { name: tr.leads.settings.minGap })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: tr.leads.outreach.title })).not.toBeInTheDocument();
+  });
+
+  it('the campaign pages still need the module', async () => {
+    for (const path of ['/outreach', '/outreach/new', '/outreach/templates']) {
+      mockFetch(answers({ 'GET /api/workspace/modules': withoutCampaigns, 'GET /api/outreach/campaigns': { items: [], next: null } }));
+      const view = renderAt(path);
+      expect(await screen.findByText('Bu modül çalışma alanına eklenmemiş', undefined, LOADED)).toBeInTheDocument();
+      view.unmount();
+    }
   });
 });

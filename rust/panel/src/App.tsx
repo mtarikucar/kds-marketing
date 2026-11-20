@@ -95,7 +95,10 @@ export const routes: RouteObject[] = [
           { path: 'prospects/:prospectId?', element: <ModuleGate moduleId="prospects"><ProspectsPage /></ModuleGate> },
           { path: 'outreach', element: <ModuleGate moduleId="outreach"><OutreachPage /></ModuleGate> },
           { path: 'outreach/templates', element: <ModuleGate moduleId="outreach"><OutreachTemplates /></ModuleGate> },
-          { path: 'outreach/settings', element: <ModuleGate moduleId="outreach"><OutreachSettings /></ModuleGate> },
+          // The sender details and the first-message permission apply to every email written to
+          // a person, not only to campaigns: the page opens without the campaigns module, and
+          // shows only those two then.
+          { path: 'outreach/settings', element: <OutreachSettings /> },
           { path: 'outreach/new', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
           { path: 'outreach/:campaignId', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
           { path: 'calls', element: <ModuleGate moduleId="calls"><CallsPage /></ModuleGate> },
