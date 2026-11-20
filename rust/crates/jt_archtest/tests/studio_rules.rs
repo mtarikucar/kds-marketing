@@ -748,17 +748,17 @@ async fn every_studio_write_reaches_shared_execution_gate() {
         );
         // The posting policy, a human's, is not strategy (design 2026-11-19 D12): it is set
         // without a frame, and only an inactive workspace refuses it.
-        let set =
+        let saved =
             jt_app::usecases::studio::posts::posting_policy_set(&w.d, &w.ctx, Default::default())
                 .await;
         if inactive {
             assert_eq!(
-                set.unwrap_err().code,
+                saved.unwrap_err().code,
                 ErrorCode::WorkspaceInactive,
                 "posting_policy_set"
             );
         } else {
-            set.expect("posting_policy_set needs no frame");
+            saved.expect("posting_policy_set needs no frame");
         }
         // The library's panel-only writes, a human's decisions, meet the status check alone.
         if inactive {
@@ -817,8 +817,18 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 assert_eq!(e.unwrap_err().code, ErrorCode::WorkspaceInactive);
             }
         }
+        // Nothing else is written: only the posting policy, saved without a frame.
         let after = w.uow.snapshot();
-        assert_eq!(after.ledger.len(), before.ledger.len());
+        let written: Vec<&str> = after.ledger[before.ledger.len()..]
+            .iter()
+            .map(|e| e.entry.action.as_str())
+            .collect();
+        let expected: &[&str] = if inactive {
+            &[]
+        } else {
+            &["studio.posting_policy.set"]
+        };
+        assert_eq!(written, expected);
         assert_eq!(after.studio.slots, before.studio.slots);
         assert!(after.studio.approvals.is_empty());
         assert!(w.ads.calls().is_empty());
