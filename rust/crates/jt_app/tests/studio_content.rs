@@ -169,3 +169,116 @@ async fn invalid_submission_compensates_all_written_bytes() {
     assert!(piece_submit(&w.d, &w.ctx, i).await.is_err());
     assert!(files.files.lock().unwrap().is_empty());
 }
+
+/// The caller as an agent: the owner's key used through an agent connection.
+fn agent(w: &support::World) -> jt_app::ctx::Ctx {
+    let jt_ledger::Actor::Human { user_id } = w.ctx.actor else {
+        panic!()
+    };
+    let connection_id = jt_tenancy::AgentConnectionId::new_v7();
+    jt_app::ctx::Ctx {
+        actor: jt_ledger::Actor::Agent {
+            user_id,
+            connection_id,
+        },
+        agent_connection_id: Some(connection_id),
+        ..w.ctx.clone()
+    }
+}
+
+/// The fixture slot's current piece submitted again: its text, media, adaptations and subject.
+async fn same_piece(w: &support::World, key: &str) -> PieceInput {
+    use jt_app::ports::UnitOfWork;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let subject = r
+        .studio_materials()
+        .piece_materials(w.f.slot.id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .subject;
+    serde_json::from_value(
+        json!({"slot_id":w.f.slot.id,"expected_revision":1,"request_key":key,
+        "text":w.f.piece.text,"media":w.f.piece.media,"adaptations":w.f.piece.adaptations,
+        "subject":subject}),
+    )
+    .unwrap()
+}
+
+async fn approved(w: &support::World, revision: u64) -> bool {
+    use jt_app::ports::UnitOfWork;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio()
+        .get_approval(
+            jt_app::ports::studio::ApprovalTarget::Slot(w.f.slot.id),
+            revision,
+        )
+        .await
+        .unwrap()
+        .is_some()
+}
+
+fn submissions(w: &support::World) -> usize {
+    w.uow
+        .snapshot()
+        .ledger
+        .iter()
+        .filter(|row| row.entry.action.as_str() == "studio.piece_submit")
+        .count()
+}
+
+/// Rule 1 (2026-11-20): the current piece submitted again, unchanged, is a no-op for an agent and
+/// a person alike: the answer is the piece as it is, no revision is written, nothing is recorded,
+/// and the approval stands.
+#[tokio::test]
+async fn an_unchanged_piece_is_a_no_op_that_keeps_its_approval() {
+    let w = world().await;
+    w.approve().await;
+    let before = submissions(&w);
+    for (ctx, key) in [(agent(&w), "again"), (w.ctx.clone(), "again-person")] {
+        let out = piece_submit(&w.d, &ctx, same_piece(&w, key).await)
+            .await
+            .unwrap();
+        assert_eq!(out.slot.revision, 1);
+        assert_eq!(out.piece.as_ref().map(|p| p.id), Some(w.f.piece.id));
+        assert_eq!(out.slot.state, jt_studio::SlotState::Ready);
+    }
+    assert_eq!(w.uow.snapshot().studio.pieces.len(), 1);
+    assert!(approved(&w, 1).await, "the approval stands");
+    assert_eq!(submissions(&w), before, "nothing is recorded");
+}
+
+/// Rule 2: an agent does not replace a piece a person approved; the refusal says why. A person in
+/// person still can, and that voids the approval as before.
+#[tokio::test]
+async fn an_agent_cannot_replace_an_approved_piece_but_a_person_can() {
+    let (w, media, subject) = material_world().await;
+    w.approve().await;
+    let i: PieceInput = serde_json::from_value(json!({"slot_id":w.f.slot.id,"expected_revision":1,
+        "request_key":"replace","text":"changed","media":media,"adaptations":{},"subject":subject}))
+    .unwrap();
+    let e = piece_submit(&w.d, &agent(&w), i.clone()).await.unwrap_err();
+    assert_eq!(e.code, jt_app::error::ErrorCode::Conflict);
+    assert_eq!(e.details["reason"], "approved_piece");
+    assert!(e.message.contains("leave it"), "{}", e.message);
+    assert_eq!(w.uow.snapshot().studio.pieces.len(), 1);
+    assert!(approved(&w, 1).await);
+    let out = piece_submit(&w.d, &w.ctx, i).await.unwrap();
+    assert_eq!(out.slot.revision, 2);
+    assert!(
+        !approved(&w, 2).await,
+        "the new piece waits for its approval"
+    );
+}
+
+/// Rule 2 leaves an agent's work alone where no person approved the piece: it replaces it.
+#[tokio::test]
+async fn an_agent_replaces_a_piece_nobody_approved() {
+    let (w, media, subject) = material_world().await;
+    let i: PieceInput = serde_json::from_value(json!({"slot_id":w.f.slot.id,"expected_revision":1,
+        "request_key":"replace","text":"changed","media":media,"adaptations":{},"subject":subject}))
+    .unwrap();
+    let out = piece_submit(&w.d, &agent(&w), i).await.unwrap();
+    assert_eq!(out.slot.revision, 2);
+    assert_eq!(out.piece.unwrap().text, "changed");
+}

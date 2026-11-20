@@ -27,8 +27,9 @@ use jt_app::{
         },
         studio::{
             control::{ApprovalInput, approve},
-            owner_request, planner, projects, publish,
+            owner_request, pieces, planner, projects, publish,
             tiktok::{TiktokPostInput, tiktok_post},
+            work as studio_work,
         },
         work::{self, WorkKind},
     },
@@ -949,6 +950,225 @@ async fn a_content_no_agent_took_is_queued_and_says_what_it_will_meet() {
             .items
             .iter()
             .any(|i| matches!(i.kind, WorkKind::ContentArea { project_id, .. } if project_id == area.id))
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// 2026-11-20: an agent's resubmit never voids a person's approval
+// ---------------------------------------------------------------------------------------------
+
+/// The agent at its hourly check-in, inside the post's preparation window.
+fn agent_soon(w: &World) -> Ctx {
+    Ctx {
+        now: WHEN - Duration::minutes(10),
+        ..agent(w)
+    }
+}
+
+/// `piece_submit`'s input for `slot` at its revision: `piece`'s media and adaptations, `text`.
+fn resubmit(slot: &Slot, piece: &Piece, text: &str, key: &str) -> pieces::PieceInput {
+    input(
+        json!({"slot_id":slot.id,"expected_revision":slot.revision,"request_key":key,
+        "text":text,"media":piece.media,"adaptations":piece.adaptations}),
+    )
+}
+
+fn submits(j: &Journey) -> usize {
+    j.w.uow
+        .snapshot()
+        .ledger
+        .iter()
+        .filter(|row| row.entry.action.as_str() == "studio.piece_submit")
+        .count()
+}
+
+impl Journey {
+    /// `slot` as `studio.pending` lists it to `ctx`: whether it asks for a piece, and whether it
+    /// waits for a person's approval.
+    async fn listed(&self, ctx: &Ctx, slot: &Slot) -> (bool, bool) {
+        let p = studio_work::pending(&self.w.d, ctx).await.unwrap();
+        let s = p
+            .slots
+            .iter()
+            .find(|s| s.slot.id == slot.id)
+            .expect("the slot is listed");
+        (
+            s.needs_piece,
+            p.approvals.contains(&ApprovalTarget::Slot(slot.id)),
+        )
+    }
+
+    /// Whether the agent's check-in asks it for `slot`'s content.
+    async fn asked_for(&self, ctx: &Ctx, slot: &Slot) -> bool {
+        work::pending(&self.w.d, ctx)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|i| matches!(i.kind, WorkKind::StudioSlot { slot_id, .. } if slot_id == slot.id))
+    }
+
+    /// `slot` as it is now, with its current piece.
+    async fn current(&self, slot: &Slot) -> (Slot, Piece) {
+        let out = studio_work::slot_get(&self.w.d, &self.w.ctx, slot.id)
+            .await
+            .unwrap();
+        (out.slot, out.piece.expect("the slot has its piece"))
+    }
+}
+
+/// What happened on 2026-11-20: the owner did their one step for a post (approved it, or passed
+/// TikTok's posting screen); the content agent, at its hourly check-in, was asked for the post's
+/// content and submitted the same piece again, which voided the approval and made the post miss
+/// its time. Now: the check-in does not ask for it; the same piece again changes nothing; another
+/// piece is refused as the person's; and the post goes out at its time.
+async fn approved_piece_stands(p: Platform) {
+    let mut j = world_for(p).await;
+    let m = material(&j.w, (p.media)()).await;
+    let area = j.ask(&j.w.ctx, "approved", &[&m]).await;
+    let area = j.deliver(&area, &m, j.other, "approved").await;
+    let slot = j.schedule(&area, "approved-time").await;
+    j.complete(&slot).await;
+    assert!(!j.waits_for_owner(&area).await);
+
+    let a = agent_soon(&j.w);
+    assert_eq!(j.listed(&a, &slot).await, (false, false));
+    assert!(
+        !j.asked_for(&a, &slot).await,
+        "a done piece is not asked for"
+    );
+
+    let (now, piece) = j.current(&slot).await;
+    let before = submits(&j);
+    let out = pieces::piece_submit(&j.w.d, &a, resubmit(&now, &piece, &piece.text, "same"))
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.slot.revision, now.revision, "no new revision");
+    assert_eq!(out.piece.map(|x| x.id), Some(piece.id));
+    assert_eq!(submits(&j), before, "nothing is recorded");
+    assert_eq!(
+        j.listed(&a, &slot).await,
+        (false, false),
+        "the approval stands"
+    );
+    assert!(!j.waits_for_owner(&area).await);
+
+    let e = pieces::piece_submit(
+        &j.w.d,
+        &a,
+        resubmit(&now, &piece, "Başka bir metin", "other"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "approved_piece", "{e:?}");
+    assert_eq!(j.current(&slot).await, (now, piece));
+    assert_eq!(j.listed(&a, &slot).await, (false, false));
+
+    j.send(&slot).await;
+}
+
+#[tokio::test]
+async fn tiktok_an_agent_resubmitting_a_post_passed_on_the_posting_screen_changes_nothing() {
+    approved_piece_stands(TIKTOK).await;
+}
+
+#[tokio::test]
+async fn x_with_approval_an_agent_resubmitting_an_approved_post_changes_nothing() {
+    approved_piece_stands(X_APPROVED).await;
+}
+
+/// After the person's step they ask for a change ("Düzenleme iste"): the post is taken back, the
+/// agent makes the content again, and the new post waits for the person's step again; an agent's
+/// piece for a post nobody approved yet is taken as before.
+async fn a_person_asks_for_a_change(p: Platform) {
+    let mut j = world_for(p).await;
+    let m = material(&j.w, (p.media)()).await;
+    let area = j.ask(&j.w.ctx, "change", &[&m]).await;
+    let area = j.deliver(&area, &m, j.other, "change").await;
+    let first = j.schedule(&area, "change-time").await;
+    j.complete(&first).await;
+    content::area_redo(
+        &j.w.d,
+        &j.w.ctx,
+        input(json!({"project_id":area.id,"package_revision":1,"note":"Daha kısa yaz"})),
+    )
+    .await
+    .unwrap();
+    let a = agent_soon(&j.w);
+    let area = j.deliver(&area, &m, j.other, "change-2").await;
+    let slot = j.schedule(&area, "change-time-2").await;
+    assert_ne!(slot.id, first.id);
+    assert_eq!(j.waits_for_owner(&area).await, p.gate().is_some());
+    // The new piece is nobody's yet: the agent may replace it, and it waits for the person.
+    let (now, piece) = j.current(&slot).await;
+    let out = pieces::piece_submit(&j.w.d, &a, resubmit(&now, &piece, "Kısa metin", "short"))
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.slot.revision, now.revision + 1);
+    assert_eq!(j.listed(&a, &out.slot).await, (false, p.gate().is_some()));
+    j.complete(&out.slot).await;
+    j.send(&out.slot).await;
+}
+
+#[tokio::test]
+async fn tiktok_a_change_asked_for_after_the_posting_screen_waits_for_the_person_again() {
+    a_person_asks_for_a_change(TIKTOK).await;
+}
+
+#[tokio::test]
+async fn x_with_approval_a_change_asked_for_after_approval_waits_for_the_person_again() {
+    a_person_asks_for_a_change(X_APPROVED).await;
+}
+
+/// Rule 2's exception: while a person's request for a change stands on the content a post was
+/// made of, an agent may replace its approved piece, and is asked to; the new piece waits for the
+/// person again. (`content.area_redo` takes such a post back as well: this is a post a redo left
+/// on the calendar.)
+#[tokio::test]
+async fn a_redo_standing_on_its_content_lets_the_agent_replace_an_approved_piece() {
+    let j = world_for(X_APPROVED).await;
+    let m = material(&j.w, image()).await;
+    let area = j.ask(&j.w.ctx, "standing", &[&m]).await;
+    let area = j.deliver(&area, &m, j.other, "standing").await;
+    let slot = j.schedule(&area, "standing-time").await;
+    j.complete(&slot).await;
+    let a = agent_soon(&j.w);
+    assert_eq!(j.listed(&a, &slot).await, (false, false));
+
+    let Actor::Human { user_id } = j.w.ctx.actor else {
+        panic!()
+    };
+    let mut r = j.w.uow.tenant(j.w.f.ws).await.unwrap();
+    let mut p = r
+        .studio_projects()
+        .get_project(area.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = p.revision;
+    p.redo = Some(jt_app::ports::production_projects::RedoRequest {
+        note: "Daha kısa yaz".into(),
+        by: user_id,
+        at: FIXED_NOW,
+        withdrawn: vec![],
+    });
+    p.revision += 1;
+    r.studio_projects()
+        .save_project(p, Some(revision))
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+
+    assert_eq!(j.listed(&a, &slot).await, (true, false));
+    assert!(j.asked_for(&a, &slot).await);
+    let (now, piece) = j.current(&slot).await;
+    let out = pieces::piece_submit(&j.w.d, &a, resubmit(&now, &piece, "Kısa metin", "standing"))
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(out.slot.revision, now.revision + 1);
+    assert!(
+        j.listed(&a, &out.slot).await.1,
+        "the new piece waits for the person"
     );
 }
 

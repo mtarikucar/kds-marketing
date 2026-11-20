@@ -438,7 +438,22 @@ async fn submit(
         {
             return replayed(r.as_mut(), v, ctx.now).await;
         }
-        validate(r.as_mut(), ctx, &i).await?;
+        let (s, frame, subject, _) = validate(r.as_mut(), ctx, &i).await?;
+        // Decided before any medium is fetched or stored: the same piece again, or one a person
+        // keeps. Checked again under the second fence below.
+        if unchanged(
+            r.as_mut(),
+            ctx,
+            &s,
+            subject,
+            &i.text,
+            &i.media,
+            &i.adaptations,
+        )
+        .await?
+        {
+            return slot_in(r.as_mut(), s.id, &frame, ctx.now).await;
+        }
     }
     let media = normalize(d, ctx, i.media.clone(), stored).await?;
     let mut adaptations = BTreeMap::new();
@@ -468,6 +483,11 @@ async fn submit(
         return replayed(r.as_mut(), v, ctx.now).await;
     }
     let (s, frame, subject, story) = validate(r.as_mut(), ctx, &i).await?;
+    // Nothing is written for the same piece again: the slot, its approval, its posting screen's
+    // choice and its material releases stay as they are (the stored media are given back).
+    if unchanged(r.as_mut(), ctx, &s, subject, &i.text, &media, &adaptations).await? {
+        return slot_in(r.as_mut(), s.id, &frame, ctx.now).await;
+    }
     // A story's one medium: what Instagram takes (a JPEG up to 8 MB, an MP4 of 3 to 60 s), the
     // refusal saying what to fix.
     if let Some(m) = &story
@@ -509,6 +529,73 @@ async fn submit(
     stored.commit_started = true;
     r.commit().await?;
     Ok(out)
+}
+
+/// Whether a submission of `text`, `media` and `adaptations` about `subject` leaves the current
+/// piece of slot `s` as it is (hotfix 2026-11-20):
+/// - `true` when it is the current piece again (the same text, the same media in the same order,
+///   the same adaptations, the same subject): nothing is written, no revision, no ledger entry,
+///   and the approval, the posting screen's choice and the material releases stand;
+/// - `CONFLICT` `approved_piece` when an agent (anyone but a person in person) would replace a
+///   current piece a person approved or passed on TikTok's posting screen, unless a person asked
+///   for a change ([`person_keeps`]);
+/// - `false` otherwise: the submission replaces the piece, voiding its approval as before.
+async fn unchanged(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    s: &Slot,
+    subject: Subject,
+    text: &str,
+    media: &[MediaAsset],
+    adaptations: &BTreeMap<String, ChannelContent>,
+) -> Result<bool, AppError> {
+    let Some(current) = r.studio().get_piece(s.id, s.revision).await? else {
+        return Ok(false);
+    };
+    let recorded = r
+        .studio_materials()
+        .piece_materials(s.id, s.revision)
+        .await?
+        .map(|m| m.subject);
+    if current.text == text
+        && current.media == media
+        && current.adaptations == *adaptations
+        && recorded == Some(subject)
+    {
+        return Ok(true);
+    }
+    if super::library::person(ctx).is_none() && person_keeps(r, s).await? {
+        return Err(AppError {
+            code: crate::error::ErrorCode::Conflict,
+            message: "a person approved this piece as it is: leave it. Only a person's request                       for a change (Düzenleme iste) lets an agent replace it"
+                .into(),
+            details: json!({"reason":"approved_piece","slot_id":s.id,"revision":s.revision}),
+        });
+    }
+    Ok(false)
+}
+
+/// Whether a person keeps the current piece of slot `s`: they approved its revision (on TikTok,
+/// on its posting screen) and asked for no change since (no redo standing on the content it was
+/// made of). An agent does not replace such a piece, and is not asked for one.
+pub(crate) async fn person_keeps(r: &mut dyn TenantRepos, s: &Slot) -> Result<bool, AppError> {
+    Ok(r.studio()
+        .get_approval(crate::ports::studio::ApprovalTarget::Slot(s.id), s.revision)
+        .await?
+        .is_some()
+        && !redo_standing(r, s.id).await?)
+}
+
+/// Whether a person asked for the content slot `slot` was made of to change (`content.area_redo`)
+/// and no delivery answered it yet.
+pub(crate) async fn redo_standing(r: &mut dyn TenantRepos, slot: SlotId) -> Result<bool, AppError> {
+    let Some(area) = crate::usecases::social::schedule::area_of(r, slot).await? else {
+        return Ok(false);
+    };
+    Ok(r.studio_projects()
+        .get_project(area)
+        .await?
+        .is_some_and(|p| p.redo.is_some()))
 }
 
 /// What a piece says and shows: its text, its media, and what replaces them on one account.

@@ -1208,6 +1208,15 @@ async fn module_work_world() -> (support::World, jt_studio::BudgetMoveId) {
         )
         .await
         .unwrap();
+    // A slot still without its piece: the fixture slot's piece is done, so it asks for none.
+    let mut planned = w.f.slot.clone();
+    planned.id = jt_studio::SlotId::new_v7();
+    planned.state = jt_studio::SlotState::Planned;
+    planned.revision = 0;
+    r.studio()
+        .insert_slots("module-work", vec![planned])
+        .await
+        .unwrap();
     r.commit().await.unwrap();
     (w, budget_move.id)
 }
