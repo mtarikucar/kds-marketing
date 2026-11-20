@@ -805,14 +805,16 @@ async fn pending_as_seen(
         items.extend(
             p.slots
                 .into_iter()
-                .filter(|_| ctx.permissions.contains(&Permission::SocialWork))
+                // Only a slot that asks for a piece: one a person approved is left as it is.
+                .filter(|s| s.needs_piece && ctx.permissions.contains(&Permission::SocialWork))
                 .map(|s| WorkItem {
                     kind: WorkKind::StudioSlot {
                         slot_id: s.slot.id,
                         overdue: s.overdue,
                     },
                     priority: if s.overdue { 1 } else { 2 },
-                    hint: "Read jeeta.studio.slot_get and supply the scheduled content.".into(),
+                    hint: "This slot needs its piece: it has none, a person asked for a change, or                            the material check holds it. Read jeeta.studio.slot_get and submit                            the piece with jeeta.studio.piece_submit."
+                        .into(),
                 }),
         );
         items.extend(

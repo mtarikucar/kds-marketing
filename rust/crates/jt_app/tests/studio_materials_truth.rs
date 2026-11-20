@@ -227,8 +227,10 @@ async fn a_new_revision_or_a_changed_finding_needs_a_new_release() {
     material_check_release(&w.d, &w.ctx, release(&w, 2, &first.digest))
         .await
         .unwrap();
-    // The same caption again is another revision: the release was for revision 2.
-    let second = piece_submit(&w.d, &w.ctx, piece(&w, "p2", 2, &m, subject, text))
+    // Another caption with the same findings is another revision: the release was for revision
+    // 2. (The same piece again is a no-op that keeps its release.)
+    let edited = format!("{text}, bugün");
+    let second = piece_submit(&w.d, &w.ctx, piece(&w, "p2", 2, &m, subject, &edited))
         .await
         .unwrap()
         .material_check
