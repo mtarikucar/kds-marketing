@@ -1478,26 +1478,30 @@ made *from* the frame: nothing to re-derive); without one, all four are 0.
 
 #### 4.3.3 The owner's workspace (version 5) as seeded
 
+The texts are the version's own words, copied by §4.3.2's mapping; this table names only which field
+lands where, in what order and with which separators (`{…}` stands for the field's text as it is in
+the version; `⏎` is a line break).
+
 | Card / box | Text (start) | From |
 |---|---|---|
-| Biz kimiz | `Figurunica: Hikâyeni üret. Anlamı olan her şeyi (bir insanı, bir evcil hayvanı, bir arabayı, bir şehri, bir markanın maskotunu) elle tutulur bir esere dönüştüren 3D üretim stüdyosu. Tek parçadan yüzlerce adede, Türkiye geneli atölye ağıyla.` ⏎⏎ `Bizi farklı kılan: Anlamı esere çeviren tasarım + yapay zekâ destekli hızlı tasarım + …` | positioning, usp |
-| Ürünler ve fiyat | `Anlamı olan şeyleri 3D üretimle elle tutulur esere dönüştürür. Ürün grupları: (1) Figür: fotoğraftan kişiye özel figür (insan, evcil hayvan), 15 cm SLA reçine, atölyede elle boyanır; tek fiyat ₺3.499, boyama ve kargo dahil. …` | product |
-| Ses tonu | `Samimi, meraklı, sıcak ve hikâye anlatan: … Kısa slogan: 'Hikâyeni üret.'` | voice |
-| Müşterilerimiz | `Aynı üretim gücünü üç satış kapısından büyütmek: …` ⏎⏎ `• Marka, kulüp ve kurum ortaklıkları: ÖNCELİK 1. …` + 9 more segments (Toplu sipariş anlaşmaları, Kişiye özel figür, Satış ortakları, Üretim ağı (PR), Influencer ve içerik üreticileri, Atölye (workshop) ortakları, Fuar ve etkinlik stantları, Okul ve eğitim kurumu iş birlikleri, Bayi adayları) | objective, 10 segments |
-| Paylaşım fikirleri | `• Fotoğraftan figüre dönüşüm: Müşterinin fotoğrafı → tasarım → baskı → boyama → teslim; …` + `Tutkunu duvara as: diorama tablo`, `Kurumsal yılbaşı hediyesi`, `Kulübün, kurumun simgesi esere dönüşür`, `Tek figürden yüz figüre`, `Fotoğraftan figüre dönüşüm (TikTok)`, `Yılbaşı ve toplu hediye (TikTok)` | 7 live hypotheses |
-| Kimi arıyoruz | `• Toplu sipariş anlaşmaları: Etkinlik ve organizasyon ajansı, Düğün ve davet organizasyonu, Pazarlama ve reklam ajansı, Kurumsal hediye ve promosyon tedarikçisi. Şehirler: İstanbul, Ankara, İzmir, Bursa, Antalya, Eskişehir, Konya, Kocaeli. İşaretler: …. Hariç: …. Ölçek: ….` + 6 more (kurumsal_marka, satis_ortagi_hediyelik, atolye_mekan, fuar_etkinlik, okul_isbirligi, bayi_adayi) | 7 ICP entries |
-| Hesaplar ve kanallar | `• Instagram: Ana vitrin. …` ⏎ `• E-posta: Kurumsal ve toplu siparişte birebir e-posta …` ⏎ `• TikTok: TikTok (@figurunicaa): …` ⏎ `• LinkedIn şirket sayfası …` ⏎ `• WhatsApp Business 0850 840 73 03: …` ⏎ `• Facebook sayfası (Figurunica): …` ⏎ `• Yapay zekâ aramasında görünürlük …` | 7 channel choices (4 of them `any`) |
+| Biz kimiz | `{identity.positioning}` ⏎⏎ `Bizi farklı kılan: {identity.usp}` | positioning, usp |
+| Ürünler ve fiyat | `{identity.product}` | product |
+| Ses tonu | `{identity.voice}` | voice |
+| Müşterilerimiz | `{goals.objective}` ⏎⏎ `• {segment 1 name}: {segment 1 description}` ⏎ … one line per segment, 10 in all, in the version's order | objective, 10 segments |
+| Paylaşım fikirleri | `• {hypothesis title}: {angle}` per live hypothesis, 7 lines in position order (the two TikTok hypotheses included) | 7 live hypotheses |
+| Kimi arıyoruz | `• {segment name}: {sectors, ", "}. Şehirler: {cities, ", "}. İşaretler: {signals, "; "}. Hariç: {exclusions, "; "}. Ölçek: {size_hint}.` per ICP entry (the parts after `Şehirler` only when present), 7 paragraphs in the version's order (segment key where the segment has no name) | 7 ICP entries |
+| Hesaplar ve kanallar | `• Instagram: {rationale}` ⏎ `• E-posta: {rationale}` ⏎ `• TikTok: {rationale}` ⏎ then `• {rationale}` for each of the 4 `any` choices (their rationales name the channel themselves), in the version's order | 7 channel choices (4 of them `any`) |
 | Referanslar | empty | — |
 | Önceki görüşmeler | the answers and notes of the 5 log entries, if any are answers or notes | consultation log |
-| Kurallar › yasaklar | the 7 prohibitions, verbatim (`Sitede yazmayan fiyat, kargo ya da teslim süresi sözü verilmez; …` … `Otomatik toplu soğuk e-posta gönderilmez …`) | prohibitions |
-| Kurallar › reklam | `Reklama ayda en çok ₺5.000.` (`ad_cap` 500000 TRY monthly; lower if the general item is lower) | paid lane, general item |
+| Kurallar › yasaklar | the 7 prohibitions, verbatim and in the version's order (`{prohibition 1}` … `{prohibition 7}`) | prohibitions |
+| Kurallar › reklam | `Reklama ayda en çok ₺{n}.` (`ad_cap` = the approved paid lane's monthly TRY cap; lower if the general item is lower) | paid lane, general item |
 | Kurallar › mesaj | `Ücretli mesajlara ayda en çok ₺0.` (`message_cap` 0 TRY monthly, the approved organic lane; the owner lifts it in Kurallar) | organic lane |
 | Kurallar › onay | from the accounts: the switch is on when every postable non-TikTok account carries the flag; every flagged account (TikTok's flag was set by hand, design 2026-11-19 P5) is in `post_approval_accounts` | capabilities |
-| Hedefler | `Marka / kulüp / kurum ortaklığı: 3 ayda 1-2 imzalı anlaşma` · `Toplu sipariş anlaşması: Ayda 2 anlaşma, her biri 30+ adet` · `Kişiye özel figür siparişi: Ayda 5-6'dan 12'ye (3. ayın sonunda)` · `Satış ortağı: 3 ayda 3 aktif satış ortağı` · `İçerik üreticisi iş birliği: 3 ayda 3 ücretsiz iş birliği (para ödenmez)` | 5 KPIs |
+| Hedefler | `{KPI name}: {target}` per KPI, 5 lines in the version's order (`{KPI name}` alone where the target is empty) | 5 KPIs |
 
 The frame of this workspace is then normalised once (§4.10.6): version 6 with `channels = [any]`,
 the 7 hypotheses kept (same ids, same organic cadences, content type `general`) with
-`channel = any`, the lanes from the caps (paid 500000 TRY monthly, or lower; organic 0 TRY monthly,
+`channel = any`, the lanes from the caps (paid = `ad_cap`, monthly TRY; organic 0 TRY monthly,
 unchanged), `channel_mix` emptied, identity mirrored from the cards; audience, prospecting and the
 hypotheses' texts unchanged. Its 7 standing research tasks are carried (same ICP entries, §4.10.7).
 
@@ -2106,9 +2110,9 @@ As mockup H, one column (max 980 px), no tabs.
    it in `inbox.context.knowledge.notes` and `studio.slot_get.brand_rules.notes` before it is filed.
 3. Two boxes side by side (stacked on a phone):
    - **Kurallar** (`id="kurallar"`), aside `ajanlar asla aşmaz`, button `Düzenle`. Shows the first two
-     prohibitions, then the ad line (`Reklama ayda en çok ₺5.000.` / `Reklama haftada en çok …` /
+     prohibitions, then the ad line (`Reklama ayda en çok ₺{n}.` / `Reklama haftada en çok ₺{n}.` /
      `Reklam yok.`), the message line only while `message_cap` is set
-     (`Ücretli mesajlara ayda en çok ₺0.`), then the approval line built from the effective gates:
+     (`Ücretli mesajlara ayda en çok ₺{n}.`), then the approval line built from the effective gates:
      switch on `Her paylaşım yayından önce onayına gelir.`; off with an empty list
      `Paylaşımlar onay beklemeden zamanında çıkar.`; off with accounts in the list
      `Paylaşımlar onay beklemeden çıkar; {hesap, …} hariç.`; each followed by
@@ -2674,9 +2678,9 @@ In order, the first time after PR 2's deploy; each step idempotent and ledgered:
 | Bootstrap (§4.10.5) | at the owner's first card text or accepted card proposal | — | — | when the owner adds a proposal or writes a card | at the owner's first card |
 
 The owner's workspace (figurunica, approved version 5, no draft): 8 seed cards plus `Önceki
-görüşmeler` if its 5 log entries hold answers or notes, 7 prohibitions, 5 goals, `ad_cap` 5.000 TRY a
-month (or less if the general item is lower), `message_cap` 0 TRY a month, every flagged account in
-the approval list, a normalised version 6 with the same 7 topics and lanes, 7 standing research tasks
+görüşmeler` if its 5 log entries hold answers or notes, 7 prohibitions, 5 goals, `ad_cap` = its
+approved paid lane's monthly cap (or less if the general item is lower), `message_cap` 0 TRY a
+month, every flagged account in the approval list, a normalised version 6 with the same 7 topics and lanes, 7 standing research tasks
 carried. The pending HummyTummy import runs after PR 2 and PR 3 are deployed, through card, rules and
 goals writes only (`strategy.card_*`, `rules_save`, `goals_save` through the panel, or a one-off
 script calling the same use cases as the owner), never through the old consultation tools.
@@ -2734,7 +2738,7 @@ Run against jeetagrowth.com with the owner's workspace (MCP with an owner key, a
 | PR | Check |
 |---|---|
 | 1 | `tools/list` and the catalog unchanged; `agents.wakes` and every area read as before |
-| 2 | `jeeta.strategy.knowledge_get`: 8 seed cards (+ `past_conversations` if any), texts as §4.3.3, 7 prohibitions, 5 goals, `ad_cap` ≤ 500000 TRY monthly, `message_cap` 0 TRY monthly, `revision = 1`; `knowledge_revisions` has one `backfill` row per subject; a second call writes nothing. After one `knowledge_settle` tick: `jeeta.strategy.list_versions` shows version 6 approved (cause `normalize` in the ledger), version 5 archived; `strategy.get` sections `channels = [any]`, the 7 hypotheses with the same ids and `channel: any`, the same two lanes; `research.tasks_list`: the same 7 standing task ids, open, `research.task_carried` ×7 in the ledger, no `superseded`; `budget.items_list`: the general item's cap ≤ 500000 TRY monthly; an agent key's `budget.items_update` above it answers `above_rules_cap`; `ads.campaigns_list` unchanged; `social.accounts_list` TikTok gated, every account flagged before still `requires_human_approval: true`; a scheduled post still goes out; a second tick applies nothing |
+| 2 | `jeeta.strategy.knowledge_get`: 8 seed cards (+ `past_conversations` if any), texts as §4.3.3, 7 prohibitions, 5 goals, `ad_cap` ≤ the approved paid lane's cap (monthly), `message_cap` 0 TRY monthly, `revision = 1`; `knowledge_revisions` has one `backfill` row per subject; a second call writes nothing. After one `knowledge_settle` tick: `jeeta.strategy.list_versions` shows version 6 approved (cause `normalize` in the ledger), version 5 archived; `strategy.get` sections `channels = [any]`, the 7 hypotheses with the same ids and `channel: any`, the same two lanes; `research.tasks_list`: the same 7 standing task ids, open, `research.task_carried` ×7 in the ledger, no `superseded`; `budget.items_list`: the general item's cap ≤ `ad_cap`; an agent key's `budget.items_update` above it answers `above_rules_cap`; `ads.campaigns_list` unchanged; `social.accounts_list` TikTok gated, every account flagged before still `requires_human_approval: true`; a scheduled post still goes out; a second tick applies nothing |
 | 3 | `/knowledge` shows the seeded cards and Kurallar (ad, message and approval lines); editing `Ses tonu` changes `strategy.get` at once and makes no version; `/strategy` lands on `/knowledge`; onboarding step 2 done |
 | 4 | `GET /api/content/posts` returns every current post of `/social` and every content of `/content` (count compare), `counts.you` equals the sum of today's waiting chips; a composer request from the API creates a `content` row, wakes the content agent, and the delivered versions, attributed to the owner's request, list every connected account |
 | 5 | `/content`, `/social`, `/studio`, `/materials` and every legacy query land per §2.11; a TikTok post completes from the panel; home work items open the right row |
@@ -2924,8 +2928,9 @@ asserted where a journey meets it, then its cause is cleared and the work must g
 - Deleted with their components: `StrategyPage.test`, `ContentPage`, `ContentEndToEnd`,
   `OlayCompact`, `ProductionFlow`, `SocialPage`, `Accounts`, `Revision`, `timeline`, `StudioProjects`
   tests (their behaviours are re-asserted in the new tests above where they survive).
-- Fixtures (`test/*.ts`, `design-review/*.cjs`): knowledge and posts fixtures from the figurunica
-  seed; strategy fixtures reduced to the compat projection.
+- Fixtures (`test/*.ts`, `design-review/*.cjs`): knowledge and posts fixtures from a fictional seed
+  in the shape of the owner's workspace (as `fixtures/strategy-sample.json`, §8.1), never its real
+  texts; strategy fixtures reduced to the compat projection.
 
 ### 8.4 Architecture, catalog, twins, registry
 
@@ -3010,7 +3015,7 @@ asserted where a journey meets it, then its cause is cleared and the work must g
 | D27 | **Special-day lines: preparation within 14 days, three at most.** | The tree lists 120 days ahead; the owner's page shows only what is near, the rest is in Ayarlar. |
 | D28 | **Knowledge edits are owner or manager work (`team.manage`), viewing is everyone's.** | The knowledge base steers every agent; the previous strategy writes had the same permission. |
 | D29 | **Note and card attachments are knowledge, never library materials** — except through a note's post-request outcome, which hands its images and videos to a content as the composer would. | They are read, not posted, so the consent path of materials does not apply and nothing in them can go out by mistake; a note that asks for a post is the owner's in-person request with its files. |
-| D30 | **`Neler işe yarıyor` shows topic titles with İlgi buckets.** | "Learned results may stay"; titles are the agent's words for subjects ("Fotoğraftan figüre dönüşüm"), buckets avoid numbers that look like approvals. |
+| D30 | **`Neler işe yarıyor` shows topic titles with İlgi buckets.** | "Learned results may stay"; titles are the agent's words for subjects (a hypothesis title), buckets avoid numbers that look like approvals. |
 | D31 | **The 2026-10-22 spec's K2, B1, B6, B7 are superseded as follows:** K2 "no work without an approved strategy" → "no gated work without a frame, which exists once the knowledge base has a card"; B1 `STRATEGY_REQUIRED` keeps its code with the knowledge message; B6 "every post and ad tied to a hypothesis and a version" holds (topics and frames); B7 "the paid cap of the budget frame" holds, mirrored from Kurallar's ad budget. | The code comments cite them; this note is now their source. |
 | D32 | **`frame_apply` takes no prohibitions, goals or budgets** (K3 lists prohibitions and goals among the derived parts): the system copies Kurallar and Hedefler into every frame it writes. | They are the owner's own structured words, not something to derive; K4 already says prohibitions are read live and "mirrored into the frame on derivation" — the mirror is the system's, so no agent can drift from what the owner wrote. |
 | D33 | **`content.posts` and the file writes are gated by the library module, not by `content`** (P2 says "content module"). | `gating_module` maps every `content.*` id to the install-gated `content` module (`jt_app/src/gate.rs:130-162`, `modules.rs` `INSTALL_GATED`), so a workspace with social but no content module would get `MODULE_NOT_INSTALLED` on the page P4 shows to it. The library comes with content, social and ads and has no requirement, exactly like the content page's library reads of 2026-11-18. The composer and the version cancel stay the content module's. |

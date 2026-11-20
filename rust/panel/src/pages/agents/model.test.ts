@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TFunction } from 'i18next';
 import i18n from '@/i18n/config';
 import type { WorkItem } from '@/api/types';
@@ -80,6 +80,16 @@ describe('agentsOf', () => {
 });
 
 describe('the sentences', () => {
+  // A wake time reads `HH:MM` only on the day it is read, so the sentences are read at a fixed
+  // midday: near midnight now + 9 minutes would be tomorrow and gain a date.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-20T12:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const sentence = (over: Parameters<typeof wake>[1], extra: { items?: WorkItem[]; scopes?: string[] } = {}) => {
     const k = key({ name: 'x', created_at: at(-DAY), scopes: (extra.scopes ?? ['workspace.read', 'materials.work']) as never });
     const w = wake(k, over);

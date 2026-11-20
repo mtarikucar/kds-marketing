@@ -1,5 +1,5 @@
 import * as clipboard from '@/lib/clipboard';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
@@ -13,6 +13,15 @@ import { AGENT_COPY } from './agents/copy';
 // The agents page as the owner reads it: one row per agent (an API key), its state in a sentence,
 // "Şimdi çalıştır" and the wake address on the row, the rest opened in place, unused agents
 // folded away, counted chips, and connecting an agent with a name and a few plain choices.
+
+// The fixtures below read the clock when the file loads and the expected sentences read it again
+// after a render, so the clock stands still at a fixed midday for the whole file: a wake time then
+// reads the same `HH:MM` in both, on whatever minute or day the run falls.
+vi.useFakeTimers({ toFake: ['Date'] });
+vi.setSystemTime(new Date('2026-11-20T12:00:00Z'));
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 const c = AGENT_COPY.tr;
 const without = (...drop: string[]) => ({ ...me, memberships: [{ ...me.memberships[0], permissions: me.memberships[0].permissions.filter((p) => !drop.includes(p)) }] });
