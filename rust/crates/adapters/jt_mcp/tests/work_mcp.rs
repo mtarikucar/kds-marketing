@@ -201,8 +201,12 @@ async fn checkin_is_agent_only_and_returns_pending() {
     // What is pending, asked plainly: the agent connected a moment ago, so it is in time.
     let pending = ok(&call(&client, "jeeta.work.pending", json!({})).await);
     assert_eq!(pending["strategy"], "missing");
-    // The key cannot declare a capability (no capabilities.manage): it is not asked to.
-    assert_eq!(kinds(&pending), ["consult_strategy"]);
+    // The key cannot declare a capability (no capabilities.manage), nor write the owner's
+    // cards: it is asked for neither (design 2026-11-19 §5.2). The knowledge base's state says
+    // it is empty.
+    assert_eq!(kinds(&pending), Vec::<&str>::new());
+    assert_eq!(pending["knowledge"]["empty"], true);
+    assert_eq!(pending["knowledge"]["frame"], Value::Null);
     assert_eq!(pending["agent"]["overdue"], false);
     assert!(pending["agent"]["last_seen_at"].is_string());
 

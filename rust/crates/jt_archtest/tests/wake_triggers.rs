@@ -86,6 +86,16 @@ const TRIGGERS: &[(&str, &str, &str, &str)] = &[
         "KnowledgeApplied",
         "SOCIAL",
     ),
+    // A knowledge write that moves what a derivation reads (a person's card write, an accepted
+    // card proposal, an agent's filing of a person's note): the agent that derives it (§5.3).
+    ("knowledge/mod.rs", "wake", "KnowledgeChanged", "KNOWLEDGE"),
+    // A person's note to the agents: the agents that file notes.
+    (
+        "knowledge/notes.rs",
+        "note_add",
+        "KnowledgeNote",
+        "KNOWLEDGE",
+    ),
     // A person releasing the organic brake: the posts waiting for a time get one now (D40).
     ("studio/control.rs", "brake", "PostingResumed", "SOCIAL"),
     // A person connecting or verifying an account a waiting post can go out on (D40).

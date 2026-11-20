@@ -37,7 +37,13 @@
 //!   (`social.work`, `ads.work`, `prospects.work`);
 //! - a frame applied from a person's knowledge write (design 2026-11-19 §4.10.8): the bootstrap
 //!   of their first card text, `knowledge_applied` for `content.work` and `social.work` agents;
-//!   the rules' mirror when the paid lane moved, for `ads.work` agents;
+//!   the rules' mirror when the paid lane moved, for `ads.work` agents; an agent's derivation,
+//!   for the work each structural part it changed gives, on behalf of the knowledge base's last
+//!   editor;
+//! - a knowledge write that moves what a derivation reads (a card write or an accepted card
+//!   proposal by a person, an agent's filing of a person's note on their behalf):
+//!   `knowledge_changed`, for `content.work` agents (the posting part) and `prospects.work` agents
+//!   (the prospecting part); `strategy.note_add`: `knowledge_note`, for both;
 //! - `studio.brake` releasing the organic lane: `posting_resumed`, for `social.work` agents;
 //! - `connector.confirm_assets` and `capability.verify` making a social account postable that a
 //!   version waiting for a time can go out on: `account_connected`, for `social.work` agents;

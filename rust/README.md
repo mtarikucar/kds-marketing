@@ -372,6 +372,11 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | günlük | `jeeta.ledger.list` | Alanın değişmez günlüğü, en yenisi başta, sır değerleri maskeli | READ |
 | strateji | `jeeta.strategy.get` | Bilgi bankası, eski rutinlerin okuduğu strateji biçiminde: kimlik kartlardan, yasaklar ve hedefler Kurallar ve Hedefler'den, `knowledge` alanında bilgi bankasının tamamı (tasarım 2026-11-19 §5.4) | READ |
 | | `jeeta.strategy.knowledge_get` | Bilgi bankası: kartlar, Kurallar (yasaklar, reklam ve ücretli mesaj sınırı, onay bekleyen hesaplar), Hedefler, notlar, öneriler ve iç çerçeve; ilk okuma alanı kurar | READ |
+| | `jeeta.strategy.frame_apply` | Ajanın kartlardan türettiğini çerçeveye uygular: `posting` (kitle, amaç, konular; `content.work`), `prospecting` (ICP, puanlama; `prospects.work`), `paid_cadence` (`ads.work`, hiçbir konuyu emekliye ayırmaz); yalnız yapısal bir değişiklik sürüm yazar, `parts` tek başına "değişmedi" demektir | WRITE |
+| | `jeeta.strategy.note_claim` | Sahibin ajanlara yazdığı notu 30 dakikalığına alır | WRITE |
+| | `jeeta.strategy.note_file` | Notu istediğiyle kapatır (kartlar, kurallar, hedefler, öneriler) ya da gerekçeyle geçer; paylaşım isteği sonucu şimdilik `not_available` | WRITE |
+| | `jeeta.strategy.note_release` | Alınan notu dosyalamadan bırakır | WRITE |
+| | `jeeta.strategy.proposal_create` | Sahibe öneri: yeni kart, kartın yeni metni, kural ya da hedef; sahip ekleyene kadar hiçbir şey değişmez | WRITE |
 | | `jeeta.strategy.start_consultation` | Taslağı açar (onaylı sürümün kopyası) ya da açık olanı döndürür | WRITE |
 | | `jeeta.strategy.record` | İstişareye soru, cevap, varsayım ya da not yazar | WRITE |
 | | `jeeta.strategy.write_section` | Taslağın bir bölümünü bütünüyle yazar | WRITE |
@@ -635,6 +640,9 @@ kullanan bir onay bilgi bankasını eşitler, onaylı sürümü arşivlemek ise 
 | Ajanlara not (`201`, `request_key` ile tekrarı aynı notu döndürür) | `POST /api/knowledge/notes` | — | `team.manage`, kişi kendisi |
 | Notu geri alma | `POST /api/knowledge/notes/{note_id}/withdraw` | — | notu yazan, sahip ya da yönetici |
 | Öneriyi ekleme / geçme | `POST /api/knowledge/proposals/{proposal_id}/accept`, `…/skip` | — | `team.manage`, kişi kendisi |
+| Türetmeyi çerçeveye uygulama (`request_key` ile tekrar) | — | `jeeta.strategy.frame_apply` | bölüm başına `content.work`, `prospects.work`, `ads.work`; yalnız ajan |
+| Notu alma, dosyalama, bırakma | — | `jeeta.strategy.note_claim`, `note_file`, `note_release` | herhangi bir iş izni; yalnız ajan |
+| Öneri (`request_key` ile tekrar) | — | `jeeta.strategy.proposal_create` | herhangi bir iş izni; yalnız ajan |
 
 Eksikleri olan bir taslak onaya sunulamaz: `422 VALIDATION`, `details.gaps` her eksiği alan yoluyla sayar.
 Bir bölüm yazılırken bilinmeyen bir alan, `lane` ya da `period`'u olmayan bir bütçe şeridi ve sınırını aşan
