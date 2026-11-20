@@ -1445,8 +1445,10 @@ async fn the_read_stays_cheap_with_500_areas_and_2000_posts() {
                 scheduled_at: base.scheduled_at + time::Duration::minutes(n),
                 ..base.clone()
             });
+            // Posts of no content: no area's request planned them.
             s.posts.posts.push(PlannedPost {
                 slot_id: id,
+                package_request_id: PackageRequestId::new_v7(),
                 ..post.clone()
             });
         }
