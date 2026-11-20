@@ -20,7 +20,7 @@ pub async fn exercise(uow: &dyn UnitOfWork) {
             .get_materials(&[MaterialId::new_v7(), m.id, m.id])
             .await
             .unwrap(),
-        [m.clone()]
+        std::slice::from_ref(&m)
     );
     assert!(
         r.studio_materials()
