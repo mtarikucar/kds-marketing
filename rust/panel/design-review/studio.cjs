@@ -39,6 +39,7 @@ function fixture(file, names) {
 const f = load(path.join(src, 'test/fixtures.ts'));
 const m = load(path.join(src, 'test/materials.ts'));
 const posts = load(path.join(src, 'test/posts.ts'));
+const kb = load(path.join(src, 'test/knowledge.ts'));
 const studio = fixture('pages/StudioPage.test.tsx', ['answers', 'overview', 'slot']);
 const tiktok = fixture('pages/StudioTiktok.test.tsx', ['answers', 'screenAnswer', 'creator', 'detail', 'slot', 'approvedIn']);
 const calendar = fixture('pages/materials/MaterialsCalendar.test.tsx', ['answers']);
@@ -50,11 +51,9 @@ const common = {
   ...studio.answers, ...m.materialsAnswers, ...posts.postsAnswers,
   'GET /api/auth/me': studio.answers['GET /api/auth/me'],
   'GET /api/strategy': f.strategyWithDraft,
-  'GET /api/strategy/versions': f.versions,
+  'GET /api/knowledge': kb.knowledge,
   'GET /api/capability-groups': [],
   'GET /api/studio/slots/s1/tiktok/metrics': { post: null, metrics: null, draft: false },
-  [`GET /api/strategy/versions/${f.DRAFT_ID}/consultation`]: f.consultation,
-  [`GET /api/strategy/versions/${f.APPROVED_ID}/consultation`]: [],
   'GET /api/studio/slots/s1/materials': { candidates: [], refused: [] },
 };
 const used = [{ slot_id: 's9', piece_id: 'p9', revision: 1, role: 'anchor', slot_state: 'published', scheduled_at: '2026-10-20T09:00:00Z', publications: [{ publication_id: 'pub1', external_id: 'ig-1', capability_id: 'c1', url: 'https://example.invalid/post/1', published_at: '2026-10-20T09:01:00Z' }] }];
@@ -115,18 +114,17 @@ add('posts-week', '/studio?tab=posts&view=week&week=2026-10-19');
 add('posts-week-empty', '/studio?tab=posts&view=week', { 'GET /api/studio/summary': { ...posts.weekSummary, published: [], planned: [], cancelled: [], scores: [] } });
 add('posts-settings', '/studio?tab=posts&view=settings');
 add('posts-settings-permission', '/studio?tab=posts&view=settings', { 'GET /api/auth/me': m.repMe });
-add('strategy-draft', '/strategy');
-add('strategy-approved', '/strategy', { 'GET /api/strategy': { approved: f.approvedVersion, draft: null, gaps: [] } });
-add('strategy-empty', '/strategy', { 'GET /api/strategy': { approved: null, draft: null, gaps: [] } });
-add('strategy-no-approved', '/strategy', { 'GET /api/strategy': { ...f.strategyWithDraft, approved: null } }, { action: checks.tab(tr.strategy.tabs.approved) });
-add('strategy-rep', '/strategy', { 'GET /api/auth/me': f.repMe });
-add('strategy-versions-drawer', '/strategy', {}, { action: checks.click(tr.strategy.versions), dialog: true });
-add('strategy-approval-dialog', '/strategy', {}, { action: checks.click(tr.strategy.approve), dialog: true });
-add('strategy-archive-dialog', '/strategy', { 'GET /api/strategy': { approved: f.approvedVersion, draft: null, gaps: [] } }, { action: checks.click(tr.strategy.archive), dialog: true });
-for (const [index, section] of ['identity','audience','channels','goals','budget_frame','prohibitions','cadence'].entries()) {
- add('strategy-edit-'+section, '/strategy', {}, { action: async p => p.getByRole('button', { name: tr.common.edit, exact: true }).nth(index).click() });
-}
-add('strategy-edit-hypotheses', '/strategy', {}, { action: checks.click(tr.strategy.hypotheses.edit) });
+// Bilgi bankası (design 2026-11-19 §4.11); `/strategy` lands on it.
+add('knowledge-loaded', '/knowledge');
+add('knowledge-from-strategy', '/strategy');
+add('knowledge-empty', '/knowledge', { 'GET /api/knowledge': kb.emptyKnowledge });
+add('knowledge-empty-proposals', '/knowledge', { 'GET /api/knowledge': { ...kb.emptyKnowledge, proposals: [{ ...kb.proposals[0], proposed_by: { kind: 'system', component: 'knowledge_backfill' } }] } });
+add('knowledge-rep', '/knowledge', { 'GET /api/auth/me': f.repMe });
+add('knowledge-card-editor', '/knowledge?card=' + kb.CARD_PRODUCTS);
+add('knowledge-new-card', '/knowledge', {}, { action: checks.click(tr.knowledge.cards.new) });
+add('knowledge-rules-dialog', '/knowledge', {}, { action: checks.click(tr.knowledge.rules.editLabel), dialog: true });
+add('knowledge-goals-dialog', '/knowledge', {}, { action: checks.click(tr.knowledge.goals.editLabel), dialog: true });
+add('knowledge-no-agent', '/knowledge', { 'GET /api/knowledge': { ...kb.knowledge, notes_agent: { state: 'none', next_at: null } } });
 // Less frequent operational branches use the same production screen, with explicit fixtures.
 const paidOverview = { ...studio.overview, lane_support: { ...studio.overview.lane_support, paid: { visible: true, supported: true } } };
 add('studio-paid-controls', '/studio', { 'GET /api/studio/overview': paidOverview }, { action: async p => { await p.locator('summary').filter({ hasText: tr.studio.bind }).click(); await p.locator('summary').filter({ hasText: tr.studio.budgetMove }).click(); } });
@@ -137,9 +135,6 @@ add('tiktok-processing', '/studio', tiktok.answers(false, { 'GET /api/studio/slo
 
 // Distinct history and publication outcomes, including actual fixture paging/download interaction.
 const ledgerRow = (id, action) => ({ id, entry: { at: '2026-10-28T10:00:00Z', actor: { kind: 'human', user_id: 'owner-1' }, action, subject: { id: 's1' }, strategy_version_id: 'v1', payload: {} } });
-add('supplement-consultation-paging', '/strategy', {
- [`GET /api/strategy/versions/${f.DRAFT_ID}/consultation`]: u => u.searchParams.has('before_id') ? [{ ...f.consultation[0], id:'older-review-entry', text:'Earlier consultation decision' }] : Array.from({length:50},(_,i)=>({...f.consultation[0],id:'review-entry-'+i,text:'Consultation note '+(i+1)})),
-}, { action: async p => { await p.getByRole('button',{name:tr.strategy.consultation.loadMore,exact:true}).click(); await p.getByText('Earlier consultation decision',{exact:true}).waitFor(); assert.equal(await p.getByRole('button',{name:tr.strategy.consultation.loadMore,exact:true}).count(),0); } });
 add('supplement-ledger-paging', '/studio', { 'GET /api/studio/ledger': u => u.searchParams.has('before') ? {entries:[ledgerRow(1,'Earlier reviewed action')],next_before:null} : {entries:[ledgerRow(2,'Latest reviewed action')],next_before:2} }, { action:async p=>{ await p.getByRole('region',{name:tr.studio.ledger}).getByRole('button',{name:tr.studio.more,exact:true}).click();await p.getByText('Earlier reviewed action',{exact:true}).waitFor(); } });
 add('supplement-ledger-export','/studio',{'POST /api/studio/ledger/export':{filename:'studio-review.csv',media_type:'text/csv',content:'action\npiece.approved\n'}},{action:async p=>{const next=p.waitForEvent('download');await p.getByRole('region',{name:tr.studio.ledger}).getByRole('button',{name:tr.studio.export,exact:true}).click();const download=await next;assert.equal(download.suggestedFilename(),'studio-review.csv');const stream=await download.createReadStream();let content='';for await(const chunk of stream)content+=chunk.toString();assert.equal(content,'action\npiece.approved\n');}});
 const failureOverview = { ...studio.overview, today:{...studio.overview.today,approvals:[],blockers:[{target:{slot:'s1'},reason:'publish_permanent',next_action:'review_publication_duplicate_risk'}]} };
@@ -165,9 +160,9 @@ for (const [name,url,endpoint,data] of [
  ['posts','/studio?tab=posts&view=plan','/api/studio/posts',{}],
  ['posts-week','/studio?tab=posts&view=week','/api/studio/summary',{}],
  ['posts-settings','/studio?tab=posts&view=settings','/api/studio/posts',{}],
- ['strategy','/strategy','/api/strategy',{}],
+ ['knowledge','/knowledge','/api/knowledge',{}],
 ]) {
- add(name+'-loading',url,data,{ delayed: endpoint, ready: async p=>p.getByText(name==='tiktok' ? tr.studio.tiktok.loading : name==='strategy' ? tr.kit.loading : tr.common.loading, {exact:true}).first().waitFor() });
+ add(name+'-loading',url,data,{ delayed: endpoint, ready: async p=>p.getByText(name==='tiktok' ? tr.studio.tiktok.loading : tr.common.loading, {exact:true}).first().waitFor() });
  add(name+'-error-retry',url,data,{ failed:endpoint, ready: async p=>p.getByRole('button',{name:tr.common.retry,exact:true}).first().waitFor(), retry:true });
 }
 (async()=>{

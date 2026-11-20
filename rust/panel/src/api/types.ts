@@ -239,13 +239,16 @@ export type NeedWake =
   | { state: 'schedule'; next_expected_at: Rfc3339 | null; interval_minutes: number; has_address: boolean; failed_at: Rfc3339 | null; run_now: RunNow | null }
   | { state: 'refused'; api_key_id: Uuid };
 
-/** `jt_app::usecases::wake::Need::key`. */
-export type NeedKey = 'content' | 'materials' | 'social' | 'ads' | 'research' | 'inbox';
+/**
+ * `jt_app::usecases::wake::Need::key`; `knowledge` files the owner's notes and derives from the
+ * cards (design 2026-11-19 §5.3).
+ */
+export type NeedKey = 'content' | 'materials' | 'social' | 'ads' | 'research' | 'inbox' | 'knowledge';
 
-/** `jt_app::usecases::wake::WakesOut`. */
+/** `jt_app::usecases::wake::WakesOut`; a server older than the `knowledge` need leaves it out. */
 export interface WakesOut {
   agents: AgentWakeOut[];
-  needs: Record<NeedKey, NeedWake>;
+  needs: Record<Exclude<NeedKey, 'knowledge'>, NeedWake> & { knowledge?: NeedWake };
 }
 
 /** `PUT /api/agents/{api_key_id}/wake`'s body. */
@@ -860,8 +863,14 @@ export type WorkKind =
   | { kind: 'content_area_held'; project_id: Uuid }
   | { kind: 'studio_material_analysis'; material_id: Uuid; expected_revision: number; unfiled?: boolean }
   | { kind: 'studio_material_production'; production_id: Uuid; expected_revision: number }
+  /** Until the server drops them (design 2026-11-19 §5.2): both now open Bilgi bankası. */
   | { kind: 'consult_strategy' }
   | { kind: 'approve_strategy' }
+  // The knowledge base's kinds (design 2026-11-19 §5.2): the last two are a person's.
+  | { kind: 'knowledge_derive'; kb_revision: number; part: 'posting' | 'prospecting' }
+  | { kind: 'knowledge_note'; note_id: Uuid; expected_revision: number }
+  | { kind: 'knowledge_proposal'; proposal_id: Uuid }
+  | { kind: 'knowledge_empty' }
   | { kind: 'verify_capability'; capability_id: Uuid; name: string; stale: boolean }
   | { kind: 'declare_first_capability' }
   | { kind: 'connect_connector'; capability_id: Uuid; name: string }
@@ -912,8 +921,19 @@ export interface AgentState {
   overdue: boolean;
 }
 
+/** `jt_app::usecases::work::KnowledgeState` (design 2026-11-19 §5.2). */
+export interface KnowledgeState {
+  empty: boolean;
+  revision: number;
+  frame: number | null;
+  derive_due: ('posting' | 'prospecting')[];
+}
+
 /** `jt_app::usecases::work::PendingOut`. */
 export interface PendingOut {
+  /** The knowledge base's state; absent from a server that does not give it yet. */
+  knowledge?: KnowledgeState;
+  /** Deprecated by the server (design 2026-11-19 §5.2). */
   strategy: StrategyState;
   items: WorkItem[];
   agent: AgentState;

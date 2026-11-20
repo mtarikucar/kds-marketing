@@ -6,6 +6,7 @@ import type { BudgetItemOut } from '@/api/types';
 import { formatDateTime } from '@/lib/format';
 import { BUDGET_ITEM_ID, CASH_ITEM_ID, budgetItems, me, spend } from '@/test/fixtures';
 import { mockFetch, renderAt } from '@/test/render';
+import { ceilingIn, otherCeilingCurrency } from './BudgetPage';
 
 const RETIRED_ID = '0190a000-0000-7000-8000-000000000063';
 const RETIRED_AT = '2026-10-01T08:00:00Z';
@@ -188,4 +189,18 @@ it.each(['social.manage', 'ads.manage'])('does not give %s the budget stop permi
   await screen.findByRole('heading', { name: tr.budget.title });
   expect(screen.queryByRole('button', { name: 'Tüm harcamayı durdur' })).not.toBeInTheDocument();
   expect(calls.some(c => c.path === '/api/budget/stop')).toBe(false);
+});
+
+it('holds a general ad budget to Kurallar’s ceiling, in its period and currency', () => {
+  const cap = { amount_minor: 300_000, period: 'monthly' as const, currency: 'TRY' };
+  // Prorated as the server’s `check_general` does, rounded down.
+  expect(ceilingIn(cap, 'monthly', 'TRY')).toBe(300_000);
+  expect(ceilingIn(cap, 'weekly', 'TRY')).toBe(70_000);
+  expect(ceilingIn(cap, 'total', 'TRY')).toBeNull();
+  expect(ceilingIn(null, 'monthly', 'TRY')).toBeNull();
+  // Another currency is no ceiling to compare with: the server refuses it (`rules_cap_currency`).
+  expect(ceilingIn(cap, 'monthly', 'EUR')).toBeNull();
+  expect(otherCeilingCurrency(cap, 'EUR')).toBe('TRY');
+  expect(otherCeilingCurrency(cap, 'TRY')).toBeNull();
+  expect(otherCeilingCurrency(null, 'EUR')).toBeNull();
 });

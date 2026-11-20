@@ -13,6 +13,7 @@ import { useSession } from '@/auth/useSession';
 import { QueryState } from '@/components/QueryState';
 import { Button, Callout, PageHeader } from '@/components/ui';
 import { billingStage, useBilling } from './billing/queries';
+import { useKnowledge } from './knowledge/queries';
 import { useEntryCopy } from './entryCopy';
 
 function SetupStep({ number, title, children, current, optional }: { number: number; title: string; children: ReactNode; current: boolean; optional?: string }) {
@@ -45,13 +46,18 @@ export function OnboardingPage() {
   // Suspension is known only once the workspace has loaded; until then nothing is "not checked".
   const suspended = workspace.data?.status === 'suspended';
   const readable = !!workspace.data && !suspended;
-  const approved = readable && pending.data && typeof pending.data.strategy === 'object' && 'approved' in pending.data.strategy;
+  // Step 2 is done once a card has text (design 2026-11-19 §4.10.12): `pending.knowledge` says it
+  // where the server gives it, else the knowledge base's own read (the same predicate, §4.5.1).
+  const knowledge = useKnowledge({ enabled: readable && pending.isSuccess && !pending.data.knowledge });
+  const knowledgeQuery = pending.data?.knowledge ? pending : knowledge;
+  const knowledgeKnown = pending.data?.knowledge ? !pending.data.knowledge.empty : knowledge.data ? !knowledge.data.empty : undefined;
+  const knowledgeReady = readable && knowledgeKnown === true;
   const recent = readable && pending.data?.agent.last_seen_at && !pending.data.agent.overdue;
   const connected = capabilities.data?.some(out=>out.effective_status==='verified' && out.capability.has_sealed_config);
-  const nextQuery = !active ? billing : !pending.isSuccess ? pending : approved ? capabilities : pending;
+  const nextQuery = !active ? billing : !pending.isSuccess ? pending : knowledgeKnown === undefined ? knowledgeQuery : knowledgeReady ? capabilities : knowledgeQuery;
   const nextReady = !suspended && nextQuery.isSuccess && (!active || can('workspace.read'));
-  const next = !nextReady ? null : !active ? 1 : !approved ? 2 : !connected ? 4 : !recent ? 5 : 0;
-  const nextHref = next===1?'/billing':next===2?'/strategy':next===4?(can('capabilities.manage')?'/connect':'/capabilities'):next===5?'/agents':'/';
+  const next = !nextReady ? null : !active ? 1 : !knowledgeReady ? 2 : !connected ? 4 : !recent ? 5 : 0;
+  const nextHref = next===1?'/billing':next===2?'/knowledge':next===4?(can('capabilities.manage')?'/connect':'/capabilities'):next===5?'/agents':'/';
   return <>
     <PageHeader title={t('onboarding.title')} description={t('onboarding.description')}/>
     <QueryState query={workspace}>
@@ -59,7 +65,7 @@ export function OnboardingPage() {
       <section className="flex items-center gap-4 rounded-lg border border-border bg-surface p-4 sm:gap-6 sm:p-6" aria-label={copy('setupNextTitle')}>
         <img src="/brand/guide-setup.webp" alt="" width="480" height="480" className="h-28 w-28 shrink-0 object-contain"/>
         <div className="min-w-0 space-y-2"><p className="text-xs text-muted-foreground">{copy('setupNextTitle')}</p>
-          {suspended ? <><h2 className="text-base font-medium">{copy('setupSuspended')}</h2><p className="text-sm text-muted-foreground">{t('onboarding.suspendedChecks')}</p></> : active && !can('workspace.read') ? <p className="text-sm text-muted-foreground">{copy('setupPermission')}</p> : <QueryState query={nextQuery}>{next!==null && <><h2 className="text-base font-medium">{copy(next===1?'setupNextPayment':next===2?'setupNextStrategy':next===4?'setupNextConnection':next===5?'setupNextAgent':'setupDone')}</h2><Button asChild variant="outline" size="sm"><Link to={nextHref}>{copy('setupOpen')}</Link></Button></>}</QueryState>}
+          {suspended ? <><h2 className="text-base font-medium">{copy('setupSuspended')}</h2><p className="text-sm text-muted-foreground">{t('onboarding.suspendedChecks')}</p></> : active && !can('workspace.read') ? <p className="text-sm text-muted-foreground">{copy('setupPermission')}</p> : <QueryState query={nextQuery}>{next!==null && <><h2 className="text-base font-medium">{copy(next===1?'setupNextPayment':next===2?'setupNextKnowledge':next===4?'setupNextConnection':next===5?'setupNextAgent':'setupDone')}</h2><Button asChild variant="outline" size="sm"><Link to={nextHref}>{copy('setupOpen')}</Link></Button></>}</QueryState>}
         </div>
       </section>
       <ol className="min-w-0 border-t border-border">
@@ -71,11 +77,11 @@ export function OnboardingPage() {
             <Button asChild variant="outline" size="sm"><Link to="/billing">{t('billing.title')}</Link></Button>
           </>}</QueryState>
         </SetupStep>
-        <SetupStep number={2} title={t('onboarding.strategy')} current={next===2}>
-          {readable && pending.data && <p className="text-muted-foreground">{t(approved?'onboarding.strategyApproved':'onboarding.strategyPending')}</p>}
-          {readable && <QueryState query={pending}/>}
+        <SetupStep number={2} title={t('onboarding.knowledge')} current={next===2}>
+          {readable && knowledgeKnown !== undefined && <p className="text-muted-foreground">{t(knowledgeReady?'onboarding.knowledgeDone':'onboarding.knowledgePending')}</p>}
+          {readable && <QueryState query={pending.isSuccess ? knowledgeQuery : pending}/>}
           {suspended && <p>{t('onboarding.suspendedChecks')}</p>}
-          {workspace.data?.status!=='suspended' && <Link className="inline-block text-primary underline underline-offset-4" to="/strategy">{t('onboarding.prepare')}</Link>}
+          {workspace.data?.status!=='suspended' && <Link className="inline-block text-primary underline underline-offset-4" to="/knowledge">{t('onboarding.knowledgeOpen')}</Link>}
         </SetupStep>
         <SetupStep number={3} title={t('onboarding.teamKeys')} current={false} optional={copy('setupOptional')}>
           {!active && <Callout tone="info">{t('onboarding.activationRequired')}</Callout>}

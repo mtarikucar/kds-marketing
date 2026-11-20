@@ -27,6 +27,13 @@ describe('errorMessage', () => {
     expect(errorMessage(t, new ApiError('FORBIDDEN', 'x', { reason: 'exceeds_own_authority' }, 403))).toBe(
       tr.errors.exceedsAuthority,
     );
+    // The general ad budget against Kurallar's ad budget (design 2026-11-19 §4.6.2).
+    expect(errorMessage(t, new ApiError('VALIDATION', 'x', { field: 'cap', reason: 'above_rules_cap', cap: 70000 }, 422))).toBe(
+      tr.errors.aboveRulesCap,
+    );
+    expect(errorMessage(t, new ApiError('VALIDATION', 'x', { field: 'unit', reason: 'rules_cap_currency', currency: 'TRY' }, 422))).toBe(
+      i18n.t('errors.rulesCapCurrency', { currency: 'TRY' }),
+    );
     expect(
       errorMessage(
         t,

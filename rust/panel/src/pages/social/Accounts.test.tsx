@@ -325,12 +325,19 @@ describe('a version with no time', () => {
 
   it('says why no account can take a blocked version and where that is fixed', async () => {
     const pack = socialAnswers['GET /api/social/packages'][0];
+    mockFetch({ ...socialAnswers, 'GET /api/social/packages': [{ ...pack, versions: [{ ...pack.versions[0], accounts: [], blocked: 'knowledge_empty' }] }] });
+    const first = renderAt('/social');
+    const row = await screen.findByRole('article', { name: 'Birlikte üretelim.' });
+    expect(within(row).getByText(/Bilgi bankası boş; paylaşım planlanamaz/)).toBeVisible();
+    expect(within(row).getByRole('link', { name: 'Bilgi bankasına git' })).toHaveAttribute('href', '/knowledge');
+    expect(within(row).queryByRole('button', { name: 'Zamanı ver' })).not.toBeInTheDocument();
+    first.unmount();
+    // The topics are the agents' to derive: said, with nothing for the owner to fix.
     mockFetch({ ...socialAnswers, 'GET /api/social/packages': [{ ...pack, versions: [{ ...pack.versions[0], accounts: [], blocked: 'hypothesis_does_not_post' }] }] });
     renderAt('/social');
-    const row = await screen.findByRole('article', { name: 'Birlikte üretelim.' });
-    expect(within(row).getByText(/paylaşım yapan bir hipotez yok/)).toBeVisible();
-    expect(within(row).getByRole('link', { name: 'Stratejiye git' })).toHaveAttribute('href', '/strategy');
-    expect(within(row).queryByRole('button', { name: 'Zamanı ver' })).not.toBeInTheDocument();
+    const waiting = await screen.findByRole('article', { name: 'Birlikte üretelim.' });
+    expect(within(waiting).getByText(/paylaşım yapan bir konu yok/)).toBeVisible();
+    expect(within(waiting).queryByRole('link', { name: 'Bilgi bankasına git' })).not.toBeInTheDocument();
   });
 });
 
@@ -471,32 +478,29 @@ describe('what stands between the account and a post', () => {
   const tiktok = {
     ...tiktokAccount, paused: false, requires_human_approval: true, human_gate: 'posting_screen',
     stops: [
-      { code: 'no_hypothesis', blocking: false, action: 'prepare_strategy' },
+      { code: 'knowledge_empty', blocking: true, action: 'open_knowledge' },
       { code: 'only_format', blocking: false, format: 'tiktok_video' },
       { code: 'posting_screen', blocking: false },
       { code: 'lead', blocking: false, format: 'tiktok_video', hours: 48 },
     ],
   };
 
-  it('says it under the account, each line with its one action, and prepares the strategy draft in one tap', async () => {
-    const user = userEvent.setup();
-    const calls = mockFetch({
+  it('says it under the account, each line with its one action, and sends an empty knowledge base to Bilgi bankası', async () => {
+    mockFetch({
       ...socialAnswers,
       'GET /api/social/accounts': [socialAccount, tiktok],
       'GET /api/social/accounts/tt1': { ...socialAnswers['GET /api/social/accounts/tt1'], account: tiktok },
-      'POST /api/strategy/channels': { id: 'draft', status: 'draft' },
     });
     renderAt('/social?account=tt1');
     const list = await screen.findByRole('list', { name: 'Paylaşmadan önce' });
-    expect(within(list).getByText('Stratejide TikTok için hipotez yok: ajan buraya kendi başına paylaşım planlamaz. Sizin istediğiniz içerikler yine paylaşılır.')).toBeVisible();
+    expect(within(list).getByText('Bilgi bankası boş; ajanlar paylaşım planlamaz.')).toBeVisible();
+    expect(within(list).getByRole('link', { name: 'Bilgi bankasına git' })).toHaveAttribute('href', '/knowledge');
     expect(within(list).getByText('TikTok yalnızca video alır.')).toBeVisible();
     expect(within(list).getByText('Her TikTok paylaşımını yayından önce TikTok ekranında siz tamamlarsınız.')).toBeVisible();
     expect(within(list).getByText('TikTok videosu en erken 48 saat sonrasına planlanır.')).toBeVisible();
     expect(screen.getByText('Her paylaşım TikTok ekranını bekler')).toBeVisible();
-    await user.click(within(list).getByRole('button', { name: 'Strateji taslağını hazırla' }));
-    expect(await within(list).findByText('Taslak hazır.')).toBeVisible();
-    expect(within(list).getByRole('link', { name: 'Onaya git' })).toHaveAttribute('href', '/strategy');
-    expect(calls.find((c) => c.method === 'POST' && c.path === '/api/strategy/channels')?.body).toEqual({ kind: 'tiktok' });
+    // The strategy's own actions are gone (design 2026-11-19 K6): every connected account is used.
+    expect(within(list).queryByRole('button', { name: /Strateji/ })).not.toBeInTheDocument();
   });
 
   it('says nothing on an account that posts by itself', async () => {

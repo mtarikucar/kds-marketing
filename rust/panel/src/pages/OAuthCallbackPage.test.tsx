@@ -27,7 +27,7 @@ describe('OAuthCallbackPage', () => {
       // What a post on the page just connected will meet, said before moving on.
       'GET /api/social/accounts': [{
         capability_id: connected.capability.id, name: 'Kahve Evi', kind: 'facebook_page', status: 'verified', paused: false,
-        requires_human_approval: false, stops: [{ code: 'no_hypothesis', blocking: false, action: 'prepare_strategy' }], latest: null, next: null,
+        requires_human_approval: false, stops: [{ code: 'knowledge_empty', blocking: true, action: 'open_knowledge' }], latest: null, next: null,
       }],
     });
     const { router } = renderAt('/oauth/callback/meta?state=signed-state&code=one-time-code');
@@ -57,8 +57,8 @@ describe('OAuthCallbackPage', () => {
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ selected: ['page-1'] });
     expect(await screen.findByText(i18n.t('oauthCallback.connected', { count: 1 }))).toBeInTheDocument();
     // Before moving on: what stands between the new account and a post there, with its one action.
-    expect(await screen.findByText(i18n.t('stops.no_hypothesis', { platform: 'Facebook sayfası' }))).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: tr.stops.act.prepare_strategy })).toBeInTheDocument();
+    expect(await screen.findByText(tr.stops.knowledge_empty)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: tr.stops.act.open_knowledge })).toHaveAttribute('href', '/knowledge');
     await user.click(screen.getByRole('button', { name: tr.stops.continue }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/capabilities'));
   });

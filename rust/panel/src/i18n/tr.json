@@ -72,10 +72,10 @@
     "endConfirm": "Reklam kampanyası reklam platformunda durdurulur ve yeniden başlatılamaz. Harcanmamış bütçesi genel reklam bütçesinde serbest kalır.",
     "errors": {
       "no_general_ad_budget": "Önce Bütçe sayfasında genel reklam bütçesini belirleyin.",
-      "no_paid_lane": "Onaylı stratejide, genel reklam bütçesinin para biriminde bir ücretli kanal yok. Önce stratejiye ekleyin.",
+      "no_paid_lane": "Kurallar'da reklam bütçesi yok.",
       "spend_stopped": "Reklam harcaması durdurulmuş. Bütçe sayfasından yeniden açılabilir.",
       "above_general_budget": "Reklam kampanyası bütçesi genel reklam bütçesinde kalanı aşıyor. Kalan: {{amount}}.",
-      "above_strategy_cap": "Reklam kampanyası bütçesi stratejideki ücretli kanal sınırını aşıyor. Kalan: {{amount}}.",
+      "above_strategy_cap": "Reklam kampanyası bütçesi Kurallar'daki reklam bütçesini aşıyor. Kalan: {{amount}}.",
       "above_account_cap": "Reklam kampanyası bütçesi reklam hesabının harcama sınırını aşıyor. Kalan: {{amount}}.",
       "already_built": "Reklam kampanyası reklam platformunda kuruldu; bütçesi ve bitiş tarihi artık değiştirilemez. Bitirip yenisini açabilirsiniz.",
       "stopped_by_budget": "Bu reklam kampanyasını bütçe durdurdu; bütçe izin verince kendiliğinden sürer.",
@@ -83,7 +83,9 @@
       "not_stopped": "Bu reklam kampanyası durdurulmuş değil.",
       "not_a_proposal": "Bu reklam kampanyası onay bekleyen bir öneri değil.",
       "duration_not_supported": "Seçtiğiniz reklam hesabının platformu bu sürede reklam kampanyası çalıştırmıyor: en az {{hours}} saat, en çok {{days}} gün.",
-      "proposal_expired": "Bu önerinin onay süresi doldu."
+      "proposal_expired": "Bu önerinin onay süresi doldu.",
+      "above_rules_cap": "Reklam kampanyası bütçesi Kurallar'daki reklam bütçesini aşıyor. Kalan: {{amount}}.",
+      "rulesLink": "Kurallar'da değiştir"
     },
     "notes": {
       "plan_refused": "Ajanın planı üç kez geri çevrildi; reklam kampanyası bir kişiyi bekliyor.",
@@ -222,14 +224,15 @@
     "noSuitableAccount": "Uygun hesap henüz yok.",
     "blocked": {
       "material_removed": "Bu sürümdeki bir dosya silindi. Yeni dosyayla düzenleme isteyin.",
-      "no_approved_strategy": "Onaylı strateji yok; paylaşım planlanamaz. Strateji onaylanınca kendiliğinden devam eder.",
+      "no_approved_strategy": "Bilgi bankası boş; paylaşım planlanamaz. Bilgi bankasına yazınca kendiliğinden devam eder.",
       "no_connected_account": "Bağlı ve çalışan bir sosyal hesap yok. Bir hesap bağlayın ya da bağlantısını yenileyin.",
       "account_paused": "Uygun hesapların paylaşımı durdurulmuş. Hesabı sürdürünce ajan zaman seçer.",
       "its_account_unavailable": "Bu sürümün hazırlandığı hesap şu an paylaşım alamıyor.",
       "format_not_supported": "Bağlı hesapların hiçbiri bu biçimi almıyor.",
       "media_not_accepted": "Bu sürümün dosyaları hesabın platformuna uymuyor (örneğin TikTok yalnızca video alır). Uygun dosyayla düzenleme isteyin.",
-      "channel_not_in_strategy": "Onaylı strateji bu hesabın kanalını seçmemiş. Stratejiye eklenince kendiliğinden devam eder.",
-      "hypothesis_does_not_post": "Onaylı stratejide bu hesabın kanalı için paylaşım yapan bir hipotez yok. Stratejiye eklenince kendiliğinden devam eder."
+      "hypothesis_does_not_post": "Bu hesap için şu an paylaşım yapan bir konu yok; ajanlar konuları güncelleyince kendiliğinden devam eder.",
+      "knowledge_empty": "Bilgi bankası boş; paylaşım planlanamaz. Bilgi bankasına yazınca kendiliğinden devam eder.",
+      "braked": "Tüm paylaşımlar durduruldu; sürdürünce kendiliğinden devam eder."
     },
     "metrics": {
       "followers": "Takipçi",
@@ -256,7 +259,6 @@
     "noPiece": "Bu paylaşımın metni ve görseli henüz hazırlanmadı.",
     "missingPost": "Bu paylaşım listelerde yok",
     "missingVersion": "Bu sürüm artık zaman beklemiyor: ya zamanı verildi ya da içerik değişti.",
-    "fixStrategy": "Stratejiye git",
     "fixPaused": "Duraklatılan hesaba git",
     "onAccount": "{{account}} hesabına",
     "scheduleAtSuggestion": "Zamanı ver: {{at}}",
@@ -357,7 +359,8 @@
       "stale": "Ayarlar bu arada değişti; güncel değerler gösteriliyor. Değişikliğinizi yeniden yapın."
     },
     "needsScreen": "Her paylaşım TikTok ekranını bekler",
-    "fixContent": "İçeriği aç"
+    "fixContent": "İçeriği aç",
+    "fixKnowledge": "Bilgi bankasına git"
   },
   "contentAreas": {
     "existing": "Önceki çalışmalar ve kaynaklar",
@@ -432,11 +435,11 @@
     "label": "Modül durumu",
     "noAgent": "{{n}} iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.",
     "overdue": "{{n}} iş ajanı bekliyor; ajan en son {{time}} yoklama yaptı.",
-    "strategy": "Onaylı strateji yok; hazırlık yapılır, paylaşım ve harcama bekler.",
-    "paid": "Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.",
-    "noPosting": "Onaylı stratejide hiçbir hipotez paylaşım yapmıyor; paylaşımlar bekler. Paylaşım sıklığı hiç yazılmamışsa stratejiyi yeniden onaya sunmak tamamlar.",
+    "paid": "Kurallar'da reklam bütçesi yok.",
     "budget": "Bütçe’de reklam bütçesi yok; kampanyalar bekler.",
-    "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin."
+    "budgetZero": "Bütçe’deki genel reklam bütçesi 0; kampanyalar harcama yapamaz. Kurallar'daki sınıra kadar açabilirsin.",
+    "adScope": "Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin.",
+    "knowledge": "Bilgi bankası boş: ajanlar paylaşım hazırlayamaz."
   },
   "modulePages": {
     "social": "Sosyal medya yönetimi",
@@ -444,7 +447,7 @@
     "specialDays": "Özel günler",
     "settings": "Ayarlar",
     "pauseSocial": "Paylaşımı duraklat",
-    "paidUnavailable": "Reklam yönetimi için bağlı bir reklam hesabı ve ücretli reklamları içeren onaylı bir strateji gerekir."
+    "paidUnavailable": "Reklam yönetimi için bağlı bir reklam hesabı ve Kurallar'da bir reklam bütçesi gerekir."
   },
   "app": {
     "name": "Jeeta",
@@ -466,7 +469,8 @@
     "actions": "İşlemler",
     "none": "—",
     "loadError": "Yüklenemedi. Lütfen yeniden deneyin.",
-    "refreshFailed": "Yenilenemedi: en son okunan gösteriliyor."
+    "refreshFailed": "Yenilenemedi: en son okunan gösteriliyor.",
+    "remove": "Kaldır"
   },
   "kit": {
     "close": "Kapat",
@@ -497,7 +501,6 @@
     "roles": "Roller",
     "agents": "Ajanlar",
     "ledger": "Günlük",
-    "strategy": "Strateji",
     "capabilities": "Yetenekler ve bağlantılar",
     "budget": "Bütçe",
     "inbox": "Gelen kutusu",
@@ -508,7 +511,8 @@
     "outreach": "Kampanyalar",
     "workGroup": "Müşteri ilişkileri",
     "growthGroup": "Planlama",
-    "workspaceGroup": "Çalışma alanı"
+    "workspaceGroup": "Çalışma alanı",
+    "knowledge": "Bilgi bankası"
   },
   "shell": {
     "workspace": "Çalışma alanı",
@@ -674,7 +678,7 @@
     "NOT_FOUND": "Aradığınız kayıt bulunamadı.",
     "CONFLICT": "Bu işlem mevcut durumla çakışıyor.",
     "VALIDATION": "Girilen bilgiler geçersiz.",
-    "STRATEGY_REQUIRED": "Bu işlem için önce onaylı bir strateji gerekiyor.",
+    "STRATEGY_REQUIRED": "Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz.",
     "MODULE_NOT_INSTALLED": "Bu modül çalışma alanına eklenmemiş.",
     "CAPABILITY_REQUIRED": "Bu modül için önce gerekli yeteneğin bağlanması gerekiyor.",
     "WORKSPACE_INACTIVE": "Çalışma alanı etkin değil.",
@@ -704,7 +708,10 @@
     "accountMismatch": "Oturum açılan hesap bu kabiliyetin hesabına ulaşmıyor.",
     "providerRefused": "Sağlayıcı isteği reddetti.",
     "accountTaken": "Bu hesap zaten aynı türden başka bir kabiliyete bağlı.",
-    "upstreamRetryAfter": "Sağlayıcı şu anda yanıt vermiyor. Yaklaşık {{seconds}} saniye sonra yeniden deneyin."
+    "upstreamRetryAfter": "Sağlayıcı şu anda yanıt vermiyor. Yaklaşık {{seconds}} saniye sonra yeniden deneyin.",
+    "noPaidLane": "Kurallar'da reklam bütçesi yok.",
+    "aboveRulesCap": "Kurallar'daki reklam bütçesini aşıyor.",
+    "rulesCapCurrency": "Genel reklam bütçesi, Kurallar'daki reklam sınırının para biriminde olur: {{currency}}."
   },
   "login": {
     "title": "Giriş yap",
@@ -743,23 +750,6 @@
     "status": "Durum",
     "myRole": "Rolünüz",
     "myPermissions": "İzinleriniz",
-    "strategy": {
-      "title": "Strateji bekleniyor",
-      "body": "Ajanınızla hedef kitlenizi, amaçlarınızı ve yaklaşımınızı belirleyin. Taslak yürürlüğe girmeden önce gözden geçirin.",
-      "start": "İstişareyi başlat",
-      "open": "Stratejiye git",
-      "draftTitle": "Strateji taslağı üzerinde çalışılıyor",
-      "draftBody": "Taslak onaya sunulmadan önce kapanması gereken eksik sayısı: {{count}}.",
-      "noGaps": "Eksik yok; taslak onaya sunulabilir.",
-      "moreGaps": "ve {{count}} eksik daha",
-      "submittedTitle": "Strateji taslağı onay bekliyor",
-      "submittedWait": "Bir sahip ya da yönetici onayladığında yürürlüğe girer.",
-      "approve": "Onayla",
-      "approvedTitle": "Strateji yürürlükte",
-      "approvedBody": "Sürüm {{number}} yürürlükte",
-      "hypotheses": "{{count}} etkin hipotez",
-      "label": "Strateji"
-    },
     "inactive": {
       "pending_payment": "Ödeme onaylanıp etkinleştirme kodu girildiğinde çalışma alanınız açılır.",
       "active": "Çalışma alanınız etkin.",
@@ -788,8 +778,8 @@
       "ads_campaign_held": "Ajan bir reklam kampanyasını çözemedi.",
       "title": "Bekleyen işler",
       "empty": "Bekleyen iş yok.",
-      "consult_strategy": "Stratejiyi istişareyle oluşturun ya da açık taslağa devam edin.",
-      "approve_strategy": "Onaya sunulan strateji taslağını gözden geçirip onaylayın.",
+      "consult_strategy": "Ajanlar seni henüz tanımıyor: Bilgi bankasına birkaç satır yaz.",
+      "approve_strategy": "Bilgi bankasında seni bekleyen bir şey var.",
       "verify_capability": "{{name}} doğrulanmayı bekliyor.",
       "verify_capability_stale": "{{name}} için doğrulama eskidi; yeniden doğrulanmalı.",
       "declare_first_capability": "Çalışma alanının kullanabileceği ilk kabiliyeti bildirin.",
@@ -827,7 +817,11 @@
       "studio_material_production": "Görsel üretimi ajanı bekliyor",
       "content_area": "Üretim alanı sırada",
       "content_material_request": "Üretim alanı için çekim gerekiyor",
-      "content_area_held": "Üretim alanında çözmeniz gereken bir sorun var"
+      "content_area_held": "Üretim alanında çözmeniz gereken bir sorun var",
+      "knowledge_empty": "Ajanlar seni henüz tanımıyor: Bilgi bankası boş.",
+      "knowledge_proposal": "Ajanın bir önerisi Bilgi bankasında seni bekliyor.",
+      "knowledge_note": "Bir not ajanın Bilgi bankasına eklemesini bekliyor.",
+      "knowledge_derive": "Bilgi bankasındaki bir değişiklik ajanı bekliyor."
     },
     "workspaceDetails": "Çalışma alanı bilgileri ve izinler",
     "continueWorking": "Çalışmaya devam et",
@@ -918,12 +912,12 @@
       "visits": "Ajan {{phrase}} uğruyor; sıradaki {{time}}.",
       "visitsLate": "Ajan {{phrase}} uğruyor; {{at}} bekleniyordu, gecikti.",
       "neverCame": "Ajan henüz uğramadı.",
-      "runNowIntro": "Hemen başlasın isterseniz:",
+      "runNowIntro": "Hemen başlasın istersen:",
       "runNow": "Şimdi çalıştır",
-      "runAfter": "{{at}} sonra çalıştırabilirsiniz.",
-      "noAddress": "Hemen başlaması için <page>ajanlar sayfasından</page> bir çağrı adresi ekleyin.",
-      "refused": "Ajanın çağrı adresi reddedildi; <page>ajanlar sayfasından</page> yeniden bağlayın.",
-      "rateLimited": "Ajan az önce çağrıldı; {{at}} sonra yeniden deneyebilirsiniz."
+      "runAfter": "{{at}} sonra çalıştırabilirsin.",
+      "noAddress": "Hemen başlaması için <page>ajanlar sayfasından</page> bir çağrı adresi ekle.",
+      "refused": "Ajanın çağrı adresi reddedildi; <page>ajanlar sayfasından</page> yeniden bağla.",
+      "rateLimited": "Ajan az önce çağrıldı; {{at}} sonra yeniden deneyebilirsin."
     }
   },
   "ledger": {
@@ -1035,184 +1029,6 @@
     "title": "Sayfa bulunamadı",
     "body": "Aradığınız sayfa yok ya da taşınmış.",
     "home": "Ana sayfaya dön"
-  },
-  "strategy": {
-    "title": "Strateji",
-    "description": "Çalışma alanının onaylı stratejisi ve üzerinde çalışılan taslak",
-    "tabs": {
-      "approved": "Onaylı",
-      "draft": "Taslak"
-    },
-    "versions": "Sürümler",
-    "versionsTitle": "Strateji sürümleri",
-    "versionsDescription": "Her sürüm, en yenisi önce.",
-    "versionsEmpty": "Henüz sürüm yok.",
-    "versionLabel": "Sürüm {{number}}",
-    "createdAt": "Oluşturulma",
-    "submittedAt": "Onaya sunulma",
-    "approvedAt": "Onaylanma",
-    "archivedAt": "Arşivlenme",
-    "approvedBy": "Onaylayan",
-    "noApproved": "Onaylı strateji yok.",
-    "noApprovedBody": "Bir taslak onaylandığında burada görünür.",
-    "noDraft": "Açık taslak yok.",
-    "noDraftBody": "İstişareyi ajanınız MCP üzerinden yürütür: sorularını sorar, yanıtlarınızı ve varsayımlarını kaydeder, bölümleri ve hipotezleri yazar, taslağı onayınıza sunar. İstişareyi buradan da başlatabilirsiniz.",
-    "start": "İstişareyi başlat",
-    "started": "İstişare başladı.",
-    "submittedBadge": "Onaya sunuldu",
-    "notSubmittedBadge": "Onaya sunulmadı",
-    "gapsTitle": "Onaydan önce kapanması gereken eksikler",
-    "noGaps": "Eksik yok; taslak onaya sunulabilir.",
-    "submit": "Onaya sun",
-    "submitted": "Taslak onaya sunuldu.",
-    "submitRefused": "Taslak onaya sunulamadı. Eksikler:",
-    "approve": "Onayla",
-    "approved": "Strateji onaylandı ve yürürlüğe girdi.",
-    "approveOwnerOnly": "Yalnızca bir sahip ya da yönetici onaylayabilir.",
-    "approveNeedsSubmit": "Onaylanabilmesi için taslak önce onaya sunulmalı.",
-    "approveTitle": "Sürüm {{number}} onaylansın",
-    "approveBody": "Onaylandığında bu sürüm yürürlükteki strateji olur ve öncekinin yerini alır. Önce neye dayandığını gözden geçirin.",
-    "approveAssumptions": "Cevabınız alınmadan konan varsayımlar",
-    "approveNoAssumptions": "Hiç varsayım kaydedilmedi: her nokta sizin cevaplarınıza dayanıyor.",
-    "approveHypotheses": "Yürürlüğe koyduğu hipotezler: {{count}}.",
-    "approveLoading": "Taslak yükleniyor…",
-    "approveNotSubmitted": "Taslak bu arada yeniden açıldı; onaya yeniden sunulmadan onaylanamaz.",
-    "approveNoDraft": "Onay bekleyen bir taslak kalmadı; bu arada onaylanmış ya da kapatılmış olabilir.",
-    "approveConfirm": "Bu sürümü onayla",
-    "archive": "Arşivle",
-    "archiveTitle": "Onaylı stratejiyi arşivle",
-    "archiveBody": "Sürüm {{number}} arşivlenecek ve yürürlükte bir strateji kalmayacak; stratejiye bağlı işler yeni bir sürüm onaylanana dek durur.",
-    "archiveConfirmLabel": "Onaylamak için sürüm numarasını yazın: {{number}}",
-    "archived": "Strateji arşivlendi.",
-    "sections": {
-      "identity": "Kimlik",
-      "audience": "Kitle",
-      "channels": "Kanallar",
-      "goals": "Hedefler",
-      "budget_frame": "Bütçe çerçevesi",
-      "prohibitions": "Yasaklar",
-      "cadence": "Sıklık",
-      "paid_enabled": "Ücretli kanallar",
-      "hypotheses": "Hipotezler"
-    },
-    "fields": {
-      "product": "Ürün",
-      "voice": "Ses tonu",
-      "positioning": "Konumlanma",
-      "usp": "Farkı",
-      "segmentKey": "Anahtar",
-      "segmentKeyHint": "2–32 karakter: küçük harf, rakam ve alt çizgi.",
-      "segmentName": "Ad",
-      "segmentDescription": "Açıklama",
-      "channel": "Kanal",
-      "rationale": "Gerekçe",
-      "group": "Kabiliyet grubu",
-      "noGroup": "Grup yok",
-      "objective": "Amaç",
-      "kpis": "Ölçütler",
-      "kpiName": "Ölçüt",
-      "kpiTarget": "Hedef",
-      "lane": "Kulvar",
-      "period": "Dönem",
-      "cap": "Üst sınır",
-      "currency": "Para birimi",
-      "prohibition": "Yasak",
-      "perWeek": "Haftada paylaşım",
-      "channelMix": "Kanal dağılımı",
-      "sharePct": "Pay (%)",
-      "mixTotal": "Toplam: %{{total}}",
-      "paidEnabled": "Ücretli kanallar kullanılır"
-    },
-    "lanes": {
-      "organic": "Organik",
-      "paid": "Ücretli"
-    },
-    "periods": {
-      "weekly": "Haftalık",
-      "monthly": "Aylık"
-    },
-    "anyChannel": "Herhangi bir kanal",
-    "channelPlaceholder": "Kanal seçin",
-    "add": "Ekle",
-    "remove": "Kaldır",
-    "empty": "Henüz yazılmadı.",
-    "sectionSaved": "Bölüm kaydedildi.",
-    "on": "Açık",
-    "off": "Kapalı",
-    "hypotheses": {
-      "columns": {
-        "title": "Başlık",
-        "segment": "Kitle",
-        "angle": "Açı",
-        "channel": "Kanal",
-        "metric": "Ölçüt",
-        "confidence": "Güven",
-        "state": "Durum"
-      },
-      "states": {
-        "kept": "Sürüyor",
-        "retired": "Emekli",
-        "added": "Yeni"
-      },
-      "empty": "Henüz hipotez yok.",
-      "edit": "Hipotezleri düzenle",
-      "add": "Hipotez ekle",
-      "retire": "Emekliye ayır",
-      "restore": "Geri al",
-      "saved": "Hipotezler kaydedildi.",
-      "segmentPlaceholder": "Kitle seçin",
-      "confidenceHint": "0 ile 1 arası."
-    },
-    "consultation": {
-      "title": "İstişare kaydı",
-      "description": "Sorular, yanıtlar, varsayımlar ve notlar; en yenisi önce.",
-      "empty": "Kayıt yok.",
-      "loadMore": "Daha fazla yükle",
-      "kinds": {
-        "question": "Soru",
-        "answer": "Yanıt",
-        "assumption": "Varsayım",
-        "section_draft": "Bölüm taslağı",
-        "note": "Not",
-        "submitted": "Onaya sunuldu",
-        "approved": "Onaylandı",
-        "archived": "Arşivlendi"
-      },
-      "add": "Not ekle",
-      "kind": "Tür",
-      "section": "Bölüm",
-      "noSection": "Bölüm yok",
-      "text": "Metin",
-      "recorded": "Kayıt eklendi."
-    },
-    "gaps": {
-      "product": "Kimlik bölümünde ürünü yazın.",
-      "segment": "Kitle bölümüne en az bir segment ekleyin.",
-      "segmentKey": "Kitle: {{n}}. segmentin anahtarı geçersiz ya da başka bir segmentle aynı.",
-      "channel": "Kanallar bölümüne en az bir kanal ekleyin.",
-      "channelUnavailable": "Kanallar: {{n}}. kanal için bağlı hesap yok. Hesabı bağlayın ya da “Herhangi bir kanal” seçin.",
-      "budget": "Bütçe çerçevesini kontrol edin: her şerit için tür, tavan ve para birimi gerekli; ücretli kanallar açıksa ücretli bir şerit de gerekli.",
-      "cadence": "Sıklık: kanal dağılımı yalnızca stratejinin kanallarını içermeli, her kanal bir kez yazılmalı ve paylar toplamı 100 olmalı.",
-      "hypothesis": "En az bir etkin hipotez ekleyin.",
-      "hypothesisField": "{{n}}. hipotez: {{field}} gerekli.",
-      "hypothesisFields": {
-        "title": "başlık",
-        "angle": "açı",
-        "metric": "ölçüt"
-      },
-      "hypothesisSegment": "{{n}}. hipotez: seçilen segment kitlede yok.",
-      "hypothesisChannel": "{{n}}. hipotez: bu kanal stratejinin kanalları arasında yok ya da bu kanalda bağlı hesap yok.",
-      "hypothesisDuplicate": "{{n}}. hipotez listede birden fazla kez geçiyor."
-    },
-    "channelHint": "Bağlı hesabı olmayan bir kanalla strateji onaylanamaz. Hesaplar henüz bağlı değilse “Herhangi bir kanal” seçin.",
-    "workbench": {
-      "sections": "Brief bölümleri",
-      "gapCount": "{{count}} eksik",
-      "fixFirstGap": "İlk eksiği tamamla",
-      "viewFirstGap": "İlk eksiğe git",
-      "brand": "Marka ve kitle",
-      "plan": "Hedefler ve plan"
-    }
   },
   "capabilities": {
     "title": "Kabiliyetler",
@@ -1860,7 +1676,12 @@
     },
     "workbench": {
       "scrollHint": "Diğer sütunları görmek için tabloyu yatay kaydırın."
-    }
+    },
+    "rulesChange": "Kurallar'da değiştir",
+    "aboveRulesCeiling": "Kurallar'daki reklam sınırını aşıyor. En çok {{amount}}.",
+    "rulesCeilingMonthly": "Kurallar'daki reklam sınırı: ayda {{amount}}",
+    "rulesCeilingWeekly": "Kurallar'daki reklam sınırı: haftada {{amount}}",
+    "rulesNone": "Kurallar'da reklam bütçesi yok."
   },
   "inbox": {
     "erasure": {
@@ -1999,7 +1820,7 @@
       "edited_after_merge": "Korunan kayıt değiştiği için birleştirme geri alınamıyor.",
       "two_open_journeys": "Birleştirmeden önce iki açık yolculuktan birini sonuçlandırın.",
       "workspace_inactive": "Çalışma alanı etkin olmadığı için gönderim durduruldu.",
-      "strategy_required": "Gönderim için onaylı bir strateji gerekiyor.",
+      "strategy_required": "Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz.",
       "unsupported_reply_channel": "Bu kanal yanıt göndermeyi desteklemiyor.",
       "connector_unavailable": "Kanal bağlantısı şu anda kullanılamıyor."
     },
@@ -2261,8 +2082,6 @@
     "connectorReconnect": "Hesabın izinleri sonuçları okumaya yetmiyor: ölçmek için hesabı yeniden bağlayın.",
     "connectorUnavailable": "Bağlayıcı desteklenmiyor veya yeniden bağlanmalı.",
     "braked": "Fren etkin; yeni işlem durduruldu.",
-    "noStrategy": "Önce bir strateji onaylayın.",
-    "openStrategy": "Stratejiyi aç",
     "failed": "İşlem tamamlanamadı. Ayrıntıları kontrol edin.",
     "stale": "Kayıt değişti. Yenileyip tekrar deneyin.",
     "inactive": "Çalışma alanı etkin değil.",
@@ -2465,7 +2284,9 @@
       "todayHint": "Onaylar, planlanan içerikler ve ilgilenmeniz gereken engeller.",
       "viewPlan": "Haftalık planı gör",
       "sections": "Stüdyo görünümü"
-    }
+    },
+    "noKnowledge": "Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz.",
+    "openKnowledge": "Bilgi bankasına git"
   },
   "billing": {
     "title": "Ödeme ve etkinleştirme",
@@ -2500,10 +2321,6 @@
     "description": "İlerlemeniz çalışma alanının güncel durumundan okunur",
     "paymentConfirmed": "Ödeme onaylandı",
     "paymentPending": "Ödeme onayı bekleniyor",
-    "strategy": "Strateji",
-    "strategyApproved": "Strateji onaylandı",
-    "strategyPending": "Strateji onayı bekleniyor",
-    "prepare": "Stratejiyi hazırla",
     "teamKeys": "Ekip ve ajanlar",
     "activationRequired": "Ekip, anahtar ve bağlantı işlemleri için önce çalışma alanını etkinleştirin. Ödeme onayı tek başına erişimi açmaz.",
     "members": "Ekip üyesi: {{count}}",
@@ -2521,7 +2338,11 @@
     "agents": "Ajanları görüntüle",
     "suspendedChecks": "Çalışma alanı askıdayken bu adım denetlenmez.",
     "connectorAfterActivation": "Çalışma alanı etkinleşince Meta, NetGSM, X, TikTok, LinkedIn ve e-posta hesaplarınızı bağlayabilirsiniz.",
-    "teamOwnerHelp": "Ekip davetleri ve API anahtarları için çalışma alanı yöneticinizle görüşün."
+    "teamOwnerHelp": "Ekip davetleri ve API anahtarları için çalışma alanı yöneticinizle görüşün.",
+    "knowledge": "Bilgi bankası",
+    "knowledgeDone": "Bilgi bankası dolu; ajanlar bunu kullanıyor.",
+    "knowledgePending": "Ajanların seni tanıması için Bilgi bankasına birkaç satır yaz.",
+    "knowledgeOpen": "Bilgi bankasını aç"
   },
   "providerSetup": {
     "title": "Sağlayıcı uygulaması kurulumu",
@@ -2548,12 +2369,12 @@
   "gates": {
     "moduleBody": "Bu bölümün modülü kaldırılmış. Mevcut kayıtlar korunur.",
     "moduleLink": "Modülü incele",
-    "strategyBody": "Bu bölüm, onaylı bir strateji olunca açılır. Stratejiyi ajanınızla ya da strateji sayfasından hazırlayıp onaylayın.",
-    "strategyLink": "Stratejiye git",
     "inactiveBody": "Bu bölüm, çalışma alanı etkinleşince açılır.",
     "inactiveLink": "Ödeme ve etkinleştirme",
     "capabilityBody": "Bu bölüm, gerekli yetenek bağlanıp doğrulanınca açılır.",
-    "capabilityLink": "Yetenek bağla"
+    "capabilityLink": "Yetenek bağla",
+    "knowledgeBody": "Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz.",
+    "knowledgeLink": "Bilgi bankasına git"
   },
   "people": {
     "title": "Kişiler",
@@ -2670,7 +2491,7 @@
     },
     "refusals": {
       "workspace_inactive": "çalışma alanı etkin değil",
-      "strategy_required": "onaylı bir strateji gerekiyor",
+      "strategy_required": "Bilgi bankası boş",
       "bridge_offline": "santral bağlı ve doğrulanmış değil",
       "bridge_busy": "bu dahili şu an başka bir görüşmede",
       "person_erased": "kişi silinmiş",
@@ -3508,9 +3329,9 @@
       "promoted": "Aday gelen kutusuna aktarılmış: itirazı kişinin kaydına işleyin.",
       "erase_the_person": "Aday gelen kutusuna aktarılmış: silme kişinin kaydından yapılır.",
       "human_only": "Bu işlemi yalnızca bir ekip üyesi yapabilir.",
-      "prospecting_off": "Onaylı stratejide hedef müşteri profili yok; önce stratejiye ekleyin.",
+      "prospecting_off": "Ajan henüz “Kimi arıyoruz” kartından kimi arayacağını çıkarmadı.",
       "task_closed": "Görev kapanmış.",
-      "standing_task": "Strateji görevi buradan kapatılamaz; stratejideki profili değiştirin.",
+      "standing_task": "Bu görev Bilgi bankasından gelir; “Kimi arıyoruz” kartını değiştir.",
       "not_scorable": "Bu aday puanlanamaz.",
       "invalid_transition": "Bu durumdaki bir kayıt için bu işlem yapılamaz.",
       "daily_cap": "Bugünkü sınır doldu.",
@@ -3680,7 +3501,7 @@
       "bounce_rate": "geri dönen e-posta oranı yüksek",
       "complaints": "şikâyet geldi",
       "mailbox_down": "posta kutusuna ulaşılamıyor",
-      "strategy_changed": "strateji değişti"
+      "strategy_changed": "bilgi bankası değişti"
     },
     "enrollmentStatus": {
       "active": "Sürüyor",
@@ -4045,7 +3866,6 @@
     "billingSuspended": "Çalışma alanı askıda. Yeni bir ödeme bildiriminden önce işletmenle durumu netleştirin",
     "setupNextTitle": "Sıradaki adım",
     "setupNextPayment": "Ödeme ve etkinleştirme durumunu kontrol edin",
-    "setupNextStrategy": "Ekibinizin çalışacağı stratejiyi hazırlayın",
     "setupNextConnection": "Kullanacağınız ilk hesabı bağlayın",
     "setupNextAgent": "Ajan bağlantısını kontrol edin",
     "setupDone": "Temel kurulum hazır. Bekleyen işlere geçebilirsiniz",
@@ -4069,7 +3889,8 @@
     "accountDetails": "Hesap kimliği ve izin ayrıntıları",
     "selectedAccounts": "{{count}} hesap seçili. Onayladığınızda Kabiliyetler sayfasına geçeceksiniz",
     "setupSuspended": "Kurulum duraklatıldı",
-    "setupPermission": "Kurulum durumunu çalışma alanı yöneticinizle kontrol edin"
+    "setupPermission": "Kurulum durumunu çalışma alanı yöneticinizle kontrol edin",
+    "setupNextKnowledge": "Bilgi bankasını doldur"
   },
   "projects": {
     "tab": "Üretim alanları",
@@ -4545,9 +4366,6 @@
     "reconnect": "{{platform}} bağlantısı şu an paylaşım yapamıyor.",
     "paused": "Bu hesapta paylaşım durduruldu.",
     "braked": "Tüm paylaşımlar durduruldu.",
-    "no_approved_strategy": "Onaylı strateji yok; hiçbir paylaşım planlanmaz.",
-    "channel_not_in_strategy": "Strateji {{platform}} kanalını seçmemiş; buraya paylaşım çıkmaz.",
-    "no_hypothesis": "Stratejide {{platform}} için hipotez yok: ajan buraya kendi başına paylaşım planlamaz. Sizin istediğiniz içerikler yine paylaşılır.",
     "media_missing_video": "{{platform}} yalnızca video alır; bu içerikte video yok.",
     "media_missing": "Bu içerikte {{platform}} için uygun dosya yok ({{format}}).",
     "only_format_video": "{{platform}} yalnızca video alır.",
@@ -4557,12 +4375,9 @@
     "act": {
       "reconnect": "Yeniden bağla",
       "resume": "Sürdür",
-      "approve_strategy": "Stratejiye git",
-      "prepare_strategy": "Strateji taslağını hazırla",
-      "prepared": "Taslak hazır.",
-      "toApprove": "Onaya git",
       "add_video": "Video ekle",
-      "add_material": "Dosya ekle"
+      "add_material": "Dosya ekle",
+      "open_knowledge": "Bilgi bankasına git"
     },
     "note": {
       "asked": "Sırası gelince size sorulur.",
@@ -4573,6 +4388,201 @@
     "connectedTitle": "Hesap bağlandı",
     "connectedBody": "Bu hesaba paylaşım çıkmadan önce bilmeniz gerekenler:",
     "continue": "Devam",
-    "accountLabel": "{{account}} için paylaşmadan önce"
+    "accountLabel": "{{account}} için paylaşmadan önce",
+    "knowledge_empty": "Bilgi bankası boş; ajanlar paylaşım planlamaz."
+  },
+  "knowledge": {
+    "title": "Bilgi bankası",
+    "description": "Ajanların işletmen hakkında bildiği her şey. Ne yazarsan her işte onu kullanırlar.",
+    "loadError": "Bilgi bankası yüklenemedi.",
+    "readOnly": "Bilgi bankasını yalnızca yöneticiler değiştirir.",
+    "conflict": "Bu sen düzenlerken değişti; son hâlini gösteriyorum.",
+    "saved": "Kaydedildi. Ajanlar bundan sonra bunu kullanır.",
+    "save": "Kaydet",
+    "cancel": "Vazgeç",
+    "edit": "Düzenle",
+    "less": "Daha az göster",
+    "empty": {
+      "callout": "Ajanların seni tanıması için birkaç kart yeter. “Biz kimiz” ile başla.",
+      "proposals": "Daha önce yazdıkların Ajanın önerileri'nde seni bekliyor; eklediğin anda ajanlar başlar.",
+      "toProposals": "Önerilere git"
+    },
+    "composer": {
+      "label": "Ajanlara bir şey anlat",
+      "placeholder": "Örn. Yılbaşı siparişleri 15 Aralık'ta kapanıyor",
+      "attach": "Dosya ya da bağlantı",
+      "addFile": "Dosya ekle",
+      "addLink": "Bağlantı ekle",
+      "noFiles": "Dosya eklemek için bir içerik, sosyal medya ya da reklam modülü gerekir.",
+      "linkLabel": "Bağlantı",
+      "linkAdd": "Ekle",
+      "linkInvalid": "Bağlantı https:// ile başlamalı.",
+      "attached": "Eklenenler",
+      "remove": "{{name}} kaldır",
+      "uploading": "yükleniyor",
+      "uploadFailed": "Yüklenemedi · Tekrar dene",
+      "uploadFailedNamed": "{{name}} yüklenemedi.",
+      "fileRefused": "{{name}} eklenemez: resim, MP4 ya da PDF olmalı.",
+      "tooMany": "En çok 10 dosya ve 10 bağlantı eklenebilir.",
+      "send": "Ekle",
+      "sent": "Ajana iletildi. Uygun karta eklediğinde burada görürsün.",
+      "sentNoAgent": "Not kaydedildi; ajan bağlanınca eklenir.",
+      "stops": {
+        "none": "Notları karta ekleyecek bağlı bir ajan yok.",
+        "connect": "Ajan bağla",
+        "asleep": "Ajan notunu bir sonraki çalışmasında ({{time}}) ekler.",
+        "asleepUnknown": "Ajan notunu bir sonraki çalışmasında ekler.",
+        "late": "Ajan {{time}} bekleniyordu, gecikti.",
+        "lateUnknown": "Ajan bekleniyordu, gecikti."
+      }
+    },
+    "notes": {
+      "title": "Son notlar",
+      "waiting": "Bekliyor",
+      "withdraw": "Geri al",
+      "withdrawn": "Geri alındı",
+      "closed": "Bu not artık açık değil.",
+      "aCard": "Bir kart",
+      "card": "{{card}} kartına eklendi: {{summary}}",
+      "cardPlain": "{{card}} kartına eklendi",
+      "cards": "{{card}} kartlarına eklendi: {{summary}}",
+      "cardsPlain": "{{card}} kartlarına eklendi",
+      "rule": "Kurallara eklendi: “{{line}}”",
+      "goal": "Hedeflere eklendi: “{{line}}”",
+      "post": "Paylaşım olarak açıldı",
+      "postLink": "Paylaşımlar'da gör",
+      "proposals": "Önerilere eklendi",
+      "filed": "Eklendi",
+      "dismissed": "Eklenmedi: {{reason}}",
+      "dismissedPlain": "Eklenmedi"
+    },
+    "rules": {
+      "title": "Kurallar",
+      "aside": "ajanlar asla aşmaz",
+      "editLabel": "Kuralları düzenle",
+      "none": "Henüz yasak yok.",
+      "more": "{{n}} kural daha",
+      "adMonthly": "Reklama ayda en çok {{amount}}.",
+      "adWeekly": "Reklama haftada en çok {{amount}}.",
+      "adNone": "Reklam yok.",
+      "messageMonthly": "Ücretli mesajlara ayda en çok {{amount}}.",
+      "messageWeekly": "Ücretli mesajlara haftada en çok {{amount}}.",
+      "approvalAll": "Her paylaşım yayından önce onayına gelir.",
+      "approvalNone": "Paylaşımlar onay beklemeden zamanında çıkar.",
+      "approvalExcept": "Paylaşımlar onay beklemeden çıkar; {{accounts}} hariç.",
+      "tiktok": "TikTok'u sen tamamlarsın.",
+      "stopped": "{{n}} reklam kampanyası yeni sınıra ulaştığı için durdu.",
+      "dialog": {
+        "help": "Bütçeyi, mesaj sınırını ve onayı sistem uygular; yasakları ajanlar her işte okur ve uyar.",
+        "prohibitions": "Yasaklar",
+        "item": "Yasak {{n}}",
+        "add": "Yasak ekle",
+        "remove": "{{n}}. yasağı kaldır",
+        "money": "Bütçe",
+        "ad": "Reklama",
+        "message": "Ücretli mesajlara (SMS vb.)",
+        "period": "Dönem",
+        "monthly": "ayda",
+        "weekly": "haftada",
+        "atMost": "en çok",
+        "noAds": "Reklam yok",
+        "noLimit": "Sınır yok",
+        "noBudget": "Bütçe yetkin yok.",
+        "amountInvalid": "Geçerli bir tutar yaz.",
+        "approval": "Her paylaşım yayından önce onayıma gelsin",
+        "stillWaits": "{{accounts}} hesaplarındaki paylaşımlar yine onayına gelir.",
+        "clearAccounts": "Bunlarda da kapat",
+        "approvalOwnerOnly": "Onayı yalnızca sahip ya da yönetici kapatır.",
+        "approvalAll": "Tüm paylaşımlar onayına geliyor; önce Kurallar'da kapat."
+      }
+    },
+    "goals": {
+      "title": "Hedefler",
+      "editLabel": "Hedefleri düzenle",
+      "none": "Henüz hedef yok.",
+      "more": "{{n}} hedef daha",
+      "dialog": {
+        "help": "Ajanlar her işte bu hedeflere göre çalışır.",
+        "item": "Hedef {{n}}",
+        "add": "Hedef ekle",
+        "remove": "{{n}}. hedefi kaldır"
+      }
+    },
+    "cards": {
+      "title": "Ajanların bildikleri",
+      "search": "Ara",
+      "searchLabel": "Bilgide ara",
+      "noMatch": "Aramana uyan kart yok.",
+      "new": "Yeni kart",
+      "newCard": "Yeni kart",
+      "newBadge": "Yeni",
+      "filed": "Ajan ekledi: {{summary}}",
+      "filedPlain": "Ajan bu karta ekledi.",
+      "editLabel": "{{title}} kartını düzenle",
+      "titleField": "Başlık",
+      "bodyField": "Metin",
+      "titleRequired": "Kartın bir başlığı olmalı.",
+      "attachments": "Ekler",
+      "file": "Dosya",
+      "removeAttachment": "{{name}} ekini kaldır",
+      "tooManyAttachments": "Bir karta en çok 10 ek eklenebilir.",
+      "history": "Geçmiş",
+      "remove": "Kaldır",
+      "removeTitle": "Bu kart kaldırılsın mı?",
+      "removed": "“{{title}}” kaldırıldı.",
+      "undo": "Geri al",
+      "archived": "Bu kart kaldırılmış.",
+      "tooMany": "En çok 50 kart olabilir; önce birini kaldır.",
+      "placeholders": {
+        "who_we_are": "Ne yapıyorsun, kime, seni farklı kılan ne?",
+        "products_prices": "Ne satıyorsun, fiyatı ne, neler dahil?",
+        "voice": "Nasıl konuşursun? Samimi mi, resmî mi? Bir sloganın var mı?",
+        "customers": "Kimler alıyor? Öncelikli müşterin kim?",
+        "post_ideas": "Hangi konular işe yarıyor? Neleri göstermek istersin?",
+        "who_we_seek": "Hangi işletmelere ulaşmak istiyorsun? Sektör, şehir, büyüklük.",
+        "accounts_channels": "Hangi hesabı ne için kullanıyorsun?",
+        "references": "Adını anabileceğin müşteriler ve projeler; izin durumlarıyla.",
+        "own": "Ajanların bilmesi gerekeni yaz."
+      }
+    },
+    "history": {
+      "title": "Geçmiş",
+      "empty": "Henüz bir değişiklik yok.",
+      "restore": "Bu hâline dön",
+      "restored": "Kart bu hâline döndü.",
+      "more": "Daha eskileri göster",
+      "you": "Sen",
+      "member": "Ekip üyesi",
+      "note": "Ajan (not)",
+      "proposal": "Ajan önerisi",
+      "seed": "İlk kurulum",
+      "resync": "Önceki sayfadan",
+      "system": "Sistem",
+      "agent": "Ajan",
+      "removedState": "Kaldırıldı"
+    },
+    "proposals": {
+      "title": "Ajanın önerileri",
+      "none": "Ajan işini yaparken yeni bir şey öğrenirse (sık sorulan bir soru, işe yarayan bir konu) burada önerir; sen eklersin ya da geçersin. Şu an öneri yok.",
+      "cardNew": "Yeni kart: {{title}}",
+      "cardEdit": "“{{card}}” kartına ekleme",
+      "ruleAdd": "Yeni kural",
+      "goalAdd": "Yeni hedef",
+      "reason": "Neden: {{reason}}",
+      "whole": "Tamamını gör",
+      "accept": "Ekle",
+      "skip": "Geç",
+      "accepted": "Eklendi. Ajanlar bundan sonra bunu kullanır.",
+      "superseded": "Bu öneri artık geçerli değil; kart bu arada değişti.",
+      "expired": "Bu önerinin süresi doldu; artık eklenemez."
+    },
+    "learned": {
+      "title": "Neler işe yarıyor",
+      "interest": "İlgi: {{level}}",
+      "high": "yüksek",
+      "medium": "orta",
+      "low": "düşük",
+      "measured": "{{n}} paylaşım ölçüldü"
+    }
   }
 }

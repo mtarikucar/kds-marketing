@@ -75,7 +75,9 @@ describe('agentsOf', () => {
       { kind: 'content_area_held', project_id: 'p' },
       { kind: 'studio_approval', target: { slot: 's' } },
       { kind: 'ads_campaign_proposal', campaign_id: 'c' },
-    ] as WorkItem[])).toEqual({ content: 0, materials: 0, social: 0, ads: 0, research: 0, inbox: 0 });
+      { kind: 'knowledge_proposal', proposal_id: 'k' },
+      { kind: 'knowledge_empty' },
+    ] as WorkItem[])).toEqual({ content: 0, materials: 0, social: 0, ads: 0, research: 0, inbox: 0, knowledge: 0 });
   });
 });
 

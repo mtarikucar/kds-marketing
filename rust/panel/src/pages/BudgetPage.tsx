@@ -3,6 +3,8 @@ import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Receipt } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
+import type { Cap } from '@/api/knowledge';
 import {
   SPEND_PAGE_SIZE,
   createBudgetItem,
@@ -64,10 +66,80 @@ import { unitKindsFor } from '@/lib/capabilities';
 import { errorMessage } from '@/lib/errors';
 import { formatDateTime } from '@/lib/format';
 import { can } from '@/lib/roles';
+import { useKnowledge } from './knowledge/queries';
+import { capMoney } from './knowledge/words';
 
 const ITEMS_KEY = ['budget', 'items'] as const;
 /** The capability lists show each capability's budget items, so an item's change refreshes them. */
 const CAPABILITIES_KEY = ['capabilities'] as const;
+
+const PERIOD_DAYS: Record<BudgetPeriod, number | null> = { daily: 1, weekly: 7, monthly: 30, total: null };
+
+/**
+ * Kurallar's ad budget brought to an item's `period` and `currency` as the server's
+ * `check_general` prorates it (rounded down); `null` where it binds nothing: no ceiling (no
+ * ads), another currency, or a total.
+ */
+export function ceilingIn(cap: Cap | null | undefined, period: BudgetPeriod, currency: string | null): number | null {
+  const days = PERIOD_DAYS[period];
+  if (!cap || days === null || currency !== cap.currency) return null;
+  return Math.floor((cap.amount_minor * days) / (cap.period === 'weekly' ? 7 : 30));
+}
+
+/** "Kurallar'daki reklam sınırı: ayda ₺5.000 · Kurallar'da değiştir" (design 2026-11-19 §4.6.2). */
+function RulesCeiling() {
+  const { t, i18n } = useTranslation();
+  const cap = useKnowledge().data?.rules.ad_cap;
+  if (cap === undefined) return null;
+  const text = !cap
+    ? t('budget.rulesNone')
+    : t(cap.period === 'weekly' ? 'budget.rulesCeilingWeekly' : 'budget.rulesCeilingMonthly', {
+        amount: capMoney(cap.amount_minor, cap.currency, i18n.language),
+      });
+  return (
+    <span className="text-xs font-normal text-muted-foreground">
+      {text} ·{' '}
+      <Link className="text-primary underline underline-offset-4" to="/knowledge#kurallar">
+        {t('budget.rulesChange')}
+      </Link>
+    </span>
+  );
+}
+
+/**
+ * The ceiling's currency when a general ad budget would be counted in another one: the server
+ * refuses that (`rules_cap_currency`, design 2026-11-19 §4.6.2), so the dialog says it first.
+ */
+export function otherCeilingCurrency(cap: Cap | null | undefined, currency: string | null): string | null {
+  return cap && currency !== null && currency !== cap.currency ? cap.currency : null;
+}
+
+/**
+ * Under the general item's cap: the ceiling, and whether the amount typed goes over it or the
+ * item is counted in another currency than the ceiling's (`mismatch`).
+ */
+function CeilingCheck({ ceiling, cap, currency, mismatch }: { ceiling: number | null; cap: number | null; currency: string; mismatch: string | null }) {
+  const { t, i18n } = useTranslation();
+  if (mismatch) {
+    return (
+      <div className="flex flex-col gap-1">
+        <RulesCeiling />
+        <p role="alert" className="text-caption text-danger">{t('errors.rulesCapCurrency', { currency: mismatch })}</p>
+      </div>
+    );
+  }
+  if (ceiling === null) return null;
+  return (
+    <div className="flex flex-col gap-1">
+      <RulesCeiling />
+      {cap !== null && cap > ceiling && (
+        <p role="alert" className="text-caption text-danger">
+          {t('budget.aboveRulesCeiling', { amount: capMoney(ceiling, currency, i18n.language) })}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function spendKey(itemId: string) {
   return ['budget', 'spend', itemId] as const;
@@ -104,6 +176,7 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [cap, setCap] = useState<number | null>(null);
   const [period, setPeriod] = useState<BudgetPeriod>('monthly');
   const [general, setGeneral] = useState(false);
+  const adCap = useKnowledge().data?.rules.ad_cap;
   const create = useMutation({
     mutationFn: createBudgetItem,
     onSuccess: async () => {
@@ -142,8 +215,13 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         ? { kind: 'count', value: countLabel.trim() }
         : { kind: 'minutes' };
 
+  const generalItem = kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' && general;
+  const ceiling = generalItem && unit.kind === 'currency' ? ceilingIn(adCap, period, unit.value) : null;
+  const mismatch = generalItem && unit.kind === 'currency' ? otherCeilingCurrency(adCap, unit.value) : null;
+  const above = (ceiling !== null && cap !== null && cap > ceiling) || mismatch !== null;
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
+    if (above) return;
     create.mutate({ name: name.trim(), kind, unit, cap: cap ?? 0, period, ...(kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' ? { general } : {}) });
   };
 
@@ -248,11 +326,12 @@ function CreateItemDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             </Field>
           </div>
           {kind === 'ad_budget' && unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
+          {unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={unit.value} mismatch={mismatch} />}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" loading={create.isPending} disabled={name.trim() === '' || cap === null}>
+            <Button type="submit" loading={create.isPending} disabled={name.trim() === '' || cap === null || above}>
               {t('budget.dialog.submit')}
             </Button>
           </DialogFooter>
@@ -288,6 +367,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
   const [cap, setCap] = useState<number | null>(null);
   const [period, setPeriod] = useState<BudgetPeriod>('monthly');
   const [general, setGeneral] = useState(false);
+  const adCap = useKnowledge().data?.rules.ad_cap;
   const save = useMutation({
     mutationFn: ({ id, input }: { id: string; input: UpdateBudgetItemInput }) => updateBudgetItem(id, input),
     onSuccess: async () => {
@@ -314,9 +394,13 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
   const { item } = entry;
   const input = budgetItemEdit(item, { name, cap, period, general });
   const changed = Object.keys(input).length > 0;
+  const generalItem = item.kind === 'ad_budget' && item.unit.kind === 'currency' && period !== 'total' && general;
+  const ceiling = generalItem && item.unit.kind === 'currency' ? ceilingIn(adCap, period, item.unit.value) : null;
+  const mismatch = generalItem && item.unit.kind === 'currency' ? otherCeilingCurrency(adCap, item.unit.value) : null;
+  const above = (ceiling !== null && cap !== null && cap > ceiling) || mismatch !== null;
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (changed) save.mutate({ id: item.id, input });
+    if (changed && !above) save.mutate({ id: item.id, input });
   };
 
   return (
@@ -363,6 +447,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
             </Field>
           </div>
           {item.kind === 'ad_budget' && item.unit.kind === 'currency' && period !== 'total' && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={general} onChange={e => setGeneral(e.target.checked)} />{t('budgetSpending.general')}</label>}
+          {item.unit.kind === 'currency' && <CeilingCheck ceiling={ceiling} cap={cap} currency={item.unit.value} mismatch={mismatch} />}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
@@ -370,7 +455,7 @@ function EditItemDialog({ entry, onClose }: { entry: BudgetItemOut | null; onClo
             <Button
               type="submit"
               loading={save.isPending}
-              disabled={!changed || name.trim() === '' || cap === null}
+              disabled={!changed || name.trim() === '' || cap === null || above}
             >
               {t('common.save')}
             </Button>
@@ -614,6 +699,7 @@ export function BudgetPage() {
                         <span className="flex flex-col gap-0.5">
                           {item.name}
                           {item.general && <span className="text-xs text-muted-foreground">{t('budgetSpending.general')}</span>}
+                          {item.general && !retired && <RulesCeiling />}
                           {retired && (
                             <span className="text-caption font-normal">
                               {t('budget.retiredOn', { date: formatDateTime(item.retired_at, i18n.language) })}

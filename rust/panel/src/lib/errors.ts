@@ -164,6 +164,15 @@ export function errorMessage(t: TFunction, err: unknown): string {
       return t('errors.useSetCredentials');
     case 'account_mismatch':
       return t('errors.accountMismatch');
+    // The ad budget is the owner's Kurallar now (design 2026-11-19 §4.6.2).
+    case 'no_paid_lane':
+    case 'lane_budget_missing':
+      return t('errors.noPaidLane');
+    case 'above_rules_cap':
+    case 'above_strategy_cap':
+      return t('errors.aboveRulesCap');
+    case 'rules_cap_currency':
+      return t('errors.rulesCapCurrency', { currency: typeof err.details.currency === 'string' ? err.details.currency : '' });
     // The leads program's refusals (spec 2026-10-30-leads-pool-outreach-design.md).
     case 'not_editable':
     case 'stale_revision':

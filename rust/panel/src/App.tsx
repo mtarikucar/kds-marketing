@@ -34,7 +34,7 @@ import { LoginPage } from '@/pages/LoginPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { OAuthCallbackPage } from '@/pages/OAuthCallbackPage';
 import { RegisterPage } from '@/pages/RegisterPage';
-import { StrategyPage } from '@/pages/StrategyPage';
+import { KnowledgePage } from '@/pages/KnowledgePage';
 import { DistributionPage } from '@/pages/DistributionPage';
 import { PlatformLoginPage } from '@/pages/platform/PlatformLoginPage';
 import { PaymentsPage } from '@/pages/platform/PaymentsPage';
@@ -101,7 +101,9 @@ export const routes: RouteObject[] = [
           { path: 'outreach/:campaignId', element: <ModuleGate moduleId="outreach"><OutreachCampaign /></ModuleGate> },
           { path: 'calls', element: <ModuleGate moduleId="calls"><CallsPage /></ModuleGate> },
           { path: 'calls/:callId', element: <ModuleGate moduleId="calls"><CallDetail /></ModuleGate> },
-          { path: 'strategy', element: <StrategyPage /> },
+          { path: 'knowledge', element: <KnowledgePage /> },
+          // The strategy page became Bilgi bankası (design 2026-11-19 §4.11): every old address lands on it.
+          { path: 'strategy', element: <Navigate to="/knowledge" replace /> },
           { path: 'capabilities', element: <CapabilitiesPage /> },
           { path: 'connect', element: <ConnectPage /> },
           // Where a provider sends the browser back after signing in (the OAuth redirect URI).
