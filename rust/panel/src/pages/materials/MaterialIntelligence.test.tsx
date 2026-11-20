@@ -38,8 +38,8 @@ const detailAnswers = {
     expires_at: '2030-01-01T00:00:00Z',
   },
 };
-// A file opens in the content page's drawer.
-const open = () => renderAt('/content?file=source');
+// A file opens in Paylaşımlar' Dosyalar drawer (design 2026-11-19 §2.9.1).
+const open = () => renderAt('/posts?files=1&file=source');
 
 describe('Material intelligence workflow', () => {
   it('explains agent waiting and saves only the metadata fields manually changed', async () => {
@@ -50,7 +50,7 @@ describe('Material intelligence workflow', () => {
     const user = userEvent.setup();
     open();
     expect(await screen.findByText('Ajan analizi bekleniyor')).toBeVisible();
-    expect(screen.getByText(/Analiz, bağlı ajan/)).toBeVisible();
+    expect(screen.getByText(/İnceleme, bağlı ajan/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Analizi yeniden sıraya al' })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Grup'), 'Kafe açılışı');
     await user.click(screen.getByRole('button', { name: 'Bilgileri kaydet' }));
@@ -88,7 +88,7 @@ describe('Material intelligence workflow', () => {
     });
     const user = userEvent.setup();
     open();
-    await user.click(await screen.findByText('Bu materyalden yeni görsel üret'));
+    await user.click(await screen.findByText('Bu dosyadan yeni görsel üret'));
     await user.selectOptions(screen.getByLabelText('Ne hazırlayalım?'), 'poster');
     await user.type(
       screen.getByLabelText('Nasıl bir sonuç istiyorsunuz?'),
@@ -103,7 +103,7 @@ describe('Material intelligence workflow', () => {
       }),
     );
     expect(calls.find((c) => c.method === 'POST')?.body).toHaveProperty('request_key');
-    expect(screen.getByText(/orijinal dosya korunur/)).toBeVisible();
+    expect(screen.getByText(/asıl dosya korunur/)).toBeVisible();
     expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(1);
   });
 });
@@ -113,7 +113,7 @@ it('renaming a material does not lock unknown quality or unchanged automatic lab
   const user = userEvent.setup();
   open();
   await user.click(await screen.findByRole('button', { name: 'Etiketler ve kişiler' }));
-  const title = screen.getByLabelText('Materyal adı');
+  const title = screen.getByLabelText('Dosya adı');
   await user.clear(title);
   await user.type(title, 'Sabah kahvesi');
   await user.click(screen.getByRole('button', { name: 'Etiketleri kaydet' }));

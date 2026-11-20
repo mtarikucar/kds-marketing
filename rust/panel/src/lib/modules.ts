@@ -9,11 +9,16 @@ export function useModules() {
   return useQuery({ queryKey: modulesKey(workspaceId), queryFn: getModules, enabled: !!workspaceId });
 }
 const BUILTIN_PATHS: Record<string, string> = {
-  inbox: '/inbox', strategy: '/knowledge', content: '/content', social: '/social', ads: '/ads', materials: '/content', people: '/people',
+  inbox: '/inbox', strategy: '/knowledge', content: '/posts', social: '/posts', ads: '/ads', materials: '/posts', people: '/people',
   prospects: '/prospects', outreach: '/outreach', calls: '/calls',
 };
-/** The library and the content share one page and one menu entry (design 2026-11-18). */
-export const CONTENT_PAGE_MODULES = ['content', 'materials'];
+/**
+ * The contents, the posts and the library share one page and one menu entry, Paylaşımlar (design
+ * 2026-11-19 §2.1).
+ */
+export const POSTS_PAGE_MODULES = ['content', 'social', 'materials'];
+/** Who sees Paylaşımlar: a member holding any of these. */
+const POSTS_PAGE_PERMISSIONS: Permission[] = ['content.work', 'content.manage', 'social.work', 'social.manage', 'materials.work'];
 export function modulePath(module: WorkspaceModule | Blueprint): string {
   const blueprint = 'blueprint' in module ? module.blueprint : module;
   return blueprint.builtin && BUILTIN_PATHS[blueprint.id]
@@ -56,6 +61,8 @@ export function moduleVisibleTo(module: WorkspaceModule | Blueprint, me: import(
   const blueprint = 'blueprint' in module ? module.blueprint : module;
   const membership = me?.memberships.find(m => m.workspace_id === me.current_workspace);
   if (!blueprint.builtin) return true;
+  // One page for three modules: a rule per page, not per module.
+  if (POSTS_PAGE_MODULES.includes(blueprint.id)) return POSTS_PAGE_PERMISSIONS.some((p) => !!membership?.permissions.includes(p));
   const permissions: Record<string, Permission> = {
     prospects: 'prospects.work', outreach: 'outreach.work',
     content: 'content.work', social: 'social.work', ads: 'ads.work', materials: 'materials.work',

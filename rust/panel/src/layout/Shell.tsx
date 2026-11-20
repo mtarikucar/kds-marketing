@@ -9,6 +9,7 @@ import {
   Lock,
   ChevronDown,
   LogOut,
+  Megaphone,
   Menu,
   Plug,
   Users,
@@ -43,7 +44,7 @@ import {
 import { errorMessage } from '@/lib/errors';
 import { currentMembership } from '@/lib/roles';
 import { Brand } from './Brand';
-import { CONTENT_PAGE_MODULES, useModules, modulePath, moduleReady, moduleVisibleTo } from '@/lib/modules';
+import { POSTS_PAGE_MODULES, useModules, modulePath, moduleReady, moduleVisibleTo } from '@/lib/modules';
 
 type NavItem = { to: string; label: string; Icon: LucideIcon; locked?: boolean };
 
@@ -86,10 +87,10 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
       {modules.isError && <button className="px-3 py-2 text-left text-xs text-destructive underline" onClick={() => void modules.refetch()}>{tr ? 'Modüller yüklenemedi. Yeniden dene' : 'Modules unavailable. Retry'}</button>}
       {modules.data?.modules.filter(m => m.installed && !m.required && moduleVisibleTo(m, me)).map(m => ({
         to: modulePath(m),
-        label: CONTENT_PAGE_MODULES.includes(m.blueprint.id) ? t('content.title') : m.blueprint.name,
-        Icon: Layers,
+        label: POSTS_PAGE_MODULES.includes(m.blueprint.id) ? t('postsPage.title') : m.blueprint.name,
+        Icon: POSTS_PAGE_MODULES.includes(m.blueprint.id) ? Megaphone : Layers,
         locked: !moduleReady(modules.data, m.blueprint.id),
-      // The library and the content are one entry: listed once, locked only when neither opens.
+      // The contents, the posts and the library are one entry: listed once, locked only when none opens.
       })).reduce<NavItem[]>((items, item) => {
         const same = items.find(i => i.to === item.to);
         if (same) same.locked = same.locked && item.locked;

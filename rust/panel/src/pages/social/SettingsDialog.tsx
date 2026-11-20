@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { ChevronDown, Pencil } from 'lucide-react';
@@ -7,11 +7,23 @@ import { isApiError } from '@/api/client';
 import * as p from '@/api/posts';
 import type { SocialAccount } from '@/api/social';
 import { QueryState } from '@/components/QueryState';
-import { Button, cn, Dialog, DialogContent, DialogDescription, DialogTitle, Switch } from '@/components/ui';
+import { Button, cn, Switch } from '@/components/ui';
 import { formatNumber } from '@/lib/format';
 import { fieldClass, MaterialsError, useDecider } from '../materials/MaterialsShared';
-import { usePostsKey, usePostsRead } from './data';
-import { useSocialPlace } from './location';
+import { useStudioKey } from '../StudioShared';
+
+/**
+ * The planned posts from a hundred days back on, and the posting settings with them (one read).
+ * Under Studio's key, so a write there refreshes it.
+ */
+export function usePostsKey() {
+  const from = `${new Date(Date.now() - 100 * 86_400_000).toISOString().slice(0, 10)}T00:00:00Z`;
+  return [...useStudioKey(), 'posts', 'list', from] as const;
+}
+export function usePostsRead(enabled: boolean) {
+  const key = usePostsKey();
+  return useQuery({ queryKey: key, queryFn: () => p.postsList({ from: key[4] }), enabled, refetchInterval: 60_000 });
+}
 
 /** The zones offered first; any IANA zone is taken. */
 const ZONES = ['Europe/Istanbul', 'Europe/Berlin', 'Europe/London', 'Europe/Amsterdam', 'UTC'];
@@ -183,18 +195,6 @@ function rules(t: TFunction, lang: string): { main: { group: string; rules: Rule
   };
 }
 
-/**
- * What the dialog says of approval, true of the accounts in front of the person: none of them
- * waits for one, every one does, or which do (named when three or fewer, else counted).
- */
-export function approvalHelp(t: TFunction, accounts: SocialAccount[]): string {
-  const waiting = accounts.filter((a) => a.requires_human_approval);
-  if (!waiting.length) return t('posts.settings.help.none');
-  if (waiting.length === accounts.length) return t('posts.settings.help.all');
-  if (waiting.length > 3) return t('posts.settings.help.many', { n: waiting.length });
-  return t('posts.settings.help.some', { count: waiting.length, accounts: waiting.map((a) => a.name).join(', ') });
-}
-
 /** The settings as the server takes them: the policy, the zone and the scheduler choice. */
 const body = (s: Settings): p.PostingSettings => ({ tz: s.tz, policy: s.policy, provider_scheduling: s.provider_scheduling === true });
 
@@ -336,16 +336,15 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /**
- * Behind the gear: the posting rules as a few readable sentences, grouped as before (daily
- * limits; calendar and time), each with its own small edit; the rarely touched values (each
- * format's lead and grace, the floor, the settling time, the horizon, the platform's scheduler)
- * folded under "Gelişmiş". An owner or manager with `social.work` changes them in person;
- * anyone else reads them (spec D21, D24–D29, D56).
+ * "Paylaşım kuralları" in Ayarlar (design 2026-11-19 §2.9.3): the posting rules as a few readable
+ * sentences, grouped as before (daily limits; calendar and time), each with its own small edit;
+ * the rarely touched values (each format's lead and grace, the floor, the settling time, the
+ * horizon, the platform's scheduler) folded under "Gelişmiş". An owner or manager with
+ * `social.work` changes them in person; anyone else reads them (spec D21, D24–D29, D56).
+ * `accounts`: the connected accounts, for the line that names the paused ones.
  */
-/** `accounts`: `undefined` until they are read; until then the dialog says nothing of approval. */
-export function SettingsDialog({ accounts }: { accounts?: SocialAccount[] }) {
+export function PostingRules({ accounts }: { accounts?: SocialAccount[] }) {
   const { t, i18n } = useTranslation();
-  const [place, go] = useSocialPlace();
   const posts = usePostsRead(true);
   const decider = useDecider('social.work');
   const [editing, setEditing] = useState<string | null>(null);
@@ -357,39 +356,35 @@ export function SettingsDialog({ accounts }: { accounts?: SocialAccount[] }) {
   );
   const paused = (accounts ?? []).filter((a) => settings?.paused_capability_ids?.includes(a.capability_id) ?? a.paused);
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) go({ ...place, settings: undefined }, { replace: true }); }}>
-      <DialogContent className="max-w-2xl" data-testid="posting-settings">
-        <DialogTitle>{t('posts.settings.title')}</DialogTitle>
-        <DialogDescription>{accounts ? approvalHelp(t, accounts) : null}</DialogDescription>
-        <QueryState query={posts} keepOnError>
-          {settings && (
-            <div className="min-w-0 space-y-5">
-              {groups.main.map((g) => <Group key={g.group} title={g.group}>{g.rules.map(line)}</Group>)}
-              {paused.length > 0 && (
-                <p className="text-sm text-muted-foreground">{t('socialAccounts.rules.paused', { accounts: paused.map((a) => a.name).join(', ') })}</p>
+    <div data-testid="posting-settings">
+      <QueryState query={posts} keepOnError>
+        {settings && (
+          <div className="min-w-0 space-y-5">
+            {groups.main.map((g) => <Group key={g.group} title={g.group}>{g.rules.map(line)}</Group>)}
+            {paused.length > 0 && (
+              <p className="text-sm text-muted-foreground">{t('socialAccounts.rules.paused', { accounts: paused.map((a) => a.name).join(', ') })}</p>
+            )}
+            <div className="border-t border-border pt-3">
+              <button type="button" aria-expanded={advanced} onClick={() => setAdvanced((o) => !o)}
+                className="flex min-h-11 w-full items-center gap-1 rounded-md text-sm font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                <ChevronDown aria-hidden="true" className={cn('h-4 w-4 transition-transform', !advanced && '-rotate-90')} />
+                {t('socialAccounts.rules.advanced')}
+              </button>
+              {advanced && (
+                <div className="space-y-5 pt-2">
+                  {groups.advanced.map((g) => (
+                    <Group key={g.group} title={g.group}>
+                      {g.rules.map(line)}
+                      {g === groups.advanced[1] && <ProviderScheduling settings={settings} decider={decider} />}
+                    </Group>
+                  ))}
+                </div>
               )}
-              <div className="border-t border-border pt-3">
-                <button type="button" aria-expanded={advanced} onClick={() => setAdvanced((o) => !o)}
-                  className="flex min-h-11 w-full items-center gap-1 rounded-md text-sm font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                  <ChevronDown aria-hidden="true" className={cn('h-4 w-4 transition-transform', !advanced && '-rotate-90')} />
-                  {t('socialAccounts.rules.advanced')}
-                </button>
-                {advanced && (
-                  <div className="space-y-5 pt-2">
-                    {groups.advanced.map((g) => (
-                      <Group key={g.group} title={g.group}>
-                        {g.rules.map(line)}
-                        {g === groups.advanced[1] && <ProviderScheduling settings={settings} decider={decider} />}
-                      </Group>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {!decider && <p className="text-sm text-muted-foreground">{t('posts.settings.managerOnly')}</p>}
             </div>
-          )}
-        </QueryState>
-      </DialogContent>
-    </Dialog>
+            {!decider && <p className="text-sm text-muted-foreground">{t('posts.settings.managerOnly')}</p>}
+          </div>
+        )}
+      </QueryState>
+    </div>
   );
 }

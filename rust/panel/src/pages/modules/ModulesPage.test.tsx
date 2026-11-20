@@ -88,7 +88,7 @@ describe('modular agent center', () => {
     expect(task).toHaveTextContent('Atanmamış');
     const post = await within(calendar).findByRole('link', { name: /Reels/ });
     expect(post).toHaveTextContent('ornek-istemci');
-    expect(post).toHaveAttribute('href', '/social?slot=s1');
+    expect(post).toHaveAttribute('href', '/posts?slot=s1');
     expect(within(calendar).getByText('Sosyal medya yönetimi')).toBeInTheDocument();
     expect(calls.some(call => call.path === '/api/studio/summary')).toBe(true);
     expect(calls.some(call => call.path === '/api/calls')).toBe(true);

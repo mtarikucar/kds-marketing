@@ -121,7 +121,7 @@ describe('Shell', () => {
     renderAt('/studio');
     expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeInTheDocument();
     expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
-    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/social');
+    expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', '/modules/content');
   });
 
   it('permissions_copy_parity', () => {
@@ -161,24 +161,34 @@ it('orders core, installed modules including inbox, then management without remo
   mockFetch({ 'GET /api/auth/me': { ...me, memberships: [{ ...me.memberships[0], permissions: [...PERMISSIONS] }] } });
   renderAt('/');
   const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
-  await within(nav).findByRole('link', { name: 'İçerik' });
-  // The library and the content are one entry.
-  expect(within(nav).getAllByRole('link', { name: 'İçerik' })).toHaveLength(1);
+  await within(nav).findByRole('link', { name: 'Paylaşımlar' });
+  // The contents, the posts and the library are one entry.
+  expect(within(nav).getAllByRole('link', { name: 'Paylaşımlar' })).toHaveLength(1);
   await userEvent.click(within(nav).getByText('Yönetim'));
   expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
-    '/', '/knowledge', '/inbox', '/content', '/social', '/ads', '/people', '/prospects', '/outreach', '/calls', '/modules',
+    '/', '/knowledge', '/inbox', '/posts', '/ads', '/people', '/prospects', '/outreach', '/calls', '/modules',
     '/budget', '/users', '/capabilities', '/agents',
   ]);
   expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();
   expect(within(nav).queryByText('Günlük')).not.toBeInTheDocument();
 });
 
-it.each([['materials', 'content'], ['content', 'content'], ['social', 'social'], ['ads', 'ads']])('gates /%s before any business query', async (path, module) => {
+it.each([['posts', 'content'], ['materials', 'content'], ['content', 'content'], ['social', 'content'], ['ads', 'ads']])('gates /%s before any business query', async (path, module) => {
   const calls = mockFetch({ 'GET /api/auth/me': me, 'GET /api/workspace/modules': coreModules });
   renderAt(`/${path}`);
   expect(await screen.findByRole('heading', { name: 'Bu modül çalışma alanına eklenmemiş' })).toBeVisible();
   expect(screen.getByRole('link', { name: 'Modülü incele' })).toHaveAttribute('href', `/modules/${module}`);
-  expect(calls.some(c => c.path.startsWith('/api/studio/'))).toBe(false);
+  expect(calls.some(c => c.path.startsWith('/api/studio/') || c.path.startsWith('/api/content/'))).toBe(false);
+});
+
+it('opens Paylaşımlar with the social module alone, and lists it for a social member', async () => {
+  const socialOnly = { ...coreModules, modules: coreModules.modules.map(m => (m.blueprint.id === 'social' ? { ...m, installed: true } : m)) };
+  const member = { ...me, memberships: [{ ...me.memberships[0], permissions: ['social.work' as const] }] };
+  mockFetch({ 'GET /api/auth/me': member, 'GET /api/workspace/modules': socialOnly, 'GET /api/content/posts': { rows: [], next_cursor: null, counts: { all: 0, you: 0, stages: {} }, days: [], days_more: 0, composer: { allowed: false, files_allowed: false, stops: [], advice: [], connected: [] }, knowledge_empty: false, brake: null, as_of: '2026-11-20T09:00:00Z' } });
+  renderAt('/posts');
+  expect(await screen.findByRole('heading', { level: 1, name: tr.postsPage.title })).toBeInTheDocument();
+  const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
+  expect(await within(nav).findByRole('link', { name: tr.postsPage.title })).toHaveAttribute('href', '/posts');
 });
 
 it('offers a module installation link when a read reports MODULE_NOT_INSTALLED', async () => {

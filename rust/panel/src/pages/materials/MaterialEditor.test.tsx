@@ -32,8 +32,8 @@ const answers = {
   'GET /api/studio/materials/m1/intelligence': { material: suggested, intelligence: null },
   'GET /api/studio/materials/m1/preview': { url: '/material-test.jpg', expires_at: '2030-01-01T00:00:00Z' },
 };
-// A file opens in the content page's drawer.
-const open = () => renderAt('/content?file=m1');
+// A file opens in Paylaşımlar' Dosyalar drawer (design 2026-11-19 §2.9.1).
+const open = () => renderAt('/posts?files=1&file=m1');
 
 describe('Materyaller · Materyal', () => {
   it('preserves a hidden draft after another section saves and submits it at the refreshed revision', async () => {
@@ -95,7 +95,7 @@ describe('Materyaller · Materyal', () => {
     expect(within(editor).getByRole('button', { name: 'İzni kaydet' })).toBeVisible();
     expect(within(editor).queryByRole('button', { name: 'Etiketleri onayla' })).not.toBeInTheDocument();
     await user.click(within(editor).getByRole('button', { name: 'Kullanım geçmişi' }));
-    expect(within(editor).getByRole('button', { name: 'Materyali sil' })).toBeVisible();
+    expect(within(editor).getByRole('button', { name: 'Dosyayı sil' })).toBeVisible();
     expect(within(editor).queryByRole('radio', { name: 'Paylaşılamaz' })).not.toBeInTheDocument();
     await user.click(within(editor).getByRole('button', { name: 'Etiketler ve kişiler' }));
     expect(within(editor).getByRole('checkbox', { name: /Yüz/ })).toBeChecked();
@@ -156,7 +156,7 @@ describe('Materyaller · Materyal', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/free'))?.body).toEqual({ expected_revision: 2, free: true }),
     );
-    await userEvent.selectOptions(within(editor).getByLabelText('Olay'), 'o2');
+    await userEvent.selectOptions(within(editor).getByLabelText('Kategori'), 'o2');
     await userEvent.click(within(editor).getByRole('button', { name: 'Taşı' }));
     await waitFor(() =>
       expect(calls.find((c) => c.path.endsWith('/bind'))?.body).toEqual({
@@ -178,8 +178,8 @@ describe('Materyaller · Materyal', () => {
       .catch(() => null);
     if (tagsTab) await userEvent.click(tagsTab);
     await userEvent.click(await within(editor).findByRole('button', { name: 'Kullanım geçmişi' }));
-    await userEvent.click(within(editor).getByRole('button', { name: 'Materyali sil' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Materyal silinsin mi?' });
+    await userEvent.click(within(editor).getByRole('button', { name: 'Dosyayı sil' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Dosya silinsin mi?' });
     expect(within(dialog).getByText(/baytları\) silinir/)).toBeInTheDocument();
     expect(
       within(dialog).getByText(/Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır/),
@@ -211,7 +211,7 @@ describe('Materyaller · Materyal', () => {
     ).not.toBeInTheDocument();
     expect(within(editor).queryByRole('button', { name: 'Taşı' })).not.toBeInTheDocument();
     await userEvent.click(within(editor).getByRole('button', { name: 'Kullanım geçmişi' }));
-    expect(within(editor).queryByRole('button', { name: 'Materyali sil' })).not.toBeInTheDocument();
+    expect(within(editor).queryByRole('button', { name: 'Dosyayı sil' })).not.toBeInTheDocument();
   });
 
   it('names where a material was used, with its published post', async () => {
@@ -246,7 +246,7 @@ describe('Materyaller · Materyal', () => {
       .findByRole('button', { name: 'Etiketler ve kişiler' })
       .catch(() => null);
     if (tagsTab) await userEvent.click(tagsTab);
-    expect(await within(editor).findByText(/dosyası kaldırıldı/)).toBeInTheDocument();
+    expect(await within(editor).findByText(/içeriği kaldırıldı/)).toBeInTheDocument();
     expect(within(editor).getByText(/Destek görseli/)).toBeInTheDocument();
     expect(within(editor).getByText(/gönderi ig-9/)).toBeInTheDocument();
     expect(within(editor).getByRole('button', { name: 'İçeriği aç' })).toBeInTheDocument();

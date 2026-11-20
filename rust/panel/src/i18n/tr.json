@@ -201,9 +201,9 @@
     "connect": "Hesap bağla",
     "empty": "Henüz bağlı sosyal hesabın yok.",
     "back": "Hesaplara dön",
-    "paused": "Duraklatıldı",
+    "paused": "Durduruldu",
     "locked": "Bağlantı kullanılamıyor",
-    "pause": "Paylaşımı duraklat",
+    "pause": "Paylaşımı durdur",
     "resume": "Paylaşımı sürdür",
     "period": "Dönem",
     "days": "{{count}} gün",
@@ -219,17 +219,17 @@
     "strays": "Platformda zamanlanmış, Jeeta’nın bilmediği gönderiler",
     "straysHelp": "Bu gönderiler platformun kendi zamanlayıcısında duruyor ama Jeeta’nın bıraktığı paylaşımlardan biri değil: elle zamanlanmış ya da sonucu öğrenilemeyen bir bırakmadan kalmış olabilir. Jeeta bunları izlemez ve geri çekmez; yayınlanmasını istemiyorsanız platformun kendi ekranından silin.",
     "noRecent": "Henüz yayınlanan paylaşım yok.",
-    "materials": "{{count}} materyal",
+    "materials": "{{count}} dosya",
     "unknownAccount": "Sosyal hesap",
     "noSuitableAccount": "Uygun hesap henüz yok.",
     "blocked": {
-      "material_removed": "Bu sürümdeki bir dosya silindi. Yeni dosyayla düzenleme isteyin.",
+      "material_removed": "Bu paylaşımdaki bir dosya silindi. Yeni dosyayla düzenleme iste.",
       "no_approved_strategy": "Bilgi bankası boş; paylaşım planlanamaz. Bilgi bankasına yazınca kendiliğinden devam eder.",
       "no_connected_account": "Bağlı ve çalışan bir sosyal hesap yok. Bir hesap bağlayın ya da bağlantısını yenileyin.",
       "account_paused": "Uygun hesapların paylaşımı durdurulmuş. Hesabı sürdürünce ajan zaman seçer.",
-      "its_account_unavailable": "Bu sürümün hazırlandığı hesap şu an paylaşım alamıyor.",
+      "its_account_unavailable": "Bu paylaşımın hazırlandığı hesap şu an paylaşım alamıyor.",
       "format_not_supported": "Bağlı hesapların hiçbiri bu biçimi almıyor.",
-      "media_not_accepted": "Bu sürümün dosyaları hesabın platformuna uymuyor (örneğin TikTok yalnızca video alır). Uygun dosyayla düzenleme isteyin.",
+      "media_not_accepted": "Bu paylaşımın dosyaları hesabın platformuna uymuyor (örneğin TikTok yalnızca video alır). Uygun dosyayla düzenleme iste.",
       "hypothesis_does_not_post": "Bu hesap için şu an paylaşım yapan bir konu yok; ajanlar konuları güncelleyince kendiliğinden devam eder.",
       "knowledge_empty": "Bilgi bankası boş; paylaşım planlanamaz. Bilgi bankasına yazınca kendiliğinden devam eder.",
       "braked": "Tüm paylaşımlar durduruldu; sürdürünce kendiliğinden devam eder."
@@ -258,16 +258,16 @@
     "noTitle": "Metni henüz yok",
     "noPiece": "Bu paylaşımın metni ve görseli henüz hazırlanmadı.",
     "missingPost": "Bu paylaşım listelerde yok",
-    "missingVersion": "Bu sürüm artık zaman beklemiyor: ya zamanı verildi ya da içerik değişti.",
-    "fixPaused": "Duraklatılan hesaba git",
+    "missingVersion": "Bu paylaşım artık zaman beklemiyor: ya zamanı verildi ya da içerik değişti.",
+    "fixPaused": "Durdurulan hesaba git",
     "onAccount": "{{account}} hesabına",
     "scheduleAtSuggestion": "Zamanı ver: {{at}}",
     "suggestionsHelp": "Önerilen saatler: hesabın her zamanki paylaşım saati, bu türden paylaşımı olmayan ilk günlerde.",
     "otherTime": "Başka bir zaman",
     "scheduled": "Zaman verildi; paylaşım sıraya girdi.",
-    "delivered": "Paket hazırlandı: {{at}}",
+    "delivered": "İçerik hazırlandı: {{at}}",
     "agentGivesTime": "Ajan bir sonraki çalışmasında hesap ve saat verir; beklemek istemezseniz siz verin. Paylaşım kuralları aynen uygulanır.",
-    "pausedSwitch": "Duraklat",
+    "pausedSwitch": "Durdur",
     "needsApproval": "Her paylaşım onay bekler",
     "active": "Paylaşım açık",
     "today": "Bugün",
@@ -283,7 +283,7 @@
       "published": "Yayınlananlar"
     },
     "state": {
-      "approval": "Onayınızı bekliyor",
+      "approval": "Onayını bekliyor",
       "tiktok": "TikTok’ta tamamlanacak",
       "failed": "Gönderilemedi",
       "held": "Tutuluyor",
@@ -302,17 +302,17 @@
       "tiktok_other": "TikTok paylaşımı tamamlanacak",
       "failed_one": "gönderilemeyen paylaşım",
       "failed_other": "gönderilemeyen paylaşım",
-      "times_one": "sürüm zaman bekliyor",
-      "times_other": "sürüm zaman bekliyor",
-      "blocked_one": "sürüm hiçbir hesaba gidemiyor",
-      "blocked_other": "sürüm hiçbir hesaba gidemiyor"
+      "times_one": "paylaşım zaman bekliyor",
+      "times_other": "paylaşım zaman bekliyor",
+      "blocked_one": "paylaşım hiçbir hesaba gidemiyor",
+      "blocked_other": "paylaşım hiçbir hesaba gidemiyor"
     },
     "filtered": {
       "approvals": "Yalnız onay bekleyen paylaşımlar.",
       "tiktok": "Yalnız TikTok’ta tamamlanacak paylaşımlar.",
       "failed": "Yalnız gönderilemeyen paylaşımlar.",
-      "times": "Yalnız zaman bekleyen sürümler.",
-      "blocked": "Yalnız hiçbir hesaba gidemeyen sürümler."
+      "times": "Yalnız zaman bekleyen paylaşımlar.",
+      "blocked": "Yalnız hiçbir hesaba gidemeyen paylaşımlar."
     },
     "refusal": {
       "lead_too_short": "hazırlık süresinden daha yakın bir zaman",
@@ -321,12 +321,12 @@
       "cap_per_day": "o gün bu hesabın sınırı dolu",
       "spacing": "bu hesabın başka bir paylaşımına çok yakın",
       "format_unsupported": "hesap bu biçimi almıyor",
-      "media_count": "materyal sayısı biçime uymuyor",
-      "media_type": "materyal türü biçime uymuyor",
-      "version_already_scheduled": "bu sürüme zaten zaman verilmiş",
+      "media_count": "dosya sayısı biçime uymuyor",
+      "media_type": "dosya türü biçime uymuyor",
+      "version_already_scheduled": "bu paylaşıma zaten zaman verilmiş",
       "area_redo_open": "içerikte bir değişiklik istendi",
-      "version_made_for_another_account": "sürüm başka bir hesap için hazırlandı",
-      "account_paused": "hesabın paylaşımı duraklatılmış"
+      "version_made_for_another_account": "paylaşım başka bir hesap için hazırlandı",
+      "account_paused": "hesabın paylaşımı durdurulmuş"
     },
     "rules": {
       "limits": "Günlük sınırlar",
@@ -348,14 +348,14 @@
       "format": "{{format}}: {{lead}} saat önce hazırlanmaya başlar, en çok {{grace}} saat gecikebilir",
       "floor_one": "Bir kanalda {{count}} gün gönderi olmazsa tek bir genel paylaşım istenir",
       "floor_other": "Bir kanalda {{count}} gün gönderi olmazsa tek bir genel paylaşım istenir",
-      "debounce_one": "Materyal eklemek bittikten {{count}} dakika sonra plan istenir",
-      "debounce_other": "Materyal eklemek bittikten {{count}} dakika sonra plan istenir",
+      "debounce_one": "Dosya eklemek bittikten {{count}} dakika sonra plan istenir",
+      "debounce_other": "Dosya eklemek bittikten {{count}} dakika sonra plan istenir",
       "horizon_one": "En çok {{count}} gün ilerisi planlanır",
       "horizon_other": "En çok {{count}} gün ilerisi planlanır",
       "horizonInvalid": "Ufuk 1–90 gün olmalı ve hiçbir biçimin hazırlık süresinden kısa olamaz.",
       "providerOn": "Zamanlayıcısı olan platformlarda paylaşım, saatinden önce platformun kendi zamanlayıcısına bırakılır",
       "providerOff": "Her paylaşımı saatinde Jeeta yayınlar; platformun zamanlayıcısı kullanılmaz",
-      "paused": "Paylaşımı duraklatılan hesaplar: {{accounts}}. Duraklatma, hesabın kendi görünümünde.",
+      "paused": "Paylaşımı durdurulan hesaplar: {{accounts}}. Durdurmak ve sürdürmek Hesaplar'da.",
       "stale": "Ayarlar bu arada değişti; güncel değerler gösteriliyor. Değişikliğinizi yeniden yapın."
     },
     "needsScreen": "Her paylaşım TikTok ekranını bekler",
@@ -2752,7 +2752,7 @@
       "once_sonra": "Önce / sonra",
       "uretim_baski": "Üretim / baskı",
       "boyama": "Boyama",
-      "paketleme": "Paketleme",
+      "paketleme": "Ambalaj",
       "teslim_tepki": "Teslim / tepki",
       "atolye_ani": "Atölye anı"
     },
@@ -2770,76 +2770,76 @@
       "corporate_ref": "Kurumsal referans"
     },
     "role": {
-      "anchor": "Dayanak materyal",
+      "anchor": "Dayanak dosya",
       "support": "Destek görseli"
     },
     "finding": {
-      "erased": "Bu materyal silindi.",
+      "erased": "Bu dosya silindi.",
       "share_unset": "Paylaşım izni verilmedi.",
-      "not_shareable": "Bu materyal paylaşılamaz olarak işaretli.",
-      "sensitive_needs_human": "Materyalde izin gerektiren bir şey görünüyor; paylaşım iznini sahip veya yönetici vermeli.",
-      "product_only_shows_person": "Sadece ürün izinli, ama materyalde bir yüz, isim veya çocuk görünüyor ya da bir kişi bağlı; bunlar henüz gizlenemiyor.",
+      "not_shareable": "Bu dosya paylaşılamaz olarak işaretli.",
+      "sensitive_needs_human": "Dosyada izin gerektiren bir şey görünüyor; paylaşım iznini sahip ya da yönetici vermeli.",
+      "product_only_shows_person": "Yalnızca ürün izinli, ama dosyada bir yüz, isim ya da çocuk görünüyor ya da bir kişi bağlı; bunlar henüz gizlenemiyor.",
       "quality": "Kalitesi “yayınlanabilir” olarak işaretlenmedi.",
-      "olay_missing": "Bağlı olduğu olay bulunamadı.",
-      "olay_unconfirmed": "Bağlı olduğu olay henüz onaylanmadı.",
+      "olay_missing": "Bağlı olduğu kategori bulunamadı.",
+      "olay_unconfirmed": "Bağlı olduğu kategori henüz onaylanmadı.",
       "out_of_season": "Sezon penceresinin dışında.",
-      "use_archive": "Geçen sezonun materyali: yalnızca geçen yılın içeriği (arşiv) olarak kullanılabilir.",
-      "archive_not_season": "Arşiv olarak yalnızca sezon veya özel gün materyali kullanılabilir.",
+      "use_archive": "Geçen sezonun dosyası: yalnızca geçen yılın içeriği (arşiv) olarak kullanılabilir.",
+      "archive_not_season": "Arşiv olarak yalnızca sezon ya da özel gün dosyası kullanılabilir.",
       "not_freed": "Genel içerikte kullanmak için “genel kullanılabilir” yapılmadı.",
-      "other_olay": "Bu materyal başka bir olaya ait.",
-      "genel_generic_only": "Genel materyal yalnızca belirli bir olaydan söz etmeyen içerikte kullanılabilir.",
+      "other_olay": "Bu dosya başka bir kategoriye ait.",
+      "genel_generic_only": "Genel bir dosya yalnızca belirli bir kategoriden söz etmeyen içerikte kullanılabilir.",
       "ai_not_anchor": "Yapay zekâ görseli içeriğin dayanağı olamaz; yalnızca destek görseli olabilir.",
-      "ai_olay_past": "Olay bittiği için bu yapay zekâ görseli artık duyuruda kullanılamaz.",
-      "no_material": "Bu parça hiçbir materyale dayanmıyor.",
-      "no_eligible_material": "Bu parçada kullanılabilir bir dayanak materyal yok.",
-      "names_other_olay": "Metin başka bir olayın adını, yerini veya müşterisini anıyor.",
-      "names_material_context": "Genel içerikte metin, materyalin geldiği olayın adını, yerini veya müşterisini anıyor.",
-      "date_outside_olay": "Metindeki tarih olayın günlerinin dışında.",
-      "date_in_generic": "Genel içerikte metin, materyalin olay gününü anıyor.",
-      "archive_year_missing": "Geçen yılın içeriğinde olayın yılı metinde geçmiyor.",
-      "client_named_product_only": "Sadece ürün izinli materyalde müşterinin adı geçiyor.",
-      "source_permission_restricted": "Bu görselin kaynağı olan materyalin paylaşım izni yok.",
-      "material_not_in_area": "Bu materyal üretim alanına eklenmemiş.",
-      "material_not_found": "Materyal bulunamadı.",
+      "ai_olay_past": "Kategorinin tarihi geçtiği için bu yapay zekâ görseli artık duyuruda kullanılamaz.",
+      "no_material": "Bu paylaşım hiçbir dosyaya dayanmıyor.",
+      "no_eligible_material": "Bu paylaşımda kullanılabilir bir dayanak dosya yok.",
+      "names_other_olay": "Metin başka bir kategorinin adını, yerini ya da müşterisini anıyor.",
+      "names_material_context": "Genel içerikte metin, dosyanın geldiği kategorinin adını, yerini ya da müşterisini anıyor.",
+      "date_outside_olay": "Metindeki tarih kategorinin günlerinin dışında.",
+      "date_in_generic": "Genel içerikte metin, dosyanın kategori gününü anıyor.",
+      "archive_year_missing": "Geçen yılın içeriğinde kategorinin yılı metinde geçmiyor.",
+      "client_named_product_only": "Yalnızca ürün izinli dosyada müşterinin adı geçiyor.",
+      "source_permission_restricted": "Bu görselin kaynağı olan dosyanın paylaşım izni yok.",
+      "material_not_in_area": "Bu dosya içeriğe eklenmemiş.",
+      "material_not_found": "Dosya bulunamadı.",
       "media_count": "Bu biçim bu sayıda görsel ya da video almıyor.",
       "media_type": "Bu biçim ve hesap bu dosya türünü almıyor.",
       "account_refused": "Seçilen hesap paylaşıma hazır değil ya da bu biçimi almıyor.",
-      "hypothesis_not_in_approved_strategy": "İçerik onaylı stratejideki bir hedefe bağlı değil.",
-      "unknown": "Materyal kontrolü bu parçayı tutuyor ({{code}})."
+      "hypothesis_not_in_approved_strategy": "Paylaşım ajanların konularından birine bağlı değil.",
+      "unknown": "Bir kontrol bu paylaşımı tutuyor ({{code}})."
     },
     "error": {
       "owner_or_manager_human": "Bu kararı yalnızca sahip veya yönetici panelden verebilir.",
       "human_required": "Bu kararı bir kişi panelden vermeli.",
-      "share_required": "Paylaşım iznini seçin.",
-      "olay_or_genel": "Bir olay seçin ya da materyali genel yapın.",
+      "share_required": "Paylaşım iznini seç.",
+      "olay_or_genel": "Bir kategori seç ya da dosyayı genel yap.",
       "file_has_material": "Bu dosya zaten kütüphanede.",
-      "duplicate_material_file": "Bu dosyanın aynısı kütüphanede zaten bir materyal (ya da bir materyaldi ve silindi): bir fotoğraf tek bir materyaldir.",
-      "material_erased": "Bu materyal silindi; değiştirilemez.",
-      "genel_stays_freed": "Genel bir materyal genel kullanılabilir kalır; geri almak için önce bir olaya taşıyın.",
-      "ai_material": "Yalnızca gerçek bir materyal genel kullanılabilir yapılır.",
-      "already_confirmed": "Bu olay zaten onaylanmış.",
+      "duplicate_material_file": "Bu dosyanın aynısı kütüphanede zaten var (ya da vardı ve silindi): bir fotoğraf tek bir dosyadır.",
+      "material_erased": "Bu dosya silindi; değiştirilemez.",
+      "genel_stays_freed": "Genel bir dosya genel kullanılabilir kalır; geri almak için önce bir kategoriye taşı.",
+      "ai_material": "Yalnızca gerçek bir dosya genel kullanılabilir yapılır.",
+      "already_confirmed": "Bu kategori zaten onaylanmış.",
       "already_resolved": "Bu istek zaten kapatılmış.",
       "closes_itself": "Bu istek, koşulu sağlanınca kendiliğinden kapanır.",
       "not_a_monday": "Bir hafta pazartesi başlar.",
       "request_key_taken": "Bu istek zaten eklenmiş.",
       "depicts_required": "Yapay zekâ görselinde nelerin göründüğü belirtilmeli.",
-      "not_a_material": "İçeriğin her görseli kütüphanedeki bir materyal olmalı.",
-      "no_eligible_material": "Bu içerik kullanılabilir bir dayanak materyal göstermiyor.",
-      "subject_required": "İçeriğin neyle ilgili olduğunu seçin.",
-      "material_refused": "Seçilen materyallerden biri burada kullanılamaz:",
+      "not_a_material": "İçeriğin her görseli kütüphanedeki bir dosya olmalı.",
+      "no_eligible_material": "Bu içerik kullanılabilir bir dayanak dosya göstermiyor.",
+      "subject_required": "İçeriğin neyle ilgili olduğunu seç.",
+      "material_refused": "Seçilen dosyalardan biri burada kullanılamaz:",
       "out_of_range": "Yıl 2000 ile 2100 arasında olmalı.",
       "revision_changed": "İçerik siz bakarken değişti; yenileyip tekrar deneyin.",
       "slot_not_ready": "Yalnızca hazır bir içeriğin metni bu hâliyle yayınlanabilir.",
-      "hard_findings_not_releasable": "Materyal sorunları bırakılamaz: materyali veya içeriği değiştirin.",
+      "hard_findings_not_releasable": "Dosya sorunları bırakılamaz: dosyayı ya da içeriği değiştir.",
       "no_caption_findings": "Bırakılacak bir metin bulgusu yok.",
       "findings_changed": "Bulgular siz bakarken değişti; yenileyip tekrar bakın.",
       "stale": "Bu kayıt siz bakarken değişti; yenileyip tekrar deneyin.",
-      "material_revision_changed": "Materyal güncellendi. Güncel bilgileri yükleyip yeniden deneyin.",
-      "analysis_in_progress": "Ajan bu materyali inceliyor. Analiz tamamlandığında yeniden deneyebilirsiniz.",
+      "material_revision_changed": "Dosya güncellendi. Güncel bilgileri yükleyip yeniden dene.",
+      "analysis_in_progress": "Ajan bu dosyayı inceliyor. İnceleme bitince yeniden deneyebilirsin.",
       "analysis_claim_expired": "Analiz süresi doldu. İşi yeniden sıraya alın.",
       "analysis_not_pending": "Analiz durumu değişti. Güncel bilgileri yükleyin.",
       "production_failed": "Üretim tamamlanamadı. İsteği kontrol edip yeniden oluşturun.",
-      "source_changed": "Kaynak materyal değişti. Güncel materyalle yeni bir istek oluşturun.",
+      "source_changed": "Kaynak dosya değişti. Güncel dosyayla yeni bir istek oluştur.",
       "production_not_pending": "Üretim isteğinin durumu değişti. Güncel bilgileri yükleyin.",
       "production_claim_expired": "Üretim oturumunun süresi doldu. İsteği kontrol edin.",
       "story_image_jpeg_only": "Hikâye görseli JPEG olmalı: fotoğrafı JPEG olarak kaydedip yeniden yükleyin.",
@@ -2852,11 +2852,11 @@
     "invalid": {
       "media": "Dosya kabul edilmedi: JPEG, PNG, WebP, GIF (en çok 25 MB) veya MP4 (en çok 200 MB) olmalı.",
       "title": "Başlık 1–120 karakter olmalı.",
-      "dates": "Bitiş tarihi başlangıçtan önce olamaz; bir olay en çok 366 gün sürer.",
+      "dates": "Bitiş tarihi başlangıçtan önce olamaz; bir kategori en çok 366 gün sürer.",
       "place": "Yer en çok 120 karakter olabilir.",
       "notes": "Notlar en çok 2000 karakter olabilir.",
       "client": "Müşteri / kurum adı en çok 120 karakter olabilir.",
-      "occasion": "Sezon veya özel gün için takvimden bir gün seçin; diğer türlerde gün seçilmez.",
+      "occasion": "Sezon ya da özel gün için takvimden bir gün seç; diğer türlerde gün seçilmez.",
       "window": "Pencerenin iki tarihi de girilmeli, en çok 120 gün sürmeli ve yılın içinde olmalı.",
       "key": "Anahtar yalnızca küçük harf, rakam ve alt çizgi içerir (en çok 40).",
       "name": "Ad 1–120 karakter olmalı.",
@@ -2866,7 +2866,7 @@
       "week_start": "Hafta bir pazartesi günü başlamalı.",
       "year": "Yıl 2000 ile 2100 arasında olmalı.",
       "people": "Kişi listesi geçersiz (en çok 50 kişi).",
-      "binding": "Gerçek bir materyal ancak genel kullanılabilir yapılarak genel olur.",
+      "binding": "Gerçek bir dosya ancak genel kullanılabilir yapılarak genel olur.",
       "share": "Bu paylaşım iznini yalnızca bir kişi verebilir.",
       "revision": "Kayıt değişti; yenileyip tekrar deneyin.",
       "request_key": "İstek anahtarı geçersiz; sayfayı yenileyip tekrar deneyin."
@@ -2880,27 +2880,27 @@
       "startsOn": "Tarih (başlangıç)",
       "endsOn": "Bitiş (birden çok gün sürdüyse)",
       "occasion": "Takvimdeki gün",
-      "chooseOccasion": "Seçin",
+      "chooseOccasion": "Seç",
       "place": "Yer",
       "organization": "Müşteri / kurum",
       "notes": "Notlar",
-      "oneDayHint": "Tek günlük bir olay için bitiş tarihini boş bırakın.",
+      "oneDayHint": "Tek günlük bir kategori için bitiş tarihini boş bırak.",
       "awaiting": "Onay bekliyor",
       "confirm": "Onayla",
-      "new": "Yeni olay",
+      "new": "Yeni kategori",
       "edit": "Düzenle",
-      "create": "Olayı oluştur",
+      "create": "Kategoriyi oluştur",
       "save": "Kaydet"
     },
     "editor": {
       "origin": "Kaynak",
       "real": "Gerçek çekim",
       "aiBy": "Yapay zekâ ({{generator}})",
-      "binding": "Olay",
-      "unknownOlay": "Bilinmeyen olay",
+      "binding": "Kategori",
+      "unknownOlay": "Bilinmeyen kategori",
       "captured": "Çekildiği an",
       "added": "Eklendiği an",
-      "erasedHelp": "Bu materyal silindi: dosyası kaldırıldı, başlığı ve etiketleri temizlendi. Kaydı yalnızca nerede kullanıldığını göstermek için duruyor.",
+      "erasedHelp": "Bu dosya silindi: içeriği kaldırıldı, başlığı ve etiketleri temizlendi. Kaydı yalnızca nerede kullanıldığını göstermek için duruyor.",
       "tags": "Etiketler ve kalite",
       "suggestedHelp": "Bu etiketler bir ajanın önerisi; henüz kimse gözden geçirmedi. Kontrol edip onaylayın.",
       "confirmTags": "Etiketleri onayla",
@@ -2911,34 +2911,34 @@
       "permissionManagerOnly": "Paylaşım iznini yalnızca sahip veya yönetici değiştirebilir.",
       "savePermission": "İzni kaydet",
       "free": "Genel kullanılabilir",
-      "freeHelp": "Genel kullanılabilir bir materyal, belirli bir olaydan söz etmeyen içerikte de kullanılabilir; başka bir olayın içeriğinde asla.",
+      "freeHelp": "Genel kullanılabilir bir dosya, belirli bir kategoriden söz etmeyen içerikte de kullanılabilir; başka bir kategorinin içeriğinde asla.",
       "freedAt": "Genel kullanılabilir ({{at}})",
       "makeFree": "Genel kullanılabilir yap",
       "unfree": "Geri al",
-      "genelStaysFreed": "Genel bir materyal genel kullanılabilir kalır; geri almak için önce bir olaya taşıyın.",
-      "bind": "Başka olaya taşı",
-      "bindHelp": "Materyal yanlış olaya bağlandıysa doğru olayı seçin.",
-      "bindTo": "Olay",
+      "genelStaysFreed": "Genel bir dosya genel kullanılabilir kalır; geri almak için önce bir kategoriye taşı.",
+      "bind": "Başka kategoriye taşı",
+      "bindHelp": "Dosya yanlış kategoriye bağlandıysa doğru kategoriyi seç.",
+      "bindTo": "Kategori",
       "move": "Taşı",
-      "delete": "Materyali sil",
+      "delete": "Dosyayı sil",
       "deleteHelp": "Dosya silinir; bu geri alınamaz.",
-      "deleteTitle": "Materyal silinsin mi?",
+      "deleteTitle": "Dosya silinsin mi?",
       "deleteKvkk": "KVKK gereği dosyanın kendisi (baytları) silinir; başlığı, etiketleri ve kişileri temizlenir. Kaydı, hangi içerikte kullanıldığının kanıtı olarak kalır.",
       "deleteUsed": "Sağlayıcıda yayınlanmış gönderiler silinmez: onları “Kullanıldığı yerler” bağlantılarından kendiniz kaldırın.",
       "deleteConfirm": "Sil",
       "deleteCancel": "Vazgeç",
       "workbench": {
-        "sections": "Materyal bölümleri",
+        "sections": "Dosya bölümleri",
         "review": "Etiketler ve kişiler",
         "publishing": "İzin ve yerleşim",
         "history": "Kullanım geçmişi",
-        "reviewHelp": "Materyalin içeriğini ve görünen kişileri kontrol edin. Her bölüm ayrı kaydedilir.",
-        "publishingHelp": "Nerede kullanılabileceğini belirleyin. Paylaşım izni ve olay bağlantısı ayrı kararlardır."
+        "reviewHelp": "Dosyanın içeriğini ve görünen kişileri kontrol et. Her bölüm ayrı kaydedilir.",
+        "publishingHelp": "Nerede kullanılabileceğini belirle. Paylaşım izni ve kategori bağlantısı ayrı kararlardır."
       }
     },
     "people": {
       "title": "Görünen kişiler",
-      "help": "Materyalde görünen kişiler. Bir kişinin verileri silinirse onun göründüğü materyaller de silinir (KVKK).",
+      "help": "Dosyada görünen kişiler. Bir kişinin verileri silinirse onun göründüğü dosyalar da silinir (KVKK).",
       "none": "Kişi eklenmedi.",
       "unnamed": "Kişi",
       "remove": "Çıkar",
@@ -2956,8 +2956,8 @@
     "calendar": {
       "year": "Yıl",
       "needsDates": "Tarih girilmeli",
-      "undated_one": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günün materyali kullanılmaz.",
-      "undated_other": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günlerin materyali kullanılmaz.",
+      "undated_one": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günün dosyası kullanılmaz.",
+      "undated_other": "{{year}} için {{count}} günün tarihi girilmedi; girilene kadar o günlerin dosyası kullanılmaz.",
       "off": "Kapalı",
       "edited": "Düzenlendi",
       "leadIs": "{{days}} gün önceden hazırlık",
@@ -2985,13 +2985,13 @@
       }
     },
     "policy": {
-      "title": "Materyal kuralları",
+      "title": "Dosya kuralları",
       "lead": "Hazırlık (gün)",
-      "leadHelp": "Bir sezon veya olaydan kaç gün önce materyal istenir.",
+      "leadHelp": "Bir sezondan ya da kategoriden kaç gün önce dosya istenir.",
       "reuse": "Tekrar aralığı (gün)",
-      "reuseHelp": "Aynı materyal bu kadar gün içinde yeniden gösterilmez.",
+      "reuseHelp": "Aynı dosya bu kadar gün içinde yeniden gösterilmez.",
       "recap": "Özet süresi (gün)",
-      "recapHelp": "Bir olay bittikten sonra bu kadar gün özet içeriğinde öncelik alır.",
+      "recapHelp": "Bir kategorinin tarihi bittikten sonra bu kadar gün özet içeriğinde öncelik alır.",
       "aiStandalone": "Ajanın ürettiği görsel tek başına paylaşılabilsin",
       "aiStandaloneHelp": "Açıkken ajan, kendi ürettiği ve içinde kişi olmayan bir görselle, gerçek çekim olmadan içerik hazırlayabilir; bu içerikte belirli bir etkinlik, yer ya da müşteri adı geçemez. Kapalıyken her içerikte en az bir gerçek çekim bulunur; ajanın görseli yalnızca onun yanında kullanılır.",
       "save": "Kuralları kaydet",
@@ -3004,17 +3004,17 @@
       "dismiss": "Gerek yok"
     },
     "hold": {
-      "title": "Materyal kontrolü bu içeriği durduruyor",
-      "noDetails": "Materyal kontrolü bu içeriği tutuyor.",
-      "fixMaterial": "Materyali (izni, olayı) ya da içeriği düzeltin; bu sorunlar bırakılamaz.",
+      "title": "Dosya kontrolü bu içeriği durduruyor",
+      "noDetails": "Dosya kontrolü bu içeriği tutuyor.",
+      "fixMaterial": "Dosyayı (iznini, kategorisini) ya da içeriği düzelt; bu sorunlar bırakılamaz.",
       "fixCaption": "Metni düzeltin; ya da sahip veya yönetici metni bu hâliyle yayınlamaya izin verebilir.",
-      "openMaterial": "Materyali aç",
+      "openMaterial": "Dosyayı aç",
       "shoots_one": "Çekim listesinde {{count}} açık istek var.",
       "shoots_other": "Çekim listesinde {{count}} açık istek var.",
       "openShoots": "Çekim listesini aç",
       "release": "Metni bu hâliyle yayınla",
       "releaseTitle": "Metin bu hâliyle yayınlansın mı?",
-      "releaseHelp": "Bu bulgular yalnızca bu içerik sürümü için bırakılır. Metin veya bulgular değişirse kontrol yeniden yapılır.",
+      "releaseHelp": "Bu bulgular yalnızca içeriğin bu hâli için bırakılır. Metin ya da bulgular değişirse kontrol yeniden yapılır.",
       "releaseConfirm": "Yayınlanabilir"
     },
     "slot": {
@@ -3039,21 +3039,21 @@
       "addLabel": "Ekle",
       "removeLabel": "{{label}} etiketini kaldır",
       "uploadTitle": "Yükleyin, birlikte düzenleyelim",
-      "uploadHelp": "Bağlı ajan görselleri inceleyerek açıklama, etiket ve grup önerir. Olay seçmek zorunda değilsiniz; sonuçları sonradan düzenleyebilirsiniz.",
-      "eventOptional": "Belirli bir olaya bağla (isteğe bağlı)",
+      "uploadHelp": "Bağlı ajan görselleri inceleyerek açıklama, etiket ve grup önerir. Kategori seçmek zorunda değilsin; sonuçları sonradan düzenleyebilirsin.",
+      "eventOptional": "Belirli bir kategoriye bağla (isteğe bağlı)",
       "shareHelp": "Paylaşılabilir, içerik üretiminde kullanılabilir demektir. Yükleme, otomatik yayın başlatmaz.",
       "optionalTags": "Etiket ve kaliteyi kendim belirle",
-      "pendingHelp": "Analiz, bağlı ajan bir sonraki çalışmasında işi aldığında başlar. Ajan çalışmıyorsa materyaller analiz bekler.",
+      "pendingHelp": "İnceleme, bağlı ajan bir sonraki çalışmasında işi aldığında başlar. Ajan çalışmıyorsa dosyalar inceleme bekler.",
       "title": "İçerik bilgileri",
       "description": "Görselde ne var?",
       "group": "Grup",
-      "groupHelp": "Benzer materyalleri bir araya getirir. Bir etkinliğin gerçekleştiğini doğrulamaz.",
-      "materialTitle": "Materyal adı",
+      "groupHelp": "Benzer dosyaları bir araya getirir. Bir etkinliğin gerçekleştiğini doğrulamaz.",
+      "materialTitle": "Dosya adı",
       "capturedAt": "Çekim tarihi ve saati (İstanbul)",
       "captureHelp": "Yükleme tarihinden farklıdır. Dosyada güvenilir çekim bilgisi yoksa boş bırakılır.",
       "save": "Bilgileri kaydet",
       "retry": "Analizi yeniden sıraya al",
-      "noAnalysis": "Bu materyal henüz analize alınmadı.",
+      "noAnalysis": "Bu dosya henüz incelemeye alınmadı.",
       "pending": "Ajan analizi bekleniyor",
       "running": "Ajan inceliyor",
       "completed": "Analiz tamamlandı",
@@ -3071,20 +3071,20 @@
       "ungrouped": "Henüz gruplandırılmadı",
       "library": "Kütüphane",
       "libraryHelp": "Görsellerinizi gruplara göre bulun; ayrıntıları açıp düzenleyin.",
-      "noResults": "Bu aramayla eşleşen materyal yok.",
+      "noResults": "Bu aramayla eşleşen dosya yok.",
       "conflict": "Siz düzenlerken bu bilgiler güncellendi. Taslağınız korunuyor. Güncel bilgileri yükleyip yeniden düzenleyin.",
       "reload": "Taslağı bırak, güncel bilgileri yükle"
     },
     "production": {
-      "title": "Bu materyalden yeni görsel üret",
-      "help": "Düzenleme, kırpma veya afiş isteyin. Bağlı ajan işi aldığında üretim başlar; orijinal dosya korunur ve sonuç ayrı materyal olarak kaydedilir.",
+      "title": "Bu dosyadan yeni görsel üret",
+      "help": "Düzenleme, kırpma ya da afiş iste. Bağlı ajan işi aldığında üretim başlar; asıl dosya korunur ve sonuç ayrı bir dosya olarak kaydedilir.",
       "kind": "Ne hazırlayalım?",
       "edit": "Görseli düzenle",
       "crop": "Kırp ve yeniden kadrajla",
       "poster": "Afiş hazırla",
       "instructions": "Nasıl bir sonuç istiyorsunuz?",
       "submit": "Üretim isteğini gönder",
-      "open": "Üretilen materyali aç",
+      "open": "Üretilen dosyayı aç",
       "status": {
         "pending": "Ajan bekleniyor",
         "running": "Ajan çalışıyor",
@@ -3093,7 +3093,7 @@
         "cancelled": "İptal edildi"
       },
       "queued": "İstek sıraya alındı. Bağlı ajan işi aldığında burada ilerlemesini görebilirsiniz.",
-      "sourceChanged": "Kaynak güncellendi. Güncel materyalle yeniden istek oluşturun."
+      "sourceChanged": "Kaynak güncellendi. Güncel dosyayla yeniden istek oluştur."
     }
   },
   "leads": {
@@ -3800,11 +3800,11 @@
     "settings": {
       "title": "Paylaşım ayarları",
       "help": {
-        "none": "Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
-        "all": "Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.",
-        "some_one": "Her paylaşımı onayınızı bekleyen hesap: {{accounts}}; diğerlerinde onay gerekmez.",
-        "some_other": "Her paylaşımı onayınızı bekleyen hesaplar: {{accounts}}; diğerlerinde onay gerekmez.",
-        "many": "{{n}} hesapta her paylaşım onayınızı bekler; diğerlerinde onay gerekmez."
+        "none": "Onay gerekmez: dosya kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.",
+        "all": "Her paylaşım onayını bekler; bu sınırlar da ayrıca uygulanır.",
+        "some_one": "Her paylaşımı onayını bekleyen hesap: {{accounts}}; diğerlerinde onay gerekmez.",
+        "some_other": "Her paylaşımı onayını bekleyen hesaplar: {{accounts}}; diğerlerinde onay gerekmez.",
+        "many": "{{n}} hesapta her paylaşım onayını bekler; diğerlerinde onay gerekmez."
       },
       "lead": "Hazırlık (saat önce)",
       "grace": "Gecikme payı (saat)",
@@ -3823,7 +3823,7 @@
       "saved": "Kaydedildi.",
       "invalid": "Değerleri kontrol edin: saatler 0–23, günlük sınırlar 1–100, ufuk 1–90 gün, gecikme payı ve aralıklar en çok 24 saat.",
       "providerScheduling": "Platformun kendi zamanlayıcısını kullan",
-      "providerSchedulingHelp": "Açıkken, zamanlayıcısı olan platformlarda (şimdilik Facebook Sayfası: metin, bağlantı ve tek görselli paylaşımlar) paylaşım saatinden önce platforma bırakılır ve orada zamanlanmış görünür. Fren, duraklatma ya da “Düzenleme iste” platformdaki paylaşımı geri çeker. Kapalıyken her paylaşımı saatinde Jeeta yayınlar.",
+      "providerSchedulingHelp": "Açıkken, zamanlayıcısı olan platformlarda (şimdilik Facebook Sayfası: metin, bağlantı ve tek görselli paylaşımlar) paylaşım saatinden önce platforma bırakılır ve orada zamanlanmış görünür. Tüm paylaşımları durdurmak, bir hesabı durdurmak ya da “Düzenleme iste” platformdaki paylaşımı geri çeker. Kapalıyken her paylaşımı saatinde Jeeta yayınlar.",
       "invalidTz": "Saat dilimi tanınmadı (ör. Europe/Istanbul).",
       "managerOnly": "Bu ayarları yalnız sahip veya yönetici değiştirir."
     }
@@ -4036,7 +4036,7 @@
     "title": "İçerik",
     "help": "Dosyaları bırakın; ajan olayına koyar, içeriği üretir. Siz yalnızca sizi bekleyenlere bakarsınız.",
     "genel": "Genel",
-    "genelHelp": "Belirli bir olaya ait olmayan dosyalar ve içerikler",
+    "genelHelp": "Belirli bir kategoriye ait olmayan dosyalar ve içerikler",
     "unknownOlay": "Bilinmeyen olay",
     "folderSummary": "{{files}} dosya · {{areas}} içerik · {{published}} yayında",
     "newIn": "Yeni içerik · {{olay}}",
@@ -4222,15 +4222,15 @@
       "active": "Aktif",
       "ended": "Bitti",
       "always": "Sürekli",
-      "proposedTitle": "Ajan bu olayı önerdi",
+      "proposedTitle": "Ajan bu kategoriyi önerdi",
       "proposedHelp": "Onaylayana kadar dosyaları içerikte kullanılmaz. Doğruysa onaylayın; değilse düzenleyin.",
       "proposedHelpOther": "Onaylayana kadar dosyaları içerikte kullanılmaz. Bir sahip ya da yönetici onaylayacak.",
-      "newHelp": "Sahip ya da yöneticinin açtığı olay onaylı başlar; başkasının açtığı olay onay bekler.",
-      "editHelp": "Değişiklik olayın bütün dosyalarına ve içeriklerine yansır.",
+      "newHelp": "Sahip ya da yöneticinin açtığı kategori onaylı başlar; başkasının açtığı kategori onay bekler.",
+      "editHelp": "Değişiklik kategorinin bütün dosyalarına ve içeriklerine yansır.",
       "problem": {
-        "title": "Olaya bir başlık verin.",
+        "title": "Kategoriye bir başlık ver.",
         "dates": "Başlangıç tarihi girin; bitiş başlangıçtan önce olamaz.",
-        "occasion": "Takvimdeki günü seçin."
+        "occasion": "Takvimdeki günü seç."
       },
       "more": "devamı",
       "less": "kısalt"
@@ -4259,7 +4259,7 @@
     },
     "queue": {
       "title": "Analiz sırası",
-      "help": "Yüklenmiş ama henüz bir olaya yerleşmemiş ya da analizi süren dosyalar. Her dosya analizden sonra bir olaya yerleşir.",
+      "help": "Yüklenmiş ama henüz bir kategoriye yerleşmemiş ya da incelemesi süren dosyalar. Her dosya incelemeden sonra bir kategoriye yerleşir.",
       "empty": "Sıra boş",
       "emptyHelp": "Bütün dosyalar bir klasöre yerleşti.",
       "stage": {
@@ -4269,18 +4269,18 @@
         "failed": "Analiz olmadı"
       },
       "line": {
-        "waiting": "Sırada · ajan bakınca olayı bulunacak",
+        "waiting": "Sırada · ajan bakınca kategorisi bulunacak",
         "waitingFiled": "Sırada · klasörüne kondu, ajan bakacak",
-        "analysing": "Ajan bakıyor: tanımlıyor, etiketliyor, olayını buluyor",
+        "analysing": "Ajan bakıyor: tanımlıyor, etiketliyor, kategorisini buluyor",
         "analysingFiled": "Ajan bakıyor: tanımlıyor, etiketliyor",
-        "needs_filing": "Ajan bu dosyayı bir olaya yerleştiremedi. Bir klasör seçin ya da dosyayı silin.",
+        "needs_filing": "Ajan bu dosyayı bir kategoriye yerleştiremedi. Bir kategori seç ya da dosyayı sil.",
         "failed": "Analiz tamamlanamadı; yeniden deneyebilirsiniz.",
         "noAgent": "Bağlı ajan yok · ajan bağlanınca sırayla analiz edilecek"
       },
-      "fileInto": "Olayı seçin",
-      "choose": "Bir olay seçin",
+      "fileInto": "Kategori seç",
+      "choose": "Bir kategori seç",
       "file": "Dosyala",
-      "managerFiles": "Bir sahip ya da yönetici olayını seçecek ya da dosyayı silecek.",
+      "managerFiles": "Bir sahip ya da yönetici kategorisini seçecek ya da dosyayı silecek.",
       "erase": "Dosyayı sil",
       "agent": {
         "none": "Analizi yapabilecek bağlı ajan yok; dosyalar bir ajan bağlanana kadar sırada bekler.",
@@ -4293,7 +4293,7 @@
       "title": "Dosya",
       "help": "Dosyanın açıklaması, etiketleri, paylaşım izni ve kullanıldığı yerler.",
       "open": "Dosyayı aç",
-      "unfiled": "Henüz bir olayda değil · analiz sırasında",
+      "unfiled": "Henüz bir kategoride değil · inceleme sırasında",
       "usedIn_one": "{{count}} içerikte",
       "usedIn_other": "{{count}} içerikte",
       "usedInTitle": "Kullanıldığı içerikler",
@@ -4302,20 +4302,20 @@
     },
     "upload": {
       "button": "Dosya yükle",
-      "drop": "Bırakın, gerisini ajan halleder",
-      "dropHelp": "Dosyalar analiz sırasına girer; ajan her birini olayına koyar.",
+      "drop": "Bırak, gerisini ajan halleder",
+      "dropHelp": "Dosyalar inceleme sırasına girer; ajan her birini kategorisine koyar.",
       "tray": "Yüklemeler",
       "sending_one": "{{count}} dosya yükleniyor",
       "sending_other": "{{count}} dosya yükleniyor",
-      "sent_one": "{{count}} dosya analiz sırasına girdi",
-      "sent_other": "{{count}} dosya analiz sırasına girdi",
-      "openQueue": "Analiz sırasını aç",
+      "sent_one": "{{count}} dosya inceleme sırasına girdi",
+      "sent_other": "{{count}} dosya inceleme sırasına girdi",
+      "openQueue": "İncelenenleri aç",
       "unnamed": "Adsız dosya",
       "status": {
         "refused": "Bu dosya türü ya da boyutu alınmıyor (JPEG, PNG, WebP, GIF en çok 25 MB; MP4 en çok 200 MB).",
         "waiting": "Sırada",
         "uploading": "Yükleniyor",
-        "added": "Analiz sırasında"
+        "added": "İnceleme sırasında"
       }
     },
     "settings": {
@@ -4367,8 +4367,8 @@
     "media_missing_video": "{{platform}} yalnızca video alır; bu içerikte video yok.",
     "media_missing": "Bu içerikte {{platform}} için uygun dosya yok ({{format}}).",
     "only_format_video": "{{platform}} yalnızca video alır.",
-    "posting_screen": "Her {{platform}} paylaşımını yayından önce {{platform}} ekranında siz tamamlarsınız.",
-    "approval": "Her paylaşım yayından önce onayınızı bekler.",
+    "posting_screen": "Her {{platform}} paylaşımını yayından önce {{platform}} ekranında sen tamamlarsın.",
+    "approval": "Her paylaşım yayından önce onayını bekler.",
     "lead": "{{format}} en erken {{hours}} saat sonrasına planlanır.",
     "act": {
       "reconnect": "Yeniden bağla",
@@ -4378,13 +4378,13 @@
       "open_knowledge": "Bilgi bankasına git"
     },
     "note": {
-      "asked": "Sırası gelince size sorulur.",
+      "asked": "Sırası gelince sana sorulur.",
       "time": "Zaman buna göre seçilir.",
-      "braked": "Paylaşım ayarlarından açılır.",
-      "resumeHere": "Yukarıdaki anahtardan sürdürün."
+      "braked": "Ayarlar’dan sürdürülür.",
+      "resumeHere": "Yukarıdaki anahtardan sürdür."
     },
     "connectedTitle": "Hesap bağlandı",
-    "connectedBody": "Bu hesaba paylaşım çıkmadan önce bilmeniz gerekenler:",
+    "connectedBody": "Bu hesaba paylaşım çıkmadan önce bilmen gerekenler:",
     "continue": "Devam",
     "accountLabel": "{{account}} için paylaşmadan önce",
     "knowledge_empty": "Bilgi bankası boş; ajanlar paylaşım planlamaz."
@@ -4579,6 +4579,364 @@
       "medium": "orta",
       "low": "düşük",
       "measured": "{{n}} paylaşım ölçüldü"
+    }
+  },
+  "postsPage": {
+    "title": "Paylaşımlar",
+    "subtitle": "Hazırlanan, seni bekleyen ve yayında olan her şey.",
+    "forbidden": "Bu sayfayı görmek için yetkin yok.",
+    "loadError": "Paylaşımlar yüklenemedi.",
+    "header": {
+      "files": "Dosyalar",
+      "accounts": "Hesaplar",
+      "settings": "Ayarlar"
+    },
+    "agent": {
+      "ran": "Ajan {{ago}} çalıştı."
+    },
+    "brake": {
+      "line": "Tüm paylaşımlar durduruldu.",
+      "other": "Yöneticin sürdürene kadar hiçbir paylaşım çıkmaz.",
+      "paused": "Tüm paylaşımlar durduruldu; sürdürünce zamanında çıkar."
+    },
+    "composer": {
+      "region": "Yeni paylaşım",
+      "label": "Ne paylaşalım?",
+      "placeholder": "Örn. Yılbaşı için şirketlere toplu hediye figürü, sadece TikTok'ta",
+      "file": "Dosya",
+      "send": "Gönder",
+      "files": "Eklenen dosyalar",
+      "unnamed": "Adsız dosya",
+      "uploading": "Yükleniyor",
+      "refused": "Bu dosya alınmaz (JPEG, PNG, WebP, GIF en çok 25 MB; MP4 en çok 200 MB)",
+      "failed": "Yüklenemedi",
+      "retry": "Tekrar dene",
+      "remove": "{{name}} dosyasını çıkar",
+      "tooMany": "En çok {{n}} dosya eklenir.",
+      "tooLong": "En çok {{n}} karakter yazılır.",
+      "sent": "İsteğin alındı.",
+      "wakesNow": "Ajan şimdi başlıyor.",
+      "wakesAt": "Ajan {{at}} civarı başlar.",
+      "noModule": "İçerik modülü kurulu değil.",
+      "addModule": "Modül ekle",
+      "platformMissing": "{{platform}} hesabın bağlı değil; bu istek oraya çıkamaz.",
+      "drop": "Bırak, isteğine eklensin",
+      "stops": {
+        "knowledge_empty": "Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz; isteğin o zaman başlar.",
+        "braked": "Tüm paylaşımlar durduruldu; isteğin hazırlanır ama sürdürene kadar çıkmaz.",
+        "no_account": "Paylaşacak bağlı bir hesap yok; içerik hazırlanır ama bir hesap bağlayana kadar çıkmaz.",
+        "no_content_agent": "İçerik hazırlayacak bağlı bir ajan yok.",
+        "agent_sleeps": "Ajanın çağrı adresi yok; bir sonraki çalışmasında ({{at}}) başlar.",
+        "agent_late": "Ajan {{at}} bekleniyordu, gecikti."
+      },
+      "advice": {
+        "approval": "Onayına gelir",
+        "posting_screen": "TikTok'u sen tamamlarsın",
+        "video_only": "Hesapların yalnızca video alıyor; video eklemezsen ajan görselden video yapar"
+      }
+    },
+    "actions": {
+      "toKnowledge": "Bilgi bankasına git",
+      "resume": "Sürdür",
+      "connect": "Hesap bağla",
+      "connectAgent": "Ajan bağla",
+      "addAddress": "Çağrı adresi ekle",
+      "approve": "Onayla",
+      "tiktok": "TikTok'ta tamamla",
+      "redo": "Düzenleme iste",
+      "retry": "Tekrar hazırlat",
+      "cancel": "İptal",
+      "addFile": "Dosya ekle",
+      "addPhoto": "Fotoğraf ekle",
+      "notNeeded": "Gerek yok",
+      "permit": "İzin ver",
+      "withoutFile": "Bu dosya olmadan devam et",
+      "anotherPhoto": "Başka fotoğraf ekle",
+      "useAnyway": "Yine de kullan",
+      "acceptHeld": "Yine de kabul et",
+      "release": "Yine de paylaş",
+      "reconnect": "Yeniden bağla",
+      "dismiss": "Bırak",
+      "done": "Tamamladım",
+      "pickTime": "Zaman seç",
+      "pickMyself": "Zamanı ben seçeyim"
+    },
+    "days": {
+      "region": "Özel günler",
+      "none": "{{day}} ({{date}}) için fotoğrafın yok",
+      "analysing": "{{day}}: fotoğrafın inceleniyor.",
+      "needs_permission": "{{day}}: fotoğrafında {{found}} var; paylaşılması için izin ver.",
+      "unchecked": "{{day}}: fotoğrafının paylaşılabilir olduğunu onayla.",
+      "quality": "{{day}}: ajan bu fotoğrafı paylaşmaya uygun bulmadı.",
+      "add": "Fotoğraf ekle",
+      "skip": "Bu yıl geç",
+      "another": "Başka fotoğraf ekle",
+      "skipped": "Bu yıl {{day}} için paylaşım yapılmayacak.",
+      "undo": "Geri al",
+      "more_one": "{{count}} özel gün daha",
+      "more_other": "{{count}} özel gün daha"
+    },
+    "found": {
+      "face": "yüz",
+      "name": "isim",
+      "child": "çocuk",
+      "logo": "logo",
+      "company": "kurum adı"
+    },
+    "chips": {
+      "label": "Süz",
+      "all": "Tümü",
+      "you": "Seni bekleyen"
+    },
+    "stages": {
+      "hazirlik": "Hazırlık",
+      "fikir": "Fikir",
+      "metin": "Metin",
+      "gorsel": "Görsel",
+      "paket": "Uyarlama",
+      "onay": "Onay",
+      "yayin": "Yayın",
+      "sonuc": "Sonuç"
+    },
+    "table": {
+      "label": "Paylaşımlar tablosu",
+      "post": "Paylaşım",
+      "channel": "Kanal",
+      "progress": "Süreç",
+      "status": "Durum",
+      "publish": "Yayın",
+      "agentPicks": "Ajan seçecek",
+      "dots": "Süreç: 8 adımın {{n}} tanesi bitti",
+      "more": "Daha fazla göster"
+    },
+    "status": {
+      "failed": "Paylaşılamadı",
+      "tiktok_draft": "TikTok'ta taslak",
+      "waiting_you": "Seni bekliyor",
+      "paused": "Durduruldu",
+      "revising": "Düzenleniyor",
+      "preparing": "Hazırlanıyor",
+      "scheduling": "Zamanlanıyor",
+      "scheduled": "Planlandı",
+      "published": "Yayında",
+      "tiktokSent": "TikTok'a gönderildi"
+    },
+    "format": {
+      "story": "Hikâye",
+      "feed_post": "Gönderi",
+      "carousel": "Kaydırmalı",
+      "reel": "Reels",
+      "tiktok_video": "Video",
+      "seconds": "{{format}} · {{n}} sn",
+      "secondsShort": "{{format}} {{n}} sn",
+      "images_one": "{{format}} · tek görsel",
+      "images_other": "{{format}} · {{count}} görsel",
+      "imagesShort_one": "{{format}} tek görsel",
+      "imagesShort_other": "{{format}} {{count}} görsel"
+    },
+    "time": {
+      "today": "Bugün {{time}}",
+      "tomorrow": "Yarın {{time}}"
+    },
+    "sub": {
+      "claimed": "Ajan üzerinde çalışıyor · {{stage}}",
+      "queuedNow": "Sırada · ajan şimdi başlıyor",
+      "queuedNext": "Sırada · ajan bir sonraki çalışmasında başlar ({{at}})",
+      "queuedNextUnknown": "Sırada · ajan bir sonraki çalışmasında başlar",
+      "queuedLate": "Sırada · ajan {{at}} bekleniyordu, gecikti",
+      "starts": "{{date}} günü hazırlanmaya başlanır",
+      "files_analysing": "Dosyaların inceleniyor"
+    },
+    "waits": {
+      "approval": {
+        "status": "Onayını bekliyor",
+        "sentence": "Yayından önce onayını bekliyor."
+      },
+      "posting_screen": {
+        "status": "TikTok'ta tamamlanacak",
+        "sentence": "TikTok'un paylaşım ekranını sen tamamlarsın."
+      },
+      "capture": {
+        "status": "Fotoğraf bekliyor",
+        "sentence": "Ajan bunun için bir fotoğraf ya da video istiyor: “{{request}}”"
+      },
+      "files_permission": {
+        "status": "İzin bekliyor",
+        "sentence": "Dosyanda {{found}} görünüyor; paylaşılması için izin ver.",
+        "unchecked": "Dosyalarının paylaşılabilir olduğunu onayla."
+      },
+      "files_quality": {
+        "status": "Dosya uygun değil",
+        "sentence": "Ajan bu dosyayı paylaşmaya uygun bulmadı: {{reason}}.",
+        "plain": "Ajan bu dosyayı paylaşmaya uygun bulmadı."
+      },
+      "delivery_held": {
+        "status": "Takıldı",
+        "sentence": "Ajan bunu üç kez hazırladı ama kontrolden geçemedi: {{reason}}.",
+        "plain": "Ajan bunu üç kez hazırladı ama kontrolden geçemedi."
+      },
+      "check_hold": {
+        "status": "Bekletiliyor",
+        "sentence": "Paylaşım saatinde bir kontrol durdurdu: {{reason}}.",
+        "plain": "Paylaşım saatinde bir kontrol durdurdu."
+      },
+      "failed": {
+        "status": "Paylaşılamadı",
+        "sentence": "{{channel}} bu paylaşımı almadı: {{reason}}.",
+        "recovered": "{{channel}} bu paylaşımı almadı: bağlantı yenilendi, yeniden hazırlatabilirsin."
+      },
+      "tiktok_draft": {
+        "status": "TikTok'ta taslak",
+        "sentence": "TikTok'taki taslaklarına gönderildi; paylaşımı TikTok uygulamasında sen yaparsın."
+      },
+      "no_account": {
+        "status": "Hesap yok",
+        "sentence": "Paylaşacak bağlı bir hesap yok."
+      },
+      "no_account_for_platform": {
+        "status": "Hesap yok",
+        "sentence": "{{platform}} hesabın bağlı değil."
+      },
+      "account_unavailable": {
+        "status": "Bağlantı koptu",
+        "sentence": "{{account}} bağlantısı şu an çalışmıyor."
+      },
+      "account_paused": {
+        "status": "Hesap durdu",
+        "sentence": "{{account}} hesabında paylaşım durduruldu."
+      },
+      "media": {
+        "status": "Dosya uymuyor",
+        "sentence": "{{platform}} bu dosyayı bu biçimde almıyor (örneğin TikTok yalnızca video alır)."
+      },
+      "material_removed": {
+        "status": "Dosya silindi",
+        "sentence": "Bu paylaşımdaki bir dosya silindi."
+      },
+      "knowledge_empty": {
+        "status": "Bilgi bankası boş",
+        "sentence": "Ajanlar seni henüz tanımıyor: Bilgi bankası boş."
+      },
+      "no_agent": {
+        "status": "Ajan yok",
+        "sentence": "Bu işi yapacak bağlı bir ajan yok."
+      },
+      "pick_time": {
+        "status": "Zaman bekliyor",
+        "sentence": "Zamanını seçecek bir ajan yok."
+      },
+      "need_photo": {
+        "status": "Fotoğraf bekliyor",
+        "sentence": "{{request}}"
+      }
+    },
+    "reasons": {
+      "auth": "bağlantının izni bitti",
+      "permission": "hesabın paylaşım izni yok",
+      "rate_limited": "platform geçici olarak almadı",
+      "refused": "platform içeriği kabul etmedi",
+      "other": "platforma ulaşılamadı",
+      "missed_grace": "zamanı geçti"
+    },
+    "panel": {
+      "label": "Seçili paylaşım",
+      "request": "İsteğin",
+      "channel": "Kanal",
+      "date": "Tarih",
+      "format": "Biçim",
+      "category": "Kategori",
+      "genel": "Genel",
+      "publishedAt": "Yayınlandı · {{at}}",
+      "openPost": "Paylaşımı aç",
+      "ai": "Görsel yapay zekâ ile üretildi; gerçek bir sipariş değil.",
+      "same": "Aynı içerikten:",
+      "gone": "Bu paylaşım artık listede değil.",
+      "close": "Kapat",
+      "back": "Paylaşımlar",
+      "changed": "Bu paylaşım bu arada değişti; son hâlini gösteriyorum.",
+      "approved": "Onaylandı. {{at}} paylaşılacak.",
+      "approvedNow": "Onaylandı.",
+      "cancelled": "İptal edildi.",
+      "undo": "Geri al",
+      "sentToAgent": "Ajana iletildi.",
+      "redoNote": "İstediğin değişiklik: {{note}}"
+    },
+    "redo": {
+      "title": "Ne değişsin?",
+      "placeholder": "Örn. Daha kısa olsun, fiyat yazma",
+      "siblings_one": "Bu içerikten {{count}} paylaşım daha var ({{list}}); o da yeniden hazırlanır.",
+      "siblings_other": "Bu içerikten {{count}} paylaşım daha var ({{list}}); onlar da yeniden hazırlanır.",
+      "published": "Yayınlanmış paylaşımlar yerinde kalır.",
+      "retryText": "Paylaşım gönderilemedi; aynısını yeniden hazırla.",
+      "send": "Gönder",
+      "cancel": "Vazgeç"
+    },
+    "cancel": {
+      "title": "İptal edilsin mi?",
+      "post": "{{post}} paylaşımı çıkmayacak. Aynı içerikten diğer paylaşımlar yerinde kalır.",
+      "version": "Bu paylaşım hiç planlanmayacak.",
+      "content": "Bu içerik hazırlanmayacak.",
+      "reason": "Neden? (isteğe bağlı)",
+      "defaultReason": "Sahibi iptal etti",
+      "confirm": "İptal et",
+      "back": "Vazgeç"
+    },
+    "empty": {
+      "knowledge": "Henüz paylaşım yok. Ajanların seni tanıması için önce Bilgi bankasını doldur.",
+      "plain": "Henüz paylaşım yok. Ne paylaşmak istediğini yukarıya yaz; gerisini ajan hazırlar.",
+      "you": "Seni bekleyen bir şey yok.",
+      "showAll": "Tümünü göster",
+      "stage": "Bu aşamada paylaşım yok."
+    },
+    "files": {
+      "title": "Dosyalar",
+      "help": "Dosya kütüphanesi ve incelenen dosyalar.",
+      "file": "Dosya",
+      "upload": "Yükle",
+      "all": "Tümü",
+      "queue": "İnceleniyor",
+      "unshared": "İzin bekleyen",
+      "category": "Kategori",
+      "allCategories": "Tümü",
+      "addCategory": "Kategori ekle",
+      "edit": "Düzenle",
+      "proposed": "Onay bekleyen kategoriler",
+      "empty": "Burada dosya yok.",
+      "grid": "Dosyalar",
+      "retry": "Tekrar dene",
+      "state": {
+        "waiting": "Sırada",
+        "analysing": "İnceleniyor",
+        "needs_filing": "Yerini seç",
+        "failed": "İncelenemedi · Tekrar dene",
+        "unshared": "İzin bekliyor"
+      }
+    },
+    "accounts": {
+      "title": "Hesaplar",
+      "help": "Bağlı hesaplar, paylaşım anahtarları ve sayıları.",
+      "empty": "Bağlı bir hesap yok.",
+      "switch": "Paylaşım açık",
+      "approval": "Bu hesaptaki paylaşımlar onayıma gelsin",
+      "rulesAll": "Her paylaşım onayına gelir (Kurallar)",
+      "tiktok": "Her paylaşım TikTok ekranını bekler",
+      "replies": "Yorum yanıtları onayına gelir",
+      "change": "Değiştir",
+      "numbers": "Sayılar",
+      "status": {
+        "on": "Paylaşım açık",
+        "paused": "Durduruldu",
+        "broken": "Bağlantı kullanılamıyor"
+      }
+    },
+    "settings": {
+      "title": "Ayarlar",
+      "help": "Paylaşım kuralları, özel günler ve dosya kullanımı.",
+      "rules": "Paylaşım kuralları",
+      "days": "Özel günler",
+      "files": "Dosya kullanımı",
+      "brake": "Tüm paylaşımları durdur",
+      "brakeHelp": "Açıkken hiçbir paylaşım çıkmaz; kapatınca ajan bekleyenlere yeniden zaman verir."
     }
   }
 }

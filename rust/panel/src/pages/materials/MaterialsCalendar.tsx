@@ -273,8 +273,9 @@ function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: bo
 /**
  * Takvim: a year's effective calendar (the Turkish defaults with the workspace's edits), each
  * occasion's window and lead, the dates the owner has yet to enter, and the materials policy.
+ * `part` shows only the days (Ayarlar › Özel günler) or only the policy (Ayarlar › Dosya kullanımı).
  */
-export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (year: number) => void }) {
+export function MaterialsCalendar({ year, onYear, part = 'all' }: { year: number; onYear: (year: number) => void; part?: 'all' | 'days' | 'files' }) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
   const decider = useDecider('content.manage');
@@ -285,6 +286,20 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
   if (!years.includes(year)) years.push(year);
   const data = calendar.data;
   const undated = data?.entries.filter((e) => e.enabled && !e.window_start) ?? [];
+  if (part === 'files') {
+    return (
+      <div className="space-y-4" data-testid="materials-policy">
+        <MaterialsReadStatus query={calendar} />
+        {data && (
+          <PolicyForm
+            key={`${data.policy.lead_days}-${data.policy.reuse_days}-${data.policy.recap_days}-${data.policy.ai_standalone}`}
+            policy={data.policy}
+            decider={decider}
+          />
+        )}
+      </div>
+    );
+  }
   return (
     <div className="space-y-4" data-testid="materials-calendar">
       <label className="flex max-w-xs flex-col gap-1 text-sm">
@@ -337,11 +352,13 @@ export function MaterialsCalendar({ year, onYear }: { year: number; onYear: (yea
                 {t('materials.calendar.add')}
               </button>
             ))}
-          <PolicyForm
-            key={`${data.policy.lead_days}-${data.policy.reuse_days}-${data.policy.recap_days}-${data.policy.ai_standalone}`}
-            policy={data.policy}
-            decider={decider}
-          />
+          {part === 'all' && (
+            <PolicyForm
+              key={`${data.policy.lead_days}-${data.policy.reuse_days}-${data.policy.recap_days}-${data.policy.ai_standalone}`}
+              policy={data.policy}
+              decider={decider}
+            />
+          )}
         </>
       )}
     </div>
