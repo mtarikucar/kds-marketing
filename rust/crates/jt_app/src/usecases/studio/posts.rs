@@ -1391,6 +1391,11 @@ pub async fn weekly_summary(
 /// An owner or manager, in person, sets the posting policy (spec D21, D24–D29): leads, graces,
 /// caps and spacing, quiet hours, floor days, the debounce, the horizon, and the IANA zone they
 /// are read in. `VALIDATION` naming the field otherwise. The ledger names the settings.
+///
+/// Exempt from the strategy gate (design 2026-11-19 D12): the posting policy is not strategy, so
+/// it is set on a workspace with no frame too (an empty knowledge base); the frame, when there is
+/// one, is locked first as every Studio write's is, and the ledger names it. An inactive
+/// workspace is `WORKSPACE_INACTIVE`.
 pub async fn posting_policy_set(
     d: &Deps,
     ctx: &Ctx,
@@ -1414,12 +1419,8 @@ pub async fn posting_policy_set(
         ));
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(
-        r.as_mut(),
-        ctx,
-        crate::usecases::studio::permissions::for_use_case("studio.posting_policy_set"),
-    )
-    .await?;
+    let frame = r.strategy().lock_execution_frame().await?;
+    super::chain::active(r.as_mut()).await?;
     r.studio_control().lock_control().await?;
     // The paused accounts are `social.account_pause`'s: setting the policy keeps them, and
     // moves the settings' revision as every change does.
@@ -1440,7 +1441,7 @@ pub async fn posting_policy_set(
         ctx.workspace_id,
         json!({"policy": i.policy, "tz": i.tz}),
     )?;
-    e.strategy_version_id = Some(frame.id.0);
+    e.strategy_version_id = frame.map(|v| v.id.0);
     r.ledger().append(e).await?;
     r.commit().await?;
     Ok(i)

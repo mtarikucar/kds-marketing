@@ -6,7 +6,9 @@
 //! always needs its posting screen. Once a workspace's gate is seeded (`post_gate_seeded_at`, the
 //! accounts' stored flags copied into the list) the capability's stored
 //! `requires_human_approval` is never read for posts, so an agent's `capability.set_policy` can no
-//! longer lower a post approval. Before that (a workspace not seeded yet) the stored flag is the
+//! longer lower a post approval; a person's, in person, moves the account into or out of the list
+//! (`capabilities::set_policy`, `knowledge::rules::follow_policy`), so the policy dialog still
+//! holds or frees its posts. Before that (a workspace not seeded yet) the stored flag is the
 //! gate, so nothing is released early.
 //!
 //! Every **posting** path reads it: `schedule::human_gate`, the pipeline's approval facts,

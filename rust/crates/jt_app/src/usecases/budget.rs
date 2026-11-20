@@ -546,9 +546,13 @@ fn period_days(period: Period) -> Option<i128> {
 /// owner raises the ceiling, in Kurallar. `ad_cap` is read after the item's lock (an update locks
 /// it first), without a lock of its own: Bütçe writes no frame (§4.10.13).
 ///
-/// No ad budget in the rules (`Reklam yok`), or one in another currency: nothing to compare with,
-/// and nothing can be spent on ads (the frame has no paid lane). A workspace whose knowledge base
-/// is not seeded yet is held to the approved strategy's paid lane, as before.
+/// An ad budget in the rules in another currency than the item's is `VALIDATION` naming `unit`
+/// (`rules_cap_currency`, with the rules' `currency`): the general ad budget is counted in the
+/// owner's currency, so no general item sits outside the ceiling (an item made general in
+/// another currency would have had none, and the owner's next Kurallar save would have taken
+/// its currency). No ad budget in the rules (`Reklam yok`): nothing to compare with, and nothing
+/// can be spent on ads (the frame has no paid lane). A workspace whose knowledge base is not
+/// seeded yet is held to the approved strategy's paid lane, as before.
 async fn check_general(repos: &mut dyn TenantRepos, item: &BudgetItem) -> Result<(), AppError> {
     let (Unit::Currency(currency), Some(days), true) =
         (&item.unit, period_days(item.period), item.can_be_general())
@@ -572,10 +576,21 @@ async fn check_general(repos: &mut dyn TenantRepos, item: &BudgetItem) -> Result
         });
     }
     let ceiling = match repos.knowledge().settings().await? {
-        Some(k) => k
-            .ad_cap
-            .filter(|c| c.currency == *currency)
-            .map(|c| (c.amount_minor, c.period)),
+        Some(k) => match k.ad_cap {
+            Some(c) if c.currency != *currency => {
+                return Err(AppError::validation(
+                    format!(
+                        "the general ad budget is counted in the currency of the owner's ad \
+                         budget (Kurallar): {}",
+                        c.currency
+                    ),
+                    json!({ "field": "unit", "reason": "rules_cap_currency",
+                        "currency": c.currency }),
+                ));
+            }
+            Some(c) => Some((c.amount_minor, c.period)),
+            None => None,
+        },
         None => repos.strategy().current_approved().await?.and_then(|v| {
             v.sections
                 .budget_frame

@@ -715,6 +715,53 @@ async fn agent_reply_is_held_when_capability_requires_approval() {
     assert_eq!(item(&r, "1").answer, AnswerState::Awaiting);
 }
 
+/// Kurallar's post approval holds posts, never comment replies (design 2026-11-19 §4.6.3, D1):
+/// with "Her paylaşım onayıma gelsin" on and the Instagram account in the approval list, an
+/// agent's public reply on it is not held; only the account's own flag holds replies.
+#[tokio::test]
+async fn the_post_approval_switch_and_list_never_hold_a_comment_reply() {
+    use jt_app::usecases::knowledge::{rules, seed};
+    let r = rig().await;
+    seed::ensure(&r.w.deps, &r.w.owner_ctx).await.unwrap();
+    let s = {
+        let mut t = r.w.uow.tenant(r.w.ws).await.unwrap();
+        t.knowledge().settings().await.unwrap().unwrap()
+    };
+    let cap = |c: &Option<jt_knowledge::Cap>| {
+        c.as_ref().map(|c| jt_knowledge::CapInput {
+            amount_minor: c.amount_minor,
+            period: Some(c.period),
+        })
+    };
+    rules::rules_save(
+        &r.w.deps,
+        &r.w.owner_ctx,
+        rules::RulesInput {
+            expected_revision: s.rules_revision,
+            prohibitions: s.prohibitions.clone(),
+            ad_budget: cap(&s.ad_cap),
+            message_budget: cap(&s.message_cap),
+            post_approval: true,
+            post_approval_accounts: Some(vec![r.ig.id]),
+        },
+    )
+    .await
+    .unwrap();
+    let c1 = take(&r, &r.ig, comment("1", FAN)).await;
+    let agent = agent(&r).await;
+    r.meta.push_reply_public(accepted("r1"));
+    let out = replies::reply(
+        &r.w.deps,
+        &agent,
+        c1.conversation_id,
+        public_reply(&c1, "Merhaba"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.state, "sent", "the reply goes out: nothing holds it");
+    assert!(r.w.entries("inbox.public.held").is_empty());
+}
+
 #[tokio::test]
 async fn human_reply_is_never_held() {
     let r = rig().await;

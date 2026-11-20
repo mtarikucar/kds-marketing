@@ -18,7 +18,9 @@ use jt_app::{
         studio::{ApprovalTarget, StrategyChange},
     },
     usecases::{
-        content, social,
+        content,
+        knowledge::{rules as kb_rules, seed},
+        social,
         social::{
             ready::StopCode,
             schedule::{Attribution, HumanGate, WaitingVersion},
@@ -560,6 +562,32 @@ impl Journey {
         }
     }
 
+    /// The owner saves Kurallar as `edit` changes the box as stored, in person.
+    async fn rules(&self, edit: impl FnOnce(&mut kb_rules::RulesInput)) {
+        let s = {
+            let mut r = self.w.uow.tenant(self.w.f.ws).await.unwrap();
+            r.knowledge().settings().await.unwrap().unwrap()
+        };
+        let cap = |c: &Option<jt_knowledge::Cap>| {
+            c.as_ref().map(|c| jt_knowledge::CapInput {
+                amount_minor: c.amount_minor,
+                period: Some(c.period),
+            })
+        };
+        let mut input = kb_rules::RulesInput {
+            expected_revision: s.rules_revision,
+            prohibitions: s.prohibitions.clone(),
+            ad_budget: cap(&s.ad_cap),
+            message_budget: cap(&s.message_cap),
+            post_approval: s.post_approval,
+            post_approval_accounts: None,
+        };
+        edit(&mut input);
+        kb_rules::rules_save(&self.w.d, &self.w.ctx, input)
+            .await
+            .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
     fn attributed(&self, slot: &Slot) -> Option<Value> {
         self.w
             .uow
@@ -922,4 +950,81 @@ async fn a_content_no_agent_took_is_queued_and_says_what_it_will_meet() {
             .iter()
             .any(|i| matches!(i.kind, WorkKind::ContentArea { project_id, .. } if project_id == area.id))
     );
+}
+
+/// Kurallar's post approval (design 2026-11-19 §4.6.3, §4.6.5), on X, whose account asks nothing
+/// of a post by itself. "Her paylaşım onayıma gelsin" on: the post waits for the owner, who
+/// approves it, and it is sent. Switched off with X in the account list: the post still waits;
+/// taken off the list by the owner, it goes out at its time with nothing asked. Neither ever
+/// holds a comment reply on the account (`inbox_public_reply.rs`,
+/// `the_post_approval_switch_and_list_never_hold_a_comment_reply`).
+#[tokio::test]
+async fn the_approval_switch_holds_and_releases_posts() {
+    // The switch on.
+    let mut j = world_for(X).await;
+    seed::ensure(&j.w.d, &j.w.ctx).await.unwrap();
+    j.rules(|i| i.post_approval = true).await;
+    let m = material(&j.w, image()).await;
+    let area = j.ask(&j.w.ctx, "switch", &[&m]).await;
+    let area = j.deliver(&area, &m, j.other, "switch").await;
+    let v = j.waiting(&area).await.unwrap();
+    assert_eq!(v.choices[0].human_gate, Some(HumanGate::Approval));
+    let slot = j.schedule(&area, "switch-time").await;
+    assert!(
+        j.waits_for_owner(&area).await,
+        "the post waits for the owner"
+    );
+    approve(
+        &j.w.d,
+        &j.w.ctx,
+        ApprovalInput {
+            target: ApprovalTarget::Slot(slot.id),
+            expected_revision: slot.revision,
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(!j.waits_for_owner(&area).await);
+    j.send(&slot).await;
+
+    // The switch off, X in the account list.
+    let mut j = world_for(X).await;
+    seed::ensure(&j.w.d, &j.w.ctx).await.unwrap();
+    let account = j.account;
+    j.rules(|i| {
+        i.post_approval = false;
+        i.post_approval_accounts = Some(vec![account]);
+    })
+    .await;
+    let m = material(&j.w, image()).await;
+    let area = j.ask(&j.w.ctx, "listed", &[&m]).await;
+    let area = j.deliver(&area, &m, j.other, "listed").await;
+    let slot = j.schedule(&area, "listed-time").await;
+    assert!(
+        j.waits_for_owner(&area).await,
+        "a listed account's post waits"
+    );
+    // Taken off the list: the same post goes out at its time.
+    let revision = {
+        let mut r = j.w.uow.tenant(j.w.f.ws).await.unwrap();
+        r.knowledge()
+            .settings()
+            .await
+            .unwrap()
+            .unwrap()
+            .rules_revision
+    };
+    kb_rules::post_approval_set(
+        &j.w.d,
+        &j.w.ctx,
+        kb_rules::PostApprovalInput {
+            capability_id: account,
+            required: false,
+            expected_revision: revision,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!j.waits_for_owner(&area).await);
+    j.send(&slot).await;
 }

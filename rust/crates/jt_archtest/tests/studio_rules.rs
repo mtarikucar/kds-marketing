@@ -746,20 +746,20 @@ async fn every_studio_write_reaches_shared_execution_gate() {
             },
             "material_check_release: {e:?}"
         );
-        // The posting policy, a human's, plans content: the same gate.
-        let e =
+        // The posting policy, a human's, is not strategy (design 2026-11-19 D12): it is set
+        // without a frame, and only an inactive workspace refuses it.
+        let set =
             jt_app::usecases::studio::posts::posting_policy_set(&w.d, &w.ctx, Default::default())
-                .await
-                .unwrap_err();
-        assert_eq!(
-            e.code,
-            if inactive {
-                ErrorCode::WorkspaceInactive
-            } else {
-                ErrorCode::StrategyRequired
-            },
-            "posting_policy_set: {e:?}"
-        );
+                .await;
+        if inactive {
+            assert_eq!(
+                set.unwrap_err().code,
+                ErrorCode::WorkspaceInactive,
+                "posting_policy_set"
+            );
+        } else {
+            set.expect("posting_policy_set needs no frame");
+        }
         // The library's panel-only writes, a human's decisions, meet the status check alone.
         if inactive {
             use jt_app::usecases::studio::library;
