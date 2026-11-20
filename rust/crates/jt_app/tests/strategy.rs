@@ -806,6 +806,34 @@ async fn approved(w: &World) -> VersionOut {
         .unwrap()
 }
 
+/// A complete draft, submitted and put in force straight through the repos, the version in force
+/// before archived: the workspace's knowledge base is not seeded, as in the minutes between the
+/// deploy of the knowledge base and its first seeding, when the old archive still runs (design
+/// 2026-11-19 §4.3.4). An approval through `strategy.approve` seeds it, and archiving is then
+/// refused (`use_brake`).
+async fn approved_unseeded(w: &World) -> StrategyVersion {
+    complete_draft(w, &w.owner_ctx).await;
+    let draft = strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    if let Some(previous) = t.strategy().current_approved().await.unwrap() {
+        t.strategy()
+            .set_status(
+                previous.id,
+                VersionStatus::Archived,
+                FIXED_NOW,
+                Some(w.owner),
+            )
+            .await
+            .unwrap();
+    }
+    t.strategy()
+        .set_status(draft.id, VersionStatus::Approved, FIXED_NOW, Some(w.owner))
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    w.version(draft.id)
+}
+
 /// What approving the draft as it now stands takes: its id and its submission time, as a caller
 /// that has just read it sends them (read past the spy). Without a draft, a made-up one.
 fn as_read(w: &World) -> ApproveInput {
@@ -1908,7 +1936,7 @@ async fn second_approval_loses_with_conflict() {
 #[tokio::test]
 async fn a_version_moved_by_another_transaction_is_conflict() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
@@ -2051,7 +2079,7 @@ async fn agent_with_owner_key_can_approve() {
 #[tokio::test]
 async fn archive_requires_confirm() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     let input = ArchiveInput {
         version_id: v1.id,
         confirm: false,
@@ -2066,9 +2094,28 @@ async fn archive_requires_confirm() {
 }
 
 #[tokio::test]
-async fn archive_closes_the_strategy() {
+async fn archive_is_refused_once_an_approval_seeded_the_knowledge_base() {
     let w = world().await;
     let v1 = approved(&w).await;
+    let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (err.code, err.details),
+        (ErrorCode::Conflict, json!({ "reason": "use_brake" }))
+    );
+    assert_eq!(
+        err.message,
+        "the knowledge base keeps the frame; stop posting with studio.brake"
+    );
+    assert_eq!(w.version(v1.id).status, VersionStatus::Approved);
+    assert!(w.entries("strategy.archive").is_empty());
+}
+
+#[tokio::test]
+async fn archive_closes_the_strategy() {
+    let w = world().await;
+    let v1 = approved_unseeded(&w).await;
     strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap();
@@ -2102,7 +2149,7 @@ async fn archive_closes_the_strategy() {
 #[tokio::test]
 async fn archive_leaves_an_open_draft_alone() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     let draft = strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
@@ -2115,16 +2162,10 @@ async fn archive_leaves_an_open_draft_alone() {
 #[tokio::test]
 async fn archive_refuses_when_the_approved_version_changed() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     // Version 2 is approved after the caller looked: an archive naming version 1 must not take
     // down version 2.
-    strategy::start_consultation(&w.deps, &w.owner_ctx)
-        .await
-        .unwrap();
-    strategy::submit(&w.deps, &w.owner_ctx).await.unwrap();
-    let v2 = strategy::approve(&w.deps, &w.owner_ctx, as_read(&w))
-        .await
-        .unwrap();
+    let v2 = approved_unseeded(&w).await;
     let err = strategy::archive(&w.deps, &w.owner_ctx, archiving(v1.id))
         .await
         .unwrap_err();
@@ -2146,7 +2187,7 @@ async fn archive_refuses_when_the_approved_version_changed() {
 #[tokio::test]
 async fn only_owner_or_manager_may_archive() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     let (_, rep) = w.member("rep").await;
     let err = strategy::archive(&w.deps, &rep, archiving(v1.id))
         .await
@@ -2162,7 +2203,7 @@ async fn only_owner_or_manager_may_archive() {
 #[tokio::test]
 async fn archive_calls_the_hook_after_commit() {
     let w = world().await;
-    let v1 = approved(&w).await;
+    let v1 = approved_unseeded(&w).await;
     let hook = HookSpy {
         uow: w.uow.clone(),
         seen: Arc::default(),
@@ -2297,7 +2338,7 @@ async fn another_workspaces_version_is_not_found() {
 #[tokio::test]
 async fn every_draft_mutation_locks_the_draft() {
     let w = world().await;
-    approved(&w).await;
+    approved_unseeded(&w).await;
     type Mutation<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>>;
     let world = &w;
     let deps = &w.deps;
@@ -2342,13 +2383,7 @@ async fn every_draft_mutation_locks_the_draft() {
                 strategy::submit(deps, ctx).await.unwrap();
             }),
         ),
-        (
-            "approve",
-            Box::pin(async move {
-                // Read past the spy, so that only the approval's own calls are logged.
-                strategy::approve(deps, ctx, as_read(world)).await.unwrap();
-            }),
-        ),
+        // Before the approval: an approval seeds the knowledge base, which keeps the frame.
         (
             "archive",
             Box::pin(async move {
@@ -2361,6 +2396,13 @@ async fn every_draft_mutation_locks_the_draft() {
                 strategy::archive(deps, ctx, archiving(approved.id))
                     .await
                     .unwrap();
+            }),
+        ),
+        (
+            "approve",
+            Box::pin(async move {
+                // Read past the spy, so that only the approval's own calls are logged.
+                strategy::approve(deps, ctx, as_read(world)).await.unwrap();
             }),
         ),
     ];
@@ -2402,7 +2444,16 @@ async fn every_draft_mutation_locks_the_draft() {
 async fn every_mutation_writes_one_ledger_entry_about_its_version() {
     let w = world().await;
     let v1 = approved(&w).await;
-    let ledger = w.ledger();
+    // The seeding the approval ran writes the knowledge base's own entries; the strategy's are
+    // about its version.
+    let ledger: Vec<_> = w
+        .ledger()
+        .into_iter()
+        .filter(|e| {
+            let action = e.action.as_str();
+            !action.starts_with("strategy.knowledge_") && action != "strategy.rules_changed"
+        })
+        .collect();
     let actions: Vec<&str> = ledger.iter().map(|e| e.action.as_str()).collect();
     let expected: Vec<&str> = std::iter::once("strategy.start_consultation")
         .chain(std::iter::repeat_n("strategy.write_section", 8))
@@ -2528,7 +2579,8 @@ async fn approval_creates_one_standing_task_per_icp_entry() {
     assert!(tasks.iter().all(|t| t.strategy_version_id == v1.id
         && t.status == TaskStatus::Open
         && matches!(t.kind, TaskKind::Standing { .. })));
-    // The next version keeps one entry: the old tasks are superseded, one new one is open.
+    // The next version keeps one entry with the same brief: its task is carried (design
+    // 2026-11-19 K5), the other superseded.
     strategy::start_consultation(&w.deps, &w.owner_ctx)
         .await
         .unwrap();
@@ -2551,12 +2603,26 @@ async fn approval_creates_one_standing_task_per_icp_entry() {
         .collect();
     assert_eq!(open.len(), 1);
     assert_eq!(open[0].strategy_version_id, v2.id);
+    assert!(
+        matches!(&open[0].kind, TaskKind::Standing { icp_key } if icp_key == "kampus"),
+        "the kept entry's task"
+    );
+    assert_eq!(tasks.len(), 2, "no new task");
     assert_eq!(
         tasks
             .iter()
             .filter(|t| t.status == TaskStatus::Superseded)
             .count(),
-        2
+        1
+    );
+    assert_eq!(
+        w.uow
+            .snapshot()
+            .ledger
+            .iter()
+            .filter(|row| row.entry.action.as_str() == "research.task_carried")
+            .count(),
+        1
     );
 }
 
@@ -2748,16 +2814,15 @@ async fn add_channel_prepares_a_draft_with_the_channel_and_a_hypothesis_per_segm
     );
     assert_eq!(w.entries("strategy.add_channel").len(), 1);
 
-    // The owner approves it as any draft; asked again, there is nothing to add.
+    // The owner approves it as any draft; the knowledge base keeps the frame, so the version
+    // approved uses every connected account (design 2026-11-19 K6).
     let v = strategy::approve(&deps, &w.owner_ctx, as_read(&w))
         .await
         .unwrap();
     assert_eq!(v.status, VersionStatus::Approved);
-    let again = strategy::add_channel(&deps, &w.owner_ctx, kind())
-        .await
-        .unwrap();
-    assert_eq!(again.id, v.id);
-    assert_eq!(w.entries("strategy.add_channel").len(), 1);
+    let approved = w.version(v.id);
+    assert_eq!(approved.sections.channels.len(), 1);
+    assert_eq!(approved.sections.channels[0].channel, "any");
 }
 
 /// The owner's request is the system's hypothesis: never listed or counted with the strategy,

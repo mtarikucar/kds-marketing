@@ -21,6 +21,9 @@ use crate::text::{cut, one_line};
 pub const DRAFT_REASON: &str = "Daha önce yazılmıştı ama uygulanmamıştı.";
 /// The reason of a proposal for a text of the strategy archived last.
 pub const ARCHIVED_REASON: &str = "Daha önce kullanılıyordu; istersen geri ekle.";
+/// The reason of a proposal for a text an approval through the old strategy tools wrote for a
+/// card the owner had changed since (design §4.3.4).
+pub const RESYNC_REASON: &str = "Önceki sayfada onaylanan metin.";
 /// The consultation log's note on a draft the seeding closes.
 pub const DRAFT_CLOSED_NOTE: &str = "closed: the knowledge base replaces drafts";
 /// The name of the general ad budget the seeding creates from a paid lane.

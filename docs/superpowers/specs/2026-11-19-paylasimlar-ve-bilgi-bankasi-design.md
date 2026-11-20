@@ -1799,7 +1799,8 @@ the caller's transaction; `cause` ∈ `derive` (an agent's `frame_apply`), `boot
 2. **Retained set** *R*, from facts: the live topics of `previous` that a planned or ready slot, a
    live ad-set binding, a queued budget move or an ad of a campaign not ended names
    (`studio().list_slots`, `list_bindings`, the budget moves, the ads repository). For each topic of
-   *R*, the content types (per lane) its slots and bindings use.
+   *R*, the content types (per lane) its slots and bindings use. A binding has no end state (every
+   one is rechecked by `recheck_periods`), so every binding counts as live.
 3. **Topics** (cause `derive` with `topics`): for each topic given, its id when given (it must be a
    hypothesis of some version of this workspace: `VALIDATION topic_unknown`; the owner's request id:
    `FORBIDDEN hypothesis_reserved`), else the id of a live topic of `previous` whose title is the
@@ -1946,8 +1947,9 @@ never a seed, never the job but for the repair below.
   `metric: "Etkileşim"`, organic cadence `default_organic_cadence(3)`;
 - prospecting empty (research waits for its agent's derivation);
 - the system fields of §4.10.1;
-- `posting_revision` and `prospecting_revision` stay as the write set them (> 0), so both
-  derivations are due at once.
+- `posting_revision` and `prospecting_revision` are raised to at least the knowledge base's
+  revision (a write of one card moves only its own part; the bootstrap frame is made of
+  fallbacks for both), so both derivations are due at once.
 
 The gate opens with it: the owner's first composer request is not stopped by "Bilgi bankası boş"
 once one card has text. Agents then derive the real frame; the bootstrap topic is left out by the

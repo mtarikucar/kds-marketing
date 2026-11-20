@@ -422,10 +422,17 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
     assert!(human["approved"]["id"].is_string());
 
-    // Archiving: the agent archives version 1; the owner approves the open draft as version 2
-    // and archives it on the panel. Both answer the same confirmation for their own version.
+    // Archiving: once an approval seeded the knowledge base, which keeps the frame (design
+    // 2026-11-19 §4.3.4, D10), the archive is refused, the same on both surfaces.
     let first = human["approved"]["id"].clone();
-    let agent = call_tool(
+    let resp = post(
+        "/api/strategy/archive",
+        Some(json!({ "version_id": first, "confirm": true })),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let refused = json_body(resp).await;
+    let agent = tool_result(
         &app,
         &key,
         &session,
@@ -433,7 +440,9 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         json!({ "version_id": first, "confirm": true }),
     )
     .await;
-    assert_eq!(agent, json!({ "version_id": first, "archived": true }));
+    assert_eq!(agent["isError"], json!(true));
+    assert_eq!(refused, agent["structuredContent"]);
+    assert_eq!(refused["details"]["reason"], "use_brake");
     let read = ok(post("/api/strategy/draft/submit", None).await).await;
 
     // Approving a draft that changed since it was read: the same refusal on both surfaces.
@@ -459,34 +468,7 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
 
     let second =
         ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await["id"].clone();
-    let resp = post(
-        "/api/strategy/archive",
-        Some(json!({ "version_id": second, "confirm": true })),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let human = json_body(resp).await;
-    assert_eq!(human, json!({ "version_id": second, "archived": true }));
-
-    // Nothing is left to archive: the same refusal on both surfaces.
-    let resp = post(
-        "/api/strategy/archive",
-        Some(json!({ "version_id": second, "confirm": true })),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::CONFLICT);
-    let human = json_body(resp).await;
-    let agent = tool_result(
-        &app,
-        &key,
-        &session,
-        "jeeta.strategy.archive",
-        json!({ "version_id": second, "confirm": true }),
-    )
-    .await;
-    assert_eq!(agent["isError"], json!(true));
-    assert_eq!(human, agent["structuredContent"]);
-    assert_eq!(human["code"], "CONFLICT");
+    assert_ne!(second, first);
 }
 
 #[tokio::test]
@@ -4249,7 +4231,8 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         assert_eq!(http, mcp, "invalid {action}");
         assert_eq!(http["code"], "VALIDATION");
     }
-    // The ledger remains readable after archive; overview still requires the approved strategy.
+    // The knowledge base the approval seeded keeps the frame: archiving it is refused (design
+    // 2026-11-19 §4.3.4, D10), and the overview and the ledger answer the same on both surfaces.
     let mut r = d.uow.tenant(ws).await.unwrap();
     let current = r.strategy().lock_execution_frame().await.unwrap().unwrap();
     drop(r);
@@ -4263,7 +4246,8 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         ),
     )
     .await;
-    assert!(archived.status().is_success());
+    assert_eq!(archived.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(archived).await["details"]["reason"], "use_brake");
     for action in ["overview", "ledger"] {
         let path =
             format!("/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z");
@@ -4280,7 +4264,10 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
             .clone();
         assert_eq!(http, mcp);
         if action == "overview" {
-            assert_eq!(http["code"], "STRATEGY_REQUIRED");
+            assert!(
+                http.get("code").is_none(),
+                "the frame is still in force: {http}"
+            );
         } else {
             assert!(http["entries"].is_array());
         }

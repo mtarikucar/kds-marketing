@@ -287,6 +287,30 @@ pub(crate) async fn request(
     let Some(user) = person(ctx) else {
         return Ok(());
     };
+    request_as(repos, ctx, needs, reason, user).await
+}
+
+/// Records a wake request as [`request`] does, for an action the system or an agent takes
+/// because `person` asked (design 2026-11-19 D19): a frame applied from what the person wrote, a
+/// note of theirs an agent filed. The request names `person` as its cause.
+pub(crate) async fn request_for(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    needs: &[Need],
+    reason: WakeReason,
+    person: UserId,
+) -> Result<(), AppError> {
+    request_as(repos, ctx, needs, reason, person).await
+}
+
+/// The request of [`request`] and [`request_for`], caused by `user`.
+async fn request_as(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    needs: &[Need],
+    reason: WakeReason,
+    user: UserId,
+) -> Result<(), AppError> {
     let rows = repos.agent_connections().wakes().await?;
     if !rows.iter().any(AgentWakeRow::usable) {
         return Ok(());

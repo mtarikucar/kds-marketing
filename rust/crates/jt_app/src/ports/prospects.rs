@@ -407,6 +407,17 @@ pub trait ResearchTaskRepo: Send + Sync {
         at: OffsetDateTime,
         note: &str,
     ) -> Result<(), AppError>;
+    /// Carries the open standing task `id` to strategy version `version` (design 2026-11-19 K5):
+    /// its version, rubric digest and daily cap are re-stamped; its id, claim and what it
+    /// recorded stay. `NOT_FOUND` when no such open task; the version must hold no other open
+    /// standing task for its ICP entry (the caller checks: the index would refuse it).
+    async fn carry(
+        &mut self,
+        id: ResearchTaskId,
+        version: StrategyVersionId,
+        rubric_digest: &str,
+        daily_cap: u16,
+    ) -> Result<(), AppError>;
     /// Sets (or with `None` clears) the task's advisory claim. `NOT_FOUND` when no such task.
     async fn set_claim(
         &mut self,

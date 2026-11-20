@@ -91,6 +91,13 @@ async fn research_tasks_round_trip_and_one_standing_per_entry() {
 }
 
 #[tokio::test]
+async fn research_tasks_are_carried_to_a_newer_version() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::prospects_contract::research_tasks_are_carried_to_a_newer_version(uow).await;
+}
+
+#[tokio::test]
 async fn blocklist_dnc_upgrades_rejected() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));

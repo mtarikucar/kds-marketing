@@ -240,6 +240,45 @@ impl ResearchTaskRepo for PgTenantRepos {
         Ok(())
     }
 
+    async fn carry(
+        &mut self,
+        id: ResearchTaskId,
+        version: StrategyVersionId,
+        rubric_digest: &str,
+        daily_cap: u16,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let known: bool = sqlx::query_scalar(
+            "select exists(select 1 from strategy_versions where workspace_id = $1 and id = $2)",
+        )
+        .bind(ws.as_uuid())
+        .bind(version.as_uuid())
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read strategy version"))?;
+        if !known {
+            return Err(AppError::not_found("no such strategy version"));
+        }
+        let done = sqlx::query(
+            "update research_tasks set strategy_version_id = $3, rubric_digest = $4, \
+             daily_cap = $5 \
+             where workspace_id = $1 and id = $2 and status = 'open' \
+             and kind->>'type' = 'standing'",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .bind(version.as_uuid())
+        .bind(rubric_digest)
+        .bind(i32::from(daily_cap))
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "carry research task"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("no such open standing research task"));
+        }
+        Ok(())
+    }
+
     async fn set_claim(
         &mut self,
         id: ResearchTaskId,

@@ -447,20 +447,14 @@ async fn the_draft_lists_its_assumptions_and_strict_bodies_refuse_unknown_fields
 }
 
 #[tokio::test]
-async fn archive_with_wrong_version_is_409() {
+async fn archive_is_refused_once_the_knowledge_base_keeps_the_frame() {
     let p = Panel::new().await;
     let (owner, _) = p.register(OWNER, "Alpha").await;
     let approved = approve_a_strategy(&p, &owner).await;
     let id = approved["id"].as_str().unwrap();
     let archive = |body: Value| post(&p, "/api/strategy/archive", &owner, Some(body));
 
-    // Another version than the one in force: refused, naming the one in force.
-    let other = "0192f0c0-0000-7000-8000-000000000001";
-    let resp = archive(json!({ "version_id": other, "confirm": true })).await;
-    let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
-    assert_eq!(refused["details"]["approved_version_id"], json!(id));
-
-    // The right version without confirmation, or with a malformed id: refused.
+    // The right version without confirmation, or with a malformed id: refused as before.
     let resp = archive(json!({ "version_id": id })).await;
     let refused = expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
     assert_eq!(refused["details"]["field"], "confirm");
@@ -468,29 +462,19 @@ async fn archive_with_wrong_version_is_409() {
     expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
     let resp = archive(json!({ "version_id": "v1", "confirm": true })).await;
     expect_error(resp, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION").await;
+
+    // The approval seeded the knowledge base, which keeps the frame (design 2026-11-19 §4.3.4,
+    // D10): a confirmed archive, of this version or another, is refused; posting is stopped
+    // with the brake instead.
+    for version in [id, "0192f0c0-0000-7000-8000-000000000001"] {
+        let resp = archive(json!({ "version_id": version, "confirm": true })).await;
+        let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
+        assert_eq!(refused["details"]["reason"], "use_brake");
+    }
     let still = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(still["approved"]["id"], json!(id));
-
-    // Confirmed: archived (`200` with the confirmation `jeeta.strategy.archive` answers), and the
-    // strategy gate is closed again.
-    let resp = archive(json!({ "version_id": id, "confirm": true })).await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(
-        body_json(resp).await,
-        json!({ "version_id": id, "archived": true })
-    );
-    let strategy = ok_json(p.get("/api/strategy", &owner).await).await;
-    assert_eq!(strategy["approved"], Value::Null);
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;
-    assert_eq!(versions[0]["status"], "archived");
-    assert!(versions[0]["archived_at"].is_string());
-    let log = consultation(&p, &owner, id, "?limit=1").await;
-    assert_eq!(kinds(&log), ["archived"]);
-
-    // Nothing is left to archive.
-    let resp = archive(json!({ "version_id": id, "confirm": true })).await;
-    let refused = expect_error(resp, StatusCode::CONFLICT, "CONFLICT").await;
-    assert_eq!(refused["details"]["reason"], "no_approved_version");
+    assert_eq!(versions[0]["status"], "approved");
 }
 
 /// `at` as a query value.

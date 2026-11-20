@@ -778,8 +778,14 @@ pub(crate) async fn reconcile_budget(
     r.commit().await
 }
 
+/// How long `recheck_periods` waits before trying a failed refresh again.
+pub const REFRESH_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Period/frame refresh uses the same locked caps. No increase is allocated automatically.
-/// On refusal the existing lane is braked before a safety pause is attempted.
+/// On refusal the existing lane is braked before a safety pause is attempted. A refresh that
+/// failed with `INTERNAL` (a deadlock or serialisation failure among them) is tried once more
+/// after [`REFRESH_RETRY_AFTER`] before the lane is braked (design 2026-11-19 §4.10.13, D35); a
+/// refusal still brakes at once.
 pub async fn recheck_periods(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     let bindings = {
         let mut r = d.uow.tenant(ws).await?;
@@ -787,7 +793,7 @@ pub async fn recheck_periods(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError>
     };
     let mut changed = 0;
     for b in bindings {
-        let result = refresh_period(d, &b).await;
+        let result = retry_internal_once(|| refresh_period(d, &b)).await;
         match result {
             Ok(true) => changed += 1,
             Ok(false) => {}
@@ -800,6 +806,23 @@ pub async fn recheck_periods(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError>
     }
     Ok(changed)
 }
+/// `attempt`'s answer, run once more after [`REFRESH_RETRY_AFTER`] when it failed with
+/// `INTERNAL` (a deadlock victim, a serialisation failure, a lost connection): a refusal of any
+/// other code is answered at once.
+async fn retry_internal_once<T, F, Fut>(mut attempt: F) -> Result<T, AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, AppError>>,
+{
+    match attempt().await {
+        Err(e) if e.code == crate::error::ErrorCode::Internal => {
+            tokio::time::sleep(REFRESH_RETRY_AFTER).await;
+            attempt().await
+        }
+        other => other,
+    }
+}
+
 async fn refresh_period(d: &Deps, b: &AdSetBinding) -> Result<bool, AppError> {
     let now = d.clock.now();
     let mut r = d.uow.tenant(b.chain.workspace_id).await?;
@@ -1016,4 +1039,49 @@ pub(super) async fn brake_paid_in(
         r.ledger().append(ledger_entry(&ctx,"studio.paid.refused","studio_binding",b.id,json!({"chain":b.chain,"reason":reason,"requires_action":true,"residual_provider_exposure":true}))?).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Runs `retry_internal_once` over answers taken in turn from `answers`; what it answered
+    /// and how many attempts it made.
+    async fn run(answers: Vec<Result<bool, AppError>>) -> (Result<bool, AppError>, u32) {
+        let calls = AtomicU32::new(0);
+        let answers = std::sync::Mutex::new(answers.into_iter());
+        let out = retry_internal_once(|| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let next = answers.lock().unwrap().next().expect("an answer");
+            async move { next }
+        })
+        .await;
+        (out, calls.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_refresh_that_failed_internally_is_tried_once_more_before_braking() {
+        // A deadlock victim succeeds on its second try: no brake.
+        let started = std::time::Instant::now();
+        let (out, calls) = run(vec![Err(AppError::internal("deadlock detected")), Ok(true)]).await;
+        assert!(matches!(out, Ok(true)));
+        assert_eq!(calls, 2);
+        assert!(started.elapsed() >= REFRESH_RETRY_AFTER, "after a pause");
+        // Failing twice is answered (the caller brakes then).
+        let (out, calls) = run(vec![
+            Err(AppError::internal("deadlock detected")),
+            Err(AppError::internal("deadlock detected")),
+        ])
+        .await;
+        assert_eq!(out.unwrap_err().code, crate::error::ErrorCode::Internal);
+        assert_eq!(calls, 2);
+        // A refusal brakes at once, and a success is not repeated.
+        let (out, calls) = run(vec![Err(refuse("lane_budget_missing"))]).await;
+        assert_eq!(out.unwrap_err().code, crate::error::ErrorCode::Conflict);
+        assert_eq!(calls, 1);
+        let (out, calls) = run(vec![Ok(false)]).await;
+        assert!(matches!(out, Ok(false)));
+        assert_eq!(calls, 1);
+    }
 }

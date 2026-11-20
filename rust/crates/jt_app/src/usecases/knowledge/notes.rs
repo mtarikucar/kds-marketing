@@ -36,6 +36,7 @@ use time::OffsetDateTime;
 use super::cards::{
     file, live, locked_card, next_position, supersede_edits, text_moved, too_many_cards,
 };
+use super::frame::Waking;
 use super::{
     Change, FrameWrite, WORK_PERMISSIONS, agent, conflict, editor, invalid, lock, moves, person,
     refused, seed,
@@ -463,6 +464,17 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
             card_id: card.id,
             revision: card.revision,
         });
+    }
+    if !filing.cards.is_empty() {
+        // The note's person's first card text bootstraps the frame, as their own write would.
+        kb.bootstrap(
+            deps,
+            ctx,
+            r.as_mut(),
+            note.created_by,
+            Waking::For(note.created_by),
+        )
+        .await?;
     }
 
     // Rules and goals: appended as the note's person's words.

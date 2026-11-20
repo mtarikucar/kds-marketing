@@ -46,8 +46,8 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_strategy::{
-    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, ContentTypeShare, Gap,
-    Hypothesis, HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState, LaneKind,
+    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, Gap, Hypothesis,
+    HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState, LaneKind,
     MAX_CONSULTATION_TEXT_CHARS, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
     next_draft_from, parse_hypotheses_strict, parse_section_strict, validate_for_approval,
 };
@@ -494,24 +494,17 @@ pub async fn set_hypotheses(
 }
 
 /// The content type of a hypothesis that posts without naming its own types.
-pub const DEFAULT_CONTENT_TYPE: &str = "general";
+pub use jt_knowledge::frame::DEFAULT_CONTENT_TYPE;
 
 /// The organic cadence a live hypothesis gets at submission when it names none and the strategy
 /// posts (`cadence.per_week` above zero): it posts, with one content type. The posting engine
 /// takes a post only for a hypothesis with an organic cadence, and neither the panel nor the
 /// consultation asks for that field, so without this a strategy written the usual way would
 /// post nothing (design 2026-11-10 B53). A hypothesis that names an organic cadence keeps it,
-/// one of zero posts a week included: that is how a hypothesis is told not to post.
+/// one of zero posts a week included: that is how a hypothesis is told not to post. The frame
+/// the knowledge base keeps uses the same one (`jt_knowledge::frame`).
 fn default_organic_cadence(per_week: u16) -> HypothesisCadence {
-    HypothesisCadence {
-        slots_per_week: per_week,
-        exploration_bps: 0,
-        content_types: vec![ContentTypeShare {
-            key: DEFAULT_CONTENT_TYPE.into(),
-            min_bps: 0,
-            max_bps: 10_000,
-        }],
-    }
+    jt_knowledge::frame::default_organic_cadence(per_week)
 }
 
 /// Submits the draft for approval and returns it. Needs `team.manage`.
@@ -588,15 +581,25 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
 /// agent, the user who issued its key), its log records the approval, and `strategy.approve` is
 /// written (payload `number`, `hypotheses`: how many are in force). The research tasks' planner
 /// runs in the same transaction (`research::plan_in`), so the version's ICP entries have their
-/// standing tasks at once and the older versions' are superseded. Should another approval have
-/// committed first, `CONFLICT` "another approval won", and nothing changes.
+/// standing tasks at once; an older version's open task whose entry is unchanged is carried, the
+/// others are superseded. Should another approval have committed first, `CONFLICT` "another
+/// approval won", and nothing changes.
+///
+/// The knowledge base follows the approval in the same transaction (design 2026-11-19 §4.3.4):
+/// on a seeded workspace the draft's system fields are written as the frame makes them before it
+/// is validated (`channels = [any]`, every topic on `any` and posting, no channel mix, the lanes
+/// from the rules' caps, lowered to the draft's when those are lower) and the knowledge base is
+/// re-synced from the version afterwards (`knowledge::resync`); a workspace not seeded yet is
+/// seeded from the version just approved.
 pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<VersionOut, AppError> {
     require_owner_or_manager(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // Draft before frame, matching draft edits and archival.
-    let draft = locked_draft(repos.as_mut()).await?;
+    // Draft before frame, matching draft edits and archival; then the knowledge base's settings
+    // (design 2026-11-19 §4.10.13).
+    let mut draft = locked_draft(repos.as_mut()).await?;
     let previous = repos.strategy().lock_execution_frame().await?;
+    let seeded = repos.knowledge().lock_settings().await?;
     if draft.submitted_at.is_none() {
         return Err(conflict("not submitted", "not_submitted"));
     }
@@ -604,6 +607,14 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         return Err(draft_changed(&draft));
     }
     let ws = ctx.workspace_id;
+    // The knowledge base keeps the frame (design 2026-11-19 §4.3.4): the draft's system fields
+    // are written as the frame makes them before it is validated.
+    let prepared = match &seeded {
+        Some(settings) => Some(
+            super::knowledge::resync::prepare(ctx, repos.as_mut(), &mut draft, settings).await?,
+        ),
+        None => None,
+    };
     let groups = group_ids(repos.as_mut()).await?;
     let gaps = approval_gaps(
         &draft.sections,
@@ -705,6 +716,30 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         super::wake::WakeReason::StrategyApproved,
     )
     .await?;
+    // The knowledge base follows what was approved, in the same transaction: re-synced when
+    // seeded, else seeded from it.
+    let approved = repos
+        .strategy()
+        .find(draft.id)
+        .await?
+        .ok_or_else(|| AppError::internal("the version just approved is missing"))?;
+    match (seeded, prepared) {
+        (Some(settings), Some(prepared)) => {
+            super::knowledge::resync::after(
+                deps,
+                ctx,
+                repos.as_mut(),
+                settings,
+                prepared,
+                &approved,
+                by,
+            )
+            .await?;
+        }
+        _ => {
+            super::knowledge::seed::ensure_in(deps, ctx, repos.as_mut()).await?;
+        }
+    }
     let out = reread(repos.as_mut(), draft.id, &known).await?;
     repos.commit().await?;
     Ok(out)
@@ -715,7 +750,10 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
 /// `details.reason = "owner_or_manager"`), `team.manage` (else `FORBIDDEN` naming it) and
 /// `input.confirm` (else `VALIDATION` naming `confirm`).
 ///
-/// Without an approved version, `CONFLICT` (`details.reason = "no_approved_version"`). When the
+/// Once the workspace's knowledge base is seeded, `CONFLICT` (`details.reason = "use_brake"`):
+/// the knowledge base keeps the frame, and posting is stopped with `studio.brake` (design
+/// 2026-11-19 §4.3.4, D10). Without an approved version, `CONFLICT`
+/// (`details.reason = "no_approved_version"`). When the
 /// approved version is not `input.version_id` (say, an approval committed while this call waited
 /// for the locks), `CONFLICT` "the approved version changed" with the one in force in
 /// `details.approved_version_id`, and nothing changes: an archive never takes down a version its
@@ -733,11 +771,17 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     // Draft before frame, including when there is no draft to lock.
     repos.strategy().lock_draft().await?;
-    let approved = repos
-        .strategy()
-        .lock_execution_frame()
-        .await?
-        .ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
+    let approved = repos.strategy().lock_execution_frame().await?;
+    // The knowledge base keeps the frame (design 2026-11-19 §4.3.4, D10): a frame never
+    // disappears under a written knowledge base.
+    if repos.knowledge().settings().await?.is_some() {
+        return Err(conflict(
+            "the knowledge base keeps the frame; stop posting with studio.brake",
+            "use_brake",
+        ));
+    }
+    let approved =
+        approved.ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
     if approved.id != input.version_id {
         return Err(AppError {
             code: ErrorCode::Conflict,

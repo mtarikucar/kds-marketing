@@ -374,17 +374,23 @@ async fn the_rollback_script_strips_newer_wake_reasons_and_is_repeatable() {
         t.agent_connections().wake_save(row).await.unwrap();
     }
     t.commit().await.unwrap();
-    // What a later release writes: codes this binary does not know.
+    // What schema 46 and a later release write: the six reasons of the knowledge base, and a
+    // code this binary does not know.
     let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
     for (k, pending, last) in [
         (
             &mixed,
-            json!(["knowledge_changed", "content_revision", "posting_resumed"]),
-            json!(["account_connected", "manual"]),
+            json!([
+                "knowledge_changed",
+                "content_revision",
+                "posting_resumed",
+                "from_a_later_release"
+            ]),
+            json!(["account_connected", "manual", "from_a_later_release"]),
         ),
         (
             &only_new,
-            json!(["knowledge_note"]),
+            json!(["knowledge_note", "content_delivered"]),
             json!(["knowledge_applied"]),
         ),
     ] {
@@ -401,15 +407,26 @@ async fn the_rollback_script_strips_newer_wake_reasons_and_is_repeatable() {
         .unwrap();
     }
     tx.commit().await.unwrap();
-    // This binary already reads them, dropping the unknown codes.
+    // This binary reads them: the reasons it knows, the unknown code dropped.
     let mut t = uow.tenant(ws).await.unwrap();
     let rows = t.agent_connections().wakes().await.unwrap();
     let of = |id: ApiKeyId| rows.iter().find(|r| r.api_key_id == id).unwrap().clone();
     assert_eq!(
         of(mixed.id).pending.unwrap().reasons,
-        vec![WakeReason::ContentRevision]
+        vec![
+            WakeReason::KnowledgeChanged,
+            WakeReason::ContentRevision,
+            WakeReason::PostingResumed
+        ]
     );
-    assert!(of(only_new.id).pending.unwrap().reasons.is_empty());
+    assert_eq!(
+        of(mixed.id).last.unwrap().reasons,
+        vec![WakeReason::AccountConnected, WakeReason::Manual]
+    );
+    assert_eq!(
+        of(only_new.id).pending.unwrap().reasons,
+        vec![WakeReason::KnowledgeNote, WakeReason::ContentDelivered]
+    );
     drop(t);
 
     for _ in 0..2 {
@@ -447,4 +464,181 @@ async fn the_rollback_script_strips_newer_wake_reasons_and_is_repeatable() {
     // Every row still reads.
     let mut t = uow.tenant(ws).await.unwrap();
     assert_eq!(t.agent_connections().wakes().await.unwrap().len(), 3);
+}
+
+/// The sample strategy of a fictional business (`jt_knowledge/tests/fixtures`), version 5 of
+/// workspace `ws`, approved by `user`, straight to the repos.
+async fn approved_sample(uow: &PgUnitOfWork, ws: WorkspaceId, user: UserId) -> StrategyVersionId {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../domain/jt_knowledge/tests/fixtures/strategy-sample.json"
+    ))
+    .unwrap();
+    let sections: Sections = serde_json::from_value(fixture["sections"].clone()).unwrap();
+    let hypotheses: Vec<jt_strategy::Hypothesis> =
+        serde_json::from_value(fixture["hypotheses"].clone()).unwrap();
+    let id = StrategyVersionId::new_v7();
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.strategy()
+        .insert(StrategyVersion {
+            id,
+            workspace_id: ws,
+            number: 5,
+            status: VersionStatus::Approved,
+            sections,
+            created_at: FIXED_NOW,
+            created_by: Actor::Human { user_id: user },
+            submitted_at: Some(FIXED_NOW),
+            approved_at: Some(FIXED_NOW),
+            approved_by: Some(user),
+            archived_at: None,
+        })
+        .await
+        .unwrap();
+    t.hypotheses().replace_all(id, hypotheses).await.unwrap();
+    t.commit().await.unwrap();
+    id
+}
+
+fn settle_ctx(ws: WorkspaceId) -> Ctx {
+    Ctx {
+        workspace_id: ws,
+        actor: Actor::System {
+            component: "scheduler:knowledge_settle".into(),
+        },
+        permissions: Default::default(),
+        role_key: None,
+        now: FIXED_NOW,
+        agent_connection_id: None,
+    }
+}
+
+/// `(id, status, version)` of every research task of `ws`.
+async fn research_tasks(pool: &PgPool, ws: WorkspaceId) -> Vec<(Uuid, String, Uuid)> {
+    let mut tx = TenantTx::begin(pool, ws).await.unwrap();
+    sqlx::query_as(
+        "select id, status, strategy_version_id from research_tasks where workspace_id = $1 \
+         order by id",
+    )
+    .bind(ws.as_uuid())
+    .fetch_all(tx.conn())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_first_settle_normalises_the_frame_on_postgres_and_carries_its_research_tasks() {
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("kb-normalise").await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let v5 = approved_sample(&uow, ws, user).await;
+    let deps = jt_testkit::fakes::deps(Arc::new(uow.clone()));
+    let ctx = settle_ctx(ws);
+    let planned = jt_app::usecases::research::plan(&deps, &ctx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(planned.created, 7);
+    let before = research_tasks(&db.pool, ws).await;
+
+    let out = jt_app::usecases::knowledge::settle::settle(&deps, &ctx)
+        .await
+        .unwrap();
+    assert!(out.seeded);
+    let applied = out.applied.unwrap();
+    assert!(applied.applied);
+    assert_eq!(applied.number, 6);
+    let mut t = uow.tenant(ws).await.unwrap();
+    let v6 = t.strategy().current_approved().await.unwrap().unwrap();
+    assert_eq!(v6.number, 6);
+    assert_eq!(v6.sections.channels.len(), 1);
+    assert_eq!(v6.sections.channels[0].channel, "any");
+    assert!(v6.sections.cadence.channel_mix.is_empty());
+    let topics = t.hypotheses().list(v6.id).await.unwrap();
+    assert_eq!(topics.len(), 7);
+    assert!(
+        topics
+            .iter()
+            .all(|h| h.channel == "any" && h.state.is_live())
+    );
+    assert_eq!(
+        t.strategy().find(v5).await.unwrap().unwrap().status,
+        VersionStatus::Archived
+    );
+    drop(t);
+    let after = research_tasks(&db.pool, ws).await;
+    assert_eq!(
+        after.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+        before.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+        "the same task ids"
+    );
+    for (_, status, version) in &after {
+        assert_eq!(status, "open");
+        assert_eq!(*version, v6.id.as_uuid());
+    }
+    // A second tick writes nothing.
+    let again = jt_app::usecases::knowledge::settle::settle(&deps, &ctx)
+        .await
+        .unwrap();
+    assert!(!again.changed());
+    let mut t = uow.tenant(ws).await.unwrap();
+    assert_eq!(
+        t.strategy().current_approved().await.unwrap().unwrap().id,
+        v6.id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_hourly_planner_waits_for_a_frame_apply_on_postgres_and_supersedes_nothing() {
+    use jt_app::usecases::knowledge::frame::{self, Request, Waking};
+    use jt_knowledge::frame::{FrameCause, FrameParts};
+    let db = TestDb::new().await;
+    let (ws, user) = db.seed_workspace("kb-plan-race").await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    approved_sample(&uow, ws, user).await;
+    let deps = Arc::new(jt_testkit::fakes::deps(Arc::new(uow.clone())));
+    let ctx = settle_ctx(ws);
+    jt_app::usecases::research::plan(&deps, &ctx)
+        .await
+        .unwrap()
+        .unwrap();
+    seed::ensure(&deps, &ctx).await.unwrap();
+    let before = research_tasks(&db.pool, ws).await;
+
+    // The normalisation holds the frame lock, having carried the tasks, while the planner runs.
+    let mut r = uow.tenant(ws).await.unwrap();
+    let applied = frame::apply(
+        &deps,
+        &ctx,
+        r.as_mut(),
+        Request {
+            cause: FrameCause::Normalize,
+            next: &FrameParts::default(),
+            approver: None,
+            waking: Waking::Nobody,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(applied.applied);
+    let planner = {
+        let (deps, ctx) = (deps.clone(), ctx.clone());
+        tokio::spawn(async move { jt_app::usecases::research::plan(&deps, &ctx).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(
+        !planner.is_finished(),
+        "the planner waits on the frame lock"
+    );
+    r.commit().await.unwrap();
+    let planned = planner.await.unwrap().unwrap().unwrap();
+    assert_eq!(
+        (planned.superseded, planned.created, planned.carried),
+        (0, 0, 0)
+    );
+    let after = research_tasks(&db.pool, ws).await;
+    let v6 = applied.version_id.unwrap().as_uuid();
+    assert_eq!(after.len(), before.len());
+    for (_, status, version) in &after {
+        assert_eq!((status.as_str(), *version), ("open", v6));
+    }
 }

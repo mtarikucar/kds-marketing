@@ -63,15 +63,24 @@ async fn flow() -> Flow {
         &["materials", "ads"],
     )
     .await;
-    budget::create_item(
-        &w.deps,
-        &w.owner,
-        input!({"name":"Ad budget","kind":"ad_budget",
-            "unit":{"kind":"currency","value":"TRY"},"cap":100_000,"period":"monthly",
-            "general":true}),
-    )
-    .await
-    .unwrap();
+    // Approving the strategy seeded the knowledge base, which made the general ad budget from
+    // the paid lane (design 2026-11-19 §4.3.2): 100.000 a month, the lane's own cap.
+    {
+        use jt_app::ports::UnitOfWork as _;
+        let mut t = w.uow.tenant(w.id).await.unwrap();
+        let general = t
+            .budget()
+            .list_items()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|i| i.general && i.retired_at.is_none())
+            .expect("the general ad budget the seeding made");
+        assert_eq!(
+            (general.cap, general.period),
+            (100_000, jt_capability::Period::Monthly)
+        );
+    }
     let scopes = ["ads_read", "ads_management"];
     let account = w
         .connected(

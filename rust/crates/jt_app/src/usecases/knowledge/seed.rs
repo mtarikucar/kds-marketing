@@ -55,6 +55,22 @@ pub async fn ensure(deps: &Deps, ctx: &Ctx) -> Result<bool, AppError> {
     if r.knowledge().settings().await?.is_some() {
         return Ok(false);
     }
+    if !ensure_in(deps, ctx, r.as_mut()).await? {
+        return Ok(false);
+    }
+    r.commit().await?;
+    Ok(true)
+}
+
+/// [`ensure`] in the caller's bundle, which commits: an approval through the old tools seeds a
+/// workspace not seeded yet from the version it just approved, in its own transaction (design
+/// §4.3.4). Takes the draft and the execution frame locks first (re-entrant for a caller holding
+/// them).
+pub(crate) async fn ensure_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+) -> Result<bool, AppError> {
     let sys = system(ctx, BACKFILL_COMPONENT);
     let draft = r.strategy().lock_draft().await?;
     let approved = r.strategy().lock_execution_frame().await?;
@@ -67,8 +83,7 @@ pub async fn ensure(deps: &Deps, ctx: &Ctx) -> Result<bool, AppError> {
     if !r.knowledge().insert_settings(&settings).await? {
         return Ok(false);
     }
-    seed_in(deps, &sys, r.as_mut(), settings, approved, draft).await?;
-    r.commit().await?;
+    seed_in(deps, &sys, r, settings, approved, draft).await?;
     Ok(true)
 }
 
@@ -458,6 +473,55 @@ async fn ad_cap(
         r.ledger().append(entry).await?;
     }
     Ok(Some(cap))
+}
+
+/// Holds the live general ad budget in `cap`'s currency to `cap` brought to the item's period,
+/// as the seeding does (design §4.3.2): lowered when it is above, never raised; ledgered
+/// `budget.items.update` with `reason` under version `version`. Locks the item (the last lock of
+/// design §4.10.13). No such item, or one of a `total` period: nothing.
+pub(crate) async fn hold_general(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Cap,
+    version: jt_strategy::StrategyVersionId,
+    reason: &str,
+) -> Result<(), AppError> {
+    let unit = Unit::Currency(cap.currency.clone());
+    let live_general = |i: &BudgetItem| i.general && i.retired_at.is_none();
+    let Some(id) = r
+        .budget()
+        .list_items()
+        .await?
+        .iter()
+        .find(|i| live_general(i) && i.unit == unit)
+        .map(|i| i.id)
+    else {
+        return Ok(());
+    };
+    let Some(mut item) = r.budget().lock_item(id).await?.filter(live_general) else {
+        return Ok(());
+    };
+    let Some(days) = item_days(item.period) else {
+        return Ok(());
+    };
+    let allowed = i64::try_from(i128::from(cap.amount_minor) * days / lane_days(cap.period))
+        .unwrap_or(i64::MAX);
+    if item.cap <= allowed {
+        return Ok(());
+    }
+    let previous = item.cap;
+    item.cap = allowed;
+    r.budget().update_item(item).await?;
+    let mut entry = ledger_entry(
+        ctx,
+        "budget.items.update",
+        "budget_item",
+        id,
+        json!({ "cap": allowed, "previous": { "cap": previous }, "reason": reason }),
+    )?;
+    entry.strategy_version_id = Some(version.as_uuid());
+    r.ledger().append(entry).await?;
+    Ok(())
 }
 
 /// The general ad budget made from the paid lane `paid`, for a workspace that has none.
