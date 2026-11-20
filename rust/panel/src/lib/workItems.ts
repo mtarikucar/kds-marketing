@@ -70,7 +70,13 @@ export function workItemLink(item: WorkItem, tiktokWaiting = false): string | nu
       return `/inbox?task=${encodeURIComponent(item.task_id)}`;
     case 'consult_strategy':
     case 'approve_strategy':
-      return '/strategy';
+    case 'knowledge_empty':
+      return '/knowledge';
+    case 'knowledge_proposal':
+      return '/knowledge#oneriler';
+    case 'knowledge_derive':
+    case 'knowledge_note':
+      return null;
     case 'reconnect_connector':
       return `/connect?capability=${encodeURIComponent(item.capability_id)}`;
     case 'research_due':

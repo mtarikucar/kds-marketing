@@ -6,7 +6,6 @@ import { listAgents } from '@/api/agents';
 import { listKeys } from '@/api/apiKeys';
 import { listBudgetItems } from '@/api/budget';
 import { listCapabilities } from '@/api/capabilities';
-import { getStrategy } from '@/api/strategy';
 import { getPending } from '@/api/work';
 import { useSession } from '@/auth/useSession';
 import { useModules } from '@/lib/modules';
@@ -14,6 +13,7 @@ import { can } from '@/lib/roles';
 import { formatDateTime } from '@/lib/format';
 import { pickNeed, useAgentWakes } from '@/lib/wake';
 import type { NeedKey, WorkItem } from '@/api/types';
+import { useKnowledge } from '@/pages/knowledge/queries';
 import { AgentWakeLine } from './AgentWakeLine';
 
 /** The permission a connection must hold to create ads, by the kind of its ad account (the server's `studio::chain::write_scopes`); `null`: the platform's authorization names none (TikTok). */
@@ -77,7 +77,7 @@ export function ModuleStatusLine({ module, extra }: { module: 'content' | 'socia
   const workspace = session.data?.current_workspace;
   const { candidates, assigned } = useModuleAgents(module);
   const wakes = useAgentWakes();
-  const strategy = useQuery({ queryKey: ['strategy', workspace], queryFn: getStrategy });
+  const knowledge = useKnowledge();
   const budget = useQuery({ queryKey: ['budget-items', workspace], queryFn: listBudgetItems, enabled: module === 'ads' });
   const adAccounts = useQuery({ queryKey: ['capabilities', workspace, 'ads'], queryFn: () => listCapabilities({ group: 'ads' }), enabled: module === 'ads' });
   const work = useQuery({ queryKey: ['work', 'pending', workspace], queryFn: getPending, refetchInterval: 60_000 });
@@ -90,17 +90,14 @@ export function ModuleStatusLine({ module, extra }: { module: 'content' | 'socia
   const speaks = wake && wake.state.state !== 'no_agent' ? wake : null;
   const notice = !speaks && candidates ? agentNotice(t, i18n.language, waiting ?? 0, candidates) : null;
   if (notice) rows.push({ key: 'agent', text: notice, href: !candidates?.length && assigned.length ? `/modules/${module}` : '/agents' });
-  if (strategy.data && !strategy.data.approved) rows.push({ key: 'strategy', text: t('moduleStatus.strategy'), href: '/strategy' });
-  // The posting engine takes a post only for a live hypothesis with an organic cadence above zero
-  // posts a week (`studio::posts::content_types`); a strategy without one posts nothing.
-  if (module === 'social' && strategy.data?.approved && !strategy.data.approved.hypotheses.some(h => h.state !== 'retired' && (h.cadence.organic?.slots_per_week ?? 0) > 0 && h.cadence.organic?.content_types.some(c => c.max_bps > 0))) rows.push({ key: 'no-posting', text: t('moduleStatus.noPosting'), href: '/strategy' });
+  // No card has text (design 2026-11-19 §4.5.1): no frame, so nothing is posted or spent yet.
+  if (knowledge.data?.empty) rows.push({ key: 'knowledge', text: t('moduleStatus.knowledge'), href: '/knowledge' });
   if (module === 'ads') {
-    // The server's own rule (`ads::check_money`): paid is on and the strategy has a paid lane in
-    // the general ad budget's currency. Which channels the strategy names does not matter.
+    // The paid lane is mirrored from Kurallar's ad budget (`ads::check_money` reads it): none, or
+    // zero, and no campaign can spend.
     const general = budget.data?.find(b => b.item.general && b.item.kind === 'ad_budget' && !b.item.retired_at);
-    const currency = general?.item.unit.kind === 'currency' ? general.item.unit.value : undefined;
-    const sections = strategy.data?.approved?.sections;
-    if (sections && !(sections.paid_enabled && sections.budget_frame.lanes.some(l => l.lane === 'paid' && (!currency || l.currency === currency)))) rows.push({ key: 'paid', text: t('moduleStatus.paid'), href: '/strategy' });
+    const rules = knowledge.data?.rules;
+    if (rules && !(rules.ad_cap && rules.ad_cap.amount_minor > 0)) rows.push({ key: 'paid', text: t('moduleStatus.paid'), href: '/knowledge#kurallar' });
     if (budget.data && !general) rows.push({ key: 'budget', text: t('moduleStatus.budget'), href: '/budget' });
     // A connection may read an ad account without being allowed to create ads in it (the
     // server's rule, `studio::chain::capability_access`): every plan is then refused.

@@ -1,0 +1,601 @@
+import { describe, expect, it, vi } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import i18n from '@/i18n/config';
+import tr from '@/i18n/tr.json';
+import type { KnowledgeOut } from '@/api/knowledge';
+import type { MeOut, NeedWake, WakesOut } from '@/api/types';
+import { me, repMe } from '@/test/fixtures';
+import {
+  AREA_ID,
+  CARD_OWN,
+  CARD_PRODUCTS,
+  CARD_WHO,
+  NOTE_OPEN,
+  PRODUCTS_BODY,
+  PROPOSAL_EDIT,
+  PROPOSAL_NEW,
+  PROPOSAL_RULE,
+  emptyKnowledge,
+  knowledge,
+} from '@/test/knowledge';
+import { delayed, mockFetch, renderAt, withStatus, type FetchCall, type FetchRoutes } from '@/test/render';
+import { wakeTime } from '@/lib/wake';
+import { approvalLine } from './knowledge/words';
+import { markAdded } from './knowledge/Proposals';
+import { cardMatches } from './knowledge/Cards';
+
+const k = tr.knowledge;
+const routes = (over: FetchRoutes = {}, data: KnowledgeOut = knowledge): FetchRoutes => ({
+  'GET /api/auth/me': me,
+  'GET /api/knowledge': data,
+  ...over,
+});
+const writes = (calls: FetchCall[], method: string, path: string) => calls.filter((c) => c.method === method && c.path === path);
+const reads = (calls: FetchCall[]) => calls.filter((c) => c.method === 'GET' && c.path === '/api/knowledge').length;
+
+/** The owner without one permission. */
+function without(permission: string): MeOut {
+  return { ...me, memberships: [{ ...me.memberships[0], permissions: me.memberships[0].permissions.filter((p) => p !== permission) }] };
+}
+
+const none: NeedWake = { state: 'no_agent' };
+function wakes(knowledgeWake: NeedWake): WakesOut {
+  return { agents: [], needs: { content: none, materials: none, social: none, ads: none, research: none, inbox: none, knowledge: knowledgeWake } };
+}
+
+/** The page with its read answered: Kurallar is drawn once the knowledge base is read. */
+async function page() {
+  await screen.findByRole('heading', { level: 1, name: k.title });
+  await screen.findByRole('region', { name: k.rules.title });
+}
+
+describe('KnowledgePage', () => {
+  it('shows the cards, Kurallar with the ad, message and approval lines, and Hedefler', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes());
+    renderAt('/knowledge');
+    await page();
+    expect(screen.getByText(k.description)).toBeInTheDocument();
+
+    const rules = screen.getByRole('region', { name: k.rules.title });
+    expect(within(rules).getByText(k.rules.aside)).toBeInTheDocument();
+    expect(within(rules).getByText('Sitede yazmayan fiyat sözü verilmez.')).toBeInTheDocument();
+    expect(within(rules).queryByText('Başka atölyelerin adı anılmaz.')).not.toBeInTheDocument();
+    expect(within(rules).getByText('Reklama ayda en çok ₺5.000.')).toBeInTheDocument();
+    expect(within(rules).getByText('Ücretli mesajlara ayda en çok ₺0.')).toBeInTheDocument();
+    expect(within(rules).getByText("Paylaşımlar onay beklemeden çıkar; Alfa Instagram hariç. TikTok'u sen tamamlarsın.")).toBeInTheDocument();
+    await user.click(within(rules).getByRole('button', { name: i18n.t('knowledge.rules.more', { n: 1 }) }));
+    expect(within(rules).getByText('Başka atölyelerin adı anılmaz.')).toBeInTheDocument();
+
+    const goals = screen.getByRole('region', { name: k.goals.title });
+    expect(within(goals).getByText('Ayda 20 kupa siparişi')).toBeInTheDocument();
+    expect(within(goals).queryByText('3 ayda 2 kahve dükkânı ortaklığı')).not.toBeInTheDocument();
+    expect(within(goals).getByRole('button', { name: i18n.t('knowledge.goals.more', { n: 1 }) })).toBeInTheDocument();
+
+    const grid = screen.getByRole('region', { name: k.cards.title });
+    expect(within(grid).getByText('Biz kimiz')).toBeInTheDocument();
+    expect(within(grid).getByText(PRODUCTS_BODY)).toBeInTheDocument();
+    // A blank seed card shows its own question; an agent's filing reads "Yeni" with what it added.
+    expect(within(grid).getByText(k.cards.placeholders.voice)).toBeInTheDocument();
+    expect(within(grid).getByText(k.cards.newBadge)).toBeInTheDocument();
+    expect(within(grid).getByRole('tooltip', { hidden: true })).toHaveTextContent(i18n.t('knowledge.cards.filed', { summary: 'Ders fiyatı eklendi' }));
+    expect(within(grid).getByRole('link', { name: 'Fiyat listesi' })).toHaveAttribute('href', 'https://alfa.example/fiyatlar');
+    // No internal word on the owner's page (the whole check is `i18n/ownerWords.test.tsx`).
+    expect(screen.getByRole('main').textContent ?? '').not.toMatch(/strateji|hipotez|sürüm/i);
+  });
+
+  it('builds the approval line from the switch, the account list and TikTok', () => {
+    const t = i18n.t.bind(i18n);
+    expect(approvalLine(t, { post_approval: true, post_approval_accounts: [], tiktok_connected: false })).toBe(k.rules.approvalAll);
+    expect(approvalLine(t, { post_approval: false, post_approval_accounts: [], tiktok_connected: false })).toBe(k.rules.approvalNone);
+    expect(approvalLine(t, { post_approval: false, post_approval_accounts: [], tiktok_connected: true })).toBe(`${k.rules.approvalNone} ${k.rules.tiktok}`);
+  });
+
+  it('leaves the message line out while no limit is set, and says when nothing is forbidden yet', async () => {
+    mockFetch(routes({}, { ...knowledge, rules: { ...knowledge.rules, prohibitions: [], message_cap: null, ad_cap: null, post_approval: true } }));
+    renderAt('/knowledge');
+    await page();
+    const rules = screen.getByRole('region', { name: k.rules.title });
+    expect(within(rules).getByText(k.rules.none)).toBeInTheDocument();
+    expect(within(rules).getByText(k.rules.adNone)).toBeInTheDocument();
+    expect(within(rules).queryByText(/Ücretli mesajlara/)).not.toBeInTheDocument();
+    expect(within(rules).getByText(`${k.rules.approvalAll} ${k.rules.tiktok}`)).toBeInTheDocument();
+  });
+
+  it('saves Kurallar whole: a new prohibition, a lowered ad budget, and the accounts taken off the list', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({
+      'PUT /api/knowledge/rules': { ...knowledge.rules, post_approval_accounts: [], stopped_campaigns: 2 },
+    }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    expect(within(dialog).getByText(k.rules.dialog.help)).toBeInTheDocument();
+    // The message field shows while a limit is set.
+    expect(within(dialog).getByLabelText(k.rules.dialog.message)).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: k.rules.dialog.add }));
+    await user.type(within(dialog).getByRole('textbox', { name: i18n.t('knowledge.rules.dialog.item', { n: 4 }) }), 'Teslim tarihi sözü verilmez.');
+    await user.click(within(dialog).getByRole('button', { name: i18n.t('knowledge.rules.dialog.remove', { n: 3 }) }));
+    const ad = within(dialog).getByLabelText(k.rules.dialog.ad);
+    await user.clear(ad);
+    await user.type(ad, '3000');
+    // The switch is off and an account still waits: said, with the way to clear it.
+    expect(within(dialog).getByText(i18n.t('knowledge.rules.dialog.stillWaits', { accounts: 'Alfa Instagram' }))).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: k.rules.dialog.clearAccounts }));
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toEqual({
+      expected_revision: 4,
+      prohibitions: ['Sitede yazmayan fiyat sözü verilmez.', 'Müşteri fotoğrafı yalnızca izinle paylaşılır.', 'Teslim tarihi sözü verilmez.'],
+      ad_budget: { amount_minor: 300000, period: 'monthly' },
+      message_budget: { amount_minor: 0, period: 'monthly' },
+      post_approval: false,
+      post_approval_accounts: [],
+    });
+    expect(await screen.findByText(i18n.t('knowledge.rules.stopped', { n: 2 }))).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('turns the ad budget off with "Reklam yok" and shows the message field only for a metered workspace', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': knowledge.rules }, { ...knowledge, rules: { ...knowledge.rules, message_cap: null, metered: false } }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    expect(within(dialog).queryByLabelText(k.rules.dialog.message)).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('switch', { name: k.rules.dialog.noAds }));
+    expect(within(dialog).getByLabelText(k.rules.dialog.ad)).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({ ad_budget: null, message_budget: null });
+  });
+
+  it('keeps the money fields read-only without budget.manage and sends the ceilings as they are', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'GET /api/auth/me': without('budget.manage'), 'PUT /api/knowledge/rules': knowledge.rules }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    expect(within(dialog).getByText(k.rules.dialog.noBudget)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(k.rules.dialog.ad)).toBeDisabled();
+    expect(within(dialog).getByLabelText(k.rules.dialog.message)).toBeDisabled();
+    await user.click(within(dialog).getByRole('switch', { name: k.rules.dialog.approval }));
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toEqual({
+      expected_revision: 4,
+      prohibitions: knowledge.rules.prohibitions,
+      ad_budget: { amount_minor: 500000, period: 'monthly' },
+      message_budget: { amount_minor: 0, period: 'monthly' },
+      post_approval: true,
+    });
+  });
+
+  it('says a stale Kurallar save changed meanwhile and reads again', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({
+      'PUT /api/knowledge/rules': withStatus(409, { code: 'CONFLICT', message: 'the rules changed', details: { reason: 'rules_changed' } }),
+    }));
+    renderAt('/knowledge');
+    await page();
+    const before = reads(calls);
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    expect(await within(dialog).findByText(k.conflict)).toBeInTheDocument();
+    await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+  });
+
+  it('saves Hedefler as a list', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/goals': { revision: 3, items: [] } }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.goals.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.goals.title });
+    await user.click(within(dialog).getByRole('button', { name: i18n.t('knowledge.goals.dialog.remove', { n: 1 }) }));
+    await user.click(within(dialog).getByRole('button', { name: k.goals.dialog.add }));
+    await user.type(within(dialog).getByRole('textbox', { name: i18n.t('knowledge.goals.dialog.item', { n: 4 }) }), 'Ayda 5 kurumsal sipariş');
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/goals')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/goals')[0].body).toEqual({
+      expected_revision: 2,
+      items: ['Ayda 2 atölye dersi', 'Haftada 3 paylaşım', '3 ayda 2 kahve dükkânı ortaklığı', 'Ayda 5 kurumsal sipariş'],
+    });
+  });
+
+  it('says when nothing is a goal yet', async () => {
+    mockFetch(routes({}, { ...knowledge, goals: { revision: 1, items: [] } }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.goals.title })).getByText(k.goals.none)).toBeInTheDocument();
+  });
+
+  it('creates a card of the owner’s own', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'POST /api/knowledge/cards': { ...knowledge.cards[4], id: 'new-card', title: 'Sık sorulanlar' } }));
+    const { router } = renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.cards.new }));
+    expect(router.state.location.search).toBe('?card=new');
+    const form = screen.getByRole('form', { name: k.cards.newCard });
+    await user.click(within(form).getByRole('button', { name: k.save }));
+    expect(within(form).getByText(k.cards.titleRequired)).toBeInTheDocument();
+    await user.type(within(form).getByLabelText(k.cards.titleField), 'Sık sorulanlar');
+    await user.type(within(form).getByLabelText(k.cards.bodyField), 'Kupalar bulaşık makinesine girer.');
+    await user.click(within(form).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'POST', '/api/knowledge/cards')).toHaveLength(1));
+    expect(writes(calls, 'POST', '/api/knowledge/cards')[0].body).toEqual({ title: 'Sık sorulanlar', body: 'Kupalar bulaşık makinesine girer.', attachments: [] });
+    expect(await screen.findByText(k.saved)).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+  });
+
+  it('edits a card in place, sending only what changed at the revision read', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ [`PATCH /api/knowledge/cards/${CARD_WHO}`]: knowledge.cards[0] }));
+    const { router } = renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) }));
+    expect(router.state.location.search).toBe(`?card=${CARD_WHO}`);
+    const form = screen.getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
+    const body = within(form).getByLabelText(k.cards.bodyField);
+    await user.clear(body);
+    await user.type(body, 'Alfa Atölye: seramik kupalar.');
+    await user.click(within(form).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_WHO}`)).toHaveLength(1));
+    expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_WHO}`)[0].body).toEqual({ expected_revision: 2, body: 'Alfa Atölye: seramik kupalar.' });
+  });
+
+  it('shows a card as it now is when it changed while being edited', async () => {
+    const user = userEvent.setup();
+    const answers = routes({
+      [`PATCH /api/knowledge/cards/${CARD_WHO}`]: withStatus(409, { code: 'CONFLICT', message: 'stale', details: { reason: 'card_changed', revision: 3 } }),
+    });
+    mockFetch(answers);
+    renderAt(`/knowledge?card=${CARD_WHO}`);
+    const form = await screen.findByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
+    const body = within(form).getByLabelText(k.cards.bodyField);
+    await user.clear(body);
+    await user.type(body, 'Benim metnim');
+    answers['GET /api/knowledge'] = {
+      ...knowledge,
+      cards: knowledge.cards.map((c) => (c.id === CARD_WHO ? { ...c, body: 'Ortağın yazdığı metin', revision: 3 } : c)),
+    };
+    await user.click(within(form).getByRole('button', { name: k.save }));
+    expect(await within(form).findByText(k.conflict)).toBeInTheDocument();
+    await waitFor(() => expect(within(form).getByLabelText(k.cards.bodyField)).toHaveValue('Ortağın yazdığı metin'));
+  });
+
+  it('removes a card after asking, and puts it back with "Geri al"', async () => {
+    const user = userEvent.setup();
+    const own = knowledge.cards[4];
+    const calls = mockFetch(routes({ [`POST /api/knowledge/cards/${CARD_OWN}/archive`]: { ...own, revision: 2 } }));
+    renderAt(`/knowledge?card=${CARD_OWN}`);
+    const form = await screen.findByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Kargo' }) });
+    await user.click(within(form).getByRole('button', { name: k.cards.remove }));
+    const confirm = await screen.findByRole('dialog', { name: k.cards.removeTitle });
+    await user.click(within(confirm).getByRole('button', { name: k.cards.remove }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)).toHaveLength(1));
+    expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)[0].body).toEqual({ expected_revision: 1, archived: true });
+    const removed = await screen.findByText(i18n.t('knowledge.cards.removed', { title: 'Kargo' }));
+    await user.click(within(removed).getByRole('button', { name: k.cards.undo }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)).toHaveLength(2));
+    expect(writes(calls, 'POST', `/api/knowledge/cards/${CARD_OWN}/archive`)[1].body).toEqual({ expected_revision: 2, archived: false });
+  });
+
+  it('lists a card’s history in the owner’s words and puts an older text back', async () => {
+    const user = userEvent.setup();
+    const revision = (n: number, body: string, cause: string, by: object) => ({
+      id: `rev-${n}`, subject: 'card', card_id: CARD_PRODUCTS, revision: n, kb_revision: n + 4,
+      content: { key: 'products_prices', title: 'Ürünler ve fiyat', body, attachments: [] }, cause, source_id: null,
+      at: '2026-11-18T09:00:00Z', by,
+    });
+    const calls = mockFetch(routes({
+      [`GET /api/knowledge/cards/${CARD_PRODUCTS}/history`]: {
+        revisions: [
+          revision(3, PRODUCTS_BODY, 'note', { kind: 'agent', connection_id: 'c1', api_key_id: 'k1' }),
+          revision(2, 'El yapımı kupa ₺400.', 'owner', { kind: 'human', user_id: me.user_id }),
+          revision(1, 'Kupa', 'backfill', { kind: 'system', component: 'knowledge_backfill' }),
+        ],
+        next_before: null,
+      },
+      [`PATCH /api/knowledge/cards/${CARD_PRODUCTS}`]: knowledge.cards[1],
+    }));
+    renderAt(`/knowledge?card=${CARD_PRODUCTS}&history=${CARD_PRODUCTS}`);
+    const sheet = await screen.findByRole('dialog', { name: k.history.title });
+    expect(await within(sheet).findByText(/Ajan \(not\)/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/· Sen$/)).toBeInTheDocument();
+    expect(within(sheet).getByText(/İlk kurulum/)).toBeInTheDocument();
+    // The text in force has nothing to go back to; an older one does.
+    expect(within(sheet).getAllByRole('button', { name: k.history.restore })).toHaveLength(2);
+    await user.click(within(sheet).getAllByRole('button', { name: k.history.restore })[0]);
+    await waitFor(() => expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_PRODUCTS}`)).toHaveLength(1));
+    expect(writes(calls, 'PATCH', `/api/knowledge/cards/${CARD_PRODUCTS}`)[0].body).toEqual({
+      expected_revision: 3, title: 'Ürünler ve fiyat', body: 'El yapımı kupa ₺400.', attachments: [],
+    });
+  });
+
+  it('finds cards by their title or text', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes());
+    renderAt('/knowledge');
+    await page();
+    const grid = screen.getByRole('region', { name: k.cards.title });
+    await user.type(within(grid).getByRole('searchbox', { name: k.cards.searchLabel }), 'kargo');
+    expect(within(grid).getByText('Siparişler iki iş gününde kargoya verilir.')).toBeInTheDocument();
+    expect(within(grid).queryByText('Biz kimiz')).not.toBeInTheDocument();
+    await user.type(within(grid).getByRole('searchbox', { name: k.cards.searchLabel }), 'zzz');
+    expect(within(grid).getByText(k.cards.noMatch)).toBeInTheDocument();
+    expect(cardMatches({ title: 'İzmir', body: '' }, 'izmir')).toBe(true);
+  });
+
+  it('adds a note, and lists the notes with what became of each', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'POST /api/knowledge/notes': { ...knowledge.notes[0], id: 'n-new' } }));
+    renderAt('/knowledge');
+    await page();
+    const list = screen.getByRole('list', { name: k.notes.title });
+    expect(within(list).getByText(k.notes.waiting)).toBeInTheDocument();
+    expect(within(list).getByText(i18n.t('knowledge.notes.card', { card: 'Ürünler ve fiyat', summary: 'Ders fiyatı eklendi' }))).toBeInTheDocument();
+    expect(within(list).getByText(i18n.t('knowledge.notes.rule', { line: 'İndirim sözü verilmez.' }), { exact: false })).toBeInTheDocument();
+    expect(within(list).getByText(i18n.t('knowledge.notes.goal', { line: 'Ayda bir atölye dersi' }), { exact: false })).toBeInTheDocument();
+    expect(within(list).getByText(k.notes.post, { exact: false })).toBeInTheDocument();
+    expect(within(list).getByRole('link', { name: k.notes.postLink })).toHaveAttribute('href', `/posts?content=${AREA_ID}`);
+    expect(within(list).getByRole('link', { name: k.rules.title })).toHaveAttribute('href', '#kurallar');
+    expect(within(list).getByRole('link', { name: k.goals.title })).toHaveAttribute('href', '#hedefler');
+    expect(within(list).getByText(k.notes.proposals, { exact: false })).toBeInTheDocument();
+    expect(within(list).getByText(i18n.t('knowledge.notes.dismissed', { reason: "Reklam bütçesini Kurallar'dan sen değiştirirsin." }))).toBeInTheDocument();
+    expect(within(list).getByText(k.notes.withdrawn)).toBeInTheDocument();
+
+    const input = screen.getByRole('textbox', { name: k.composer.label });
+    expect(input).toHaveAttribute('placeholder', k.composer.placeholder);
+    await user.type(input, 'Pazar günleri kapalıyız{Enter}');
+    await waitFor(() => expect(writes(calls, 'POST', '/api/knowledge/notes')).toHaveLength(1));
+    const sent = writes(calls, 'POST', '/api/knowledge/notes')[0].body as { request_key: string; text: string };
+    expect(sent.text).toBe('Pazar günleri kapalıyız');
+    expect(sent.request_key).toMatch(/\S/);
+    expect(Object.keys(sent).sort()).toEqual(['request_key', 'text']);
+    expect(await screen.findByText(k.composer.sent)).toBeInTheDocument();
+    await waitFor(() => expect(input).toHaveValue(''));
+  });
+
+  it('adds a link to a note and refuses one that is not https', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'POST /api/knowledge/notes': knowledge.notes[0] }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.composer.attach }));
+    await user.click(await screen.findByRole('menuitem', { name: k.composer.addLink }));
+    const link = screen.getByRole('textbox', { name: k.composer.linkLabel });
+    await user.type(link, 'http://alfa.example{Enter}');
+    expect(screen.getByText(k.composer.linkInvalid)).toBeInTheDocument();
+    await user.clear(link);
+    await user.type(link, 'https://alfa.example/katalog{Enter}');
+    expect(within(screen.getByRole('list', { name: k.composer.attached })).getByText('https://alfa.example/katalog')).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: k.composer.label }), 'Yeni katalog');
+    await user.click(within(screen.getByRole('region', { name: k.composer.label })).getByRole('button', { name: k.composer.send }));
+    await waitFor(() => expect(writes(calls, 'POST', '/api/knowledge/notes')).toHaveLength(1));
+    expect(writes(calls, 'POST', '/api/knowledge/notes')[0].body).toMatchObject({ text: 'Yeni katalog', links: ['https://alfa.example/katalog'] });
+  });
+
+  it('hides the file choice without the library and says why', async () => {
+    const user = userEvent.setup();
+    mockFetch(routes({ 'GET /api/workspace/modules': { modules: [] } }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.composer.attach }));
+    expect(await screen.findByRole('menuitem', { name: k.composer.addLink })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: k.composer.addFile })).not.toBeInTheDocument();
+    expect(screen.getByText(k.composer.noFiles)).toBeInTheDocument();
+  });
+
+  it('takes an open note back', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ [`POST /api/knowledge/notes/${NOTE_OPEN}/withdraw`]: { ...knowledge.notes[0], status: 'withdrawn' } }));
+    renderAt('/knowledge');
+    await page();
+    const list = screen.getByRole('list', { name: k.notes.title });
+    await user.click(within(list).getByRole('button', { name: k.notes.withdraw }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/notes/${NOTE_OPEN}/withdraw`)).toHaveLength(1));
+    expect(writes(calls, 'POST', `/api/knowledge/notes/${NOTE_OPEN}/withdraw`)[0].body).toEqual({ expected_revision: 1 });
+  });
+
+  it.each([
+    ['none', null, () => k.composer.stops.none],
+    ['asleep', '2026-11-21T09:00:00Z', (at: string) => i18n.t('knowledge.composer.stops.asleep', { time: wakeTime(at, 'tr') })],
+    ['late', '2026-11-19T09:00:00Z', (at: string) => i18n.t('knowledge.composer.stops.late', { time: wakeTime(at, 'tr') })],
+  ] as const)('says before sending what stands before a note is filed (%s), and still sends', async (state, nextAt, text) => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'POST /api/knowledge/notes': knowledge.notes[0] }, { ...knowledge, notes_agent: { state, next_at: nextAt } }));
+    renderAt('/knowledge');
+    await page();
+    expect(screen.getByText(text(nextAt ?? ''), { exact: false })).toBeInTheDocument();
+    if (state === 'none') expect(screen.getByRole('link', { name: k.composer.stops.connect })).toHaveAttribute('href', '/agents');
+    await user.type(screen.getByRole('textbox', { name: k.composer.label }), 'Bir not{Enter}');
+    await waitFor(() => expect(writes(calls, 'POST', '/api/knowledge/notes')).toHaveLength(1));
+    expect(await screen.findByText(k.composer.sentNoAgent)).toBeInTheDocument();
+  });
+
+  it('shows the agent line only while a note is open or a derivation is due', async () => {
+    const schedule: NeedWake = { state: 'schedule', next_expected_at: new Date(Date.now() + 3600_000).toISOString(), interval_minutes: 60, has_address: false, failed_at: null, run_now: null };
+    mockFetch(routes({ 'GET /api/agents/wakes': wakes(schedule) }));
+    renderAt('/knowledge');
+    await page();
+    expect(await screen.findByTestId('agent-wake-line')).toBeInTheDocument();
+  });
+
+  it('has no agent line when nothing waits for an agent', async () => {
+    const schedule: NeedWake = { state: 'schedule', next_expected_at: new Date(Date.now() + 3600_000).toISOString(), interval_minutes: 60, has_address: false, failed_at: null, run_now: null };
+    const calls = mockFetch(routes({ 'GET /api/agents/wakes': wakes(schedule) }, { ...knowledge, notes: knowledge.notes.filter((n) => n.status !== 'open'), frame: { number: 2, derive_due: [] } }));
+    renderAt('/knowledge');
+    await page();
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/agents/wakes')).toBe(true));
+    expect(screen.queryByTestId('agent-wake-line')).not.toBeInTheDocument();
+  });
+
+  it('shows each proposal by its kind, with what a card edit adds, and adds or skips it', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({
+      [`POST /api/knowledge/proposals/${PROPOSAL_NEW}/accept`]: { ...knowledge.proposals[0] },
+      [`POST /api/knowledge/proposals/${PROPOSAL_RULE}/skip`]: { ...knowledge.proposals[2] },
+    }));
+    renderAt('/knowledge');
+    await page();
+    const box = screen.getByRole('region', { name: k.proposals.title });
+    const block = (heading: string) => within(box).getByRole('heading', { name: heading }).closest('li') as HTMLElement;
+    expect(within(block(i18n.t('knowledge.proposals.cardNew', { title: 'Sık sorulanlar' }))).getByText(i18n.t('knowledge.proposals.reason', { reason: 'Müşteriler bunu sık soruyor.' }))).toBeInTheDocument();
+    const edit = block(i18n.t('knowledge.proposals.cardEdit', { card: 'Ürünler ve fiyat' }));
+    expect(edit.querySelector('mark')).toHaveTextContent('Hediye kutusu ₺50.');
+    expect(block(k.proposals.ruleAdd)).toBeInTheDocument();
+    expect(block(k.proposals.goalAdd)).toBeInTheDocument();
+
+    await user.click(within(block(i18n.t('knowledge.proposals.cardNew', { title: 'Sık sorulanlar' }))).getByRole('button', { name: k.proposals.accept }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/proposals/${PROPOSAL_NEW}/accept`)).toHaveLength(1));
+    expect(await screen.findByText(k.proposals.accepted)).toBeInTheDocument();
+    await user.click(within(block(k.proposals.ruleAdd)).getByRole('button', { name: k.proposals.skip }));
+    await waitFor(() => expect(writes(calls, 'POST', `/api/knowledge/proposals/${PROPOSAL_RULE}/skip`)).toHaveLength(1));
+  });
+
+  it('says a proposal no longer holds when its card changed meanwhile', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({
+      [`POST /api/knowledge/proposals/${PROPOSAL_EDIT}/accept`]: withStatus(409, { code: 'CONFLICT', message: 'superseded', details: { reason: 'proposal_superseded' } }),
+    }));
+    renderAt('/knowledge');
+    await page();
+    const before = reads(calls);
+    const box = screen.getByRole('region', { name: k.proposals.title });
+    const edit = within(box).getByRole('heading', { name: i18n.t('knowledge.proposals.cardEdit', { card: 'Ürünler ve fiyat' }) }).closest('li') as HTMLElement;
+    await user.click(within(edit).getByRole('button', { name: k.proposals.accept }));
+    expect(await within(box).findByText(k.proposals.superseded)).toBeInTheDocument();
+    await waitFor(() => expect(reads(calls)).toBeGreaterThan(before));
+  });
+
+  it('marks the words a card edit adds', () => {
+    expect(markAdded('Kupa ₺450.', 'Kupa ₺450. Hediye kutusu ₺50.')).toEqual([
+      { text: 'Kupa ₺450. ', added: false },
+      { text: 'Hediye kutusu ₺50.', added: true },
+    ]);
+    expect(markAdded('', 'Yeni')).toEqual([{ text: 'Yeni', added: true }]);
+  });
+
+  it('says there is no proposal in the mockup’s words', async () => {
+    mockFetch(routes({}, { ...knowledge, proposals: [] }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.proposals.title })).getByText(k.proposals.none)).toBeInTheDocument();
+  });
+
+  it('shows what works, by topic, only with evidence and to a viewer who works on posts', async () => {
+    const overview = (evidence: { id: string; status: string; raw_metrics: Record<string, number | null> }[]) => ({
+      hypotheses: [
+        { id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel', derived_confidence: 0.7 },
+        { id: 'h2', title: 'Sahibin isteği', segment_key: 'owner_request', derived_confidence: 0.9 },
+      ],
+      learned: {
+        arms: [
+          { arm: { id: 'a1', key: { hypothesis_id: 'h1', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence },
+          { arm: { id: 'a2', key: { hypothesis_id: 'h2', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm9', status: 'measured', raw_metrics: {} }] },
+        ],
+        hypotheses: [{ hypothesis_id: 'h1', derived_confidence: 0.7 }],
+      },
+    });
+    mockFetch(routes({ 'GET /api/studio/overview': overview([{ id: 'm1', status: 'measured', raw_metrics: {} }, { id: 'm2', status: 'measured', raw_metrics: {} }]) }));
+    renderAt('/knowledge');
+    await page();
+    const learned = await screen.findByRole('region', { name: k.learned.title });
+    expect(within(learned).getByText('Atölyeden kısa videolar')).toBeInTheDocument();
+    expect(learned).toHaveTextContent(`${i18n.t('knowledge.learned.interest', { level: k.learned.high })} · ${i18n.t('knowledge.learned.measured', { n: 2 })}`);
+    // The owner's own requests are not a topic of the page.
+    expect(within(learned).queryByText('Sahibin isteği')).not.toBeInTheDocument();
+  });
+
+  it('hides "Neler işe yarıyor" without evidence', async () => {
+    const calls = mockFetch(routes({
+      'GET /api/studio/overview': { hypotheses: [{ id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel' }], learned: { arms: [], hypotheses: [] } },
+    }));
+    renderAt('/knowledge');
+    await page();
+    await waitFor(() => expect(calls.some((c) => c.path === '/api/studio/overview')).toBe(true));
+    expect(screen.queryByRole('region', { name: k.learned.title })).not.toBeInTheDocument();
+  });
+
+  it('lets a member read but not change: no composer, no edit, proposals without buttons, and says so', async () => {
+    const calls = mockFetch(routes({ 'GET /api/auth/me': repMe }));
+    renderAt('/knowledge');
+    await page();
+    expect(screen.getByText(k.readOnly)).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: k.composer.label })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: k.rules.editLabel })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: k.goals.editLabel })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: k.cards.new })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).not.toBeInTheDocument();
+    const box = screen.getByRole('region', { name: k.proposals.title });
+    expect(within(box).queryByRole('button', { name: k.proposals.accept })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: k.notes.title })).queryByRole('button', { name: k.notes.withdraw })).not.toBeInTheDocument();
+    // Nobody without a work permission reads the learned results.
+    expect(calls.some((c) => c.path === '/api/studio/overview')).toBe(false);
+  });
+
+  it('opens "Biz kimiz" for an empty knowledge base, under the callout that says to start there', async () => {
+    mockFetch(routes({}, emptyKnowledge));
+    renderAt('/knowledge');
+    await page();
+    expect(screen.getByText(k.empty.callout)).toBeInTheDocument();
+    const form = screen.getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) });
+    expect(within(form).getByLabelText(k.cards.bodyField)).toHaveAttribute('placeholder', k.cards.placeholders.who_we_are);
+    expect(within(form).getByLabelText(k.cards.bodyField)).toHaveFocus();
+    expect(screen.getByText(k.rules.adNone)).toBeInTheDocument();
+    expect(screen.getByText(k.composer.stops.none)).toBeInTheDocument();
+  });
+
+  it('points an empty knowledge base to the texts waiting as proposals instead', async () => {
+    mockFetch(routes({}, {
+      ...emptyKnowledge,
+      proposals: [{ ...knowledge.proposals[1], card_id: CARD_WHO, proposed_by: { kind: 'system', component: 'knowledge_backfill' }, reason: 'Daha önce yazılmıştı ama uygulanmamıştı.' }],
+    }));
+    renderAt('/knowledge');
+    await page();
+    expect(screen.getByText(k.empty.proposals, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: k.empty.toProposals })).toHaveAttribute('href', '#oneriler');
+    expect(screen.queryByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).not.toBeInTheDocument();
+  });
+
+  it('shows the boxes’ and cards’ skeletons while loading', async () => {
+    mockFetch(routes({ 'GET /api/knowledge': delayed(10_000, knowledge) }));
+    renderAt('/knowledge');
+    await screen.findByRole('heading', { level: 1, name: k.title });
+    expect(screen.getByRole('status', { name: tr.common.loading })).toBeInTheDocument();
+  });
+
+  it('says the knowledge base could not be read, and reads again on "Yeniden dene"', async () => {
+    const user = userEvent.setup();
+    const answers = routes({ 'GET /api/knowledge': withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }) });
+    mockFetch(answers);
+    renderAt('/knowledge');
+    expect(await screen.findByText(k.loadError)).toBeInTheDocument();
+    answers['GET /api/knowledge'] = knowledge;
+    await user.click(screen.getByRole('button', { name: tr.common.retry }));
+    expect(await screen.findByRole('region', { name: k.rules.title })).toBeInTheDocument();
+  });
+
+  it('opens a card as a full-screen sheet on a phone', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'matchMedia').mockImplementation((query: string) => ({
+      matches: query.includes('max-width: 639px'), media: query, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    }) as unknown as MediaQueryList);
+    mockFetch(routes());
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) }));
+    const sheet = await screen.findByRole('dialog', { name: 'Biz kimiz' });
+    expect(within(sheet).getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).toBeInTheDocument();
+  });
+});

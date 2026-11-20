@@ -72,10 +72,10 @@
     "endConfirm": "The ad campaign is paused at the ad platform and cannot be started again. What it has not spent is free again in the general ad budget.",
     "errors": {
       "no_general_ad_budget": "First set a general ad budget on the Budget page.",
-      "no_paid_lane": "The approved strategy has no paid channel in the general ad budget’s currency. Add one to the strategy first.",
+      "no_paid_lane": "The rules set no ad budget.",
       "spend_stopped": "Ad spending is stopped. It can be turned on again on the Budget page.",
       "above_general_budget": "The ad campaign budget exceeds what is left of the general ad budget. Left: {{amount}}.",
-      "above_strategy_cap": "The ad campaign budget exceeds the strategy’s paid channel limit. Left: {{amount}}.",
+      "above_strategy_cap": "The ad campaign budget exceeds the ad budget in the rules. Left: {{amount}}.",
       "above_account_cap": "The ad campaign budget exceeds the ad account’s spending limit. Left: {{amount}}.",
       "already_built": "The ad campaign is built at the ad platform; its budget and end date can no longer change. End it and open another.",
       "stopped_by_budget": "The budget stopped this ad campaign; it goes on by itself when the budget allows it.",
@@ -83,7 +83,9 @@
       "not_stopped": "This ad campaign is not stopped.",
       "not_a_proposal": "This ad campaign is not a proposal awaiting approval.",
       "duration_not_supported": "The platform of the ad account you chose does not run an ad campaign of this length: at least {{hours}} hours, at most {{days}} days.",
-      "proposal_expired": "This proposal expired without approval."
+      "proposal_expired": "This proposal expired without approval.",
+      "above_rules_cap": "The ad campaign budget exceeds the ad budget in the rules. Left: {{amount}}.",
+      "rulesLink": "Change it in the rules"
     },
     "notes": {
       "plan_refused": "The agent’s plan was turned down three times; the ad campaign waits for a person.",
@@ -222,14 +224,15 @@
     "noSuitableAccount": "No suitable account yet.",
     "blocked": {
       "material_removed": "A file of this version was deleted. Ask for a revision with a new file.",
-      "no_approved_strategy": "No strategy is approved; nothing can be planned. It goes on by itself once a strategy is approved.",
+      "no_approved_strategy": "The knowledge base is empty; no post can be planned. It goes on by itself once you write in it.",
       "no_connected_account": "No social account is connected and working. Connect one or renew its connection.",
       "account_paused": "Posting is paused on the accounts that could take it. Resume one and the agent picks a time.",
       "its_account_unavailable": "The account this version was made for cannot take a post now.",
       "format_not_supported": "None of the connected accounts takes this format.",
       "media_not_accepted": "This version's files do not suit the account's platform (TikTok, for one, takes only video). Ask for a revision with a fitting file.",
-      "channel_not_in_strategy": "The approved strategy has not chosen this account's channel. It goes on by itself once the channel is added.",
-      "hypothesis_does_not_post": "The approved strategy has no hypothesis that posts on this account's channel. It goes on by itself once one is added."
+      "hypothesis_does_not_post": "No topic posts on this account right now; it goes on by itself once the agents update the topics.",
+      "knowledge_empty": "The knowledge base is empty; no post can be planned. It goes on by itself once you write in it.",
+      "braked": "All posting is stopped; it goes on by itself once you resume."
     },
     "metrics": {
       "followers": "Followers",
@@ -256,7 +259,6 @@
     "noPiece": "This post’s text and visuals are not ready yet.",
     "missingPost": "This post is not in the lists",
     "missingVersion": "This version no longer waits for a time: it was given one, or its content changed.",
-    "fixStrategy": "Open the strategy",
     "fixPaused": "Open the paused account",
     "onAccount": "To {{account}}",
     "scheduleAtSuggestion": "Give the time: {{at}}",
@@ -357,7 +359,8 @@
       "stale": "The settings changed meanwhile; the current values are shown. Make your change again."
     },
     "needsScreen": "Every post waits for the TikTok screen",
-    "fixContent": "Open the content"
+    "fixContent": "Open the content",
+    "fixKnowledge": "Go to the knowledge base"
   },
   "contentAreas": {
     "existing": "Earlier work and sources",
@@ -432,11 +435,10 @@
     "label": "Module status",
     "noAgent": "{{n}} items wait for an agent; no connected agent can work in this module.",
     "overdue": "{{n}} items wait for an agent; an agent last checked in at {{time}}.",
-    "strategy": "No approved strategy; preparation can continue, but publishing and spending wait.",
-    "paid": "The strategy does not allow ad spending; campaigns are waiting.",
-    "noPosting": "No hypothesis of the approved strategy posts; posts are waiting. If no posting cadence was ever written, submitting the strategy again completes it.",
+    "paid": "The rules set no ad budget.",
     "budget": "No ad budget has been set in Budget; campaigns are waiting.",
-    "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen."
+    "adScope": "The connected ad account may not create ads (it lacks ads_management); campaigns cannot be built. Reconnect the account and allow that permission on the consent screen.",
+    "knowledge": "The knowledge base is empty: the agents cannot prepare posts."
   },
   "modulePages": {
     "social": "Social media",
@@ -444,7 +446,7 @@
     "specialDays": "Special days",
     "settings": "Settings",
     "pauseSocial": "Pause publishing",
-    "paidUnavailable": "Advertising needs a connected ad account and an approved strategy that includes paid advertising."
+    "paidUnavailable": "Ads need a connected ad account and an ad budget in the rules."
   },
   "app": {
     "name": "Jeeta",
@@ -466,7 +468,8 @@
     "actions": "Actions",
     "none": "—",
     "loadError": "Could not load. Please try again.",
-    "refreshFailed": "Could not refresh: showing what was read last."
+    "refreshFailed": "Could not refresh: showing what was read last.",
+    "remove": "Remove"
   },
   "kit": {
     "close": "Close",
@@ -497,7 +500,6 @@
     "roles": "Roles",
     "agents": "Agents",
     "ledger": "Ledger",
-    "strategy": "Strategy",
     "capabilities": "Abilities & connections",
     "budget": "Budget",
     "inbox": "Inbox",
@@ -508,7 +510,8 @@
     "outreach": "Campaigns",
     "workGroup": "Customer work",
     "growthGroup": "Planning",
-    "workspaceGroup": "Workspace"
+    "workspaceGroup": "Workspace",
+    "knowledge": "Knowledge base"
   },
   "shell": {
     "workspace": "Workspace",
@@ -674,7 +677,7 @@
     "NOT_FOUND": "We could not find that.",
     "CONFLICT": "This conflicts with the current state.",
     "VALIDATION": "Some of the details are not valid.",
-    "STRATEGY_REQUIRED": "This needs an approved strategy first.",
+    "STRATEGY_REQUIRED": "The agents do not know you yet. Write a few lines in the knowledge base first.",
     "MODULE_NOT_INSTALLED": "This module is not installed in this workspace.",
     "CAPABILITY_REQUIRED": "This module needs its capability connected first.",
     "WORKSPACE_INACTIVE": "The workspace is not active.",
@@ -704,7 +707,9 @@
     "accountMismatch": "The account you signed in with does not reach this capability's account.",
     "providerRefused": "The provider refused the request.",
     "accountTaken": "Another capability of the same kind already holds this account.",
-    "upstreamRetryAfter": "The provider is not answering right now. Try again in about {{seconds}} seconds."
+    "upstreamRetryAfter": "The provider is not answering right now. Try again in about {{seconds}} seconds.",
+    "noPaidLane": "The rules set no ad budget.",
+    "aboveRulesCap": "It exceeds the ad budget in the rules."
   },
   "login": {
     "title": "Sign in",
@@ -743,23 +748,6 @@
     "status": "Status",
     "myRole": "Your role",
     "myPermissions": "Your permissions",
-    "strategy": {
-      "title": "Waiting for a strategy",
-      "body": "Work with your agent to define your audience, goals, and approach. Review the draft before it takes effect.",
-      "start": "Start the consultation",
-      "open": "Open the strategy",
-      "draftTitle": "A strategy draft is being worked out",
-      "draftBody": "Gaps to close before the draft can be submitted: {{count}}.",
-      "noGaps": "No gaps: the draft can be submitted.",
-      "moreGaps": "and {{count}} more",
-      "submittedTitle": "A strategy draft awaits approval",
-      "submittedWait": "It takes effect once an owner or a manager approves it.",
-      "approve": "Approve",
-      "approvedTitle": "The strategy is in force",
-      "approvedBody": "Version {{number}} in effect",
-      "hypotheses": "{{count}} active hypotheses",
-      "label": "Strategy"
-    },
     "inactive": {
       "pending_payment": "Your workspace opens once the payment is confirmed and the activation code is entered.",
       "active": "Your workspace is active.",
@@ -788,8 +776,8 @@
       "ads_campaign_held": "An ad campaign needs your help.",
       "title": "Pending work",
       "empty": "Nothing is pending.",
-      "consult_strategy": "Work out the strategy in the consultation, or continue the open draft.",
-      "approve_strategy": "Review and approve the submitted strategy draft.",
+      "consult_strategy": "The agents do not know you yet: write a few lines in the knowledge base.",
+      "approve_strategy": "Something waits for you in the knowledge base.",
       "verify_capability": "{{name}} awaits verification.",
       "verify_capability_stale": "The verification of {{name}} has lapsed; verify it again.",
       "declare_first_capability": "Declare the first capability the workspace can act through.",
@@ -827,7 +815,11 @@
       "studio_material_production": "Image production is waiting for an agent",
       "content_area": "Production area queued",
       "content_material_request": "Captures needed for a production area",
-      "content_area_held": "A production area needs your attention"
+      "content_area_held": "A production area needs your attention",
+      "knowledge_empty": "The agents do not know you yet: the knowledge base is empty.",
+      "knowledge_proposal": "A suggestion of the agent waits for you in the knowledge base.",
+      "knowledge_note": "A note waits for an agent to add it to the knowledge base.",
+      "knowledge_derive": "A change in the knowledge base waits for an agent."
     },
     "workspaceDetails": "Workspace details & permissions",
     "continueWorking": "Continue working",
@@ -918,10 +910,10 @@
       "visits": "The agent comes {{phrase}}; next at {{time}}.",
       "visitsLate": "The agent comes {{phrase}}; it was expected at {{at}} and is late.",
       "neverCame": "The agent has not come yet.",
-      "runNowIntro": "To have it start now:",
+      "runNowIntro": "To start it now:",
       "runNow": "Run now",
       "runAfter": "You can run it after {{at}}.",
-      "noAddress": "To have it start at once, add a wake address on the <page>agents page</page>.",
+      "noAddress": "To start it at once, add a wake address on the <page>agents page</page>.",
       "refused": "The agent’s wake address was refused; reconnect it on the <page>agents page</page>.",
       "rateLimited": "The agent was just called; you can try again after {{at}}."
     }
@@ -1035,184 +1027,6 @@
     "title": "Page not found",
     "body": "The page you are looking for does not exist or has moved.",
     "home": "Back to home"
-  },
-  "strategy": {
-    "title": "Strategy",
-    "description": "The workspace's approved strategy and the draft being worked out",
-    "tabs": {
-      "approved": "Approved",
-      "draft": "Draft"
-    },
-    "versions": "Versions",
-    "versionsTitle": "Strategy versions",
-    "versionsDescription": "Every version, newest first.",
-    "versionsEmpty": "No versions yet.",
-    "versionLabel": "Version {{number}}",
-    "createdAt": "Created",
-    "submittedAt": "Submitted",
-    "approvedAt": "Approved",
-    "archivedAt": "Archived",
-    "approvedBy": "Approved by",
-    "noApproved": "No approved strategy.",
-    "noApprovedBody": "A draft shows here once it is approved.",
-    "noDraft": "No open draft.",
-    "noDraftBody": "Your agent runs the consultation over MCP: it asks its questions, records your answers and its assumptions, writes the sections and the hypotheses, and submits the draft for your approval. You can also start the consultation here.",
-    "start": "Start the consultation",
-    "started": "The consultation has started.",
-    "submittedBadge": "Submitted",
-    "notSubmittedBadge": "Not submitted",
-    "gapsTitle": "Gaps to close before approval",
-    "noGaps": "No gaps: the draft can be submitted.",
-    "submit": "Submit for approval",
-    "submitted": "The draft is submitted for approval.",
-    "submitRefused": "The draft could not be submitted. Gaps:",
-    "approve": "Approve",
-    "approved": "The strategy is approved and in force.",
-    "approveOwnerOnly": "Only an owner or a manager can approve.",
-    "approveNeedsSubmit": "The draft must be submitted before it can be approved.",
-    "approveTitle": "Approve version {{number}}",
-    "approveBody": "Once approved, this version is the strategy in force and replaces the one before it. Go through what it rests on first.",
-    "approveAssumptions": "Assumptions made without your answer",
-    "approveNoAssumptions": "No assumption was recorded: every point rests on your answers.",
-    "approveHypotheses": "Hypotheses it puts in force: {{count}}.",
-    "approveLoading": "Loading the draft…",
-    "approveNotSubmitted": "The draft was reopened meanwhile; it cannot be approved until it is submitted again.",
-    "approveNoDraft": "No draft awaits approval any more; it may have been approved or closed meanwhile.",
-    "approveConfirm": "Approve this version",
-    "archive": "Archive",
-    "archiveTitle": "Archive the approved strategy",
-    "archiveBody": "Version {{number}} will be archived and no strategy will be in force; work that needs a strategy stops until a new version is approved.",
-    "archiveConfirmLabel": "Type the version number to confirm: {{number}}",
-    "archived": "The strategy is archived.",
-    "sections": {
-      "identity": "Identity",
-      "audience": "Audience",
-      "channels": "Channels",
-      "goals": "Goals",
-      "budget_frame": "Budget frame",
-      "prohibitions": "Prohibitions",
-      "cadence": "Cadence",
-      "paid_enabled": "Paid channels",
-      "hypotheses": "Hypotheses"
-    },
-    "fields": {
-      "product": "Product",
-      "voice": "Voice",
-      "positioning": "Positioning",
-      "usp": "What sets it apart",
-      "segmentKey": "Key",
-      "segmentKeyHint": "2–32 characters: lowercase letters, digits and underscores.",
-      "segmentName": "Name",
-      "segmentDescription": "Description",
-      "channel": "Channel",
-      "rationale": "Rationale",
-      "group": "Capability group",
-      "noGroup": "No group",
-      "objective": "Objective",
-      "kpis": "KPIs",
-      "kpiName": "KPI",
-      "kpiTarget": "Target",
-      "lane": "Lane",
-      "period": "Period",
-      "cap": "Cap",
-      "currency": "Currency",
-      "prohibition": "Prohibition",
-      "perWeek": "Posts per week",
-      "channelMix": "Channel mix",
-      "sharePct": "Share (%)",
-      "mixTotal": "Total: {{total}}%",
-      "paidEnabled": "Paid channels are used"
-    },
-    "lanes": {
-      "organic": "Organic",
-      "paid": "Paid"
-    },
-    "periods": {
-      "weekly": "Weekly",
-      "monthly": "Monthly"
-    },
-    "anyChannel": "Any channel",
-    "channelPlaceholder": "Choose a channel",
-    "add": "Add",
-    "remove": "Remove",
-    "empty": "Not written yet.",
-    "sectionSaved": "Section saved.",
-    "on": "On",
-    "off": "Off",
-    "hypotheses": {
-      "columns": {
-        "title": "Title",
-        "segment": "Segment",
-        "angle": "Angle",
-        "channel": "Channel",
-        "metric": "Metric",
-        "confidence": "Confidence",
-        "state": "State"
-      },
-      "states": {
-        "kept": "Kept",
-        "retired": "Retired",
-        "added": "Added"
-      },
-      "empty": "No hypotheses yet.",
-      "edit": "Edit the hypotheses",
-      "add": "Add a hypothesis",
-      "retire": "Retire",
-      "restore": "Restore",
-      "saved": "Hypotheses saved.",
-      "segmentPlaceholder": "Choose a segment",
-      "confidenceHint": "Between 0 and 1."
-    },
-    "consultation": {
-      "title": "Consultation log",
-      "description": "Questions, answers, assumptions and notes, newest first.",
-      "empty": "No entries.",
-      "loadMore": "Load more",
-      "kinds": {
-        "question": "Question",
-        "answer": "Answer",
-        "assumption": "Assumption",
-        "section_draft": "Section draft",
-        "note": "Note",
-        "submitted": "Submitted",
-        "approved": "Approved",
-        "archived": "Archived"
-      },
-      "add": "Add a note",
-      "kind": "Kind",
-      "section": "Section",
-      "noSection": "No section",
-      "text": "Text",
-      "recorded": "Entry recorded."
-    },
-    "gaps": {
-      "product": "Name the product in the Identity section.",
-      "segment": "Add at least one segment to the Audience section.",
-      "segmentKey": "Audience: segment {{n}} has an invalid or duplicate key.",
-      "channel": "Add at least one channel to the Channels section.",
-      "channelUnavailable": "Channels: channel {{n}} has no connected account. Connect it or choose “Any channel”.",
-      "budget": "Check the budget frame: every lane needs a kind, cap and currency; paid channels need a paid lane.",
-      "cadence": "Cadence: the channel mix may only use the strategy's channels, each once, with shares summing to 100.",
-      "hypothesis": "Add at least one active hypothesis.",
-      "hypothesisField": "Hypothesis {{n}}: the {{field}} is required.",
-      "hypothesisFields": {
-        "title": "title",
-        "angle": "angle",
-        "metric": "metric"
-      },
-      "hypothesisSegment": "Hypothesis {{n}}: its segment is not in the audience.",
-      "hypothesisChannel": "Hypothesis {{n}}: its channel is not one of the strategy's channels, or it has no connected account.",
-      "hypothesisDuplicate": "Hypothesis {{n}} is listed more than once."
-    },
-    "channelHint": "A strategy cannot be approved with a channel that has no connected account. Choose “Any channel” until accounts are connected.",
-    "workbench": {
-      "sections": "Brief sections",
-      "gapCount": "{{count}} gaps",
-      "fixFirstGap": "Resolve the first gap",
-      "viewFirstGap": "Go to the first gap",
-      "brand": "Brand and audience",
-      "plan": "Goals and plan"
-    }
   },
   "capabilities": {
     "title": "Capabilities",
@@ -1860,7 +1674,12 @@
     },
     "workbench": {
       "scrollHint": "Scroll the table horizontally to see the other columns."
-    }
+    },
+    "rulesChange": "Change it in the rules",
+    "aboveRulesCeiling": "It exceeds the ad limit in the rules. At most {{amount}}.",
+    "rulesCeilingMonthly": "Ad limit in the rules: {{amount}} a month",
+    "rulesCeilingWeekly": "Ad limit in the rules: {{amount}} a week",
+    "rulesNone": "The rules set no ad budget."
   },
   "inbox": {
     "erasure": {
@@ -1999,7 +1818,7 @@
       "edited_after_merge": "The keeper changed, so this merge cannot be undone.",
       "two_open_journeys": "Resolve one of the two open journeys before merging.",
       "workspace_inactive": "Sending is blocked because the workspace is inactive.",
-      "strategy_required": "Sending requires an approved strategy.",
+      "strategy_required": "The agents do not know you yet. Write a few lines in the knowledge base first.",
       "unsupported_reply_channel": "This channel does not support replies.",
       "connector_unavailable": "The channel connector is currently unavailable."
     },
@@ -2261,8 +2080,6 @@
     "connectorReconnect": "The account's permissions do not read its results: reconnect it to measure.",
     "connectorUnavailable": "Connector unsupported or needs reconnection.",
     "braked": "Brake engaged; new execution held.",
-    "noStrategy": "Approve a strategy first.",
-    "openStrategy": "Open strategy",
     "failed": "The operation failed. Check its details.",
     "stale": "The record changed. Refresh and try again.",
     "inactive": "The workspace is inactive.",
@@ -2465,7 +2282,9 @@
       "todayHint": "Approvals, scheduled content, and blockers that need your attention.",
       "viewPlan": "View the weekly plan",
       "sections": "Studio view"
-    }
+    },
+    "noKnowledge": "The agents do not know you yet. Write a few lines in the knowledge base first.",
+    "openKnowledge": "Go to the knowledge base"
   },
   "billing": {
     "title": "Payment and activation",
@@ -2500,10 +2319,6 @@
     "description": "Progress is read from the current workspace state",
     "paymentConfirmed": "Payment confirmed",
     "paymentPending": "Awaiting payment confirmation",
-    "strategy": "Strategy",
-    "strategyApproved": "Strategy approved",
-    "strategyPending": "Awaiting strategy approval",
-    "prepare": "Prepare strategy",
     "teamKeys": "Team and agents",
     "activationRequired": "Activate the workspace before managing team, keys and connections. Payment confirmation alone does not open access.",
     "members": "Team members: {{count}}",
@@ -2521,7 +2336,11 @@
     "agents": "View agents",
     "suspendedChecks": "This step is not checked while the workspace is suspended.",
     "connectorAfterActivation": "Once the workspace is active you can connect your Meta, NetGSM, X, TikTok, LinkedIn and email accounts.",
-    "teamOwnerHelp": "Ask a workspace manager to manage team invitations and API keys."
+    "teamOwnerHelp": "Ask a workspace manager to manage team invitations and API keys.",
+    "knowledge": "Knowledge base",
+    "knowledgeDone": "The knowledge base has text; the agents use it.",
+    "knowledgePending": "Write a few lines in the knowledge base so the agents know you.",
+    "knowledgeOpen": "Open the knowledge base"
   },
   "providerSetup": {
     "title": "Provider application setup",
@@ -2548,12 +2367,12 @@
   "gates": {
     "moduleBody": "This section’s module was removed. Existing records are retained.",
     "moduleLink": "View module",
-    "strategyBody": "This opens once a strategy is approved. Prepare and approve it with your agent or on the strategy page.",
-    "strategyLink": "Go to strategy",
     "inactiveBody": "This opens once the workspace is active.",
     "inactiveLink": "Payment and activation",
     "capabilityBody": "This section opens once the capability it needs is connected and verified.",
-    "capabilityLink": "Connect a capability"
+    "capabilityLink": "Connect a capability",
+    "knowledgeBody": "The agents do not know you yet. Write a few lines in the knowledge base first.",
+    "knowledgeLink": "Go to the knowledge base"
   },
   "people": {
     "title": "People",
@@ -2670,7 +2489,7 @@
     },
     "refusals": {
       "workspace_inactive": "the workspace is not active",
-      "strategy_required": "an approved strategy is required",
+      "strategy_required": "the knowledge base is empty",
       "bridge_offline": "the PBX is not connected and verified",
       "bridge_busy": "this extension is in another call",
       "person_erased": "the person was erased",
@@ -3508,9 +3327,9 @@
       "promoted": "The prospect is in the inbox: record the objection on the person.",
       "erase_the_person": "The prospect is in the inbox: erase the person instead.",
       "human_only": "Only a team member can do this.",
-      "prospecting_off": "The approved strategy has no ideal customer profile; add one first.",
+      "prospecting_off": "The agent has not yet worked out whom to look for from the “Kimi arıyoruz” card.",
       "task_closed": "The task is closed.",
-      "standing_task": "A strategy task cannot be closed here; change the profile in the strategy.",
+      "standing_task": "This task comes from the knowledge base; change the “Kimi arıyoruz” card.",
       "not_scorable": "This prospect cannot be scored.",
       "invalid_transition": "This cannot be done to a record in this state.",
       "daily_cap": "Today's limit is reached.",
@@ -3680,7 +3499,7 @@
       "bounce_rate": "too many bounced emails",
       "complaints": "complaints came in",
       "mailbox_down": "the mailbox cannot be reached",
-      "strategy_changed": "the strategy changed"
+      "strategy_changed": "the knowledge base changed"
     },
     "enrollmentStatus": {
       "active": "Running",
@@ -4045,7 +3864,6 @@
     "billingSuspended": "The workspace is suspended. Check with the operator before reporting another payment",
     "setupNextTitle": "Next step",
     "setupNextPayment": "Check payment and activation",
-    "setupNextStrategy": "Prepare the strategy your team will follow",
     "setupNextConnection": "Connect the first account you will use",
     "setupNextAgent": "Check the agent connection",
     "setupDone": "The core setup is ready. Open your pending work",
@@ -4069,7 +3887,8 @@
     "accountDetails": "Account identity and permission details",
     "selectedAccounts": "{{count}} accounts selected. Confirmation opens the Capabilities page",
     "setupSuspended": "Setup is paused",
-    "setupPermission": "Check setup progress with your workspace administrator"
+    "setupPermission": "Check setup progress with your workspace administrator",
+    "setupNextKnowledge": "Fill in the knowledge base"
   },
   "projects": {
     "tab": "Production spaces",
@@ -4545,9 +4364,6 @@
     "reconnect": "The {{platform}} connection cannot post right now.",
     "paused": "Posting is paused on this account.",
     "braked": "All posting is stopped.",
-    "no_approved_strategy": "No strategy is approved; nothing is planned.",
-    "channel_not_in_strategy": "The strategy has not chosen the {{platform}} channel; nothing goes out here.",
-    "no_hypothesis": "The strategy has no hypothesis for {{platform}}: the agent plans nothing here on its own. The contents you ask for still go out.",
     "media_missing_video": "{{platform}} takes only video; this content has no video.",
     "media_missing": "This content has no file {{platform}} takes ({{format}}).",
     "only_format_video": "{{platform}} takes only video.",
@@ -4557,12 +4373,9 @@
     "act": {
       "reconnect": "Reconnect",
       "resume": "Resume",
-      "approve_strategy": "Go to the strategy",
-      "prepare_strategy": "Prepare the strategy draft",
-      "prepared": "The draft is ready.",
-      "toApprove": "Approve it",
       "add_video": "Add a video",
-      "add_material": "Add a file"
+      "add_material": "Add a file",
+      "open_knowledge": "Go to the knowledge base"
     },
     "note": {
       "asked": "You are asked when it is time.",
@@ -4573,6 +4386,199 @@
     "connectedTitle": "Account connected",
     "connectedBody": "What to know before anything is posted on it:",
     "continue": "Continue",
-    "accountLabel": "Before posting on {{account}}"
+    "accountLabel": "Before posting on {{account}}",
+    "knowledge_empty": "The knowledge base is empty; the agents plan no post."
+  },
+  "knowledge": {
+    "title": "Knowledge base",
+    "description": "Everything the agents know about your business. Whatever you write, they use in every job.",
+    "loadError": "The knowledge base could not be loaded.",
+    "readOnly": "Only managers change the knowledge base.",
+    "conflict": "This changed while you were editing; showing it as it is now.",
+    "saved": "Saved. The agents use this from now on.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "less": "Show less",
+    "empty": {
+      "callout": "A few cards are enough for the agents to know you. Start with “Biz kimiz”.",
+      "proposals": "What you wrote before waits for you in the agent’s suggestions; the agents start the moment you add it.",
+      "toProposals": "Go to the suggestions"
+    },
+    "composer": {
+      "label": "Tell the agents something",
+      "placeholder": "E.g. New Year orders close on 15 December",
+      "attach": "File or link",
+      "addFile": "Add a file",
+      "addLink": "Add a link",
+      "noFiles": "Adding a file needs a content, social media or ads module.",
+      "linkLabel": "Link",
+      "linkAdd": "Add",
+      "linkInvalid": "A link starts with https://.",
+      "attached": "Attached",
+      "remove": "Remove {{name}}",
+      "uploading": "uploading",
+      "uploadFailed": "Could not upload · Try again",
+      "uploadFailedNamed": "{{name}} could not be uploaded.",
+      "fileRefused": "{{name}} cannot be added: it must be an image, an MP4 or a PDF.",
+      "tooMany": "At most 10 files and 10 links.",
+      "send": "Add",
+      "sent": "Passed to the agent. You will see it here once it is added to the right card.",
+      "sentNoAgent": "Note saved; it is added once an agent is connected.",
+      "stops": {
+        "none": "No connected agent adds notes to the cards.",
+        "connect": "Connect an agent",
+        "asleep": "The agent adds your note on its next run ({{time}}).",
+        "asleepUnknown": "The agent adds your note on its next run.",
+        "late": "The agent was expected at {{time}}; it is late.",
+        "lateUnknown": "The agent was expected; it is late."
+      }
+    },
+    "notes": {
+      "title": "Latest notes",
+      "waiting": "Waiting",
+      "withdraw": "Take back",
+      "withdrawn": "Taken back",
+      "closed": "This note is no longer open.",
+      "aCard": "A card",
+      "card": "Added to {{card}}: {{summary}}",
+      "cardPlain": "Added to {{card}}",
+      "cards": "Added to {{card}}: {{summary}}",
+      "cardsPlain": "Added to {{card}}",
+      "rule": "Added to the rules: “{{line}}”",
+      "goal": "Added to the goals: “{{line}}”",
+      "post": "Opened as a post",
+      "postLink": "See it in Posts",
+      "proposals": "Added to the suggestions",
+      "filed": "Added",
+      "dismissed": "Not added: {{reason}}",
+      "dismissedPlain": "Not added"
+    },
+    "rules": {
+      "title": "Rules",
+      "aside": "the agents never cross them",
+      "editLabel": "Edit the rules",
+      "none": "No prohibition yet.",
+      "more": "{{n}} more rules",
+      "adMonthly": "Ads: at most {{amount}} a month.",
+      "adWeekly": "Ads: at most {{amount}} a week.",
+      "adNone": "No ads.",
+      "messageMonthly": "Paid messages: at most {{amount}} a month.",
+      "messageWeekly": "Paid messages: at most {{amount}} a week.",
+      "approvalAll": "Every post waits for your approval before it goes out.",
+      "approvalNone": "Posts go out on time without waiting for approval.",
+      "approvalExcept": "Posts go out without waiting for approval, except on {{accounts}}.",
+      "tiktok": "You finish TikTok yourself.",
+      "stopped": "{{n}} ad campaigns stopped as they reached the new limit.",
+      "dialog": {
+        "help": "The system enforces the budget, the message limit and approval; the agents read the prohibitions in every job and follow them.",
+        "prohibitions": "Prohibitions",
+        "item": "Prohibition {{n}}",
+        "add": "Add a prohibition",
+        "remove": "Remove prohibition {{n}}",
+        "money": "Budget",
+        "ad": "Ads",
+        "message": "Paid messages (SMS and the like)",
+        "period": "Period",
+        "monthly": "a month",
+        "weekly": "a week",
+        "atMost": "at most",
+        "noAds": "No ads",
+        "noLimit": "No limit",
+        "noBudget": "You have no budget permission.",
+        "amountInvalid": "Enter a valid amount.",
+        "approval": "Every post waits for my approval before it goes out",
+        "stillWaits": "Posts on {{accounts}} still wait for your approval.",
+        "clearAccounts": "Turn it off for them too",
+        "approvalAll": "Every post waits for your approval; turn it off in the rules first."
+      }
+    },
+    "goals": {
+      "title": "Goals",
+      "editLabel": "Edit the goals",
+      "none": "No goal yet.",
+      "more": "{{n}} more goals",
+      "dialog": {
+        "help": "The agents work towards these goals in every job.",
+        "item": "Goal {{n}}",
+        "add": "Add a goal",
+        "remove": "Remove goal {{n}}"
+      }
+    },
+    "cards": {
+      "title": "What the agents know",
+      "search": "Search",
+      "searchLabel": "Search the knowledge",
+      "noMatch": "No card matches your search.",
+      "new": "New card",
+      "newCard": "New card",
+      "newBadge": "New",
+      "filed": "The agent added: {{summary}}",
+      "editLabel": "Edit the card {{title}}",
+      "titleField": "Title",
+      "bodyField": "Text",
+      "titleRequired": "A card needs a title.",
+      "attachments": "Attachments",
+      "file": "File",
+      "removeAttachment": "Remove the attachment {{name}}",
+      "tooManyAttachments": "A card takes at most 10 attachments.",
+      "history": "History",
+      "remove": "Remove",
+      "removeTitle": "Remove this card?",
+      "removed": "“{{title}}” was removed.",
+      "undo": "Undo",
+      "archived": "This card was removed.",
+      "tooMany": "At most 50 cards; remove one first.",
+      "placeholders": {
+        "who_we_are": "What do you do, for whom, and what sets you apart?",
+        "products_prices": "What do you sell, at what price, and what is included?",
+        "voice": "How do you speak? Warm or formal? Do you have a slogan?",
+        "customers": "Who buys from you? Who is your priority customer?",
+        "post_ideas": "Which topics work? What would you like to show?",
+        "who_we_seek": "Which businesses do you want to reach? Sector, city, size.",
+        "accounts_channels": "What do you use each account for?",
+        "references": "Customers and projects you can name, with their permission.",
+        "own": "Write what the agents should know."
+      }
+    },
+    "history": {
+      "title": "History",
+      "empty": "No change yet.",
+      "restore": "Go back to this",
+      "restored": "The card is back to that version of its text.",
+      "more": "Show older ones",
+      "you": "You",
+      "member": "Team member",
+      "note": "Agent (note)",
+      "proposal": "Agent’s suggestion",
+      "seed": "First setup",
+      "resync": "From the previous page",
+      "system": "System",
+      "agent": "Agent",
+      "removedState": "Removed"
+    },
+    "proposals": {
+      "title": "The agent’s suggestions",
+      "none": "When the agent learns something new while working (a question customers keep asking, a topic that works), it suggests it here; you add it or skip it. No suggestion right now.",
+      "cardNew": "New card: {{title}}",
+      "cardEdit": "An addition to “{{card}}”",
+      "ruleAdd": "New rule",
+      "goalAdd": "New goal",
+      "reason": "Why: {{reason}}",
+      "whole": "See all of it",
+      "accept": "Add",
+      "skip": "Skip",
+      "accepted": "Added. The agents use this from now on.",
+      "superseded": "This suggestion no longer applies; the card changed meanwhile.",
+      "expired": "This suggestion has expired and can no longer be added."
+    },
+    "learned": {
+      "title": "What works",
+      "interest": "Interest: {{level}}",
+      "high": "high",
+      "medium": "medium",
+      "low": "low",
+      "measured": "{{n}} posts measured"
+    }
   }
 }

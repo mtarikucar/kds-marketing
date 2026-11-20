@@ -53,17 +53,17 @@ describe('modular agent center', () => {
     const at = new Date().toISOString();
     mockFetch(answers({
       'GET /api/work/pending': { strategy: 'missing', agent: { last_seen_at: null, interval_minutes: 60, overdue: false },
-        items: [{ kind: 'approve_strategy', priority: 1, hint: '' }] },
+        items: [{ kind: 'knowledge_proposal', proposal_id: 'p1', priority: 3, hint: '' }] },
       'GET /api/ledger': [{ id: 7, entry: { workspace_id: me.current_workspace, at, actor: { kind: 'human', user_id: me.user_id },
-        action: 'strategy.start_consultation', subject: null, payload: null, strategy_version_id: null } }],
+        action: 'strategy.knowledge_changed', subject: null, payload: null, strategy_version_id: null } }],
     }));
     renderAt('/');
     const feed = await screen.findByRole('region', { name: /İşler ve onaylar/ });
     const pending = await within(feed).findByRole('list', { name: 'Bekleyen' });
-    expect(within(pending).getByRole('link', { name: 'Aç' })).toHaveAttribute('href', '/strategy');
+    expect(within(pending).getByRole('link', { name: 'Aç' })).toHaveAttribute('href', '/knowledge#oneriler');
     const log = await within(feed).findByRole('list', { name: 'Günlük' });
-    expect(log).toHaveTextContent('Sen strateji istişaresini başlattı');
-    expect(log).toHaveTextContent('Strateji');
+    expect(log).toHaveTextContent('Sen bilgi bankasını güncelledi');
+    expect(log).toHaveTextContent('Bilgi bankası');
     expect(pending.compareDocumentPosition(log) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

@@ -35,18 +35,17 @@ export function refusalText(t: TFunction, error: unknown): string {
   return known ? t(`socialAccounts.refusal.${known}`) : code;
 }
 
-/** Where a blocked version is fixed: the strategy, the connections, the paused account, or its content. */
-type FixLabel = 'socialAccounts.fixStrategy' | 'socialAccounts.connect' | 'socialAccounts.fixPaused' | 'socialAccounts.fixContent';
+/** Where a blocked version is fixed: the knowledge base, the connections, the paused account, or its content. */
+type FixLabel = 'socialAccounts.fixKnowledge' | 'socialAccounts.connect' | 'socialAccounts.fixPaused' | 'socialAccounts.fixContent';
 function fixOf(reason: string | undefined, accounts: api.SocialAccount[], projectId: string): { to: string; label: FixLabel } | null {
   switch (reason) {
     // Its files do not fit or one was deleted: the content asks for a revision with a new one.
     case 'media_not_accepted':
     case 'material_removed':
       return { to: contentHref({ view: 'all', content: projectId }), label: 'socialAccounts.fixContent' };
+    case 'knowledge_empty':
     case 'no_approved_strategy':
-    case 'channel_not_in_strategy':
-    case 'hypothesis_does_not_post':
-      return { to: '/strategy', label: 'socialAccounts.fixStrategy' };
+      return { to: '/knowledge', label: 'socialAccounts.fixKnowledge' };
     case 'no_connected_account':
     case 'its_account_unavailable':
     case 'format_not_supported':

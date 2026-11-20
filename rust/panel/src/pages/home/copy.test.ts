@@ -11,6 +11,11 @@ const USE_CASES = resolve(__dirname, '../../../../crates/jt_app/src');
 const NAME_TABLES = new Set(['catalog.rs', 'gate.rs']);
 /** Actions the server names at run time (`inbox.<job name>`, `usecases/jobs.rs`). */
 const ASSEMBLED = new Set(['inbox.response_sla', 'inbox.snooze_wake']);
+/**
+ * Actions of the knowledge base's server step that is built beside this page (design 2026-11-19
+ * §7.4, PR 2: the frame apply). Remove a name once the server writes it.
+ */
+const COMING = new Set(['strategy.frame_applied']);
 
 function rustSources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -30,7 +35,7 @@ describe('the home log’s wording of ledger actions', () => {
   it('words only actions the server names', () => {
     const source = rustSources(USE_CASES).join('\n');
     const codes = [...new Set(actionCodes.tr.map(code => code.split(':')[0]))];
-    expect(codes.filter(code => !ASSEMBLED.has(code) && !source.includes(`"${code}"`))).toEqual([]);
+    expect(codes.filter(code => !ASSEMBLED.has(code) && !COMING.has(code) && !source.includes(`"${code}"`))).toEqual([]);
   });
 
   it('words a send result by how it ended', () => {

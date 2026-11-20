@@ -14,7 +14,7 @@ import type { HomeCopy } from './copy';
 
 type Tab = 'all' | 'pending' | 'log';
 /** Kinds where a person decides, shown as approvals. */
-const APPROVALS = new Set<WorkItem['kind']>(['ads_campaign_proposal', 'approve_strategy', 'campaign_approval', 'consult_strategy', 'studio_approval']);
+const APPROVALS = new Set<WorkItem['kind']>(['ads_campaign_proposal', 'approve_strategy', 'campaign_approval', 'consult_strategy', 'knowledge_empty', 'knowledge_proposal', 'studio_approval']);
 
 interface Props {
   copy: HomeCopy;

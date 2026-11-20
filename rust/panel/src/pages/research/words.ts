@@ -11,7 +11,7 @@ export function taskName(copy: TaskCopy, task: ResearchTask, segments: ReadonlyM
   const segment = task.brief.segment_key ? segments.get(task.brief.segment_key) : undefined;
   if (task.kind.type === 'standing' && segment) return segment;
   const sought = soughtText(copy, task.brief.sectors, 2);
-  return sought || copy(task.kind.type === 'standing' ? 'fromStrategy' : 'oneOff');
+  return sought || copy(task.kind.type === 'standing' ? 'fromKnowledge' : 'oneOff');
 }
 
 /** The first `shown` of `items`, then how many more. */

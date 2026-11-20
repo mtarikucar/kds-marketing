@@ -3,7 +3,8 @@ import { screen, waitFor } from '@testing-library/react';
 import { contentFetch } from '@/test/content';
 import { renderAt } from '@/test/render';
 import { legacyModules } from '@/test/modules';
-import { agents, strategyWithDraft, budgetItems } from '@/test/fixtures';
+import { agents, budgetItems } from '@/test/fixtures';
+import { emptyKnowledge, knowledge } from '@/test/knowledge';
 
 it.each([
   ['no connections', [], [], '2 iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.', '/agents'],
@@ -16,15 +17,15 @@ it.each([
   expect(await screen.findByRole('link', { name: text }, { timeout: 5000 })).toHaveAttribute('href', href);
 });
 
-it('explains a missing approved strategy', async () => {
-  contentFetch({ answers: { 'GET /api/strategy': { approved: null, draft: null, gaps: [] } } });
+it('says an empty knowledge base: nothing is posted or spent until a card has text', async () => {
+  contentFetch({ answers: { 'GET /api/knowledge': emptyKnowledge } });
   renderAt('/social');
-  expect(await screen.findByRole('link', { name: 'Onaylı strateji yok; hazırlık yapılır, paylaşım ve harcama bekler.' })).toHaveAttribute('href', '/strategy');
+  expect(await screen.findByRole('link', { name: 'Bilgi bankası boş: ajanlar paylaşım hazırlayamaz.' }, { timeout: 5000 })).toHaveAttribute('href', '/knowledge');
 });
-it('explains missing paid strategy and ad budget only in ads', async () => {
-  contentFetch({ answers: { 'GET /api/budget/items': [] } });
+it('explains a missing ad budget in Kurallar and in Bütçe only in ads', async () => {
+  contentFetch({ answers: { 'GET /api/budget/items': [], 'GET /api/knowledge': { ...knowledge, rules: { ...knowledge.rules, ad_cap: null } } } });
   renderAt('/ads');
-  expect(await screen.findByRole('link', { name: 'Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.' })).toHaveAttribute('href', '/strategy');
+  expect(await screen.findByRole('link', { name: "Kurallar'da reklam bütçesi yok." }, { timeout: 5000 })).toHaveAttribute('href', '/knowledge#kurallar');
   expect(await screen.findByRole('link', { name: "Bütçe’de reklam bütçesi yok; kampanyalar bekler." })).toHaveAttribute('href', '/budget');
 });
 it('says when the connected ad account may only be read, and nothing when it may create ads', async () => {
@@ -41,7 +42,7 @@ it('says when the connected ad account may only be read, and nothing when it may
   expect(screen.queryByRole('link', { name: text })).not.toBeInTheDocument();
 });
 it('renders nothing when all is well, including an unassigned connected agent', async () => {
-  const calls = contentFetch({ answers: { 'GET /api/budget/items': budgetItems.map(b => ({ ...b, item: { ...b.item, general: b.item.kind === 'ad_budget' } })), 'GET /api/strategy': { ...strategyWithDraft, approved: { ...strategyWithDraft.approved, sections: { ...strategyWithDraft.approved!.sections, paid_enabled: true, budget_frame: { lanes: [{ lane: 'paid', period: 'monthly', cap_minor: 1_000_000, currency: 'TRY' }] } } } } } });
+  const calls = contentFetch({ answers: { 'GET /api/budget/items': budgetItems.map(b => ({ ...b, item: { ...b.item, general: b.item.kind === 'ad_budget' } })) } });
   const { client } = renderAt('/ads');
   await waitFor(() => expect(client.isFetching()).toBe(0));
   await waitFor(() => expect(calls.some(c => c.path === '/api/budget/items')).toBe(true));
@@ -58,32 +59,26 @@ it('does not treat a revoked assigned key as an available agent', async () => {
   expect(await screen.findByRole('link', { name: '1 iş ajanı bekliyor; bu modülde çalışabilecek bağlı bir ajan yok.' })).toHaveAttribute('href', '/modules/content');
 });
 
-it('follows the server’s paid rule: a paid lane in the ad budget’s currency, whatever the channels', async () => {
+it('follows the server’s paid rule: Kurallar’s ad budget above zero, whatever the frame says', async () => {
   const general = budgetItems.map(b => ({ ...b, item: { ...b.item, general: b.item.kind === 'ad_budget' } }));
-  const strategy = (currency: string) => ({ ...strategyWithDraft, approved: { ...strategyWithDraft.approved, sections: { ...strategyWithDraft.approved!.sections, paid_enabled: true, channels: [{ channel: 'any', rationale: '', group_id: null }], budget_frame: { lanes: [{ lane: 'paid', period: 'monthly', cap_minor: 1_000_000, currency }] } } } });
-  contentFetch({ answers: { 'GET /api/budget/items': general, 'GET /api/strategy': strategy('USD') } });
+  const withCap = (amount_minor: number) => ({ ...knowledge, rules: { ...knowledge.rules, ad_cap: { amount_minor, period: 'monthly' as const, currency: 'TRY' } } });
+  contentFetch({ answers: { 'GET /api/budget/items': general, 'GET /api/knowledge': withCap(0) } });
   const first = renderAt('/ads');
-  expect(await screen.findByRole('link', { name: 'Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.' })).toBeVisible();
+  expect(await screen.findByRole('link', { name: "Kurallar'da reklam bütçesi yok." }, { timeout: 5000 })).toBeVisible();
   first.unmount();
-  const calls = contentFetch({ answers: { 'GET /api/budget/items': general, 'GET /api/strategy': strategy('TRY') } });
+  const calls = contentFetch({ answers: { 'GET /api/budget/items': general, 'GET /api/knowledge': withCap(1_000_000) } });
   const { client } = renderAt('/ads');
   await waitFor(() => expect(client.isFetching()).toBe(0));
-  await waitFor(() => expect(calls.some(c => c.path === '/api/budget/items')).toBe(true));
-  expect(screen.queryByRole('link', { name: 'Strateji reklam harcamasına izin vermiyor; kampanyalar bekler.' })).not.toBeInTheDocument();
+  await waitFor(() => expect(calls.some(c => c.path === '/api/knowledge')).toBe(true));
+  expect(screen.queryByRole('link', { name: "Kurallar'da reklam bütçesi yok." })).not.toBeInTheDocument();
 });
 
-it('says in social when no hypothesis of the strategy posts, and nothing when one does', async () => {
-  contentFetch({});
-  const first = renderAt('/social');
-  const row = await screen.findByRole('link', { name: /hiçbir hipotez paylaşım yapmıyor/ });
-  expect(row).toHaveAttribute('href', '/strategy');
-  first.unmount();
-  const posting = { ...strategyWithDraft, approved: { ...strategyWithDraft.approved, hypotheses: strategyWithDraft.approved!.hypotheses.map(h => ({ ...h, cadence: { organic: { slots_per_week: 3, exploration_bps: 0, content_types: [{ key: 'general', min_bps: 0, max_bps: 10000 }] } } })) } };
-  const calls = contentFetch({ answers: { 'GET /api/strategy': posting } });
+it('has no line of its own in social for the frame’s topics: the knowledge base says what is empty', async () => {
+  const calls = contentFetch({});
   const { client } = renderAt('/social');
+  await waitFor(() => expect(calls.some(c => c.path === '/api/knowledge')).toBe(true));
   await waitFor(() => expect(client.isFetching()).toBe(0));
-  await waitFor(() => expect(calls.some(c => c.path === '/api/strategy')).toBe(true));
-  expect(screen.queryByRole('link', { name: /hiçbir hipotez paylaşım yapmıyor/ })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /hipotez|Bilgi bankası boş/ })).not.toBeInTheDocument();
 });
 
 // Sixteen keys that last checked in weeks ago (figurunica, 2026-11-18): one line at most, and

@@ -20,8 +20,9 @@ export const PHONE_REFRESH_MS = 15_000;
 
 /**
  * After a capability, group or connection change: the lists, the connectors' health, the pending
- * work (verify / connect / reconnect items) and the strategy (its channel and group gaps read the
- * capabilities).
+ * work (verify / connect / reconnect items), the knowledge base (Kurallar's approval line names
+ * accounts and says whether TikTok is connected, design 2026-11-19 §4.11) and the compatibility
+ * read of the frame.
  */
 export async function invalidateCapabilities(queryClient: QueryClient): Promise<void> {
   await Promise.all([
@@ -29,6 +30,7 @@ export async function invalidateCapabilities(queryClient: QueryClient): Promise<
     queryClient.invalidateQueries({ queryKey: CONNECTOR_HEALTH_KEY }),
     queryClient.invalidateQueries({ queryKey: GROUPS_KEY }),
     queryClient.invalidateQueries({ queryKey: ['work', 'pending'] }),
+    queryClient.invalidateQueries({ queryKey: ['knowledge'] }),
     queryClient.invalidateQueries({ queryKey: ['strategy'] }),
   ]);
 }

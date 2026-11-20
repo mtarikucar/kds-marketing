@@ -15,7 +15,7 @@ import { WAKE_META, everyPhrase, putWakes, useNeedWake, useNow, wakeTime, wakeTi
 const agentsLink = <Link className="underline underline-offset-4" to="/agents" />;
 
 /** "Şimdi çalıştır": wakes the agent now; disabled, with the time, while the rate limits hold it back. */
-function RunNowButton({ run, now }: { run: RunNow; now: number }) {
+export function RunNowButton({ run, now }: { run: RunNow; now: number }) {
   const { t, i18n } = useTranslation();
   const client = useQueryClient();
   const session = useSession();
