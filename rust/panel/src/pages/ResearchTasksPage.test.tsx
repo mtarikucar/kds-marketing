@@ -6,6 +6,9 @@ import { approvedVersion, sections } from '@/test/fixtures';
 import { AGENT_CONNECTION_ID, LOADED, REP_ID, agentsList, leadsMe, leadsRep, row, task, taskId, team } from '@/test/leads';
 import { delayed, mockFetch, renderAt, withStatus, type FetchCall } from '@/test/render';
 import { TASK_COPY } from './research/copy';
+import { knowledge } from '@/test/knowledge';
+
+const SEEK_CARD = '0190a000-0000-7000-8000-0000000000c9';
 
 // The research tasks page as the owner reads it: one row per task, counted chips, rows that open
 // in place, a person's claim said for what it is, closing and a two-field composer.
@@ -72,6 +75,7 @@ function answers(extra: Record<string, unknown> = {}, open: ListedTask[] = OPEN,
     'GET /api/api-keys': keys,
     'GET /api/team': team,
     'GET /api/strategy': strategy,
+    'GET /api/knowledge': { ...knowledge, cards: [{ ...knowledge.cards[3], id: SEEK_CARD }] },
     'GET /api/research/tasks?status=open&limit=200': { items: open, next: null },
     'GET /api/research/tasks?limit=200': { items: [...open, ...closed], next: null },
     [`GET /api/research/tasks/${taskId(1)}`]: { task: bayi, remaining_today: 4, found: 121, prospects: [row(1), row(2, { status: 'new' })] },
@@ -138,7 +142,7 @@ describe('ResearchTasksPage', () => {
     // Every closed status the server has stays reachable, each in words.
     expect(done).toHaveTextContent('Tamamlandı ·');
     expect(canceled).toHaveTextContent('İptal edildi ·');
-    expect(superseded).toHaveTextContent('Strateji değişince kapandı ·');
+    expect(superseded).toHaveTextContent('Bilgi bankası değişince kapandı ·');
     expect(done).not.toHaveTextContent('bugün');
   });
 
@@ -179,8 +183,8 @@ describe('ResearchTasksPage', () => {
     expect(panel.queryByText(/Malatya/)).not.toBeInTheDocument();
     await user.click(panel.getByRole('button', { name: 'Tümünü göster (16)' }));
     expect(panel.getByText(/Malatya/)).toBeInTheDocument();
-    // It comes from the strategy, which is where it changes; there is no close for it.
-    expect(panel.getByRole('link', { name: 'Stratejide değiştir' })).toHaveAttribute('href', '/strategy');
+    // It comes from the knowledge base's "Kimi arıyoruz" card, which is where it changes; there is no close for it.
+    expect(await panel.findByRole('link', { name: 'Bilgi bankasında değiştir' }, LOADED)).toHaveAttribute('href', `/knowledge?card=${SEEK_CARD}`);
     expect(panel.queryByRole('button', { name: 'Görevi kapat' })).not.toBeInTheDocument();
     expect(await panel.findByRole('link', { name: 'Örnek Kafe 1' }, LOADED)).toHaveAttribute('href', expect.stringContaining('/prospects/'));
     expect(panel.getByRole('link', { name: 'Bu görevin 121 adayını havuzda gör' })).toHaveAttribute('href', `/prospects?task=${taskId(1)}`);

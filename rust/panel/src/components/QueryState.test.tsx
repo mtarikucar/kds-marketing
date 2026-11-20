@@ -15,10 +15,10 @@ const failed = (code: string) => ({
 });
 
 describe('QueryState', () => {
-  it('turns a strategy gate into a next step, never a red error with a pointless retry', () => {
+  it('turns the empty knowledge base into a next step, never a red error with a pointless retry', () => {
     render(<MemoryRouter><QueryState query={failed('STRATEGY_REQUIRED')} /></MemoryRouter>);
-    expect(screen.getByText(tr.gates.strategyBody)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: tr.gates.strategyLink })).toHaveAttribute('href', '/strategy');
+    expect(screen.getByText('Ajanlar seni henüz tanımıyor. Önce Bilgi bankasına birkaç satır yaz.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: tr.gates.knowledgeLink })).toHaveAttribute('href', '/knowledge');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: tr.common.retry })).not.toBeInTheDocument();
   });

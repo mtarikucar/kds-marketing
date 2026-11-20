@@ -162,16 +162,21 @@ export interface Stage {
   publications?: PublicationFact[];
   results?: ResultFact[];
 }
-/** Why no account can take a waiting version, as `social.versions_waiting` says it. */
+/**
+ * Why no account can take a waiting version, as `social.versions_waiting` says it
+ * (`knowledge_empty` and `braked` from design 2026-11-19 §3.10.2; `no_approved_strategy` from an
+ * older server).
+ */
 export const BLOCKED_REASONS = [
   'material_removed',
+  'knowledge_empty',
+  'braked',
   'no_approved_strategy',
   'no_connected_account',
   'account_paused',
   'its_account_unavailable',
   'format_not_supported',
   'media_not_accepted',
-  'channel_not_in_strategy',
   'hypothesis_does_not_post',
 ] as const;
 /** A version of the finished package with no planned post yet: it waits for an account and a time. */

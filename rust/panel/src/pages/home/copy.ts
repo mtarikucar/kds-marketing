@@ -64,6 +64,14 @@ const actionsTr: Record<string, string> = {
   'strategy.write_section': 'stratejinin bir bölümünü yazdı', 'strategy.set_hypotheses': 'stratejinin hipotezlerini yazdı',
   'strategy.submit': 'stratejiyi onaya sundu', 'strategy.add_channel': 'stratejiye yeni bir kanal ekleyen taslağı hazırladı', 'strategy.submission_withdrawn': 'onaya sunulan stratejiyi geri çekti',
   'strategy.approve': 'stratejiyi onayladı', 'strategy.archive': 'bir strateji sürümünü arşivledi',
+  // Bilgi bankası (tasarım 2026-11-19); yukarıdakiler eski kayıtlar için kalır.
+  'strategy.knowledge_seeded': 'bilgi bankasını kurdu', 'strategy.knowledge_changed': 'bilgi bankasını güncelledi',
+  'strategy.rules_changed': 'kuralları güncelledi', 'strategy.frame_applied': 'bilgi bankasını uyguladı',
+  'strategy.note_added': 'ajanlara bir not yazdı', 'strategy.note_withdrawn': 'bir notunu geri aldı',
+  'strategy.note_claimed': 'bir notu üstlendi', 'strategy.note_released': 'üstlendiği notu bıraktı',
+  'strategy.note_filed': 'bir notu bilgi bankasına ekledi', 'strategy.note_dismissed': 'bir notu eklemedi, nedenini yazdı',
+  'strategy.proposal_created': 'bilgi bankası için bir öneri yaptı', 'strategy.proposal_accepted': 'bir öneriyi bilgi bankasına ekledi',
+  'strategy.proposal_skipped': 'bir öneriyi geçti',
   // Yetenekler ve bağlı hesaplar
   'capability.declare': 'bir yetenek ekledi', 'capability.verify': 'bir yeteneği doğruladı', 'capability.update': 'bir yeteneği güncelledi',
   'capability.retire': 'bir yeteneği emekliye ayırdı', 'capability.set_policy': 'bir yeteneğin kurallarını değiştirdi',
@@ -265,6 +273,14 @@ const actionsEn: Record<string, string> = {
   'strategy.write_section': 'wrote a section of the strategy', 'strategy.set_hypotheses': 'wrote the hypotheses of the strategy',
   'strategy.submit': 'submitted the strategy for approval', 'strategy.add_channel': 'prepared a strategy draft adding a channel', 'strategy.submission_withdrawn': 'withdrew the submitted strategy',
   'strategy.approve': 'approved the strategy', 'strategy.archive': 'archived a strategy version',
+  // The knowledge base (design 2026-11-19); the lines above stay for older entries.
+  'strategy.knowledge_seeded': 'set up the knowledge base', 'strategy.knowledge_changed': 'updated the knowledge base',
+  'strategy.rules_changed': 'updated the rules', 'strategy.frame_applied': 'applied the knowledge base',
+  'strategy.note_added': 'wrote a note to the agents', 'strategy.note_withdrawn': 'took a note back',
+  'strategy.note_claimed': 'took a note', 'strategy.note_released': 'gave a note back',
+  'strategy.note_filed': 'added a note to the knowledge base', 'strategy.note_dismissed': 'did not add a note, and said why',
+  'strategy.proposal_created': 'made a suggestion for the knowledge base', 'strategy.proposal_accepted': 'added a suggestion to the knowledge base',
+  'strategy.proposal_skipped': 'skipped a suggestion',
   // Capabilities and connected accounts
   'capability.declare': 'added a capability', 'capability.verify': 'verified a capability', 'capability.update': 'updated a capability',
   'capability.retire': 'retired a capability', 'capability.set_policy': 'changed the rules of a capability',

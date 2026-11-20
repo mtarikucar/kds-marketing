@@ -9,9 +9,9 @@ export interface AccountDay extends Numbers { day: string }
 export type HumanGate = 'approval' | 'posting_screen';
 /** What a stop is about (`social::ready::StopCode`). */
 export type StopCode =
-  | 'reconnect' | 'paused' | 'braked' | 'no_approved_strategy' | 'channel_not_in_strategy' | 'no_hypothesis'
+  | 'reconnect' | 'paused' | 'braked' | 'knowledge_empty'
   | 'media_missing' | 'only_format' | 'posting_screen' | 'approval' | 'lead';
-export type StopAction = 'reconnect' | 'resume' | 'approve_strategy' | 'prepare_strategy' | 'add_material';
+export type StopAction = 'reconnect' | 'resume' | 'open_knowledge' | 'add_material';
 /** One thing between a request and a post on an account, worked out from the facts now: it goes the moment its cause does. */
 export interface Stop {
   code: StopCode;

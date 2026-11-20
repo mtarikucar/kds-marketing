@@ -13,6 +13,9 @@ it.each([
   ['/roles?role=rep', '/users', '?role=rep'],
   ['/activity?filter=pending', '/', '?filter=pending'],
   ['/ledger?before=e1', '/', '?before=e1'],
+  // The strategy page became Bilgi bankası (design 2026-11-19 §2.11): any query lands on it.
+  ['/strategy', '/knowledge', ''],
+  ['/strategy?version=v1#gaps', '/knowledge', ''],
 ])('redirects %s preserving its query and replacing history', async (from, path, search) => {
   mockFetch(studioAnswers);
   const { router } = renderAt(from);

@@ -191,7 +191,7 @@ function ScheduleForm({
       {!options.length ? (
         <EmptyNote>
           {t('projects.strategyNeeded')}{' '}
-          <Link className="underline underline-offset-4" to="/strategy">
+          <Link className="underline underline-offset-4" to="/knowledge">
             {t('projects.openStrategy')}
           </Link>
         </EmptyNote>

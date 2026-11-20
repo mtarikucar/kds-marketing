@@ -248,7 +248,7 @@ export function DeclareDialog({ open, onOpenChange, initialKind }: { open: boole
               onChange={setSettings}
               makeItem={() => ({ key: '', value: '' })}
               addLabel={t('capabilities.declareDialog.addSetting')}
-              removeLabel={t('strategy.remove')}
+              removeLabel={t('common.remove')}
               renderRow={(item, update) => (
                 <>
                   <Field label={t('capabilities.declareDialog.settingKey')}>
@@ -421,7 +421,7 @@ export function VerifyDialog({ target, onClose }: { target: CapabilityOut | null
           onChange={setRefs}
           makeItem={() => ({ ref: '' })}
           addLabel={t('capabilities.verifyDialog.addRef')}
-          removeLabel={t('strategy.remove')}
+          removeLabel={t('common.remove')}
           renderRow={(item, update) => (
             <Field label={t('capabilities.verifyDialog.ref')} className="sm:col-span-2">
               {(ids) => (

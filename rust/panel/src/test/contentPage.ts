@@ -3,6 +3,7 @@ import { mockFetch, type FetchRoutes } from './render';
 import { studioAnswers } from './studio';
 import { agents, strategyWithDraft } from './fixtures';
 import { material, olay } from './materials';
+import { knowledge } from './knowledge';
 
 // The content page's reads in the server's shapes (`jt_app::usecases::content::views`).
 
@@ -69,6 +70,7 @@ export function contentPageFetch(answers: FetchRoutes = {}, me?: unknown) {
     ...(me ? { 'GET /api/auth/me': me } : {}),
     'GET /api/agents': agents,
     'GET /api/strategy': strategyWithDraft,
+    'GET /api/knowledge': knowledge,
     'GET /api/content/tree': tree(),
     'GET /api/content/areas': { areas: [], next_cursor: null, next_done_before: null },
     ...answers,

@@ -2,7 +2,7 @@ import type { ModulesOut } from '@/api/modules';
 
 export const legacyModules: ModulesOut = {
   modules: [
-    ['inbox', 'Gelen kutusu'], ['strategy', 'Strateji'], ['content', 'İçerik oluşturma'], ['social', 'Sosyal medya yönetimi'], ['ads', 'Reklam yönetimi'], ['materials', 'Materyal kütüphanesi'],
+    ['inbox', 'Gelen kutusu'], ['strategy', 'Bilgi bankası'], ['content', 'İçerik oluşturma'], ['social', 'Sosyal medya yönetimi'], ['ads', 'Reklam yönetimi'], ['materials', 'Materyal kütüphanesi'],
     ['people', 'Kişiler'], ['prospects', 'Aday havuzu'], ['outreach', 'Kampanyalar'], ['calls', 'Aramalar'],
   ].map(([id, name]) => ({
     blueprint: { id, name, description: '', version: '1', requirements: [], workflow: [], builtin: true },

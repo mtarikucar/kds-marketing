@@ -122,7 +122,7 @@ it.each([
   ['no_general_ad_budget', 'Önce Bütçe sayfasında genel reklam bütçesini belirleyin.'],
   [
     'no_paid_lane',
-    'Onaylı stratejide, genel reklam bütçesinin para biriminde bir ücretli kanal yok. Önce stratejiye ekleyin.',
+    "Kurallar'da reklam bütçesi yok.",
   ],
   ['spend_stopped', 'Reklam harcaması durdurulmuş. Bütçe sayfasından yeniden açılabilir.'],
   [
@@ -131,7 +131,11 @@ it.each([
   ],
   [
     'above_strategy_cap',
-    `Reklam kampanyası bütçesi stratejideki ücretli kanal sınırını aşıyor. Kalan: ${formatMoney(1200, 'TRY', 'tr')}.`,
+    `Reklam kampanyası bütçesi Kurallar'daki reklam bütçesini aşıyor. Kalan: ${formatMoney(1200, 'TRY', 'tr')}.`,
+  ],
+  [
+    'above_rules_cap',
+    `Reklam kampanyası bütçesi Kurallar'daki reklam bütçesini aşıyor. Kalan: ${formatMoney(1200, 'TRY', 'tr')}.`,
   ],
   [
     'above_account_cap',
@@ -150,6 +154,10 @@ it.each([
   const dialog = await fillOpening();
   await userEvent.click(within(dialog).getByRole('button', { name: 'Reklam kampanyası aç' }));
   expect(await within(dialog).findByText(message)).toBeVisible();
+  // The ad budget's ceiling is the owner's Kurallar (design 2026-11-19 §4.6.2): said where it changes.
+  const rules = within(dialog).queryByRole('link', { name: "Kurallar'da değiştir" });
+  if (['no_paid_lane', 'above_strategy_cap', 'above_rules_cap'].includes(reason)) expect(rules).toHaveAttribute('href', '/knowledge#kurallar');
+  else expect(rules).not.toBeInTheDocument();
 });
 
 it('loads open pages by cursor, sorts by start time, filters platforms, and reveals closed campaigns', async () => {

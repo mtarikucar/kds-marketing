@@ -11,13 +11,13 @@ import {
   type CapabilityQuery,
 } from './capabilities';
 import { completeOAuth, confirmAssets, probeConnector, reconnectConnector, setCredentials } from './connectors';
-import { archiveVersion, listConsultation, recordEntry, writeSection } from './strategy';
+import { addNote, archiveCard, cardHistory, saveRules } from './knowledge';
 import { getPending, setCheckinInterval } from './work';
 
 const CAP = '0190a000-0000-7000-8000-000000000101';
 const ITEM = '0190a000-0000-7000-8000-000000000060';
 const GROUP = '0190a000-0000-7000-8000-000000000050';
-const VERSION = '0190a000-0000-7000-8000-000000000041';
+const CARD = '0190a000-0000-7000-8000-000000000041';
 
 describe('api wrappers: query parameters', () => {
   it('lists capabilities with the four known filters only', async () => {
@@ -52,25 +52,20 @@ describe('api wrappers: query parameters', () => {
     });
   });
 
-  it('pages the consultation log the same way', async () => {
-    const calls = mockFetch({ [`GET /api/strategy/versions/${VERSION}/consultation`]: [] });
-    await listConsultation(VERSION, { limit: 3, before_at: '2026-10-22T09:00:00Z', before_id: 'e1' });
-    expect(Object.fromEntries(new URLSearchParams(calls[0].search))).toEqual({
-      limit: '3',
-      before_at: '2026-10-22T09:00:00Z',
-      before_id: 'e1',
-    });
+  it("pages a card's history by the revision before, and asks for the first page with none", async () => {
+    const calls = mockFetch({ [`GET /api/knowledge/cards/${CARD}/history`]: { revisions: [], next_before: null } });
+    await cardHistory(CARD);
+    await cardHistory(CARD, 7);
+    expect(calls[0].search).toBe('');
+    expect(Object.fromEntries(new URLSearchParams(calls[1].search))).toEqual({ before: '7' });
   });
 });
 
 describe('api wrappers: bodies and answers', () => {
-  it('archives with the version and the confirmation, and answers as the MCP tool does', async () => {
-    const calls = mockFetch({ 'POST /api/strategy/archive': { version_id: VERSION, archived: true } });
-    await expect(archiveVersion({ version_id: VERSION, confirm: true })).resolves.toEqual({
-      version_id: VERSION,
-      archived: true,
-    });
-    expect(calls[0].body).toEqual({ version_id: VERSION, confirm: true });
+  it('removes a card at the revision it was read, as a panel write', async () => {
+    const calls = mockFetch({ [`POST /api/knowledge/cards/${CARD}/archive`]: { id: CARD, revision: 4 } });
+    await expect(archiveCard(CARD, { expected_revision: 3, archived: true })).resolves.toEqual({ id: CARD, revision: 4 });
+    expect(calls[0].body).toEqual({ expected_revision: 3, archived: true });
     expect(calls[0].headers.get('x-requested-with')).toBe('jeeta-panel');
   });
 
@@ -93,15 +88,12 @@ describe('api wrappers: bodies and answers', () => {
     await expect(deleteGroup(GROUP)).resolves.toEqual({ group_id: GROUP, deleted: true });
   });
 
-  it('writes a section as its bare value and leaves out an empty section key', async () => {
-    const calls = mockFetch({
-      'PUT /api/strategy/draft/sections/paid_enabled': {},
-      'POST /api/strategy/consultation/entries': { id: 'e1' },
-    });
-    await writeSection('paid_enabled', true);
-    await recordEntry({ kind: 'note', text: 'kısa not' });
-    expect(calls[0].body).toBe(true);
-    expect(calls[1].body).toEqual({ kind: 'note', text: 'kısa not' });
+  it('saves the rules whole and a note as written, nothing more', async () => {
+    const calls = mockFetch({ 'PUT /api/knowledge/rules': {}, 'POST /api/knowledge/notes': { id: 'n1' } });
+    await saveRules({ expected_revision: 2, prohibitions: ['indirim vaadi yok'], ad_budget: null, message_budget: { amount_minor: 0 }, post_approval: true });
+    await addNote({ request_key: 'k1', text: 'kısa not' });
+    expect(calls[0].body).toEqual({ expected_revision: 2, prohibitions: ['indirim vaadi yok'], ad_budget: null, message_budget: { amount_minor: 0 }, post_approval: true });
+    expect(calls[1].body).toEqual({ request_key: 'k1', text: 'kısa not' });
   });
 
   it('edits with only the fields given, never the ones an edit does not take', async () => {

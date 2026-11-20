@@ -19,7 +19,7 @@ describe('Shell', () => {
     await userEvent.click(within(nav).getByText('Yönetim'));
     for (const label of [
       tr.nav.home,
-      tr.nav.strategy,
+      tr.nav.knowledge,
       tr.nav.capabilities,
       tr.nav.budget,
       tr.nav.users,
@@ -101,7 +101,7 @@ describe('Shell', () => {
     renderAt('/');
     const nav = (await screen.findAllByRole('navigation', { name: tr.nav.label }))[0];
     expect(within(nav).queryByRole('link', { name: tr.nav.inbox })).not.toBeInTheDocument();
-    expect(within(nav).getByRole('link', { name: tr.nav.strategy })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: tr.nav.knowledge })).toBeInTheDocument();
     expect(within(nav).getByRole('link', { name: 'Modül ekle' })).toHaveAttribute('href', '/modules');
     expect(within(nav).queryByRole('link', { name: tr.nav.studio })).not.toBeInTheDocument();
   });
@@ -166,7 +166,7 @@ it('orders core, installed modules including inbox, then management without remo
   expect(within(nav).getAllByRole('link', { name: 'İçerik' })).toHaveLength(1);
   await userEvent.click(within(nav).getByText('Yönetim'));
   expect(within(nav).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([
-    '/', '/strategy', '/inbox', '/content', '/social', '/ads', '/people', '/prospects', '/outreach', '/calls', '/modules',
+    '/', '/knowledge', '/inbox', '/content', '/social', '/ads', '/people', '/prospects', '/outreach', '/calls', '/modules',
     '/budget', '/users', '/capabilities', '/agents',
   ]);
   expect(within(nav).queryByText('İş takibi')).not.toBeInTheDocument();

@@ -98,6 +98,7 @@ export function MoneyInput({
   onChange,
   describedBy,
   required,
+  disabled,
 }: {
   id?: string;
   minor: number | null;
@@ -105,6 +106,7 @@ export function MoneyInput({
   onChange: (minor: number | null) => void;
   describedBy?: string;
   required?: boolean;
+  disabled?: boolean;
 }) {
   const { i18n } = useTranslation();
   const digits = minorDigits(currency);
@@ -123,6 +125,7 @@ export function MoneyInput({
       autoComplete="off"
       lang={i18n.language}
       required={required}
+      disabled={disabled}
       aria-describedby={describedBy}
       aria-invalid={invalid || undefined}
       value={text}

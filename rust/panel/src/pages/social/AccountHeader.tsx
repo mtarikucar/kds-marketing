@@ -137,10 +137,10 @@ export function AccountHeader({
   const locked = account.status !== 'verified';
   const name = `${t(`capabilities.kinds.${account.kind}`)} · ${account.name}`;
   const strays = data?.at_platform?.filter((p) => !p.known) ?? [];
-  // An account that cannot post yet, or on which the agent posts nothing by itself, says what
-  // stands in the way, with the one action for each, right under its name.
+  // An account that cannot post yet says what stands in the way, with the one action for each,
+  // right under its name.
   const stops = data?.account.stops ?? account.stops ?? [];
-  const cannotPostYet = stops.some((s) => s.blocking || s.code === 'no_hypothesis');
+  const cannotPostYet = stops.some((s) => s.blocking);
   return (
     <section aria-label={name} className="min-w-0 space-y-4 rounded-lg border border-border bg-surface p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
