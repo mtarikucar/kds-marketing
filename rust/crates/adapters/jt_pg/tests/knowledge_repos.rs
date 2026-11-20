@@ -241,6 +241,7 @@ fn cancelled_area(ws: WorkspaceId, slot: Option<jt_studio::SlotId>) -> Productio
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        pending_files: vec![],
         olay_id: None,
         steps: vec![],
         start_at: None,

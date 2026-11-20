@@ -211,6 +211,7 @@ fn material(n: u128, binding: Binding) -> Material {
             permission: SharePermission::Shareable,
             by: Some(owner()),
             at: datetime!(2025-01-01 0:00 UTC),
+            rule: None,
         }),
         tags: Tags {
             quality: Some(Quality::Publishable),
@@ -223,6 +224,7 @@ fn material(n: u128, binding: Binding) -> Material {
         revision: 1,
         created_at: datetime!(2025-01-01 0:00 UTC),
         erased_at: None,
+        upload_for: None,
     }
 }
 

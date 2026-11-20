@@ -126,17 +126,21 @@ fn only_kind(format: PostFormat) -> Option<&'static str> {
     kinds.next().is_none().then_some(first)
 }
 
-/// Whether area `p` is a person's request naming `account` (rule R3): a person opened it in
-/// person, and named that account, or, naming no account, a format only that account's platform
-/// takes. An area an agent or the system opened names nothing in this sense.
+/// Whether area `p` is a person's request covering `account` (rule R3; design 2026-11-19
+/// "Paylaşımlar and Bilgi bankası" §3.5): a person opened it in person, and named that account;
+/// or, naming no account, named a format only that account's platform takes; or named neither
+/// (the composer's "Ne paylaşalım?": every connected postable account is the owner's request,
+/// P3). The version's own `capability_id` (the agent's reading of "sadece TikTok") still limits
+/// where it goes. An area an agent or the system opened covers nothing in this sense.
 pub(crate) fn names(p: &ProductionProject, account: &Capability) -> bool {
     p.requested_by.is_some()
         && (p.hints.capability_ids.contains(&account.id)
             || (p.hints.capability_ids.is_empty()
-                && p.hints
-                    .formats
-                    .iter()
-                    .any(|f| only_kind(*f) == Some(account.kind_key.as_str()))))
+                && (p.hints.formats.is_empty()
+                    || p.hints
+                        .formats
+                        .iter()
+                        .any(|f| only_kind(*f) == Some(account.kind_key.as_str())))))
 }
 
 #[cfg(test)]

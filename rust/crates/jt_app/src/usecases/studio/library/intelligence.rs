@@ -68,6 +68,11 @@ pub struct MaterialAnalysisCompleteInput {
     /// person files it.
     #[serde(default)]
     pub filing: Option<MaterialFiling>,
+    /// The agent looked for every face, name, child, client logo and corporate reference and
+    /// marked each in `depicts` (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.4.4, §5.1):
+    /// only then does a file a person attached to a post become shareable by rule.
+    #[serde(default)]
+    pub sensitive_checked: bool,
 }
 
 /// The agent's filing decision for an unfiled material: exactly one of an existing olay, a new
@@ -632,6 +637,11 @@ pub async fn material_analysis_complete(
         Some(f) => Some(file(d, r.as_mut(), ctx, &mut material, f).await?),
         None => None,
     };
+    // A person's file for a post, checked and showing no one: shared by rule (§3.4.4, D5).
+    let by_rule = crate::usecases::content::pending::rule_applies(&material, i.sensitive_checked);
+    if by_rule {
+        material.share = Some(crate::usecases::content::pending::share_by_rule(ctx.now));
+    }
     material.revision = material
         .revision
         .checked_add(1)
@@ -665,6 +675,18 @@ pub async fn material_analysis_complete(
             json!({"revision":material.revision,"labels_count":material.tags.labels.len()}),
         )?)
         .await?;
+    if by_rule {
+        crate::usecases::content::pending::ledger_shared_by_rule(r.as_mut(), ctx, &material)
+            .await?;
+        crate::usecases::content::pending::left(
+            d,
+            r.as_mut(),
+            ctx,
+            &material,
+            crate::usecases::content::pending::Left::Shared,
+        )
+        .await?;
+    }
     if let Some((_, how)) = &filed {
         r.ledger()
             .append(ledger_entry(

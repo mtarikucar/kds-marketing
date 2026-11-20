@@ -22,6 +22,7 @@ fn area(ws: WorkspaceId, start_minutes: i64) -> ProductionProject {
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        pending_files: vec![],
         olay_id: None,
         steps: vec![],
         created_at: FIXED_NOW,

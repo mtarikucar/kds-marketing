@@ -137,6 +137,36 @@ impl ProjectRepo for MemTenant {
         rows.truncate(200);
         Ok(rows)
     }
+    async fn list_live_areas(&mut self) -> Result<Vec<ProductionProject>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .production_projects
+            .iter()
+            .filter(|p| p.workspace_id == self.ws && !p.archived)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|p| std::cmp::Reverse(p.id));
+        Ok(rows)
+    }
+    async fn find_area_by_version(
+        &mut self,
+        version_id: Uuid,
+    ) -> Result<Option<ProductionProject>, AppError> {
+        let mut rows: Vec<_> = self
+            .state()
+            .production_projects
+            .iter()
+            .filter(|p| {
+                p.workspace_id == self.ws
+                    && p.packages
+                        .iter()
+                        .any(|k| k.versions.iter().any(|v| v.id == version_id))
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|p| p.id);
+        Ok(rows.into_iter().next())
+    }
     async fn save_project(
         &mut self,
         mut p: ProductionProject,

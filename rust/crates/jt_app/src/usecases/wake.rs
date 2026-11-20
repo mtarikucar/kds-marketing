@@ -554,6 +554,68 @@ pub(crate) async fn reach(
     })
 }
 
+/// For each of `needs`, how the agents that may take its work (its permission and module, as
+/// [`request`] decides) can be reached at `now` ([`AgentReach`]): one with a usable wake address
+/// is `ok`; else the soonest expected check-in, `late` once it passed; `none` when no agent takes
+/// it. Pure over the agents, the modules and the wake rows, each read once (design 2026-11-19
+/// "Paylaşımlar and Bilgi bankası" §3.2.4 step 9).
+pub(crate) async fn takers(
+    repos: &mut dyn TenantRepos,
+    now: OffsetDateTime,
+    needs: &[Need],
+) -> Result<Vec<AgentReach>, AppError> {
+    let agents = agents_in(repos).await?;
+    let offered = Offered::read(repos).await?;
+    let rows: BTreeMap<ApiKeyId, AgentWakeRow> = repos
+        .agent_connections()
+        .wakes()
+        .await?
+        .into_iter()
+        .map(|r| (r.api_key_id, r))
+        .collect();
+    let fallback = repos
+        .workspace_policy()
+        .get()
+        .await?
+        .agent_checkin_interval_minutes;
+    Ok(needs
+        .iter()
+        .map(|need| {
+            let taking: Vec<&Agent> = agents.iter().filter(|a| a.takes(need, &offered)).collect();
+            if taking.is_empty() {
+                return AgentReach {
+                    state: ReachState::None,
+                    next_at: None,
+                };
+            }
+            if taking
+                .iter()
+                .any(|a| rows.get(&a.key.id).is_some_and(AgentWakeRow::usable))
+            {
+                return AgentReach {
+                    state: ReachState::Ok,
+                    next_at: None,
+                };
+            }
+            let next_at = taking
+                .iter()
+                .filter_map(|a| {
+                    let row = rows.get(&a.key.id);
+                    next_expected(row, a.last_seen_at(), interval_of(row, fallback).0)
+                })
+                .min();
+            AgentReach {
+                state: if next_at.is_some_and(|at| at <= now) {
+                    ReachState::Late
+                } else {
+                    ReachState::Asleep
+                },
+                next_at,
+            }
+        })
+        .collect())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------------------------

@@ -153,6 +153,7 @@ fn post() -> PlannedPost {
         content_type: "bitmis_urun".into(),
         retired: None,
         created_at: now(),
+        acknowledged: None,
     }
 }
 
@@ -336,12 +337,14 @@ fn a_material_changes_when_added_and_when_its_permission_is_set() {
         revision: 1,
         created_at: now(),
         erased_at: None,
+        upload_for: None,
     };
     assert_eq!(material_changed_at(&m), now());
     m.share = Some(ShareDecision {
         permission: SharePermission::Shareable,
         by: Some(by),
         at: now() + Duration::minutes(20),
+        rule: None,
     });
     assert_eq!(material_changed_at(&m), now() + Duration::minutes(20));
 }

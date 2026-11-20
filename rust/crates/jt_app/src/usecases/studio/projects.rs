@@ -598,6 +598,7 @@ pub async fn project_create(
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        pending_files: vec![],
         olay_id: i.olay_id,
         steps: vec![],
         start_at: Some(start_at),
@@ -786,6 +787,10 @@ pub async fn project_materials(
     )
     .await?;
     p.sources.retain(|s| !i.remove.contains(&s.material_id));
+    // `Bu dosya olmadan devam et`: a removed file no longer holds the content (§3.4.4).
+    let had_pending = !p.pending_files.is_empty();
+    p.pending_files.retain(|id| !i.remove.contains(id));
+    let emptied = had_pending && p.pending_files.is_empty();
     for id in i.add {
         let m = material(r.as_mut(), id).await?;
         if p.sources
@@ -812,6 +817,22 @@ pub async fn project_materials(
         return Err(invalid("add", "at most 100 project sources"));
     }
     let p = save(r.as_mut(), ctx, p, "studio.project.materials_changed").await?;
+    if emptied && p.needs_agent(ctx.now) {
+        let capture = p.requests.iter().any(|q| {
+            q.status == RequestStatus::Done && q.material_ids.iter().any(|m| i.remove.contains(m))
+        });
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::CONTENT],
+            if capture {
+                crate::usecases::wake::WakeReason::CaptureAnswered
+            } else {
+                crate::usecases::wake::WakeReason::ContentRequested
+            },
+        )
+        .await?;
+    }
     r.commit().await?;
     Ok(p)
 }

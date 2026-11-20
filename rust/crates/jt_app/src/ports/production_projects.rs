@@ -323,6 +323,14 @@ pub struct ProductionProject {
     pub production_ids: Vec<Uuid>,
     #[serde(default)]
     pub invalidated_production_ids: Vec<Uuid>,
+    /// The files a person attached to this content (the composer, a capture answer) whose share
+    /// is not set yet (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.4.4): while any is
+    /// listed no agent takes the area ([`ProductionProject::needs_agent`]), so nothing is made
+    /// without the person's files and then refused `share_unset`. A file leaves the list when it
+    /// gets its share (by rule or by a person), leaves the sources, or is deleted. Absent on an
+    /// area from before, which waits for nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_files: Vec<MaterialId>,
     #[serde(with = "jt_studio::time_compat")]
     pub created_at: OffsetDateTime,
     #[serde(with = "jt_studio::time_compat")]
@@ -367,9 +375,12 @@ impl ProductionProject {
         }
     }
 
-    /// What `work.checkin` offers an agent: queued, and its start time has come.
+    /// What `work.checkin` offers an agent: queued, its start time has come, and no file a
+    /// person attached still waits for its share ([`ProductionProject::pending_files`]).
     pub fn needs_agent(&self, now: OffsetDateTime) -> bool {
-        self.state(now) == AreaState::Queued && self.starts_at() <= now
+        self.state(now) == AreaState::Queued
+            && self.starts_at() <= now
+            && self.pending_files.is_empty()
     }
 
     /// The versions of the current package that no planned post was made of, while the area is
@@ -541,6 +552,48 @@ pub trait ProjectRepo: Send + Sync {
     /// Finished areas whose current package holds a version no planned post was made of, oldest
     /// delivery first, then id, at most 200: what waits for a time (design §7.2).
     async fn list_areas_waiting(&mut self) -> Result<Vec<ProductionProject>, AppError>;
+    /// Every area not archived, whole documents, newest first, with no cap (design 2026-11-19
+    /// "Paylaşımlar and Bilgi bankası" §3.9): the read of `content.posts`. One read in the
+    /// database; the default pages through [`Self::list_projects`].
+    async fn list_live_areas(&mut self) -> Result<Vec<ProductionProject>, AppError> {
+        let mut out: Vec<ProductionProject> = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self.list_projects(false, before, None).await?;
+            let more = page.len() > 100;
+            out.extend(page.into_iter().take(100));
+            if !more {
+                return Ok(out);
+            }
+            before = out.last().map(|p| p.id);
+        }
+    }
+    /// The area, archived or not, one of whose packages holds the version `version_id`; `None`
+    /// when no area does. One read in the database; the default scans every area.
+    async fn find_area_by_version(
+        &mut self,
+        version_id: Uuid,
+    ) -> Result<Option<ProductionProject>, AppError> {
+        for archived in [false, true] {
+            let mut before = None;
+            loop {
+                let page = self.list_projects(archived, before, None).await?;
+                let more = page.len() > 100;
+                if let Some(p) = page.iter().take(100).find(|p| {
+                    p.packages
+                        .iter()
+                        .any(|k| k.versions.iter().any(|v| v.id == version_id))
+                }) {
+                    return Ok(Some(p.clone()));
+                }
+                if !more {
+                    break;
+                }
+                before = page.get(99).map(|p| p.id);
+            }
+        }
+        Ok(None)
+    }
     /// Stores the area at `project.revision`, which must follow `expected` (`None`: a new area).
     /// The answer projection `state` is not stored.
     async fn save_project(

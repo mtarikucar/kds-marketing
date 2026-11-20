@@ -481,10 +481,18 @@ pub(crate) async fn slot_in(
         content: None,
     })
 }
+/// Who may cancel a planned post (design 2026-11-19 "Paylaşımlar and Bilgi bankası" D13): a
+/// person in person with `social.manage` or `content.manage` (the page offers `İptal` per post to
+/// both); an agent (or a key used through a connection) with `social.work`, as before.
+fn cancel_permissions(ctx: &Ctx) -> &'static [Permission] {
+    if super::library::person(ctx).is_some() {
+        &[Permission::SocialManage, Permission::ContentManage]
+    } else {
+        crate::usecases::studio::permissions::for_use_case("studio.slot_cancel")
+    }
+}
 pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<SlotOut, AppError> {
-    ctx.require_any(crate::usecases::studio::permissions::for_use_case(
-        "studio.slot_cancel",
-    ))?;
+    ctx.require_any(cancel_permissions(ctx))?;
     if input.reason.trim().is_empty() || input.reason.len() > 2000 {
         return Err(AppError::validation(
             "cancellation reason required (max 2000 bytes)",
@@ -495,12 +503,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
     // §7.3): cancelled here and still going out there would be the worst of both.
     {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
-        gated(
-            r.as_mut(),
-            ctx,
-            crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
-        )
-        .await?;
+        gated(r.as_mut(), ctx, cancel_permissions(ctx)).await?;
         let s = r
             .studio()
             .get_slot(input.slot_id)
@@ -514,12 +517,7 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
             .await?;
     }
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
-    let frame = gated(
-        r.as_mut(),
-        ctx,
-        crate::usecases::studio::permissions::for_use_case("studio.slot_cancel"),
-    )
-    .await?;
+    let frame = gated(r.as_mut(), ctx, cancel_permissions(ctx)).await?;
     r.studio_control().lock_control().await?;
     let s = r
         .studio()

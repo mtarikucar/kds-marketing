@@ -66,6 +66,34 @@ impl StudioControlRepo for PgTenantRepos {
         control.removed = jt_app::usecases::modules::removed_lanes(registry.as_ref())?;
         Ok(control)
     }
+    async fn read_control(&mut self) -> Result<StudioControl, AppError> {
+        let ws = self.workspace_id();
+        let row: Option<Value> =
+            sqlx::query_scalar("select data from studio_control where workspace_id=$1")
+                .bind(ws.0)
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "read Studio control"))?;
+        let mut control: StudioControl = match row {
+            Some(row) => decode(row)?,
+            None => StudioControl {
+                spend_stopped: Default::default(),
+                workspace_id: ws,
+                brake_engaged: false,
+                revision: 0,
+                lanes: Default::default(),
+                removed: Default::default(),
+            },
+        };
+        let registry: Option<Value> =
+            sqlx::query_scalar("select data from workspace_modules where workspace_id=$1")
+                .bind(ws.0)
+                .fetch_optional(self.tx.conn())
+                .await
+                .map_err(|e| map_sqlx(e, "read the module registry"))?;
+        control.removed = jt_app::usecases::modules::removed_lanes(registry.as_ref())?;
+        Ok(control)
+    }
     async fn set_brake(
         &mut self,
         expected: u64,

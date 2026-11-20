@@ -75,6 +75,7 @@ fn planned_post(
         content_type: "text".into(),
         retired: None,
         created_at: FIXED_NOW,
+        acknowledged: None,
     }
 }
 
