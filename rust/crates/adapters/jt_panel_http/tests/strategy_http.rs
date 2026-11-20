@@ -271,11 +271,20 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     assert_eq!(log[7]["text"], "Kahve");
     assert_eq!(log[0]["actor"]["kind"], "human");
 
-    // The ledger names each change, the approval under the version it put in force.
-    let ledger = ok_json(p.get("/api/ledger?action_prefix=strategy.", &owner).await).await;
-    let actions: Vec<&str> = ledger
+    // The ledger names each change, the approval under the version it put in force. The
+    // knowledge base the approval seeded writes its own entries (design 2026-11-19 §4.3.4).
+    let ledger: Vec<Value> = ok_json(p.get("/api/ledger?action_prefix=strategy.", &owner).await)
+        .await
         .as_array()
         .unwrap()
+        .iter()
+        .filter(|e| {
+            let action = e["entry"]["action"].as_str().unwrap();
+            !action.starts_with("strategy.knowledge_") && action != "strategy.rules_changed"
+        })
+        .cloned()
+        .collect();
+    let actions: Vec<&str> = ledger
         .iter()
         .map(|e| e["entry"]["action"].as_str().unwrap())
         .collect();
@@ -296,7 +305,7 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
         ]
     );
     assert_eq!(ledger[0]["entry"]["strategy_version_id"], json!(id));
-    assert!(!ledger.to_string().contains("Ne satıyorsunuz?"));
+    assert!(!json!(ledger).to_string().contains("Ne satıyorsunuz?"));
 }
 
 #[tokio::test]

@@ -1231,36 +1231,28 @@ pub async fn research_tasks_are_carried_to_a_newer_version(uow: Arc<dyn UnitOfWo
         .map(|t| t.id)
         .collect();
     assert_eq!(open, [a.id, taken.id]);
-    // An ad-hoc task, an unknown one and an unknown version are not carried.
-    for (id, version) in [
-        (adhoc.id, v2),
-        (ResearchTaskId::new_v7(), v2),
-        (b.id, StrategyVersionId::new_v7()),
+    t.research_tasks()
+        .set_status(a.id, TaskStatus::Superseded, at(10), "")
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    // An ad-hoc task, an unknown one, an unknown version and a closed task are not carried; each
+    // refusal in a bundle of its own (a refusal spoils it).
+    for (id, version, what) in [
+        (adhoc.id, v2, "an ad-hoc task"),
+        (ResearchTaskId::new_v7(), v2, "an unknown task"),
+        (b.id, StrategyVersionId::new_v7(), "an unknown version"),
+        (a.id, v1, "a closed task"),
     ] {
+        let mut t = uow.tenant(f.ws).await.unwrap();
         let err = t
             .research_tasks()
             .carry(id, version, &digest, 10)
             .await
             .unwrap_err();
-        assert_eq!(err.code, jt_app::error::ErrorCode::NotFound);
+        assert_eq!(err.code, jt_app::error::ErrorCode::NotFound, "{what}");
     }
-    t.research_tasks()
-        .set_status(a.id, TaskStatus::Superseded, at(10), "")
-        .await
-        .unwrap();
-    let err = t
-        .research_tasks()
-        .carry(a.id, v1, &digest, 10)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        err.code,
-        jt_app::error::ErrorCode::NotFound,
-        "a closed task"
-    );
-    t.commit().await.unwrap();
-    // The entry already has an open standing task of the target version: refused, in a bundle
-    // of its own (a refusal spoils it).
+    // The entry already has an open standing task of the target version: refused.
     let mut t = uow.tenant(f.ws).await.unwrap();
     let err = t
         .research_tasks()

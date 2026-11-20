@@ -984,7 +984,10 @@ async fn the_owner_adds_edits_removes_and_restores_a_card() {
 
 #[tokio::test]
 async fn which_card_moves_which_derivation() {
+    // A workspace with a frame: the first card text of one without would bootstrap it, which
+    // makes both derivations due (design §4.10.5).
     let w = world().await;
+    w.approve_strategy().await;
     seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
     let ideas = card_of(&w, "post_ideas").await;
     card_update(
@@ -998,7 +1001,7 @@ async fn which_card_moves_which_derivation() {
     let s = settings(&w).await;
     assert_eq!(
         (s.revision, s.posting_revision, s.prospecting_revision),
-        (2, 2, 0)
+        (2, 2, 1)
     );
     let seek = card_of(&w, "who_we_seek").await;
     card_update(&w.deps, &w.owner_ctx, seek.id, body(1, "• Ajanslar"))
