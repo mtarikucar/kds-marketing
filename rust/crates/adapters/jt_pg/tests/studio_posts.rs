@@ -1003,3 +1003,10 @@ async fn account_snapshots_repository_contract() {
         Some("42501")
     );
 }
+
+/// Paylaşımlar's batch reads and the post acknowledgement (design 2026-11-19 §3.9), as the fake.
+#[tokio::test]
+async fn paylasimlar_reads_and_the_acknowledgement_repository_contract() {
+    let db = TestDb::new().await;
+    jt_testkit::posts_reads_contract::exercise(&PgUnitOfWork::new(db.pool.clone())).await;
+}

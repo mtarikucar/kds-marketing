@@ -41,6 +41,16 @@
 //! - `studio.brake` releasing the organic lane: `posting_resumed`, for `social.work` agents;
 //! - `connector.confirm_assets` and `capability.verify` making a social account postable that a
 //!   version waiting for a time can go out on: `account_connected`, for `social.work` agents;
+//! - Paylaşımlar (design 2026-11-19 §3.6): `content.post_request` (the composer),
+//!   `content_requested` for `content.work` agents, or with files `material_uploaded` for
+//!   `materials.work` agents; `content.files_add`, `material_uploaded`, and `capture_answered`
+//!   when a capture's files are all shared already; the last file a person attached to a content
+//!   getting its share (by rule in `studio.material_analysis_complete`, or by `İzin ver`), leaving
+//!   its sources or being deleted: `content_requested` (`capture_answered` for a capture's file),
+//!   on the uploader's behalf when the analysis shared it; a special day's file shared while its
+//!   preparation runs, which opens its content at once: `content_requested`;
+//!   `content.area_deliver` of a content a person asked for: `content_delivered`, for
+//!   `social.work` agents, on that person's behalf;
 //! - `agents.wake_now`: `manual`, for the one agent named.
 //!
 //! An action the system or an agent takes because a person asked (a frame applied from their

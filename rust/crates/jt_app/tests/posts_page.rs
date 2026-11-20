@@ -893,3 +893,95 @@ async fn a_capture_answered_with_a_file_waits_for_its_share() {
         pending(&w, content_key).is_some_and(|(r, _)| r.contains(&WakeReason::CaptureAnswered))
     );
 }
+
+#[tokio::test]
+async fn a_special_day_photo_starts_its_content_at_once() {
+    let w = page_world().await;
+    let content_key = routine_agent(&w, "content", &["content.work"]).await;
+    // A special day three days ahead, in its preparation.
+    let today = istanbul_day(FIXED_NOW);
+    let year = today.year();
+    library::calendar_set(
+        &w.d,
+        &w.ctx,
+        input(json!({"key":"dukkan_gunu","year":year,"name":"Dükkan günü","kind":"special_day",
+            "window_start":(today + time::Duration::days(3)).to_string(),
+            "window_end":(today + time::Duration::days(4)).to_string(),
+            "lead_days":7,"enabled":true})),
+    )
+    .await
+    .unwrap();
+    let page = read(&w, &w.ctx, json!({})).await;
+    let line = page
+        .days
+        .iter()
+        .chain(std::iter::empty())
+        .find(|l| l.key == "dukkan_gunu")
+        .cloned();
+    let more = page.days_more;
+    assert!(
+        line.is_some() || more > 0,
+        "the day is a line of its own or folded"
+    );
+    if let Some(line) = &line {
+        assert_eq!(line.files.state, content::posts::DayFilesState::None);
+        assert!(line.can_add && line.can_skip);
+    }
+    // Fotoğraf ekle: a confirmed olay of the day holds the file, pending its share.
+    let f = file(&w, "image/png").await;
+    let out = content::files_add(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"day-1","target":{"kind":"special_day","key":"dukkan_gunu",
+            "year":year},"file_ids":[f.id]})),
+    )
+    .await
+    .unwrap();
+    let s = w.uow.snapshot();
+    let m = s
+        .materials
+        .materials
+        .iter()
+        .find(|m| m.file_id == f.id)
+        .cloned()
+        .unwrap();
+    let olay = s
+        .materials
+        .olays
+        .iter()
+        .find(|o| o.occasion.as_deref() == Some("dukkan_gunu"))
+        .cloned()
+        .expect("the day's olay");
+    assert!(olay.is_confirmed());
+    assert_eq!(m.olay_id(), Some(olay.id));
+    assert_eq!(
+        m.upload_for.as_ref().and_then(|u| u.day.as_ref()).map(|d| d.key.as_str()),
+        Some("dukkan_gunu")
+    );
+    if let Some(day) = &out.day {
+        assert_ne!(day.files.state, content::posts::DayFilesState::None);
+    }
+    assert!(
+        s.production_projects.is_empty(),
+        "nothing is made before the file is shared"
+    );
+    // Checked and nobody found: the calendar trigger opens the day's content at once.
+    analysed(&w, m.id, &[], true).await;
+    let s = w.uow.snapshot();
+    let p = s
+        .production_projects
+        .iter()
+        .find(|p| p.olay_id == Some(olay.id))
+        .expect("the day's content is opened at once");
+    assert!(p.sources.iter().any(|x| x.material_id == m.id));
+    assert!(
+        pending(&w, content_key).is_some_and(|(r, _)| r.contains(&WakeReason::ContentRequested))
+    );
+    let page = read(&w, &w.ctx, json!({})).await;
+    assert!(page.days.iter().all(|l| l.key != "dukkan_gunu"), "the line is gone");
+}
+
+#[tokio::test]
+async fn the_batch_reads_and_the_acknowledgement_hold_on_the_fake() {
+    jt_testkit::posts_reads_contract::exercise(&jt_testkit::fakes::InMemoryUow::new()).await;
+}

@@ -197,6 +197,32 @@ pub async fn exercise(uow: &dyn UnitOfWork, ws: WorkspaceId) {
             .code,
         ErrorCode::Conflict
     );
+    // Paylaşımlar's read (design 2026-11-19 §3.9): every live area at once, past the open list's
+    // 200, newest first and never the archived one; the area holding a version, by its id.
+    let live = r.studio_projects().list_live_areas().await.unwrap();
+    let mut expected: Vec<Uuid> = open
+        .iter()
+        .chain(&done)
+        .map(|p| p.id)
+        .chain([waiting.id, scheduled.id, unfinished.id])
+        .filter(|id| *id != open[0].id)
+        .collect();
+    expected.sort_by_key(|id| std::cmp::Reverse(*id));
+    assert!(expected.len() > 200);
+    assert_eq!(live.iter().map(|p| p.id).collect::<Vec<_>>(), expected);
+    let found = r
+        .studio_projects()
+        .find_area_by_version(scheduled.packages[0].versions[0].id)
+        .await
+        .unwrap();
+    assert_eq!(found.map(|p| p.id), Some(scheduled.id));
+    assert_eq!(
+        r.studio_projects()
+            .find_area_by_version(Uuid::now_v7())
+            .await
+            .unwrap(),
+        None
+    );
     drop(r);
 
     // The tree's reads (design 2026-11-18): the areas counted by olay, with their open captures,

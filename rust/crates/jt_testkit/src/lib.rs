@@ -44,5 +44,6 @@ pub mod prospects_contract;
 pub mod ads_contract;
 /// The knowledge base's repository contract, shared by the fake and PostgreSQL.
 pub mod knowledge_contract;
+pub mod posts_reads_contract;
 pub mod production_areas_contract;
 pub mod social_accounts_contract;

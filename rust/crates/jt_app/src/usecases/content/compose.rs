@@ -105,12 +105,16 @@ async fn stored(
 
 /// What was read of a person's files before the transaction: each stored file and when its
 /// bytes say it was taken (read outside any transaction, as `material_add` does, D41).
-struct Prepared {
+pub(crate) struct Prepared {
     file: StoredFile,
     captured_at: Option<OffsetDateTime>,
 }
 
-async fn prepare(d: &Deps, ctx: &Ctx, ids: &[FileId]) -> Result<Vec<Prepared>, AppError> {
+pub(crate) async fn prepare(
+    d: &Deps,
+    ctx: &Ctx,
+    ids: &[FileId],
+) -> Result<Vec<Prepared>, AppError> {
     let mut files = Vec::new();
     {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
@@ -364,10 +368,35 @@ pub async fn post_request(
         let id: Uuid = decode(v)?;
         return post_answer(d, r.as_mut(), ctx, id).await;
     }
+    let p = open_request_in(d, r.as_mut(), ctx, by, text, &files).await?;
+    let id = p.id;
+    r.studio()
+        .request_receipt(POST_REQUEST, &i.request_key, &payload, &json!(id))
+        .await?;
+    let out = post_answer(d, r.as_mut(), ctx, id).await?;
+    r.commit().await?;
+    Ok(out)
+}
+
+/// Opens the content person `by` asked for with `text` and the files `files` read before the
+/// transaction ([`prepare`]), in the caller's transaction, which holds the Studio control lock:
+/// the composer's internals, and a filed note's post request (design 2026-11-19 §4.8, D29: the
+/// note's images and videos are handed to the content as the composer would). Each file becomes a
+/// material genel freed by the person, publishable, its share unset and pending; the content is
+/// asked for in person with no platform named. Wakes the content agent (no files) or the materials
+/// agent (files), in person or on the person's behalf.
+pub(crate) async fn open_request_in(
+    d: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    by: UserId,
+    text: String,
+    files: &[Prepared],
+) -> Result<ProductionProject, AppError> {
     let id = d.ids.uuid();
     let mut upload = pending::upload_for(by, ctx.now);
     upload.area_id = Some(id);
-    let (shown, created) = attach(r.as_mut(), ctx, d, &files, Binding::Genel, &upload).await?;
+    let (shown, _) = attach(r, ctx, d, files, Binding::Genel, &upload).await?;
     let mut sources: Vec<ProjectSource> = Vec::new();
     for m in &shown {
         if !sources.iter().any(|s| s.material_id == m.id) {
@@ -412,9 +441,6 @@ pub async fn post_request(
         updated_at: ctx.now,
     };
     r.studio_projects().save_project(p.clone(), None).await?;
-    r.studio()
-        .request_receipt(POST_REQUEST, &i.request_key, &payload, &json!(id))
-        .await?;
     r.ledger()
         .append(ledger_entry(
             ctx,
@@ -424,26 +450,18 @@ pub async fn post_request(
             json!({"area_id": id, "files": shown.len()}),
         )?)
         .await?;
-    if p.pending_files.is_empty() {
-        wake::request(
-            r.as_mut(),
-            ctx,
-            &[wake::CONTENT],
-            wake::WakeReason::ContentRequested,
-        )
-        .await?;
-    } else if created > 0 || !p.pending_files.is_empty() {
-        wake::request(
-            r.as_mut(),
-            ctx,
-            &[wake::MATERIALS],
-            wake::WakeReason::MaterialUploaded,
-        )
-        .await?;
+    // The person asked in person; a note an agent files acts on the note's person's behalf.
+    let (needs, reason) = if p.pending_files.is_empty() {
+        ([wake::CONTENT], wake::WakeReason::ContentRequested)
+    } else {
+        ([wake::MATERIALS], wake::WakeReason::MaterialUploaded)
+    };
+    if library::person(ctx).is_some() {
+        wake::request(r, ctx, &needs, reason).await?;
+    } else {
+        wake::request_for(r, ctx, &needs, reason, by).await?;
     }
-    let out = post_answer(d, r.as_mut(), ctx, id).await?;
-    r.commit().await?;
-    Ok(out)
+    Ok(p)
 }
 
 // ---------------------------------------------------------------------------------------------
