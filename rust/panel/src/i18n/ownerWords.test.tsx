@@ -260,10 +260,18 @@ describe('the owner’s words on Paylaşımlar', () => {
     seen.push(visibleText());
     await user.keyboard('{Escape}');
     // The three drawers.
-    for (const place of ['?files=1', '?files=1&queue=1', '?files=1&file=m1', '?accounts=1&account=cap-ig', '?settings=1']) {
+    // Each drawer once what it reads has come: a text only its answer draws.
+    const drawers: [string, string, string][] = [
+      ['?files=1', tr.postsPage.files.title, 'Raf'],
+      ['?files=1&queue=1', tr.postsPage.files.title, tr.postsPage.files.state.needs_filing],
+      ['?files=1&file=m1', tr.postsPage.files.file, tr.materials.editor.bindTo],
+      ['?accounts=1&account=cap-ig', tr.postsPage.accounts.title, tr.postsPage.accounts.numbers],
+      ['?settings=1', tr.postsPage.settings.title, 'Öğretmenler Günü'],
+    ];
+    for (const [place, name, probe] of drawers) {
       await router.navigate(`/posts${place}`);
-      await screen.findByRole('dialog', undefined, { timeout: 10_000 });
-      await waitFor(() => expect(screen.queryAllByRole('status', { name: tr.common.loading })).toHaveLength(0));
+      const drawer = await screen.findByRole('dialog', { name }, { timeout: 10_000 });
+      await within(drawer).findAllByText(probe, { exact: false }, { timeout: 10_000 });
       seen.push(visibleText());
     }
     // What was read holds the panel's waits, the findings and each drawer.
