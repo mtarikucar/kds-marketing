@@ -49,6 +49,12 @@ pub struct SlotOut {
 pub struct PendingSlot {
     pub slot: Slot,
     pub overdue: bool,
+    /// The slot asks an agent for a piece (`studio.piece_submit`): it has none yet, a person
+    /// asked for a change of the content it was made of, or the material gate holds its current
+    /// piece and no person approved that piece. A slot whose piece is done is listed too (its
+    /// approval, posting screen and blockers are here), without asking for content.
+    #[serde(default)]
+    pub needs_piece: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Blocker {
@@ -270,6 +276,7 @@ pub(crate) async fn pending_in(
         }
         // A ready piece the material gate would hold when it publishes: now, or at the slot's
         // time when later (spec 2026-11-03 §5.6).
+        let mut held = false;
         if s.state == SlotState::Ready
             && attempts.is_empty()
             && let Err(e) =
@@ -278,6 +285,7 @@ pub(crate) async fn pending_in(
             if e.code == crate::error::ErrorCode::Internal {
                 return Err(e);
             }
+            held = true;
             let findings = e.details["findings"].clone();
             out.blockers.push(Blocker {
                 next_action: Some(super::materials::hold_next_action(&findings).into()),
@@ -286,8 +294,17 @@ pub(crate) async fn pending_in(
                 reason: super::materials::MATERIAL_HOLD.into(),
             });
         }
+        // A piece that is there is not asked for again (hotfix 2026-11-20): only a missing one,
+        // a person's request for a change, or a held piece nobody approved.
+        let needs_piece = match s.state {
+            SlotState::Planned => true,
+            _ if !attempts.is_empty() => false,
+            _ if super::pieces::redo_standing(r, s.id).await? => true,
+            _ => held && !super::pieces::person_keeps(r, &s).await?,
+        };
         out.slots.push(PendingSlot {
             overdue: s.scheduled_at < ctx.now,
+            needs_piece,
             slot: s,
         });
     }
