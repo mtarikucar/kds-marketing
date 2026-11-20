@@ -42,6 +42,10 @@ async fn the_owner_keeps_the_knowledge_base_on_the_panel() {
     assert_eq!(kb["cards"].as_array().unwrap().len(), 8);
     assert_eq!(kb["notes_agent"]["state"], "none");
     assert_eq!(ok_json(p.get("/api/knowledge", &owner).await).await, kb);
+    // The home page's work (design 2026-11-19 §4.10.12, §5.2): empty, a card asked for.
+    let pending = ok_json(p.get("/api/work/pending", &owner).await).await;
+    assert_eq!(pending["knowledge"]["empty"], true);
+    assert_eq!(pending["items"][0]["kind"], "knowledge_empty");
 
     // A Kurallar save first: still empty, no frame.
     let rules = ok_json(
@@ -74,6 +78,11 @@ async fn the_owner_keeps_the_knowledge_base_on_the_panel() {
     let kb = ok_json(p.get("/api/knowledge", &owner).await).await;
     assert_eq!(kb["empty"], true);
     assert_eq!(kb["frame"], Value::Null);
+    let pending = ok_json(p.get("/api/work/pending", &owner).await).await;
+    assert_eq!(
+        pending["knowledge"]["empty"], true,
+        "a Kurallar save is no card"
+    );
 
     // The first card text: the frame is bootstrapped in the same write.
     let who = card(&kb, "who_we_are").clone();
@@ -104,6 +113,10 @@ async fn the_owner_keeps_the_knowledge_base_on_the_panel() {
     assert_eq!(kb["empty"], false);
     assert_eq!(kb["frame"]["number"], 1);
     assert_eq!(kb["frame"]["topics"][0]["title"], "Genel");
+    let pending = ok_json(p.get("/api/work/pending", &owner).await).await;
+    assert_eq!(pending["knowledge"]["empty"], false);
+    assert_eq!(pending["knowledge"]["frame"], 1);
+    assert_eq!(pending["strategy"], json!({ "approved": { "number": 1 } }));
 
     // A card of the owner's own, its removal and restoration, and its history.
     let resp = send(
