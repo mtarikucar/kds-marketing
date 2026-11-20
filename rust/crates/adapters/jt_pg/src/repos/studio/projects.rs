@@ -222,7 +222,8 @@ impl ProjectRepo for PgTenantRepos {
     async fn list_live_areas(&mut self) -> Result<Vec<ProductionProject>, AppError> {
         // Served by 0031's `studio_projects_recent (workspace_id, archived, id desc)`.
         let rows: Vec<Value> = sqlx::query_scalar(
-            "select data from studio_production_projects              where workspace_id=$1 and not archived order by id desc",
+            "select data from studio_production_projects \
+             where workspace_id=$1 and not archived order by id desc",
         )
         .bind(self.workspace_id().0)
         .fetch_all(self.tx.conn())

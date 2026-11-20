@@ -185,12 +185,13 @@ async fn material(w: &World) -> Material {
     m
 }
 
-/// An area a person opened and an agent finished with one feed post of `m` on the fixture's
-/// topic.
+/// An area an agent opened and finished with one feed post of `m` on the fixture's topic. An
+/// agent's: a person's content would go out under the owner's request on any account (design
+/// §3.5) and its delivery would wake the social agent.
 async fn finished(w: &World, key: &str, m: &Material) -> ProductionProject {
     let p = projects::project_create(
         &w.d,
-        &w.ctx,
+        &agent(w),
         input(json!({"request_key":key,"brief":"Yeni sezonu duyur","material_ids":[m.id]})),
     )
     .await

@@ -153,7 +153,9 @@ impl PostRepo for PgTenantRepos {
     ) -> Result<bool, AppError> {
         // One statement: only a post not acknowledged yet takes it, nothing else of it changes.
         let done = sqlx::query(
-            "update studio_posts set data=jsonb_set(data,'{acknowledged}',$3)              where workspace_id=$1 and slot_id=$2                and nullif(data->'acknowledged','null'::jsonb) is null",
+            "update studio_posts set data=jsonb_set(data,'{acknowledged}',$3) \
+             where workspace_id=$1 and slot_id=$2 \
+             and nullif(data->'acknowledged','null'::jsonb) is null",
         )
         .bind(self.workspace_id().0)
         .bind(slot.0)

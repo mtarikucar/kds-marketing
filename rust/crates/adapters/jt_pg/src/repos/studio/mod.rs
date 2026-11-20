@@ -297,7 +297,10 @@ impl StudioRepo for PgTenantRepos {
             .map(|(_, r)| revision(*r))
             .collect::<Result<Vec<i64>, _>>()?;
         let rows: Vec<(Uuid, Value)> = sqlx::query_as(
-            "select p.slot_id, p.data from studio_pieces p              join unnest($2::uuid[], $3::bigint[]) as w(slot_id, revision)                on w.slot_id = p.slot_id and w.revision = p.revision              where p.workspace_id=$1 order by p.slot_id",
+            "select p.slot_id, p.data from studio_pieces p \
+             join unnest($2::uuid[], $3::bigint[]) as w(slot_id, revision) \
+             on w.slot_id = p.slot_id and w.revision = p.revision \
+             where p.workspace_id=$1 order by p.slot_id",
         )
         .bind(self.workspace_id().0)
         .bind(ids)
