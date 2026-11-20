@@ -76,7 +76,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.piece_submit",
-            description: "Submit agent content and revision-bound Ready work atomically. The caption truth check never refuses a submission: its findings come back as material_check (what the texts name that the piece's olays do not back); until fixed by a new piece, or released by an owner or manager in the panel, they hold the publish. [risk: WRITE]",
+            description: "Submit agent content and revision-bound Ready work atomically. The caption truth check never refuses a submission: its findings come back as material_check (what the texts name that the piece's olays do not back); until fixed by a new piece, or released by an owner or manager in the panel, they hold the publish. The current piece submitted again unchanged is a no-op (its approval stands). A piece a person approved (or passed on TikTok's posting screen) is theirs: an agent's different piece is refused (CONFLICT approved_piece) unless a person asked for a change; leave it. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.piece_submit"),
             schema: || Schema::try_from(schema::input("piece_submit")).expect("studio schema"),
             run: piece_submit,
