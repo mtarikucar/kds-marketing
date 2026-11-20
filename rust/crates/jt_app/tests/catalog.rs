@@ -59,6 +59,11 @@ fn mcp_only_use_cases_have_no_panel_route() {
             "studio.material_analysis_claim",
             "studio.material_analysis_complete",
             "studio.material_analysis_fail",
+            "strategy.frame_apply",
+            "strategy.note_claim",
+            "strategy.note_file",
+            "strategy.note_release",
+            "strategy.proposal_create",
             "work.checkin",
         ]
     );

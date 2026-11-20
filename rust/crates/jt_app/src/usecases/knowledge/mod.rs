@@ -7,7 +7,7 @@
 //! - [`rules`]: `strategy.rules_save`, `post_approval_set` and `goals_save`.
 //! - [`notes`]: `strategy.note_add`, `note_withdraw`, `note_claim`, `note_file`, `note_release`.
 //! - [`proposals`]: `strategy.proposal_create`, `proposal_accept`, `proposal_skip`.
-//! - [`derive`]: `strategy.frame_apply`, an agent's derivation applied to the frame (§4.10.3).
+//! - [`derive`](mod@derive): `strategy.frame_apply`, an agent's derivation applied to the frame (§4.10.3).
 //! - [`frame`]: the internal frame the system applies from the knowledge base (§4.10), and its
 //!   bootstrap from the first card text a person writes or accepts (D4).
 //! - [`settle`]: the `knowledge_settle` job's body (seeding, the bootstrap's repair, the
