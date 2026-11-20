@@ -21,12 +21,19 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The one test that runs the packaged candidate (nextest filterset). rust-test runs every test but
+  # these, rust-release-binary runs only these and fails if none match: one definition, so the two
+  # jobs cannot drift apart.
+  RELEASE_BINARY_TESTS: 'binary_id(jeeta::m4_deployment) & test(=production_build_refuses_test_loopback)'
 
 # Caches (Swatinem/rust-cache). Every job restores, only pushes to main and design/** save
 # (`save-if`), so a pull request starts from its base branch's cache and branches do not evict
 # it. The key is kept stable: each Rust job uninstalls every toolchain but the pinned one first
 # (rust-cache hashes all installed toolchains, and the image's own stable moves as runner images
-# roll out), and `env-vars: ImageOS` keeps caches of different OS releases apart.
+# roll out), and `env-vars: ImageOS` keeps caches of different OS releases apart. GitHub lets a
+# pull request read only its base branch's and the default branch's caches, so one whose base is
+# another feature branch (a stacked pull request) finds none and builds cold while main has no
+# copy of this workflow.
 
 jobs:
   # Which side jobs a pull request needs. Each runs on a pull request only when a file it builds
@@ -56,22 +63,27 @@ jobs:
           if [ "$EVENT" != pull_request ] || ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
             for job in "${!run[@]}"; do run[$job]=true; done
           else
-            git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed"
+            # --no-renames lists a moved file under its old path too, so moving a file out of a
+            # job's directory still runs that job; core.quotePath=false keeps non-ASCII paths raw.
+            git -c core.quotePath=false diff --no-renames --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed"
             echo "Changed files:"; cat "$RUNNER_TEMP/changed"
             while IFS= read -r path; do
               case "$path" in
                 .github/workflows/rust.yml) for job in "${!run[@]}"; do run[$job]=true; done ;;
               esac
-              # The release package and its build: the whole Rust tree but the two bridges (the
-              # server binary links neither), the operations docs it ships, Cargo configuration.
+              # The release package and its build: the whole Rust tree (package-release.py checks
+              # every file under rust/, the bridges included, before it builds), the operations docs
+              # it ships, Cargo configuration.
               case "$path" in
-                rust/bridge/*) ;;
                 rust/*|docs/operations/*|.cargo/*) run[release]=true ;;
               esac
-              # Workspace build inputs and the domain crates the bridges link.
+              # Workspace build inputs and the domain crates the bridges link; the speech tests
+              # also read jt_calls' phrase sources (test_speak_image.py).
               case "$path" in
-                rust/Cargo.toml|rust/Cargo.lock|rust/rust-toolchain.toml|rust/.cargo/*|.cargo/*|rust/crates/domain/*)
+                rust/Cargo.toml|rust/Cargo.lock|rust/rust-toolchain.toml|rust/.cargo/*|.cargo/*)
                   run[voice_bridge]=true; run[device_bridge]=true ;;
+                rust/crates/domain/*)
+                  run[voice_bridge]=true; run[device_bridge]=true; run[voice_speech]=true ;;
               esac
               case "$path" in
                 rust/bridge/voice/*) run[voice_bridge]=true; run[voice_speech]=true ;;
@@ -196,7 +208,7 @@ jobs:
         run: >-
           cargo nextest run --locked --workspace --no-fail-fast
           --partition count:${{ matrix.partition }}/3
-          -E 'not (binary_id(jeeta::m4_deployment) & test(=production_build_refuses_test_loopback))'
+          -E "not ($RELEASE_BINARY_TESTS)"
       # Partition 3 gets the fewest tests (`count` gives each binary's remainder to 1 and 2), so it
       # also runs these two. nextest does not run documentation tests; `cargo test` ran them with
       # the rest, so they run whether or not a test above failed.
@@ -246,11 +258,12 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
       - run: cargo test --locked -p jt_outbound --test production_build
 
-  # The one test that runs the packaged candidate: bin/jeeta/tests/m4_deployment.rs
-  # `production_build_refuses_test_loopback` (it reads JEETA_RELEASE_BINARY and
+  # The one test that runs the packaged candidate ($RELEASE_BINARY_TESTS: bin/jeeta/tests/
+  # m4_deployment.rs `production_build_refuses_test_loopback`, which reads JEETA_RELEASE_BINARY and
   # JEETA_RELEASE_PANEL_DIR). It waits for release-artifact and runs whenever that job does;
   # rust-test runs every other test without waiting. `--workspace` keeps the workspace's test
-  # features, so this is the binary `cargo test --workspace` built.
+  # features, so this is the binary `cargo test --workspace` built. `--no-tests=fail`: a filter
+  # that stops matching fails here instead of passing with no test run.
   rust-release-binary:
     needs: [changes, release-artifact]
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.release == 'true') }}
@@ -315,7 +328,10 @@ jobs:
           name: jeeta-release-${{ github.sha }}
           path: release-candidate
       - run: tar -xf ../release-candidate/jeeta-release.tar -C "$RUNNER_TEMP"
-      - run: cargo test --locked --workspace --test m4_deployment -- --exact production_build_refuses_test_loopback
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9
+      - run: cargo nextest run --locked --workspace --test m4_deployment --no-tests=fail -E "$RELEASE_BINARY_TESTS"
         env:
           JEETA_RELEASE_BINARY: ${{ runner.temp }}/jeeta-release/jeeta
           JEETA_RELEASE_PANEL_DIR: ${{ runner.temp }}/jeeta-release/panel
@@ -504,7 +520,9 @@ jobs:
           retention-days: 14
 
   # The voice bridge's Python speech services and Asterisk configs: unit tests without the models
-  # (plan V1-T3 B1-B3, D3). The model-backed tests run on the host inside the images.
+  # (plan V1-T3 B1-B3, D3). The model-backed tests run on the host inside the images. Besides
+  # rust/bridge/voice they read rust/crates/domain/jt_calls/src (the approved phrases); `changes`
+  # runs this job for both, so widen it there if they read more.
   voice-speech:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.voice_speech == 'true') }}
