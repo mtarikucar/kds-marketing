@@ -1148,6 +1148,12 @@ chain context, so sending waits for the approval), `social::accounts` (`requires
 `context.rs`) keep reading the stored flag: the switch and the list are about posts only, and the
 stored flag keeps its other meanings (comment replies, ad budget moves). An agent's
 `capability.set_policy` can therefore no longer lower a post approval (design 2026-11-19 O4).
+A person's `capability.set_policy` in person on a seeded workspace still moves it, so the policy
+dialog ("Her eylem insan onayı bekler") keeps holding or freeing the account's posts until Hesaplar
+replaces it: turning the stored flag on for a social account also puts the account into
+`post_approval_accounts`, and turning it off takes it out when the person is an owner or a manager
+and the switch is off (else its posts keep waiting, which errs safe); a `rules` revision row and
+`strategy.rules_changed`, the settings locked before the capability (§4.10.13).
 
 #### 3.10.2 Stops and blocked codes
 
@@ -1456,7 +1462,7 @@ body empty; the card stays (blank seeds show their placeholder, §4.11).
 
 | key | Title | Body generated from the source version's sections |
 |---|---|---|
-| `who_we_are` | Biz kimiz | `identity.positioning`, then `\n\nBizi farklı kılan: {identity.usp}` when `usp` is not empty |
+| `who_we_are` | Biz kimiz | `identity.positioning`, then `\n\nBizi farklı kılan: {identity.usp}` when `usp` is not empty and the positioning does not already hold that line (a frame's positioning is the card's whole text, D34) |
 | `products_prices` | Ürünler ve fiyat | `identity.product` |
 | `voice` | Ses tonu | `identity.voice` |
 | `customers` | Müşterilerimiz | `goals.objective` (when not empty) and a blank line, then one line per audience segment `• {name}: {description}` |
@@ -1487,9 +1493,12 @@ version is the source; a draft or no version gives none of them):
     214.285 a month → *G* 49.999), and the three then agree under `check_general`. *G* is locked
     (after the settings, §4.10.13) before anything is worked out from it, so an edit of it
     committed meanwhile is what is lowered, never raised back.
-  - Only *L*: `ad_cap` = *L*; a general item is created from it (`name = "Reklam bütçesi"`,
-    `kind = ad_budget`, unit the lane's currency, `cap = L.cap_minor`, `period = L.period`, ledger
-    `budget.items.create {reason: "knowledge_backfill"}`).
+  - Only *L*: `ad_cap` = *L*; a general item is created in its currency and period at 0
+    (`name = "Reklam bütçesi"`, `kind = ad_budget`, unit the lane's currency, `cap = 0`,
+    `period = L.period`, ledger `budget.items.create {reason: "knowledge_backfill"}`). Without a
+    general item no campaign could open (`no_general_ad_budget`), so creating it at the lane's cap
+    would have lifted ad spend from nothing to *L*; at 0 the owner opens it in Bütçe, up to
+    `ad_cap` (amended after the PR 2 review).
   - Only *G* (no paid lane, or `paid_enabled = false`): `ad_cap = null` (Kurallar reads `Reklam yok.`);
     *G* is left as it is (no lane: nothing can be spent on ads, exactly as today).
   - Neither: `ad_cap = null`.
@@ -1553,7 +1562,12 @@ own transaction:
    `seed`, `backfill` or `resync` is rewritten from the approved version with §4.3.2's mapping
    (`cause = resync`); a seed card the owner, a note or a proposal changed since is left as it is,
    and when the version's text for it differs, one `card_edit` proposal carries that text
-   (`proposed_by_component = 'strategy_resync'`, reason `Önceki sayfada onaylanan metin.`).
+   (`proposed_by_component = 'strategy_resync'`, reason `Önceki sayfada onaylanan metin.`). Only
+   the parts the routine changed count: a card whose text the frame in force before the approval
+   gives alike is neither rewritten nor proposed (the frame mirrors the cards, so a draft copied
+   from it reads them back, cut to the frame's 2000 characters), `accounts_channels` is built from
+   the draft's channels as the routine wrote them (step 1 makes the approved version's the
+   system's `[any]`), and no card is emptied (amended after the PR 2 review).
 3. Kurallar and Hedefler: prohibitions and goal lines the version adds are appended (never one
    removed, cause `resync`); `ad_cap` and `message_cap` are lowered to the version's lanes when those
    are lower, never raised (raising is the owner's, in Kurallar); the general item follows a lowered
@@ -1661,9 +1675,13 @@ The owner's number is **`knowledge_settings.ad_cap`**: written only here (a pers
 nothing else crosses:
 
 - Save with an amount: `ad_cap = {amount_minor, period (given, else the current one, else monthly),
-  currency (the general item's unit, else TRY)}`. The live general item gets `cap = amount_minor`
-  and that period (`budget.items.update` internals, the person as actor); with none, one is created
-  (`name = "Reklam bütçesi"`, `kind = ad_budget`, `general = true`). `None` (no ads): `ad_cap = null`
+  currency (the current one; a new cap's is the general item's unit, else TRY)}`: a save never
+  changes a cap's currency, so no general item in another currency can turn the owner's number
+  into that currency's (amended after the PR 2 review). The live general item in that currency
+  gets `cap = amount_minor` and that period (`budget.items.update` internals, the person as
+  actor); with none, one is created (`name = "Reklam bütçesi"`, `kind = ad_budget`,
+  `general = true`); one in another currency is left as it is (nothing is spent through it: the
+  paid lane is in `ad_cap`'s currency). `None` (no ads): `ad_cap = null`
   and the general item's cap becomes 0 (it is kept: Bütçe's history stays).
 - In the same transaction, when a frame exists, the system writes the **mirror** (§4.10.2, cause
   `rules`): the frame's paid lane = `ad_cap` (`{lane: paid, period, cap_minor: amount, currency}`)
@@ -1676,7 +1694,9 @@ nothing else crosses:
 - **Agents cannot raise it.** `budget.rs` `check_general` compares a general item with `ad_cap`
   instead of the strategy's paid lane (same proration, refusal `VALIDATION {field: "cap", reason:
   "above_rules_cap", cap: <most allowed>}`), for every create, update, period change or
-  `general: true`, whoever makes it. So `jeeta.budget.items_update` and `items_create` (which need
+  `general: true`, whoever makes it; a general item in another currency than `ad_cap`'s is
+  `VALIDATION {field: "unit", reason: "rules_cap_currency", currency}`, so none sits outside the
+  ceiling. So `jeeta.budget.items_update` and `items_create` (which need
   only `budget.manage`, a scope an agent key may carry) can lower the general item, or raise it back
   up to `ad_cap`, never above; the lane never moves from Bütçe (Bütçe's writes run no mirror and take
   no frame lock). `ad_cap = null`: nothing to compare with, and nothing can be spent on ads (no
@@ -1839,7 +1859,8 @@ the caller's transaction; `cause` ∈ `derive` (an agent's `frame_apply`), `boot
    one is rechecked by `recheck_periods`), so every binding counts as live.
 3. **Topics** (cause `derive` with `topics`): for each topic given, its id when given (it must be a
    hypothesis of some version of this workspace: `VALIDATION topic_unknown`; the owner's request id:
-   `FORBIDDEN hypothesis_reserved`), else the id of a live topic of `previous` whose title is the
+   `FORBIDDEN hypothesis_reserved`), else the id of a live topic of `previous` that no entry of the
+   call names by its id and whose title is the
    same once case and whitespace are normalised, else a new id. `channel = "any"`. A **kept** topic
    sent without a cadence keeps its previous cadence; a **new** one without gets
    `default_organic_cadence(max(per_week, 1))` (`strategy.rs`, moved to `jt_knowledge`); a given
@@ -2708,7 +2729,9 @@ A separate, idempotent ops script `rust/scripts/rollback/strip_new_wake_reasons.
 `set_config('app.platform', 'on', true)`) removes the wake codes newer than schema 45 from both
 `pending.reasons` and `last.reasons` of `agent_wakes` and nulls a pending wake left with no reason.
 It is needed only to go back to a binary older than PR 1 (which has no tolerant decoding); every
-other rollback target reads newer rows (§4.2).
+other rollback target reads newer rows (§4.2). A second one, `write_back_post_approval.sql` (PR 2,
+same conventions), writes post approval back onto the stored flags before going back to PR 1's
+binaries (§7.6).
 
 ### 7.2 What every existing workspace goes through
 
@@ -2717,7 +2740,7 @@ In order, the first time after PR 2's deploy; each step idempotent and ledgered:
 | Step | When | Workspace with an approved version | …and an open draft | Only a draft | Neither |
 |---|---|---|---|---|---|
 | Seed cards, rules, goals (§4.3) | first knowledge call, first `knowledge_settle` tick, or an old approval | from the approved version | from the approved; draft differences become proposals; draft archived | blank seeds; every draft part becomes a proposal; draft archived | blank seeds |
-| Caps and approval (§4.3.2) | with the seed | `ad_cap` = the lower of lane and general item (item lowered to it, or created from the lane); `message_cap` = the organic lane; switch and account list from the accounts' flags | same | no caps; account list from the flags | same |
+| Caps and approval (§4.3.2) | with the seed | `ad_cap` = the lower of lane and general item (item lowered to it, or created at 0 in the lane's currency when there is none); `message_cap` = the organic lane; switch and account list from the accounts' flags | same | no caps; account list from the flags | same |
 | Normalise the frame (§4.10.6) | first `knowledge_settle` tick after the seed | a new version: channels `any`, topics on `any`, lanes = caps, mix emptied, every topic kept, tasks carried | same | — (no frame) | — |
 | Bootstrap (§4.10.5) | at the owner's first card text or accepted card proposal | — | — | when the owner adds a proposal or writes a card | at the owner's first card |
 
@@ -2796,7 +2819,7 @@ Run against jeetagrowth.com with the owner's workspace (MCP with an owner key, a
 | After | Rollback by | What is lost or stays |
 |---|---|---|
 | PR 1 | revert; 0046's down only if PR 2 was never deployed | nothing else changed |
-| PR 2 (+3) | revert the binaries to PR 1's (0046 stays). **Before switching**, for each workspace: set `requires_human_approval` on every postable social account when `post_approval` is on, else on each account of `post_approval_accounts` (ledgered `capability.set_policy {reason: "rollback"}`; this also holds comment replies on those accounts until a person changes it, which errs safe) | frames written stay (ordinary approved versions the older code reads); carried research tasks stay carried (valid); budget items stay lowered; the knowledge tables stay, unread; archived drafts stay archived (their text is in the proposals); new wake reasons are dropped on read (PR 1's tolerant decoding) |
+| PR 2 (+3) | revert the binaries to PR 1's (0046 stays). **Before switching**, run `rust/scripts/rollback/write_back_post_approval.sql` (idempotent, under `app.platform`): for each seeded workspace it sets `requires_human_approval` on every live social account when `post_approval` is on, else on each account of `post_approval_accounts` (ledgered `capability.set_policy {reason: "rollback"}`; this also holds comment replies on those accounts until a person changes it, which errs safe) | frames written stay (ordinary approved versions the older code reads); carried research tasks stay carried (valid); budget items stay lowered; the knowledge tables stay, unread; archived drafts stay archived (their text is in the proposals); new wake reasons are dropped on read (PR 1's tolerant decoding) |
 | PR 4 (+5) | revert to PR 3's binaries | versions cancelled without a slot are read by PR 1's tolerant decoding; composer materials keep their share and their `upload_for` field (ignored); `pending_files` is ignored, so such areas are offered to agents at once (a delivery with an unshared file is refused `share_unset`, as before) |
 | PR 3, PR 5 | revert (panel only) | none; the old pages come back with the server unchanged (PR 3's revert also lets `/api/strategy` writes through again, with the re-sync) |
 | PR 6 | revert | items and tools of agents go; the frame stays as last applied; nothing in the data depends on them |

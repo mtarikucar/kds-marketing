@@ -16,8 +16,9 @@
 //! The caps come only from an approved version: the ad cap is the lower of its paid lane (when
 //! paid channels are on) and the live general ad budget in the lane's currency brought to the
 //! lane's period, and that item is lowered to the cap brought back to its own period when it is
-//! above (or created from the lane when there is none); the paid-message limit is its organic lane
-//! as it is. The approval list holds every social account whose stored flag holds its posts today,
+//! above; a workspace with no general ad budget gets one ("Reklam bütçesi", in the lane's
+//! currency and period) at 0, since nothing could be spent on ads without one: the owner opens ad
+//! spend in Bütçe, up to the cap. The paid-message limit is its organic lane as it is. The approval list holds every social account whose stored flag holds its posts today,
 //! and, from an approved version, the switch is on when every postable account but TikTok has it;
 //! more flagged accounts than the list holds turn the switch on instead, so none is dropped.
 //! Nothing a draft says takes effect, and no limit is lifted.
@@ -402,8 +403,8 @@ pub(crate) fn item_period(period: jt_strategy::Period) -> jt_capability::Period 
 }
 
 /// The ad cap version `v` seeds (see the module docs), lowering the general ad budget to it, or
-/// creating one from the paid lane when the workspace has none; each change ledgered with the
-/// reason `knowledge_backfill`.
+/// creating one at 0 in the paid lane's currency and period when the workspace has none; each
+/// change ledgered with the reason `knowledge_backfill`.
 ///
 /// The general item is locked before anything is worked out from it (after the settings, as
 /// design §4.10.13 orders), so an edit of it that committed meanwhile (Bütçe's writes lock only
@@ -524,7 +525,9 @@ pub(crate) async fn hold_general(
     Ok(())
 }
 
-/// The general ad budget made from the paid lane `paid`, for a workspace that has none.
+/// The general ad budget of a workspace that has none, in the paid lane `paid`'s currency and
+/// period, at 0: without one no campaign could open (`no_general_ad_budget`), so the seed lifts
+/// no ad spend (design §4.3.2, §7.3); the owner raises it in Bütçe, up to the ad cap.
 async fn create_general(
     deps: &Deps,
     sys: &Ctx,
@@ -539,7 +542,7 @@ async fn create_general(
             name: AD_BUDGET_NAME.to_owned(),
             kind: BudgetKind::AdBudget,
             unit: Unit::Currency(paid.currency.clone()),
-            cap: paid.amount_minor,
+            cap: 0,
             unit_cost_minor: None,
             period: item_period(paid.period),
         },

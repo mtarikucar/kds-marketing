@@ -523,6 +523,32 @@ fn topic_ids_are_given_matched_by_title_or_new() {
 }
 
 #[test]
+fn a_title_never_takes_an_id_the_same_call_gives() {
+    let f = Facts::new();
+    let (s, h) = v5();
+    // The first entry has `h[0]`'s title but no id, the second names `h[0]` by its id: the id
+    // wins, and the first is a new topic rather than a refusal for a topic sent twice.
+    let same_title = TopicInput {
+        id: None,
+        angle: "Başka bir açı".into(),
+        ..sent(&h[0])
+    };
+    let m = f
+        .merge(
+            FrameCause::Derive,
+            Some((&s, &h)),
+            &posting(vec![same_title, sent(&h[0])]),
+        )
+        .unwrap();
+    let fresh = &m.hypotheses[0];
+    assert_ne!(fresh.id, h[0].id);
+    assert!(h.iter().all(|x| x.id != fresh.id));
+    assert_eq!(fresh.state, HypothesisState::Added);
+    assert_eq!(m.hypotheses[1].id, h[0].id);
+    assert_eq!(m.hypotheses[1].state, HypothesisState::Kept);
+}
+
+#[test]
 fn a_topic_id_must_be_of_the_workspace_and_never_the_owners_request() {
     let mut f = Facts::new();
     let (s, h) = v5();

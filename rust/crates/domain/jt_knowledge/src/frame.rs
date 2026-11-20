@@ -544,8 +544,11 @@ pub fn merge(
                     message: format!("at most {MAX_TOPICS} topics, got {}", topics.len()),
                 });
             }
+            // A title matches a topic of the frame in force only when no entry of this call names
+            // that topic by its id: the id given wins, and the title-matched entry is new.
+            let given: BTreeSet<HypothesisId> = topics.iter().filter_map(|t| t.id).collect();
             let mut by_title: BTreeMap<String, HypothesisId> = BTreeMap::new();
-            for h in &previous {
+            for h in previous.iter().filter(|h| !given.contains(&h.id)) {
                 by_title.entry(title_key(&h.title)).or_insert(h.id);
             }
             for (i, t) in topics.iter().enumerate() {

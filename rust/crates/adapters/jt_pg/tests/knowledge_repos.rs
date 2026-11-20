@@ -34,6 +34,7 @@ const TABLES: [&str; 5] = [
 const UP: &str = include_str!("../../../../migrations/0046_knowledge_base.up.sql");
 const DOWN: &str = include_str!("../../../../migrations/0046_knowledge_base.down.sql");
 const STRIP: &str = include_str!("../../../../scripts/rollback/strip_new_wake_reasons.sql");
+const WRITE_BACK: &str = include_str!("../../../../scripts/rollback/write_back_post_approval.sql");
 
 async fn table_count(pool: &PgPool) -> i64 {
     sqlx::query_scalar(
@@ -467,16 +468,142 @@ async fn the_rollback_script_strips_newer_wake_reasons_and_is_repeatable() {
     assert_eq!(t.agent_connections().wakes().await.unwrap().len(), 3);
 }
 
+/// Account `kind` of workspace `ws`, stored with its flag off (and retired when `retired`).
+async fn social_account(
+    uow: &PgUnitOfWork,
+    ws: WorkspaceId,
+    kind: &str,
+    retired: bool,
+) -> jt_capability::CapabilityId {
+    let mut c = jt_capability::Capability::new(
+        jt_capability::CapabilityId::new_v7(),
+        ws,
+        jt_capability::NewCapability {
+            kind_key: kind.into(),
+            name: format!("{kind} hesabı"),
+            ..jt_capability::NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    if retired {
+        c.status = jt_capability::StoredStatus::Retired;
+    }
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.capabilities().insert(c.clone(), None).await.unwrap();
+    t.commit().await.unwrap();
+    c.id
+}
+
+async fn stored_flag(uow: &PgUnitOfWork, ws: WorkspaceId, id: jt_capability::CapabilityId) -> bool {
+    let mut t = uow.tenant(ws).await.unwrap();
+    t.capabilities()
+        .find(id)
+        .await
+        .unwrap()
+        .unwrap()
+        .policy
+        .requires_human_approval
+}
+
+/// Design §7.6: before going back to PR 1's binaries, which read only the stored flag for posts,
+/// `write_back_post_approval.sql` writes post approval back onto it: every live social account
+/// of a workspace whose switch is on, each listed one of a workspace whose switch is off; one
+/// `capability.set_policy {reason: "rollback"}` per account changed; never a flag lowered, never
+/// a workspace not seeded, never another kind; and a second run changes nothing.
+#[tokio::test]
+async fn the_rollback_script_writes_post_approval_back_onto_the_stored_flags_once() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let deps = jt_testkit::fakes::deps(Arc::new(uow.clone()));
+    let (listed_ws, a_user) = db.seed_workspace("kb-rollback-list").await;
+    let (switch_ws, b_user) = db.seed_workspace("kb-rollback-switch").await;
+    let (unseeded_ws, _) = db.seed_workspace("kb-rollback-unseeded").await;
+    let listed = social_account(&uow, listed_ws, "instagram", false).await;
+    let unlisted = social_account(&uow, listed_ws, "x", false).await;
+    let covered = social_account(&uow, switch_ws, "instagram", false).await;
+    let tiktok = social_account(&uow, switch_ws, "tiktok", false).await;
+    let retired = social_account(&uow, switch_ws, "x", true).await;
+    let sms = social_account(&uow, switch_ws, "sms_line", false).await;
+    let elsewhere = social_account(&uow, unseeded_ws, "x", false).await;
+    for (ws, user) in [(listed_ws, a_user), (switch_ws, b_user)] {
+        seed::ensure(&deps, &owner(ws, user)).await.unwrap();
+    }
+    let mut t = uow.tenant(listed_ws).await.unwrap();
+    let mut k = t.knowledge().lock_settings().await.unwrap().unwrap();
+    k.post_approval_accounts = vec![listed.as_uuid()];
+    t.knowledge().save_settings(&k).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(switch_ws).await.unwrap();
+    let mut k = t.knowledge().lock_settings().await.unwrap().unwrap();
+    k.post_approval = true;
+    t.knowledge().save_settings(&k).await.unwrap();
+    t.commit().await.unwrap();
+
+    for _ in 0..2 {
+        sqlx::raw_sql(WRITE_BACK).execute(&db.pool).await.unwrap();
+        for (ws, id, flagged) in [
+            (listed_ws, listed, true),
+            (listed_ws, unlisted, false),
+            (switch_ws, covered, true),
+            (switch_ws, tiktok, true),
+            (switch_ws, retired, false),
+            (switch_ws, sms, false),
+            (unseeded_ws, elsewhere, false),
+        ] {
+            assert_eq!(stored_flag(&uow, ws, id).await, flagged, "{id:?}");
+        }
+        for (ws, expected) in [
+            (listed_ws, vec![listed]),
+            (switch_ws, vec![covered, tiktok]),
+            (unseeded_ws, vec![]),
+        ] {
+            let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+            let rows: Vec<(String, serde_json::Value, String)> = sqlx::query_as(
+                "select subject_id, payload, actor_component from ledger_entries                  where workspace_id = $1 and action = 'capability.set_policy' order by id",
+            )
+            .bind(ws.as_uuid())
+            .fetch_all(tx.conn())
+            .await
+            .unwrap();
+            let mut ids: Vec<String> = rows.iter().map(|(id, _, _)| id.clone()).collect();
+            ids.sort();
+            let mut want: Vec<String> = expected.iter().map(|c| c.as_uuid().to_string()).collect();
+            want.sort();
+            assert_eq!(
+                ids, want,
+                "one entry per account changed, by the first run only"
+            );
+            for (_, payload, component) in &rows {
+                assert_eq!(payload["reason"], "rollback");
+                assert_eq!(payload["policy"]["requires_human_approval"], true);
+                assert_eq!(component, "rollback");
+            }
+        }
+    }
+}
+
 /// The sample strategy of a fictional business (`jt_knowledge/tests/fixtures`), version 5 of
 /// workspace `ws`, approved by `user`, straight to the repos.
 async fn approved_sample(uow: &PgUnitOfWork, ws: WorkspaceId, user: UserId) -> StrategyVersionId {
+    approved_sample_with(uow, ws, user, |_| {}).await
+}
+
+/// [`approved_sample`] with its hypotheses as `edit` leaves them.
+async fn approved_sample_with(
+    uow: &PgUnitOfWork,
+    ws: WorkspaceId,
+    user: UserId,
+    edit: impl FnOnce(&mut Vec<jt_strategy::Hypothesis>),
+) -> StrategyVersionId {
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../../domain/jt_knowledge/tests/fixtures/strategy-sample.json"
     ))
     .unwrap();
     let sections: Sections = serde_json::from_value(fixture["sections"].clone()).unwrap();
-    let hypotheses: Vec<jt_strategy::Hypothesis> =
+    let mut hypotheses: Vec<jt_strategy::Hypothesis> =
         serde_json::from_value(fixture["hypotheses"].clone()).unwrap();
+    edit(&mut hypotheses);
     let id = StrategyVersionId::new_v7();
     let mut t = uow.tenant(ws).await.unwrap();
     t.strategy()
@@ -654,29 +781,43 @@ fn settled<T>(what: &str, r: Result<T, jt_app::error::AppError>) {
 }
 
 /// Design 2026-11-19 §4.10.13 (D35): the Kurallar save of the ad budget (draft, frame, settings,
-/// control, general item), the spend paths on the same general item (frame, capability,
-/// control, items; `refresh_period` takes the same locks in the same order as
-/// `reserve_metered_for`), Bütçe's own writes (the item, then the settings read without a lock)
-/// and a frame apply (draft, frame, settings, control) run at once, many times, and none
-/// deadlocks.
+/// control, general item), the spend paths on the same general item (`reserve_metered_for` and
+/// `studio::ads::recheck_periods`, whose `refresh_period` rolls an ad set's reservation over to
+/// every new frame: frame, capability, control, items), Bütçe's own writes (the item, then the
+/// settings read without a lock) and a rules mirror of the paid-message limit that writes a
+/// version each time (draft, frame, settings, control) run at once, many times: none deadlocks
+/// (no bundle ends `INTERNAL`), and nothing brakes the paid lane.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_postgres() {
     use jt_app::usecases::budget::{self, UpdateBudgetItem};
-    use jt_app::usecases::knowledge::frame::{self, Request, Waking};
     use jt_app::usecases::knowledge::rules::{self, RulesInput};
     use jt_capability::{Capability, CapabilityId, NewCapability};
     use jt_knowledge::CapInput;
-    use jt_knowledge::frame::{FrameCause, FrameParts};
 
     let db = TestDb::new().await;
     let (ws, user) = db.seed_workspace("kb-deadlock").await;
     let uow = PgUnitOfWork::new(db.pool.clone());
-    approved_sample(&uow, ws, user).await;
+    // The sample's first topic also runs on ads.
+    let v5 = approved_sample_with(&uow, ws, user, |h| {
+        h[0].cadence.insert(
+            jt_strategy::LaneKind::Paid,
+            jt_strategy::HypothesisCadence {
+                slots_per_week: 7,
+                exploration_bps: 0,
+                content_types: vec![jt_strategy::ContentTypeShare {
+                    key: "general".into(),
+                    min_bps: 0,
+                    max_bps: 10_000,
+                }],
+            },
+        );
+    })
+    .await;
     let deps = Arc::new(jt_testkit::fakes::deps(Arc::new(uow.clone())));
     let ctx = owner(ws, user);
     seed::ensure(&deps, &ctx).await.unwrap();
-    // The general ad budget the seed made from the paid lane gets a unit price, and an SMS line
-    // is metered on it.
+    // The general ad budget the seed made (at 0: there was none) is opened in Bütçe and gets a
+    // unit price, and an SMS line is metered on it.
     let general = budget::list_items(&deps, &ctx)
         .await
         .unwrap()
@@ -690,6 +831,7 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
         &ctx,
         general,
         UpdateBudgetItem {
+            cap: Some(2_500),
             unit_cost_minor: Some(Some(1)),
             ..Default::default()
         },
@@ -711,6 +853,7 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
     t.capabilities().insert(sms.clone(), None).await.unwrap();
     t.budget().link(sms.id, general).await.unwrap();
     t.commit().await.unwrap();
+    let binding = ad_set_on(&deps, &uow, ws, v5, general).await;
 
     let mut tasks = Vec::new();
     for worker in 0..3_i64 {
@@ -780,29 +923,29 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
                 );
             }
         }));
-        // The housekeeping applies the frame.
+        // A rules mirror of a moved paid-message limit: a new version each time, so the
+        // transition hook takes the studio control under contention.
         let (d, u) = (deps.clone(), uow.clone());
         tasks.push(tokio::spawn(async move {
             let ctx = settle_ctx(ws);
-            for _ in 0..4 {
+            for round in 0..4_i64 {
                 let mut r = u.tenant(ws).await.unwrap();
-                let out = frame::apply(
-                    &d,
-                    &ctx,
-                    r.as_mut(),
-                    Request {
-                        cause: FrameCause::Normalize,
-                        next: &FrameParts::default(),
-                        approver: None,
-                        waking: Waking::Nobody,
-                    },
-                )
-                .await;
+                let out = message_mirror(&d, &ctx, r.as_mut(), 10 * worker + round + 1).await;
                 if out.is_ok() {
                     settled("frame apply commit", r.commit().await);
                 } else {
                     settled("frame apply", out);
                 }
+            }
+        }));
+        // The ad set's reservation is rolled over to every new frame.
+        let d = deps.clone();
+        tasks.push(tokio::spawn(async move {
+            for _ in 0..4 {
+                settled(
+                    "recheck_periods",
+                    jt_app::usecases::studio::ads::recheck_periods(&d, ws).await,
+                );
             }
         }));
     }
@@ -828,4 +971,175 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
         .find(|l| l.lane == jt_strategy::LaneKind::Paid)
         .map(|l| l.cap_minor);
     assert_eq!(lane, Some(cap));
+    // The ad set followed the frames without a refusal: nothing braked the paid lane, and its
+    // reservation is the frame's.
+    let control = r.studio_control().lock_control().await.unwrap();
+    assert!(
+        !control.is_braked(jt_strategy::LaneKind::Paid),
+        "a refresh was refused: {control:?}"
+    );
+    drop(r);
+    jt_app::usecases::studio::ads::recheck_periods(&deps, ws)
+        .await
+        .unwrap();
+    let mut r = uow.tenant(ws).await.unwrap();
+    let rows = r.studio_budget().list_reservations().await.unwrap();
+    let frame = r.strategy().current_approved().await.unwrap().unwrap();
+    assert!(
+        rows.iter()
+            .any(|(row, _)| row.request.binding_id == Some(binding)
+                && row.request.executed_version_id == frame.id),
+        "the ad set is reserved under the frame in force"
+    );
+    assert!(
+        !r.studio_control()
+            .lock_control()
+            .await
+            .unwrap()
+            .is_braked(jt_strategy::LaneKind::Paid)
+    );
+}
+
+/// A rules mirror after the paid-message limit moved to `amount_minor`, in `r`'s bundle, as
+/// `rules_save` writes it: the draft, the frame and the settings locked, the settings saved, the
+/// frame applied (cause `rules`).
+async fn message_mirror(
+    deps: &jt_app::usecases::Deps,
+    ctx: &Ctx,
+    r: &mut dyn jt_app::ports::TenantRepos,
+    amount_minor: i64,
+) -> Result<jt_app::usecases::knowledge::frame::Applied, jt_app::error::AppError> {
+    use jt_app::usecases::knowledge::frame::{self, Request, Waking};
+    use jt_knowledge::frame::{FrameCause, FrameParts};
+    r.strategy().lock_draft().await?;
+    r.strategy().lock_execution_frame().await?;
+    let mut s = r
+        .knowledge()
+        .lock_settings()
+        .await?
+        .expect("the knowledge base is seeded");
+    if let Some(cap) = s.message_cap.as_mut() {
+        cap.amount_minor = amount_minor;
+    }
+    r.knowledge().save_settings(&s).await?;
+    frame::apply(
+        deps,
+        ctx,
+        r,
+        Request {
+            cause: FrameCause::Rules,
+            next: &FrameParts::default(),
+            approver: None,
+            waking: Waking::Nobody,
+        },
+    )
+    .await
+}
+
+/// An ad set bound on a verified ad account whose spend the general item `general` bounds, for
+/// the first topic of version `born` (its paid cadence), with one reservation of its daily
+/// budget under the frame in force: what `studio::ads::recheck_periods` rolls over.
+async fn ad_set_on(
+    deps: &jt_app::usecases::Deps,
+    uow: &PgUnitOfWork,
+    ws: WorkspaceId,
+    born: StrategyVersionId,
+    general: jt_capability::BudgetItemId,
+) -> jt_studio::AdSetBindingId {
+    use jt_studio::{AdSetBinding, AdSetBindingId, Arm, ArmId, ArmKey, Chain, ReserveSpend};
+    let mut t = uow.tenant(ws).await.unwrap();
+    let topic = t.hypotheses().list(born).await.unwrap()[0].id;
+    let mut c = jt_capability::Capability::new(
+        jt_capability::CapabilityId::new_v7(),
+        ws,
+        jt_capability::NewCapability {
+            kind_key: "meta_ads".into(),
+            name: "Reklam hesabı".into(),
+            external_id: Some("act_1".into()),
+            connector_public: json!({"access":{"scopes":["ads_read","ads_management"]}}),
+            ..jt_capability::NewCapability::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    c.status = jt_capability::StoredStatus::Verified;
+    c.last_verified_at = Some(FIXED_NOW);
+    let cred = jt_connector::Credential::OAuth {
+        access_token: "test".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["ads_read".into(), "ads_management".into()],
+    };
+    let sealed = deps
+        .seal
+        .seal(ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    t.capabilities()
+        .insert(c.clone(), Some(sealed))
+        .await
+        .unwrap();
+    t.budget().link(c.id, general).await.unwrap();
+    let arm = Arm::new(
+        ArmId::new_v7(),
+        ws,
+        ArmKey {
+            hypothesis_id: topic,
+            content_type: "general".into(),
+            channel: "meta_ads".into(),
+            lane: jt_strategy::LaneKind::Paid,
+        },
+    )
+    .unwrap();
+    t.studio().insert_arm(arm.clone()).await.unwrap();
+    let chain = Chain {
+        workspace_id: ws,
+        born_version_id: born,
+        hypothesis_id: topic,
+        arm_id: arm.id,
+    };
+    let b = AdSetBinding {
+        id: AdSetBindingId::new_v7(),
+        chain: chain.clone(),
+        capability_id: c.id,
+        account_id: "act_1".into(),
+        adset_id: "set_1".into(),
+        campaign_id: Some("campaign".into()),
+        verified_at: Some(FIXED_NOW),
+        verification_evidence: None,
+    };
+    t.studio().bind_adset(b.clone(), "binding").await.unwrap();
+    let frame = t.strategy().current_approved().await.unwrap().unwrap();
+    let saved = jt_app::usecases::studio::budget::reserve_connector_spend(
+        t.as_mut(),
+        ReserveSpend {
+            binding_id: Some(b.id),
+            chain: Some(chain),
+            replaces: None,
+            workspace_id: ws,
+            capability_id: c.id,
+            budget_item_ids: vec![general],
+            lane: jt_strategy::LaneKind::Paid,
+            executed_version_id: frame.id,
+            amount_minor: 30,
+            daily_budget_minor: Some(1),
+            currency: "TRY".into(),
+            evidence_key: format!("budget.move:{}", b.id),
+            at: FIXED_NOW,
+            module: None,
+            campaign_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    t.studio_budget()
+        .settle(
+            saved.id,
+            jt_studio::SpendOutcome::Applied {
+                evidence_key: saved.request.evidence_key.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    b.id
 }

@@ -637,7 +637,14 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
     // are written as the frame makes them before it is validated.
     let prepared = match &seeded {
         Some(settings) => Some(
-            super::knowledge::resync::prepare(ctx, repos.as_mut(), &mut draft, settings).await?,
+            super::knowledge::resync::prepare(
+                ctx,
+                repos.as_mut(),
+                &mut draft,
+                previous.as_ref(),
+                settings,
+            )
+            .await?,
         ),
         None => None,
     };
