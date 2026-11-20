@@ -8,7 +8,11 @@ use crate::{
         TenantRepos,
         materials::{Olay, OlayClient},
     },
-    usecases::ledger_entry,
+    usecases::{
+        Deps,
+        content::pending::{self, Left},
+        ledger_entry,
+    },
 };
 use jt_inbox::PersonId;
 use jt_studio::FileId;
@@ -41,8 +45,10 @@ async fn erased_with(
 /// Redacts the materials that show `person` and unlinks the olays naming them, under the Studio
 /// control lock, in the caller's transaction; the files of the materials redacted now, whose bytes
 /// the caller deletes once it has committed. Idempotent: an erased material or an unlinked olay is
-/// left as it is.
+/// left as it is. A redacted file a person attached for a post no longer holds its content: it
+/// leaves the pending lists, and a content left with nothing to wait for goes back to its agent.
 pub(crate) async fn erase_person(
+    d: &Deps,
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     person: PersonId,
@@ -83,6 +89,7 @@ pub(crate) async fn erase_person(
                 json!({"file_id":erased.file_id,"reason":"person_erased"}),
             )?)
             .await?;
+        pending::left(d, r, ctx, &erased, Left::Erased).await?;
         files.push(erased.file_id);
     }
     for o in r.studio_materials().list_olays().await? {

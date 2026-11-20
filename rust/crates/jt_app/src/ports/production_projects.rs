@@ -179,6 +179,10 @@ pub struct RefusedDelivery {
     pub versions: Vec<PackageVersion>,
     /// What held it, as the agent was told: `[{"index": n, "findings": [{"kind", "code", ...}]}]`.
     pub findings: serde_json::Value,
+    /// By version, whether the server gave it the owner's request as its hypothesis (a person's
+    /// content delivered without a topic, design 2026-11-19 §3.5); absent: none was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned: Vec<bool>,
 }
 
 /// One platform version of a package.

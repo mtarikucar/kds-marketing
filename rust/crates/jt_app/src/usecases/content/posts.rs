@@ -1055,15 +1055,10 @@ fn content_row(f: &Facts, v: &Viewer, p: &ProductionProject) -> Built {
             json!({"finding": first.as_ref().map(|x| x["code"].clone())}),
         ));
         // Releasable when only the text check holds it (`content.delivery_accept` checks again).
-        let text_only = p.refusal.as_ref().is_some_and(|x| {
-            x.findings.as_array().is_some_and(|vs| {
-                vs.iter().all(|v| {
-                    v["findings"]
-                        .as_array()
-                        .is_some_and(|fs| fs.iter().all(|f| f["kind"] == "text"))
-                })
-            })
-        });
+        let text_only = p
+            .refusal
+            .as_ref()
+            .is_some_and(|x| super::delivery::releasable(&x.findings));
         if text_only && v.person() && v.has(Permission::ContentManage) {
             actions.accept_held = Some(AreaRef {
                 project_id: p.id,
@@ -1799,7 +1794,6 @@ fn area_rows(f: &Facts, v: &Viewer, p: &ProductionProject) -> Vec<Built> {
 fn day_lines(f: &Facts, v: &Viewer, policy_lead: u16) -> (Vec<SpecialDayLine>, BTreeSet<String>) {
     let today = istanbul_day(f.now);
     let mut lines = Vec::new();
-    let mut keys = BTreeSet::new();
     let season_year = |o: &jt_studio::Olay| {
         o.occasion
             .as_deref()
@@ -1835,7 +1829,6 @@ fn day_lines(f: &Facts, v: &Viewer, policy_lead: u16) -> (Vec<SpecialDayLine>, B
             continue;
         }
         let key = jt_studio::season_request_key(&e.key, e.year);
-        keys.insert(key.clone());
         let pending: Vec<&Material> = f
             .materials
             .values()
@@ -1908,6 +1901,13 @@ fn day_lines(f: &Facts, v: &Viewer, policy_lead: u16) -> (Vec<SpecialDayLine>, B
         });
     }
     lines.sort_by(|a, b| (a.prepares_from, &a.key).cmp(&(b.prepares_from, &b.key)));
+    // Only a day shown as a line replaces its çekim listesi request; the days folded into
+    // `days_more` keep their need rows (§3.2.4).
+    let keys = lines
+        .iter()
+        .take(MAX_DAY_LINES)
+        .map(|l| jt_studio::season_request_key(&l.key, l.year))
+        .collect();
     (lines, keys)
 }
 
@@ -2172,20 +2172,19 @@ pub async fn posts(d: &Deps, ctx: &Ctx, q: PostsQuery) -> Result<PostsOut, AppEr
         facts,
     } = page(d, r.as_mut(), ctx).await?;
     let now = ctx.now;
-    let visible: Vec<&Built> = rows
-        .iter()
-        .filter(|b| stage.is_some() || !hidden_by_default(b, now))
-        .collect();
+    // The counts are over every row, whatever the filter and the page (§3.2.6); only the rows
+    // listed leave out the old failed posts the default view no longer shows.
     let mut counts = PostCounts::default();
-    for b in &visible {
+    for b in &rows {
         counts.all += 1;
         if !b.row.waits.is_empty() {
             counts.you += 1;
         }
         *counts.stages.entry(b.row.progress.stage()).or_default() += 1;
     }
-    let matching: Vec<&Built> = visible
-        .into_iter()
+    let matching: Vec<&Built> = rows
+        .iter()
+        .filter(|b| stage.is_some() || !hidden_by_default(b, now))
         .filter(|b| match (q.filter.as_deref(), stage) {
             (Some("you"), _) => !b.row.waits.is_empty(),
             (_, Some(s)) => b.row.progress.stage() == s,
@@ -2425,14 +2424,13 @@ async fn gone_row(
                     status,
                     tiktok_draft: false,
                     sub_state: None,
-                    progress: Progress::at(
-                        if status == RowStatus::Published { 7 } else { 6 },
-                        if status == RowStatus::Failed {
-                            StageState::Problem
-                        } else {
-                            StageState::Done
-                        },
-                    ),
+                    // As it was: out (done at Sonuç), failed (a problem at Yayın), else planned
+                    // and not yet out (current at Yayın, as a scheduled row reads).
+                    progress: match status {
+                        RowStatus::Published => Progress::at(7, StageState::Done),
+                        RowStatus::Failed => Progress::at(6, StageState::Problem),
+                        _ => Progress::at(6, StageState::Current),
+                    },
                     waits: Vec::new(),
                     actions: RowActions::default(),
                     ai_illustration: facts.ai(&shows),

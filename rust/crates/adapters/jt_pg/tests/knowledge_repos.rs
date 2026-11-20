@@ -583,6 +583,77 @@ async fn the_rollback_script_writes_post_approval_back_onto_the_stored_flags_onc
     }
 }
 
+/// Design §7.6: before going back to PR 3's binaries, which refuse a real material's share with no
+/// person on it, `clear_rule_shares.sql` clears every share the person-upload rule gave: the
+/// share and its column, the revision raised once, one `studio.material.permission_set {reason:
+/// "rollback"}` per material; a person's share is left as it is, and a second run changes nothing.
+#[tokio::test]
+async fn the_rollback_script_clears_the_shares_the_upload_rule_gave_once() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let (ws, _) = db.seed_workspace("kb-rollback-rule-shares").await;
+    let by_rule = jt_testkit::studio_contract::seed_material(&uow, ws).await;
+    let by_person = jt_testkit::studio_contract::seed_material(&uow, ws).await;
+    let mut t = uow.tenant(ws).await.unwrap();
+    let mut m = by_rule.clone();
+    m.share = Some(jt_studio::ShareDecision {
+        permission: jt_studio::SharePermission::Shareable,
+        by: None,
+        at: FIXED_NOW,
+        rule: Some(jt_studio::PERSON_UPLOAD_RULE.into()),
+    });
+    m.revision += 1;
+    t.studio_materials()
+        .update_material(m, by_rule.revision)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+
+    const CLEAR: &str = include_str!("../../../../scripts/rollback/clear_rule_shares.sql");
+    for _ in 0..2 {
+        sqlx::raw_sql(CLEAR).execute(&db.pool).await.unwrap();
+        let mut t = uow.tenant(ws).await.unwrap();
+        let cleared = t
+            .studio_materials()
+            .get_material(by_rule.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cleared.share, None);
+        assert_eq!(cleared.revision, by_rule.revision + 2, "raised once");
+        let kept = t
+            .studio_materials()
+            .get_material(by_person.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept, by_person);
+        drop(t);
+        let mut tx = TenantTx::begin(&db.pool, ws).await.unwrap();
+        let column: Option<String> = sqlx::query_scalar(
+            "select share from studio_materials where workspace_id=$1 and id=$2",
+        )
+        .bind(ws.as_uuid())
+        .bind(by_rule.id.0)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+        let rows: Vec<(String, serde_json::Value, String)> = sqlx::query_as(
+            "select subject_id, payload, actor_component from ledger_entries              where workspace_id = $1 and action = 'studio.material.permission_set' order by id",
+        )
+        .bind(ws.as_uuid())
+        .fetch_all(tx.conn())
+        .await
+        .unwrap();
+        assert_eq!(column, None);
+        assert_eq!(rows.len(), 1, "one entry, by the first run only");
+        assert_eq!(rows[0].0, by_rule.id.0.to_string());
+        assert_eq!(rows[0].1["reason"], "rollback");
+        assert_eq!(rows[0].1["share"], serde_json::Value::Null);
+        assert_eq!(rows[0].2, "rollback");
+    }
+}
+
 /// The sample strategy of a fictional business (`jt_knowledge/tests/fixtures`), version 5 of
 /// workspace `ws`, approved by `user`, straight to the repos.
 async fn approved_sample(uow: &PgUnitOfWork, ws: WorkspaceId, user: UserId) -> StrategyVersionId {

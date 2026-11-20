@@ -665,6 +665,8 @@ pub async fn material_analysis_complete(
     r.studio_materials().save_intelligence(row.clone()).await?;
     if share_cleared {
         super::invalidate_material_productions(r.as_mut(), material.id, ctx.now, false).await?;
+        // A person's file for a post waits for `İzin ver` again where it is still used (§3.4.4).
+        crate::usecases::content::pending::reopened(r.as_mut(), ctx, &material).await?;
     }
     r.ledger()
         .append(ledger_entry(

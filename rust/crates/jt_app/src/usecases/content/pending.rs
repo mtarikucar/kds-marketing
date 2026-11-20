@@ -60,6 +60,9 @@ pub(crate) enum Left {
     /// A person deleted it. (A person taking it out of a content's sources, `Bu dosya olmadan
     /// devam et`, is `studio.project_materials`' own.)
     Deleted,
+    /// It was redacted by a person's erasure (KVKK): nothing waits for it any more, and it stays
+    /// a source as the erasure leaves it (what was produced of it is invalidated there).
+    Erased,
 }
 
 /// Who the work that a pending file held goes on for: the person in person, else the person who
@@ -95,6 +98,8 @@ async fn wake_for(
 /// source) is saved without it; a content whose list empties is woken (`content_requested`, or
 /// `capture_answered` when a capture answer was the file); a need is answered `done` with its
 /// first shared file; a special day's calendar trigger runs once a file of it is shared.
+///
+/// Only live areas are walked: an archived one is pruned when it is brought back ([`prune`]).
 pub(crate) async fn left(
     d: &Deps,
     r: &mut dyn TenantRepos,
@@ -170,6 +175,54 @@ pub(crate) async fn left(
             )
             .await?;
         }
+    }
+    Ok(())
+}
+
+/// Whether pending file `m` (`None`: no longer stored) no longer waits: it has its share or was
+/// erased.
+fn settled(m: Option<&Material>) -> bool {
+    m.is_none_or(|m| m.share.is_some() || m.erased_at.is_some())
+}
+
+/// Drops from `p.pending_files` every file that no longer waits ([`settled`]); whether any was
+/// dropped. What an archived area missed while [`left`] walked only the live ones (a file
+/// shared, deleted or erased meanwhile) is caught up when it is brought back.
+pub(crate) async fn prune(
+    r: &mut dyn TenantRepos,
+    p: &mut ProductionProject,
+) -> Result<bool, AppError> {
+    if p.pending_files.is_empty() {
+        return Ok(false);
+    }
+    let stored = r.studio_materials().get_materials(&p.pending_files).await?;
+    let before = p.pending_files.len();
+    p.pending_files
+        .retain(|id| !settled(stored.iter().find(|m| m.id == *id)));
+    Ok(p.pending_files.len() != before)
+}
+
+/// After an analysis or a person's tags cleared the share of `m` (a face, a child, a name found
+/// later), in the caller's transaction: a person's file waits for its share again in every live
+/// content still being made that holds it as a source, so the row asks `İzin ver` and no agent
+/// is offered the content meanwhile (§3.4.4).
+pub(crate) async fn reopened(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    m: &Material,
+) -> Result<(), AppError> {
+    if m.upload_for.is_none() || m.share.is_some() || m.erased_at.is_some() {
+        return Ok(());
+    }
+    for mut p in r.studio_projects().list_live_areas().await? {
+        if p.done_at().is_some()
+            || p.pending_files.contains(&m.id)
+            || !p.sources.iter().any(|s| s.material_id == m.id)
+        {
+            continue;
+        }
+        p.pending_files.push(m.id);
+        projects::save(r, ctx, p, "content.area.files_reopened").await?;
     }
     Ok(())
 }

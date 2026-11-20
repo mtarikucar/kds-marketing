@@ -868,6 +868,8 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     }
     if share_cleared {
         super::invalidate_material_productions(r.as_mut(), m.id, ctx.now, false).await?;
+        // A person's file for a post waits for `İzin ver` again where it is still used (§3.4.4).
+        crate::usecases::content::pending::reopened(r.as_mut(), ctx, &m).await?;
     }
     append(
         r.as_mut(),

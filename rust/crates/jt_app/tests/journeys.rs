@@ -170,6 +170,8 @@ struct Journey {
     w: World,
     p: Platform,
     connector: Arc<ScriptedConnector>,
+    /// The X connector (the fixture's account), also `connector` for X.
+    x: Arc<ScriptedConnector>,
     account: CapabilityId,
     /// The strategy's own hypothesis, which posts on another platform.
     other: HypothesisId,
@@ -190,7 +192,7 @@ async fn world_for(p: Platform) -> Journey {
     };
     let mut registry = ScriptedRegistry::new()
         .with_connector(w.ads.clone())
-        .with_connector(x);
+        .with_connector(x.clone());
     if p.provider != Provider::X {
         registry = registry.with_connector(connector.clone());
     }
@@ -276,6 +278,7 @@ async fn world_for(p: Platform) -> Journey {
         w,
         p,
         connector,
+        x,
         account,
         other,
     }
@@ -1247,4 +1250,141 @@ async fn the_approval_switch_holds_and_releases_posts() {
     .unwrap();
     assert!(!j.waits_for_owner(&area).await);
     j.send(&slot).await;
+}
+
+/// §8.2: X and TikTok connected, the owner writes a request in the composer with no file → the
+/// agent adds what fits and delivers one version per account naming no topic → both are offered
+/// under the owner's request → each gets its time → TikTok's posting screen → both are sent → the
+/// measurements land on the owner's-request arm of each platform.
+#[tokio::test]
+async fn the_owners_free_text_request_posts_on_every_connected_account() {
+    let mut j = world_for(TIKTOK).await;
+    jt_testkit::studio_contract::install_all_modules(&j.w.uow, j.w.f.ws).await;
+    let x_account = j.w.f.slot.capability_id;
+    let tiktok = j.account;
+    let out = content::post_request(
+        &j.w.d,
+        &j.w.ctx,
+        input(
+            json!({"request_key":"owner-1","text":"Yeni sezon figürlerini paylaş",
+            "file_ids":[]}),
+        ),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let id = out.row.area_id.expect("a content of the owner's");
+
+    // The agent adds what fits to the content and delivers one version per account, no topic.
+    let image = material(&j.w, image()).await;
+    let clip = material(&j.w, video()).await;
+    let a = agent(&j.w);
+    let p = projects::project_get(&j.w.d, &a, input(json!({"project_id":id})))
+        .await
+        .unwrap()
+        .project;
+    let p = projects::project_materials(
+        &j.w.d,
+        &a,
+        input(json!({"project_id":id,"expected_revision":p.revision,
+            "add":[image.id, clip.id]})),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let c = content::area_claim(
+        &j.w.d,
+        &a,
+        input(json!({"project_id":id,"expected_revision":p.revision})),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let p = content::area_deliver(
+        &j.w.d,
+        &a,
+        input(json!({"project_id":id,"claim_token":c.claim_token,
+            "request_key":"owner-1-delivery","summary":"Hazır","versions":[
+                {"format":"feed_post","capability_id":x_account,
+                 "text":"Yeni figürler hazır","material_ids":[image.id]},
+                {"format":"tiktok_video","capability_id":tiktok,
+                 "text":"Yeni figürler hazır","material_ids":[clip.id]}]})),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e:?}"))
+    .project;
+
+    // Both are offered on their account, under the owner's request.
+    let waiting = social::versions_waiting(&j.w.d, &agent(&j.w), input(json!({})))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|k| k.project_id == id)
+        .expect("the versions wait for a time");
+    assert_eq!(waiting.versions.len(), 2);
+    for (v, account) in waiting.versions.iter().zip([x_account, tiktok]) {
+        assert_eq!(v.blocked, None);
+        assert_eq!(v.accounts, [account]);
+        assert!(!v.choices.is_empty());
+        assert!(
+            v.choices
+                .iter()
+                .all(|c| c.attribution == Attribution::OwnerRequest)
+        );
+    }
+
+    // Each gets its time, attributed to the owner's request.
+    let versions = p.packages.last().unwrap().versions.clone();
+    let mut slots = Vec::new();
+    for (n, (v, account)) in versions.iter().zip([x_account, tiktok]).enumerate() {
+        let slot = social::version_schedule(
+            &j.w.d,
+            &agent(&j.w),
+            input(
+                json!({"project_id":id,"version_id":v.id,"capability_id":account,
+                "publish_at":rfc3339(WHEN + Duration::minutes(30 * n as i64)),
+                "request_key":format!("owner-1-time-{n}")}),
+            ),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .publication
+        .slot;
+        assert_eq!(slot.chain.hypothesis_id, owner_request::id(j.w.f.ws));
+        assert_eq!(
+            j.attributed(&slot).expect("the attribution is recorded")["attribution"],
+            "owner_request"
+        );
+        slots.push(slot);
+    }
+
+    // TikTok's posting screen, then both go out at their time.
+    j.complete(&slots[1]).await;
+    j.w.d.clock = Arc::new(FixedClock(WHEN + Duration::hours(1)));
+    j.x.push_publish(Ok(PublishReceipt {
+        external_id: "x-post".into(),
+        url: None,
+    }));
+    j.connector.push_publish(Ok(PublishReceipt {
+        external_id: "tiktok-post".into(),
+        url: None,
+    }));
+    assert_eq!(
+        publish::publish_due(&j.w.d, j.w.f.ws).await.unwrap(),
+        2,
+        "both posts are sent"
+    );
+    let s = j.w.uow.snapshot();
+    for (slot, kind) in slots.iter().zip(["x", "tiktok"]) {
+        assert!(
+            s.studio.attempts.iter().any(|a| a.slot_id() == slot.id),
+            "the {kind} post was sent"
+        );
+        // What it measures goes to the owner's-request arm of its platform.
+        let arm = s
+            .studio
+            .arms
+            .iter()
+            .find(|a| a.id == slot.chain.arm_id)
+            .expect("the post's arm");
+        assert_eq!(arm.key.hypothesis_id, owner_request::id(j.w.f.ws));
+        assert_eq!(arm.key.channel, kind);
+    }
 }

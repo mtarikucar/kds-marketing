@@ -336,6 +336,7 @@ pub async fn area_deliver(d: &Deps, ctx: &Ctx, i: DeliverInput) -> Result<AreaOu
             summary,
             versions,
             findings: json!(held),
+            assigned,
         });
         projects::save(r.as_mut(), ctx, p, "content.package.refused").await?;
         let details = json!({"reason":"package_refused","versions":held});
@@ -416,29 +417,19 @@ pub async fn delivery_accept(
     else {
         return Err(AppError::conflict("the area holds no delivery to release"));
     };
-    // A person's content holds the owner's request where its agent named no topic (§3.5).
-    let assigned: Vec<bool> = kept
-        .versions
-        .iter()
-        .map(|v| {
-            p.requested_by.is_some()
-                && crate::usecases::studio::owner_request::is(ctx.workspace_id, v.hypothesis_id)
-        })
-        .collect();
-    let held = held_versions(d, r.as_mut(), ctx, frame.id, &p, &kept.versions, &assigned).await?;
-    let text_only = |finding: &Value| finding["kind"] == "text";
-    let blocking: Vec<Value> = held
-        .iter()
-        .filter_map(|v| {
-            let rest: Vec<&Value> = v["findings"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|f| !text_only(f))
-                .collect();
-            (!rest.is_empty()).then(|| json!({"index":v["index"],"findings":rest}))
-        })
-        .collect();
+    // The owner's request is the hypothesis only of the versions the server gave it, as the
+    // delivery recorded them (§3.5): one whose agent named it stays refused `hypothesis_reserved`.
+    let held = held_versions(
+        d,
+        r.as_mut(),
+        ctx,
+        frame.id,
+        &p,
+        &kept.versions,
+        &kept.assigned,
+    )
+    .await?;
+    let blocking = blocking(&held);
     if !blocking.is_empty() {
         return Err(AppError {
             code: ErrorCode::Conflict,
@@ -474,6 +465,31 @@ pub async fn delivery_accept(
     let out = projects::detail(r.as_mut(), p).await?;
     r.commit().await?;
     Ok(out)
+}
+
+/// What in `held` (`[{"index", "findings"}]`, as [`held_versions`] gives it) a person may not
+/// release: each version's findings other than the truth check's (`"kind":"text"`).
+fn blocking(held: &[Value]) -> Vec<Value> {
+    held.iter()
+        .filter_map(|v| {
+            let rest: Vec<&Value> = v["findings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|f| f["kind"] != "text")
+                .collect();
+            (!rest.is_empty()).then(|| json!({"index":v["index"],"findings":rest}))
+        })
+        .collect()
+}
+
+/// Whether a kept delivery refused with `findings` is one a person may release
+/// (`content.delivery_accept`'s check, made pure for the read): something holds it, and only the
+/// truth check does.
+pub(crate) fn releasable(findings: &Value) -> bool {
+    findings
+        .as_array()
+        .is_some_and(|held| !held.is_empty() && blocking(held).is_empty())
 }
 
 fn refusal(details: Value) -> AppError {

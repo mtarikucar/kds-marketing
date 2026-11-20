@@ -181,9 +181,23 @@ async fn attach(
                 }
                 changed = true;
             }
-            if m.share.is_none() && m.upload_for.is_none() {
-                m.upload_for = Some(upload.clone());
-                changed = true;
+            // A file still waiting for its share is attached for this target too: it settles
+            // every target it was added for once it gets its share (one of each kind: the
+            // latest need or day replaces an earlier one).
+            if m.share.is_none() {
+                let merged = match m.upload_for.clone() {
+                    None => upload.clone(),
+                    Some(old) => jt_studio::UploadFor {
+                        area_id: upload.area_id.or(old.area_id),
+                        shoot_request_id: upload.shoot_request_id.or(old.shoot_request_id),
+                        day: upload.day.clone().or(old.day),
+                        ..old
+                    },
+                };
+                if m.upload_for.as_ref() != Some(&merged) {
+                    m.upload_for = Some(merged);
+                    changed = true;
+                }
             }
             if changed {
                 m.revision = m
@@ -591,6 +605,8 @@ pub async fn files_add(d: &Deps, ctx: &Ctx, i: FilesAddInput) -> Result<FilesAdd
         return files_answer(d, r.as_mut(), ctx, &i.target).await;
     }
     let mut upload = pending::upload_for(by, ctx.now);
+    // The special day's olay, for that target.
+    let mut day_olay_of = None;
     let (shown, created) = match &i.target {
         FilesTarget::SpecialDay { key, year } => {
             let lib = materials::library(r.as_mut(), ctx.now).await?;
@@ -602,6 +618,7 @@ pub async fn files_add(d: &Deps, ctx: &Ctx, i: FilesAddInput) -> Result<FilesAdd
                 .cloned()
                 .ok_or_else(|| AppError::not_found("special day"))?;
             let olay = day_olay(d, r.as_mut(), ctx, by, &entry, &lib.calendar, &lib.olays).await?;
+            day_olay_of = Some(olay);
             upload.day = Some(UploadDay {
                 key: key.clone(),
                 year: *year,
@@ -681,7 +698,8 @@ pub async fn files_add(d: &Deps, ctx: &Ctx, i: FilesAddInput) -> Result<FilesAdd
             (shown, created)
         }
     };
-    // A file that is shared already (a live material used again) settles its need or day now.
+    // A file that is shared already (a live material used again) settles its need or day now; a
+    // day only with a file of its own olay, the one its content is made of.
     if !matches!(i.target, FilesTarget::Capture { .. }) {
         for m in shown.iter().filter(|m| {
             m.share.as_ref().is_some_and(|s| {
@@ -689,7 +707,7 @@ pub async fn files_add(d: &Deps, ctx: &Ctx, i: FilesAddInput) -> Result<FilesAdd
                     s.permission,
                     SharePermission::Shareable | SharePermission::ProductOnly
                 )
-            })
+            }) && day_olay_of.is_none_or(|o| m.olay_id() == Some(o))
         }) {
             let mut m = m.clone();
             m.upload_for = Some(upload.clone());

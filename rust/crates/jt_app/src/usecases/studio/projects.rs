@@ -735,6 +735,11 @@ pub async fn project_update(
     if let Some(archived) = i.archived {
         p.archived = archived;
     }
+    // Brought back: what its files missed while it was archived (a share, a deletion, an
+    // erasure) is caught up, so it waits only for what still waits (§3.4.4).
+    if was_archived && !p.archived {
+        crate::usecases::content::pending::prune(r.as_mut(), &mut p).await?;
+    }
     let p = save(r.as_mut(), ctx, p, "studio.project.updated").await?;
     if was_archived && !p.archived && p.needs_agent(ctx.now) {
         crate::usecases::wake::request(
