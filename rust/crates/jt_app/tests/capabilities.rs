@@ -16,7 +16,6 @@ use jt_app::usecases::capabilities::{
     self, CapabilityQuery, DeclareInput, UowChannelCatalog, UpdateCapability, parse_policy_strict,
 };
 use jt_app::usecases::groups;
-use jt_app::usecases::strategy;
 use jt_capability::{
     BudgetItemId, BudgetKind, CapabilityGroupId, CapabilityId, EffectiveStatus, Evidence, Hours,
     MAX_DESCRIPTION_CHARS, Period, Policy, RESERVED_PUBLIC_KEYS, Reach, StoredStatus, Unit,
@@ -1875,8 +1874,10 @@ async fn groups_need_capabilities_manage_to_change_and_workspace_read_to_list() 
     assert_forbidden(&err(groups::list(d, &auditor).await), "workspace.read");
 }
 
+/// A frame names no group (design 2026-11-19 K6: every connected account is used), so a group
+/// an old version still narrows a channel to is deleted like any other.
 #[tokio::test]
-async fn group_referenced_by_strategy_cannot_be_deleted() {
+async fn a_group_an_old_version_narrows_to_is_deleted_like_any_other() {
     let w = world().await;
     let (d, o) = (&w.deps, &w.owner_ctx);
     let brand = groups::create(d, o, "Marka A".into(), None)
@@ -1884,32 +1885,22 @@ async fn group_referenced_by_strategy_cannot_be_deleted() {
         .unwrap()
         .group
         .id;
-    let spare = groups::create(d, o, "Yedek".into(), None)
-        .await
-        .unwrap()
-        .group
-        .id;
-    let narrowed_to = |group: Option<CapabilityGroupId>| Sections {
-        channels: vec![ChannelChoice {
-            channel: "any".into(),
-            rationale: "her yerde".into(),
-            group_id: group.map(|g| g.as_uuid()),
-        }],
-        ..Sections::default()
-    };
-
-    // The approved version narrows its channel to the brand's group; the draft opened from it
-    // copies the choice.
-    let approved = StrategyVersionId::new_v7();
     {
         let mut t = w.uow.tenant(w.ws).await.unwrap();
         t.strategy()
             .insert(StrategyVersion {
-                id: approved,
+                id: StrategyVersionId::new_v7(),
                 workspace_id: w.ws,
                 number: 1,
                 status: VersionStatus::Approved,
-                sections: narrowed_to(Some(brand)),
+                sections: Sections {
+                    channels: vec![ChannelChoice {
+                        channel: "any".into(),
+                        rationale: "her yerde".into(),
+                        group_id: Some(brand.as_uuid()),
+                    }],
+                    ..Sections::default()
+                },
                 created_at: FIXED_NOW,
                 created_by: Actor::Human { user_id: w.owner },
                 submitted_at: Some(FIXED_NOW),
@@ -1921,23 +1912,7 @@ async fn group_referenced_by_strategy_cannot_be_deleted() {
             .unwrap();
         t.commit().await.unwrap();
     }
-    let draft = strategy::start_consultation(d, o).await.unwrap().id;
-    let e = err(groups::delete(d, o, brand).await);
-    assert_eq!(e.code, ErrorCode::Conflict);
-    assert_eq!(e.message, "group is referenced by the strategy");
-    assert_eq!(e.details, json!({ "version_ids": [approved, draft] }));
-
-    // The draft drops the group; the approved version still names it.
-    let channels = json!([{ "channel": "any", "rationale": "her yerde" }]);
-    strategy::write_section(d, o, "channels".into(), channels)
-        .await
-        .unwrap();
-    let e = err(groups::delete(d, o, brand).await);
-    assert_eq!(e.details, json!({ "version_ids": [approved] }));
-    assert_eq!(groups::list(d, o).await.unwrap().len(), 2);
-    assert!(w.entries("capability.groups.delete").is_empty());
-
-    // A group nothing refers to is deleted as before.
-    groups::delete(d, o, spare).await.unwrap();
+    groups::delete(d, o, brand).await.unwrap();
+    assert!(groups::list(d, o).await.unwrap().is_empty());
     assert_eq!(w.entries("capability.groups.delete").len(), 1);
 }

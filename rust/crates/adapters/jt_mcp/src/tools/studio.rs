@@ -13,7 +13,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
             use_case: "studio.overview",
-            description: "Read shared five-region Studio overview. [risk: READ]",
+            description: "Read shared five-region Studio overview; goals.kpis are the owner's goals (Hedefler), live, and goals.objective the frame's. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.overview"),
             schema: || Schema::try_from(schema::input("overview")).expect("studio schema"),
             run: overview,
@@ -90,7 +90,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.slot_get",
-            description: "Read slot content, hypothesis, brand rules, learning and evidence, and the piece's material_check: caption findings (code, matched words), their digest, whether a human released them, and hard findings (never releasable). A failed or uncertain publish attempt carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: x: HTTP 402 CreditsDepleted: ...\"); the outcome itself keeps only the closed category. With content.work or content.manage, a post made of a content version also carries content: the area (project_id, title), its current package_revision, whether the post is of that package (current), the redo standing, and the package's planned posts (slot, format, account, time, state, published, withdrawn_by_redo: whether a person's redo would take it back). [risk: READ]",
+            description: "Read slot content, hypothesis, brand_rules (the identity the owner's cards give, the prohibitions, the voice card and the owner's open notes, all live), learning and evidence, and the piece's material_check: caption findings (code, matched words), their digest, whether a human released them, and hard findings (never releasable). A failed or uncertain publish attempt carries failure_reason: the error kind, provider and the provider's reason (e.g. \"permanent: x: HTTP 402 CreditsDepleted: ...\"); the outcome itself keeps only the closed category. With content.work or content.manage, a post made of a content version also carries content: the area (project_id, title), its current package_revision, whether the post is of that package (current), the redo standing, and the package's planned posts (slot, format, account, time, state, published, withdrawn_by_redo: whether a person's redo would take it back). [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.slot_get"),
             schema: || Schema::try_from(schema::input("slot_get")).expect("studio schema"),
             run: slot_get,

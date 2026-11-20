@@ -68,6 +68,12 @@ async fn research_tasks_round_trip_and_one_standing_per_entry() {
 }
 
 #[tokio::test]
+async fn research_tasks_are_carried_to_a_newer_version() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::research_tasks_are_carried_to_a_newer_version(uow).await;
+}
+
+#[tokio::test]
 async fn blocklist_dnc_upgrades_rejected() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::prospects_contract::blocklist_dnc_upgrades_rejected(uow).await;

@@ -571,6 +571,11 @@ pub async fn verify(
     )
     .await?;
     repos.commit().await?;
+    // A social account a waiting post can now go out on wakes the social agent (design
+    // 2026-11-19 D40); the verification stands whatever this does.
+    if let Err(_e) = super::social::schedule::account_connected(deps, ctx, &[id]).await {
+        tracing::warn!(workspace_id = %ctx.workspace_id, "the social agent could not be woken for a verification");
+    }
     Ok(CapabilityOut::at(capability, ctx.now))
 }
 
@@ -649,6 +654,14 @@ pub async fn mark_unreachable(
 /// A policy with gaps (`validate_policy`) is `VALIDATION` with `details.gaps`. An unknown id is
 /// `NOT_FOUND`; a retired capability `CONFLICT`. The capability's strategy version becomes the
 /// one in force, if any. Writes `capability.set_policy` (payload `policy`).
+///
+/// Post approval is the knowledge base's (design 2026-11-19 §3.10.1, D1): once a workspace's
+/// post gate is seeded the stored `requires_human_approval` no longer holds a social account's
+/// posts (it still holds its comment replies). So a person who turns it on for a social account,
+/// in person, also puts the account into the approval list, and one who turns it off (an owner
+/// or a manager, while the Kurallar switch is off) takes it out, in the same bundle
+/// (`knowledge::rules::follow_policy`): the dialog keeps holding, or freeing, the posts it says
+/// it does. An agent's policy write never moves post approval.
 pub async fn set_policy(
     deps: &Deps,
     ctx: &Ctx,
@@ -661,8 +674,21 @@ pub async fn set_policy(
         return Err(gaps_error("the policy is not valid", gaps));
     }
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    // The knowledge base's settings before the capability (design 2026-11-19 §4.10.13).
+    let rules = super::knowledge::rules::lock_for_policy(ctx, repos.as_mut()).await?;
     let mut capability = locked(repos.as_mut(), id).await?;
     not_retired(&capability)?;
+    if let Some(rules) = rules {
+        super::knowledge::rules::follow_policy(
+            deps,
+            ctx,
+            repos.as_mut(),
+            rules,
+            &capability,
+            policy.requires_human_approval,
+        )
+        .await?;
+    }
     let in_force = version_in_force(repos.as_mut()).await?;
     let payload = json!({ "policy": policy });
     capability.policy = policy;

@@ -21,6 +21,9 @@ use crate::text::{cut, one_line};
 pub const DRAFT_REASON: &str = "Daha önce yazılmıştı ama uygulanmamıştı.";
 /// The reason of a proposal for a text of the strategy archived last.
 pub const ARCHIVED_REASON: &str = "Daha önce kullanılıyordu; istersen geri ekle.";
+/// The reason of a proposal for a text an approval through the old strategy tools wrote for a
+/// card the owner had changed since (design §4.3.4).
+pub const RESYNC_REASON: &str = "Önceki sayfada onaylanan metin.";
 /// The consultation log's note on a draft the seeding closes.
 pub const DRAFT_CLOSED_NOTE: &str = "closed: the knowledge base replaces drafts";
 /// The name of the general ad budget the seeding creates from a paid lane.
@@ -171,13 +174,16 @@ fn sentence(text: &str) -> String {
     format!("{}.", text.trim_end_matches('.'))
 }
 
-/// "Biz kimiz": the positioning, then what sets the business apart.
+/// "Biz kimiz": the positioning, then what sets the business apart, unless the positioning says
+/// it already (a frame's positioning is the card's whole text, D34, so a version copied from a
+/// frame ends with that line).
 fn who_we_are(identity: &Identity) -> String {
     let usp = identity.usp.trim();
-    let lines: Vec<String> = if usp.is_empty() {
+    let line = format!("Bizi farklı kılan: {usp}");
+    let lines: Vec<String> = if usp.is_empty() || identity.positioning.contains(&line) {
         Vec::new()
     } else {
-        vec![format!("Bizi farklı kılan: {usp}")]
+        vec![line]
     };
     fit(Some(&identity.positioning), &lines)
 }

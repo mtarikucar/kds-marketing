@@ -809,7 +809,7 @@ async fn confirm_assets_with_hosts(
 
     allow_hosts(deps, ctx, &hosts);
     let mut out = Vec::with_capacity(touched.len());
-    for id in touched {
+    for id in touched.iter().copied() {
         if let Err(_e) = probe_locked(deps, ctx, id, true).await {
             tracing::warn!(
                 workspace_id = %ws,
@@ -818,6 +818,11 @@ async fn confirm_assets_with_hosts(
             );
         }
         out.push(current(deps, ctx, id).await?);
+    }
+    // An account a waiting post can now go out on wakes the social agent (design 2026-11-19
+    // D40); the connection stands whatever this does.
+    if let Err(_e) = super::social::schedule::account_connected(deps, ctx, &touched).await {
+        tracing::warn!(workspace_id = %ws, "the social agent could not be woken for a connection");
     }
     Ok(out)
 }

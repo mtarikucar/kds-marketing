@@ -372,6 +372,8 @@ async fn plan_paid(
         return Ok(0);
     }
     let start = istanbul_week_start(now);
+    // A closing topic gets no new work (design 2026-11-19 §4.10.6).
+    let closing = crate::usecases::knowledge::read::closing_topics(r).await?;
     let hypotheses = r.hypotheses().list(frame.id).await?;
     let groups = r.capability_groups().list().await?;
     let caps = r.capabilities().list(CapabilityFilter::default()).await?;
@@ -398,7 +400,10 @@ async fn plan_paid(
         });
     }
     let mut lanes = Vec::new();
-    for h in hypotheses.iter().filter(|h| h.state.is_live()) {
+    for h in hypotheses
+        .iter()
+        .filter(|h| h.state.is_live() && !closing.contains(&h.id))
+    {
         let Some(cadence) = h.cadence.get(&LaneKind::Paid) else {
             continue;
         };

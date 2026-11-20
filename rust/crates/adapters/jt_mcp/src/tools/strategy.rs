@@ -1,7 +1,12 @@
-//! `jeeta.strategy.get`, `jeeta.strategy.start_consultation`, `jeeta.strategy.record`,
-//! `jeeta.strategy.write_section`, `jeeta.strategy.set_hypotheses`, `jeeta.strategy.submit`,
-//! `jeeta.strategy.approve`, `jeeta.strategy.archive`, `jeeta.strategy.list_versions` and
-//! `jeeta.strategy.consultation`.
+//! `jeeta.strategy.get`, `jeeta.strategy.knowledge_get`, `jeeta.strategy.start_consultation`,
+//! `jeeta.strategy.record`, `jeeta.strategy.write_section`, `jeeta.strategy.set_hypotheses`,
+//! `jeeta.strategy.submit`, `jeeta.strategy.approve`, `jeeta.strategy.archive`,
+//! `jeeta.strategy.list_versions` and `jeeta.strategy.consultation`.
+//!
+//! The knowledge base (design 2026-11-19 §4) is read with `knowledge_get`; `get` answers it in
+//! the shape older routines read the strategy (§5.4). The consultation tools stay for those
+//! routines and work on the internal frame; an approval through them keeps the knowledge base
+//! equal (§4.3.4).
 //!
 //! Reading needs `workspace.read`; every change needs `team.manage` (approving and archiving also
 //! the role owner or manager, which the use cases check). The arguments mirror the panel's
@@ -27,15 +32,36 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         ToolDef {
             use_case: "strategy.get",
-            description: "Read the workspace's strategy: the approved version in force (null \
-                          until one is approved), the draft being worked out (null when none is \
-                          open) and the gaps that stop the draft from being approved. Ask the \
-                          owner the open questions, record each answer, write sections, set \
-                          hypotheses, submit; the owner or a manager approves. Gated tools work \
-                          only while a version is approved. [risk: READ]",
+            description: "Read the knowledge base in the shape older routines read the \
+                          strategy: approved.sections.identity (product, voice and positioning \
+                          from the owner's cards), prohibitions and goals (the owner's rules \
+                          and goals), audience and prospecting (derived), hypotheses (the \
+                          topics), and knowledge (everything jeeta.strategy.knowledge_get \
+                          answers; null until the knowledge base is set up, which reading \
+                          jeeta.strategy.knowledge_get does). approved is null until the \
+                          knowledge base has a card. The owner's edits apply at once: nothing \
+                          here waits for an approval. Prefer jeeta.strategy.knowledge_get. \
+                          [risk: READ]",
             permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
             run: get,
+        },
+        ToolDef {
+            use_case: "strategy.knowledge_get",
+            description: "Read the knowledge base the owner keeps for agents: every card (key, \
+                          title, body, attachments with short-lived links), the rules no agent \
+                          may cross (prohibitions, the ad budget, the paid-message limit, which \
+                          accounts' posts wait for the owner's approval), the goals, the notes \
+                          the owner wrote (open ones bind at once, before they are filed), the \
+                          pending proposals, and the frame (its number, the knowledge revision \
+                          each part was derived from, which derivations are due, its audience, \
+                          objective, topics with has_posts, closing topics and prospecting). \
+                          Topic ids are what tools that ask for a hypothesis_id take. The \
+                          owner's edits apply at once: read this at the start of every run. \
+                          [risk: READ]",
+            permissions: &[Permission::WorkspaceRead],
+            schema: schema_for::<NoArgs>,
+            run: knowledge_get,
         },
         ToolDef {
             use_case: "strategy.start_consultation",
@@ -279,6 +305,13 @@ fn get<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let NoArgs {} = args(raw)?;
         to_json(&strategy::get(deps, ctx).await?)
+    })
+}
+
+fn knowledge_get<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let NoArgs {} = args(raw)?;
+        to_json(&jt_app::usecases::knowledge::read::knowledge_get(deps, ctx).await?)
     })
 }
 

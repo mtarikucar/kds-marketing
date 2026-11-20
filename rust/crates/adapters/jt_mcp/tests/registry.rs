@@ -141,6 +141,7 @@ const TOOLS: &[&str] = &[
     "jeeta.agents.list",
     "jeeta.ledger.list",
     "jeeta.strategy.get",
+    "jeeta.strategy.knowledge_get",
     "jeeta.strategy.start_consultation",
     "jeeta.strategy.record",
     "jeeta.strategy.write_section",
@@ -260,7 +261,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 244);
+    assert_eq!(TOOLS.len(), 245);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -366,6 +367,7 @@ fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
     {
         let expected = match spec.name {
             "jeeta.strategy.get"
+            | "jeeta.strategy.knowledge_get"
             | "jeeta.strategy.list_versions"
             | "jeeta.strategy.consultation" => Permission::WorkspaceRead,
             _ => Permission::TeamManage,
@@ -376,14 +378,27 @@ fn strategy_tools_read_with_workspace_read_and_change_with_team_manage() {
         .into_iter()
         .find(|t| t.name == "jeeta.strategy.get")
         .unwrap();
-    // The entry point tells the agent the consultation protocol.
+    // The old entry point is the knowledge base's compatibility projection (design 2026-11-19
+    // §5.4): it says where the owner's words are and sends agents to knowledge_get.
     assert!(
-        get.description.contains(
-            "Ask the owner the open questions, record each answer, write sections, set \
-             hypotheses, submit; the owner or a manager approves."
-        ),
+        get.description
+            .contains("Read the knowledge base in the shape older routines read the strategy")
+            && get
+                .description
+                .contains("Prefer jeeta.strategy.knowledge_get."),
         "{}",
         get.description
+    );
+    let read = registry()
+        .into_iter()
+        .find(|t| t.name == "jeeta.strategy.knowledge_get")
+        .unwrap();
+    assert_eq!(read.risk, Risk::Read);
+    assert!(
+        read.description
+            .contains("read this at the start of every run"),
+        "{}",
+        read.description
     );
     let archive = registry()
         .into_iter()

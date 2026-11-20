@@ -90,6 +90,10 @@ const RENEWING: &[WorkspaceStatus] = &[WorkspaceStatus::Active, WorkspaceStatus:
 /// (`webhook::takes_routed_events`), so a payment hold keeps its inbound messages.
 const RECEIVING: &[WorkspaceStatus] = &[WorkspaceStatus::Active, WorkspaceStatus::PendingPayment];
 
+/// The workspaces `knowledge_settle` runs for: the knowledge base is kept while a payment is
+/// pending (`strategy.*` runs then).
+const SETTLING: &[WorkspaceStatus] = &[WorkspaceStatus::Active, WorkspaceStatus::PendingPayment];
+
 /// Every workspace (the purges).
 const EVERY: &[WorkspaceStatus] = &[
     WorkspaceStatus::Active,
@@ -150,11 +154,12 @@ pub enum Job {
     CommentsPoll,
     PurgeRequestKeys,
     AgentWake,
+    KnowledgeSettle,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 36] = [
+    pub const ALL: [Job; 37] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -191,6 +196,7 @@ impl Job {
         Job::CommentsPoll,
         Job::PurgeRequestKeys,
         Job::AgentWake,
+        Job::KnowledgeSettle,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -233,6 +239,7 @@ impl Job {
             Job::CommentsPoll => "comments_poll",
             Job::PurgeRequestKeys => "purge_request_keys",
             Job::AgentWake => "agent_wake",
+            Job::KnowledgeSettle => "knowledge_settle",
         }
     }
 
@@ -280,6 +287,7 @@ impl Job {
             Job::CommentsPoll => run_comments_poll(deps, now).await,
             Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
             Job::AgentWake => run_agent_wake(deps, now).await,
+            Job::KnowledgeSettle => run_knowledge_settle(deps, now).await,
         }
     }
 }
@@ -1227,9 +1235,39 @@ pub async fn run_research_plan(deps: &Deps, now: OffsetDateTime) -> JobReport {
         match super::research::plan(deps, &ctx).await {
             Ok(Some(planned)) => {
                 report.touched += 1;
-                report.changed += u64::from(planned.created + planned.superseded);
+                report.changed += u64::from(planned.created + planned.superseded + planned.carried);
             }
             Ok(None) => report.skipped += 1,
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
+}
+
+/// The knowledge base's housekeeping (design 2026-11-19 "Paylaşımlar and Bilgi bankası"
+/// §4.10.6, `knowledge::settle::settle`), in every `active` or `pending_payment` workspace: seeds
+/// a knowledge base not seeded yet, repairs a skipped bootstrap, normalises the frame once (the
+/// first tick after the deploy brings every frame to `channels = [any]`, its lanes to the rules'
+/// caps, every topic kept), retires closing topics nothing names any more, and expires the
+/// proposals past their time. None of it wakes an agent. `touched` counts the workspaces settled,
+/// `changed` those it changed something in, `failed` those it could not settle.
+pub async fn run_knowledge_settle(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::KnowledgeSettle;
+    let mut report = JobReport::default();
+    for ws in workspaces(deps, job, SETTLING, &mut report).await {
+        let ctx = system_ctx(job, ws, now);
+        match super::knowledge::settle::settle(deps, &ctx).await {
+            Ok(settled) => {
+                report.touched += 1;
+                if settled.changed() {
+                    report.changed += 1;
+                } else {
+                    report.skipped += 1;
+                }
+            }
             Err(e) => {
                 report.failed += 1;
                 step_failed(job, ws, None, &Failure::App(e));

@@ -507,7 +507,9 @@ pub async fn strategy_approval_and_existing_confirm_actions_need_no_code(uow: Ar
         .code,
         ErrorCode::Validation
     );
-    strategy::archive(
+    // The approval seeded the knowledge base, which keeps the frame: the archive is refused for
+    // that reason (design 2026-11-19 §4.3.4), never for a payment code.
+    let refused = strategy::archive(
         &w.deps,
         &ctx,
         strategy::ArchiveInput {
@@ -516,7 +518,11 @@ pub async fn strategy_approval_and_existing_confirm_actions_need_no_code(uow: Ar
         },
     )
     .await
-    .unwrap();
+    .unwrap_err();
+    assert_eq!(
+        (refused.code, refused.details["reason"].as_str()),
+        (ErrorCode::Conflict, Some("use_brake"))
+    );
     let declared = capabilities::declare(
         &w.deps,
         &ctx,

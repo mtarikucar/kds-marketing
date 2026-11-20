@@ -55,6 +55,9 @@ pub struct RecentConversation {
     pub conversation: Conversation,
     pub messages: Vec<Message>,
 }
+/// What the frame says for answering in this conversation: who the business is (from the
+/// owner's cards once the knowledge base is seeded, design 2026-11-19 §4.12), the segments, and
+/// the topics on this conversation's channel (never the owner's request or a closing topic).
 #[derive(Debug, Serialize)]
 pub struct StrategyGuidance {
     pub summary: jt_strategy::Identity,
@@ -70,8 +73,14 @@ pub struct ContextOut {
     pub events: Vec<JourneyEvent>,
     pub open_tasks: Vec<Task>,
     pub recent_conversations: Vec<RecentConversation>,
+    /// From the frame; none without one.
     pub strategy_guidance: Option<StrategyGuidance>,
+    /// The conversation's own (`lost`, `human_held_for_agent`), then the knowledge base's
+    /// (live; the frame's before the workspace is seeded).
     pub prohibitions: Vec<String>,
+    /// The knowledge base the owner keeps (cards, rules, goals, the open notes, which bind at
+    /// once): answered with or without a frame; none before the workspace is seeded.
+    pub knowledge: Option<crate::usecases::knowledge::read::KnowledgeBrief>,
     /// The prospect this person was promoted from: why this business was chosen.
     pub prospect: Option<crate::usecases::prospects::ProspectSummary>,
     /// For a comment conversation (spec §6.8); absent for a direct one.
@@ -441,25 +450,39 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
     {
         prohibitions.push("human_held_for_agent".into());
     }
-    let strategy_guidance = if let Some(v) = r.strategy().current_approved().await? {
-        prohibitions.extend(v.sections.prohibitions.clone());
+    let live = crate::usecases::knowledge::read::Live::read(r.as_mut()).await?;
+    let frame = r.strategy().current_approved().await?;
+    match (&live, &frame) {
+        (Some(k), _) => prohibitions.extend(k.settings.prohibitions.iter().cloned()),
+        (None, Some(v)) => prohibitions.extend(v.sections.prohibitions.iter().cloned()),
+        (None, None) => {}
+    }
+    let strategy_guidance = if let Some(v) = &frame {
+        let closing = live.as_ref().map(|k| k.closing()).unwrap_or_default();
         let hypotheses = r
             .hypotheses()
             .list(v.id)
             .await?
             .into_iter()
             .filter(|h| {
-                h.state.is_live() && (h.channel == conversation.kind_key || h.channel == "any")
+                h.state.is_live()
+                    && (h.channel == conversation.kind_key || h.channel == "any")
+                    && !crate::usecases::studio::owner_request::is(ctx.workspace_id, h.id)
+                    && !closing.contains(&h.id)
             })
             .collect();
         Some(StrategyGuidance {
-            summary: v.sections.identity,
-            segments: v.sections.audience,
+            summary: match &live {
+                Some(k) => k.identity(Some(v)),
+                None => v.sections.identity.clone(),
+            },
+            segments: v.sections.audience.clone(),
             hypotheses,
         })
     } else {
         None
     };
+    let knowledge = live.as_ref().map(|k| k.brief());
     let labels = super::dictionaries::status_labels(r.as_mut()).await?;
     let prospect = crate::usecases::prospects::promote::summary_for(r.as_mut(), person.id).await?;
     let public = public_context(r.as_mut(), &conversation).await?;
@@ -473,6 +496,7 @@ pub async fn context(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Conte
         recent_conversations,
         strategy_guidance,
         prohibitions,
+        knowledge,
         prospect,
         public,
     })

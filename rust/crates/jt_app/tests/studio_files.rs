@@ -21,6 +21,40 @@ fn media_mime_and_25mb_200mb_boundaries() {
         assert!(validate_upload(&u).is_err());
     }
 }
+/// A PDF (a price list, a catalogue) is stored up to 20 MB, by its `%PDF-` mark, for the
+/// knowledge base only: it is no medium, so no material and no post takes it (design 2026-11-19
+/// D17).
+#[test]
+fn a_pdf_is_stored_up_to_20mb_and_is_no_medium() {
+    use jt_app::usecases::studio::files::{PDF, PDF_LIMIT, is_media, limit, media_limit};
+    let mut bytes = vec![0; PDF_LIMIT as usize];
+    bytes[..5].copy_from_slice(b"%PDF-");
+    let mut u = MediaUpload {
+        bytes,
+        mime: PDF.into(),
+        filename: "fiyat-listesi.pdf".into(),
+    };
+    assert!(validate_upload(&u).is_ok());
+    u.bytes.push(0);
+    assert!(validate_upload(&u).is_err());
+    u.bytes = b"PK\x03\x04 not a pdf".to_vec();
+    assert!(validate_upload(&u).is_err());
+    assert_eq!(limit(PDF).unwrap(), 20_000_000);
+    assert!(!is_media(PDF));
+    assert!(media_limit(PDF).is_err());
+    for mime in [
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "video/mp4",
+    ] {
+        assert!(is_media(mime), "{mime}");
+        assert_eq!(media_limit(mime).unwrap(), limit(mime).unwrap(), "{mime}");
+    }
+    assert!(!is_media("text/plain"));
+    assert!(limit("text/plain").is_err());
+}
 #[path = "support/studio.rs"]
 mod support;
 use jt_app::{

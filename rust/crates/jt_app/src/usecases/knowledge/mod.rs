@@ -7,10 +7,13 @@
 //! - [`rules`]: `strategy.rules_save`, `post_approval_set` and `goals_save`.
 //! - [`notes`]: `strategy.note_add`, `note_withdraw`, `note_claim`, `note_file`, `note_release`.
 //! - [`proposals`]: `strategy.proposal_create`, `proposal_accept`, `proposal_skip`.
-//!
-//! Not registered yet: no catalog row, panel route or MCP tool calls these (they arrive with the
-//! design's next step, with the internal frame they feed: the frame apply, its bootstrap from the
-//! first card text, the mirror of the rules' caps, and the wakes a change asks for).
+//! - [`frame`]: the internal frame the system applies from the knowledge base (§4.10), and its
+//!   bootstrap from the first card text a person writes or accepts (D4).
+//! - [`settle`]: the `knowledge_settle` job's body (seeding, the bootstrap's repair, the
+//!   normalisation, retiring closing topics, expiring proposals).
+//! - [`resync`]: an approval through the old strategy tools keeps the two layers equal (§4.3.4).
+//! - [`read`]: `strategy.knowledge_get`, what the agents' work reads take from the knowledge
+//!   base, and `strategy.get`'s compatibility projection (§4.11.1, §4.12, §5.4).
 //!
 //! **Every knowledge write** (a card, the rules, the goals, an accepted proposal, a filed note)
 //! runs in one tenant bundle (design §4.4): it takes its locks in the one order of §4.10.13
@@ -26,10 +29,14 @@
 //! ([`WORK_PERMISSIONS`]) and an agent connection (`FORBIDDEN` `agent_only` for a person).
 
 pub mod cards;
+pub mod frame;
 pub mod notes;
 pub mod proposals;
+pub mod read;
+pub mod resync;
 pub mod rules;
 pub mod seed;
+pub mod settle;
 
 use jt_knowledge::{Card, Cause, Invalid, KnowledgeSettings, Subject};
 use jt_ledger::Actor;
@@ -281,6 +288,29 @@ impl Locked {
     /// Stores the settings as the write left them.
     pub(crate) async fn save(&self, r: &mut dyn TenantRepos) -> Result<(), AppError> {
         r.knowledge().save_settings(&self.settings).await
+    }
+
+    /// The bootstrap (design §4.10.5, D4) after a card write of `approver`'s: when the workspace
+    /// had no frame when the write began (so its locks were taken first, [`FrameWrite::WithoutFrame`])
+    /// and a live card now has text, the bootstrap frame is applied in the same bundle, waking
+    /// as `waking` says. Before [`Locked::save`].
+    pub(crate) async fn bootstrap(
+        &mut self,
+        deps: &Deps,
+        ctx: &Ctx,
+        r: &mut dyn TenantRepos,
+        approver: UserId,
+        waking: frame::Waking,
+    ) -> Result<(), AppError> {
+        if self.frame.is_some() {
+            return Ok(());
+        }
+        if let Some(v) =
+            frame::bootstrap_if_due(deps, ctx, r, &mut self.settings, approver, waking).await?
+        {
+            self.frame = Some(v);
+        }
+        Ok(())
     }
 }
 

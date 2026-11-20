@@ -438,7 +438,7 @@ async fn pending_as_seen(
     ctx: &Ctx,
     seen_now: Option<OffsetDateTime>,
 ) -> Result<PendingOut, AppError> {
-    let strategy = strategy::get(deps, ctx).await?;
+    let strategy = strategy::versions(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     let capabilities: Vec<CapabilityOut> = repos
         .capabilities()

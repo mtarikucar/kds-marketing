@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use time::Duration;
 
 use super::cards::{live, next_position, supersede_edits, too_many_cards};
+use super::frame::Waking;
 use super::{
     Change, FrameWrite, WORK_PERMISSIONS, agent, conflict, editor, invalid, lock, moves, refused,
     seed,
@@ -291,6 +292,10 @@ pub async fn proposal_accept(
                 kb.record(r.as_mut(), deps, ctx, c).await?;
             }
         }
+    }
+    if matches!(p.kind, ProposalKind::CardNew | ProposalKind::CardEdit) {
+        kb.bootstrap(deps, ctx, r.as_mut(), person, Waking::InPerson)
+            .await?;
     }
     p.status = ProposalStatus::Accepted;
     p.decided_at = Some(ctx.now);

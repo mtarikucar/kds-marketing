@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 124] = [
+const POST_M4_ADDED: [(&str, &str); 125] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -223,6 +223,8 @@ const POST_M4_ADDED: [(&str, &str); 124] = [
     ("ads.campaign_move", "jeeta.ads.campaign_move"),
     ("ads.campaign_pause", "jeeta.ads.campaign_pause"),
     ("ads.ad_preview", "jeeta.ads.ad_preview"),
+    // The knowledge base's read (design 2026-11-19 §4.11.1).
+    ("strategy.knowledge_get", "jeeta.strategy.knowledge_get"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human
@@ -249,7 +251,7 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 40] = [
+const POST_M4_PANEL_ONLY: [&str; 50] = [
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
@@ -291,8 +293,18 @@ const POST_M4_PANEL_ONLY: [&str; 40] = [
     "agents.wake_set",
     "agents.wake_remove",
     "agents.wake_now",
-    // The draft that adds a connected account's channel (design 2026-11-19 F3).
-    "strategy.add_channel",
+    // The owner's knowledge base page (design 2026-11-19 §4.4-§4.9): a person's writes.
+    "strategy.card_create",
+    "strategy.card_update",
+    "strategy.card_archive",
+    "strategy.card_history",
+    "strategy.rules_save",
+    "strategy.goals_save",
+    "strategy.post_approval_set",
+    "strategy.note_add",
+    "strategy.note_withdraw",
+    "strategy.proposal_accept",
+    "strategy.proposal_skip",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

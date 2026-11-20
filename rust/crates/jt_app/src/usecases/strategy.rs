@@ -46,8 +46,8 @@ use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_strategy::{
-    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, ContentTypeShare, Gap,
-    Hypothesis, HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState, LaneKind,
+    ANY_CHANNEL, ConsultationEntry, ConsultationEntryId, ConsultationKind, Gap, Hypothesis,
+    HypothesisCadence, HypothesisId, HypothesisInput, HypothesisState, LaneKind,
     MAX_CONSULTATION_TEXT_CHARS, Sections, StrategyVersion, StrategyVersionId, VersionStatus,
     next_draft_from, parse_hypotheses_strict, parse_section_strict, validate_for_approval,
 };
@@ -65,6 +65,11 @@ use crate::error::{AppError, ErrorCode};
 use crate::ports::{ChannelCatalog, MAX_CONSULTATION_PAGE, StrategyArchivedHook, TenantRepos};
 
 const NO_SUCH_VERSION: &str = "no such strategy version";
+
+/// Ledger actions no use case writes any more, whose entries stay in the ledger and are still
+/// worded by the panel: `strategy.add_channel` went with K6 (design 2026-11-19 "Paylaşımlar and
+/// Bilgi bankası": every connected account is used, no frame names a channel).
+pub const RETIRED_LEDGER_ACTIONS: &[&str] = &["strategy.add_channel"];
 
 // ---------------------------------------------------------------------------------------------
 // Inputs and outputs
@@ -105,12 +110,19 @@ pub struct VersionOut {
 pub type ConsultationEntryOut = ConsultationEntry;
 
 /// The strategy in force and the draft being worked out, either of which may be missing.
+///
+/// `strategy.get` answers it as the knowledge base's compatibility projection (design
+/// 2026-11-19 §5.4): on a seeded workspace `approved` carries the owner's live words and
+/// `knowledge` what `strategy.knowledge_get` answers (`knowledge::read::project`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StrategyOut {
     pub approved: Option<VersionOut>,
     pub draft: Option<VersionOut>,
     /// The draft's gaps; empty without a draft.
     pub gaps: Vec<Gap>,
+    /// The knowledge base (`strategy.knowledge_get`'s answer); none until the workspace is
+    /// seeded.
+    pub knowledge: Option<super::knowledge::read::KnowledgeOut>,
 }
 
 /// A version as the version list shows it.
@@ -224,9 +236,22 @@ pub struct RecordInput {
 // Use cases
 // ---------------------------------------------------------------------------------------------
 
-/// The approved version and the draft, each with its hypotheses, and the draft's gaps. Needs
-/// `workspace.read`.
+/// `strategy.get`: the approved version and the draft, each with its hypotheses, and the draft's
+/// gaps, as the knowledge base's compatibility projection (design 2026-11-19 §5.4): once the
+/// workspace is seeded, the approved version carries the owner's live words (identity from the
+/// cards, the prohibitions, the goals), `channels = [any]` and its topics without the owner's
+/// request and the closing ones, and `knowledge` is `strategy.knowledge_get`'s answer. An open
+/// draft (only an older routine's) is answered as it is. Needs `workspace.read`.
 pub async fn get(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
+    let mut out = versions(deps, ctx).await?;
+    super::knowledge::read::project(deps, ctx, &mut out).await?;
+    Ok(out)
+}
+
+/// The approved version and the draft as stored, each with its hypotheses, and the draft's gaps,
+/// without the knowledge base: what `work.pending` reads of the strategy. Needs
+/// `workspace.read`.
+pub(crate) async fn versions(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
@@ -243,7 +268,26 @@ pub async fn get(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
         approved,
         draft,
         gaps,
+        knowledge: None,
     })
+}
+
+/// The panel's strategy writes (`/api/strategy`'s consultation, sections, hypotheses, submit,
+/// approve and archive) once the workspace's knowledge base is seeded: `CONFLICT`
+/// (`details.reason = "use_knowledge_base"`). The owner keeps the business in Bilgi bankası
+/// (`/api/knowledge`), whose edits apply at once; the page these routes served is gone (design
+/// 2026-11-19 §4.3.4). The MCP tools keep working, with the re-sync, until they are retired.
+/// Before the seed the routes still write: the seed copies what they approve.
+pub async fn panel_write_open(deps: &Deps, ctx: &Ctx) -> Result<(), AppError> {
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    if repos.knowledge().settings().await?.is_some() {
+        return Err(conflict(
+            "the knowledge base replaced the strategy page: change it in Bilgi bankasi \
+             (/api/knowledge)",
+            "use_knowledge_base",
+        ));
+    }
+    Ok(())
 }
 
 /// Opens the next draft and returns it; while a draft is open, returns that one instead and
@@ -494,24 +538,17 @@ pub async fn set_hypotheses(
 }
 
 /// The content type of a hypothesis that posts without naming its own types.
-pub const DEFAULT_CONTENT_TYPE: &str = "general";
+pub use jt_knowledge::frame::DEFAULT_CONTENT_TYPE;
 
 /// The organic cadence a live hypothesis gets at submission when it names none and the strategy
 /// posts (`cadence.per_week` above zero): it posts, with one content type. The posting engine
 /// takes a post only for a hypothesis with an organic cadence, and neither the panel nor the
 /// consultation asks for that field, so without this a strategy written the usual way would
 /// post nothing (design 2026-11-10 B53). A hypothesis that names an organic cadence keeps it,
-/// one of zero posts a week included: that is how a hypothesis is told not to post.
+/// one of zero posts a week included: that is how a hypothesis is told not to post. The frame
+/// the knowledge base keeps uses the same one (`jt_knowledge::frame`).
 fn default_organic_cadence(per_week: u16) -> HypothesisCadence {
-    HypothesisCadence {
-        slots_per_week: per_week,
-        exploration_bps: 0,
-        content_types: vec![ContentTypeShare {
-            key: DEFAULT_CONTENT_TYPE.into(),
-            min_bps: 0,
-            max_bps: 10_000,
-        }],
-    }
+    jt_knowledge::frame::default_organic_cadence(per_week)
 }
 
 /// Submits the draft for approval and returns it. Needs `team.manage`.
@@ -588,15 +625,25 @@ pub async fn submit(deps: &Deps, ctx: &Ctx) -> Result<VersionOut, AppError> {
 /// agent, the user who issued its key), its log records the approval, and `strategy.approve` is
 /// written (payload `number`, `hypotheses`: how many are in force). The research tasks' planner
 /// runs in the same transaction (`research::plan_in`), so the version's ICP entries have their
-/// standing tasks at once and the older versions' are superseded. Should another approval have
-/// committed first, `CONFLICT` "another approval won", and nothing changes.
+/// standing tasks at once; an older version's open task whose entry is unchanged is carried, the
+/// others are superseded. Should another approval have committed first, `CONFLICT` "another
+/// approval won", and nothing changes.
+///
+/// The knowledge base follows the approval in the same transaction (design 2026-11-19 §4.3.4):
+/// on a seeded workspace the draft's system fields are written as the frame makes them before it
+/// is validated (`channels = [any]`, every topic on `any` and posting, no channel mix, the lanes
+/// from the rules' caps, lowered to the draft's when those are lower) and the knowledge base is
+/// re-synced from the version afterwards (`knowledge::resync`); a workspace not seeded yet is
+/// seeded from the version just approved.
 pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<VersionOut, AppError> {
     require_owner_or_manager(ctx)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    // Draft before frame, matching draft edits and archival.
-    let draft = locked_draft(repos.as_mut()).await?;
+    // Draft before frame, matching draft edits and archival; then the knowledge base's settings
+    // (design 2026-11-19 §4.10.13).
+    let mut draft = locked_draft(repos.as_mut()).await?;
     let previous = repos.strategy().lock_execution_frame().await?;
+    let seeded = repos.knowledge().lock_settings().await?;
     if draft.submitted_at.is_none() {
         return Err(conflict("not submitted", "not_submitted"));
     }
@@ -604,6 +651,21 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         return Err(draft_changed(&draft));
     }
     let ws = ctx.workspace_id;
+    // The knowledge base keeps the frame (design 2026-11-19 §4.3.4): the draft's system fields
+    // are written as the frame makes them before it is validated.
+    let prepared = match &seeded {
+        Some(settings) => Some(
+            super::knowledge::resync::prepare(
+                ctx,
+                repos.as_mut(),
+                &mut draft,
+                previous.as_ref(),
+                settings,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let groups = group_ids(repos.as_mut()).await?;
     let gaps = approval_gaps(
         &draft.sections,
@@ -705,6 +767,30 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
         super::wake::WakeReason::StrategyApproved,
     )
     .await?;
+    // The knowledge base follows what was approved, in the same transaction: re-synced when
+    // seeded, else seeded from it.
+    let approved = repos
+        .strategy()
+        .find(draft.id)
+        .await?
+        .ok_or_else(|| AppError::internal("the version just approved is missing"))?;
+    match (seeded, prepared) {
+        (Some(settings), Some(prepared)) => {
+            super::knowledge::resync::after(
+                deps,
+                ctx,
+                repos.as_mut(),
+                settings,
+                prepared,
+                &approved,
+                by,
+            )
+            .await?;
+        }
+        _ => {
+            super::knowledge::seed::ensure_in(deps, ctx, repos.as_mut()).await?;
+        }
+    }
     let out = reread(repos.as_mut(), draft.id, &known).await?;
     repos.commit().await?;
     Ok(out)
@@ -715,7 +801,10 @@ pub async fn approve(deps: &Deps, ctx: &Ctx, input: ApproveInput) -> Result<Vers
 /// `details.reason = "owner_or_manager"`), `team.manage` (else `FORBIDDEN` naming it) and
 /// `input.confirm` (else `VALIDATION` naming `confirm`).
 ///
-/// Without an approved version, `CONFLICT` (`details.reason = "no_approved_version"`). When the
+/// Once the workspace's knowledge base is seeded, `CONFLICT` (`details.reason = "use_brake"`):
+/// the knowledge base keeps the frame, and posting is stopped with `studio.brake` (design
+/// 2026-11-19 §4.3.4, D10). Without an approved version, `CONFLICT`
+/// (`details.reason = "no_approved_version"`). When the
 /// approved version is not `input.version_id` (say, an approval committed while this call waited
 /// for the locks), `CONFLICT` "the approved version changed" with the one in force in
 /// `details.approved_version_id`, and nothing changes: an archive never takes down a version its
@@ -733,11 +822,17 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
     // Draft before frame, including when there is no draft to lock.
     repos.strategy().lock_draft().await?;
-    let approved = repos
-        .strategy()
-        .lock_execution_frame()
-        .await?
-        .ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
+    let approved = repos.strategy().lock_execution_frame().await?;
+    // The knowledge base keeps the frame (design 2026-11-19 §4.3.4, D10): a frame never
+    // disappears under a written knowledge base.
+    if repos.knowledge().settings().await?.is_some() {
+        return Err(conflict(
+            "the knowledge base keeps the frame; stop posting with studio.brake",
+            "use_brake",
+        ));
+    }
+    let approved =
+        approved.ok_or_else(|| conflict("no approved version", "no_approved_version"))?;
     if approved.id != input.version_id {
         return Err(AppError {
             code: ErrorCode::Conflict,
@@ -795,211 +890,6 @@ pub async fn archive(deps: &Deps, ctx: &Ctx, input: ArchiveInput) -> Result<(), 
     deps.archived_hook
         .on_archived(ctx.workspace_id, approved.id)
         .await
-}
-
-/// `strategy.add_channel`'s input: the kind of a connected account (`tiktok`, `instagram`, ...).
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AddChannelInput {
-    pub kind: String,
-}
-
-/// A channel kind's name for a hypothesis title.
-fn channel_label(kind: &str) -> &str {
-    match kind {
-        "tiktok" => "TikTok",
-        "instagram" => "Instagram",
-        "facebook_page" => "Facebook",
-        "x" => "X",
-        "linkedin_member" | "linkedin_page" => "LinkedIn",
-        other => other,
-    }
-}
-
-/// The hypotheses to add so that each segment the strategy posts to also posts on `kind`: for
-/// each segment with a live hypothesis and none posting on `kind`, a copy of its first live
-/// hypothesis there, with its organic cadence (or the strategy's default one) and `new_id`s.
-fn mirrored(
-    hypotheses: &[Hypothesis],
-    kind: &str,
-    per_week: u16,
-    mut new_id: impl FnMut() -> HypothesisId,
-) -> Vec<Hypothesis> {
-    let posts_on = |h: &Hypothesis| {
-        h.state.is_live()
-            && (h.channel == kind || h.channel == ANY_CHANNEL)
-            && h.cadence
-                .get(&LaneKind::Organic)
-                .is_none_or(|c| c.slots_per_week > 0)
-    };
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for h in hypotheses.iter().filter(|h| h.state.is_live()) {
-        if !seen.insert(h.segment_key.clone())
-            || hypotheses
-                .iter()
-                .any(|x| x.segment_key == h.segment_key && posts_on(x))
-        {
-            continue;
-        }
-        let cadence = h
-            .cadence
-            .get(&LaneKind::Organic)
-            .filter(|c| c.slots_per_week > 0)
-            .cloned()
-            .unwrap_or_else(|| default_organic_cadence(per_week.max(1)));
-        let mut lanes = std::collections::BTreeMap::new();
-        lanes.insert(LaneKind::Organic, cadence);
-        out.push(Hypothesis {
-            id: new_id(),
-            title: format!("{} ({})", h.title, channel_label(kind)),
-            channel: kind.to_owned(),
-            cadence: lanes,
-            derived_confidence: None,
-            state: HypothesisState::Added,
-            ..h.clone()
-        });
-    }
-    out
-}
-
-/// The one action behind "the strategy does not post on this account" (design 2026-11-19 F3):
-/// prepares the draft that adds channel `kind` (a kind the workspace has) and, for each segment
-/// the strategy speaks to, a hypothesis on it mirroring that segment's, and submits it for
-/// approval when it has no gap. The owner approves it as any draft. Needs `team.manage`, in
-/// person. A draft that is open is used as it is (its other changes stay); without one, the
-/// draft starts from the approved version. With nothing to add, the draft is answered as it is.
-/// Writes `strategy.add_channel` (payload `kind`, `added`: how many hypotheses).
-pub async fn add_channel(
-    deps: &Deps,
-    ctx: &Ctx,
-    input: AddChannelInput,
-) -> Result<VersionOut, AppError> {
-    require_consultant(ctx)?;
-    if super::studio::library::person(ctx).is_none() {
-        return Err(AppError::forbidden("a person prepares this draft"));
-    }
-    let known = channel_kinds(deps, ctx).await?;
-    let kind = input.kind.trim().to_owned();
-    if kind == ANY_CHANNEL || !known.contains(&kind) {
-        return Err(invalid("kind", "the workspace has no account of this kind"));
-    }
-    let ws = ctx.workspace_id;
-    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
-    let approved = repos.strategy().current_approved().await?;
-    let open = repos.strategy().lock_draft().await?;
-    // Nothing to add to the strategy in force, and no draft: it is answered as it is.
-    if open.is_none()
-        && let Some(v) = &approved
-    {
-        let hypotheses = owner_request::without(ws, repos.hypotheses().list(v.id).await?);
-        if v.sections.channels.iter().any(|c| c.channel == kind)
-            && mirrored(&hypotheses, &kind, v.sections.cadence.per_week, || {
-                HypothesisId(Uuid::nil())
-            })
-            .is_empty()
-        {
-            return version_out(repos.as_mut(), v.clone(), &known).await;
-        }
-    }
-    let draft = match open {
-        Some(draft) => draft,
-        None => {
-            let (sections, hypotheses) = match &approved {
-                Some(v) => next_draft_from(v, &repos.hypotheses().list(v.id).await?),
-                None => (Sections::default(), Vec::new()),
-            };
-            let draft = StrategyVersion {
-                id: StrategyVersionId(deps.ids.uuid()),
-                workspace_id: ws,
-                number: repos.strategy().next_number().await?,
-                status: VersionStatus::Draft,
-                sections,
-                created_at: ctx.now,
-                created_by: ctx.actor.clone(),
-                submitted_at: None,
-                approved_at: None,
-                approved_by: None,
-                archived_at: None,
-            };
-            repos.strategy().insert(draft.clone()).await?;
-            if !hypotheses.is_empty() {
-                repos.hypotheses().replace_all(draft.id, hypotheses).await?;
-            }
-            draft
-        }
-    };
-    let mut sections = draft.sections.clone();
-    let mut changed = false;
-    if !sections.channels.iter().any(|c| c.channel == kind) {
-        sections.channels.push(jt_strategy::ChannelChoice {
-            channel: kind.clone(),
-            rationale: format!("A {} account is connected.", channel_label(&kind)),
-            group_id: None,
-        });
-        repos
-            .strategy()
-            .update_sections(draft.id, sections.clone(), ctx.now)
-            .await?;
-        changed = true;
-    }
-    let hypotheses = owner_request::without(ws, repos.hypotheses().list(draft.id).await?);
-    let added = mirrored(&hypotheses, &kind, sections.cadence.per_week, || {
-        HypothesisId(deps.ids.uuid())
-    });
-    for h in &added {
-        repos.hypotheses().upsert(draft.id, h.clone()).await?;
-        changed = true;
-    }
-    let in_force = approved.as_ref().map(|v| v.id);
-    if changed {
-        withdraw_submission(repos.as_mut(), &draft).await?;
-        log(
-            repos.as_mut(),
-            deps,
-            ctx,
-            draft.id,
-            ConsultationKind::Note,
-            Some("channels".into()),
-            format!(
-                "channel {kind} added for a connected account, with {} hypotheses",
-                added.len()
-            ),
-        )
-        .await?;
-        append_ledger(
-            repos.as_mut(),
-            ctx,
-            "strategy.add_channel",
-            draft.id,
-            in_force,
-            json!({ "kind": kind, "added": added.len() }),
-        )
-        .await?;
-    }
-    let groups = group_ids(repos.as_mut()).await?;
-    let hypotheses = owner_request::without(ws, repos.hypotheses().list(draft.id).await?);
-    if approval_gaps(&sections, &hypotheses, &known, &groups).is_empty()
-        && (changed || draft.submitted_at.is_none())
-    {
-        repos
-            .strategy()
-            .set_submitted(draft.id, Some(ctx.now))
-            .await?;
-        log(
-            repos.as_mut(),
-            deps,
-            ctx,
-            draft.id,
-            ConsultationKind::Submitted,
-            None,
-            format!("version {} submitted for approval", draft.number),
-        )
-        .await?;
-    }
-    let out = reread(repos.as_mut(), draft.id, &known).await?;
-    repos.commit().await?;
-    Ok(out)
 }
 
 /// Every version of the workspace's strategy, newest first. Needs `workspace.read`.

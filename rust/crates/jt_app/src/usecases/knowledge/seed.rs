@@ -16,8 +16,9 @@
 //! The caps come only from an approved version: the ad cap is the lower of its paid lane (when
 //! paid channels are on) and the live general ad budget in the lane's currency brought to the
 //! lane's period, and that item is lowered to the cap brought back to its own period when it is
-//! above (or created from the lane when there is none); the paid-message limit is its organic lane
-//! as it is. The approval list holds every social account whose stored flag holds its posts today,
+//! above; a workspace with no general ad budget gets one ("Reklam bütçesi", in the lane's
+//! currency and period) at 0, since nothing could be spent on ads without one: the owner opens ad
+//! spend in Bütçe, up to the cap. The paid-message limit is its organic lane as it is. The approval list holds every social account whose stored flag holds its posts today,
 //! and, from an approved version, the switch is on when every postable account but TikTok has it;
 //! more flagged accounts than the list holds turn the switch on instead, so none is dropped.
 //! Nothing a draft says takes effect, and no limit is lifted.
@@ -55,6 +56,22 @@ pub async fn ensure(deps: &Deps, ctx: &Ctx) -> Result<bool, AppError> {
     if r.knowledge().settings().await?.is_some() {
         return Ok(false);
     }
+    if !ensure_in(deps, ctx, r.as_mut()).await? {
+        return Ok(false);
+    }
+    r.commit().await?;
+    Ok(true)
+}
+
+/// [`ensure`] in the caller's bundle, which commits: an approval through the old tools seeds a
+/// workspace not seeded yet from the version it just approved, in its own transaction (design
+/// §4.3.4). Takes the draft and the execution frame locks first (re-entrant for a caller holding
+/// them).
+pub(crate) async fn ensure_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+) -> Result<bool, AppError> {
     let sys = system(ctx, BACKFILL_COMPONENT);
     let draft = r.strategy().lock_draft().await?;
     let approved = r.strategy().lock_execution_frame().await?;
@@ -67,8 +84,7 @@ pub async fn ensure(deps: &Deps, ctx: &Ctx) -> Result<bool, AppError> {
     if !r.knowledge().insert_settings(&settings).await? {
         return Ok(false);
     }
-    seed_in(deps, &sys, r.as_mut(), settings, approved, draft).await?;
-    r.commit().await?;
+    seed_in(deps, &sys, r, settings, approved, draft).await?;
     Ok(true)
 }
 
@@ -361,7 +377,7 @@ fn lane(v: &StrategyVersion, kind: LaneKind) -> Option<Cap> {
 
 /// How many days a budget period counts as when caps are compared (as `budget::check_general`
 /// does); none for `total`, which has no rate.
-fn item_days(period: jt_capability::Period) -> Option<i128> {
+pub(crate) fn item_days(period: jt_capability::Period) -> Option<i128> {
     match period {
         jt_capability::Period::Daily => Some(1),
         jt_capability::Period::Weekly => Some(7),
@@ -371,7 +387,7 @@ fn item_days(period: jt_capability::Period) -> Option<i128> {
 }
 
 /// How many days a lane's period counts as.
-fn lane_days(period: jt_strategy::Period) -> i128 {
+pub(crate) fn lane_days(period: jt_strategy::Period) -> i128 {
     match period {
         jt_strategy::Period::Weekly => 7,
         jt_strategy::Period::Monthly => 30,
@@ -379,7 +395,7 @@ fn lane_days(period: jt_strategy::Period) -> i128 {
 }
 
 /// The budget period of a lane's.
-fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
+pub(crate) fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
     match period {
         jt_strategy::Period::Weekly => jt_capability::Period::Weekly,
         jt_strategy::Period::Monthly => jt_capability::Period::Monthly,
@@ -387,8 +403,8 @@ fn item_period(period: jt_strategy::Period) -> jt_capability::Period {
 }
 
 /// The ad cap version `v` seeds (see the module docs), lowering the general ad budget to it, or
-/// creating one from the paid lane when the workspace has none; each change ledgered with the
-/// reason `knowledge_backfill`.
+/// creating one at 0 in the paid lane's currency and period when the workspace has none; each
+/// change ledgered with the reason `knowledge_backfill`.
 ///
 /// The general item is locked before anything is worked out from it (after the settings, as
 /// design §4.10.13 orders), so an edit of it that committed meanwhile (Bütçe's writes lock only
@@ -460,7 +476,58 @@ async fn ad_cap(
     Ok(Some(cap))
 }
 
-/// The general ad budget made from the paid lane `paid`, for a workspace that has none.
+/// Holds the live general ad budget in `cap`'s currency to `cap` brought to the item's period,
+/// as the seeding does (design §4.3.2): lowered when it is above, never raised; ledgered
+/// `budget.items.update` with `reason` under version `version`. Locks the item (the last lock of
+/// design §4.10.13). No such item, or one of a `total` period: nothing.
+pub(crate) async fn hold_general(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    cap: &Cap,
+    version: jt_strategy::StrategyVersionId,
+    reason: &str,
+) -> Result<(), AppError> {
+    let unit = Unit::Currency(cap.currency.clone());
+    let live_general = |i: &BudgetItem| i.general && i.retired_at.is_none();
+    let Some(id) = r
+        .budget()
+        .list_items()
+        .await?
+        .iter()
+        .find(|i| live_general(i) && i.unit == unit)
+        .map(|i| i.id)
+    else {
+        return Ok(());
+    };
+    let Some(mut item) = r.budget().lock_item(id).await?.filter(live_general) else {
+        return Ok(());
+    };
+    let Some(days) = item_days(item.period) else {
+        return Ok(());
+    };
+    let allowed = i64::try_from(i128::from(cap.amount_minor) * days / lane_days(cap.period))
+        .unwrap_or(i64::MAX);
+    if item.cap <= allowed {
+        return Ok(());
+    }
+    let previous = item.cap;
+    item.cap = allowed;
+    r.budget().update_item(item).await?;
+    let mut entry = ledger_entry(
+        ctx,
+        "budget.items.update",
+        "budget_item",
+        id,
+        json!({ "cap": allowed, "previous": { "cap": previous }, "reason": reason }),
+    )?;
+    entry.strategy_version_id = Some(version.as_uuid());
+    r.ledger().append(entry).await?;
+    Ok(())
+}
+
+/// The general ad budget of a workspace that has none, in the paid lane `paid`'s currency and
+/// period, at 0: without one no campaign could open (`no_general_ad_budget`), so the seed lifts
+/// no ad spend (design §4.3.2, §7.3); the owner raises it in Bütçe, up to the ad cap.
 async fn create_general(
     deps: &Deps,
     sys: &Ctx,
@@ -475,7 +542,7 @@ async fn create_general(
             name: AD_BUDGET_NAME.to_owned(),
             kind: BudgetKind::AdBudget,
             unit: Unit::Currency(paid.currency.clone()),
-            cap: paid.amount_minor,
+            cap: 0,
             unit_cost_minor: None,
             period: item_period(paid.period),
         },

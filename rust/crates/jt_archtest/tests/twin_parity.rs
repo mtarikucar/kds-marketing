@@ -6,10 +6,13 @@
 //!   identical; only the actor differs, by design: the human in the panel, the agent on the
 //!   human's authority over MCP.
 //! - `strategy.get`: after an approval, `GET /api/strategy` and `jeeta.strategy.get` answer the
-//!   same JSON, field for field.
-//! - `strategy.archive`: archiving the version in force answers `{version_id, archived: true}` on
-//!   both surfaces (each archives a version of its own: one can be archived only once), and the
-//!   same error once nothing is left to archive.
+//!   same JSON, field for field: the knowledge base's compatibility projection (design
+//!   2026-11-19 §5.4), with the owner's card and rules edits in it at once.
+//! - `strategy.knowledge_get`: `GET /api/knowledge` and `jeeta.strategy.knowledge_get` answer
+//!   the same knowledge base, field for field.
+//! - `strategy.archive`: once an approval seeded the knowledge base, which keeps the frame, both
+//!   surfaces refuse it: the panel as every write of the old strategy page
+//!   (`use_knowledge_base`), the tool as the archive itself (`use_brake`).
 //! - `strategy.approve`: approving a draft submitted again since it was read answers the same
 //!   `CONFLICT` on both surfaces, naming the draft as it now stands.
 //! - `capability.list`: after declarations, `GET /api/capabilities` answers the very list
@@ -333,6 +336,20 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
     assert!(agent["actor"]["connection_id"].is_string());
 }
 
+/// A knowledge base answer without the soonest expected check-in of the agents that take notes
+/// (`notes_agent.next_at`): the MCP call itself is a sighting of the agent that makes it, so the
+/// two surfaces read it a moment apart.
+fn steady_kb(mut kb: Value) -> Value {
+    kb["notes_agent"]["next_at"] = Value::Null;
+    kb
+}
+
+/// [`steady_kb`] of a `strategy.get` answer's knowledge base.
+fn steady(mut strategy: Value) -> Value {
+    strategy["knowledge"] = steady_kb(strategy["knowledge"].take());
+    strategy
+}
+
 #[tokio::test]
 async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let db = TestDb::new().await;
@@ -340,9 +357,14 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let deps = deps(&db);
     let app = app(&db, &deps);
     let cookie = sign_in(&app, user).await;
+    // The MCP surface, with a key the same owner issued (issued first: the knowledge base says
+    // whether an agent can be reached for the owner's notes).
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
 
-    // The owner works out a strategy on the panel and approves it, then opens the next draft so
-    // both halves of the answer are filled.
+    // The owner works out a strategy on the panel and approves it: before the workspace has a
+    // knowledge base, the old page still writes (design 2026-11-19 §4.3.4). An older routine
+    // then opens the next draft through its tools, so both halves of the answer are filled.
     let ok = |resp: Response| async move {
         let status = resp.status();
         let body = json_body(resp).await;
@@ -382,61 +404,9 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let as_read = |draft: &Value| {
         Some(json!({ "version_id": draft["id"], "submitted_at": draft["submitted_at"] }))
     };
-    let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
-    ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await;
-    ok(post("/api/strategy/consultation", None).await).await;
-    ok(put(
-        "/api/strategy/draft/sections/prohibitions".to_owned(),
-        json!(["rakip adı"]),
-    )
-    .await)
-    .await;
 
-    // The panel surface, then the MCP surface with a key the same owner issued.
-    let resp = send(
-        &app,
-        panel(Method::GET, "/api/strategy", Some(&cookie), None),
-    )
-    .await;
-    let human = ok(resp).await;
-    let key = issue_key(&app, &cookie).await;
-    let session = mcp_session(&app, &key).await;
-    let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
-
-    assert_eq!(human, agent);
-    assert_eq!(human["approved"]["status"], "approved");
-    assert_eq!(human["approved"]["number"], 1);
-    assert_eq!(
-        human["approved"]["approved_by_email"],
-        json!(format!("owner+{user}@test.local"))
-    );
-    assert_eq!(human["draft"]["number"], 2);
-    assert_eq!(
-        human["draft"]["sections"]["prohibitions"],
-        json!(["rakip adı"])
-    );
-    assert_eq!(
-        human["draft"]["hypotheses"][0]["id"], human["approved"]["hypotheses"][0]["id"],
-        "a hypothesis keeps its identity across versions"
-    );
-    assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
-    assert!(human["approved"]["id"].is_string());
-
-    // Archiving: the agent archives version 1; the owner approves the open draft as version 2
-    // and archives it on the panel. Both answer the same confirmation for their own version.
-    let first = human["approved"]["id"].clone();
-    let agent = call_tool(
-        &app,
-        &key,
-        &session,
-        "jeeta.strategy.archive",
-        json!({ "version_id": first, "confirm": true }),
-    )
-    .await;
-    assert_eq!(agent, json!({ "version_id": first, "archived": true }));
+    // Approving a draft submitted again since it was read: the same refusal on both surfaces.
     let read = ok(post("/api/strategy/draft/submit", None).await).await;
-
-    // Approving a draft that changed since it was read: the same refusal on both surfaces.
     let submitted = ok(post("/api/strategy/draft/submit", None).await).await;
     let resp = post("/api/strategy/draft/approve", as_read(&read)).await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
@@ -456,37 +426,156 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
         human["details"],
         json!({ "version_id": submitted["id"], "submitted_at": submitted["submitted_at"] })
     );
-
-    let second =
+    let first =
         ok(post("/api/strategy/draft/approve", as_read(&submitted)).await).await["id"].clone();
-    let resp = post(
-        "/api/strategy/archive",
-        Some(json!({ "version_id": second, "confirm": true })),
+
+    // The approval seeded the knowledge base: the panel's strategy writes are refused from now
+    // on (the page is Bilgi bankası), and an older routine's tools keep writing.
+    let resp = post("/api/strategy/consultation", None).await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(resp).await["details"]["reason"],
+        "use_knowledge_base"
+    );
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.start_consultation",
+        json!({}),
     )
     .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let human = json_body(resp).await;
-    assert_eq!(human, json!({ "version_id": second, "archived": true }));
+    call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.write_section",
+        json!({ "section_key": "prohibitions", "value": ["rakip adı"] }),
+    )
+    .await;
 
-    // Nothing is left to archive: the same refusal on both surfaces.
+    // The panel surface, then the MCP surface.
+    let resp = send(
+        &app,
+        panel(Method::GET, "/api/strategy", Some(&cookie), None),
+    )
+    .await;
+    let human = ok(resp).await;
+    let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
+
+    assert_eq!(steady(human.clone()), steady(agent));
+    // The approval seeded the knowledge base: the projection answers it, live.
+    assert_eq!(human["knowledge"]["notes_agent"]["state"], "asleep");
+    assert_eq!(
+        human["approved"]["sections"]["channels"][0]["channel"],
+        "any"
+    );
+    assert_eq!(human["knowledge"]["revision"], 1);
+    assert_eq!(human["knowledge"]["empty"], false);
+    let card = human["knowledge"]["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["key"] == "products_prices")
+        .unwrap()
+        .clone();
+    assert_eq!(card["body"], "Kahve");
+
+    // An owner's card edit is in both reads at once, and `GET /api/knowledge` is its twin.
+    let resp = send(
+        &app,
+        panel(
+            Method::PATCH,
+            &format!("/api/knowledge/cards/{}", card["id"].as_str().unwrap()),
+            Some(&cookie),
+            Some(json!({ "expected_revision": card["revision"], "body": "Kahve ve kurabiye" })),
+        ),
+    )
+    .await;
+    ok(resp).await;
+    let human_kb = ok(send(
+        &app,
+        panel(Method::GET, "/api/knowledge", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let agent_kb = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.knowledge_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(steady_kb(human_kb.clone()), steady_kb(agent_kb));
+    assert_eq!(human_kb["revision"], 2);
+    let human = ok(send(
+        &app,
+        panel(Method::GET, "/api/strategy", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
+    assert_eq!(steady(human.clone()), steady(agent));
+    assert_eq!(
+        human["approved"]["sections"]["identity"]["product"],
+        "Kahve ve kurabiye"
+    );
+    assert_eq!(steady_kb(human["knowledge"].clone()), steady_kb(human_kb));
+    assert_eq!(human["approved"]["status"], "approved");
+    assert_eq!(human["approved"]["number"], 1);
+    assert_eq!(
+        human["approved"]["approved_by_email"],
+        json!(format!("owner+{user}@test.local"))
+    );
+    assert_eq!(human["draft"]["number"], 2);
+    assert_eq!(
+        human["draft"]["sections"]["prohibitions"],
+        json!(["rakip adı"])
+    );
+    assert_eq!(
+        human["draft"]["hypotheses"][0]["id"], human["approved"]["hypotheses"][0]["id"],
+        "a hypothesis keeps its identity across versions"
+    );
+    assert_eq!(human["draft"]["hypotheses"][0]["state"], "kept");
+    assert_eq!(human["approved"]["id"], first);
+
+    // Archiving: once an approval seeded the knowledge base, which keeps the frame (design
+    // 2026-11-19 §4.3.4, D10), the archive is refused on both surfaces: on the panel as every
+    // write of the old strategy page, through the tool as the archive itself.
     let resp = post(
         "/api/strategy/archive",
-        Some(json!({ "version_id": second, "confirm": true })),
+        Some(json!({ "version_id": first, "confirm": true })),
     )
     .await;
     assert_eq!(resp.status(), StatusCode::CONFLICT);
-    let human = json_body(resp).await;
+    assert_eq!(
+        json_body(resp).await["details"]["reason"],
+        "use_knowledge_base"
+    );
     let agent = tool_result(
         &app,
         &key,
         &session,
         "jeeta.strategy.archive",
-        json!({ "version_id": second, "confirm": true }),
+        json!({ "version_id": first, "confirm": true }),
     )
     .await;
     assert_eq!(agent["isError"], json!(true));
-    assert_eq!(human, agent["structuredContent"]);
-    assert_eq!(human["code"], "CONFLICT");
+    assert_eq!(agent["structuredContent"]["details"]["reason"], "use_brake");
+
+    // The routine's draft is approved through its tools, with the re-sync.
+    let submitted = call_tool(&app, &key, &session, "jeeta.strategy.submit", json!({})).await;
+    let second = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.approve",
+        as_read(&submitted).unwrap(),
+    )
+    .await["id"]
+        .clone();
+    assert_ne!(second, first);
 }
 
 #[tokio::test]
@@ -4249,7 +4338,9 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         assert_eq!(http, mcp, "invalid {action}");
         assert_eq!(http["code"], "VALIDATION");
     }
-    // The ledger remains readable after archive; overview still requires the approved strategy.
+    // The knowledge base the approval seeded keeps the frame: archiving it is refused, on the
+    // panel as every write of the old strategy page (design 2026-11-19 §4.3.4, D10), and the
+    // overview and the ledger answer the same on both surfaces.
     let mut r = d.uow.tenant(ws).await.unwrap();
     let current = r.strategy().lock_execution_frame().await.unwrap().unwrap();
     drop(r);
@@ -4263,7 +4354,11 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
         ),
     )
     .await;
-    assert!(archived.status().is_success());
+    assert_eq!(archived.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(archived).await["details"]["reason"],
+        "use_knowledge_base"
+    );
     for action in ["overview", "ledger"] {
         let path =
             format!("/api/studio/{action}?from=2020-01-01T00:00:00Z&until=2099-01-01T00:00:00Z");
@@ -4280,7 +4375,10 @@ async fn studio_overview_ledger_and_export_have_json_error_and_archive_parity() 
             .clone();
         assert_eq!(http, mcp);
         if action == "overview" {
-            assert_eq!(http["code"], "STRATEGY_REQUIRED");
+            assert!(
+                http.get("code").is_none(),
+                "the frame is still in force: {http}"
+            );
         } else {
             assert!(http["entries"].is_array());
         }

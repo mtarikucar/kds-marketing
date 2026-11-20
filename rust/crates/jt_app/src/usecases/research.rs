@@ -4,10 +4,12 @@
 //! the agent records what it finds with `jeeta.prospects.create`.
 //!
 //! - **Standing tasks**: one open task per ICP entry of the approved strategy version, kept by
-//!   the planner ([`plan_in`]: the hourly job, and `strategy.approve` in its own transaction),
-//!   recorded by `Recorder::System { job: "research_plan" }`. A newer version supersedes the open
-//!   standing tasks of the older ones; nobody closes a standing task by hand (its ICP entry is
-//!   the strategy's, spec D38).
+//!   the planner ([`plan_in`]: the hourly job, `strategy.approve` and every frame apply in their
+//!   own transaction), recorded by `Recorder::System { job: "research_plan" }`. A newer version
+//!   carries the open standing task of an entry it keeps with the same brief (design 2026-11-19
+//!   K5: same id, claim and today's count) and supersedes the others; nobody closes a standing
+//!   task by hand (its ICP entry is the frame's, from the knowledge base, spec D38). The job plans
+//!   under the frame its lock returns, so it and an apply take turns.
 //! - **Ad-hoc tasks** (`research.tasks_create`): a person's or an agent's brief and target,
 //!   while prospecting is on; done by themselves once `target_count` prospects are recorded
 //!   (`prospects.create` checks it), or closed by hand. A newer strategy version leaves them
@@ -193,13 +195,37 @@ pub struct Planned {
     pub created: u32,
     /// Open standing tasks of other versions superseded.
     pub superseded: u32,
+    /// Open standing tasks of other versions carried to this one: their ICP entry is unchanged
+    /// (design 2026-11-19 K5).
+    pub carried: u32,
 }
 
-/// The planner, inside the caller's bundle (the `research_plan` job's, or `strategy.approve`'s):
-/// supersedes the open standing tasks of versions other than `version`, then gives each of
-/// `version`'s ICP entries an open standing task if it has none (a concurrent planner's insert
-/// meets the one-standing-task index and does nothing). Nothing is created while prospecting
-/// is off. Ad-hoc tasks are left as they are.
+/// Whether two briefs say the same once whitespace is normalised (the "brief digest" of design
+/// 2026-11-19 K5).
+fn same_brief(a: &Brief, b: &Brief) -> bool {
+    fn text(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            Value::String(s) => Value::String(s.split_whitespace().collect::<Vec<_>>().join(" ")),
+            Value::Array(items) => Value::Array(items.into_iter().map(text).collect()),
+            Value::Object(map) => {
+                Value::Object(map.into_iter().map(|(k, v)| (k, text(v))).collect())
+            }
+            other => other,
+        }
+    }
+    match (serde_json::to_value(a), serde_json::to_value(b)) {
+        (Ok(a), Ok(b)) => text(a) == text(b),
+        _ => false,
+    }
+}
+
+/// The planner, inside the caller's bundle (the `research_plan` job's, an approval's, or a frame
+/// apply's): an open standing task of another version whose ICP entry `version` holds with the
+/// same standing brief is **carried** to `version` (design 2026-11-19 §4.10.7, K5: its id, claim
+/// and today's count stay; `research.task_carried`), every other one is superseded; then each of
+/// `version`'s ICP entries gets an open standing task if it has none (a concurrent planner's
+/// insert meets the one-standing-task index and does nothing). Nothing is created while
+/// prospecting is off. Ad-hoc tasks are left as they are.
 pub async fn plan_in(
     deps: &Deps,
     ctx: &Ctx,
@@ -208,8 +234,54 @@ pub async fn plan_in(
 ) -> Result<Planned, AppError> {
     let ctx = planner_ctx(ctx);
     let mut out = Planned::default();
-    for t in open_tasks(r).await? {
-        if matches!(t.kind, TaskKind::Standing { .. }) && t.strategy_version_id != version.id {
+    let tasks = open_tasks(r).await?;
+    // The entries that hold an open standing task of `version` already: none is carried onto
+    // them (one open standing task per entry and version).
+    let mut held: Vec<String> = tasks
+        .iter()
+        .filter(|t| t.strategy_version_id == version.id)
+        .filter_map(|t| match &t.kind {
+            TaskKind::Standing { icp_key } => Some(icp_key.clone()),
+            TaskKind::AdHoc { .. } => None,
+        })
+        .collect();
+    let digest = rubric_digest(&version.sections.prospecting.rubric);
+    for t in tasks {
+        if let TaskKind::Standing { icp_key } = &t.kind
+            && t.strategy_version_id != version.id
+        {
+            let entry = prospecting_on(version)
+                .then(|| {
+                    version
+                        .sections
+                        .prospecting
+                        .icp
+                        .iter()
+                        .find(|e| &e.key == icp_key)
+                })
+                .flatten()
+                .filter(|e| !held.contains(&e.key) && same_brief(&standing_brief(e), &t.brief));
+            if let Some(entry) = entry {
+                r.research_tasks()
+                    .carry(t.id, version.id, &digest, entry.daily_cap)
+                    .await?;
+                record(
+                    r,
+                    &ctx,
+                    "research.task_carried",
+                    t.id,
+                    json!({
+                        "task_id": t.id,
+                        "from_version": t.strategy_version_id,
+                        "to_version": version.id,
+                        "icp_key": icp_key,
+                    }),
+                )
+                .await?;
+                held.push(icp_key.clone());
+                out.carried += 1;
+                continue;
+            }
             r.research_tasks()
                 .set_status(t.id, TaskStatus::Superseded, ctx.now, "")
                 .await?;
@@ -228,7 +300,6 @@ pub async fn plan_in(
         return Ok(out);
     }
     let prospecting = &version.sections.prospecting;
-    let digest = rubric_digest(&prospecting.rubric);
     let open: Vec<String> = r
         .research_tasks()
         .open_standing(version.id)
@@ -275,10 +346,13 @@ pub async fn plan_in(
 }
 
 /// The `research_plan` job's body for one workspace: [`plan_in`] under the approved version,
-/// in a bundle of its own; nothing without an approved version (`None`).
+/// in a bundle of its own; nothing without an approved version (`None`). It plans under the
+/// version the execution frame's lock returns (design 2026-11-19 §4.10.7, D37), as an approval
+/// and every frame apply do: the job and an apply take turns, so the job never supersedes tasks
+/// an apply just carried from a stale view.
 pub async fn plan(deps: &Deps, ctx: &Ctx) -> Result<Option<Planned>, AppError> {
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    let Some(version) = r.strategy().current_approved().await? else {
+    let Some(version) = r.strategy().lock_execution_frame().await? else {
         return Ok(None);
     };
     let out = plan_in(deps, ctx, r.as_mut(), &version).await?;
@@ -655,7 +729,8 @@ pub struct CloseInput {
 }
 
 /// `jeeta.research.tasks_close`: closes an open ad-hoc task as done or canceled. A standing
-/// task is the strategy's (`CONFLICT standing_task`: change the ICP entry instead).
+/// task is the frame's (`CONFLICT standing_task`: the ICP comes from the knowledge base's card
+/// `who_we_seek`, so the card is what changes).
 pub async fn tasks_close(
     deps: &Deps,
     ctx: &Ctx,
@@ -678,7 +753,7 @@ pub async fn tasks_close(
         return Err(refused(
             ErrorCode::Conflict,
             "standing_task",
-            "a standing task follows its ICP entry: change the strategy's ICP instead",
+            "the ICP comes from the knowledge base (card who_we_seek); change the card instead",
             json!({ "task_id": id }),
         ));
     }

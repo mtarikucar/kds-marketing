@@ -92,14 +92,27 @@ pub async fn validate_reservation(
         super::chain::capability_access(&c, req.at, true)?;
         super::ads::validate_paid_or_organic_chain(r, chain, &c, req.lane).await?;
     }
-    let lane = frame
-        .sections
-        .budget_frame
-        .lanes
+    // The paid lane is the rules' ad cap and binds every ad spend; the organic lane is the
+    // paid-message limit (design 2026-11-19 §4.6.4, D3): a frame without one has no lane cap
+    // of its own, and the spend still meets its budget items' caps (a reservation has at least
+    // one) and the capability's own cap.
+    let lanes = &frame.sections.budget_frame.lanes;
+    let lane = lanes
         .iter()
-        .find(|l| l.lane == req.lane && l.currency == req.currency)
-        .ok_or_else(|| refuse("lane_budget_missing"))?;
-    let period = lane_period(lane.period);
+        .find(|l| l.lane == req.lane && l.currency == req.currency);
+    let lane = match lane {
+        Some(lane) => Some(lane),
+        None if req.lane == LaneKind::Organic
+            && req.daily_budget_minor.is_none()
+            && !lanes.iter().any(|l| l.lane == LaneKind::Organic) =>
+        {
+            None
+        }
+        None => return Err(refuse("lane_budget_missing")),
+    };
+    // Without a lane, the capability's own cap is counted over the month (a missing period
+    // reads as monthly), and each item over its own period.
+    let period = lane.map_or(Period::Monthly, |l| lane_period(l.period));
     let (from, until) = period_window(period, req.at);
     let rows = r.studio_budget().list_reservations().await?;
     let replay = rows.iter().position(|(r, _)| r.request == *req);
@@ -134,7 +147,7 @@ pub async fn validate_reservation(
         return Err(refuse("invalid_daily_liability"));
     }
     let mut proposed = SpendReservation {
-        lane_window: Some((from, until)),
+        lane_window: lane.map(|_| (from, until)),
         item_windows: BTreeMap::new(),
         id: ReservationId::new_v7(),
         request: req.clone(),
@@ -165,20 +178,22 @@ pub async fn validate_reservation(
         manual_lane +=
             crate::usecases::ads::committed(r, &req.currency, None, None, req.at).await?;
     }
-    check(
-        occupied(
-            &combined,
-            &measurements,
-            None,
-            Some(req.lane),
-            None,
-            &req.currency,
-            from,
-            until,
-            req.at,
-        ) + manual_lane,
-        lane.cap_minor,
-    )?;
+    if let Some(lane) = lane {
+        check(
+            occupied(
+                &combined,
+                &measurements,
+                None,
+                Some(req.lane),
+                None,
+                &req.currency,
+                from,
+                until,
+                req.at,
+            ) + manual_lane,
+            lane.cap_minor,
+        )?;
+    }
     if let Some(cap) = c.policy.spend_cap_minor {
         check(
             occupied(

@@ -306,7 +306,14 @@ pub async fn authorize_execution_at(
     .map_err(|e| refuse(&e.to_string()))?;
     let policy = StudioPolicy {
         expected_revision: input.expected_revision,
-        capability_requires_human_approval: c.policy.requires_human_approval,
+        // A post's approval is the knowledge base's (design 2026-11-19 §3.10.1, D1): the switch
+        // or the account list, read without a lock; other lanes keep the stored flag.
+        capability_requires_human_approval: if lane == LaneKind::Organic {
+            let knowledge = crate::usecases::social::approval::rules(r).await?;
+            crate::usecases::social::approval::needs_approval(&c, knowledge.as_ref())
+        } else {
+            c.policy.requires_human_approval
+        },
         // TikTok's guidelines: a human passes its posting screen whatever the policies above say.
         posting_screen_required: jt_studio::requires_posting_screen(&c.kind_key),
         approval: None,

@@ -231,13 +231,19 @@ async fn approval_creates_one_standing_task_per_icp_entry_and_planning_is_idempo
 }
 
 #[tokio::test]
-async fn a_newer_version_supersedes_the_old_standing_tasks_but_not_ad_hoc_ones() {
+async fn a_newer_version_carries_an_unchanged_entry_and_supersedes_the_rest_but_not_ad_hoc_ones() {
     let w = active_world().await;
     approve(&w, 1, vec![entry("kafeler", 20, 0), entry("merkez", 5, 0)]).await;
     plan(&w, FIXED_NOW).await;
+    let kafeler = tasks(&w)
+        .into_iter()
+        .find(|t| matches!(&t.kind, TaskKind::Standing { icp_key } if icp_key == "kafeler"))
+        .unwrap();
     let asked = research::tasks_create(&w.deps, &w.owner_ctx, ad_hoc(10, 5))
         .await
         .unwrap();
+    // Version 2 keeps the café entry with the same brief (only its daily cap moves) and drops
+    // the other: the café task is carried (design 2026-11-19 K5), the other superseded.
     let v2 = approve(&w, 2, vec![entry("kafeler", 30, 0)]).await;
     plan(&w, FIXED_NOW + Duration::hours(1)).await;
     let all = tasks(&w);
@@ -251,19 +257,45 @@ async fn a_newer_version_supersedes_the_old_standing_tasks_but_not_ad_hoc_ones()
         .iter()
         .find(|t| matches!(t.kind, TaskKind::Standing { .. }))
         .unwrap();
+    assert_eq!(standing.id, kafeler.id, "the same task, carried");
     assert_eq!(standing.strategy_version_id, v2);
     assert_eq!(standing.daily_cap, 30);
     assert_eq!(
         all.iter()
             .filter(|t| t.status == TaskStatus::Superseded)
             .count(),
-        2
+        1
     );
     let closed = w.entries("research.task_closed");
-    assert_eq!(closed.len(), 2);
+    assert_eq!(closed.len(), 1);
     assert!(closed.iter().all(|e| e.payload["outcome"] == "superseded"));
+    let carried = w.entries("research.task_carried");
+    assert_eq!(carried.len(), 1);
+    assert_eq!(carried[0].payload["task_id"], kafeler.id.to_string());
+    assert_eq!(carried[0].payload["to_version"], v2.to_string());
+    assert!(matches!(carried[0].actor, Actor::System { .. }));
+    // A brief that changed is a new task.
+    let mut changed = entry("kafeler", 30, 0);
+    changed.sectors = vec!["kafe ve pastane".into()];
+    let v3 = approve(&w, 3, vec![changed]).await;
+    plan(&w, FIXED_NOW + Duration::hours(1)).await;
+    let standing: Vec<ResearchTask> = tasks(&w)
+        .into_iter()
+        .filter(|t| t.status == TaskStatus::Open && matches!(t.kind, TaskKind::Standing { .. }))
+        .collect();
+    assert_eq!(standing.len(), 1);
+    assert_ne!(standing[0].id, kafeler.id);
+    assert_eq!(standing[0].strategy_version_id, v3);
+    assert_eq!(
+        tasks(&w)
+            .into_iter()
+            .find(|t| t.id == kafeler.id)
+            .unwrap()
+            .status,
+        TaskStatus::Superseded
+    );
     // Turning prospecting off supersedes the last standing task and creates none.
-    approve(&w, 3, vec![]).await;
+    approve(&w, 4, vec![]).await;
     plan(&w, FIXED_NOW + Duration::hours(2)).await;
     let open: Vec<ResearchTask> = tasks(&w)
         .into_iter()

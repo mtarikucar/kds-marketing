@@ -208,16 +208,26 @@ impl World {
         .unwrap()
     }
     /// Sets whether the fixture slot's account asks for a person's approval: the connection's
-    /// own flag, the only approval setting there is (design 2026-11-10 B35).
+    /// own flag (design 2026-11-10 B35) and, once the knowledge base is seeded, the account list
+    /// of its rules, which is what a post's approval reads then (design 2026-11-19 §3.10.1).
     pub async fn approval(&self, required: bool) {
         self.approval_of(self.f.slot.capability_id, required).await;
     }
-    /// The same flag of connection `capability` (an ad account's, for the paid lane).
+    /// The same of connection `capability` (an ad account's, for the paid lane: only its flag
+    /// is read there).
     pub async fn approval_of(&self, capability: CapabilityId, required: bool) {
         let mut r = self.uow.tenant(self.f.ws).await.unwrap();
         let mut c = r.capabilities().lock(capability).await.unwrap().unwrap();
         c.policy.requires_human_approval = required;
         r.capabilities().update(c).await.unwrap();
+        if let Some(mut k) = r.knowledge().lock_settings().await.unwrap() {
+            let id = capability.as_uuid();
+            k.post_approval_accounts.retain(|a| *a != id);
+            if required {
+                k.post_approval_accounts.push(id);
+            }
+            r.knowledge().save_settings(&k).await.unwrap();
+        }
         r.commit().await.unwrap();
     }
     pub async fn approve(&self) {

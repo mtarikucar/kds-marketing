@@ -275,13 +275,32 @@ const WORKSPACE_INACTIVE: &str = "workspace_inactive";
 /// (B51, B52), and goes on when the workspace is active and the module installed again. Answers
 /// how many campaigns changed.
 pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<u32, AppError> {
+    Ok(watch_counted(d, ws, now).await?.changed)
+}
+
+/// What one pass of [`watch_all`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Watched {
+    /// How many campaigns changed.
+    pub(crate) changed: u32,
+    /// How many running campaigns the budget's own stop stopped in this pass.
+    pub(crate) stopped: u32,
+}
+
+/// [`watch_all`], answering also how many running campaigns it stopped (a Kurallar save that
+/// lowered the ad budget says so, design 2026-11-19 §4.6.2).
+pub(crate) async fn watch_counted(
+    d: &Deps,
+    ws: WorkspaceId,
+    now: OffsetDateTime,
+) -> Result<Watched, AppError> {
     let (campaigns, closing, hold) = {
         let mut r = d.uow.tenant(ws).await?;
         let active = r.workspace().get().await?.status == WorkspaceStatus::Active;
         let campaigns = r.ads().list_campaigns(CampaignScope::Open, None).await?;
         let closing = r.ads().list_winding_down(now - SETTLE_WINDOW).await?;
         if campaigns.is_empty() && closing.is_empty() {
-            return Ok(0);
+            return Ok(Watched::default());
         }
         let hold = if !active {
             Some(WORKSPACE_INACTIVE)
@@ -309,6 +328,7 @@ pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result
         (campaigns, closing, hold)
     };
     let mut changed = 0;
+    let mut stopped = 0;
     for c in campaigns {
         let id = c.id;
         if c.state_at(now) == CampaignState::Expired {
@@ -333,6 +353,7 @@ pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result
                 })
                 .await?;
                 changed += 1;
+                stopped += 1;
             }
             (Some(stop), None) if stop.by == StopBy::Budget => {
                 record(d, ws, id, now, "ads.campaign.released_by_budget", |c| {
@@ -366,7 +387,7 @@ pub async fn watch_all(d: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result
             changed += 1;
         }
     }
-    Ok(changed)
+    Ok(Watched { changed, stopped })
 }
 
 // ---------------------------------------------------------------------------------------------

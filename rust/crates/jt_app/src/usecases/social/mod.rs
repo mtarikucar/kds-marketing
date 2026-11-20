@@ -2,6 +2,7 @@
 //! The module's agent gives each platform version of a content package a time; the existing
 //! posting engine plans it, checks it and publishes it. Nothing here publishes by itself.
 pub mod accounts;
+pub mod approval;
 pub mod ready;
 pub mod schedule;
 pub use accounts::{account_get, account_pause, accounts_list};

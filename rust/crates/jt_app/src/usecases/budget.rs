@@ -57,7 +57,7 @@ pub struct BudgetItemInput {
     pub period: Period,
     /// Whether it is the workspace's general ad budget (design 2026-11-10 B37): only an
     /// `ad_budget` in a currency with a period that is not `total`, at most one per workspace,
-    /// its cap within the approved strategy's paid cap.
+    /// its cap within the ad budget of the owner's rules (Kurallar).
     #[serde(default)]
     pub general: bool,
 }
@@ -539,11 +539,20 @@ fn period_days(period: Period) -> Option<i128> {
 /// The rules of the general ad budget for `item`, about to be stored as one (design 2026-11-10
 /// B37): it is an `ad_budget` in a currency with a period that is not `total` (`VALIDATION`
 /// naming `general`); the workspace has no other live one (`CONFLICT`, `general_exists`); and
-/// its cap is within the approved strategy's paid cap for its currency, both brought to the
-/// item's period (`VALIDATION` naming `cap`, `above_strategy_cap` with the most allowed). A
-/// workspace without an approved strategy, or whose strategy has no paid lane in that currency,
-/// has no cap to compare with: the item is stored, and nothing can be spent on ads until there
-/// is one.
+/// its cap is within the ad budget of the owner's rules (Kurallar's `ad_cap`, design 2026-11-19
+/// §4.6.2, D2) in its currency, both brought to the item's period (`VALIDATION` naming `cap`,
+/// `above_rules_cap` with the most allowed), whoever writes it: an agent's key with
+/// `budget.manage` may lower the item, or raise it back up to the ceiling, never above; only the
+/// owner raises the ceiling, in Kurallar. `ad_cap` is read after the item's lock (an update locks
+/// it first), without a lock of its own: Bütçe writes no frame (§4.10.13).
+///
+/// An ad budget in the rules in another currency than the item's is `VALIDATION` naming `unit`
+/// (`rules_cap_currency`, with the rules' `currency`): the general ad budget is counted in the
+/// owner's currency, so no general item sits outside the ceiling (an item made general in
+/// another currency would have had none, and the owner's next Kurallar save would have taken
+/// its currency). No ad budget in the rules (`Reklam yok`): nothing to compare with, and nothing
+/// can be spent on ads (the frame has no paid lane). A workspace whose knowledge base is not
+/// seeded yet is held to the approved strategy's paid lane, as before.
 async fn check_general(repos: &mut dyn TenantRepos, item: &BudgetItem) -> Result<(), AppError> {
     let (Unit::Currency(currency), Some(days), true) =
         (&item.unit, period_days(item.period), item.can_be_general())
@@ -566,27 +575,44 @@ async fn check_general(repos: &mut dyn TenantRepos, item: &BudgetItem) -> Result
             details: json!({ "field": "general", "reason": "general_exists" }),
         });
     }
-    let Some(version) = repos.strategy().current_approved().await? else {
+    let ceiling = match repos.knowledge().settings().await? {
+        Some(k) => match k.ad_cap {
+            Some(c) if c.currency != *currency => {
+                return Err(AppError::validation(
+                    format!(
+                        "the general ad budget is counted in the currency of the owner's ad \
+                         budget (Kurallar): {}",
+                        c.currency
+                    ),
+                    json!({ "field": "unit", "reason": "rules_cap_currency",
+                        "currency": c.currency }),
+                ));
+            }
+            Some(c) => Some((c.amount_minor, c.period)),
+            None => None,
+        },
+        None => repos.strategy().current_approved().await?.and_then(|v| {
+            v.sections
+                .budget_frame
+                .lanes
+                .iter()
+                .find(|l| l.lane == jt_strategy::LaneKind::Paid && l.currency == *currency)
+                .map(|l| (l.cap_minor, l.period))
+        }),
+    };
+    let Some((amount, period)) = ceiling else {
         return Ok(());
     };
-    let Some(lane) = version
-        .sections
-        .budget_frame
-        .lanes
-        .iter()
-        .find(|l| l.lane == jt_strategy::LaneKind::Paid && l.currency == *currency)
-    else {
-        return Ok(());
-    };
-    let lane_days: i128 = match lane.period {
+    let lane_days: i128 = match period {
         jt_strategy::Period::Weekly => 7,
         jt_strategy::Period::Monthly => 30,
     };
-    let allowed = i128::from(lane.cap_minor) * days / lane_days;
+    let allowed = i128::from(amount) * days / lane_days;
     if i128::from(item.cap) > allowed {
         return Err(AppError::validation(
-            "the general ad budget may not exceed the strategy's paid cap",
-            json!({ "field": "cap", "reason": "above_strategy_cap", "cap": allowed as i64 }),
+            "the general ad budget may not exceed the ad budget of the owner's rules (Kurallar); \
+             only the owner raises it there",
+            json!({ "field": "cap", "reason": "above_rules_cap", "cap": allowed as i64 }),
         ));
     }
     Ok(())

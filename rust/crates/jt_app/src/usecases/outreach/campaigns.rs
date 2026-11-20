@@ -653,6 +653,10 @@ pub struct ControlInput {
 /// one, through the launch fences and the approval rule at its current revision) or cancel (any
 /// campaign not completed or canceled; `outreach.manage`; every active enrollment stops with
 /// `campaign_canceled`).
+///
+/// Exempt from the strategy gate, so that stopping what runs never waits for it (design
+/// 2026-11-19 D12): a resume, which starts sending again, still needs a frame
+/// (`STRATEGY_REQUIRED` without one).
 pub async fn campaigns_control(
     deps: &Deps,
     ctx: &Ctx,
@@ -664,6 +668,9 @@ pub async fn campaigns_control(
         ctx.require(Permission::OutreachManage)?;
     }
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    if input.action == ControlAction::Resume && r.strategy().current_approved().await?.is_none() {
+        return Err(AppError::strategy_required());
+    }
     let mut row = r
         .outreach_campaigns()
         .lock(id)
