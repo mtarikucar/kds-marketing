@@ -68,7 +68,7 @@ it('shows every pending item on All and keeps the log tab without links to remov
   renderAt('/');
   const list = await screen.findByRole('list', { name: 'Bekleyen' });
   expect(within(list).getAllByRole('listitem')).toHaveLength(7);
-  expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(Array.from({ length: 7 }, (_, i) => `/content?content=p${i}`));
+  expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(Array.from({ length: 7 }, (_, i) => `/posts?content=p${i}`));
   await userEvent.click(screen.getByRole('button', { name: 'Günlük' }));
   // The record is said in words, under its module, not as its code.
   expect(await screen.findByRole('list', { name: 'Günlük' })).toHaveTextContent('bir reklam setini bağladı');
@@ -82,13 +82,13 @@ import { ledgerModule } from './home/agenda';
 
 it('routes social, materials, project and budget work to their modules', () => {
   const cases: [WorkItem, string][] = [
-    [{ kind: 'studio_slot', slot_id: 's/1', overdue: false, priority: 1, hint: '' }, '/social?slot=s%2F1'],
-    [{ kind: 'studio_approval', target: { slot: 's1' }, priority: 1, hint: '' }, '/social?slot=s1'],
+    [{ kind: 'studio_slot', slot_id: 's/1', overdue: false, priority: 1, hint: '' }, '/posts?slot=s%2F1'],
+    [{ kind: 'studio_approval', target: { slot: 's1' }, priority: 1, hint: '' }, '/posts?slot=s1'],
     [{ kind: 'studio_approval', target: { budget_move: 'b1' }, priority: 1, hint: '' }, '/ads?tab=external'],
     [{ kind: 'studio_budget_move', budget_move_id: 'b1', priority: 1, hint: '' }, '/ads?tab=external'],
-    [{ kind: 'studio_shoot_request', shoot_request_id: 'r1', priority: 1, hint: '' }, '/content'],
-    [{ kind: 'studio_post_request', post_request_id: 'p1', priority: 1, hint: '' }, '/social?tab=posts'],
-    [{ kind: 'content_area', redo_note: null, project_id: 'p1', expected_revision: 1, priority: 1, hint: '' }, '/content?content=p1'],
+    [{ kind: 'studio_shoot_request', shoot_request_id: 'r1', priority: 1, hint: '' }, '/posts?need=r1'],
+    [{ kind: 'studio_post_request', post_request_id: 'p1', priority: 1, hint: '' }, '/posts'],
+    [{ kind: 'content_area', redo_note: null, project_id: 'p1', expected_revision: 1, priority: 1, hint: '' }, '/posts?content=p1'],
   ];
   for (const [item, href] of cases) expect(workItemLink(item)).toBe(href);
 });
@@ -124,7 +124,7 @@ it('shows the three content work kinds and links each to its production area', a
   expect(within(list).getByText('Düzenleme istendi: “Daha kısa”')).toBeVisible();
   expect(within(list).getByText(tr.home.pending.content_material_request)).toBeVisible();
   expect(within(list).getByText(tr.home.pending.content_area_held)).toBeVisible();
-  expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(['/content?content=a%2F1', '/content?content=a2', '/content?content=a3']);
+  expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(['/posts?content=a%2F1', '/posts?content=a2', '/posts?content=a3']);
 });
 
 it('shows ad campaign proposals and held campaigns with encoded campaign links', async () => {

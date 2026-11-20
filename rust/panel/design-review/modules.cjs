@@ -40,7 +40,7 @@ function fixture(file, names) {
   return evaluate(absolute, source.slice(0, end) + '\nmodule.exports = {' + names.join(',') + '};');
 }
 const f = load(path.join(src, 'test/fixtures.ts'));
-const content = load(path.join(src, 'test/content.ts'));
+const posts = load(path.join(src, 'test/postsPage.ts'));
 const social = load(path.join(src, 'test/social.ts'));
 const ads = load(path.join(src, 'test/ads.ts'));
 const modules = load(path.join(src, 'test/modules.ts'));
@@ -55,34 +55,22 @@ const common = {
   'GET /api/agents': f.agents,
   'GET /api/strategy': f.strategyWithDraft,
   'GET /api/studio/projects': { projects: [], next_cursor: null, next_done_before: null },
+  // Paylaşımlar (design 2026-11-19 §3.2): the page's one read and the selected rows' details.
+  ...posts.postsAnswers(),
 };
-// The production line: one area in each state a person meets.
-const areas = [
-  content.area('queued', { title: 'Kupa serisini tanıt', state: { state: 'queued', step: null, note: null, starts_at: '2026-11-12T09:00:00Z' } }),
-  content.area('working', { title: 'Atölye turu', state: { state: 'working', step: 9, note: 'Görsel hazırlanıyor', starts_at: '2026-11-10T09:00:00Z' } }),
-  content.area('waiting', { title: 'Yeni sezon', state: { state: 'waiting_material', step: null, note: null, starts_at: '2026-11-10T09:00:00Z' } }),
-  content.area('held', { title: 'Kampanya duyurusu', refused: 3, state: { state: 'held', step: null, note: null, starts_at: '2026-11-09T09:00:00Z' } }),
-];
-const finished = content.area('done', { title: 'Biten içerik', packages: [content.pack], state: { state: 'done', step: null, note: null, starts_at: '2026-11-01T09:00:00Z' } });
-const projects = u => ({
-  projects: u.searchParams.get('archived') === 'true' ? [] : u.searchParams.get('scope') === 'done' ? [finished] : areas,
-  next_cursor: null, next_done_before: null,
-});
 const approvalPending = { slots: [], approvals: [{ slot: 's1' }], blockers: [{ target: { slot: 's1' }, reason: 'human_approval_required' }], budget_moves: [], paid_alerts: [] };
 const proposal = { ...ads.campaign, id: 'proposal-1', title: 'Ajanın önerisi', opened_by: { kind: 'system', agent: 'agent1' }, approval: null, plan: null, built: null, moves: [], state: { state: 'proposed', note: null }, totals: { spent_minor: 0, results: null, result_kind: null, impressions: null, clicks: null } };
 const stopped = { ...ads.breakdown, stop: { revision: 9, all: false, modules: ['ads', 'inbox'], paused: [{ module: 'ads', title: ads.campaign.title, state: 'paused' }, { module: 'ads', title: 'İkinci reklam', state: 'pausing' }] } };
 const scenarios = [];
 function add(name, url, data = {}, options = {}) { scenarios.push({ name, url, data, ...options }); }
-add('content-line', '/content', { 'GET /api/studio/projects': projects });
-add('content-empty', '/content', {});
-add('content-area-done', '/content?area=done', { 'GET /api/studio/projects': projects, 'GET /api/studio/projects/done': content.detail(finished) });
-add('social-accounts', '/social', {});
-add('social-account', '/social?account=ig1', {});
-add('social-empty', '/social', { 'GET /api/social/accounts': [] });
-add('social-packages', '/social?tab=packages', {});
-add('social-packages-blocked', '/social?tab=packages', { 'GET /api/social/packages': social.socialAnswers['GET /api/social/packages'].map(p => ({ ...p, versions: p.versions.map(v => ({ ...v, accounts: [], blocked: 'hypothesis_does_not_post' })) })) });
-add('social-settings', '/social?tab=settings', {});
-add('social-approval', '/social?slot=s1', { 'GET /api/studio/pending': approvalPending }, { ready: async p => p.getByRole('region', { name: tr.socialAccounts.approvalTitle }).waitFor() });
+add('posts-table', '/posts', {}, { ready: async p => p.getByRole('region', { name: tr.postsPage.table.label }).waitFor() });
+add('posts-empty', '/posts', { 'GET /api/content/posts': posts.postsOut({ rows: [], counts: { all: 0, you: 0, stages: {} } }) });
+add('posts-approval', '/posts?slot=s-approve', {}, { ready: async p => p.getByRole('button', { name: tr.postsPage.actions.approve }).first().waitFor() });
+add('posts-brake', '/posts', { 'GET /api/content/posts': posts.postsOut({ brake: { revision: 3, can_resume: true } }) });
+add('posts-files', '/posts?files=1', {});
+add('posts-accounts', '/posts?accounts=1', {});
+add('posts-settings', '/posts?settings=1', {});
+add('posts-tiktok', '/posts?slot=s1&tiktok=s1', { 'GET /api/studio/pending': approvalPending });
 add('ads-queue', '/ads', {});
 add('ads-empty', '/ads', { 'GET /api/ads/campaigns': { campaigns: [], next_before: null } });
 add('ads-campaign', '/ads?campaign=campaign-1', {});
@@ -98,8 +86,7 @@ add('budget-spending', '/budget', {});
 add('budget-held', '/budget', { 'GET /api/budget/breakdown': { ...ads.breakdown, items: [{ ...ads.breakdown.items[0], held_minor: 175000 }] } });
 add('budget-stopped', '/budget', { 'GET /api/budget/breakdown': stopped });
 for (const [name, url, endpoint] of [
-  ['content', '/content', '/api/studio/projects'],
-  ['social', '/social', '/api/social/accounts'],
+  ['posts', '/posts', '/api/content/posts'],
   ['ads', '/ads', '/api/ads/campaigns'],
 ]) {
   add(name + '-error-retry', url, {}, { failed: endpoint, ready: async p => p.getByRole('button', { name: tr.common.retry, exact: true }).first().waitFor(), retry: true });

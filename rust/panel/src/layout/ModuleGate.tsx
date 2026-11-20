@@ -16,10 +16,13 @@ export function ModuleGate({ moduleId, children }: { moduleId: string | string[]
   const { t, i18n } = useTranslation();
   const tr = i18n.language.startsWith('tr');
   if (!query.data) return <QueryState query={query} />;
-  // Several ids: the first one installed opens the page; with none, the first is offered.
+  // Several ids: the page opens when any of them is installed and ready (their requirements are
+  // judged together); with none installed, the first is offered; with none ready, the first
+  // installed one says what it needs.
   const ids = Array.isArray(moduleId) ? moduleId : [moduleId];
-  const installed = ids.map(id => query.data.modules.find(m => m.blueprint.id === id)).find(m => m?.installed);
-  const module = installed ?? query.data.modules.find(m => m.blueprint.id === ids[0]);
+  const installed = ids.map(id => query.data.modules.find(m => m.blueprint.id === id)).filter((m): m is NonNullable<typeof m> => !!m?.installed);
+  const ready = installed.find(m => moduleMissing(query.data, m.blueprint.id).length === 0);
+  const module = ready ?? installed[0] ?? query.data.modules.find(m => m.blueprint.id === ids[0]);
   const gateId = module?.blueprint.id ?? ids[0];
   if (!module?.installed) return <EmptyState
     headingLevel="h1"

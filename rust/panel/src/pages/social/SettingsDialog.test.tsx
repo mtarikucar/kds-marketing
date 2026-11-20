@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
+import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { repMe } from '@/test/materials';
 import { defaultSettings, postsAnswers } from '@/test/posts';
-import { socialAccount, socialAnswers, socialSettings } from '@/test/social';
+import { socialAnswers, socialSettings } from '@/test/social';
+import { postsAnswers as postsPageAnswers } from '@/test/postsPage';
 
-const answers = { ...socialAnswers, 'GET /api/studio/posts': { posts: [], settings: socialSettings } };
-const open = () => renderAt('/social?settings=1');
-const dialog = () => screen.findByRole('dialog', { name: 'Paylaşım ayarları' });
+// Ayarlar › Paylaşım kuralları on Paylaşımlar (design 2026-11-19 §2.9.3): the posting rules as sentences.
+
+const answers = { ...postsPageAnswers(), ...socialAnswers, 'GET /api/studio/posts': { posts: [], settings: socialSettings } };
+const open = () => renderAt('/posts?settings=1&section=rules');
+const dialog = async () => within(await screen.findByRole('dialog', { name: 'Ayarlar' })).getByRole('region', { name: 'Paylaşım kuralları' });
 /** Opens the edit of the rule whose sentence starts with `start`. */
 async function edit(start: string) {
   const d = await dialog();
@@ -31,7 +34,7 @@ describe('Paylaşım ayarları as sentences', () => {
     await userEvent.click(within(d).getByRole('button', { name: 'Gelişmiş' }));
     expect(within(d).getByText('Reels: 48 saat önce hazırlanmaya başlar, en çok 6 saat gecikebilir')).toBeVisible();
     expect(within(d).getByText('Bir kanalda 4 gün gönderi olmazsa tek bir genel paylaşım istenir')).toBeVisible();
-    expect(within(d).getByText('Materyal eklemek bittikten 30 dakika sonra plan istenir')).toBeVisible();
+    expect(within(d).getByText('Dosya eklemek bittikten 30 dakika sonra plan istenir')).toBeVisible();
     expect(within(d).getByText('En çok 30 gün ilerisi planlanır')).toBeVisible();
     expect(within(d).getByRole('switch', { name: 'Platformun kendi zamanlayıcısını kullan' })).not.toBeChecked();
   });
@@ -138,7 +141,7 @@ describe('Paylaşım ayarları as sentences', () => {
   });
 
   it('a member who is no owner or manager reads them only', async () => {
-    mockFetch({ ...postsAnswers, ...socialAnswers, 'GET /api/studio/posts': { posts: [], settings: socialSettings }, 'GET /api/auth/me': { ...repMe, memberships: [{ ...repMe.memberships[0], permissions: [...repMe.memberships[0].permissions, 'social.work'] }] } });
+    mockFetch({ ...postsAnswers, ...answers, 'GET /api/auth/me': { ...repMe, memberships: [{ ...repMe.memberships[0], permissions: [...repMe.memberships[0].permissions, 'social.work'] }] } });
     open();
     const d = await dialog();
     expect(await within(d).findByText('Günde en çok 2 gönderi, aralarında en az 3 saat')).toBeVisible();
@@ -152,33 +155,6 @@ describe('Paylaşım ayarları as sentences', () => {
     await dialog();
     await userEvent.keyboard('{Escape}');
     await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(router.state.location.pathname).toBe('/posts');
   });
 });
-
-describe('what the settings say of approval', () => {
-  const account = (id: string, name: string, approval: boolean) => ({ ...socialAccount, capability_id: id, name, requires_human_approval: approval });
-  const description = async () => (await dialog()).getAttribute('aria-describedby')!;
-
-  it.each([
-    ['no account waits for approval', [account('ig1', '@atolye', false)], 'Onay gerekmez: materyal kontrolü, doğruluk kontrolü ve bu sınırlar güvenliği sağlar.'],
-    ['every account does (the owner’s)', [account('ig1', 'figurunica instagram', true)], 'Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.'],
-    ['one of two does', [account('ig1', 'figurunica instagram', true), account('tt1', '@atolye.video', false)], 'Her paylaşımı onayınızı bekleyen hesap: figurunica instagram; diğerlerinde onay gerekmez.'],
-    ['two of three do', [account('a', '@bir', true), account('b', '@iki', true), account('c', '@üç', false)], 'Her paylaşımı onayınızı bekleyen hesaplar: @bir, @iki; diğerlerinde onay gerekmez.'],
-    ['four of five do', ['a', 'b', 'c', 'd', 'e'].map((id) => account(id, `@${id}`, id !== 'e')), '4 hesapta her paylaşım onayınızı bekler; diğerlerinde onay gerekmez.'],
-  ])('when %s', async (_, accounts, text) => {
-    mockFetch({ ...answers, 'GET /api/social/accounts': accounts });
-    open();
-    const id = await description();
-    await waitFor(() => expect(document.getElementById(id)).toHaveTextContent(text));
-  });
-
-  it('says nothing of approval until the accounts are read', async () => {
-    mockFetch({ ...answers, 'GET /api/social/accounts': delayed(400, [account('ig1', 'figurunica instagram', true)]) });
-    open();
-    const id = await description();
-    expect(document.getElementById(id)).toHaveTextContent(/^$/);
-    expect(screen.queryByText(/Onay gerekmez/)).not.toBeInTheDocument();
-    await waitFor(() => expect(document.getElementById(id)).toHaveTextContent('Her paylaşım onayınızı bekler; bu sınırlar da ayrıca uygulanır.'));
-  });
-});
-

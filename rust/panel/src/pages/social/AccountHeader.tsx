@@ -1,14 +1,10 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import type { UseQueryResult } from '@tanstack/react-query';
 import * as api from '@/api/social';
-import type { PostsOut } from '@/api/posts';
-import { Badge, cn, Switch } from '@/components/ui';
+import { useSession } from '@/auth/useSession';
+import { cn } from '@/components/ui';
 import { formatDateTime, formatNumber } from '@/lib/format';
-import { StudioError, StudioReadStatus } from '../StudioShared';
-import { useSocialKey } from './data';
-import { StopList } from './Stops';
-import type { SocialPlace } from './location';
+import { StudioReadStatus } from '../StudioShared';
 
 const METRICS: api.Metric[] = ['followers', 'reach', 'views', 'engagement', 'profile_visits'];
 
@@ -70,95 +66,38 @@ export function Sparkline({ days, metric }: { days: api.AccountDay[]; metric: ap
   );
 }
 
-/** The account's pause, as a switch; a stale revision is read again, never guessed. */
-function PauseSwitch({ account, posts, postsKey }: { account: api.SocialAccount; posts: UseQueryResult<PostsOut>; postsKey: readonly unknown[] }) {
-  const { t } = useTranslation();
-  const client = useQueryClient();
-  const key = useSocialKey();
-  const settings = posts.data?.settings;
-  const revision = settings?.revision;
-  const pause = useMutation({
-    mutationFn: (paused: boolean) => api.accountPause(account.capability_id, paused, revision!),
-    onSuccess: (result) => {
-      client.setQueryData<PostsOut>(postsKey, (old) => (old ? { ...old, settings: result } : old));
-      client.setQueryData<api.SocialAccount[]>([...key, 'accounts'], (old) => old?.map((a) => ({ ...a, paused: result.paused_capability_ids.includes(a.capability_id) })));
-      void client.invalidateQueries({ queryKey: [...key, 'account', account.capability_id] });
-      void client.invalidateQueries({ queryKey: [...key, 'packages'] });
-    },
-    // A stale revision must be read again; never retry a write with a guessed revision.
-    onError: () => { void posts.refetch(); },
-  });
-  const paused = settings?.paused_capability_ids?.includes(account.capability_id) ?? account.paused;
-  const label = t(paused ? 'socialAccounts.resume' : 'socialAccounts.pause');
-  return (
-    <div className="space-y-2">
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <Switch
-          checked={paused}
-          aria-label={`${account.name} · ${label}`}
-          disabled={pause.isPending || posts.isFetching || posts.isError || !Number.isInteger(revision)}
-          onCheckedChange={(next) => pause.mutate(next)}
-        />
-        <span>{t('socialAccounts.pausedSwitch')}</span>
-      </label>
-      <StudioError error={pause.error} />
-    </div>
-  );
+/** The first and last day of a period of `days` days ending today (as the server reads them). */
+export function periodRange(days: number): { from: string; until: string } {
+  const until = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.parse(until) - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+  return { from, until };
 }
 
 /**
- * The selected account: its state and (for `social.manage`) its pause, its numbers in one row
- * with their change over the period and a small line each, the period, the period's totals,
- * and the posts its platform holds that Jeeta did not leave there.
+ * An account's numbers ("Sayılar" in Hesaplar, design 2026-11-19 §2.9.2): its metrics in one row
+ * with their change over the period and a small line each, the period (7, 30 or 90 days), the
+ * period's totals, and the posts its platform holds that Jeeta did not leave there. Read only
+ * while shown (`social.account_get`): never one read per account when the page opens.
  */
-export function AccountHeader({
-  account,
-  detail,
-  place,
-  go,
-  manage,
-  posts,
-  postsKey,
-}: {
-  account: api.SocialAccount;
-  detail: UseQueryResult<api.AccountDetail>;
-  place: SocialPlace;
-  go: (place: SocialPlace, options?: { replace?: boolean }) => void;
-  manage: boolean;
-  posts: UseQueryResult<PostsOut>;
-  postsKey: readonly unknown[];
-}) {
+export function AccountNumbers({ account, days: period, onDays }: { account: api.SocialAccount; days: 7 | 30 | 90; onDays: (days: 7 | 30 | 90) => void }) {
   const { t, i18n } = useTranslation();
+  const workspace = useSession().data?.current_workspace;
+  const { from, until } = periodRange(period);
+  const detail = useQuery({
+    queryKey: ['social', workspace, 'account', account.capability_id, from, until],
+    queryFn: () => api.accountGet(account.capability_id, from, until),
+    refetchInterval: 60_000,
+  });
   const data = detail.data;
   const days = [...(data?.days ?? [])].sort((a, b) => a.day.localeCompare(b.day));
   const latest = days.at(-1) ?? data?.account.latest ?? account.latest;
   const number = (n: number | null | undefined) => (n == null ? '—' : formatNumber(n, i18n.language));
-  const period = place.days ?? 30;
-  const locked = account.status !== 'verified';
-  const name = `${t(`capabilities.kinds.${account.kind}`)} · ${account.name}`;
   const strays = data?.at_platform?.filter((p) => !p.known) ?? [];
-  // An account that cannot post yet says what stands in the way, with the one action for each,
-  // right under its name.
-  const stops = data?.account.stops ?? account.stops ?? [];
-  const cannotPostYet = stops.some((s) => s.blocking);
   return (
-    <section aria-label={name} className="min-w-0 space-y-4 rounded-lg border border-border bg-surface p-4">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 className="break-all text-lg font-semibold">{name}</h2>
-          <p className="flex flex-wrap gap-2">
-            {account.paused && <Badge tone="warning">{t('socialAccounts.paused')}</Badge>}
-            {locked && <Badge tone="danger">{t(`status.capability.${account.status}`, { defaultValue: t('socialAccounts.locked') })}</Badge>}
-            {account.requires_human_approval && <Badge tone="info">{t(account.human_gate === 'posting_screen' ? 'socialAccounts.needsScreen' : 'socialAccounts.needsApproval')}</Badge>}
-            {!account.paused && !locked && <Badge tone="success">{t('socialAccounts.active')}</Badge>}
-          </p>
-        </div>
-        {manage && <PauseSwitch account={account} posts={posts} postsKey={postsKey} />}
-      </header>
-      {cannotPostYet && <StopList kind={account.kind} capabilityId={account.capability_id} stops={stops} here />}
+    <div className="min-w-0 space-y-4">
       <div role="group" aria-label={t('socialAccounts.period')} className="flex flex-wrap gap-1.5">
         {([7, 30, 90] as const).map((value) => (
-          <button key={value} type="button" aria-pressed={period === value} onClick={() => go({ ...place, days: value === 30 ? undefined : value }, { replace: true })}
+          <button key={value} type="button" aria-pressed={period === value} onClick={() => onDays(value)}
             className={cn('inline-flex min-h-9 items-center rounded-full border px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', period === value ? 'border-transparent bg-primary/10 font-medium text-primary' : 'border-border bg-surface hover:border-border-strong')}>
             {t('socialAccounts.days', { count: value })}
           </button>
@@ -167,7 +106,7 @@ export function AccountHeader({
       <StudioReadStatus query={detail} />
       {data && (
         <>
-          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {METRICS.map((metric) => {
               const start = days[0]?.[metric];
               const end = days.at(-1)?.[metric];
@@ -210,6 +149,6 @@ export function AccountHeader({
           )}
         </>
       )}
-    </section>
+    </div>
   );
 }

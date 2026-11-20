@@ -178,7 +178,7 @@ async function postingScreen() {
 describe('TikTok posting screen', () => {
   it('reads_the_account_and_presets_nothing', async () => {
     const calls = mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     // The account the post goes to, read fresh for the screen.
     expect(await within(form).findByText('Jeeta Test (@jeeta_test) hesabında paylaşılacak')).toBeInTheDocument();
@@ -220,7 +220,7 @@ describe('TikTok posting screen', () => {
 
   it('posts_exactly_what_was_chosen_and_says_processing_takes_minutes', async () => {
     const calls = mockFetch(answers(true, { 'POST /api/studio/slots/s1/tiktok': { revision: 3 } }));
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     const caption = await within(form).findByLabelText('Açıklama');
@@ -254,7 +254,7 @@ describe('TikTok posting screen', () => {
 
   it('commercial_content_needs_a_choice_and_branded_content_is_never_private', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     const privacy = await within(form).findByLabelText('Bu paylaşımı kimler görebilir');
@@ -285,7 +285,7 @@ describe('TikTok posting screen', () => {
 
   it('a_private_post_cannot_be_branded_content', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     await user.selectOptions(await within(form).findByLabelText('Bu paylaşımı kimler görebilir'), 'SELF_ONLY');
@@ -303,7 +303,7 @@ describe('TikTok posting screen', () => {
         }),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(card).findByText('Bu TikTok hesabı şu anda paylaşım yapamıyor. Daha sonra yeniden deneyin.'),
@@ -313,7 +313,7 @@ describe('TikTok posting screen', () => {
 
   it('a_video_longer_than_the_account_may_post_cannot_be_posted', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     await user.selectOptions(await within(form).findByLabelText('Bu paylaşımı kimler görebilir'), 'SELF_ONLY');
@@ -339,7 +339,7 @@ describe('TikTok posting screen', () => {
         }),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     expect(await within(form).findByRole('img', { name: 'Paylaşılacak fotoğraf 2' })).toHaveAttribute(
       'src',
@@ -360,7 +360,7 @@ describe('TikTok posting screen', () => {
         }),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     await user.selectOptions(await within(form).findByLabelText('Bu paylaşımı kimler görebilir'), 'PUBLIC_TO_EVERYONE');
@@ -388,7 +388,7 @@ describe('TikTok posting screen', () => {
         ]),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(await within(card).findByText('Paylaşım durumu: TikTok paylaşımı işliyor…')).toBeInTheDocument();
     // Processing is not an uncertain outcome to review.
@@ -404,14 +404,14 @@ describe('TikTok posting screen', () => {
 
   it('a_passed_post_waits_for_its_time_until_the_time_has_passed', async () => {
     mockFetch(approvedIn(60 * 60_000));
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(await within(card).findByText('Paylaşım durumu: planlanan saati bekliyor')).toBeInTheDocument();
   });
 
   it('a_passed_post_whose_time_has_passed_is_being_sent_not_waiting', async () => {
     mockFetch(approvedIn(-60 * 60_000));
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(card).findByText("Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…"),
@@ -431,7 +431,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(card).findByText(
@@ -465,7 +465,7 @@ describe('TikTok posting screen', () => {
         ]),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(await within(card).findByText(/^Paylaşım durumu: yayınlanamadı/)).toBeInTheDocument();
     expect(
@@ -480,7 +480,7 @@ describe('TikTok posting screen', () => {
 
   it('shows_the_accounts_counters_and_recent_videos_under_its_name', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     const counters = await within(form).findByRole('list', { name: 'TikTok hesabının sayaçları' });
     for (const text of ['Takipçi: 1.200', 'Takip edilen: 45', 'Beğeni: 8.700', 'Video: 31']) {
@@ -507,7 +507,7 @@ describe('TikTok posting screen', () => {
 
   it('a_cover_that_does_not_load_gives_way_to_a_placeholder', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     const videos = await within(form).findByRole('list', { name: 'Son videolar' });
     const first = videos.children[0] as HTMLElement;
@@ -523,7 +523,7 @@ describe('TikTok posting screen', () => {
 
   it('an_avatar_that_does_not_load_is_left_out', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     const avatar = form.querySelector('img[src="https://p16.tiktokcdn.test/avatar.jpeg"]');
     expect(avatar).not.toBeNull();
@@ -538,7 +538,7 @@ describe('TikTok posting screen', () => {
         'GET /api/studio/slots/s1/tiktok': screenAnswer({ account_metrics: null, recent_posts: null }),
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     expect(await within(form).findByText('Jeeta Test (@jeeta_test) hesabında paylaşılacak')).toBeInTheDocument();
     expect(within(form).queryByRole('list', { name: 'TikTok hesabının sayaçları' })).not.toBeInTheDocument();
@@ -550,7 +550,7 @@ describe('TikTok posting screen', () => {
     mockFetch(
       answers(true, { 'GET /api/studio/slots/s1/tiktok': screenAnswer({ recent_posts: [] }) }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     expect(await within(form).findByText('Henüz herkese açık video yok.')).toBeInTheDocument();
   });
@@ -591,7 +591,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const editor = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     const counters = await within(editor).findByRole('list', { name: 'Paylaşımın TikTok sayaçları' });
     for (const text of ['İzlenme: 42', 'Beğeni: 3', 'Yorum: 1', 'Paylaşım: 0']) {
@@ -619,7 +619,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const editor = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(editor).findByText(
@@ -630,7 +630,7 @@ describe('TikTok posting screen', () => {
 
   it('posts_directly_unless_the_draft_is_chosen', async () => {
     mockFetch(answers());
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     const how = await within(form).findByRole('radiogroup', { name: 'Nasıl gönderilsin' });
     expect(within(how).getByRole('radio', { name: 'Doğrudan paylaş' })).toBeChecked();
@@ -641,7 +641,7 @@ describe('TikTok posting screen', () => {
 
   it('a_video_draft_sends_the_file_alone_and_says_where_to_finish_it', async () => {
     const calls = mockFetch(answers(true, { 'POST /api/studio/slots/s1/tiktok': { revision: 3 } }));
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     await user.click(
@@ -695,7 +695,7 @@ describe('TikTok posting screen', () => {
         'POST /api/studio/slots/s1/tiktok': { revision: 3 },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
     const form = await postingScreen();
     await user.click(
@@ -716,7 +716,7 @@ describe('TikTok posting screen', () => {
     mockFetch(
       answers(true, { 'GET /api/studio/slots/s1/tiktok': screenAnswer({ drafts_available: false }) }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const form = await postingScreen();
     expect(
       await within(form).findByRole('radio', {
@@ -744,7 +744,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(await within(card).findByText('Paylaşım durumu: TikTok taslağı işliyor…')).toBeInTheDocument();
     expect(within(card).getByText(/TikTok gelen kutunuzdaki bir bildirimle/)).toBeInTheDocument();
@@ -770,7 +770,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    renderAt('/social?tiktok=s1');
+    renderAt('/posts?slot=s1&tiktok=s1');
     const editor = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(editor).findByText(
@@ -783,7 +783,7 @@ describe('TikTok posting screen', () => {
     await i18n.changeLanguage('en');
     try {
       mockFetch(answers());
-      renderAt('/social?tiktok=s1');
+      renderAt('/posts?slot=s1&tiktok=s1');
       const user = userEvent.setup();
       const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
       const form = await within(card).findByRole('form', { name: 'Post to TikTok' });

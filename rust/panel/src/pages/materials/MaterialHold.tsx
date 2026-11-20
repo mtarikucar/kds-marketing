@@ -102,7 +102,7 @@ export function MaterialHold({
               {f.material_id && (
                 <>
                   {' '}
-                  <Link className="underline" to={`/content?file=${encodeURIComponent(f.material_id)}`}>
+                  <Link className="underline" to={`/posts?files=1&file=${encodeURIComponent(f.material_id)}`}>
                     {t('materials.hold.openMaterial')}
                   </Link>
                 </>
@@ -119,7 +119,7 @@ export function MaterialHold({
       {shootCount > 0 && (
         <p>
           {t('materials.hold.shoots', { count: shootCount })}{' '}
-          <Link className="underline" to="/content">
+          <Link className="underline" to="/posts?f=you">
             {t('materials.hold.openShoots')}
           </Link>
         </p>
