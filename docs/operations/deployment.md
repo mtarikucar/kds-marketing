@@ -33,7 +33,7 @@ dotenv files, are refused outside the expected build/cache directories. Ambient
 `VITE_*` values and Rust cfg flags are excluded from the controlled build. Existing
 build outputs alone are never accepted as provenance.
 CI invokes this same entry point in `release-artifact` and supplies that binary
-and panel to `rust-test`, outside workspace feature unification.
+and panel to `rust-release-binary`, outside workspace feature unification.
 
 Package `rust/target/release/jeeta`, the **contents** of `rust/panel/dist/`,
 `rust/migrations/`, `rust/scripts/`, `rust/deploy/` and operation documents from

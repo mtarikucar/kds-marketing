@@ -1902,6 +1902,9 @@ bölünür; belge testleri için
 `rust-release-binary`'de koşar. `release-artifact`, ses ve cihaz köprüleri ve `production-worker` her
 gönderimde çalışır, bir çekme isteğinde ise yalnız kendilerini besleyen dosyalar değiştiğinde (`changes`
 işi). Önbellekleri yalnız `main` ve `design/**` gönderimleri yazar, çekme istekleri taban dalınkini okur.
+GitHub bir çekme isteğine yalnız taban dalın ve `main`'in önbelleğini açar: tabanı başka bir özellik dalı
+olan (yığılmış) bir çekme isteği önbellek bulamaz ve soğuk derler (`main`'de bu iş akışı henüz yok), bu
+yüzden çekme isteklerini `design/jeeta-refinement`'e açın.
 `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de
 (`make dev` dahil), `--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş
 durur (bir bağımlılık değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
